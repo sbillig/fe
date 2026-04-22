@@ -219,7 +219,7 @@ fn stmt_used_locals<'db>(
         NSStmtKind::Assign { expr, .. } => expr_used_locals(body, expr),
         NSStmtKind::Store { dst, src } => {
             let mut uses = place_used_locals(body, dst);
-            push_unique(&mut uses, *src);
+            push_unique(&mut uses, src.local);
             uses
         }
     }

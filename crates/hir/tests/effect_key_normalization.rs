@@ -4604,7 +4604,7 @@ fn use_ctx_semantic_body_keeps_receiver_as_effect_binding_local() {
         })
         .unwrap_or_else(|| panic!("{body:#?}"));
     assert_eq!(args.len(), 1);
-    let receiver = &body.locals[args[0].index()];
+    let receiver = &body.locals[args[0].value.index()];
     assert!(
         matches!(
             receiver.role,
@@ -4668,7 +4668,7 @@ fn impl_sum_semantic_body_uses_self_binding_directly() {
                         fe_hir::analysis::semantic::SExpr::Forward(local)
                         | fe_hir::analysis::semantic::SExpr::UseValue(local),
                     ..
-                } => *local != fe_hir::analysis::semantic::SLocalId::from_u32(0),
+                } => local.value != fe_hir::analysis::semantic::SLocalId::from_u32(0),
                 fe_hir::analysis::semantic::SStmtKind::Assign { .. }
                 | fe_hir::analysis::semantic::SStmtKind::Store { .. } => true,
             }),

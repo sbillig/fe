@@ -5,7 +5,7 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            FieldIndex, SBlockId, SConst, SExpr, SStmtKind, STerminatorKind, SValueId,
+            FieldIndex, SBlockId, SConst, SExpr, SOperand, SStmtKind, STerminatorKind, SValueId,
             VariantIndex, bool_const, bytes_const, int_const,
         },
         ty::{
@@ -131,7 +131,7 @@ impl<'db> SmirLowerCtxt<'db> {
         let value = self.emit_expr(
             ty,
             SExpr::Field {
-                base: base.value,
+                base: SOperand::synthetic(base.value),
                 field: FieldIndex(field_idx as u16),
             },
         );
@@ -155,7 +155,7 @@ impl<'db> SmirLowerCtxt<'db> {
         let value = self.emit_expr(
             ty,
             SExpr::ExtractEnumField {
-                value: base.value,
+                value: SOperand::synthetic(base.value),
                 variant: VariantIndex(variant.idx),
                 field: FieldIndex(field_idx as u16),
             },
@@ -204,7 +204,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 self.debug_assert_pattern_binding_ty_matches(dst, value);
                 self.push_synthetic_stmt(SStmtKind::Assign {
                     dst,
-                    expr: SExpr::UseValue(value.value),
+                    expr: SExpr::UseValue(SOperand::synthetic(value.value)),
                 });
             }
         } else if let Some(ctor) = pattern_store.constructor_kind(pat) {
@@ -277,14 +277,14 @@ impl<'db> SmirLowerCtxt<'db> {
                         TyId::bool(self.db),
                         SExpr::Binary {
                             op: BinOp::Comp(CompBinOp::Eq),
-                            lhs: value.value,
-                            rhs,
+                            lhs: SOperand::synthetic(value.value),
+                            rhs: SOperand::synthetic(rhs),
                         },
                     );
                     self.set_synthetic_terminator(
                         self.current,
                         STerminatorKind::Branch {
-                            cond,
+                            cond: SOperand::synthetic(cond),
                             then_bb,
                             else_bb,
                         },
@@ -299,14 +299,14 @@ impl<'db> SmirLowerCtxt<'db> {
                     let cond = self.emit_expr(
                         TyId::bool(self.db),
                         SExpr::IsEnumVariant {
-                            value: value.value,
+                            value: SOperand::synthetic(value.value),
                             variant: VariantIndex(variant.idx),
                         },
                     );
                     self.set_synthetic_terminator(
                         self.current,
                         STerminatorKind::Branch {
-                            cond,
+                            cond: SOperand::synthetic(cond),
                             then_bb: success_bb,
                             else_bb,
                         },
@@ -367,7 +367,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 } else {
                     self.push_synthetic_stmt(SStmtKind::Assign {
                         dst: result,
-                        expr: SExpr::Forward(arm_value),
+                        expr: SExpr::Forward(SOperand::expr(arm_value, arm.body)),
                     });
                     self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
                     true
@@ -420,7 +420,7 @@ impl<'db> SmirLowerCtxt<'db> {
             self.set_synthetic_terminator(
                 self.current,
                 STerminatorKind::MatchEnum {
-                    value: occurrence.value,
+                    value: SOperand::synthetic(occurrence.value),
                     enum_ty,
                     cases: enum_cases.into_boxed_slice(),
                     default: enum_default,
@@ -455,12 +455,12 @@ impl<'db> SmirLowerCtxt<'db> {
                                 let rhs = self.literal_pattern_value(*ty, *lit);
                                 SExpr::Binary {
                                     op: BinOp::Comp(CompBinOp::Eq),
-                                    lhs: occurrence.value,
-                                    rhs,
+                                    lhs: SOperand::synthetic(occurrence.value),
+                                    rhs: SOperand::synthetic(rhs),
                                 }
                             }
                             ConstructorKind::Variant(variant, _) => SExpr::IsEnumVariant {
-                                value: occurrence.value,
+                                value: SOperand::synthetic(occurrence.value),
                                 variant: VariantIndex(variant.idx),
                             },
                             ConstructorKind::Type(_) => unreachable!(),
@@ -470,7 +470,7 @@ impl<'db> SmirLowerCtxt<'db> {
                         self.set_synthetic_terminator(
                             self.current,
                             STerminatorKind::Branch {
-                                cond,
+                                cond: SOperand::synthetic(cond),
                                 then_bb: *case_bb,
                                 else_bb: next_bb,
                             },
@@ -503,7 +503,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 self.debug_assert_pattern_binding_ty_matches(dst, src);
                 self.push_synthetic_stmt(SStmtKind::Assign {
                     dst,
-                    expr: SExpr::UseValue(src.value),
+                    expr: SExpr::UseValue(SOperand::synthetic(src.value)),
                 });
             }
         }
@@ -546,7 +546,12 @@ impl<'db> SmirLowerCtxt<'db> {
                     self.db,
                     pattern_match_expected_ty(self.db, base.carrier_ty.0),
                 );
-                let value = self.emit_expr(ty, SExpr::GetEnumTag { value: base.value });
+                let value = self.emit_expr(
+                    ty,
+                    SExpr::GetEnumTag {
+                        value: SOperand::synthetic(base.value),
+                    },
+                );
                 PatternValue {
                     value,
                     carrier_ty: PatternCarrierTy(ty),

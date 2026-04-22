@@ -109,7 +109,7 @@ pub fn verify_normalized_semantic_body<'db>(
                 }
                 NSStmtKind::Store { dst, src } => {
                     verify_place(db, instance, body, stmt.origin, dst)?;
-                    verify_local_exists(db, instance, body, stmt.origin, *src)?;
+                    verify_local_exists(db, instance, body, stmt.origin, src.local)?;
                 }
             }
         }

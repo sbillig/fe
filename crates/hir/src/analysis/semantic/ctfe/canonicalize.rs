@@ -149,7 +149,7 @@ fn invalidate_mutated_call_locals<'db>(
         if !callee_arg_is_mutable(db, *callee, idx) {
             continue;
         }
-        for root in writable_local_roots(*arg, local_defs, &mut memo, &mut visiting) {
+        for root in writable_local_roots(arg.value, local_defs, &mut memo, &mut visiting) {
             locals[root.index()] = None;
         }
     }
@@ -192,7 +192,7 @@ fn writable_local_roots<'db>(
                 roots.insert(place.local);
             }
             SExpr::Forward(src) | SExpr::UseValue(src) => {
-                roots.extend(writable_local_roots(*src, local_defs, memo, visiting));
+                roots.extend(writable_local_roots(src.value, local_defs, memo, visiting));
             }
             SExpr::ReadPlace { .. } => {}
             SExpr::CodeRegionRef { .. }

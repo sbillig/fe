@@ -11,9 +11,9 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            FieldIndex, Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId, SPlace,
-            SStmt, SStmtKind, STerminator, STerminatorKind, SValueId, SemOrigin, SemanticBody,
-            VariantIndex, bool_const, bytes_const, int_const, runtime_size_bytes,
+            FieldIndex, Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand,
+            SPlace, SStmt, SStmtKind, STerminator, STerminatorKind, SValueId, SemOrigin,
+            SemanticBody, VariantIndex, bool_const, bytes_const, int_const, runtime_size_bytes,
             sem_const_from_ty, unit_const,
         },
         ty::{
@@ -95,6 +95,7 @@ pub fn lower_to_smir<'db>(
     );
     let result = cx.lower_expr(body.expr(db));
     if !cx.is_terminated(cx.current) {
+        let result = SOperand::expr(result, body.expr(db));
         cx.set_terminator(
             cx.current,
             SemOrigin::Body(template_owner),
@@ -316,6 +317,10 @@ impl<'db> SmirLowerCtxt<'db> {
         self.emit_expr_with_origin(SemOrigin::Synthetic, ty, expr)
     }
 
+    pub(super) fn lower_expr_operand(&mut self, expr: ExprId) -> SOperand {
+        SOperand::expr(self.lower_expr(expr), expr)
+    }
+
     pub(super) fn push_synthetic_stmt(&mut self, kind: SStmtKind<'db>) {
         self.push_stmt(SemOrigin::Synthetic, kind);
     }
@@ -346,7 +351,10 @@ impl<'db> SmirLowerCtxt<'db> {
             Expr::Lit(lit) => self.lower_leaf_literal(expr, lit),
             Expr::Path(_) => self.lower_path_expr(expr),
             Expr::Tuple(elems) | Expr::Array(elems) => {
-                let fields = elems.iter().map(|expr| self.lower_expr(*expr)).collect();
+                let fields = elems
+                    .iter()
+                    .map(|expr| self.lower_expr_operand(*expr))
+                    .collect();
                 self.emit_expr_with_origin(origin, ty, SExpr::AggregateMake { ty, fields })
             }
             Expr::ArrayRep(elem, _) => {
@@ -360,7 +368,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     ty,
                     SExpr::AggregateMake {
                         ty,
-                        fields: vec![value; len].into_boxed_slice(),
+                        fields: vec![SOperand::expr(value, *elem); len].into_boxed_slice(),
                     },
                 )
             }
@@ -377,15 +385,22 @@ impl<'db> SmirLowerCtxt<'db> {
                         .resolved_field_index(expr)
                         .expect("field expression should have a resolved field index"),
                 );
-                self.emit_expr_with_origin(origin, ty, SExpr::Field { base, field })
+                self.emit_expr_with_origin(
+                    origin,
+                    ty,
+                    SExpr::Field {
+                        base: SOperand::expr(base, base_expr),
+                        field,
+                    },
+                )
             }
             Expr::Bin(base, index, BinOp::Index) => {
                 if let Some(place) = self.typed_body.expr_place(expr) {
                     let place = self.lower_place_data(place);
                     return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
                 }
-                let base = self.lower_expr(*base);
-                let index = self.lower_expr(*index);
+                let base = self.lower_expr_operand(*base);
+                let index = self.lower_expr_operand(*index);
                 self.emit_expr_with_origin(origin, ty, SExpr::Index { base, index })
             }
             Expr::Un(inner, UnOp::Mut | UnOp::Ref) => {
@@ -414,14 +429,14 @@ impl<'db> SmirLowerCtxt<'db> {
                 {
                     return value;
                 }
-                let value = self.lower_expr(*inner);
+                let value = self.lower_expr_operand(*inner);
                 self.emit_expr_with_origin(origin, ty, SExpr::Unary { op: *op, value })
             }
             Expr::Bin(lhs, rhs, BinOp::Arith(ArithBinOp::Range)) => {
                 let ty = self.expr_ty(expr);
-                let lhs = self.lower_expr(*lhs);
-                let rhs = self.lower_expr(*rhs);
-                let unit = self.unit_value();
+                let lhs = self.lower_expr_operand(*lhs);
+                let rhs = self.lower_expr_operand(*rhs);
+                let unit = SOperand::synthetic(self.unit_value());
                 let fields = ty
                     .field_types(self.db)
                     .into_iter()
@@ -444,12 +459,12 @@ impl<'db> SmirLowerCtxt<'db> {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
                     return self.lower_call_like_expr(expr, ty, Some(*lhs), &[*rhs]);
                 }
-                let lhs = self.lower_expr(*lhs);
-                let rhs = self.lower_expr(*rhs);
+                let lhs = self.lower_expr_operand(*lhs);
+                let rhs = self.lower_expr_operand(*rhs);
                 self.emit_expr_with_origin(origin, ty, SExpr::Binary { op: *op, lhs, rhs })
             }
             Expr::Cast(value, to) => {
-                let value = self.lower_expr(*value);
+                let value = self.lower_expr_operand(*value);
                 self.emit_expr_with_origin(
                     origin,
                     ty,
@@ -462,7 +477,7 @@ impl<'db> SmirLowerCtxt<'db> {
             Expr::Call(_, args) => self.lower_call(expr, None, args),
             Expr::MethodCall(receiver, _, _, args) => self.lower_call(expr, Some(*receiver), args),
             Expr::Assign(dst, src) => {
-                let src = self.lower_expr(*src);
+                let src = self.lower_expr_operand(*src);
                 let dst_place = self.lower_place(*dst);
                 self.push_place_write(origin, dst_place, src);
                 self.unit_value()
@@ -471,8 +486,8 @@ impl<'db> SmirLowerCtxt<'db> {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
                     return self.lower_call_like_expr(expr, ty, Some(*dst), &[*src]);
                 }
-                let lhs = self.lower_expr(*dst);
-                let rhs = self.lower_expr(*src);
+                let lhs = self.lower_expr_operand(*dst);
+                let rhs = self.lower_expr_operand(*src);
                 let dst_ty = self.projectable_place_ty(self.expr_ty(*dst));
                 let sum = self.emit_expr_with_origin(
                     origin,
@@ -484,7 +499,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     },
                 );
                 let dst_place = self.lower_place(*dst);
-                self.push_place_write(origin, dst_place, sum);
+                self.push_place_write(origin, dst_place, SOperand::inherited(sum));
                 self.unit_value()
             }
             Expr::Block(stmts) => self.lower_block_expr(stmts),
@@ -588,12 +603,12 @@ impl<'db> SmirLowerCtxt<'db> {
                 PathReadSemantics::ForwardInterface => self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
                     self.expr_ty(expr),
-                    SExpr::Forward(local),
+                    SExpr::Forward(SOperand::inherited(local)),
                 ),
                 PathReadSemantics::MaterializeValue => self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
                     self.expr_ty(expr),
-                    SExpr::UseValue(local),
+                    SExpr::UseValue(SOperand::inherited(local)),
                 ),
             };
         }
@@ -666,7 +681,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     let idx = RecordLike::from_variant(variant)
                         .record_field_idx(self.db, label)
                         .expect("record variant field should resolve");
-                    values[idx] = Some(self.lower_expr(field.expr));
+                    values[idx] = Some(self.lower_expr_operand(field.expr));
                 }
                 self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
@@ -691,7 +706,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     let idx = RecordLike::Type(ty)
                         .record_field_idx(self.db, label)
                         .expect("record field should resolve");
-                    values[idx] = Some(self.lower_expr(field.expr));
+                    values[idx] = Some(self.lower_expr_operand(field.expr));
                 }
                 self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
@@ -767,10 +782,13 @@ impl<'db> SmirLowerCtxt<'db> {
     ) -> SValueId {
         let mut values = Vec::with_capacity(args.len() + usize::from(receiver.is_some()));
         if let Some(receiver) = receiver {
-            values.push(self.lower_callable_receiver(expr, receiver));
+            values.push(SOperand::expr(
+                self.lower_callable_receiver(expr, receiver),
+                receiver,
+            ));
         }
         for arg in args {
-            values.push(self.lower_expr(*arg));
+            values.push(self.lower_expr_operand(*arg));
         }
 
         match callable.callable_def() {
@@ -833,7 +851,7 @@ impl<'db> SmirLowerCtxt<'db> {
                     SemOrigin::Expr(receiver),
                     SStmtKind::Assign {
                         dst: local,
-                        expr: SExpr::UseValue(value),
+                        expr: SExpr::UseValue(SOperand::inherited(value)),
                     },
                 );
                 SPlace::new(local)
@@ -939,7 +957,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 self.set_terminator(self.current, origin, STerminatorKind::Goto(scope.break_bb));
             }
             Stmt::Return(expr) => {
-                let value = expr.map(|expr| self.lower_expr(expr));
+                let value = expr.map(|expr| self.lower_expr_operand(expr));
                 self.set_terminator(
                     self.current,
                     origin,
@@ -991,6 +1009,7 @@ impl<'db> SmirLowerCtxt<'db> {
             .for_loop_seq(stmt)
             .unwrap_or_else(|| panic!("missing Seq resolution for for-loop {stmt:?}"));
         let iter_value = self.lower_expr(iter);
+        let iter_operand = SOperand::expr(iter_value, iter);
         let usize_ty = seq.len_callable.ret_ty(self.db);
         let elem_ty = seq.elem_ty;
         let idx_local = self.alloc_temp(usize_ty);
@@ -1007,7 +1026,7 @@ impl<'db> SmirLowerCtxt<'db> {
             usize_ty,
             SExpr::Call {
                 callee: for_loop_callee_refs.len_callee,
-                args: vec![iter_value].into_boxed_slice(),
+                args: vec![iter_operand].into_boxed_slice(),
                 effect_args: len_effect_args,
             },
         );
@@ -1022,14 +1041,14 @@ impl<'db> SmirLowerCtxt<'db> {
             TyId::bool(self.db),
             SExpr::Binary {
                 op: BinOp::Comp(CompBinOp::Lt),
-                lhs: idx_local,
-                rhs: len_value,
+                lhs: SOperand::synthetic(idx_local),
+                rhs: SOperand::synthetic(len_value),
             },
         );
         self.set_synthetic_terminator(
             self.current,
             STerminatorKind::Branch {
-                cond,
+                cond: SOperand::synthetic(cond),
                 then_bb: body_bb,
                 else_bb: exit_bb,
             },
@@ -1045,7 +1064,7 @@ impl<'db> SmirLowerCtxt<'db> {
             elem_ty,
             SExpr::Call {
                 callee: for_loop_callee_refs.get_callee,
-                args: vec![iter_value, idx_local].into_boxed_slice(),
+                args: vec![iter_operand, SOperand::synthetic(idx_local)].into_boxed_slice(),
                 effect_args: get_effect_args,
             },
         );
@@ -1064,13 +1083,13 @@ impl<'db> SmirLowerCtxt<'db> {
                 usize_ty,
                 SExpr::Binary {
                     op: BinOp::Arith(ArithBinOp::Add),
-                    lhs: idx_local,
-                    rhs: one,
+                    lhs: SOperand::synthetic(idx_local),
+                    rhs: SOperand::synthetic(one),
                 },
             );
             self.push_synthetic_stmt(SStmtKind::Assign {
                 dst: idx_local,
-                expr: SExpr::UseValue(next),
+                expr: SExpr::UseValue(SOperand::synthetic(next)),
             });
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(cond_bb));
         }
@@ -1099,16 +1118,16 @@ impl<'db> SmirLowerCtxt<'db> {
             join_reachable = true;
             self.push_synthetic_stmt(SStmtKind::Assign {
                 dst: result,
-                expr: SExpr::Forward(then_value),
+                expr: SExpr::Forward(SOperand::expr(then_value, then_expr)),
             });
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
         }
 
         self.switch_to(else_bb);
         let else_value = if let Some(expr) = else_expr {
-            self.lower_expr(expr)
+            SOperand::expr(self.lower_expr(expr), expr)
         } else {
-            self.unit_value()
+            SOperand::synthetic(self.unit_value())
         };
         if !self.is_terminated(self.current) {
             join_reachable = true;
@@ -1152,7 +1171,7 @@ impl<'db> SmirLowerCtxt<'db> {
                 self.set_synthetic_terminator(
                     self.current,
                     STerminatorKind::Branch {
-                        cond,
+                        cond: SOperand::expr(cond, *expr),
                         then_bb,
                         else_bb,
                     },
@@ -1210,7 +1229,7 @@ impl<'db> SmirLowerCtxt<'db> {
         place.path.is_empty() && !self.place_needs_indirect_store(place)
     }
 
-    fn push_place_write(&mut self, origin: SemOrigin<'db>, dst: SPlace<'db>, src: SValueId) {
+    fn push_place_write(&mut self, origin: SemOrigin<'db>, dst: SPlace<'db>, src: SOperand) {
         let kind = if self.place_can_assign_directly(&dst) {
             SStmtKind::Assign {
                 dst: dst.local,

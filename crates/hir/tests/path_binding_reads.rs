@@ -118,16 +118,16 @@ fn f(ptr: u256) {
         panic!("binding assignment should read from a temp");
     };
     assert!(
-        sem_body.locals[temp.index()].source.is_none(),
+        sem_body.locals[temp.value.index()].source.is_none(),
         "materialized read should use a temp local"
     );
 
-    let SExpr::UseValue(param) = assign_expr_for_dst(&sem_body, *temp) else {
+    let SExpr::UseValue(param) = assign_expr_for_dst(&sem_body, temp.value) else {
         panic!("temp should read from the source param");
     };
     assert!(
         matches!(
-            sem_body.locals[param.index()].source,
+            sem_body.locals[param.value.index()].source,
             Some(LocalBinding::Param { .. })
         ),
         "materialized temp should read from the original param local"
@@ -176,7 +176,7 @@ fn f() {
         panic!("binding assignment should read from the original local");
     };
     assert_eq!(
-        sem_body.locals[src.index()].source,
+        sem_body.locals[src.value.index()].source,
         Some(src_binding),
         "preserved path read should use the original binding local directly"
     );

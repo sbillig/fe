@@ -507,7 +507,7 @@ impl<'db> RmirEmitter<'db> {
             NSStmtKind::Store { dst, src } => {
                 let place = self.lower_place(bb, dst);
                 let target = self.project_place_class(&place);
-                let value = self.read_semantic_value(bb, *src);
+                let value = self.read_semantic_value(bb, src.local);
                 self.write_value_to_place(bb, place, value, &target);
             }
         }

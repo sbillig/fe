@@ -12,10 +12,10 @@ use crate::{
             get_or_build_semantic_instance, instantiate_with_generic_args,
         },
         semantic::{
-            FieldIndex, SConst, SExpr, SLocalId, SPlace, SStmt, SStmtKind, STerminatorKind,
-            SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody, SemanticConstRef,
-            VariantIndex, array_const, bool_const, bytes_const, enum_const, int_const,
-            int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_eq,
+            FieldIndex, SConst, SExpr, SLocalId, SOperand, SPlace, SStmt, SStmtKind,
+            STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody,
+            SemanticConstRef, VariantIndex, array_const, bool_const, bytes_const, enum_const,
+            int_const, int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_eq,
             sem_const_from_ty, struct_const, tuple_const, unit_const,
         },
         ty::{
@@ -405,7 +405,7 @@ impl<'db> CtfeMachine<'db> {
                         .map_or_else(|| default.map_or(0, |bb| bb.index()), |(_, bb)| bb.index());
                 }
                 STerminatorKind::Return(Some(value)) => {
-                    return self.read_slot(frame_idx, value, term_origin);
+                    return self.read_operand(frame_idx, value, term_origin);
                 }
                 STerminatorKind::Return(None) => {
                     return Ok(CtfeValue::concrete(unit_const(self.db)));
@@ -424,7 +424,7 @@ impl<'db> CtfeMachine<'db> {
             }
             SStmtKind::Store { dst, src } => {
                 let place = self.resolve_place(frame_idx, &dst, origin)?;
-                let CtfeValue::Value(value) = self.read_slot(frame_idx, src, origin)? else {
+                let CtfeValue::Value(value) = self.read_operand(frame_idx, src, origin)? else {
                     return Err(CtfeError::InvalidBorrow { origin });
                 };
                 self.store_place(place, value, origin)?;
@@ -443,7 +443,7 @@ impl<'db> CtfeMachine<'db> {
         self.bump(origin)?;
         match expr {
             SExpr::Forward(value) | SExpr::UseValue(value) => {
-                self.read_slot(frame_idx, value, origin)
+                self.read_operand(frame_idx, value, origin)
             }
             SExpr::CodeRegionRef { .. } => Err(CtfeError::NotConstEvaluable { origin }),
             SExpr::Const(SConst::Value(value)) => Ok(CtfeValue::concrete(value)),
@@ -943,23 +943,23 @@ impl<'db> CtfeMachine<'db> {
     fn eval_args(
         &mut self,
         frame_idx: usize,
-        args: &[SLocalId],
+        args: &[SOperand],
         origin: SemOrigin<'db>,
     ) -> Result<Vec<CtfeValue<'db>>, CtfeError<'db>> {
         args.iter()
-            .map(|arg| self.read_slot(frame_idx, *arg, origin))
+            .map(|arg| self.read_operand(frame_idx, *arg, origin))
             .collect()
     }
 
     fn eval_value_args(
         &mut self,
         frame_idx: usize,
-        args: &[SLocalId],
+        args: &[SOperand],
         origin: SemOrigin<'db>,
     ) -> Result<Vec<CtfeConstValue<'db>>, CtfeError<'db>> {
         args.iter()
             .map(|arg| {
-                let CtfeValue::Value(value) = self.read_slot(frame_idx, *arg, origin)? else {
+                let CtfeValue::Value(value) = self.read_operand(frame_idx, *arg, origin)? else {
                     return Err(CtfeError::InvalidBorrow { origin });
                 };
                 Ok(value)
@@ -979,13 +979,23 @@ impl<'db> CtfeMachine<'db> {
         }
     }
 
+    fn read_operand(
+        &self,
+        frame_idx: usize,
+        operand: SOperand,
+        origin: SemOrigin<'db>,
+    ) -> Result<CtfeValue<'db>, CtfeError<'db>> {
+        self.read_slot(frame_idx, operand.value, operand.sem_origin(origin))
+    }
+
     fn load_value(
         &mut self,
         frame_idx: usize,
-        local: SLocalId,
+        operand: SOperand,
         origin: SemOrigin<'db>,
     ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
-        match self.read_slot(frame_idx, local, origin)? {
+        let origin = operand.sem_origin(origin);
+        match self.read_slot(frame_idx, operand.value, origin)? {
             CtfeValue::Value(value) => Ok(value),
             CtfeValue::Ref(r#ref) => self.load_ref_value(&r#ref, origin),
         }
@@ -1032,7 +1042,7 @@ impl<'db> CtfeMachine<'db> {
                     })?),
                 },
                 Projection::Index(IndexSource::Dynamic(index)) => {
-                    let index = self.load_value(frame_idx, *index, origin)?;
+                    let index = self.load_value(frame_idx, SOperand::synthetic(*index), origin)?;
                     CtfePathElem::Index(self.index_from_value(frame_idx, index, origin)?)
                 }
                 Projection::Index(IndexSource::Constant(index)) => CtfePathElem::Index(*index),

@@ -2,7 +2,7 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            SEffectArg, SEffectArgValue, SPlace, SValueId,
+            SEffectArg, SEffectArgValue, SOperand, SPlace, SValueId,
             resolved_provider_binding_for_instance_effect,
         },
         ty::{
@@ -89,21 +89,24 @@ impl<'db> SmirLowerCtxt<'db> {
             binding_idx: arg.binding_idx,
             arg: match &arg.arg {
                 EffectArg::Place(place) => SEffectArgValue::Place(self.lower_place_data(place)),
-                EffectArg::Value(expr) => SEffectArgValue::Value(
+                EffectArg::Value(expr) => SEffectArgValue::Value(SOperand::expr(
                     self.with_binding_values
                         .get(expr)
                         .copied()
                         .unwrap_or_else(|| self.lower_expr(*expr)),
-                ),
+                    *expr,
+                )),
                 EffectArg::Binding(binding) => {
                     let local = self.alloc_binding_local(*binding);
                     if matches!(arg.pass_mode, EffectPassMode::ByPlace) {
                         SEffectArgValue::Place(SPlace::new(local))
                     } else {
-                        SEffectArgValue::Value(local)
+                        SEffectArgValue::Value(SOperand::inherited(local))
                     }
                 }
-                EffectArg::Unknown => SEffectArgValue::Value(self.unit_value()),
+                EffectArg::Unknown => {
+                    SEffectArgValue::Value(SOperand::synthetic(self.unit_value()))
+                }
             },
             pass_mode: arg.pass_mode,
             target_ty: arg.provider_target_ty,

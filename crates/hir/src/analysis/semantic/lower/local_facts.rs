@@ -61,7 +61,7 @@ impl<'db> SmirLowerCtxt<'db> {
         expr: &SExpr<'db>,
     ) -> SemanticLocalRole<'db> {
         match expr {
-            SExpr::Forward(value) => self.classify_forward_role(dst_ty, *value),
+            SExpr::Forward(value) => self.classify_forward_role(dst_ty, value.value),
             SExpr::UseValue(_) | SExpr::Borrow { .. } | SExpr::Call { .. } => {
                 self.fallback_local_role(dst_ty)
             }
@@ -69,18 +69,24 @@ impl<'db> SmirLowerCtxt<'db> {
                 self.classify_projection_local_role(dst_ty, place.clone())
             }
             SExpr::Field { base, field } => {
-                self.classify_projection_local_role(dst_ty, SPlace::field(*base, *field))
+                self.classify_projection_local_role(dst_ty, SPlace::field(base.value, *field))
             }
-            SExpr::Index { base, index } => {
-                self.classify_projection_local_role(dst_ty, SPlace::dynamic_index(*base, *index))
-            }
+            SExpr::Index { base, index } => self.classify_projection_local_role(
+                dst_ty,
+                SPlace::dynamic_index(base.value, index.value),
+            ),
             SExpr::ExtractEnumField {
                 value,
                 variant,
                 field,
             } => self.classify_projection_local_role(
                 dst_ty,
-                SPlace::variant_field(*value, *variant, self.locals[value.index()].ty, *field),
+                SPlace::variant_field(
+                    value.value,
+                    *variant,
+                    self.locals[value.value.index()].ty,
+                    *field,
+                ),
             ),
             SExpr::AggregateMake { ty, .. } => {
                 let fallback = self.fallback_local_role(*ty);
@@ -109,23 +115,23 @@ impl<'db> SmirLowerCtxt<'db> {
     fn classify_expr_snapshot_source(&self, expr: &SExpr<'db>) -> Option<PlaceProvenance<'db>> {
         match expr {
             SExpr::Forward(value) | SExpr::UseValue(value) => {
-                self.locals[value.index()].snapshot_source.clone()
+                self.locals[value.value.index()].snapshot_source.clone()
             }
             SExpr::ReadPlace { place } => self.classify_projection_snapshot_source(place.clone()),
             SExpr::Field { base, field } => {
-                self.classify_projection_snapshot_source(SPlace::field(*base, *field))
+                self.classify_projection_snapshot_source(SPlace::field(base.value, *field))
             }
-            SExpr::Index { base, index } => {
-                self.classify_projection_snapshot_source(SPlace::dynamic_index(*base, *index))
-            }
+            SExpr::Index { base, index } => self.classify_projection_snapshot_source(
+                SPlace::dynamic_index(base.value, index.value),
+            ),
             SExpr::ExtractEnumField {
                 value,
                 variant,
                 field,
             } => self.classify_projection_snapshot_source(SPlace::variant_field(
-                *value,
+                value.value,
                 *variant,
-                self.locals[value.index()].ty,
+                self.locals[value.value.index()].ty,
                 *field,
             )),
             SExpr::Borrow { .. }

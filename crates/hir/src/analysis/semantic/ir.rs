@@ -284,13 +284,57 @@ pub struct SEffectArg<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SEffectArgValue<'db> {
     Place(SPlace<'db>),
-    Value(SValueId),
+    Value(SOperand),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SOperandOrigin {
+    Inherited,
+    Expr(ExprId),
+    Synthetic,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub struct SOperand {
+    pub value: SValueId,
+    pub origin: SOperandOrigin,
+}
+
+impl SOperand {
+    pub fn inherited(value: SValueId) -> Self {
+        Self {
+            value,
+            origin: SOperandOrigin::Inherited,
+        }
+    }
+
+    pub fn expr(value: SValueId, expr: ExprId) -> Self {
+        Self {
+            value,
+            origin: SOperandOrigin::Expr(expr),
+        }
+    }
+
+    pub fn synthetic(value: SValueId) -> Self {
+        Self {
+            value,
+            origin: SOperandOrigin::Synthetic,
+        }
+    }
+
+    pub fn sem_origin<'db>(self, fallback: SemOrigin<'db>) -> SemOrigin<'db> {
+        match self.origin {
+            SOperandOrigin::Inherited => fallback,
+            SOperandOrigin::Expr(expr) => SemOrigin::Expr(expr),
+            SOperandOrigin::Synthetic => SemOrigin::Synthetic,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SExpr<'db> {
-    Forward(SValueId),
-    UseValue(SValueId),
+    Forward(SOperand),
+    UseValue(SOperand),
     ReadPlace {
         place: SPlace<'db>,
     },
@@ -300,33 +344,33 @@ pub enum SExpr<'db> {
     Const(SConst<'db>),
     Unary {
         op: UnOp,
-        value: SValueId,
+        value: SOperand,
     },
     Binary {
         op: BinOp,
-        lhs: SValueId,
-        rhs: SValueId,
+        lhs: SOperand,
+        rhs: SOperand,
     },
     Cast {
-        value: SValueId,
+        value: SOperand,
         to: TyId<'db>,
     },
     AggregateMake {
         ty: TyId<'db>,
-        fields: Box<[SValueId]>,
+        fields: Box<[SOperand]>,
     },
     EnumMake {
         enum_ty: TyId<'db>,
         variant: VariantIndex,
-        fields: Box<[SValueId]>,
+        fields: Box<[SOperand]>,
     },
     Field {
-        base: SValueId,
+        base: SOperand,
         field: FieldIndex,
     },
     Index {
-        base: SValueId,
-        index: SValueId,
+        base: SOperand,
+        index: SOperand,
     },
     Borrow {
         place: SPlace<'db>,
@@ -334,14 +378,14 @@ pub enum SExpr<'db> {
         provider: Option<ProviderAddressSpace>,
     },
     GetEnumTag {
-        value: SValueId,
+        value: SOperand,
     },
     IsEnumVariant {
-        value: SValueId,
+        value: SOperand,
         variant: VariantIndex,
     },
     ExtractEnumField {
-        value: SValueId,
+        value: SOperand,
         variant: VariantIndex,
         field: FieldIndex,
     },
@@ -353,7 +397,7 @@ pub enum SExpr<'db> {
     },
     Call {
         callee: SemanticCalleeRef<'db>,
-        args: Box<[SValueId]>,
+        args: Box<[SOperand]>,
         effect_args: Box<[SEffectArg<'db>]>,
     },
 }
@@ -373,7 +417,7 @@ pub struct SStmt<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SStmtKind<'db> {
     Assign { dst: SLocalId, expr: SExpr<'db> },
-    Store { dst: SPlace<'db>, src: SValueId },
+    Store { dst: SPlace<'db>, src: SOperand },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -386,15 +430,15 @@ pub struct STerminator<'db> {
 pub enum STerminatorKind<'db> {
     Goto(SBlockId),
     Branch {
-        cond: SValueId,
+        cond: SOperand,
         then_bb: SBlockId,
         else_bb: SBlockId,
     },
     MatchEnum {
-        value: SValueId,
+        value: SOperand,
         enum_ty: TyId<'db>,
         cases: Box<[(VariantIndex, SBlockId)]>,
         default: Option<SBlockId>,
     },
-    Return(Option<SValueId>),
+    Return(Option<SOperand>),
 }

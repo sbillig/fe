@@ -24,8 +24,8 @@ pub fn verify_semantic_body<'db>(body: &SemanticBody<'db>) -> Result<(), Semanti
                     if body.local(dst.local).is_none() {
                         return Err(SemanticVerifyError::MissingSemanticLocal(dst.local));
                     }
-                    if body.local(*src).is_none() {
-                        return Err(SemanticVerifyError::MissingSemanticLocal(*src));
+                    if body.local(src.value).is_none() {
+                        return Err(SemanticVerifyError::MissingSemanticLocal(src.value));
                     }
                 }
             }

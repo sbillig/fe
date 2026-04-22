@@ -430,7 +430,7 @@ pub struct NSStmt<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NSStmtKind<'db> {
     Assign { dst: SLocalId, expr: NExpr<'db> },
-    Store { dst: NSPlace<'db>, src: SLocalId },
+    Store { dst: NSPlace<'db>, src: NOperand },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

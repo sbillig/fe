@@ -594,7 +594,9 @@ impl Tower {
                     SStmtKind::Assign {
                         expr: SExpr::Call { args, .. },
                         ..
-                    } if args.first().is_some_and(|receiver| borrow_dsts.contains(receiver))
+                    } if args
+                        .first()
+                        .is_some_and(|receiver| borrow_dsts.contains(&receiver.value))
                 )
             }),
         "augmented assignment receiver should lower through a synthesized mutable borrow:\n{body:#?}"
