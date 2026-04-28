@@ -12,7 +12,8 @@ use crate::{analysis::name_resolution::diagnostics::PathResDiag, hir_def::ItemKi
 use crate::{analysis::ty::ty_check::EffectParamOwner, span::DynLazySpan};
 use crate::{
     core::hir_def::{
-        CallableDef, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId, ImplTrait,
+        CallableDef, CompBinOp, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId,
+        ImplTrait,
     },
     hir_def::TypeAlias,
 };
@@ -224,6 +225,13 @@ pub struct CallConstraintDiagInfo<'db> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct StaticAssertComparisonValues {
+    pub op: CompBinOp,
+    pub lhs: String,
+    pub rhs: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum BodyDiag<'db> {
     TypeMismatch {
         span: DynLazySpan<'db>,
@@ -391,6 +399,10 @@ pub enum BodyDiag<'db> {
 
     TypeMustBeKnown(DynLazySpan<'db>),
     ConstValueMustBeKnown(DynLazySpan<'db>),
+    StaticAssertFailed {
+        primary: DynLazySpan<'db>,
+        comparison: Option<StaticAssertComparisonValues>,
+    },
 
     InvalidCast {
         primary: DynLazySpan<'db>,
@@ -769,6 +781,7 @@ impl<'db> BodyDiag<'db> {
             Self::TypeMustBeKnown(..) => 14,
             Self::InvalidCast { .. } => 55,
             Self::ConstValueMustBeKnown(..) => 64,
+            Self::StaticAssertFailed { .. } => 81,
             Self::AccessedFieldNotFound { .. } => 15,
             Self::OpsTraitNotImplemented { .. } => 16,
             Self::UnsupportedUnaryPlus(..) => 52,

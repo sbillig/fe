@@ -346,6 +346,7 @@ fn walk<'db>(
                 | ItemKind::Trait(_) => Domain::Type,
 
                 ItemKind::TopMod(_)
+                | ItemKind::StaticAssert(_)
                 | ItemKind::Use(_)
                 | ItemKind::Impl(_)
                 | ItemKind::ImplTrait(_)
@@ -392,6 +393,14 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                     _ => None,
                 })
                 .flat_map(|const_| &ty_check::check_const_body(db, const_).0)
+                .map(|diag| diag.to_voucher()),
+        );
+
+        diags.extend(
+            top_mod
+                .all_static_asserts(db)
+                .iter()
+                .flat_map(|assert_| ty_check::check_static_assert(db, *assert_).iter())
                 .map(|diag| diag.to_voucher()),
         );
 

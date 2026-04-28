@@ -3021,6 +3021,30 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
+            Self::StaticAssertFailed {
+                primary,
+                comparison,
+            } => {
+                let mut notes = Vec::new();
+                if let Some(comparison) = comparison {
+                    notes.push(format!("left: `{}`", comparison.lhs));
+                    notes.push(format!("right: `{}`", comparison.rhs));
+                    notes.push(format!("operator: `{}`", comparison.op.symbol()));
+                }
+
+                CompleteDiagnostic {
+                    severity,
+                    message: "static assertion failed".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: "`static_assert` evaluated to `false`".to_string(),
+                        span: primary.resolve(db),
+                    }],
+                    notes,
+                    error_code,
+                }
+            }
+
             Self::InvalidCast {
                 primary,
                 from,

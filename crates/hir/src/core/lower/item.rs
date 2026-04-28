@@ -4,9 +4,10 @@ use salsa::Accumulator as _;
 use super::{FileLowerCtxt, attr::named_attr_specs};
 use crate::{
     hir_def::{
-        AttrListId, Body, EffectParamListId, FuncParamListId, GenericParamListId, IdentId,
-        InlineAttrErrorKind, KeywordAttrArgSpec, KeywordAttrSpec, PathId, TraitRefId, TupleTypeId,
-        TypeBound, TypeId, WhereClauseId, item::*, parse_inline_attr_specs,
+        AttrListId, Body, BodyKind, CompBinOp, EffectParamListId, FuncParamListId,
+        GenericParamListId, IdentId, InlineAttrErrorKind, KeywordAttrArgSpec, KeywordAttrSpec,
+        PathId, TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*,
+        parse_inline_attr_specs,
     },
     lower::msg::lower_msg_as_mod,
     span::HirOrigin,
@@ -258,6 +259,29 @@ impl<'db> ItemKind<'db> {
                     "const",
                 );
                 Const::lower_ast(ctxt, const_);
+            }
+            ast::ItemKind::StaticAssert(assert_) => {
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                    ctxt,
+                    assert_.attr_list(),
+                    "static assertion",
+                );
+                super::event::report_event_attr_on_non_struct_item(
+                    ctxt,
+                    assert_.attr_list(),
+                    "static assertion",
+                );
+                super::error::report_error_attr_on_non_struct_item(
+                    ctxt,
+                    assert_.attr_list(),
+                    "static assertion",
+                );
+                super::payable::report_payable_attr_on_unsupported_item(
+                    ctxt,
+                    assert_.attr_list(),
+                    "static assertion",
+                );
+                StaticAssert::lower_ast(ctxt, assert_);
             }
             ast::ItemKind::Use(use_) => {
                 super::arithmetic::report_arithmetic_attr_on_unsupported_item(
@@ -863,6 +887,77 @@ impl<'db> Const<'db> {
             origin,
         );
         ctxt.leave_item_scope(const_)
+    }
+}
+
+impl<'db> StaticAssert<'db> {
+    pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::StaticAssert) -> Self {
+        let idx = ctxt.next_static_assert_idx();
+        let id = ctxt.joined_id(TrackedItemVariant::StaticAssert(idx));
+        ctxt.enter_item_scope(id, false);
+
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
+        let condition_ast = ast.condition();
+        let condition = Body::lower_ast_with_variant(
+            ctxt,
+            condition_ast.clone(),
+            TrackedItemVariant::StaticAssertCondition,
+            BodyKind::Anonymous,
+        );
+        let comparison =
+            condition_ast.and_then(|expr| StaticAssertComparison::lower_ast(ctxt, expr));
+        let origin = HirOrigin::raw(&ast);
+
+        let assert_ = Self::new(
+            ctxt.db(),
+            id,
+            attributes,
+            condition,
+            comparison,
+            ctxt.top_mod(),
+            origin,
+        );
+        ctxt.leave_item_scope(assert_)
+    }
+}
+
+impl<'db> StaticAssertComparison<'db> {
+    fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, expr: ast::Expr) -> Option<Self> {
+        let expr = peel_parens(expr);
+        let ast::ExprKind::Bin(bin) = expr.kind() else {
+            return None;
+        };
+        let ast::BinOp::Comp(op) = bin.op()? else {
+            return None;
+        };
+
+        Some(Self {
+            op: CompBinOp::lower_ast(op),
+            lhs: Body::lower_ast_with_variant(
+                ctxt,
+                bin.lhs(),
+                TrackedItemVariant::StaticAssertComparisonLhs,
+                BodyKind::Anonymous,
+            ),
+            rhs: Body::lower_ast_with_variant(
+                ctxt,
+                bin.rhs(),
+                TrackedItemVariant::StaticAssertComparisonRhs,
+                BodyKind::Anonymous,
+            ),
+        })
+    }
+}
+
+fn peel_parens(mut expr: ast::Expr) -> ast::Expr {
+    loop {
+        match expr.kind() {
+            ast::ExprKind::Paren(paren) => match paren.expr() {
+                Some(inner) => expr = inner,
+                None => return expr,
+            },
+            _ => return expr,
+        }
     }
 }
 

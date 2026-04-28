@@ -5,8 +5,8 @@ use salsa::Update;
 use crate::{
     HirDb, SpannedHirDb,
     core::hir_def::{
-        Body, Const, Contract, Enum, Func, Impl, ImplTrait, Mod, Struct, TopLevelMod, Trait,
-        TypeAlias, Use,
+        Body, Const, Contract, Enum, Func, Impl, ImplTrait, Mod, StaticAssert, Struct, TopLevelMod,
+        Trait, TypeAlias, Use,
     },
     core::lower::top_mod_ast,
 };
@@ -41,8 +41,8 @@ pub mod lazy_spans {
             LazyBodySpan, LazyConstSpan, LazyContractRecvSpan, LazyContractSpan, LazyEnumSpan,
             LazyFieldDefListSpan, LazyFieldDefSpan, LazyFuncSignatureSpan, LazyFuncSpan,
             LazyImplSpan, LazyImplTraitSpan, LazyItemSpan, LazyModSpan, LazyRecvArmListSpan,
-            LazyRecvArmSpan, LazyStructSpan, LazyTopModSpan, LazyTraitSpan, LazyTypeAliasSpan,
-            LazyUseSpan, LazyVariantDefListSpan, LazyVariantDefSpan,
+            LazyRecvArmSpan, LazyStaticAssertSpan, LazyStructSpan, LazyTopModSpan, LazyTraitSpan,
+            LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefListSpan, LazyVariantDefSpan,
         },
         params::{
             LazyConstGenericParamSpan, LazyFuncParamListSpan, LazyFuncParamSpan,
@@ -156,6 +156,13 @@ pub fn impl_trait_ast<'db>(
 }
 
 pub fn const_ast<'db>(db: &'db dyn SpannedHirDb, item: Const<'db>) -> &'db HirOrigin<ast::Const> {
+    item.origin(db)
+}
+
+pub fn static_assert_ast<'db>(
+    db: &'db dyn SpannedHirDb,
+    item: StaticAssert<'db>,
+) -> &'db HirOrigin<ast::StaticAssert> {
     item.origin(db)
 }
 

@@ -38,6 +38,7 @@ define_scope! {
         ImplKw,
         UseKw,
         ConstKw,
+        StaticAssertKw,
         ExternKw,
         TypeKw,
         PubKw,
@@ -115,7 +116,12 @@ impl super::Parse for ItemScope {
 
         if modifiers.is_unsafe && !is_fn_item_head(parser) {
             parser.error("expected `fn` after `unsafe` keyword");
-        } else if modifiers.is_pub && matches!(parser.current_kind(), Some(ImplKw | ExternKw)) {
+        } else if modifiers.is_pub
+            && matches!(
+                parser.current_kind(),
+                Some(ImplKw | ExternKw | StaticAssertKw)
+            )
+        {
             let error_msg = format!(
                 "`pub` can't be used for `{}`",
                 parser.current_token().unwrap().text()
@@ -125,8 +131,19 @@ impl super::Parse for ItemScope {
 
         parser.expect(
             &[
-                ModKw, FnKw, StructKw, ContractKw, MsgKw, EnumKw, TraitKw, ImplKw, UseKw, ConstKw,
-                ExternKw, TypeKw,
+                ModKw,
+                FnKw,
+                StructKw,
+                ContractKw,
+                MsgKw,
+                EnumKw,
+                TraitKw,
+                ImplKw,
+                UseKw,
+                ConstKw,
+                StaticAssertKw,
+                ExternKw,
+                TypeKw,
             ],
             Some(ExpectedKind::Syntax(SyntaxKind::Item)),
         )?;
@@ -148,6 +165,7 @@ impl super::Parse for ItemScope {
                     parser.parse_cp(ConstScope::default(), checkpoint)
                 }
             }
+            Some(StaticAssertKw) => parser.parse_cp(StaticAssertScope::default(), checkpoint),
             Some(ExternKw) => parser.parse_cp(ExternScope::default(), checkpoint),
             Some(TypeKw) => parser.parse_cp(TypeAliasScope::default(), checkpoint),
             _ => unreachable!(),
@@ -879,6 +897,38 @@ impl super::Parse for ConstScope {
         if parser.find_and_pop(SyntaxKind::Eq, ExpectedKind::Unspecified)? {
             parser.bump();
             parse_expr(parser)?;
+        }
+        Ok(())
+    }
+}
+
+define_scope! { StaticAssertScope, StaticAssert }
+impl super::Parse for StaticAssertScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.bump_expected(SyntaxKind::StaticAssertKw);
+        parser.set_newline_as_trivia(true);
+        parser.set_scope_recovery_stack(&[SyntaxKind::LParen, SyntaxKind::RParen]);
+
+        if parser.find_and_pop(
+            SyntaxKind::LParen,
+            ExpectedKind::Syntax(SyntaxKind::StaticAssert),
+        )? {
+            parser.bump();
+            if parser.current_kind() != Some(SyntaxKind::RParen) {
+                parse_expr(parser)?;
+            }
+        }
+
+        if parser.find_and_pop(
+            SyntaxKind::RParen,
+            ExpectedKind::ClosingBracket {
+                bracket: SyntaxKind::RParen,
+                parent: SyntaxKind::StaticAssert,
+            },
+        )? {
+            parser.bump();
         }
         Ok(())
     }

@@ -12,9 +12,10 @@ use crate::{
         Expr, ExprId, Field, FieldDef, FieldDefListId, FieldIndex, FieldParent, Func, FuncParam,
         FuncParamListId, FuncParamName, GenericArg, GenericArgListId, GenericParam,
         GenericParamListId, IdentId, Impl, ImplTrait, ItemKind, KindBound, LitKind, MatchArm, Mod,
-        Partial, Pat, PatId, PathId, PathKind, Stmt, StmtId, Struct, TopLevelMod, Trait,
-        TraitRefId, TupleTypeId, TypeAlias, TypeBound, TypeId, TypeKind, Use, UseAlias, UsePathId,
-        UsePathSegment, VariantDef, VariantDefListId, VariantKind, WhereClauseId, WherePredicate,
+        Partial, Pat, PatId, PathId, PathKind, StaticAssert, Stmt, StmtId, Struct, TopLevelMod,
+        Trait, TraitRefId, TupleTypeId, TypeAlias, TypeBound, TypeId, TypeKind, Use, UseAlias,
+        UsePathId, UsePathSegment, VariantDef, VariantDefListId, VariantKind, WhereClauseId,
+        WherePredicate,
         attr::{self, AttrArgValue},
         scope_graph::ScopeId,
     },
@@ -29,9 +30,10 @@ pub mod prelude {
         walk_field_def_list, walk_field_list, walk_func, walk_func_param, walk_func_param_list,
         walk_generic_arg, walk_generic_arg_list, walk_generic_param, walk_generic_param_list,
         walk_impl, walk_impl_trait, walk_item, walk_kind_bound, walk_mod, walk_pat, walk_path,
-        walk_stmt, walk_struct, walk_super_trait_list, walk_top_mod, walk_trait, walk_trait_ref,
-        walk_type, walk_type_alias, walk_type_bound, walk_type_bound_list, walk_use, walk_use_path,
-        walk_variant_def, walk_variant_def_list, walk_where_clause, walk_where_predicate,
+        walk_static_assert, walk_stmt, walk_struct, walk_super_trait_list, walk_top_mod,
+        walk_trait, walk_trait_ref, walk_type, walk_type_alias, walk_type_bound,
+        walk_type_bound_list, walk_use, walk_use_path, walk_variant_def, walk_variant_def_list,
+        walk_where_clause, walk_where_predicate,
     };
     pub use crate::core::span::lazy_spans::*;
 }
@@ -148,6 +150,14 @@ pub trait Visitor<'db> {
         constant: Const<'db>,
     ) {
         walk_const(self, ctxt, constant)
+    }
+
+    fn visit_static_assert(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyStaticAssertSpan<'db>>,
+        assert_: StaticAssert<'db>,
+    ) {
+        walk_static_assert(self, ctxt, assert_)
     }
 
     fn visit_use(&mut self, ctxt: &mut VisitorCtxt<'db, LazyUseSpan<'db>>, use_: Use<'db>) {
@@ -452,6 +462,10 @@ pub fn walk_item<'db, V>(
         ItemKind::Const(const_) => {
             let mut new_ctxt = VisitorCtxt::with_const(ctxt.db, const_);
             visitor.visit_const(&mut new_ctxt, const_)
+        }
+        ItemKind::StaticAssert(assert_) => {
+            let mut new_ctxt = VisitorCtxt::with_static_assert(ctxt.db, assert_);
+            visitor.visit_static_assert(&mut new_ctxt, assert_)
         }
         ItemKind::Use(use_) => {
             let mut new_ctxt = VisitorCtxt::with_use(ctxt.db, use_);
@@ -1085,6 +1099,25 @@ pub fn walk_const<'db, V>(
     if let Some(body) = const_.body(ctxt.db).to_opt() {
         visitor.visit_body(&mut VisitorCtxt::with_body(ctxt.db, body), body);
     }
+}
+
+pub fn walk_static_assert<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyStaticAssertSpan<'db>>,
+    assert_: StaticAssert<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    ctxt.with_new_ctxt(
+        |span| span.attributes(),
+        |ctxt| {
+            let id = assert_.attributes(ctxt.db);
+            visitor.visit_attribute_list(ctxt, id);
+        },
+    );
+
+    let body = assert_.condition(ctxt.db);
+    visitor.visit_body(&mut VisitorCtxt::with_body(ctxt.db, body), body);
 }
 
 pub fn walk_use<'db, V>(
@@ -2344,6 +2377,7 @@ where
             ChainRoot::Trait(trait_) => trait_.top_mod(self.db),
             ChainRoot::ImplTrait(impl_trait) => impl_trait.top_mod(self.db),
             ChainRoot::Const(const_) => const_.top_mod(self.db),
+            ChainRoot::StaticAssert(assert_) => assert_.top_mod(self.db),
             ChainRoot::Use(use_) => use_.top_mod(self.db),
             ChainRoot::Body(body) => body.top_mod(self.db),
             ChainRoot::Stmt(_) | ChainRoot::Expr(_) | ChainRoot::Pat(_) => {
@@ -2519,6 +2553,7 @@ define_item_ctxt_ctor! {
     (LazyTraitSpan<'db>, with_trait(trait_: Trait<'db>)),
     (LazyImplTraitSpan<'db>, with_impl_trait(impl_trait: ImplTrait<'db>)),
     (LazyConstSpan<'db>, with_const(const_: Const<'db>)),
+    (LazyStaticAssertSpan<'db>, with_static_assert(assert_: StaticAssert<'db>)),
     (LazyUseSpan<'db>, with_use(use_: Use<'db>)),
     (LazyBodySpan<'db>, with_body(body: Body<'db>)),
 }

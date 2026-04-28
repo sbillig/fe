@@ -279,6 +279,11 @@ impl<'db> ScopeGraphBuilder<'db> {
                     .unwrap_or_else(EdgeKind::anon)
             }
 
+            StaticAssert(_) => {
+                self.graph.add_lex_edge(item_node, parent_node);
+                EdgeKind::anon()
+            }
+
             Use(use_) => {
                 self.graph.unresolved_uses.insert(use_);
 

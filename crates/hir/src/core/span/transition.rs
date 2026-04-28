@@ -11,13 +11,14 @@ use thin_vec::ThinVec;
 use super::{
     DesugaredOrigin, DesugaredUseFocus, HirOrigin, LazySpan, UseDesugared, body_ast, const_ast,
     contract_ast, enum_ast, expr::ExprRoot, func_ast, impl_ast, impl_trait_ast, mod_ast,
-    pat::PatRoot, stmt::StmtRoot, struct_ast, trait_ast, type_alias_ast, use_ast,
+    pat::PatRoot, static_assert_ast, stmt::StmtRoot, struct_ast, trait_ast, type_alias_ast,
+    use_ast,
 };
 use crate::{
     HirDb, SpannedHirDb,
     hir_def::{
-        Body, Const, Contract, Enum, Func, Impl, ImplTrait, ItemKind, Mod, Struct, TopLevelMod,
-        Trait, TypeAlias, Use,
+        Body, Const, Contract, Enum, Func, Impl, ImplTrait, ItemKind, Mod, StaticAssert, Struct,
+        TopLevelMod, Trait, TypeAlias, Use,
     },
     lower::top_mod_ast,
 };
@@ -78,6 +79,7 @@ impl<'db> SpanTransitionChain<'db> {
             ChainRoot::Trait(t) => t.top_mod(db),
             ChainRoot::ImplTrait(i) => i.top_mod(db),
             ChainRoot::Const(c) => c.top_mod(db),
+            ChainRoot::StaticAssert(a) => a.top_mod(db),
             ChainRoot::Use(u) => u.top_mod(db),
             ChainRoot::Body(b) => b.top_mod(db),
             ChainRoot::Stmt(s) => s.body.top_mod(db),
@@ -105,6 +107,7 @@ pub(crate) enum ChainRoot<'db> {
     Trait(Trait<'db>),
     ImplTrait(ImplTrait<'db>),
     Const(Const<'db>),
+    StaticAssert(StaticAssert<'db>),
     Use(Use<'db>),
     Body(Body<'db>),
     Stmt(StmtRoot<'db>),
@@ -209,6 +212,7 @@ impl ChainInitiator for ChainRoot<'_> {
                 ItemKind::Trait(trait_) => trait_.init(db),
                 ItemKind::ImplTrait(impl_trait) => impl_trait.init(db),
                 ItemKind::Const(const_) => const_.init(db),
+                ItemKind::StaticAssert(assert_) => assert_.init(db),
                 ItemKind::Use(use_) => use_.init(db),
                 ItemKind::Body(body) => body.init(db),
             },
@@ -223,6 +227,7 @@ impl ChainInitiator for ChainRoot<'_> {
             Self::Trait(trait_) => trait_.init(db),
             Self::ImplTrait(impl_trait) => impl_trait.init(db),
             Self::Const(const_) => const_.init(db),
+            Self::StaticAssert(assert_) => assert_.init(db),
             Self::Use(use_) => use_.init(db),
             Self::Body(body) => body.init(db),
             Self::Stmt(stmt) => stmt.init(db),
@@ -296,6 +301,7 @@ impl_chain_root! {
     (Trait<'db>, trait_ast),
     (ImplTrait<'db>, impl_trait_ast),
     (Const<'db>, const_ast),
+    (StaticAssert<'db>, static_assert_ast),
     (Use<'db>, use_ast),
     (Body<'db>, body_ast),
 }

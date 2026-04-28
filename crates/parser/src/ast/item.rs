@@ -46,6 +46,7 @@ impl Item {
             .or_else(|| support::child(self.syntax()).map(ItemKind::Trait))
             .or_else(|| support::child(self.syntax()).map(ItemKind::ImplTrait))
             .or_else(|| support::child(self.syntax()).map(ItemKind::Const))
+            .or_else(|| support::child(self.syntax()).map(ItemKind::StaticAssert))
             .or_else(|| support::child(self.syntax()).map(ItemKind::Use))
             .or_else(|| support::child(self.syntax()).map(ItemKind::Extern))
     }
@@ -497,6 +498,19 @@ impl Const {
 }
 
 ast_node! {
+    /// `static_assert(expr)`
+    pub struct StaticAssert,
+    SK::StaticAssert,
+}
+impl super::AttrListOwner for StaticAssert {}
+impl StaticAssert {
+    /// Returns the asserted condition.
+    pub fn condition(&self) -> Option<super::Expr> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
     /// `use foo::{bar, Baz::*}`
     pub struct Use,
     SK::Use,
@@ -732,6 +746,7 @@ pub enum ItemKind {
     Trait(Trait),
     ImplTrait(ImplTrait),
     Const(Const),
+    StaticAssert(StaticAssert),
     Use(Use),
     Extern(Extern),
 }
@@ -1088,6 +1103,19 @@ mod tests {
         assert_eq!(c.name().unwrap().text(), "FOO");
         assert!(matches!(c.ty().unwrap().kind(), TypeKind::Path(_)));
         assert!(matches!(c.value().unwrap().kind(), ExprKind::Bin(_)));
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn static_assert() {
+        let source = r#"
+            static_assert(1 + 1 == 2)
+        "#;
+        let assert_: StaticAssert = parse_item(source);
+        assert!(matches!(
+            assert_.condition().unwrap().kind(),
+            ExprKind::Bin(_)
+        ));
     }
 
     #[test]

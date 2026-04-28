@@ -4,6 +4,7 @@ use super::{
     LazySpanAtom,
     attr::LazyAttrListSpan,
     define_lazy_span_node,
+    expr::LazyExprSpan,
     params::{
         LazyFuncParamListSpan, LazyGenericParamListSpan, LazyUsesClauseSpan, LazyWhereClauseSpan,
     },
@@ -15,8 +16,8 @@ use super::{
 };
 use crate::{
     hir_def::{
-        Body, Const, Contract, Enum, Func, Impl, ImplTrait, ItemKind, Mod, Struct, TopLevelMod,
-        Trait, TypeAlias, Use,
+        Body, Const, Contract, Enum, Func, Impl, ImplTrait, ItemKind, Mod, StaticAssert, Struct,
+        TopLevelMod, Trait, TypeAlias, Use,
     },
     span::{
         DesugaredOrigin, DesugaredUseFocus, MsgDesugaredFocus,
@@ -428,6 +429,20 @@ define_lazy_span_node!(
 impl<'db> LazyConstSpan<'db> {
     pub fn new(c: Const<'db>) -> Self {
         Self(crate::span::transition::SpanTransitionChain::new(c))
+    }
+}
+
+define_lazy_span_node!(
+    LazyStaticAssertSpan,
+    ast::StaticAssert,
+    @node {
+        (attributes, attr_list, LazyAttrListSpan),
+        (condition, condition, LazyExprSpan),
+    }
+);
+impl<'db> LazyStaticAssertSpan<'db> {
+    pub fn new(a: StaticAssert<'db>) -> Self {
+        Self(crate::span::transition::SpanTransitionChain::new(a))
     }
 }
 

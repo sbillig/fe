@@ -1,0 +1,30 @@
+const A: u8 = 1
+const B: u8 = 2
+const TRUTH: bool = true
+const LIE: bool = false
+
+static_assert(false)
+static_assert(2 == 3)
+static_assert(A + 2 == B)
+static_assert((TRUTH == LIE))
+static_assert(A < 1)
+static_assert(A > B)
+static_assert(B <= A)
+static_assert(A >= B)
+static_assert(A != 1)
+static_assert(1 / 0 == 0)
+static_assert(1)
+
+mod nested {
+    const C: u8 = 5
+
+    static_assert(C == 6)
+}
+
+static_assert(true)
+
+fn runtime() -> bool {
+    true
+}
+
+static_assert(runtime())

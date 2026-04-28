@@ -1,0 +1,118 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/static_assert.fe
+---
+error[3-0024]: non-const function call in const context
+   ┌─ static_assert.fe:30:15
+   │
+30 │ static_assert(runtime())
+   │               ^^^^^^^^^ calls in const context must be `const fn`
+
+error[3-0025]: division by zero in const context
+   ┌─ static_assert.fe:15:15
+   │
+15 │ static_assert(1 / 0 == 0)
+   │               ^^^^^ cannot divide by zero
+
+error[8-0000]: type mismatch
+   ┌─ static_assert.fe:16:15
+   │
+16 │ static_assert(1)
+   │               ^ expected `bool`, but `{integer}` is given
+
+error[8-0081]: static assertion failed
+  ┌─ static_assert.fe:6:15
+  │
+6 │ static_assert(false)
+  │               ^^^^^ `static_assert` evaluated to `false`
+
+error[8-0081]: static assertion failed
+  ┌─ static_assert.fe:7:15
+  │
+7 │ static_assert(2 == 3)
+  │               ^^^^^^ `static_assert` evaluated to `false`
+  │
+  = left: `2`
+  = right: `3`
+  = operator: `==`
+
+error[8-0081]: static assertion failed
+  ┌─ static_assert.fe:8:15
+  │
+8 │ static_assert(A + 2 == B)
+  │               ^^^^^^^^^^ `static_assert` evaluated to `false`
+  │
+  = left: `3`
+  = right: `2`
+  = operator: `==`
+
+error[8-0081]: static assertion failed
+  ┌─ static_assert.fe:9:15
+  │
+9 │ static_assert((TRUTH == LIE))
+  │               ^^^^^^^^^^^^^^ `static_assert` evaluated to `false`
+  │
+  = left: `true`
+  = right: `false`
+  = operator: `==`
+
+error[8-0081]: static assertion failed
+   ┌─ static_assert.fe:10:15
+   │
+10 │ static_assert(A < 1)
+   │               ^^^^^ `static_assert` evaluated to `false`
+   │
+   = left: `1`
+   = right: `1`
+   = operator: `<`
+
+error[8-0081]: static assertion failed
+   ┌─ static_assert.fe:11:15
+   │
+11 │ static_assert(A > B)
+   │               ^^^^^ `static_assert` evaluated to `false`
+   │
+   = left: `1`
+   = right: `2`
+   = operator: `>`
+
+error[8-0081]: static assertion failed
+   ┌─ static_assert.fe:12:15
+   │
+12 │ static_assert(B <= A)
+   │               ^^^^^^ `static_assert` evaluated to `false`
+   │
+   = left: `2`
+   = right: `1`
+   = operator: `<=`
+
+error[8-0081]: static assertion failed
+   ┌─ static_assert.fe:13:15
+   │
+13 │ static_assert(A >= B)
+   │               ^^^^^^ `static_assert` evaluated to `false`
+   │
+   = left: `1`
+   = right: `2`
+   = operator: `>=`
+
+error[8-0081]: static assertion failed
+   ┌─ static_assert.fe:14:15
+   │
+14 │ static_assert(A != 1)
+   │               ^^^^^^ `static_assert` evaluated to `false`
+   │
+   = left: `1`
+   = right: `1`
+   = operator: `!=`
+
+error[8-0081]: static assertion failed
+   ┌─ static_assert.fe:21:19
+   │
+21 │     static_assert(C == 6)
+   │                   ^^^^^^ `static_assert` evaluated to `false`
+   │
+   = left: `5`
+   = right: `6`
+   = operator: `==`

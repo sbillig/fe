@@ -29,7 +29,9 @@ fn token_piece_basic<'a>(
     Some(match token.kind() {
         FnKw => TokenPiece::new(alloc.nil()),
         PubKw | UnsafeKw | MutKw | StructKw | ContractKw | EnumKw | TraitKw | MsgKw | ModKw
-        | UseKw | ConstKw | TypeKw | ExternKw => TokenPiece::new(text).space_after(),
+        | UseKw | ConstKw | StaticAssertKw | TypeKw | ExternKw => {
+            TokenPiece::new(text).space_after()
+        }
         ImplKw => TokenPiece::new(text),
         ForKw => TokenPiece::new(text).space_before(),
         Eq | Arrow => TokenPiece::new(text).spaces(),
@@ -351,6 +353,7 @@ impl ToDoc for ast::Item {
             Some(ItemKind::Trait(trait_)) => trait_.to_doc(ctx),
             Some(ItemKind::ImplTrait(impl_trait)) => impl_trait.to_doc(ctx),
             Some(ItemKind::Const(const_)) => const_.to_doc(ctx),
+            Some(ItemKind::StaticAssert(assert_)) => assert_.to_doc(ctx),
             Some(ItemKind::Use(use_)) => use_.to_doc(ctx),
             Some(ItemKind::Extern(extern_)) => extern_.to_doc(ctx),
             Some(ItemKind::Msg(msg)) => msg.to_doc(ctx),
@@ -1360,6 +1363,25 @@ impl ToDoc for ast::Const {
             .append(name)
             .append(ty_doc)
             .append(value_doc)
+    }
+}
+
+impl ToDoc for ast::StaticAssert {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        token_doc_item_like_if_comments!(self, ctx);
+
+        let attrs = attrs_doc(self, ctx);
+        let condition = self
+            .condition()
+            .map(|condition| condition.to_doc(ctx))
+            .unwrap_or_else(|| alloc.nil());
+
+        attrs
+            .append(alloc.text("static_assert("))
+            .append(condition)
+            .append(alloc.text(")"))
     }
 }
 

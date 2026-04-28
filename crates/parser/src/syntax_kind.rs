@@ -165,6 +165,9 @@ pub enum SyntaxKind {
     /// `const`
     #[token("const")]
     ConstKw,
+    /// `static_assert`
+    #[token("static_assert")]
+    StaticAssertKw,
     /// `if`
     #[token("if")]
     IfKw,
@@ -404,6 +407,8 @@ pub enum SyntaxKind {
     ImplTrait,
     /// `const FOO: i32 = 1`
     Const,
+    /// `static_assert(expr)`
+    StaticAssert,
     /// `use foo::{Foo as Foo1, bar::Baz}`
     Use,
     /// `msg Erc20Msg { ... }`
@@ -575,6 +580,7 @@ impl SyntaxKind {
                     | SyntaxKind::ImplKw
                     | SyntaxKind::TraitKw
                     | SyntaxKind::ConstKw
+                    | SyntaxKind::StaticAssertKw
                     | SyntaxKind::UseKw
                     | SyntaxKind::ExternKw
             )
@@ -631,6 +637,7 @@ impl SyntaxKind {
             SyntaxKind::FnKw => "`fn`",
             SyntaxKind::ModKw => "`mod`",
             SyntaxKind::ConstKw => "`const`",
+            SyntaxKind::StaticAssertKw => "`static_assert`",
             SyntaxKind::IfKw => "`if`",
             SyntaxKind::ElseKw => "`else`",
             SyntaxKind::MatchKw => "`match`",
@@ -749,6 +756,7 @@ impl SyntaxKind {
             SyntaxKind::TraitConstItem => "`trait` const item",
             SyntaxKind::ImplTrait => "`impl` trait block",
             SyntaxKind::Const => "const definition",
+            SyntaxKind::StaticAssert => "static assertion",
             SyntaxKind::Use => "`use` statement",
             SyntaxKind::UseTree => "`use` tree",
             SyntaxKind::UseTreeList => "`use` tree list",
@@ -848,6 +856,7 @@ impl SyntaxKind {
                 | SyntaxKind::FnKw
                 | SyntaxKind::ModKw
                 | SyntaxKind::ConstKw
+                | SyntaxKind::StaticAssertKw
                 | SyntaxKind::IfKw
                 | SyntaxKind::ElseKw
                 | SyntaxKind::MatchKw

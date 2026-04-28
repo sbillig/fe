@@ -222,6 +222,7 @@ fn collect_top_mod_semantic_borrow_diagnostic_vouchers<'db>(
             | ItemKind::Impl(_)
             | ItemKind::ImplTrait(_)
             | ItemKind::TypeAlias(_)
+            | ItemKind::StaticAssert(_)
             | ItemKind::Use(_)
             | ItemKind::TopMod(_)
             | ItemKind::Body(_) => {}

@@ -9,9 +9,10 @@ use common::{file::File, ingot::Ingot};
 use parser::ast;
 
 use super::{
-    AttrListId, Body, EffectParamListId, FuncParamListId, FuncParamName, GenericParamListId,
-    HirIngot, IdentId, InlineAttr, InlineAttrErrorKind, InlineHint, ManualContractRootAttr,
-    Partial, Pat, PatId, TupleTypeId, TypeBound, TypeId, UseAlias, WhereClauseId,
+    AttrListId, Body, CompBinOp, EffectParamListId, FuncParamListId, FuncParamName,
+    GenericParamListId, HirIngot, IdentId, InlineAttr, InlineAttrErrorKind, InlineHint,
+    ManualContractRootAttr, Partial, Pat, PatId, TupleTypeId, TypeBound, TypeId, UseAlias,
+    WhereClauseId,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
@@ -22,8 +23,9 @@ use crate::{
         DynLazySpan, HirOrigin,
         item::{
             LazyConstSpan, LazyContractSpan, LazyEnumSpan, LazyFuncSpan, LazyImplSpan,
-            LazyImplTraitSpan, LazyItemSpan, LazyModSpan, LazyStructSpan, LazyTopModSpan,
-            LazyTraitSpan, LazyTraitTypeSpan, LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefSpan,
+            LazyImplTraitSpan, LazyItemSpan, LazyModSpan, LazyStaticAssertSpan, LazyStructSpan,
+            LazyTopModSpan, LazyTraitSpan, LazyTraitTypeSpan, LazyTypeAliasSpan, LazyUseSpan,
+            LazyVariantDefSpan,
         },
         params::LazyGenericParamListSpan,
     },
@@ -54,6 +56,7 @@ pub enum ItemKind<'db> {
     Trait(Trait<'db>),
     ImplTrait(ImplTrait<'db>),
     Const(Const<'db>),
+    StaticAssert(StaticAssert<'db>),
     Use(Use<'db>),
     /// Body is not an `Item`, but this makes it easier for analyzers to handle
     /// it.
@@ -81,7 +84,7 @@ impl<'db> ItemKind<'db> {
             TypeAlias(alias) => alias.name(db).to_opt(),
             Trait(trait_) => trait_.name(db).to_opt(),
             Const(const_) => const_.name(db).to_opt(),
-            Use(_) | Body(_) | Impl(_) | ImplTrait(_) => None,
+            Use(_) | StaticAssert(_) | Body(_) | Impl(_) | ImplTrait(_) => None,
         }
     }
 
@@ -99,6 +102,7 @@ impl<'db> ItemKind<'db> {
             Self::Trait(trait_) => trait_.attributes(db),
             Self::ImplTrait(impl_trait) => impl_trait.attributes(db),
             Self::Const(const_) => const_.attributes(db),
+            Self::StaticAssert(assert_) => assert_.attributes(db),
             Self::Use(use_) => use_.attributes(db),
             _ => return None,
         }
@@ -119,6 +123,7 @@ impl<'db> ItemKind<'db> {
             Impl(_) => "impl",
             ImplTrait(_) => "impl trait",
             Const(_) => "const",
+            StaticAssert(_) => "static_assert",
             Use(_) => "use",
             Body(_) => "body",
         }
@@ -135,7 +140,7 @@ impl<'db> ItemKind<'db> {
             TypeAlias(alias) => Some(alias.span().alias().into()),
             Trait(trait_) => Some(trait_.span().name().into()),
             Const(const_) => Some(const_.span().name().into()),
-            TopMod(_) | Use(_) | Body(_) | Impl(_) | ImplTrait(_) => None,
+            TopMod(_) | StaticAssert(_) | Use(_) | Body(_) | Impl(_) | ImplTrait(_) => None,
         }
     }
 
@@ -152,7 +157,7 @@ impl<'db> ItemKind<'db> {
             Trait(trait_) => trait_.vis(db),
             Const(const_) => const_.vis(db),
             Use(use_) => use_.vis(db),
-            Impl(_) | ImplTrait(_) | Body(_) => Visibility::Private,
+            StaticAssert(_) | Impl(_) | ImplTrait(_) | Body(_) => Visibility::Private,
         }
     }
 
@@ -169,6 +174,7 @@ impl<'db> ItemKind<'db> {
             ItemKind::Impl(impl_) => impl_.top_mod(db),
             ItemKind::ImplTrait(impl_trait) => impl_trait.top_mod(db),
             ItemKind::Const(const_) => const_.top_mod(db),
+            ItemKind::StaticAssert(assert_) => assert_.top_mod(db),
             ItemKind::Use(use_) => use_.top_mod(db),
             ItemKind::Body(body) => body.top_mod(db),
         }
@@ -582,6 +588,17 @@ impl<'db> TopLevelMod<'db> {
             .iter()
             .filter_map(|item| match item {
                 ItemKind::Mod(mod_) => Some(*mod_),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[salsa::tracked(return_ref)]
+    pub fn all_static_asserts(self, db: &'db dyn HirDb) -> Vec<StaticAssert<'db>> {
+        self.all_items(db)
+            .iter()
+            .filter_map(|item| match item {
+                ItemKind::StaticAssert(assert_) => Some(*assert_),
                 _ => None,
             })
             .collect()
@@ -1294,6 +1311,38 @@ impl<'db> Const<'db> {
     // raw type_ref access kept; shim exposes public ___tmp method.
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub struct StaticAssertComparison<'db> {
+    pub op: CompBinOp,
+    pub lhs: Body<'db>,
+    pub rhs: Body<'db>,
+}
+
+#[salsa::tracked]
+#[derive(Debug)]
+pub struct StaticAssert<'db> {
+    #[id]
+    id: TrackedItemId<'db>,
+
+    pub(in crate::core) attributes: AttrListId<'db>,
+    pub condition: Body<'db>,
+    pub comparison: Option<StaticAssertComparison<'db>>,
+    pub top_mod: TopLevelMod<'db>,
+
+    #[return_ref]
+    pub(crate) origin: HirOrigin<ast::StaticAssert>,
+}
+
+impl<'db> StaticAssert<'db> {
+    pub fn span(self) -> LazyStaticAssertSpan<'db> {
+        LazyStaticAssertSpan::new(self)
+    }
+
+    pub fn scope(self) -> ScopeId<'db> {
+        ScopeId::from_item(self.into())
+    }
+}
+
 #[salsa::tracked]
 #[derive(Debug)]
 pub struct Use<'db> {
@@ -1612,11 +1661,15 @@ pub enum TrackedItemVariant<'db> {
     Trait(Partial<IdentId<'db>>),
     ImplTrait(u32),
     Const(Partial<IdentId<'db>>),
+    StaticAssert(u32),
     ContractInit,
     ContractRecvArm { recv_idx: u32, arm_idx: u32 },
     Use(Partial<super::UsePathId<'db>>),
     FuncBody,
     NamelessBody,
+    StaticAssertCondition,
+    StaticAssertComparisonLhs,
+    StaticAssertComparisonRhs,
     Joined(Box<Self>, Box<Self>),
 }
 impl TrackedItemVariant<'_> {

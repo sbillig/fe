@@ -266,6 +266,7 @@ pub fn resolved_item_scope_targets<'db>(
                 EMPTY_RESOLVED
             }
         }
+        ItemKind::StaticAssert(assert_) => resolved_body_scope_targets(db, assert_.condition(db)),
         ItemKind::TopMod(_) | ItemKind::Mod(_) => EMPTY_RESOLVED,
     }
 }

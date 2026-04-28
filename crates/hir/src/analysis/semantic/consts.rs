@@ -20,6 +20,75 @@ pub struct SemConstId<'db> {
     pub value: SemConstValue<'db>,
 }
 
+impl<'db> SemConstId<'db> {
+    pub fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
+        match self.value(db) {
+            SemConstValue::Unit => "()".to_string(),
+            SemConstValue::Scalar { value, .. } => match value {
+                SemConstScalar::Bool(value) => value.to_string(),
+                SemConstScalar::Int { value } => value.to_string(),
+                SemConstScalar::Bytes(bytes) => {
+                    let hex = bytes
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>();
+                    format!("0x{hex}")
+                }
+            },
+            SemConstValue::TypeLevel { const_ty, .. } => const_ty.pretty_print(db).to_string(),
+            SemConstValue::Tuple { elems, .. } => {
+                let elems = elems
+                    .iter()
+                    .map(|elem| elem.pretty_print(db))
+                    .collect::<Vec<_>>();
+                if elems.len() == 1 {
+                    format!("({},)", elems[0])
+                } else {
+                    format!("({})", elems.join(", "))
+                }
+            }
+            SemConstValue::Struct { ty, fields } => {
+                let fields = fields
+                    .iter()
+                    .map(|field| field.pretty_print(db))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}({fields})", ty.pretty_print(db))
+            }
+            SemConstValue::Array { elems, .. } => {
+                let elems = elems
+                    .iter()
+                    .map(|elem| elem.pretty_print(db))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{elems}]")
+            }
+            SemConstValue::Enum {
+                ty,
+                variant,
+                fields,
+            } => {
+                let variant_name = ty
+                    .as_enum(db)
+                    .and_then(|enum_| enum_.variants(db).nth(variant.0 as usize))
+                    .and_then(|variant| variant.name(db))
+                    .map(|name| name.data(db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let fields = fields
+                    .iter()
+                    .map(|field| field.pretty_print(db))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if fields.is_empty() {
+                    format!("{}::{variant_name}", ty.pretty_print(db))
+                } else {
+                    format!("{}::{variant_name}({fields})", ty.pretty_print(db))
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SemConstValue<'db> {
     Unit,

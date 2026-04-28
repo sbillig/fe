@@ -322,6 +322,7 @@ fn contract_init_fixed_array_arg_fixture_has_no_type_level_semantic_consts() {
             | ItemKind::Impl(_)
             | ItemKind::ImplTrait(_)
             | ItemKind::TypeAlias(_)
+            | ItemKind::StaticAssert(_)
             | ItemKind::Use(_)
             | ItemKind::TopMod(_)
             | ItemKind::Body(_) => {}

@@ -233,7 +233,7 @@ impl<'db> DocExtractor<'db> {
     pub fn extract_item(&self, item: ItemKind<'db>) -> Option<DocItem> {
         // Skip items that shouldn't be documented
         match item {
-            ItemKind::Use(_) | ItemKind::Body(_) => return None,
+            ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => return None,
             _ => {}
         }
 
@@ -309,7 +309,7 @@ impl<'db> DocExtractor<'db> {
             ItemKind::Const(_) => Some(DocItemKind::Const),
             ItemKind::Impl(_) => Some(DocItemKind::Impl),
             ItemKind::ImplTrait(_) => Some(DocItemKind::ImplTrait),
-            ItemKind::Use(_) | ItemKind::Body(_) => None,
+            ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => None,
         }
     }
 
@@ -796,7 +796,10 @@ impl<'db> DocExtractor<'db> {
                     // Use ingot-aware builder for inline modules too
                     children.push(self.build_module_node_for_ingot_inline(ingot, child));
                 }
-                ItemKind::Use(_) | ItemKind::Body(_) | ItemKind::TopMod(_) => {}
+                ItemKind::StaticAssert(_)
+                | ItemKind::Use(_)
+                | ItemKind::Body(_)
+                | ItemKind::TopMod(_) => {}
                 _ => {
                     if let (Some(name), Some(kind)) =
                         (child.name(self.db), self.item_kind_to_doc_kind(child))
@@ -867,7 +870,7 @@ impl<'db> DocExtractor<'db> {
                 ItemKind::Mod(_) | ItemKind::TopMod(_) => {
                     children.push(self.build_module_node_for_ingot_inline(ingot, child));
                 }
-                ItemKind::Use(_) | ItemKind::Body(_) => {}
+                ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => {}
                 _ => {
                     if let (Some(name), Some(kind)) =
                         (child.name(self.db), self.item_kind_to_doc_kind(child))
@@ -926,7 +929,7 @@ impl<'db> DocExtractor<'db> {
                 ItemKind::Mod(_) | ItemKind::TopMod(_) => {
                     children.push(self.build_module_node(child));
                 }
-                ItemKind::Use(_) | ItemKind::Body(_) => {}
+                ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => {}
                 _ => {
                     if let (Some(name), Some(kind)) =
                         (child.name(self.db), self.item_kind_to_doc_kind(child))

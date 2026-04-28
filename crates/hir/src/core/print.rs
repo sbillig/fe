@@ -1083,6 +1083,7 @@ impl<'db> ItemKind<'db> {
             ItemKind::Trait(t) => t.pretty_print(db),
             ItemKind::ImplTrait(i) => i.pretty_print(db),
             ItemKind::Const(c) => c.pretty_print(db),
+            ItemKind::StaticAssert(a) => a.pretty_print(db),
             ItemKind::Use(u) => u.pretty_print(db),
             ItemKind::Body(_) => panic!("Body should not be printed as an item"),
         }
@@ -1577,6 +1578,18 @@ impl<'db> Const<'db> {
         let body = unwrap_partial(self.body(db), "Const::body");
         result.push_str(&body.pretty_print(db));
 
+        result
+    }
+}
+
+impl<'db> StaticAssert<'db> {
+    /// Pretty-prints a static assertion.
+    pub fn pretty_print(self, db: &dyn HirDb) -> String {
+        let mut result = String::new();
+        result.push_str(&self.attributes(db).pretty_print_with_newline(db));
+        result.push_str("static_assert(");
+        result.push_str(&self.condition(db).pretty_print(db));
+        result.push(')');
         result
     }
 }

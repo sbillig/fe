@@ -94,6 +94,7 @@ impl<'db> From<ItemKind<'db>> for SymbolKind {
             ItemKind::ImplTrait(_) => SymbolKind::ImplTrait,
             ItemKind::Const(_) => SymbolKind::Const,
             ItemKind::Use(_) => SymbolKind::Use,
+            ItemKind::StaticAssert(_) => SymbolKind::Const,
             ItemKind::Body(_) => SymbolKind::Func, // Bodies are function-like
         }
     }
@@ -540,7 +541,7 @@ pub fn item_kind_to_url_suffix(item: ItemKind) -> Option<&'static str> {
         ItemKind::Const(_) => Some("const"),
         ItemKind::Impl(_) => Some("impl"),
         ItemKind::ImplTrait(_) => Some("impl"),
-        ItemKind::Use(_) | ItemKind::Body(_) => None,
+        ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => None,
     }
 }
 

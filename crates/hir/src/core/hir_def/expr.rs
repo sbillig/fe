@@ -140,7 +140,7 @@ pub enum ArithBinOp {
     Range,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum CompBinOp {
     /// `==`
     Eq,
@@ -154,6 +154,19 @@ pub enum CompBinOp {
     Gt,
     /// `>=`
     GtEq,
+}
+
+impl CompBinOp {
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Self::Eq => "==",
+            Self::NotEq => "!=",
+            Self::Lt => "<",
+            Self::LtEq => "<=",
+            Self::Gt => ">",
+            Self::GtEq => ">=",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

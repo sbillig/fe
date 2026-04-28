@@ -24,9 +24,10 @@ use crate::analysis::ty::visitor::TyVisitable;
 use crate::hir_def::CallableDef;
 use crate::{
     hir_def::{
-        Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
+        BinOp, Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
         GenericParamOwner, ItemKind, LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId,
-        Stmt, StmtId, StringId, TypeBound, TypeId as HirTyId, WhereClauseOwner,
+        StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeBound, TypeId as HirTyId,
+        WhereClauseOwner,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -56,8 +57,8 @@ use super::{
     assoc_const::AssocConstUse,
     canonical::Canonical,
     diagnostics::{
-        BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection,
-        TyLowerDiag,
+        BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, StaticAssertComparisonValues,
+        TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key},
     trait_def::TraitInstId,
@@ -74,7 +75,7 @@ use super::{
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
-use crate::analysis::semantic::{SemConstValue, eval_body_owner_const};
+use crate::analysis::semantic::{SemConstId, SemConstScalar, SemConstValue, eval_body_owner_const};
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
     const_ty::{ConstTyData, invalid_cause_from_ctfe_error},
@@ -121,6 +122,135 @@ pub fn check_anon_const_body<'db>(
     expected: TyId<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
     check_body(db, BodyOwner::AnonConstBody { body, expected })
+}
+
+#[salsa::tracked(return_ref)]
+pub fn check_static_assert<'db>(
+    db: &'db dyn HirAnalysisDb,
+    assert_: StaticAssert<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let condition = assert_.condition(db);
+    let expected = TyId::bool(db);
+    let owner = BodyOwner::AnonConstBody {
+        body: condition,
+        expected,
+    };
+    let (body_diags, typed_body) = check_anon_const_body(db, condition, expected);
+    let ignorable_body_diags = static_assert_ignorable_type_diags(db, body_diags);
+    if !body_diags.is_empty() && !ignorable_body_diags {
+        return body_diags.clone();
+    }
+
+    match eval_body_owner_const(db, owner, Vec::new()) {
+        Ok(value) => match static_assert_bool_value(db, value) {
+            Some(true) => {}
+            Some(false) => {
+                let mut diags = Vec::new();
+                let comparison = assert_.comparison(db).and_then(|comparison| {
+                    static_assert_comparison_values(db, condition, typed_body, comparison)
+                });
+                diags.push(
+                    BodyDiag::StaticAssertFailed {
+                        primary: condition.span().into(),
+                        comparison,
+                    }
+                    .into(),
+                );
+                return diags;
+            }
+            None => {
+                return vec![BodyDiag::ConstValueMustBeKnown(condition.span().into()).into()];
+            }
+        },
+        Err(crate::analysis::semantic::CtfeError::NotConstEvaluable { .. }) => {
+            return vec![BodyDiag::ConstValueMustBeKnown(condition.span().into()).into()];
+        }
+        Err(err) => {
+            let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, owner, err));
+            if let Some(diag) = ty.emit_diag(db, condition.span().into()) {
+                return vec![diag.into()];
+            }
+        }
+    }
+
+    Vec::new()
+}
+
+fn static_assert_bool_value<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: SemConstId<'db>,
+) -> Option<bool> {
+    let SemConstValue::Scalar {
+        value: SemConstScalar::Bool(value),
+        ..
+    } = value.value(db)
+    else {
+        return None;
+    };
+    Some(value)
+}
+
+fn static_assert_ignorable_type_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    diags: &[FuncBodyDiag<'db>],
+) -> bool {
+    !diags.is_empty()
+        && diags.iter().all(|diag| {
+            matches!(
+                diag,
+                FuncBodyDiag::Body(BodyDiag::TypeAnnotationNeeded { ty, .. })
+                    if ty.is_integral_var(db)
+            )
+        })
+}
+
+fn static_assert_comparison_values<'db>(
+    db: &'db dyn HirAnalysisDb,
+    condition: Body<'db>,
+    typed_body: &TypedBody<'db>,
+    comparison: StaticAssertComparison<'db>,
+) -> Option<StaticAssertComparisonValues> {
+    let Partial::Present(Expr::Bin(lhs_expr, rhs_expr, BinOp::Comp(op))) =
+        condition.expr(db).data(db, condition)
+    else {
+        return None;
+    };
+    if *op != comparison.op {
+        return None;
+    }
+
+    let lhs = eval_static_assert_comparison_operand(
+        db,
+        comparison.lhs,
+        typed_body.expr_ty(db, *lhs_expr),
+    )?;
+    let rhs = eval_static_assert_comparison_operand(
+        db,
+        comparison.rhs,
+        typed_body.expr_ty(db, *rhs_expr),
+    )?;
+
+    Some(StaticAssertComparisonValues {
+        op: comparison.op,
+        lhs: lhs.pretty_print(db),
+        rhs: rhs.pretty_print(db),
+    })
+}
+
+fn eval_static_assert_comparison_operand<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expected: TyId<'db>,
+) -> Option<SemConstId<'db>> {
+    if expected.has_invalid(db) {
+        return None;
+    }
+    let owner = BodyOwner::AnonConstBody { body, expected };
+    let body_diags = &check_anon_const_body(db, body, expected).0;
+    if !body_diags.is_empty() && !static_assert_ignorable_type_diags(db, body_diags) {
+        return None;
+    }
+    eval_body_owner_const(db, owner, Vec::new()).ok()
 }
 
 pub(super) fn check_body<'db>(

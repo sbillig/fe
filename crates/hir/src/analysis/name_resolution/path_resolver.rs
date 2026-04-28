@@ -1529,7 +1529,7 @@ pub fn resolve_name_res<'db>(
                     }
                 }
 
-                ItemKind::Use(_) | ItemKind::Body(_) => unreachable!(),
+                ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => unreachable!(),
             },
             ScopeId::GenericParam(parent, idx) => {
                 let owner = GenericParamOwner::from_item_opt(parent).unwrap();

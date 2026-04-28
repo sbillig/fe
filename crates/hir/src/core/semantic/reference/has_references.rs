@@ -94,6 +94,7 @@ impl<'db> HasReferences<'db> for ItemKind<'db> {
             ItemKind::ImplTrait(impl_trait) => impl_trait_references(db, *impl_trait),
             ItemKind::Use(use_item) => use_references(db, *use_item),
             ItemKind::Const(c) => c.body(db).to_opt().map_or(EMPTY_REFS, |b| b.references(db)),
+            ItemKind::StaticAssert(assert_) => assert_.condition(db).references(db),
             // Modules don't contain references themselves
             ItemKind::TopMod(_) | ItemKind::Mod(_) => EMPTY_REFS,
             ItemKind::Contract(contract) => contract_references(db, *contract),
