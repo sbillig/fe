@@ -1,5 +1,3 @@
-use std::abi::sol
-
 msg FooMsg {
     #[selector = sol("ping(uint256)")]
     Ping { value: u256 } -> u256,

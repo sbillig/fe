@@ -1,5 +1,3 @@
-use std::abi::sol
-
 msg Erc20 {
     #[selector = sol("name()")]
     Name -> u256,

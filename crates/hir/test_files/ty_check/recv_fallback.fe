@@ -1,5 +1,3 @@
-use std::abi::sol
-
 msg CounterMsg {
     #[selector = sol("count()")]
     Count -> u256,

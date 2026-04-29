@@ -11,14 +11,17 @@ note:
 
 completions:
   - Abi (Interface)
+  - AbiDecoder (Interface)
   - AbiEncoder (Interface)
   - AbiSize (Interface)
   - Address (Struct)
+  - Bytes (Struct)
   - Call (Interface)
   - Clone (Interface)
   - Copy (Interface)
   - Create (Interface)
   - Ctx (Interface)
+  - Decode (Interface)
   - Default (Interface)
   - Drawable (Interface)
   - Encode (Interface)
@@ -56,6 +59,7 @@ completions:
   - revert_error (Function) -> "revert_error(${1:error})$0" [fn revert_error(error: T) -> !]
   - self (Variable) [self: Point]
   - shadow_test (Module) -> "shadow_test::"
+  - sol (Function) -> "sol(${1:sig})$0" [fn sol(sig: T) -> u32]
   - test_expression_context (Function) -> "test_expression_context()$0" [fn test_expression_context()]
   - test_locals (Function) -> "test_locals(${1:param})$0" [fn test_locals(param: i32)]
   - test_member_completion (Function) -> "test_member_completion()$0" [fn test_member_completion()]
@@ -87,6 +91,7 @@ note:
 
 completions:
   - Address (Struct)
+  - Bytes (Struct)
   - Evm (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
@@ -122,6 +127,7 @@ completions:
   - result (Variable) [result: _]
   - revert (Function) -> "revert(${1:value})$0" [fn revert(value: T) -> !]
   - revert_error (Function) -> "revert_error(${1:error})$0" [fn revert_error(error: T) -> !]
+  - sol (Function) -> "sol(${1:sig})$0" [fn sol(sig: T) -> u32]
   - test_expression_context (Function) -> "test_expression_context()$0" [fn test_expression_context()]
   - test_locals (Function) -> "test_locals(${1:param})$0" [fn test_locals(param: i32)]
   - test_member_completion (Function) -> "test_member_completion()$0" [fn test_member_completion()]
@@ -151,6 +157,7 @@ note:
 
 completions:
   - Address (Struct)
+  - Bytes (Struct)
   - Evm (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
@@ -187,6 +194,7 @@ completions:
   - param (Variable) [param: i32]
   - revert (Function) -> "revert(${1:value})$0" [fn revert(value: T) -> !]
   - revert_error (Function) -> "revert_error(${1:error})$0" [fn revert_error(error: T) -> !]
+  - sol (Function) -> "sol(${1:sig})$0" [fn sol(sig: T) -> u32]
   - test_expression_context (Function) -> "test_expression_context()$0" [fn test_expression_context()]
   - test_locals (Function) -> "test_locals(${1:param})$0" [fn test_locals(param: i32)]
   - test_member_completion (Function) -> "test_member_completion()$0" [fn test_member_completion()]
@@ -205,6 +213,7 @@ note:
 
 completions:
   - Address (Struct)
+  - Bytes (Struct)
   - Evm (Struct)
   - Helper (Struct)
   - Option (Enum)
@@ -225,6 +234,7 @@ note:
 
 completions:
   - Address (Struct)
+  - Bytes (Struct)
   - Evm (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+104:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+104:use utils::Helper}

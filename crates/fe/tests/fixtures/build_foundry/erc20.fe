@@ -1,5 +1,4 @@
 use std::evm::{Ctx, Log, StorageMap}
-use std::abi::sol
 
 msg Erc20 {
     #[selector = sol("name()")]

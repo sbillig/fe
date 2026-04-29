@@ -1,5 +1,3 @@
-use std::abi::sol
-
 pub msg GreetMsg {
     #[selector = sol("greet()")]
     Greet -> u256,

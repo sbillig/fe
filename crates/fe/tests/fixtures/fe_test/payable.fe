@@ -1,5 +1,4 @@
 use std::evm::{Evm, Ctx, Address}
-use std::abi::sol
 
 pub contract PayableBox uses (ctx: Ctx) {
     #[payable]

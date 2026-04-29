@@ -1,6 +1,5 @@
 use std::evm::{Address, Ctx, StorageMap, assert}
 use std::evm::effects::Log
-use std::abi::sol
 
 // roles
 const MINTER: u256 = 1

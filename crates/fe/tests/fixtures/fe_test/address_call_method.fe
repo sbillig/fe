@@ -2,8 +2,6 @@
 /// Address that references the Call trait) must not trigger a Salsa cycle crash
 /// in `collect_methods`.
 
-use std::abi::sol
-
 msg CounterMsg {
     #[selector = sol("increment()")]
     Increment,

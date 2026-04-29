@@ -1,7 +1,5 @@
 use std::evm::{Call, Evm}
 use std::evm::effects::assert
-use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
-use std::abi::Sol
 
 msg StrideMsg {
     #[selector = 0x3bde36f4]

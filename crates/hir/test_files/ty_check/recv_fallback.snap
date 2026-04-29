@@ -4,61 +4,61 @@ expression: res
 input_file: test_files/ty_check/recv_fallback.fe
 ---
 note:
-  ┌─ recv_fallback.fe:5:5
+  ┌─ recv_fallback.fe:3:5
   │
-5 │     Count -> u256,
+3 │     Count -> u256,
   │     ^^^^^ () | Count | invalid(Other) | u256
 
 note:
-   ┌─ recv_fallback.fe:12:9
+   ┌─ recv_fallback.fe:10:9
    │
-12 │         CounterMsg::Count {} -> u256 uses (count) {
+10 │         CounterMsg::Count {} -> u256 uses (count) {
    │         ^^^^^^^^^^^^^^^^^^^^ Count
 
 note:
-   ┌─ recv_fallback.fe:12:51
+   ┌─ recv_fallback.fe:10:51
    │
-12 │           CounterMsg::Count {} -> u256 uses (count) {
+10 │           CounterMsg::Count {} -> u256 uses (count) {
    │ ╭───────────────────────────────────────────────────^
-13 │ │             count
-14 │ │         }
+11 │ │             count
+12 │ │         }
    │ ╰─────────^ u256
 
 note:
-   ┌─ recv_fallback.fe:13:13
+   ┌─ recv_fallback.fe:11:13
    │
-13 │             count
+11 │             count
    │             ^^^^^ u256
 
 note:
-   ┌─ recv_fallback.fe:16:9
+   ┌─ recv_fallback.fe:14:9
    │
-16 │         _ uses (mut count) {
+14 │         _ uses (mut count) {
    │         ^ ()
 
 note:
-   ┌─ recv_fallback.fe:16:28
+   ┌─ recv_fallback.fe:14:28
    │
-16 │           _ uses (mut count) {
+14 │           _ uses (mut count) {
    │ ╭────────────────────────────^
-17 │ │             count += 1
-18 │ │         }
+15 │ │             count += 1
+16 │ │         }
    │ ╰─────────^ ()
 
 note:
-   ┌─ recv_fallback.fe:17:13
+   ┌─ recv_fallback.fe:15:13
    │
-17 │             count += 1
+15 │             count += 1
    │             ^^^^^ u256
 
 note:
-   ┌─ recv_fallback.fe:17:13
+   ┌─ recv_fallback.fe:15:13
    │
-17 │             count += 1
+15 │             count += 1
    │             ^^^^^^^^^^ ()
 
 note:
-   ┌─ recv_fallback.fe:17:22
+   ┌─ recv_fallback.fe:15:22
    │
-17 │             count += 1
+15 │             count += 1
    │                      ^ u256

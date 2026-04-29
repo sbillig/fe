@@ -1,5 +1,3 @@
-use std::abi::sol
-
 msg M {
     #[payable]
     #[selector = sol("ping()")]

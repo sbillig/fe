@@ -1,4 +1,3 @@
-use core::abi::Bytes
 use std::evm::{Evm, StorageBytes, assert, mem}
 
 type Blobs = StorageBytes<u256, 0, 1>
