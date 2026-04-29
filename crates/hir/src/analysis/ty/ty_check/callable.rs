@@ -414,10 +414,14 @@ impl<'db> Callable<'db> {
         };
 
         for (i, (given, expected)) in args.into_iter().zip(expected_arg_tys.iter()).enumerate() {
-            if let Some(given_label) = given.label
-                && let Some(expected_label) = self.callable_def.param_label(db, i)
+            // Call labels are either explicit (`f(x: value)`) or inferred from a bare
+            // identifier argument (`f(x)`), but not from arbitrary expressions (`f(10)`).
+            // If the callee parameter has an unsuppressed label, the call must provide
+            // one of those labels. Do not disable this check or guard it on explicit
+            // syntax only; that would silently allow missing labels.
+            if let Some(expected_label) = self.callable_def.param_label(db, i)
                 && !expected_label.is_self(db)
-                && given_label != expected_label
+                && Some(expected_label) != given.label
             {
                 let diag = BodyDiag::CallArgLabelMismatch {
                     primary: given.label_span.unwrap_or(given.expr_span.clone()),
@@ -726,7 +730,7 @@ impl<'db> CallArg<'db> {
             let ty = expected_hint.unwrap_or_else(|| tc.fresh_ty());
             tc.check_expr(arg.expr, ty)
         };
-        let label = arg.label;
+        let label = arg.label_eagerly(tc.db, tc.body());
         let label_span = arg.label.is_some().then(|| span.clone().label().into());
         let expr_span = span.expr().into();
 

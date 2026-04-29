@@ -26,7 +26,7 @@ struct Evm {}
 impl CreateLike for Evm {}
 
 fn run(evm: mut Evm) -> u256 {
-    evm.create2(1, 2, 3)
+    evm.create2(value: 1, args: 2, salt: 3)
 }
 "#,
     );

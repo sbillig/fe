@@ -1,12 +1,12 @@
 type Words = [u256; 4]
 
-fn rewrite(mut arr: own Words, idx: usize, value: u256) -> Words {
+fn rewrite(mut _ arr: own Words, _ idx: usize, _ value: u256) -> Words {
     arr[idx] = value
     arr[3] = arr[0] + arr[1] + arr[2]
     arr
 }
 
-fn write_effect(idx: usize, value: u256) uses (words: mut Words) {
+fn write_effect(_ idx: usize, _ value: u256) uses (words: mut Words) {
     words[idx] = value
     words[3] = words[0] + words[1] + words[2]
 }

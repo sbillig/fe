@@ -4,6 +4,9 @@ pub fn add(x: i32, y: i32) -> i32 {
 
 pub fn use_add() -> i32 {
     add(1, 2)
+    let x = 1
+    let y = 2
+    add(x, y)
     add(y: 1, x: 2)
     add(x: 1, z: 2)
     add(x: false, y: 2)

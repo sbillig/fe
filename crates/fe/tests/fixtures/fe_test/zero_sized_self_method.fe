@@ -1,7 +1,7 @@
 struct Marker {}
 
 impl Marker {
-    fn add1(self, value: u256) -> u256 {
+    fn add1(self, _ value: u256) -> u256 {
         value + 1
     }
 }

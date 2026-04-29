@@ -281,7 +281,7 @@ fn impl_method_effect_keys_match_with_omitted_const_expr_defaults() {
     let file = db.new_stand_alone(
         Utf8PathBuf::from("impl_method_effect_keys_match_with_omitted_const_expr_defaults.fe"),
         r#"
-const fn plus1(x: usize) -> usize {
+const fn plus1(_ x: usize) -> usize {
     x + 1
 }
 
@@ -311,7 +311,7 @@ fn impl_method_effect_keys_match_with_substituted_omitted_const_expr_defaults() 
             "impl_method_effect_keys_match_with_substituted_omitted_const_expr_defaults.fe",
         ),
         r#"
-const fn plus1(x: usize) -> usize {
+const fn plus1(_ x: usize) -> usize {
     x + 1
 }
 
@@ -5245,7 +5245,7 @@ fn free_function_effect_calls_monomorphize_distinct_provider_bindings() {
         r#"
 use std::evm::StorageMap
 
-fn needs(addr: u256) -> u256
+fn needs(_ addr: u256) -> u256
     uses (balances: StorageMap<u256, u256>)
 {
     balances.get(key: addr)
@@ -5441,7 +5441,7 @@ struct Holder {
     ptr: StorPtr<Cell>,
 }
 
-fn write_cell(value: u256) uses (cell: mut Cell) {
+fn write_cell(_ value: u256) uses (cell: mut Cell) {
     cell.value = value
 }
 

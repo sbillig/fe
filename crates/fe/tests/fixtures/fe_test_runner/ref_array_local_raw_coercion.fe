@@ -1,4 +1,4 @@
-fn first(xs: ref [u8; 32]) -> u8 {
+fn first(_ xs: ref [u8; 32]) -> u8 {
     xs[0]
 }
 

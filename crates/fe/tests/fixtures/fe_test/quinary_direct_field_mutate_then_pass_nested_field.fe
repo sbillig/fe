@@ -5,7 +5,7 @@ pub struct Data {
     pub values: [[u256; 5]; 3],
 }
 
-fn first(values: [[u256; 5]; 3]) -> u256 {
+fn first(_ values: [[u256; 5]; 3]) -> u256 {
     values[1][2]
 }
 

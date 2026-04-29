@@ -1,13 +1,13 @@
 use std::evm::effects::assert
 
-fn rewrite(arr: [u256; 4], idx: usize, value: u256) -> [u256; 4] {
+fn rewrite(_ arr: [u256; 4], _ idx: usize, _ value: u256) -> [u256; 4] {
     let mut out: [u256; 4] = arr
     out[idx] = value
     out[3] = out[0] + out[1] + out[2]
     out
 }
 
-fn sum(arr: [u256; 4]) -> u256 {
+fn sum(_ arr: [u256; 4]) -> u256 {
     let mut total: u256 = 0
     for value in arr {
         total += value

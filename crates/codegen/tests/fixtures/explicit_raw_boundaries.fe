@@ -10,7 +10,7 @@ fn bump() uses (value: mut u256) {
 }
 
 fn raw_store() uses (data: mut MemPtr<Data>, mem: mut RawMem) {
-    mem.mstore(data.raw(), 8)
+    mem.mstore(addr: data.raw(), value: 8)
 }
 
 pub fn explicit_raw_boundaries() uses (mem: mut RawMem) {

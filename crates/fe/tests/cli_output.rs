@@ -1854,7 +1854,7 @@ fn test_cli_test_ingot_reports_mir_diagnostics_in_non_root_modules() {
         r#"
 struct Inner {}
 
-fn bad(x: own Inner) {
+fn bad(_ x: own Inner) {
     let y = x
     let z = x
 }

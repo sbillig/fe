@@ -3,11 +3,11 @@ use std::evm::effects::assert
 const VALUES: [u256; 8] = [3, 1, 4, 1, 5, 9, 2, 6]
 const PICKS: [usize; 4] = [4, 7, 2, 0]
 
-fn pick(arr: [u256; 8], idx: usize) -> u256 {
+fn pick(_ arr: [u256; 8], _ idx: usize) -> u256 {
     arr[idx]
 }
 
-fn tail_sum(arr: [u256; 8]) -> u256 {
+fn tail_sum(_ arr: [u256; 8]) -> u256 {
     let mut sum: u256 = 0
     for i in 4..8 {
         sum += arr[i]

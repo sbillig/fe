@@ -3,7 +3,7 @@ enum Maybe {
     Some(u8),
 }
 
-fn classify(value: own Maybe) -> u8 {
+fn classify(_ value: own Maybe) -> u8 {
     match value {
         Maybe::Some(1) => 10
         _ => 20

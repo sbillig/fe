@@ -610,7 +610,7 @@ fn f() uses (slots: Repeated) {}
         let file = db.new_stand_alone(
             Utf8PathBuf::from("effect_constraints_canonicalize_omitted_const_expr_defaults.fe"),
             r#"
-const fn plus1(x: usize) -> usize {
+const fn plus1(_ x: usize) -> usize {
     x + 1
 }
 
