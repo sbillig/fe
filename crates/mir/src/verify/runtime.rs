@@ -560,6 +560,12 @@ fn verify_builtin<'db>(
             };
             Ok(None)
         }
+        RuntimeBuiltin::Mcopy { dst, src, len } => {
+            verify_address_operand(body, *dst, AddressSpaceKind::Memory)?;
+            verify_address_operand(body, *src, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *len)?;
+            Ok(None)
+        }
         RuntimeBuiltin::Msize
         | RuntimeBuiltin::CallValue
         | RuntimeBuiltin::ReturnDataSize

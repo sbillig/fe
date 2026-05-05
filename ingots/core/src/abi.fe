@@ -3,6 +3,11 @@ use ingot::EffectHandle
 use ingot::MemPtr
 use ingot::num::{IntDowncast, WordValue}
 
+// EVM Cancun+ (EIP-5656) memory copy. Used to speed up ABI payload copying.
+extern {
+    fn mcopy(dest: u256, addr: u256, len: u256)
+}
+
 /// Errors returned by ABI decoding/encoding helpers.
 pub enum AbiError {
     InputTooShort,
@@ -572,15 +577,7 @@ impl ByteInput for MemoryInput {
             super::panic()
         }
 
-        let mut offset: u256 = 0
-        while offset < len {
-            let word = mem_word_at(base: self.base, offset: src_offset + offset)
-            let ptr: MemPtr<u256> = MemPtr::from_raw(dest + offset)
-            with (ptr) {
-                mem_word_store(value: word)
-            }
-            offset += 32
-        }
+        mcopy(dest: dest, addr: self.base + src_offset, len: len)
     }
 }
 
@@ -1234,15 +1231,7 @@ impl<A: Abi> Encode<A> for DynString {
             e.write_word(self.len)
             return
         }
-
-        let mut offset_in_payload: u256 = 0
-        while offset_in_payload < self.size {
-            e.write_word_at(
-                at: e.base() + offset_in_payload,
-                value: mem_word_at(base: self.data, offset: offset_in_payload),
-            )
-            offset_in_payload += 32
-        }
+        mcopy(dest: e.base(), addr: self.data, len: self.size)
     }
 
     fn encode_to_ptr(own self, _ ptr: u256) {
@@ -1551,15 +1540,7 @@ impl<A: Abi> Encode<A> for Bytes {
             e.write_word(self.len)
             return
         }
-
-        let mut offset_in_payload: u256 = 0
-        while offset_in_payload < self.size {
-            e.write_word_at(
-                at: e.base() + offset_in_payload,
-                value: mem_word_at(base: self.data, offset: offset_in_payload),
-            )
-            offset_in_payload += 32
-        }
+        mcopy(dest: e.base(), addr: self.data, len: self.size)
     }
 
     fn encode_to_ptr(own self, _ ptr: u256) {
@@ -1649,15 +1630,7 @@ impl<A: Abi, T> Encode<A> for DynArray<T>
             e.write_word(self.len)
             return
         }
-
-        let mut offset_in_payload: u256 = 0
-        while offset_in_payload < self.size {
-            e.write_word_at(
-                at: e.base() + offset_in_payload,
-                value: mem_word_at(base: self.data, offset: offset_in_payload),
-            )
-            offset_in_payload += 32
-        }
+        mcopy(dest: e.base(), addr: self.data, len: self.size)
     }
 
     fn encode_to_ptr(own self, _ ptr: u256) {
