@@ -24,6 +24,10 @@ pub trait ByteInput: Copy {
     fn len(self) -> u256
     fn word_at(self, _ byte_offset: u256) -> u256
     fn byte_at(self, _ byte_offset: u256) -> u8
+    /// Copy `len` bytes starting at `src_offset` into linear memory at `dest`.
+    ///
+    /// Callers currently rely on `len` being a whole number of words.
+    fn copy_to_memory(self, dest: u256, src_offset: u256, len: u256)
 }
 
 /// First-word prefix used for fast dispatch.
@@ -528,6 +532,10 @@ fn mem_word_load() -> u256
     slot
 }
 
+fn mem_word_store(value: u256) uses (slot: mut u256) {
+    slot = value
+}
+
 fn mem_word_at(base: u256, offset: u256) -> u256 {
     let ptr: MemPtr<u256> = MemPtr::from_raw(base + offset)
     with (ptr) {
@@ -552,6 +560,27 @@ impl ByteInput for MemoryInput {
         let idx = byte_offset - word_offset
         let shift = (31 - idx) * 8
         (word >> shift).downcast_truncate()
+    }
+
+    fn copy_to_memory(self, dest: u256, src_offset: u256, len: u256) {
+        if len % 32 != 0 {
+            super::panic()
+        }
+
+        let end = src_offset + len
+        if end < src_offset || end > self.len {
+            super::panic()
+        }
+
+        let mut offset: u256 = 0
+        while offset < len {
+            let word = mem_word_at(base: self.base, offset: src_offset + offset)
+            let ptr: MemPtr<u256> = MemPtr::from_raw(dest + offset)
+            with (ptr) {
+                mem_word_store(value: word)
+            }
+            offset += 32
+        }
     }
 }
 
@@ -1187,11 +1216,7 @@ impl<A: Abi> Decode<A> for DynString {
         let payload_size = 32 + round_up_words(data_len)
         let data_ptr = d.alloc(payload_size)
 
-        let mut offset: u256 = 0
-        while offset < payload_size {
-            A::store_word(ptr: data_ptr + offset, value: d.peek_word(payload_at + offset))
-            offset += 32
-        }
+        d.input().copy_to_memory(dest: data_ptr, src_offset: payload_at, len: payload_size)
 
         DynString {
             data: data_ptr,
@@ -1508,11 +1533,7 @@ impl<A: Abi> Decode<A> for Bytes {
         let payload_size = 32 + round_up_words(data_len)
         let data_ptr = d.alloc(payload_size)
 
-        let mut offset: u256 = 0
-        while offset < payload_size {
-            A::store_word(ptr: data_ptr + offset, value: d.peek_word(payload_at + offset))
-            offset += 32
-        }
+        d.input().copy_to_memory(dest: data_ptr, src_offset: payload_at, len: payload_size)
 
         Bytes {
             data: data_ptr,
@@ -1546,13 +1567,12 @@ impl<A: Abi> Encode<A> for Bytes {
     }
 }
 
-fn dyn_array_payload_end<A: Abi, T, I>(_ input: I, tail_at: u256, elem_count: u256) -> u256
+fn dyn_array_payload_end_scan<A: Abi, T, I>(_ input: I, elems_base: u256, head_end: u256, elem_count: u256) -> u256
     where T: AbiSpan<A> + AbiSize,
           I: ByteInput
 {
-    let elems_base = tail_at + 32
     let mut head_pos = elems_base
-    let mut end = elems_base + (elem_count * abi_field_head_size<T>())
+    let mut end = head_end
     let mut i: u256 = 0
     while i < elem_count {
         end = max_u256(a: end, b: abi_field_end<A, T, I>(input, base: elems_base, pos: head_pos))
@@ -1560,6 +1580,43 @@ fn dyn_array_payload_end<A: Abi, T, I>(_ input: I, tail_at: u256, elem_count: u2
         i += 1
     }
     end
+}
+
+fn dyn_array_payload_end<A: Abi, T, I>(_ input: I, tail_at: u256, elem_count: u256) -> u256
+    where T: AbiSpan<A> + AbiSize,
+          I: ByteInput
+{
+    let elems_base = tail_at + 32
+    let head_size = elem_count * abi_field_head_size<T>()
+    let head_end = elems_base + head_size
+
+    if elem_count == 0 || !T::IS_DYNAMIC {
+        return head_end
+    }
+
+    // Fast path: prove that each tail starts after the head and after the
+    // previous element ends. Non-canonical layouts fall back to a max scan.
+    let mut prev_offset = head_size
+    let mut prev_end = head_end
+    let mut i: u256 = 0
+    while i < elem_count {
+        let head_pos = elems_base + (i * abi_field_head_size<T>())
+        let offset = input.word_at(head_pos)
+        if offset < prev_offset || offset % 32 != 0 {
+            return dyn_array_payload_end_scan<A, T, I>(input, elems_base: elems_base, head_end: head_end, elem_count: elem_count)
+        }
+
+        let tail_at = elems_base + offset
+        if tail_at < elems_base || prev_end > tail_at {
+            return dyn_array_payload_end_scan<A, T, I>(input, elems_base: elems_base, head_end: head_end, elem_count: elem_count)
+        }
+
+        prev_offset = offset
+        prev_end = abi_field_end<A, T, I>(input, base: elems_base, pos: head_pos)
+        i += 1
+    }
+
+    max_u256(a: head_end, b: prev_end)
 }
 
 impl<A: Abi, T> Decode<A> for DynArray<T>
@@ -1572,11 +1629,7 @@ impl<A: Abi, T> Decode<A> for DynArray<T>
         let payload_size = payload_end - payload_at
         let data_ptr = d.alloc(payload_size)
 
-        let mut offset: u256 = 0
-        while offset < payload_size {
-            A::store_word(ptr: data_ptr + offset, value: d.peek_word(payload_at + offset))
-            offset += 32
-        }
+        d.input().copy_to_memory(dest: data_ptr, src_offset: payload_at, len: payload_size)
 
         DynArray {
             data: data_ptr,

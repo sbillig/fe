@@ -1,0 +1,12 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 958
+expression: output
+input_file: tests/fixtures/fe_test_runner/abi_dynamic_array_payload_end.fe
+---
+=== STDOUT ===
+PASS  [<time>] test_dynamic_array_payload_end_uses_max_element_end
+
+test result: ok. 1 passed; 0 failed
+
+=== EXIT CODE: 0 ===
