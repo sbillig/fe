@@ -46,8 +46,8 @@ use sonatina_ir::{
             EvmGasLimit, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
             EvmMalloc, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin, EvmPrevRandao,
             EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSdiv, EvmSelfBalance,
-            EvmSelfDestruct, EvmSload, EvmSmod, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp,
-            EvmTload, EvmTstore, EvmUdiv, EvmUmod, inst_set::EvmInstSet,
+            EvmSelfDestruct, EvmSignExtend, EvmSload, EvmSmod, EvmSstore, EvmStaticCall, EvmStop,
+            EvmTimestamp, EvmTload, EvmTstore, EvmUdiv, EvmUmod, inst_set::EvmInstSet,
         },
         logic::{And, Not, Or, Xor},
     },
@@ -1423,6 +1423,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let modulus = self.local_value(*modulus)?;
                 self.fb.insert_inst(
                     EvmMulMod::new(self.module.inst_set(), lhs, rhs, modulus),
+                    Type::I256,
+                )
+            }
+            RuntimeBuiltin::SignExtend { byte, value } => {
+                let byte = self.local_value(*byte)?;
+                let value = self.local_value(*value)?;
+                self.fb.insert_inst(
+                    EvmSignExtend::new(self.module.inst_set(), byte, value),
                     Type::I256,
                 )
             }
