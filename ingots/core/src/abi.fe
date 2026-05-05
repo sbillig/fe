@@ -262,12 +262,21 @@ fn decode_field_at<A: Abi, T, D>(d: mut D, pos: u256) -> T
     decode_field<A, T, D>(mut d)
 }
 
+#[arithmetic(unchecked)]
 pub fn encode_root<A: Abi, T, E>(_ value: own T, _ e: mut E)
     where T: Encode<A>, E: AbiEncoder<A>
 {
+    if T::DIRECT_ENCODE {
+        let at = e.pos()
+        value.encode_to_ptr(at)
+        e.set_pos(at + T::HEAD_SIZE)
+        return
+    }
+
     value.encode(mut e)
 }
 
+#[arithmetic(unchecked)]
 pub fn encode_single_root<A: Abi, T, E>(_ value: own T, _ e: mut E)
     where T: Encode<A> + AbiSize, E: AbiEncoder<A>
 {
@@ -275,6 +284,7 @@ pub fn encode_single_root<A: Abi, T, E>(_ value: own T, _ e: mut E)
     encode_field<A, T, E>(value, mut e, mut tail)
 }
 
+#[arithmetic(unchecked)]
 pub fn encode_field<A: Abi, T, E>(_ value: own T, _ e: mut E, _ tail: mut u256)
     where T: Encode<A> + AbiSize, E: AbiEncoder<A>
 {
@@ -291,6 +301,13 @@ pub fn encode_field<A: Abi, T, E>(_ value: own T, _ e: mut E, _ tail: mut u256)
         e.set_base(parent_base)
         e.set_pos(parent_pos)
         tail = child_base + child_size
+        return
+    }
+
+    if T::DIRECT_ENCODE {
+        let at = e.pos()
+        value.encode_to_ptr(at)
+        e.set_pos(at + T::HEAD_SIZE)
         return
     }
 
