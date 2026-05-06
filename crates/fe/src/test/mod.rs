@@ -629,6 +629,7 @@ struct SingleRunResult {
     suite_key: String,
     symbol_name: String,
     result: TestResult,
+    output: String,
     measurement: Option<GasMeasurement>,
     elapsed: Duration,
 }
@@ -888,7 +889,15 @@ impl OutcomeCollectorState {
             }
             JobOutcome::SingleFinished(single) => {
                 let single = *single;
-                let suite_key = single.suite_key.clone();
+                let suite_key = single.suite_key;
+                let kind = if single.result.passed {
+                    StreamStatusKind::Pass
+                } else {
+                    StreamStatusKind::Fail
+                };
+                let elapsed = single.elapsed;
+                let name = single.result.name.clone();
+                let output = single.output;
                 let suite_is_complete = {
                     let state = self.pending_suites.get_mut(&suite_key).ok_or_else(|| {
                         format!("received single test outcome for unknown suite `{suite_key}`")
@@ -902,6 +911,22 @@ impl OutcomeCollectorState {
                     }
                     state.completed_singles == state.expected_singles
                 };
+                self.handle_outcome(
+                    JobOutcome::Status {
+                        suite_key: suite_key.clone(),
+                        kind,
+                        elapsed: Some(elapsed),
+                        message: name,
+                    },
+                    ctx,
+                )?;
+                self.handle_outcome(
+                    JobOutcome::Text {
+                        suite_key: suite_key.clone(),
+                        text: output,
+                    },
+                    ctx,
+                )?;
                 if suite_is_complete {
                     self.finalize_pending_suite(&suite_key, ctx)?;
                 }
@@ -1479,23 +1504,7 @@ fn emit_single_outcome(
     outcome_tx: &Sender<JobOutcome>,
     shared: &WorkerSharedConfig,
 ) {
-    let (output, single) = run_single_test_job(job, shared);
-    let _ = outcome_tx.send(JobOutcome::Status {
-        suite_key: single.suite_key.clone(),
-        kind: if single.result.passed {
-            StreamStatusKind::Pass
-        } else {
-            StreamStatusKind::Fail
-        },
-        elapsed: Some(single.elapsed),
-        message: single.result.name.clone(),
-    });
-    if !output.is_empty() {
-        let _ = outcome_tx.send(JobOutcome::Text {
-            suite_key: single.suite_key.clone(),
-            text: output,
-        });
-    }
+    let single = run_single_test_job(job, shared);
     let _ = outcome_tx.send(JobOutcome::SingleFinished(Box::new(single)));
 }
 
@@ -1563,7 +1572,7 @@ fn emit_grouped_suite_outcome(
         aggregate_suite_staging: prepared.aggregate_suite_staging,
     };
     for single_job in prepared.single_jobs {
-        let (output, single) = run_single_test_job(single_job, cfg.shared.as_ref());
+        let single = run_single_test_job(single_job, cfg.shared.as_ref());
         let _ = outcome_tx.send(JobOutcome::Status {
             suite_key: single.suite_key.clone(),
             kind: if single.result.passed {
@@ -1574,10 +1583,10 @@ fn emit_grouped_suite_outcome(
             elapsed: Some(single.elapsed),
             message: single.result.name.clone(),
         });
-        if !output.is_empty() {
+        if !single.output.is_empty() {
             let _ = outcome_tx.send(JobOutcome::Text {
                 suite_key: single.suite_key.clone(),
-                text: output,
+                text: single.output,
             });
         }
         state.completed_singles += 1;
@@ -1850,10 +1859,7 @@ fn prepare_suite_job(
     )
 }
 
-fn run_single_test_job(
-    job: SingleTestJob,
-    shared: &WorkerSharedConfig,
-) -> (String, SingleRunResult) {
+fn run_single_test_job(job: SingleTestJob, shared: &WorkerSharedConfig) -> SingleRunResult {
     let report_ctx = job.report_root.as_ref().map(|root| ReportContext {
         root_dir: root.clone(),
     });
@@ -1880,14 +1886,14 @@ fn run_single_test_job(
         &shared.backend,
         &shared.debug,
     );
-    let result = SingleRunResult {
+    SingleRunResult {
         suite_key: job.suite_key,
         symbol_name: case.symbol_name,
         result: outcome.result,
+        output,
         measurement: Some(measurement),
         elapsed,
-    };
-    (output, result)
+    }
 }
 
 fn finalize_pending_suite(
