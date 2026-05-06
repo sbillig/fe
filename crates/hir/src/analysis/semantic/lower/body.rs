@@ -11,9 +11,9 @@ use crate::{
         semantic::{
             CallSiteId, FieldIndex, Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId,
             SOperand, SPlace, SStmt, SStmtKind, STerminator, STerminatorKind, SValueId,
-            SemConstValue, SemOrigin, SemanticBody, SemanticLocalRole, VariantIndex, bool_const,
-            bytes_const, int_const, reify_runtime_const_for_ty, runtime_size_bytes,
-            sem_const_from_ty, unit_const,
+            SemConstValue, SemOrigin, SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole,
+            VariantIndex, bool_const, bytes_const, int_const, reify_runtime_const_for_ty,
+            runtime_size_bytes, sem_const_from_ty, unit_const,
         },
         ty::{
             const_ty::const_ty_or_abstract_from_assoc_const_use,
@@ -861,16 +861,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             SemanticExprLowering::CodeRegionIntrinsic {
                 region_arg, kind, ..
             } => {
-                let region = self.typed_body.expr_code_region_ref(self.db, *region_arg).unwrap_or_else(
-                    || {
-                        panic!(
-                            "typed code-region intrinsic is missing instantiated code-region ref: call={expr:?} arg={region_arg:?}"
-                        )
-                    },
-                );
+                let target = self.lower_code_region_target(expr, *region_arg);
                 let lowered = match kind {
-                    CodeRegionIntrinsicKind::Offset => SExpr::CodeRegionOffset { region },
-                    CodeRegionIntrinsicKind::Len => SExpr::CodeRegionLen { region },
+                    CodeRegionIntrinsicKind::Offset => SExpr::CodeRegionOffset { target },
+                    CodeRegionIntrinsicKind::Len => SExpr::CodeRegionLen { target },
                 };
                 self.emit_expr_with_origin(SemOrigin::Expr(expr), ty, lowered)
             }
@@ -878,6 +872,28 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.lower_const_intrinsic(expr, callable, *kind)
             }
         }
+    }
+
+    fn lower_code_region_target(
+        &self,
+        call_expr: ExprId,
+        region_arg: ExprId,
+    ) -> SemanticCodeRegionTarget<'db> {
+        self.typed_body
+            .expr_code_region_ref(self.db, region_arg)
+            .map(SemanticCodeRegionTarget::Resolved)
+            .unwrap_or_else(|| {
+                let ty = self.expr_ty(region_arg);
+                if ty.has_param(self.db) || ty.has_var(self.db) {
+                    SemanticCodeRegionTarget::Deferred {
+                        arg: region_arg, ty
+                    }
+                } else {
+                    panic!(
+                        "typed code-region intrinsic is missing instantiated code-region ref: call={call_expr:?} arg={region_arg:?} ty={ty:?}"
+                    )
+                }
+            })
     }
 
     fn lower_callable_expr(

@@ -228,6 +228,12 @@ pub enum SemanticCodeRegionRef<'db> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SemanticCodeRegionTarget<'db> {
+    Resolved(SemanticCodeRegionRef<'db>),
+    Deferred { arg: ExprId, ty: TyId<'db> },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct SPlace<'db> {
     pub local: SLocalId,
     pub path: SemanticProjectionPath<'db>,
@@ -406,10 +412,10 @@ pub enum SExpr<'db> {
         field: FieldIndex,
     },
     CodeRegionOffset {
-        region: SemanticCodeRegionRef<'db>,
+        target: SemanticCodeRegionTarget<'db>,
     },
     CodeRegionLen {
-        region: SemanticCodeRegionRef<'db>,
+        target: SemanticCodeRegionTarget<'db>,
     },
     Call {
         call_site: CallSiteId,

@@ -751,11 +751,11 @@ impl<'db> NormalizeCtxt<'db> {
                 variant: *variant,
                 field: *field,
             },
-            SExpr::CodeRegionOffset { region } => NExpr::CodeRegionOffset {
-                region: region.clone(),
+            SExpr::CodeRegionOffset { target } => NExpr::CodeRegionOffset {
+                target: target.clone(),
             },
-            SExpr::CodeRegionLen { region } => NExpr::CodeRegionLen {
-                region: region.clone(),
+            SExpr::CodeRegionLen { target } => NExpr::CodeRegionLen {
+                target: target.clone(),
             },
             SExpr::Call {
                 call_site,

@@ -6,7 +6,8 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             FieldIndex, Mutability, SConst, SLocalId, SemOrigin, SemanticBody, SemanticCalleeRef,
-            SemanticCodeRegionRef, SemanticLocalKind, SemanticProjectionPath, VariantIndex,
+            SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticLocalKind,
+            SemanticProjectionPath, VariantIndex,
         },
         ty::{
             provider::ProviderAddressSpace,
@@ -319,10 +320,10 @@ pub enum NExpr<'db> {
         field: FieldIndex,
     },
     CodeRegionOffset {
-        region: SemanticCodeRegionRef<'db>,
+        target: SemanticCodeRegionTarget<'db>,
     },
     CodeRegionLen {
-        region: SemanticCodeRegionRef<'db>,
+        target: SemanticCodeRegionTarget<'db>,
     },
     Call {
         call_site: crate::analysis::semantic::CallSiteId,
