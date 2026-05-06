@@ -336,6 +336,24 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 steps.push(RuntimeConversionStep::RetagRef { class: target });
                 Ok(())
             }
+            (
+                RuntimeClass::Ref {
+                    pointee,
+                    kind: RefKind::Const,
+                    view: RefView::Whole,
+                },
+                RuntimeClass::AggregateValue { .. },
+            ) if pointee.aggregate_layout().is_some() => {
+                let loaded = pointee.as_ref().clone();
+                let layout = loaded.aggregate_layout().expect("aggregate const layout");
+                steps.push(RuntimeConversionStep::MaterializeToObject {
+                    class: RuntimeClass::object_ref(layout),
+                });
+                steps.push(RuntimeConversionStep::LoadRef {
+                    class: loaded.clone(),
+                });
+                self.convert(loaded, target, steps)
+            }
             (RuntimeClass::Ref { pointee, .. }, _) if !target.is_transport() => {
                 let loaded = pointee.as_ref().clone();
                 steps.push(RuntimeConversionStep::LoadRef {

@@ -5,6 +5,8 @@ input_file: crates/codegen/tests/fixtures/const_array_loop.fe
 ---
 target = "evm-ethereum-osaka"
 
+global private const [i256; 3] $const_region_0 = [10, 20, 30];
+
 func private %main() -> i256 {
     block0:
         jump block1;
@@ -35,8 +37,8 @@ func private %sum_loop(v0.i256) -> i256 {
         jump block2;
 
     block2:
-        v39.i256 = phi (0.i256 block1) (v33 block11);
-        v5.i256 = phi (0.i256 block1) (v37 block11);
+        v32.i256 = phi (0.i256 block1) (v25 block11);
+        v5.i256 = phi (0.i256 block1) (v30 block11);
         v6.i256 = mload v1 i256;
         v7.i1 = lt v5 v6;
         br v7 block3 block4;
@@ -46,7 +48,7 @@ func private %sum_loop(v0.i256) -> i256 {
         br v10 block5 block6;
 
     block4:
-        return v39;
+        return v32;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -55,25 +57,19 @@ func private %sum_loop(v0.i256) -> i256 {
 
     block6:
         v15.i256 = evm_umod v5 3.i256;
-        v19.objref<[i256; 3]> = obj.alloc [i256; 3];
-        v20.objref<i256> = obj.index v19 0.i256;
-        obj.store v20 10.i256;
-        v22.objref<i256> = obj.index v19 1.i256;
-        obj.store v22 20.i256;
-        v24.objref<i256> = obj.index v19 2.i256;
-        obj.store v24 30.i256;
-        v25.i1 = lt v15 3.i256;
-        v26.i1 = is_zero v25;
-        br v26 block7 block8;
+        v16.constref<[i256; 3]> = const.ref $const_region_0;
+        v17.i1 = lt v15 3.i256;
+        v18.i1 = is_zero v17;
+        br v18 block7 block8;
 
     block7:
         evm_revert 0.i256 0.i256;
 
     block8:
-        v27.objref<i256> = obj.index v19 v15;
-        v28.i256 = obj.load v27;
-        (v30.i256, v31.i1) = uaddo v39 v28;
-        br v31 block9 block10;
+        v19.constref<i256> = const.index v16 v15;
+        v20.i256 = const.load v19;
+        (v22.i256, v23.i1) = uaddo v32 v20;
+        br v23 block9 block10;
 
     block9:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -81,14 +77,14 @@ func private %sum_loop(v0.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block10:
-        mstore v2 v30 i256;
-        v33.i256 = mload v2 i256;
-        (v35.i256, v36.i1) = uaddo v5 1.i256;
-        br v36 block9 block11;
+        mstore v2 v22 i256;
+        v25.i256 = mload v2 i256;
+        (v28.i256, v29.i1) = uaddo v5 1.i256;
+        br v29 block9 block11;
 
     block11:
-        mstore v3 v35 i256;
-        v37.i256 = mload v3 i256;
+        mstore v3 v28 i256;
+        v30.i256 = mload v3 i256;
         jump block2;
 }
 
@@ -96,5 +92,6 @@ func private %sum_loop(v0.i256) -> i256 {
 object @main {
     section main {
         entry %main_root;
+        data $const_region_0;
     }
 }

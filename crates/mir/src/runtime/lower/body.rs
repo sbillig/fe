@@ -1,16 +1,18 @@
+use std::collections::HashSet;
+
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
         EffectProviderSubst, FieldIndex, GenericSubst, ImplEnv, SBlockId, SConst, SLocalId,
         SemConstId, SemConstScalar, SemConstValue, SemanticCalleeRef, SemanticCodeRegionRef,
-        SemanticCodeRegionTarget, SemanticInstance, SemanticInstanceKey, SemanticLocalKind,
+        SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance, SemanticInstanceKey, SemanticLocalKind,
         VariantIndex,
         borrowck::{
             NBorrowRoot, NBorrowRootId, NEffectArg, NExpr, NLocalOrigin, NOperand, NSPlace,
             NSPlaceRoot, NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind,
             NormalizedBindingLowering, NormalizedSemanticBody, normalize_semantic_body,
         },
-        get_or_build_semantic_instance, reify_runtime_const_for_ty, sem_const_ty,
+        eval_const_ref, get_or_build_semantic_instance, reify_runtime_const_for_ty, sem_const_ty,
     },
     ty::{
         corelib::{
@@ -36,9 +38,9 @@ use crate::{
     instance::{RuntimeInstance, RuntimeInstanceKey, get_or_build_runtime_instance},
     resolve_runtime_place_address_class,
     runtime::{
-        AddressSpaceKind, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem, PlaceRoot, RBlock,
-        RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody,
-        RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeExitBehavior,
+        AddressSpaceKind, ConstRegionId, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem,
+        PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
+        RuntimeBody, RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeExitBehavior,
         RuntimeInterfaceSignature, RuntimeLocalLowering, RuntimeLocalRoot, RuntimePlace,
         RuntimeProviderBinding, RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole,
         VariantId,
@@ -58,7 +60,8 @@ use super::{
         resolve_runtime_call_key, semantic_return_ty, snapshot_source_place,
     },
     consts::{
-        const_scalar_for_class, const_scalar_from_value, enum_tag_scalar, lower_const_region,
+        aggregate_const_ref_class, const_scalar_for_class, const_scalar_from_value,
+        enum_tag_scalar, lower_const_region,
     },
     conversion::{RuntimeConversionEmitter, RuntimeConversionError, emit_runtime_coercion},
     infer::{InferenceResult, LocalStateInferer, merge_runtime_class},
@@ -259,6 +262,32 @@ fn expr_requires_runtime_eval_when_erased(expr: &NExpr<'_>) -> bool {
     }
 }
 
+fn collect_const_ref_regions<'db>(
+    db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
+    body: &NormalizedSemanticBody<'db>,
+) -> HashSet<ConstRegionId<'db>> {
+    body.blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .filter_map(|stmt| {
+            let NSStmtKind::Assign { dst, expr } = &stmt.kind else {
+                return None;
+            };
+            let NExpr::Const(SConst::Ref(cref)) = expr else {
+                return None;
+            };
+            let value = eval_const_ref(db, *cref)
+                .unwrap_or_else(|err| panic!("CTFE failed for {cref:?}: {err:?}"));
+            let value =
+                reify_runtime_const_for_ty(db, body.owner, body.locals[dst.index()].ty, value)
+                    .unwrap_or(value);
+            aggregate_const_ref_class(db, env, value)?;
+            lower_const_region(db, env, value)
+        })
+        .collect()
+}
+
 pub(super) struct RmirEmitter<'db> {
     pub(super) db: &'db dyn MirDb,
     pub(super) instance: RuntimeInstance<'db>,
@@ -267,6 +296,7 @@ pub(super) struct RmirEmitter<'db> {
     pub(super) facts: BodyStaticFacts<'db>,
     pub(super) ret_class: Option<RuntimeClass<'db>>,
     pub(super) env: RuntimeTypeEnv<'db>,
+    const_ref_regions: HashSet<ConstRegionId<'db>>,
     pub(super) semantic_carriers: Vec<RuntimeCarrier<'db>>,
     pub(super) semantic_locals: Vec<RuntimeLocalLowering<'db>>,
     pub(super) provider_bindings: Vec<RuntimeProviderBinding<'db>>,
@@ -399,6 +429,7 @@ impl<'db> RmirEmitter<'db> {
         };
         let semantic_carriers = carriers.clone();
         let env = RuntimeTypeEnv::for_semantic(db, semantic);
+        let const_ref_regions = collect_const_ref_regions(db, env, &semantic_body);
         let terminated_blocks = vec![false; semantic_body.blocks.len()];
         let locals = semantic_body
             .locals
@@ -419,6 +450,7 @@ impl<'db> RmirEmitter<'db> {
             facts,
             ret_class: signature.ret.clone(),
             env,
+            const_ref_regions,
             semantic_carriers,
             semantic_locals,
             provider_bindings,
@@ -570,6 +602,17 @@ impl<'db> RmirEmitter<'db> {
         let Some(target) = self.value_class(dst_value).cloned() else {
             return;
         };
+        if !self.semantic_body.locals[dst.index()]
+            .facts
+            .root_demand
+            .written_by_place
+            && let NExpr::Const(SConst::Ref(cref)) = expr
+            && let Some(actual) =
+                self.const_ref_runtime_class(*cref, self.locals[dst_value.index()].semantic_ty)
+        {
+            self.refine_local_runtime_class(dst_value, actual);
+            return;
+        }
         if matches!(
             self.semantic_local_lowering(dst),
             RuntimeLocalLowering::PlaceCarrier { .. }
@@ -909,7 +952,48 @@ impl<'db> RmirEmitter<'db> {
                     self.const_lowering_ty(self.locals[dst.index()].semantic_ty, &target);
                 self.lower_sem_const_for_class(bb, dst, *value, expected_ty, &target);
             }
-            SConst::Ref(cref) => panic!("unresolved const ref reached rMIR lowering: {cref:?}"),
+            SConst::Ref(cref) => {
+                let value = eval_const_ref(self.db, *cref)
+                    .unwrap_or_else(|err| panic!("CTFE failed for {cref:?}: {err:?}"));
+                if sem_const_ty(self.db, value) == TyId::unit(self.db) {
+                    return;
+                }
+                let target = self
+                    .value_class(dst)
+                    .cloned()
+                    .expect("const destination should have a runtime class");
+                let expected_ty =
+                    self.const_lowering_ty(self.locals[dst.index()].semantic_ty, &target);
+                self.lower_const_ref_for_class(bb, dst, value, expected_ty, &target);
+            }
+        }
+    }
+
+    fn lower_const_ref_for_class(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        value: SemConstId<'db>,
+        expected_ty: TyId<'db>,
+        target: &RuntimeClass<'db>,
+    ) {
+        let value = self.reify_runtime_const(expected_ty, value);
+        if aggregate_const_ref_class(self.db, self.env, value).is_some() {
+            let src = self.lower_sem_const_as_const_handle(bb, value, expected_ty);
+            let value = if self.value_class(src) == Some(target) {
+                src
+            } else {
+                self.coerce_value(bb, src, target)
+            };
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst,
+                    expr: RExpr::Use(value),
+                },
+            );
+        } else {
+            self.lower_sem_const_for_class(bb, dst, value, expected_ty, target);
         }
     }
 
@@ -971,6 +1055,14 @@ impl<'db> RmirEmitter<'db> {
         }
         if let Some(value) = self.try_lower_bytes_array_const_as_class(bb, ty, value, target) {
             return value;
+        }
+        if self.known_const_ref_region(value).is_some() {
+            let value = self.lower_sem_const_as_const_handle(bb, value, ty);
+            return if self.value_class(value) == Some(target) {
+                value
+            } else {
+                self.coerce_value(bb, value, target)
+            };
         }
         if let Some(scalar) = const_scalar_from_value(self.db, self.env, value) {
             return self.lower_sem_const_scalar(bb, ty, scalar);
@@ -1278,6 +1370,25 @@ impl<'db> RmirEmitter<'db> {
             },
         );
         local
+    }
+
+    fn known_const_ref_region(&self, value: SemConstId<'db>) -> Option<ConstRegionId<'db>> {
+        aggregate_const_ref_class(self.db, self.env, value)?;
+        let region = lower_const_region(self.db, self.env, value)?;
+        self.const_ref_regions.contains(&region).then_some(region)
+    }
+
+    fn const_ref_runtime_class(
+        &self,
+        cref: SemanticConstRef<'db>,
+        expected_ty: TyId<'db>,
+    ) -> Option<RuntimeClass<'db>> {
+        let value = eval_const_ref(self.db, cref)
+            .unwrap_or_else(|err| panic!("CTFE failed for {cref:?}: {err:?}"));
+        let value =
+            reify_runtime_const_for_ty(self.db, self.semantic_body.owner, expected_ty, value)
+                .unwrap_or(value);
+        aggregate_const_ref_class(self.db, self.env, value)
     }
 
     fn lower_sem_const_scalar(

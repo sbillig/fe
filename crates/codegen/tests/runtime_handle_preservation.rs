@@ -522,7 +522,7 @@ fn read(v: own View) -> u256 {
     v.d.x
 }
 
-fn entry() -> u256 {
+pub fn entry() -> u256 {
     let data = Data { x: 1 }
     let view = View { d: ref data }
     read(view)
@@ -1273,64 +1273,6 @@ fn entry() -> u8 {
                 })
         }),
         "enum constants should lower through EnumMake in value position",
-    );
-}
-
-#[test]
-fn by_value_aggregate_constants_do_not_become_const_regions() {
-    let mut db = DriverDataBase::default();
-    let file_url =
-        Url::parse("file:///by_value_aggregate_constants_do_not_become_const_regions.fe").unwrap();
-    db.workspace().touch(
-        &mut db,
-        file_url.clone(),
-        Some(
-            r#"const C: [u256; 2] = [10, 20]
-
-fn entry() -> u256 {
-    let vals = C
-    vals[0] + vals[1]
-}"#
-            .to_string(),
-        ),
-    );
-    let file = db
-        .workspace()
-        .get(&db, &file_url)
-        .expect("file should be loaded");
-    let top_mod = db.top_mod(file);
-    let package = build_runtime_package(&db, top_mod).expect("runtime package");
-    let const_handle_bodies = package
-        .functions(&db)
-        .iter()
-        .filter_map(|function| {
-            let body = function.instance(&db).body(&db);
-            body.blocks
-                .iter()
-                .flat_map(|block| block.stmts.iter())
-                .any(|stmt| {
-                    matches!(
-                        stmt,
-                        RStmt::Assign {
-                            expr: RExpr::ConstRef { .. },
-                            ..
-                        }
-                    )
-                })
-                .then(|| format!("{}:\n{body:#?}", function.symbol(&db)))
-        })
-        .collect::<Vec<_>>();
-
-    assert!(
-        package.const_regions(&db).is_empty(),
-        "by-value aggregate constants should not create package const regions:\nregions={:#?}\n{}",
-        package.const_regions(&db),
-        const_handle_bodies.join("\n\n")
-    );
-    assert!(
-        const_handle_bodies.is_empty(),
-        "by-value aggregate constants should lower inline, not through ConstRef:\n{}",
-        const_handle_bodies.join("\n\n")
     );
 }
 

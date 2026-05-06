@@ -9,7 +9,10 @@ use hir::analysis::{
 
 use crate::{
     db::MirDb,
-    runtime::{ConstNode, ConstRegionId, ConstScalar, LayoutId, ScalarClass, ScalarRepr},
+    runtime::{
+        ConstNode, ConstRegionId, ConstScalar, Layout, LayoutId, RuntimeClass, ScalarClass,
+        ScalarRepr,
+    },
 };
 
 use super::{
@@ -151,6 +154,40 @@ pub(super) fn lower_const_region<'db>(
     let layout = layout_for_ty_in_env(db, env, sem_const_ty(db, value));
     let value = lower_const_node(db, env, value)?;
     Some(ConstRegionId::new(db, layout, value))
+}
+
+pub(super) fn aggregate_const_ref_class<'db>(
+    db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
+    value: SemConstId<'db>,
+) -> Option<RuntimeClass<'db>> {
+    if !matches!(
+        value.value(db),
+        SemConstValue::Tuple { .. } | SemConstValue::Struct { .. } | SemConstValue::Array { .. }
+    ) {
+        return None;
+    }
+    let node = lower_const_node(db, env, value)?;
+    if !const_node_supports_data_ref(db, &node) {
+        return None;
+    }
+    Some(RuntimeClass::const_ref(layout_for_ty_in_env(
+        db,
+        env,
+        sem_const_ty(db, value),
+    )))
+}
+
+fn const_node_supports_data_ref<'db>(db: &'db dyn MirDb, node: &ConstNode<'db>) -> bool {
+    match node {
+        ConstNode::Scalar(_) => true,
+        ConstNode::Aggregate { layout, fields } => {
+            !matches!(layout.data(db), Layout::Enum(_))
+                && fields
+                    .iter()
+                    .all(|field| const_node_supports_data_ref(db, field))
+        }
+    }
 }
 
 fn lower_const_node<'db>(

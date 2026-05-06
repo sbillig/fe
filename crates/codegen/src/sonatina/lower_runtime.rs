@@ -2581,6 +2581,26 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ObjLoad::new(self.module.inst_set(), value),
                 self.module.ty_for_class(&class)?,
             ),
+            PlaceTerminal::Const { value, class } if class.aggregate_layout().is_some() => {
+                let layout = class.aggregate_layout().expect("const aggregate layout");
+                let layout_ty = self.module.ty_for_layout(layout)?;
+                let object = self.fb.insert_inst(
+                    ObjAlloc::new(self.module.inst_set(), layout_ty),
+                    self.fb.module_builder.objref_type(layout_ty),
+                );
+                self.copy_source_into_object(
+                    CopySource::Const {
+                        value,
+                        class: class.clone(),
+                    },
+                    &class,
+                    object,
+                )?;
+                self.fb.insert_inst(
+                    ObjLoad::new(self.module.inst_set(), object),
+                    self.module.ty_for_class(&class)?,
+                )
+            }
             PlaceTerminal::Const { value, .. } => self.fb.insert_inst(
                 ConstLoad::new(self.module.inst_set(), value),
                 self.module.ty_for_class(&class)?,
@@ -2683,8 +2703,18 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             class: source_class,
         } = &source
             && source_class == class
-            && self.fb.type_of(*value) == self.fb.type_of(object)
+            && matches!(class, RuntimeClass::AggregateValue { .. })
         {
+            let class_ty = self.module.ty_for_class(class)?;
+            let object_ty = self.fb.module_builder.objref_type(class_ty);
+            let const_ty = self.fb.module_builder.constref_type(class_ty);
+            if self.fb.type_of(object) != object_ty || self.fb.type_of(*value) != const_ty {
+                return Err(LowerError::Internal(format!(
+                    "const object copy type mismatch: object={:?} const={:?} class={class:?}",
+                    self.fb.type_of(object),
+                    self.fb.type_of(*value),
+                )));
+            }
             self.fb.insert_inst_no_result(ObjInitConst::new(
                 self.module.inst_set(),
                 object,

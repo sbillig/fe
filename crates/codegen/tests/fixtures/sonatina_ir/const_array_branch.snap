@@ -5,36 +5,24 @@ input_file: crates/codegen/tests/fixtures/const_array_branch.fe
 ---
 target = "evm-ethereum-osaka"
 
+global private const [i256; 1] $const_region_0 = [1];
+
 func private %const_array_branch(v0.i1) -> i256 {
     block0:
         v1.*i1 = alloca i1;
-        v2.objref<[i256; 1]> = obj.alloc [i256; 1];
-        v3.objref<[i256; 1]> = obj.alloc [i256; 1];
         mstore v1 v0 i1;
         jump block1;
 
     block1:
-        v4.i1 = mload v1 i1;
-        br v4 block2 block3;
+        v2.i1 = mload v1 i1;
+        br v2 block2 block3;
 
     block2:
-        v6.objref<[i256; 1]> = obj.alloc [i256; 1];
-        v8.objref<i256> = obj.index v6 0.i256;
-        obj.store v8 1.i256;
-        v9.[i256; 1] = obj.load v6;
-        v10.objref<i256> = obj.index v2 0.i256;
-        v11.i256 = extract_value v9 0.i256;
-        obj.store v10 v11;
+        v3.constref<[i256; 1]> = const.ref $const_region_0;
         jump block4;
 
     block3:
-        v12.objref<[i256; 1]> = obj.alloc [i256; 1];
-        v13.objref<i256> = obj.index v12 0.i256;
-        obj.store v13 1.i256;
-        v14.[i256; 1] = obj.load v12;
-        v15.objref<i256> = obj.index v3 0.i256;
-        v16.i256 = extract_value v14 0.i256;
-        obj.store v15 v16;
+        v6.constref<[i256; 1]> = const.ref $const_region_0;
         jump block4;
 
     block4:
@@ -63,5 +51,6 @@ func private %main_root() {
 object @main {
     section main {
         entry %main_root;
+        data $const_region_0;
     }
 }

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use common::indexmap::IndexSet;
 use cranelift_entity::{EntityRef, PrimaryMap};
 use hir::analysis::{
@@ -9,7 +11,7 @@ use hir::analysis::{
             NAssignmentId, NBorrowRoot, NExpr, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot,
             NormalizedBindingLowering, NormalizedBodyFacts, NormalizedSemanticBody,
         },
-        get_or_build_semantic_instance, sem_const_ty,
+        eval_const_ref, get_or_build_semantic_instance, reify_runtime_const_for_ty, sem_const_ty,
     },
     ty::{
         ProviderKind,
@@ -33,9 +35,9 @@ use crate::{
     db::MirDb,
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
     runtime::{
-        AddressSpaceKind, BorrowAccess, Layout, LayoutId, RefKind, RefView, RuntimeBoundarySpec,
-        RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan,
-        SaturatingBinOp, ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        AddressSpaceKind, BorrowAccess, ConstRegionId, Layout, LayoutId, RefKind, RefView,
+        RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey,
+        RuntimeParamPlan, SaturatingBinOp, ScalarClass, ScalarRepr, ScalarRole, VariantId,
     },
 };
 
@@ -52,6 +54,7 @@ use super::{
         CompiledCallInputPlan, CompiledMaterializationPlan, compile_call_input_plan_for_semantic,
         compile_value_pass_plan,
     },
+    consts::{aggregate_const_ref_class, lower_const_region},
     infer::{fallback_root_transport_class, local_place_root_class},
     interface::runtime_visible_binding_plans,
     layout::{
@@ -261,6 +264,14 @@ impl<'db> BodyStaticFacts<'db> {
     ) -> Self {
         let mut boundary_sites = BoundarySiteAllocator::default();
         let normalized_facts = NormalizedBodyFacts::new(body);
+        let const_ref_regions = collect_const_ref_regions(db, type_env, body);
+        let expr_facts_builder = ExprStaticFactsBuilder {
+            db,
+            body,
+            typed_body,
+            type_env,
+            const_ref_regions: &const_ref_regions,
+        };
         let local_facts: Vec<_> = body
             .locals
             .iter()
@@ -285,15 +296,7 @@ impl<'db> BodyStaticFacts<'db> {
                 .get(dst.index())
                 .unwrap_or_else(|| panic!("missing assignment local for {dst:?}"))
                 .ty;
-            let expr_facts = build_expr_static_facts(
-                db,
-                body,
-                typed_body,
-                type_env,
-                expr,
-                result_ty,
-                &mut boundary_sites,
-            );
+            let expr_facts = expr_facts_builder.build(expr, *dst, result_ty, &mut boundary_sites);
             let pushed = assignments.push(AssignStaticFacts {
                 block_idx: structural.block.index(),
                 stmt_idx: structural.stmt_idx,
@@ -912,183 +915,261 @@ fn lowered_place_like_ty<'db>(
     }
 }
 
-fn build_expr_static_facts<'db>(
+fn collect_const_ref_regions<'db>(
     db: &'db dyn MirDb,
-    body: &NormalizedSemanticBody<'db>,
-    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
     type_env: RuntimeTypeEnv<'db>,
-    expr: &NExpr<'db>,
-    result_ty: TyId<'db>,
-    boundary_sites: &mut BoundarySiteAllocator,
-) -> Option<ExprStaticFacts<'db>> {
-    Some(match expr {
-        NExpr::Use(_) | NExpr::CodeRegionRef { .. } => return None,
-        NExpr::Const(const_) => ExprStaticFacts::Const(match const_ {
-            SConst::Value(value) => {
-                let ty = sem_const_ty(db, *value);
-                if ty == TyId::unit(db) {
-                    None
-                } else {
-                    top_level_class_for_ty_in_env(db, type_env, ty, AddressSpaceKind::Memory)
-                }
-            }
-            SConst::Ref(cref) => {
-                panic!("unresolved const ref reached runtime class inference: {cref:?}")
-            }
-        }),
-        NExpr::Unary { .. }
-        | NExpr::Binary { .. }
-        | NExpr::Cast { .. }
-        | NExpr::CodeRegionOffset { .. }
-        | NExpr::CodeRegionLen { .. } => ExprStaticFacts::DirectClass(
-            scalar_class_for_ty_in_env(db, type_env, result_ty).map(RuntimeClass::Scalar),
-        ),
-        NExpr::ArrayRepeat { .. } => {
-            panic!(
-                "array repeat with non-concrete length reached runtime class inference: {expr:?}"
-            )
-        }
-        NExpr::GetEnumTag { .. } => return None,
-        NExpr::AggregateMake { ty, fields } => {
-            let direct_class =
-                top_level_class_for_ty_in_env(db, type_env, *ty, AddressSpaceKind::Memory)
-                    .filter(|class| !matches!(class, RuntimeClass::AggregateValue { .. }));
-            let field_tys = if ty.is_array(db) {
-                let (_, args) = ty.decompose_ty_app(db);
-                let elem_ty = args.first().copied().expect("array element type");
-                vec![elem_ty; fields.len()]
-            } else {
-                ty.field_types(db)
+    body: &NormalizedSemanticBody<'db>,
+) -> HashSet<ConstRegionId<'db>> {
+    body.blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .filter_map(|stmt| {
+            let hir::analysis::semantic::NSStmtKind::Assign { dst, expr } = &stmt.kind else {
+                return None;
             };
-            if field_tys.len() != fields.len() {
+            let NExpr::Const(SConst::Ref(cref)) = expr else {
                 return None;
-            }
-            let fields = field_tys
-                .into_iter()
-                .map(|field_ty| AggregateMakeFieldStaticFacts {
-                    boundary: boundary_spec_for_ty_in_env(
-                        db,
-                        type_env,
-                        field_ty,
-                        AddressSpaceKind::Memory,
-                    )
-                    .map(|boundary| boundary_sites.stage(boundary)),
-                    stored_class: stored_class_for_ty_in_context(
-                        db,
-                        field_ty,
-                        type_env.scope,
-                        type_env.assumptions,
-                    ),
-                })
-                .collect();
-            ExprStaticFacts::AggregateMake(AggregateMakeStaticFacts {
-                direct_class,
-                ctor: AggregateCtorKind::Aggregate(*ty),
-                fields,
-            })
-        }
-        NExpr::EnumMake {
-            enum_ty,
-            variant,
-            fields,
-        } => {
-            let enum_ = enum_ty
-                .as_enum(db)
-                .unwrap_or_else(|| panic!("enum construction reached non-enum type"));
-            let args = enum_ty.generic_args(db);
-            let enum_variant = enum_.variants(db).nth(variant.0 as usize)?;
-            let field_tys = enum_variant
-                .field_tys(db)
-                .into_iter()
-                .map(|field| field.instantiate(db, args))
-                .collect::<Vec<_>>();
-            if field_tys.len() != fields.len() {
-                return None;
-            }
-            let fields = field_tys
-                .into_iter()
-                .map(|field_ty| AggregateMakeFieldStaticFacts {
-                    boundary: boundary_spec_for_ty_in_env(
-                        db,
-                        type_env,
-                        field_ty,
-                        AddressSpaceKind::Memory,
-                    )
-                    .map(|boundary| boundary_sites.stage(boundary)),
-                    stored_class: stored_class_for_ty_in_context(
-                        db,
-                        field_ty,
-                        type_env.scope,
-                        type_env.assumptions,
-                    ),
-                })
-                .collect();
-            ExprStaticFacts::AggregateMake(AggregateMakeStaticFacts {
-                direct_class: None,
-                ctor: AggregateCtorKind::EnumVariant {
-                    enum_ty: *enum_ty,
-                    variant: *variant,
-                },
-                fields,
-            })
-        }
-        NExpr::ReadPlace { .. } => ExprStaticFacts::DirectClass(top_level_class_for_ty_in_env(
-            db,
-            type_env,
-            result_ty,
-            AddressSpaceKind::Memory,
-        )),
-        NExpr::ExtractEnumField { .. } => return None,
-        NExpr::Borrow { provider, .. } => ExprStaticFacts::Borrow {
-            provider_fallback: provider.map(|provider| RuntimeClass::RawAddr {
-                space: address_space_from_provider(provider),
-                target: None,
+            };
+            let value = eval_const_ref(db, *cref)
+                .unwrap_or_else(|err| panic!("CTFE failed for {cref:?}: {err:?}"));
+            let value =
+                reify_runtime_const_for_ty(db, body.owner, body.locals[dst.index()].ty, value)
+                    .unwrap_or(value);
+            aggregate_const_ref_class(db, type_env, value)?;
+            lower_const_region(db, type_env, value)
+        })
+        .collect()
+}
+
+struct ExprStaticFactsBuilder<'a, 'db> {
+    db: &'db dyn MirDb,
+    body: &'a NormalizedSemanticBody<'db>,
+    typed_body: &'a hir::analysis::ty::ty_check::TypedBody<'db>,
+    type_env: RuntimeTypeEnv<'db>,
+    const_ref_regions: &'a HashSet<ConstRegionId<'db>>,
+}
+
+impl<'db> ExprStaticFactsBuilder<'_, 'db> {
+    fn build(
+        &self,
+        expr: &NExpr<'db>,
+        dst: SLocalId,
+        result_ty: TyId<'db>,
+        boundary_sites: &mut BoundarySiteAllocator,
+    ) -> Option<ExprStaticFacts<'db>> {
+        let db = self.db;
+        let body = self.body;
+        let typed_body = self.typed_body;
+        let type_env = self.type_env;
+        let const_ref_regions = self.const_ref_regions;
+        Some(match expr {
+            NExpr::Use(_) | NExpr::CodeRegionRef { .. } => return None,
+            NExpr::Const(const_) => ExprStaticFacts::Const(match const_ {
+                SConst::Value(value) => {
+                    let ty = sem_const_ty(db, *value);
+                    if ty == TyId::unit(db) {
+                        None
+                    } else {
+                        let dst_is_written_by_place = body
+                            .locals
+                            .get(dst.index())
+                            .is_some_and(|local| local.facts.root_demand.written_by_place);
+                        (!dst_is_written_by_place)
+                            .then(|| {
+                                aggregate_const_ref_class(db, type_env, *value)?;
+                                let region = lower_const_region(db, type_env, *value)?;
+                                const_ref_regions
+                                    .contains(&region)
+                                    .then(|| RuntimeClass::const_ref(region.layout(db)))
+                            })
+                            .flatten()
+                            .or_else(|| {
+                                top_level_class_for_ty_in_env(
+                                    db,
+                                    type_env,
+                                    ty,
+                                    AddressSpaceKind::Memory,
+                                )
+                            })
+                    }
+                }
+                SConst::Ref(cref) => {
+                    let value = eval_const_ref(db, *cref)
+                        .unwrap_or_else(|err| panic!("CTFE failed for {cref:?}: {err:?}"));
+                    let value = reify_runtime_const_for_ty(db, body.owner, result_ty, value)
+                        .unwrap_or(value);
+                    let ty = sem_const_ty(db, value);
+                    let dst_is_written_by_place = body
+                        .locals
+                        .get(dst.index())
+                        .is_some_and(|local| local.facts.root_demand.written_by_place);
+                    (!dst_is_written_by_place)
+                        .then(|| aggregate_const_ref_class(db, type_env, value))
+                        .flatten()
+                        .or_else(|| {
+                            top_level_class_for_ty_in_env(
+                                db,
+                                type_env,
+                                ty,
+                                AddressSpaceKind::Memory,
+                            )
+                        })
+                }
             }),
-        },
-        NExpr::IsEnumVariant { .. } => {
-            ExprStaticFacts::DirectClass(Some(RuntimeClass::Scalar(ScalarClass {
-                repr: ScalarRepr::Bool,
-                role: ScalarRole::Plain,
-            })))
-        }
-        NExpr::Call {
-            callee,
-            args,
-            effect_args,
-            ..
-        } => {
-            let caller_key = body.owner.key(db);
-            let callee_key = resolve_runtime_call_key(
-                db, caller_key, typed_body, body, *callee, args,
-            )
-            .unwrap_or_else(|err| {
+            NExpr::Unary { .. }
+            | NExpr::Binary { .. }
+            | NExpr::Cast { .. }
+            | NExpr::CodeRegionOffset { .. }
+            | NExpr::CodeRegionLen { .. } => ExprStaticFacts::DirectClass(
+                scalar_class_for_ty_in_env(db, type_env, result_ty).map(RuntimeClass::Scalar),
+            ),
+            NExpr::ArrayRepeat { .. } => {
                 panic!(
-                    "runtime call resolution failed during return-class inference for {:?}: {err}",
-                    caller_key,
+                    "array repeat with non-concrete length reached runtime class inference: {expr:?}"
                 )
-            });
-            let semantic = get_or_build_semantic_instance(db, callee_key);
-            let builtin_return_class = extern_builtin_return_class(db, semantic, result_ty);
-            let return_decision = static_runtime_return_decision(db, semantic);
-            let needs_input_plan = builtin_return_class.is_none()
-                && matches!(return_decision, StaticRuntimeReturnDecision::Dynamic);
-            ExprStaticFacts::Call(CallStaticFacts {
-                semantic,
-                builtin_return_class,
-                return_decision,
-                input_plan: needs_input_plan.then(|| {
-                    compile_call_input_plan_for_semantic(
-                        db,
-                        body,
-                        semantic,
-                        RuntimeTypeEnv::for_semantic(db, semantic),
-                        effect_args,
-                        boundary_sites,
-                    )
+            }
+            NExpr::GetEnumTag { .. } => return None,
+            NExpr::AggregateMake { ty, fields } => {
+                let direct_class =
+                    top_level_class_for_ty_in_env(db, type_env, *ty, AddressSpaceKind::Memory)
+                        .filter(|class| !matches!(class, RuntimeClass::AggregateValue { .. }));
+                let field_tys = if ty.is_array(db) {
+                    let (_, args) = ty.decompose_ty_app(db);
+                    let elem_ty = args.first().copied().expect("array element type");
+                    vec![elem_ty; fields.len()]
+                } else {
+                    ty.field_types(db)
+                };
+                if field_tys.len() != fields.len() {
+                    return None;
+                }
+                let fields = field_tys
+                    .into_iter()
+                    .map(|field_ty| AggregateMakeFieldStaticFacts {
+                        boundary: boundary_spec_for_ty_in_env(
+                            db,
+                            type_env,
+                            field_ty,
+                            AddressSpaceKind::Memory,
+                        )
+                        .map(|boundary| boundary_sites.stage(boundary)),
+                        stored_class: stored_class_for_ty_in_context(
+                            db,
+                            field_ty,
+                            type_env.scope,
+                            type_env.assumptions,
+                        ),
+                    })
+                    .collect();
+                ExprStaticFacts::AggregateMake(AggregateMakeStaticFacts {
+                    direct_class,
+                    ctor: AggregateCtorKind::Aggregate(*ty),
+                    fields,
+                })
+            }
+            NExpr::EnumMake {
+                enum_ty,
+                variant,
+                fields,
+            } => {
+                let enum_ = enum_ty
+                    .as_enum(db)
+                    .unwrap_or_else(|| panic!("enum construction reached non-enum type"));
+                let args = enum_ty.generic_args(db);
+                let enum_variant = enum_.variants(db).nth(variant.0 as usize)?;
+                let field_tys = enum_variant
+                    .field_tys(db)
+                    .into_iter()
+                    .map(|field| field.instantiate(db, args))
+                    .collect::<Vec<_>>();
+                if field_tys.len() != fields.len() {
+                    return None;
+                }
+                let fields = field_tys
+                    .into_iter()
+                    .map(|field_ty| AggregateMakeFieldStaticFacts {
+                        boundary: boundary_spec_for_ty_in_env(
+                            db,
+                            type_env,
+                            field_ty,
+                            AddressSpaceKind::Memory,
+                        )
+                        .map(|boundary| boundary_sites.stage(boundary)),
+                        stored_class: stored_class_for_ty_in_context(
+                            db,
+                            field_ty,
+                            type_env.scope,
+                            type_env.assumptions,
+                        ),
+                    })
+                    .collect();
+                ExprStaticFacts::AggregateMake(AggregateMakeStaticFacts {
+                    direct_class: None,
+                    ctor: AggregateCtorKind::EnumVariant {
+                        enum_ty: *enum_ty,
+                        variant: *variant,
+                    },
+                    fields,
+                })
+            }
+            NExpr::ReadPlace { .. } => ExprStaticFacts::DirectClass(top_level_class_for_ty_in_env(
+                db,
+                type_env,
+                result_ty,
+                AddressSpaceKind::Memory,
+            )),
+            NExpr::ExtractEnumField { .. } => return None,
+            NExpr::Borrow { provider, .. } => ExprStaticFacts::Borrow {
+                provider_fallback: provider.map(|provider| RuntimeClass::RawAddr {
+                    space: address_space_from_provider(provider),
+                    target: None,
                 }),
-            })
-        }
-    })
+            },
+            NExpr::IsEnumVariant { .. } => {
+                ExprStaticFacts::DirectClass(Some(RuntimeClass::Scalar(ScalarClass {
+                    repr: ScalarRepr::Bool,
+                    role: ScalarRole::Plain,
+                })))
+            }
+            NExpr::Call {
+                callee,
+                args,
+                effect_args,
+                ..
+            } => {
+                let caller_key = body.owner.key(db);
+                let callee_key = resolve_runtime_call_key(
+                    db, caller_key, typed_body, body, *callee, args,
+                )
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "runtime call resolution failed during return-class inference for {:?}: {err}",
+                        caller_key,
+                    )
+                });
+                let semantic = get_or_build_semantic_instance(db, callee_key);
+                let builtin_return_class = extern_builtin_return_class(db, semantic, result_ty);
+                let return_decision = static_runtime_return_decision(db, semantic);
+                let needs_input_plan = builtin_return_class.is_none()
+                    && matches!(return_decision, StaticRuntimeReturnDecision::Dynamic);
+                ExprStaticFacts::Call(CallStaticFacts {
+                    semantic,
+                    builtin_return_class,
+                    return_decision,
+                    input_plan: needs_input_plan.then(|| {
+                        compile_call_input_plan_for_semantic(
+                            db,
+                            body,
+                            semantic,
+                            RuntimeTypeEnv::for_semantic(db, semantic),
+                            effect_args,
+                            boundary_sites,
+                        )
+                    }),
+                })
+            }
+        })
+    }
 }
 
 #[derive(Clone, Copy)]

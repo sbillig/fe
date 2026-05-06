@@ -5,6 +5,8 @@ input_file: crates/codegen/tests/fixtures/const_array.fe
 ---
 target = "evm-ethereum-osaka"
 
+global private const [i256; 3] $const_region_0 = [10, 20, 30];
+
 func private %main() -> i256 {
     block0:
         jump block1;
@@ -32,41 +34,29 @@ func private %sum_two(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v7.objref<[i256; 3]> = obj.alloc [i256; 3];
-        v9.objref<i256> = obj.index v7 0.i256;
-        obj.store v9 10.i256;
-        v11.objref<i256> = obj.index v7 1.i256;
-        obj.store v11 20.i256;
-        v13.objref<i256> = obj.index v7 2.i256;
-        obj.store v13 30.i256;
-        v14.i256 = mload v2 i256;
-        v16.i1 = lt v14 3.i256;
-        v17.i1 = is_zero v16;
-        br v17 block2 block3;
+        v4.constref<[i256; 3]> = const.ref $const_region_0;
+        v5.i256 = mload v2 i256;
+        v7.i1 = lt v5 3.i256;
+        v8.i1 = is_zero v7;
+        br v8 block2 block3;
 
     block2:
         evm_revert 0.i256 0.i256;
 
     block3:
-        v18.objref<i256> = obj.index v7 v14;
-        v19.i256 = obj.load v18;
-        v20.objref<[i256; 3]> = obj.alloc [i256; 3];
-        v21.objref<i256> = obj.index v20 0.i256;
-        obj.store v21 10.i256;
-        v22.objref<i256> = obj.index v20 1.i256;
-        obj.store v22 20.i256;
-        v23.objref<i256> = obj.index v20 2.i256;
-        obj.store v23 30.i256;
-        v24.i256 = mload v3 i256;
-        v25.i1 = lt v24 3.i256;
-        v26.i1 = is_zero v25;
-        br v26 block2 block4;
+        v10.constref<i256> = const.index v4 v5;
+        v11.i256 = const.load v10;
+        v12.constref<[i256; 3]> = const.ref $const_region_0;
+        v13.i256 = mload v3 i256;
+        v14.i1 = lt v13 3.i256;
+        v15.i1 = is_zero v14;
+        br v15 block2 block4;
 
     block4:
-        v27.objref<i256> = obj.index v20 v24;
-        v28.i256 = obj.load v27;
-        (v30.i256, v31.i1) = uaddo v19 v28;
-        br v31 block5 block6;
+        v16.constref<i256> = const.index v12 v13;
+        v17.i256 = const.load v16;
+        (v19.i256, v20.i1) = uaddo v11 v17;
+        br v20 block5 block6;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -74,12 +64,13 @@ func private %sum_two(v0.i256, v1.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        return v30;
+        return v19;
 }
 
 
 object @main {
     section main {
         entry %main_root;
+        data $const_region_0;
     }
 }
