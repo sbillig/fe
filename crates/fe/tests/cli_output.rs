@@ -1749,6 +1749,16 @@ fn test_cli_test_workspace_root_is_workspace_aware() {
 }
 
 #[test]
+fn test_cli_test_fe_repo_root() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("fe repo root");
+    let (output, exit_code) = run_fe_main_in_dir(&["test"], root);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+}
+
+#[test]
 fn test_cli_test_workspace_ingot_selects_single_ingot() {
     let root = workspace_fixture("test_workspace_fe_test_core_std_no_tests");
     let (output, exit_code) = run_fe_main_in_dir(&["test", "--ingot", "app"], &root);

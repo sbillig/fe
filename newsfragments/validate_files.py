@@ -8,13 +8,13 @@ import pathlib
 import sys
 
 ALLOWED_EXTENSIONS = {
-    '.bugfix.md',
-    '.doc.md',
-    '.feature.md',
-    '.internal.md',
-    '.misc.md',
-    '.performance.md',
-    '.removal.md',
+    '.bugfix',
+    '.doc',
+    '.feature',
+    '.internal',
+    '.misc',
+    '.performance',
+    '.removal',
 }
 
 ALLOWED_FILES = {
@@ -37,8 +37,14 @@ for fragment_file in THIS_DIR.iterdir():
     if fragment_file.name in ALLOWED_FILES:
         continue
     elif num_args == 0:
-        full_extension = "".join(fragment_file.suffixes)
-        if full_extension not in ALLOWED_EXTENSIONS:
+        suffixes = fragment_file.suffixes
+        has_counter = len(suffixes) >= 3 and suffixes[-2].lstrip('.').isdigit()
+        type_idx = -3 if has_counter else -2
+        if (
+            len(suffixes) < 2
+            or suffixes[-1] != '.md'
+            or suffixes[type_idx] not in ALLOWED_EXTENSIONS
+        ):
             raise Exception(f"Unexpected file: {fragment_file}")
         elif not ends_with_newline(fragment_file):
             raise Exception(
