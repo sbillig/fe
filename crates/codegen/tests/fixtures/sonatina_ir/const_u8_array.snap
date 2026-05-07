@@ -89,6 +89,5 @@ func private %pass_then_index() -> i8 {
 object @main {
     section main {
         entry %main_root;
-        data $const_region_0;
     }
 }

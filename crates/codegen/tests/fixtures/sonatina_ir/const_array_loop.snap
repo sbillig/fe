@@ -92,6 +92,5 @@ func private %sum_loop(v0.i256) -> i256 {
 object @main {
     section main {
         entry %main_root;
-        data $const_region_0;
     }
 }

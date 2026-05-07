@@ -21,7 +21,7 @@ use mir::{
     RuntimeLinkage, RuntimeLocalRoot, RuntimePackage, RuntimePlace, SaturatingBinOp, ScalarClass,
     ScalarRepr, VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, GlobalVariableData, GlobalVariableRef, I256, Immediate, Linkage, Module, Signature,
@@ -95,6 +95,7 @@ struct ModuleLowerer<'db, 'a> {
     layout_names: FxHashMap<LayoutId<'db>, String>,
     const_globals: FxHashMap<ConstRegionId<'db>, GlobalVariableRef>,
     const_names: FxHashMap<ConstRegionId<'db>, String>,
+    explicit_code_region_sections: FxHashSet<(mir::RuntimeObject<'db>, mir::RuntimeSectionName)>,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -116,6 +117,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             layout_names: FxHashMap::default(),
             const_globals: FxHashMap::default(),
             const_names: FxHashMap::default(),
+            explicit_code_region_sections: FxHashSet::default(),
         }
     }
 
@@ -305,8 +307,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 let section_builder =
                     object_builder.section(super::section_name_for_runtime(&section.name));
                 section_builder.entry(self.func_ref(section.entry.instance(self.db))?);
-                for region in &section.const_regions {
-                    section_builder.data(self.lower_const_region(*region)?);
+                if self.section_needs_const_data(object, &section.name) {
+                    for region in &section.const_regions {
+                        section_builder.data(self.lower_const_region(*region)?);
+                    }
                 }
                 for embed in &section.embeds {
                     match &embed.source {
@@ -331,6 +335,35 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 .map_err(|err| LowerError::Internal(format!("failed to declare object: {err}")))?;
         }
         Ok(())
+    }
+
+    fn section_needs_const_data(
+        &self,
+        object: mir::RuntimeObject<'db>,
+        section: &mir::RuntimeSectionName,
+    ) -> bool {
+        matches!(section, mir::RuntimeSectionName::CodeRegion(_))
+            || self
+                .explicit_code_region_sections
+                .contains(&(object, section.clone()))
+    }
+
+    fn mark_explicit_code_region(&mut self, region: mir::RuntimeCodeRegion<'db>) {
+        let Some(resolved) = self
+            .package
+            .code_regions(self.db)
+            .into_iter()
+            .find(|resolved| resolved.region(self.db) == region)
+        else {
+            return;
+        };
+        match resolved.source(self.db) {
+            mir::RuntimeSectionRef::Local { object, section }
+            | mir::RuntimeSectionRef::External { object, section } => {
+                self.explicit_code_region_sections
+                    .insert((object, section.clone()));
+            }
+        }
     }
 
     fn func_ref(&self, instance: mir::RuntimeInstance<'db>) -> Result<FuncRef, LowerError> {
@@ -1520,14 +1553,16 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 SymSize::new(self.module.inst_set(), SymbolRef::CurrentSection),
                 Type::I256,
             ),
-            RuntimeBuiltin::CodeRegionOffset { region } => self.fb.insert_inst(
-                SymAddr::new(self.module.inst_set(), self.code_region_symbol_ref(*region)),
-                Type::I256,
-            ),
-            RuntimeBuiltin::CodeRegionLen { region } => self.fb.insert_inst(
-                SymSize::new(self.module.inst_set(), self.code_region_symbol_ref(*region)),
-                Type::I256,
-            ),
+            RuntimeBuiltin::CodeRegionOffset { region } => {
+                let symbol = self.code_region_symbol_ref(*region);
+                self.fb
+                    .insert_inst(SymAddr::new(self.module.inst_set(), symbol), Type::I256)
+            }
+            RuntimeBuiltin::CodeRegionLen { region } => {
+                let symbol = self.code_region_symbol_ref(*region);
+                self.fb
+                    .insert_inst(SymSize::new(self.module.inst_set(), symbol), Type::I256)
+            }
             RuntimeBuiltin::Malloc { size } => {
                 let size = self.local_value(*size)?;
                 let ptr_ty = self.fb.ptr_type(Type::I8);
@@ -1761,7 +1796,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         })
     }
 
-    fn code_region_symbol_ref(&self, region: mir::RuntimeCodeRegion<'db>) -> SymbolRef {
+    fn code_region_symbol_ref(&mut self, region: mir::RuntimeCodeRegion<'db>) -> SymbolRef {
+        self.module.mark_explicit_code_region(region);
         if !self.current_sections.is_empty()
             && self
                 .module

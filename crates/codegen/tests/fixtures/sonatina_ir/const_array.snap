@@ -71,6 +71,5 @@ func private %sum_two(v0.i256, v1.i256) -> i256 {
 object @main {
     section main {
         entry %main_root;
-        data $const_region_0;
     }
 }

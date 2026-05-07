@@ -5,8 +5,8 @@ use hir::analysis::{
     semantic::{
         EffectProviderSubst, FieldIndex, GenericSubst, ImplEnv, SBlockId, SConst, SLocalId,
         SemConstId, SemConstScalar, SemConstValue, SemanticCalleeRef, SemanticCodeRegionRef,
-        SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance, SemanticInstanceKey, SemanticLocalKind,
-        VariantIndex,
+        SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance, SemanticInstanceKey,
+        SemanticLocalKind, VariantIndex,
         borrowck::{
             NBorrowRoot, NBorrowRootId, NEffectArg, NExpr, NLocalOrigin, NOperand, NSPlace,
             NSPlaceRoot, NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind,

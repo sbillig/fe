@@ -29,6 +29,5 @@ func private %main_root() {
 object @main {
     section main {
         entry %main_root;
-        data $const_region_0;
     }
 }
