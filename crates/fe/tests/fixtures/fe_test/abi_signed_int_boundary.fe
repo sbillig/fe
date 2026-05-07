@@ -1,0 +1,57 @@
+use std::evm::{Call, Create, Evm, assert}
+
+msg M {
+    #[selector = 1]
+    InputI8 { k: i8 } -> u256,
+    #[selector = 2]
+    InputI16 { k: i16 } -> u256,
+    #[selector = 3]
+    InputI32 { k: i32 } -> u256,
+    #[selector = 4]
+    InputI64 { k: i64 } -> u256,
+    #[selector = 5]
+    InputI128 { k: i128 } -> u256,
+    #[selector = 6]
+    OutputI8 { dummy: u256 } -> i8,
+    #[selector = 7]
+    OutputI16 { dummy: u256 } -> i16,
+    #[selector = 8]
+    OutputI32 { dummy: u256 } -> i32,
+    #[selector = 9]
+    OutputI64 { dummy: u256 } -> i64,
+    #[selector = 10]
+    OutputI128 { dummy: u256 } -> i128,
+}
+
+pub contract C {
+    recv M {
+        InputI8 { k } -> u256 { if k == 0 { 0 } else { 1 } }
+        InputI16 { k } -> u256 { if k == 0 { 0 } else { 1 } }
+        InputI32 { k } -> u256 { if k == 0 { 0 } else { 1 } }
+        InputI64 { k } -> u256 { if k == 0 { 0 } else { 1 } }
+        InputI128 { k } -> u256 { if k == 0 { 0 } else { 1 } }
+
+        OutputI8 { dummy } -> i8 { -1 }
+        OutputI16 { dummy } -> i16 { -1 }
+        OutputI32 { dummy } -> i32 { -1 }
+        OutputI64 { dummy } -> i64 { -1 }
+        OutputI128 { dummy } -> i128 { -1 }
+    }
+}
+
+#[test]
+fn signed_ints_cross_abi_boundary() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+
+    assert(evm.call(addr: c, gas: 100000, value: 0, message: M::InputI8 { k: -1 }) == 1)
+    assert(evm.call(addr: c, gas: 100000, value: 0, message: M::InputI16 { k: -1 }) == 1)
+    assert(evm.call(addr: c, gas: 100000, value: 0, message: M::InputI32 { k: -1 }) == 1)
+    assert(evm.call(addr: c, gas: 100000, value: 0, message: M::InputI64 { k: -1 }) == 1)
+    assert(evm.call(addr: c, gas: 100000, value: 0, message: M::InputI128 { k: -1 }) == 1)
+
+    assert(evm.call(addr: c, gas: 100000, value: 0, message: M::OutputI8 { dummy: 0 }) == -1)
+    assert(evm.call(addr: c, gas: 100000, value: 0, message: M::OutputI16 { dummy: 0 }) == -1)
+    assert(evm.call(addr: c, gas: 100000, value: 0, message: M::OutputI32 { dummy: 0 }) == -1)
+    assert(evm.call(addr: c, gas: 100000, value: 0, message: M::OutputI64 { dummy: 0 }) == -1)
+    assert(evm.call(addr: c, gas: 100000, value: 0, message: M::OutputI128 { dummy: 0 }) == -1)
+}

@@ -1110,8 +1110,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.lower_binary(*op, lhs, rhs, &lhs_class)?
             }
             RExpr::Cast { value, to } => {
+                let signed = self
+                    .body
+                    .value_class(*value)
+                    .is_some_and(RuntimeClass::is_signed_scalar);
                 let value = self.local_value(*value)?;
-                self.cast_scalar(value, scalar_ty(to))?
+                self.cast_scalar_with_signedness(value, scalar_ty(to), signed)?
             }
             RExpr::ConstRef { region, .. } => {
                 let gv = self.module.lower_const_region(*region)?;
@@ -1439,7 +1443,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let rhs = self.local_value(*rhs)?;
                 let lhs = self.cast_scalar(lhs, scalar_ty(class))?;
                 let rhs = self.cast_scalar(rhs, scalar_ty(class))?;
-                let signed = matches!(class.repr, ScalarRepr::Int { signed: true, .. });
+                let signed = class.is_signed_int();
                 match (op, signed) {
                     (SaturatingBinOp::Add, true) => self.fb.insert_saddsat(lhs, rhs),
                     (SaturatingBinOp::Add, false) => self.fb.insert_uaddsat(lhs, rhs),
@@ -1792,7 +1796,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RuntimeIntrinsic::GenericSaturating { op, ty } => {
                 let prim = intrinsic_prim_from_ty(self.module.db, ty)?;
                 let op_ty = intrinsic_value_type(prim);
-                let signed = prim_is_signed(prim);
+                let signed = prim.is_signed_int();
                 let (lhs, rhs) = intrinsic_binary_args(self, args)?;
                 let lhs =
                     lower_intrinsic_operand(&mut self.fb, self.module.inst_set(), lhs, prim, op_ty);
@@ -1821,7 +1825,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         args: &[RLocalId],
     ) -> Result<ValueId, LowerError> {
         let op_ty = intrinsic_value_type(prim);
-        let signed = prim_is_signed(prim);
+        let signed = prim.is_signed_int();
         Ok(match op {
             NumericIntrinsicOp::Eq
             | NumericIntrinsicOp::Ne
@@ -3509,7 +3513,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         src: ValueId,
     ) -> Result<(), LowerError> {
         let value = match class {
-            RuntimeClass::Scalar(scalar) => self.cast_scalar(src, scalar_word_ty(scalar)),
+            RuntimeClass::Scalar(scalar) => self.cast_scalar_with_signedness(
+                src,
+                scalar_word_ty(scalar),
+                scalar.is_signed_int(),
+            ),
             RuntimeClass::Ref {
                 kind:
                     RefKind::Provider {
@@ -3566,29 +3574,23 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     }
 
     fn cast_scalar(&mut self, value: ValueId, ty: Type) -> Result<ValueId, LowerError> {
-        let from = self.fb.type_of(value);
-        if from == ty {
+        self.cast_scalar_with_signedness(value, ty, false)
+    }
+
+    fn cast_scalar_with_signedness(
+        &mut self,
+        value: ValueId,
+        ty: Type,
+        signed: bool,
+    ) -> Result<ValueId, LowerError> {
+        if self.fb.type_of(value) == ty {
             return Ok(value);
         }
         if ty == Type::I1 {
             return Ok(condition_to_i1(&mut self.fb, value, self.module.inst_set()));
         }
-        if from == Type::I1 {
-            return Ok(self
-                .fb
-                .insert_inst(Zext::new(self.module.inst_set(), value, ty), ty));
-        }
-        let from_bits = int_bits(from);
-        let to_bits = int_bits(ty);
-        Ok(match from_bits.cmp(&to_bits) {
-            std::cmp::Ordering::Less => self
-                .fb
-                .insert_inst(Zext::new(self.module.inst_set(), value, ty), ty),
-            std::cmp::Ordering::Equal => value,
-            std::cmp::Ordering::Greater => self
-                .fb
-                .insert_inst(Trunc::new(self.module.inst_set(), value, ty), ty),
-        })
+        let is = self.module.inst_set();
+        Ok(cast_int_value(&mut self.fb, is, value, ty, signed))
     }
 
     fn coerce_to_dst(
@@ -3721,7 +3723,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         let ty = self.module.ty_for_class(operand)?;
         let lhs = self.cast_scalar(lhs, ty)?;
         let rhs = self.cast_scalar(rhs, ty)?;
-        let signed = scalar_is_signed(operand);
+        let signed = operand.is_signed_scalar();
         Ok(match op {
             ArithBinOp::Add => {
                 let [raw, overflow] = if signed {
@@ -3972,7 +3974,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         let ty = self.module.ty_for_class(operand)?;
         let lhs = self.cast_scalar(lhs, ty)?;
         let rhs = self.cast_scalar(rhs, ty)?;
-        let signed = scalar_is_signed(operand);
+        let signed = operand.is_signed_scalar();
         Ok(match op {
             CompBinOp::Eq => self
                 .fb
@@ -4327,29 +4329,6 @@ fn scalar_word_ty<'db>(scalar: &ScalarClass<'db>) -> Type {
     }
 }
 
-fn scalar_is_signed(class: &RuntimeClass<'_>) -> bool {
-    matches!(
-        class,
-        RuntimeClass::Scalar(ScalarClass {
-            repr: ScalarRepr::Int { signed: true, .. },
-            ..
-        })
-    )
-}
-
-fn prim_is_signed(prim: PrimTy) -> bool {
-    matches!(
-        prim,
-        PrimTy::I8
-            | PrimTy::I16
-            | PrimTy::I32
-            | PrimTy::I64
-            | PrimTy::I128
-            | PrimTy::I256
-            | PrimTy::Isize
-    )
-}
-
 fn intrinsic_prim_from_ty<'db>(
     db: &'db DriverDataBase,
     ty: TyId<'db>,
@@ -4393,7 +4372,7 @@ fn lower_intrinsic_operand(
     if prim == PrimTy::Bool {
         condition_to_i1(fb, value, is)
     } else {
-        cast_int_value(fb, is, value, op_ty, prim_is_signed(prim))
+        cast_int_value(fb, is, value, op_ty, prim.is_signed_int())
     }
 }
 
