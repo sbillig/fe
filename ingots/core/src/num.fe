@@ -1,5 +1,6 @@
 use super::ops::*
 use super::default::Default
+use super::marker::Copy
 use super::option::Option::{self, *}
 use super::panic
 
@@ -402,7 +403,7 @@ pub trait IntDowncast<T> {
     const fn downcast_unchecked(self) -> T
 }
 
-pub trait IntWord {
+pub trait IntWord: Copy {
     const MASK: u256
     const SIGN_BIT: u256
     const IS_SIGNED: bool

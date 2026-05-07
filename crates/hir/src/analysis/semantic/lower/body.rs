@@ -10,8 +10,9 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             CallSiteId, FieldIndex, Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId,
-            SOperand, SPlace, SStmt, SStmtKind, STerminator, STerminatorKind, SValueId, SemOrigin,
-            SemanticBody, SemanticLocalRole, VariantIndex, bool_const, bytes_const, int_const,
+            SOperand, SPlace, SStmt, SStmtKind, STerminator, STerminatorKind, SValueId,
+            SemConstValue, SemOrigin, SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole,
+            VariantIndex, bool_const, bytes_const, int_const, reify_runtime_const_for_ty,
             runtime_size_bytes, sem_const_from_ty, unit_const,
         },
         ty::{
@@ -613,6 +614,36 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     fn lower_const_ref(&mut self, expr: ExprId, const_ref: ConstRef<'db>) -> SValueId {
         let ty = self.expr_ty(expr);
+        if let ConstRef::TraitConst(assoc) = const_ref
+            && let Some(const_ty) = const_ty_or_abstract_from_assoc_const_use(self.db, assoc, ty)
+                .map(|const_ty| TyId::const_ty(self.db, const_ty))
+            && let Some(mut symbolic) = sem_const_from_ty(self.db, const_ty)
+        {
+            if matches!(symbolic.value(self.db), SemConstValue::TypeLevel { .. })
+                && let Some(runtime) =
+                    reify_runtime_const_for_ty(self.db, self.instance, ty, symbolic)
+            {
+                symbolic = runtime;
+            }
+
+            let instance_has_generic_args = self
+                .instance
+                .key(self.db)
+                .subst(self.db)
+                .generic_args(self.db)
+                .iter()
+                .any(|arg| arg.has_param(self.db) || arg.has_var(self.db));
+            if !matches!(symbolic.value(self.db), SemConstValue::TypeLevel { .. })
+                || instance_has_generic_args
+            {
+                return self.emit_expr_with_origin(
+                    SemOrigin::Expr(expr),
+                    ty,
+                    SExpr::Const(SConst::Value(symbolic)),
+                );
+            }
+        }
+
         if let Some(const_ref) =
             resolve_semantic_const_ref(self.db, const_ref, ty, SemOrigin::Expr(expr))
         {
@@ -623,22 +654,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             );
         }
 
-        let symbolic = match const_ref {
-            ConstRef::TraitConst(assoc) => {
-                const_ty_or_abstract_from_assoc_const_use(self.db, assoc, ty)
-                    .map(|const_ty| TyId::const_ty(self.db, const_ty))
-                    .and_then(|const_ty| sem_const_from_ty(self.db, const_ty))
-            }
-            ConstRef::Const(_) => None,
-        };
-        let Some(symbolic) = symbolic else {
-            panic!("const ref should resolve to a semantic instance: {const_ref:?}");
-        };
-        self.emit_expr_with_origin(
-            SemOrigin::Expr(expr),
-            ty,
-            SExpr::Const(SConst::Value(symbolic)),
-        )
+        panic!("const ref should resolve to a semantic instance: {const_ref:?}");
     }
 
     fn lower_path_expr(&mut self, expr: ExprId) -> SValueId {
@@ -845,16 +861,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             SemanticExprLowering::CodeRegionIntrinsic {
                 region_arg, kind, ..
             } => {
-                let region = self.typed_body.expr_code_region_ref(self.db, *region_arg).unwrap_or_else(
-                    || {
-                        panic!(
-                            "typed code-region intrinsic is missing instantiated code-region ref: call={expr:?} arg={region_arg:?}"
-                        )
-                    },
-                );
+                let target = self.lower_code_region_target(expr, *region_arg);
                 let lowered = match kind {
-                    CodeRegionIntrinsicKind::Offset => SExpr::CodeRegionOffset { region },
-                    CodeRegionIntrinsicKind::Len => SExpr::CodeRegionLen { region },
+                    CodeRegionIntrinsicKind::Offset => SExpr::CodeRegionOffset { target },
+                    CodeRegionIntrinsicKind::Len => SExpr::CodeRegionLen { target },
                 };
                 self.emit_expr_with_origin(SemOrigin::Expr(expr), ty, lowered)
             }
@@ -862,6 +872,28 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.lower_const_intrinsic(expr, callable, *kind)
             }
         }
+    }
+
+    fn lower_code_region_target(
+        &self,
+        call_expr: ExprId,
+        region_arg: ExprId,
+    ) -> SemanticCodeRegionTarget<'db> {
+        self.typed_body
+            .expr_code_region_ref(self.db, region_arg)
+            .map(SemanticCodeRegionTarget::Resolved)
+            .unwrap_or_else(|| {
+                let ty = self.expr_ty(region_arg);
+                if ty.has_param(self.db) || ty.has_var(self.db) {
+                    SemanticCodeRegionTarget::Deferred {
+                        arg: region_arg, ty
+                    }
+                } else {
+                    panic!(
+                        "typed code-region intrinsic is missing instantiated code-region ref: call={call_expr:?} arg={region_arg:?} ty={ty:?}"
+                    )
+                }
+            })
     }
 
     fn lower_callable_expr(

@@ -2,7 +2,7 @@ use fe_hir::test_db::HirAnalysisTestDb;
 use fe_hir::{
     analysis::{
         semantic::{
-            NExpr, NSStmtKind, SExpr, SStmtKind, SemanticCodeRegionRef,
+            NExpr, NSStmtKind, SExpr, SStmtKind, SemanticCodeRegionRef, SemanticCodeRegionTarget,
             get_or_build_semantic_instance, identity_semantic_instance_key,
             normalize_semantic_body,
         },
@@ -337,12 +337,20 @@ fn runtime() uses (evm: mut Evm) {}"#,
         .collect::<Vec<_>>();
     assert!(exprs.iter().any(|expr| matches!(
         expr,
-        SExpr::CodeRegionLen { region: SemanticCodeRegionRef::ManualContractRoot { func } }
+        SExpr::CodeRegionLen {
+            target: SemanticCodeRegionTarget::Resolved(
+                SemanticCodeRegionRef::ManualContractRoot { func },
+            ),
+        }
             if *func == runtime
     )));
     assert!(exprs.iter().any(|expr| matches!(
         expr,
-        SExpr::CodeRegionOffset { region: SemanticCodeRegionRef::ManualContractRoot { func } }
+        SExpr::CodeRegionOffset {
+            target: SemanticCodeRegionTarget::Resolved(
+                SemanticCodeRegionRef::ManualContractRoot { func },
+            ),
+        }
             if *func == runtime
     )));
 }
@@ -474,12 +482,20 @@ fn runtime() uses (evm: mut Evm) {}"#,
         {
             saw_len |= matches!(
                 expr,
-                SExpr::CodeRegionLen { region: SemanticCodeRegionRef::ManualContractRoot { func } }
+                SExpr::CodeRegionLen {
+                    target: SemanticCodeRegionTarget::Resolved(
+                        SemanticCodeRegionRef::ManualContractRoot { func },
+                    ),
+                }
                     if *func == runtime
             );
             saw_offset |= matches!(
                 expr,
-                SExpr::CodeRegionOffset { region: SemanticCodeRegionRef::ManualContractRoot { func } }
+                SExpr::CodeRegionOffset {
+                    target: SemanticCodeRegionTarget::Resolved(
+                        SemanticCodeRegionRef::ManualContractRoot { func },
+                    ),
+                }
                     if *func == runtime
             );
         }

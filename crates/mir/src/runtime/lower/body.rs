@@ -3,7 +3,8 @@ use hir::analysis::{
     semantic::{
         EffectProviderSubst, FieldIndex, GenericSubst, ImplEnv, SBlockId, SConst, SLocalId,
         SemConstId, SemConstScalar, SemConstValue, SemanticCalleeRef, SemanticCodeRegionRef,
-        SemanticInstance, SemanticInstanceKey, SemanticLocalKind, VariantIndex,
+        SemanticCodeRegionTarget, SemanticInstance, SemanticInstanceKey, SemanticLocalKind,
+        VariantIndex,
         borrowck::{
             NBorrowRoot, NBorrowRootId, NEffectArg, NExpr, NLocalOrigin, NOperand, NSPlace,
             NSPlaceRoot, NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind,
@@ -816,24 +817,30 @@ impl<'db> RmirEmitter<'db> {
             } => {
                 self.lower_extract_enum_field(bb, dst, *value, *variant, *field);
             }
-            NExpr::CodeRegionOffset { region } => self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst,
-                    expr: RExpr::Builtin(crate::runtime::RuntimeBuiltin::CodeRegionOffset {
-                        region: self.lower_code_region_ref(region),
-                    }),
-                },
-            ),
-            NExpr::CodeRegionLen { region } => self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst,
-                    expr: RExpr::Builtin(crate::runtime::RuntimeBuiltin::CodeRegionLen {
-                        region: self.lower_code_region_ref(region),
-                    }),
-                },
-            ),
+            NExpr::CodeRegionOffset { target } => {
+                let region = self.lower_code_region_target(target);
+                self.push_stmt(
+                    bb,
+                    RStmt::Assign {
+                        dst,
+                        expr: RExpr::Builtin(crate::runtime::RuntimeBuiltin::CodeRegionOffset {
+                            region,
+                        }),
+                    },
+                );
+            }
+            NExpr::CodeRegionLen { target } => {
+                let region = self.lower_code_region_target(target);
+                self.push_stmt(
+                    bb,
+                    RStmt::Assign {
+                        dst,
+                        expr: RExpr::Builtin(crate::runtime::RuntimeBuiltin::CodeRegionLen {
+                            region,
+                        }),
+                    },
+                );
+            }
             NExpr::Call {
                 callee,
                 args,
@@ -871,6 +878,21 @@ impl<'db> RmirEmitter<'db> {
 
     fn lower_code_region_ref(&self, region: &SemanticCodeRegionRef<'db>) -> RuntimeCodeRegion<'db> {
         runtime_code_region_for_semantic_ref(self.db, region)
+    }
+
+    fn lower_code_region_target(
+        &self,
+        target: &SemanticCodeRegionTarget<'db>,
+    ) -> RuntimeCodeRegion<'db> {
+        match target {
+            SemanticCodeRegionTarget::Resolved(region) => self.lower_code_region_ref(region),
+            SemanticCodeRegionTarget::Deferred { arg, ty } => {
+                panic!(
+                    "deferred generic code-region target reached runtime lowering: owner={:?}; arg={arg:?}; ty={ty:?}",
+                    self.current_semantic_key(),
+                )
+            }
+        }
     }
 
     fn lower_const_into(&mut self, bb: RBlockId, dst: RLocalId, const_: &SConst<'db>) {
