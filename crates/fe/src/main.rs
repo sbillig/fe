@@ -18,7 +18,7 @@ use std::fs;
 use build::build;
 use camino::Utf8PathBuf;
 use check::check;
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use fmt as fe_fmt;
 use similar::{ChangeTag, TextDiff};
@@ -65,6 +65,34 @@ pub struct Options {
     pub command: Command,
 }
 
+#[derive(Debug, Clone, Args)]
+pub struct OptimizeArgs {
+    /// Optimization level.
+    ///
+    /// 0 = none
+    /// 1 = fast compilation, usually close to `2` gas and bytecode size with Sonatina
+    /// 2 = optimizes heavily for runtime gas
+    /// s = size-oriented (currently similar to `2`)
+    ///
+    /// Defaults to `1`
+    ///
+    /// Note: with `--backend yul`, optimize levels `s`, `1`, and `2` are currently equivalent.
+    #[arg(
+        long = "optimize",
+        short = 'O',
+        value_name = "LEVEL",
+        value_parser = ["0", "1", "2", "s"],
+        verbatim_doc_comment
+    )]
+    optimize: Option<String>,
+}
+
+impl OptimizeArgs {
+    fn as_deref(&self) -> Option<&str> {
+        self.optimize.as_deref()
+    }
+}
+
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     /// Compile Fe code to EVM bytecode.
@@ -86,23 +114,8 @@ pub enum Command {
         /// Code generation backend to use (yul or sonatina).
         #[arg(long, default_value = "sonatina")]
         backend: String,
-        /// Optimization level (0 = none, s = size-oriented, 2 = speed-oriented).
-        ///
-        /// Defaults to `2`.
-        ///
-        /// Note: with `--backend yul`, optimize levels `s`, `1`, and `2` are currently equivalent.
-        ///
-        /// `1` is currently an alias for `2`.
-        ///
-        /// - Sonatina backend: controls the optimization pipeline.
-        /// - Yul backend: controls whether solc optimization is enabled (0 = disabled, s/1/2 = enabled).
-        #[arg(
-            long = "optimize",
-            short = 'O',
-            value_name = "LEVEL",
-            value_parser = ["0", "1", "2", "s"]
-        )]
-        optimize: Option<String>,
+        #[command(flatten)]
+        optimize: OptimizeArgs,
         /// solc binary to use (overrides FE_SOLC_PATH).
         ///
         /// Only used with `--backend yul` (ignored with a warning otherwise).
@@ -255,23 +268,8 @@ pub enum Command {
         /// Only used with `--backend yul` (ignored with a warning otherwise).
         #[arg(long)]
         solc: Option<String>,
-        /// Optimization level (0 = none, s = size-oriented, 1/2 = speed-oriented).
-        ///
-        /// Defaults to `2`.
-        ///
-        /// Note: with `--backend yul`, optimize levels `s`, `1`, and `2` are currently equivalent.
-        ///
-        /// `1` is currently an alias for `2`.
-        ///
-        /// - Sonatina backend: controls the optimization pipeline.
-        /// - Yul backend: controls whether solc optimization is enabled (0 = disabled, s/1/2 = enabled).
-        #[arg(
-            long = "optimize",
-            short = 'O',
-            value_name = "LEVEL",
-            value_parser = ["0", "1", "2", "s"]
-        )]
-        optimize: Option<String>,
+        #[command(flatten)]
+        optimize: OptimizeArgs,
         /// Trace executed EVM opcodes while running tests.
         #[arg(long)]
         trace_evm: bool,
@@ -910,7 +908,11 @@ fn effective_opt_level(
     backend_kind: codegen::BackendKind,
     optimize: Option<&str>,
 ) -> Result<codegen::OptLevel, String> {
-    let level: codegen::OptLevel = optimize.unwrap_or("2").parse()?;
+    let default_optimize = match backend_kind {
+        codegen::BackendKind::Sonatina => "1",
+        codegen::BackendKind::Yul => "2",
+    };
+    let level: codegen::OptLevel = optimize.unwrap_or(default_optimize).parse()?;
 
     if backend_kind == codegen::BackendKind::Yul
         && let Some(optimize @ ("1" | "2")) = optimize
