@@ -127,6 +127,10 @@ impl<'db> RuntimeClass<'db> {
         }
     }
 
+    pub fn is_signed_scalar(&self) -> bool {
+        matches!(self, Self::Scalar(scalar) if scalar.is_signed_int())
+    }
+
     pub fn array_len(&self, db: &'db dyn MirDb) -> Option<u64> {
         match self {
             RuntimeClass::AggregateValue { layout } => match layout.data(db) {
@@ -359,6 +363,12 @@ pub enum RuntimeCarrier<'db> {
 pub struct ScalarClass<'db> {
     pub repr: ScalarRepr,
     pub role: ScalarRole<'db>,
+}
+
+impl ScalarClass<'_> {
+    pub fn is_signed_int(&self) -> bool {
+        matches!(self.repr, ScalarRepr::Int { signed: true, .. })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
