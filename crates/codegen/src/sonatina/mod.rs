@@ -8,10 +8,7 @@ use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::runtime::ir::RuntimePackagePlan;
 use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rustc_hash::FxHashSet;
-use sonatina_codegen::{
-    isa::evm::EvmBackend,
-    object::{CompileOptions, ObjectArtifact, compile_all_objects},
-};
+use sonatina_codegen::{EvmCompile, OptLevel as SonatinaOptLevel};
 use sonatina_ir::{
     Module,
     ir_writer::{FuncWriter, ModuleWriter},
@@ -160,32 +157,39 @@ fn diagnostic_func_ref(location: &Location) -> Option<FuncRef> {
     }
 }
 
-fn run_sonatina_optimization_pipeline(module: &mut Module, opt_level: OptLevel) {
+fn to_sonatina_opt_level(opt_level: OptLevel) -> SonatinaOptLevel {
     match opt_level {
-        OptLevel::O0 => {}
-        OptLevel::Os => sonatina_codegen::optim::Pipeline::size().run(module),
-        OptLevel::O2 => sonatina_codegen::optim::Pipeline::speed().run(module),
+        OptLevel::O0 => SonatinaOptLevel::O0,
+        OptLevel::O1 => SonatinaOptLevel::O1,
+        OptLevel::Os => SonatinaOptLevel::Os,
+        OptLevel::O2 => SonatinaOptLevel::O2,
     }
 }
 
-fn compile_all_runtime_objects(
-    module: &Module,
+fn evm_compile(module: Module, opt_level: OptLevel, emit_observability: bool) -> EvmCompile {
+    EvmCompile::new(module)
+        .with_opt_level(to_sonatina_opt_level(opt_level))
+        .with_observability(emit_observability)
+}
+
+fn format_object_compile_errors(errors: &[sonatina_codegen::object::ObjectCompileError]) -> String {
+    errors
+        .iter()
+        .map(|error| format!("{error:?}"))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn compile_runtime_objects(
+    module: Module,
+    opt_level: OptLevel,
     emit_observability: bool,
-) -> Result<Vec<ObjectArtifact>, LowerError> {
-    let mut options = CompileOptions::default();
-    let mut verifier_cfg = VerifierConfig::for_level(VerificationLevel::Full);
-    verifier_cfg.allow_detached_entities = true;
-    options.verifier_cfg = verifier_cfg;
-    options.emit_observability = emit_observability;
-    compile_all_objects(module, &EvmBackend::new(create_evm_isa()), &options).map_err(|errors| {
-        LowerError::Internal(
-            errors
-                .iter()
-                .map(|error| format!("{error:?}"))
-                .collect::<Vec<_>>()
-                .join("; "),
-        )
-    })
+) -> Result<Vec<sonatina_codegen::object::ObjectArtifact>, LowerError> {
+    let mut compile = evm_compile(module, opt_level, emit_observability);
+    ensure_module_sonatina_ir_valid(compile.optimize())?;
+    compile
+        .compile()
+        .map_err(|errors| LowerError::Internal(format_object_compile_errors(&errors)))
 }
 
 fn section_name_for_runtime(name: &mir::RuntimeSectionName) -> sonatina_ir::SectionName {
@@ -488,11 +492,12 @@ pub fn emit_runtime_package_sonatina_ir_optimized(
     opt_level: OptLevel,
 ) -> Result<String, LowerError> {
     ensure_runtime_package_has_roots(db, package, "Sonatina IR")?;
-    let mut module = compile_runtime_package_sonatina(db, package, layout)?;
+    let module = compile_runtime_package_sonatina(db, package, layout)?;
     ensure_module_sonatina_ir_valid(&module)?;
-    run_sonatina_optimization_pipeline(&mut module, opt_level);
-    ensure_module_sonatina_ir_valid(&module)?;
-    let mut writer = ModuleWriter::new(&module);
+    let mut compile = evm_compile(module, opt_level, false);
+    let optimized = compile.optimize();
+    ensure_module_sonatina_ir_valid(optimized)?;
+    let mut writer = ModuleWriter::new(optimized);
     Ok(writer.dump_string())
 }
 
@@ -503,11 +508,9 @@ pub fn emit_runtime_package_sonatina_bytecode(
     opt_level: OptLevel,
 ) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
     ensure_runtime_package_has_roots(db, package, "Sonatina bytecode")?;
-    let mut module = compile_runtime_package_sonatina(db, package, layout)?;
+    let module = compile_runtime_package_sonatina(db, package, layout)?;
     ensure_module_sonatina_ir_valid(&module)?;
-    run_sonatina_optimization_pipeline(&mut module, opt_level);
-    ensure_module_sonatina_ir_valid(&module)?;
-    let artifacts = compile_all_runtime_objects(&module, false)?;
+    let artifacts = compile_runtime_objects(module, opt_level, false)?;
     let artifacts_by_name = artifacts
         .iter()
         .map(|artifact| (artifact.object.0.as_str(), artifact))
@@ -683,11 +686,9 @@ pub fn emit_test_module_sonatina(
     if package.root_objects(db).is_empty() {
         return Ok(TestModuleOutput { tests: Vec::new() });
     }
-    let mut module = compile_runtime_package_sonatina(db, &package, crate::EVM_LAYOUT)?;
+    let module = compile_runtime_package_sonatina(db, &package, crate::EVM_LAYOUT)?;
     ensure_module_sonatina_ir_valid(&module)?;
-    run_sonatina_optimization_pipeline(&mut module, opt_level);
-    ensure_module_sonatina_ir_valid(&module)?;
-    let artifacts = compile_all_runtime_objects(&module, options.emit_observability)?;
+    let artifacts = compile_runtime_objects(module, opt_level, options.emit_observability)?;
     let artifacts_by_name = artifacts
         .iter()
         .map(|artifact| (artifact.object.0.as_str(), artifact))
@@ -774,6 +775,14 @@ mod tests {
     }
 
     #[test]
+    fn fe_opt_levels_map_to_sonatina_opt_levels() {
+        assert_eq!(to_sonatina_opt_level(OptLevel::O0), SonatinaOptLevel::O0);
+        assert_eq!(to_sonatina_opt_level(OptLevel::O1), SonatinaOptLevel::O1);
+        assert_eq!(to_sonatina_opt_level(OptLevel::Os), SonatinaOptLevel::Os);
+        assert_eq!(to_sonatina_opt_level(OptLevel::O2), SonatinaOptLevel::O2);
+    }
+
+    #[test]
     fn module_sonatina_bytecode_respects_contract_filter() {
         let mut db = DriverDataBase::default();
         let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -817,7 +826,7 @@ mod tests {
         let package = build_test_runtime_package(&db, top_mod, None)
             .expect("test runtime package should build");
 
-        let mut module = compile_runtime_package_sonatina(&db, &package, crate::EVM_LAYOUT)
+        let module = compile_runtime_package_sonatina(&db, &package, crate::EVM_LAYOUT)
             .expect("test runtime package should lower to Sonatina IR");
         let dumped = ModuleWriter::new(&module).dump_string();
         let map_helpers = dumped
@@ -847,11 +856,8 @@ mod tests {
         if let Err(err) = ensure_module_sonatina_ir_valid(&module) {
             panic!("pre-opt test module should verify: {err}\n\n{dumped}");
         }
-        run_sonatina_optimization_pipeline(&mut module, OptLevel::O0);
-        if let Err(err) = ensure_module_sonatina_ir_valid(&module) {
-            panic!("post-opt test module should verify: {err}\n\n{dumped}");
-        }
-        compile_all_runtime_objects(&module, false).expect("test runtime package should compile");
+        compile_runtime_objects(module, OptLevel::O0, false)
+            .expect("test runtime package should compile");
     }
 
     #[test]
@@ -872,18 +878,15 @@ mod tests {
         let package = build_test_runtime_package(&db, top_mod, None)
             .expect("test runtime package should build");
 
-        let mut module = compile_runtime_package_sonatina(&db, &package, crate::EVM_LAYOUT)
+        let module = compile_runtime_package_sonatina(&db, &package, crate::EVM_LAYOUT)
             .expect("test runtime package should lower to Sonatina IR");
         let dumped = ModuleWriter::new(&module).dump_string();
 
         if let Err(err) = ensure_module_sonatina_ir_valid(&module) {
             panic!("pre-opt test module should verify: {err}\n\n{dumped}");
         }
-        run_sonatina_optimization_pipeline(&mut module, OptLevel::O0);
-        if let Err(err) = ensure_module_sonatina_ir_valid(&module) {
-            panic!("post-opt test module should verify: {err}\n\n{dumped}");
-        }
-        compile_all_runtime_objects(&module, false).expect("test runtime package should compile");
+        compile_runtime_objects(module, OptLevel::O0, false)
+            .expect("test runtime package should compile");
     }
 
     #[test]
@@ -904,18 +907,15 @@ mod tests {
         let package = build_test_runtime_package(&db, top_mod, None)
             .expect("test runtime package should build");
 
-        let mut module = compile_runtime_package_sonatina(&db, &package, crate::EVM_LAYOUT)
+        let module = compile_runtime_package_sonatina(&db, &package, crate::EVM_LAYOUT)
             .expect("test runtime package should lower to Sonatina IR");
         let dumped = ModuleWriter::new(&module).dump_string();
 
         if let Err(err) = ensure_module_sonatina_ir_valid(&module) {
             panic!("pre-opt test module should verify: {err}\n\n{dumped}");
         }
-        run_sonatina_optimization_pipeline(&mut module, OptLevel::O0);
-        if let Err(err) = ensure_module_sonatina_ir_valid(&module) {
-            panic!("post-opt test module should verify: {err}\n\n{dumped}");
-        }
-        compile_all_runtime_objects(&module, false).expect("test runtime package should compile");
+        compile_runtime_objects(module, OptLevel::O0, false)
+            .expect("test runtime package should compile");
     }
 
     #[test]
