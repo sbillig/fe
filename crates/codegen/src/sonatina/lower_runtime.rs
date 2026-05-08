@@ -3152,9 +3152,22 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         };
         match terminal {
             PlaceTerminal::Object { value, .. } => Ok(Lowered::Value(value)),
-            PlaceTerminal::Const { .. } => Err(LowerError::Unsupported(
-                "borrowing const-backed places is not supported".to_string(),
-            )),
+            PlaceTerminal::Const { value, .. } => {
+                if let Some(dst) = dst
+                    && matches!(
+                        self.body.value_class(dst),
+                        Some(RuntimeClass::Ref {
+                            kind: RefKind::Const,
+                            ..
+                        })
+                    )
+                {
+                    return Ok(Lowered::Value(value));
+                }
+                Err(LowerError::Unsupported(
+                    "borrowing const-backed places requires a const-backed destination".to_string(),
+                ))
+            }
             PlaceTerminal::Ptr { addr, .. } => {
                 if let Some(dst) = dst
                     && matches!(

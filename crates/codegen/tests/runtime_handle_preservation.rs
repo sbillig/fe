@@ -1277,6 +1277,55 @@ fn entry() -> u8 {
 }
 
 #[test]
+fn const_backed_local_borrows_lower_as_const_refs_in_sonatina() {
+    let mut db = DriverDataBase::default();
+    let file_url =
+        Url::parse("file:///const_backed_local_borrows_lower_as_const_refs_in_sonatina.fe")
+            .unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            r#"
+const C: [u256; 4] = [11, 22, 33, 44]
+
+fn pick(values: ref [u256; 4], idx: usize) -> u256 {
+    values[idx]
+}
+
+pub fn entry() -> u256 {
+    let values: [u256; 4] = C
+    let idx: usize = 2
+    pick(values: ref values, idx)
+}
+"#
+            .to_string(),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let ir = emit_module_sonatina_ir(&db, top_mod)
+        .expect("const-backed local borrow should lower in Sonatina");
+    let pick = sonatina_function_body(&ir, "pick");
+
+    assert!(
+        pick.contains("constref<[i256; 4]>"),
+        "borrowed const-backed array should be passed as a const ref:\n{ir}"
+    );
+    assert!(
+        pick.contains("const.index") && pick.contains("const.load"),
+        "const-backed ref parameter should load through const data projections:\n{pick}"
+    );
+    assert!(
+        !ir.contains("obj.init.const"),
+        "borrowing a const-backed local should not materialize the full array:\n{ir}"
+    );
+}
+
+#[test]
 fn borrow_typed_aggregate_literals_lower_without_const_shape_mismatch() {
     let mut db = DriverDataBase::default();
     let file_url =
