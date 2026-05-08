@@ -4446,6 +4446,26 @@ impl<'db> ImplTrait<'db> {
             return (None, Vec::new());
         }
 
+        let assumptions = constraints_for(db, self.into());
+        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+            db,
+            TraitSolveCx::new(db, self.scope()).with_assumptions(assumptions),
+            ty,
+        ) {
+            return (
+                None,
+                vec![
+                    TraitConstraintDiag::TraitBoundNotSat {
+                        span: self.span().ty().into(),
+                        primary_goal: goal,
+                        unsat_subgoal: subgoal,
+                        required_by: None,
+                    }
+                    .into(),
+                ],
+            );
+        }
+
         match self.lowered_implementor(db) {
             Ok(implementor) => (Some(implementor), Vec::new()),
             Err(err) => {

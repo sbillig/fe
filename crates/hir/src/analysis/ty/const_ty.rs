@@ -15,7 +15,7 @@ use super::{
     fold::{AssocTySubst, TyFoldable},
     normalize::normalize_ty,
     trait_def::TraitInstId,
-    trait_resolution::{TraitSolveCx, constraint::collect_constraints},
+    trait_resolution::{TraitSolveCx, constraint::collect_constraints, GoalSatisfiability, is_goal_satisfiable, },
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_lower::{ConstDefaultCompletion, collect_generic_params},
@@ -2185,16 +2185,22 @@ pub(super) fn const_ty_from_trait_const<'db>(
     name: IdentId<'db>,
 ) -> Option<ConstTyId<'db>> {
     let trait_ = inst.def(db);
-    let (body, generic_args) =
-        crate::analysis::ty::trait_def::assoc_const_body_and_impl_args_for_trait_inst(
-            db, solve_cx, inst, name,
-        )
-        .or_else(|| {
-            trait_
-                .const_(db, name)
-                .and_then(|c| c.default_body(db))
-                .map(|body| (body, inst.args(db).clone()))
-        })?;
+    let selected = crate::analysis::ty::trait_def::assoc_const_body_and_impl_args_for_trait_inst(
+        db, solve_cx, inst, name,
+    );
+    let (body, generic_args) = if let Some(selected) = selected {
+        selected
+    } else if matches!(
+        is_goal_satisfiable(db, solve_cx, inst),
+        GoalSatisfiability::Satisfied(_)
+    ) {
+        trait_
+            .const_(db, name)
+            .and_then(|c| c.default_body(db))
+            .map(|body| (body, inst.args(db).clone()))?
+    } else {
+        return None;
+    };
 
     let declared_ty = trait_
         .const_(db, name)
