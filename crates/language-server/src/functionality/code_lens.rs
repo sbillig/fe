@@ -111,11 +111,7 @@ pub async fn handle_code_lens(
         },
     };
     let uri_string = params.text_document.uri.to_string();
-    for (label, cmd) in [
-        ("MIR", "fe.viewMir"),
-        ("Yul", "fe.viewYul"),
-        ("Sonatina IR", "fe.viewSonatinaIr"),
-    ] {
+    for (label, cmd) in [("MIR", "fe.viewMir"), ("Sonatina IR", "fe.viewSonatinaIr")] {
         lenses.push(CodeLens {
             range: codegen_range,
             command: Some(Command {

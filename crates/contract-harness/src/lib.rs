@@ -1,5 +1,5 @@
 //! Test harness utilities for compiling Fe contracts and exercising their runtimes with `revm`.
-use codegen::{Backend, EVM_LAYOUT, SonatinaBackend, emit_module_object_yul};
+use codegen::{OptLevel, emit_module_sonatina_bytecode};
 use common::InputDb;
 use driver::DriverDataBase;
 use ethers_core::abi::{AbiParser, ParamType, ParseError as AbiParseError, Token, decode};
@@ -18,7 +18,6 @@ use revm::{
     primitives::{Address, Bytes as EvmBytes, Log, TxKind},
     state::AccountInfo,
 };
-use solc_runner::{ContractBytecode, YulcError, compile_single_contract};
 use std::{
     cmp::Reverse,
     collections::{HashMap, VecDeque},
@@ -42,12 +41,8 @@ const TEST_GAS_LIMIT: u64 = 1_000_000_000;
 pub enum HarnessError {
     #[error("fe compiler diagnostics:\n{0}")]
     CompilerDiagnostics(String),
-    #[error("failed to emit Yul: {0}")]
-    EmitYul(#[from] codegen::EmitModuleError),
     #[error("failed to emit Sonatina bytecode: {0}")]
     EmitSonatina(String),
-    #[error("solc error: {0}")]
-    Solc(String),
     #[error("abi encoding failed: {0}")]
     Abi(#[from] ethers_core::abi::Error),
     #[error("failed to parse function signature: {0}")]
@@ -72,12 +67,6 @@ impl fmt::Debug for HarnessError {
     }
 }
 
-impl From<YulcError> for HarnessError {
-    fn from(value: YulcError) -> Self {
-        Self::Solc(value.0)
-    }
-}
-
 /// Captures raw revert data and provides a nicer `Display` implementation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevertData(pub Vec<u8>);
@@ -89,21 +78,9 @@ impl fmt::Display for RevertData {
 }
 
 /// Options that control how the Fe source is compiled.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CompileOptions {
-    /// Toggle solc optimizer.
-    pub optimize: bool,
-    /// Verify that solc produced runtime bytecode.
-    pub verify_runtime: bool,
-}
-
-impl Default for CompileOptions {
-    fn default() -> Self {
-        Self {
-            optimize: false,
-            verify_runtime: true,
-        }
-    }
+    pub opt_level: OptLevel,
 }
 
 /// Options that control the execution context fed into `revm`.
@@ -1183,6 +1160,12 @@ impl RuntimeInstance {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ContractBytecode {
+    pub bytecode: String,
+    pub runtime_bytecode: String,
+}
+
 /// Harness that compiles Fe source code and executes the resulting contract runtime.
 pub struct FeContractHarness {
     contract: ContractBytecode,
@@ -1213,13 +1196,16 @@ impl FeContractHarness {
         if !diags.is_empty() {
             return Err(HarnessError::CompilerDiagnostics(diags.format_diags(&db)));
         }
-        let yul = emit_module_object_yul(&db, top_mod, contract_name)?;
-        let contract = compile_single_contract(
-            contract_name,
-            &yul,
-            options.optimize,
-            options.verify_runtime,
-        )?;
+        let bytecode =
+            emit_module_sonatina_bytecode(&db, top_mod, options.opt_level, Some(contract_name))
+                .map_err(|err| HarnessError::EmitSonatina(err.to_string()))?;
+        let bytecode = bytecode.get(contract_name).ok_or_else(|| {
+            HarnessError::EmitSonatina(format!("missing bytecode for `{contract_name}`"))
+        })?;
+        let contract = ContractBytecode {
+            bytecode: hex::encode(&bytecode.deploy),
+            runtime_bytecode: hex::encode(&bytecode.runtime),
+        };
         Ok(Self { contract })
     }
 
@@ -1233,12 +1219,12 @@ impl FeContractHarness {
         Self::compile_from_source(contract_name, &source, options)
     }
 
-    /// Returns the raw runtime bytecode emitted by `solc`.
+    /// Returns the compiled raw runtime bytecode.
     pub fn runtime_bytecode(&self) -> &str {
         &self.contract.runtime_bytecode
     }
 
-    /// Returns the init bytecode emitted by `solc`.
+    /// Returns the compiled init bytecode.
     pub fn init_bytecode(&self) -> &str {
         &self.contract.bytecode
     }
@@ -1300,13 +1286,13 @@ pub fn compile_runtime_sonatina_from_source(source: &str) -> Result<String, Harn
         return Err(HarnessError::CompilerDiagnostics(diags.format_diags(&db)));
     }
 
-    let output = SonatinaBackend
-        .compile(&db, top_mod, EVM_LAYOUT, codegen::OptLevel::default())
+    let bytecode = emit_module_sonatina_bytecode(&db, top_mod, OptLevel::default(), None)
         .map_err(|err| HarnessError::EmitSonatina(err.to_string()))?;
-    let bytes = output
-        .as_bytecode()
-        .ok_or_else(|| HarnessError::EmitSonatina("backend returned non-bytecode output".into()))?;
-    Ok(hex::encode(bytes))
+    let contract = bytecode
+        .values()
+        .next()
+        .ok_or_else(|| HarnessError::EmitSonatina("no runtime bytecode emitted".into()))?;
+    Ok(hex::encode(&contract.runtime))
 }
 
 /// ABI-encodes a function call according to the provided signature.
@@ -1364,43 +1350,8 @@ mod tests {
         abi::{AbiParser, Function, Param, ParamType, StateMutability, Token, decode},
         types::U256 as AbiU256,
     };
-    use std::process::Command;
-
-    fn initcode_returning_zero_runtime(runtime_len: usize) -> String {
-        assert!(
-            u16::try_from(runtime_len).is_ok(),
-            "runtime length must fit in PUSH2"
-        );
-
-        let runtime_len = runtime_len as u16;
-        let offset: u16 = 15;
-        let mut init = vec![
-            0x61,
-            (runtime_len >> 8) as u8,
-            runtime_len as u8,
-            0x61,
-            (offset >> 8) as u8,
-            offset as u8,
-            0x60,
-            0x00,
-            0x39,
-            0x61,
-            (runtime_len >> 8) as u8,
-            runtime_len as u8,
-            0x60,
-            0x00,
-            0xf3,
-        ];
-        init.extend(vec![0x00; runtime_len as usize]);
-        hex::encode(init)
-    }
 
     fn compile_calldata_decode_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping calldata decode contract tests because solc is missing");
-            return None;
-        }
-
         let source = r#"
 use std::abi::sol
 use std::abi::{decode_input, decode_input_at}
@@ -1489,11 +1440,6 @@ pub contract DecodeHarness {
     }
 
     fn compile_canonical_decode_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping canonical decode contract tests because solc is missing");
-            return None;
-        }
-
         let source = r#"
 use std::abi::sol
 use std::evm::Address
@@ -1541,11 +1487,6 @@ pub contract CanonicalHarness {
     }
 
     fn compile_dynamic_view_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping dynamic view contract tests because solc is missing");
-            return None;
-        }
-
         let source = r#"
 use std::abi::sol
 use std::abi::sol::{decode_bytes_view, decode_bytes_view_at, decode_string_view}
@@ -1605,11 +1546,6 @@ fn runtime() uses (evm: mut Evm) {
     }
 
     fn compile_storage_bytes_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping storage bytes contract tests because solc is missing");
-            return None;
-        }
-
         let source = r#"
 use std::abi::sol
 use std::abi::sol::{decode_bytes_view, decode_bytes_view_at}
@@ -1692,11 +1628,6 @@ pub contract EmitThenText {
     }
 
     fn compile_emit_then_text_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping emit-then-text contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "EmitThenText",
@@ -1734,11 +1665,6 @@ pub contract RawStaticTarget {
     }
 
     fn compile_raw_static_target_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping raw static target contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "RawStaticTarget",
@@ -1781,11 +1707,6 @@ pub contract RawStaticCaller {
     }
 
     fn compile_raw_static_caller_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping raw static caller contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "RawStaticCaller",
@@ -1821,11 +1742,6 @@ fn runtime() uses (evm: mut Evm) {
     }
 
     fn compile_bad_bool_target_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping bad bool target contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "BadBoolTarget",
@@ -1915,11 +1831,6 @@ pub contract StringLiteral {
     }
 
     fn compile_string_echo_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping string echo contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "StringEcho",
@@ -1931,11 +1842,6 @@ pub contract StringLiteral {
     }
 
     fn compile_string_caller_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping string caller contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "StringCaller",
@@ -1947,11 +1853,6 @@ pub contract StringLiteral {
     }
 
     fn compile_string_literal_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping string literal contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "StringLiteral",
@@ -1982,11 +1883,6 @@ pub contract StringViewHead {
     }
 
     fn compile_string_view_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping string view contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "StringViewHead",
@@ -2017,11 +1913,6 @@ pub contract VecEcho {
     }
 
     fn compile_vec_echo_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping vec echo contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "VecEcho",
@@ -2122,11 +2013,6 @@ pub contract NestedTupleInit {
     }
 
     fn compile_nested_tuple_echo_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping nested tuple echo contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "NestedTupleEcho",
@@ -2138,11 +2024,6 @@ pub contract NestedTupleInit {
     }
 
     fn compile_nested_tuple_caller_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping nested tuple caller contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "NestedTupleCaller",
@@ -2154,11 +2035,6 @@ pub contract NestedTupleInit {
     }
 
     fn compile_nested_tuple_init_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping nested tuple init contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "NestedTupleInit",
@@ -2189,11 +2065,6 @@ pub contract FixedStringDecode {
     }
 
     fn compile_fixed_string_decode_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping fixed string decode contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "FixedStringDecode",
@@ -2230,11 +2101,6 @@ pub contract FixedStringCaller uses (call: mut Call) {
     }
 
     fn compile_fixed_string_return_caller_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping fixed string return caller contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "FixedStringCaller",
@@ -2330,11 +2196,6 @@ pub contract Create2Parent uses (create: mut Create) {
     }
 
     fn compile_create2_init_args_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping create2 init arg contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "Create2Parent",
@@ -2428,11 +2289,6 @@ pub contract CustomWidthBoundary uses (log: mut Log) {
     }
 
     fn compile_custom_width_encode_contract() -> Option<FeContractHarness> {
-        if !solc_available() {
-            eprintln!("skipping custom width encode contract tests because solc is missing");
-            return None;
-        }
-
         Some(
             FeContractHarness::compile_from_source(
                 "CustomWidthBoundary",
@@ -2608,121 +2464,8 @@ pub contract FixedDynamicArrayBoundary {{
         word
     }
 
-    fn solc_available() -> bool {
-        let solc_path = std::env::var("FE_SOLC_PATH").unwrap_or_else(|_| "solc".to_string());
-        Command::new(solc_path)
-            .arg("--version")
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
-    }
-
-    #[test]
-    fn harness_error_debug_is_human_readable() {
-        let err = HarnessError::Solc("DeclarationError: missing".to_string());
-        let dbg = format!("{err:?}");
-        assert!(dbg.starts_with("solc error: DeclarationError:"));
-        assert!(!dbg.contains("Solc(\""));
-    }
-
-    #[test]
-    fn deploy_tracked_allows_oversized_test_contracts() {
-        let initcode_hex = initcode_returning_zero_runtime(0x6001);
-
-        let default_result = {
-            let caller = Address::ZERO;
-            let mut db = InMemoryDB::default();
-            db.insert_account_info(
-                caller,
-                AccountInfo::new(
-                    U256::from(1_000_000_000u64),
-                    0,
-                    Default::default(),
-                    Bytecode::default(),
-                ),
-            );
-
-            let ctx = Context::mainnet().with_db(db);
-            let mut evm = ctx.build_mainnet();
-            let tx = TxEnv::builder()
-                .caller(caller)
-                .gas_limit(TEST_GAS_LIMIT)
-                .gas_price(0)
-                .kind(TxKind::Create)
-                .data(EvmBytes::from(
-                    hex_to_bytes(&initcode_hex).expect("valid initcode"),
-                ))
-                .nonce(0)
-                .build()
-                .expect("deployment tx should build");
-
-            evm.transact_commit(tx).expect("deployment should execute")
-        };
-
-        assert!(
-            matches!(
-                default_result,
-                ExecutionResult::Halt {
-                    reason: HaltReason::CreateContractSizeLimit,
-                    ..
-                }
-            ),
-            "default revm config should reject oversized runtime bytecode"
-        );
-
-        let (mut instance, _deploy_gas_used) = RuntimeInstance::deploy_tracked(&initcode_hex)
-            .expect("test harness should allow oversized test contracts");
-        let call_result = instance
-            .call_raw(&[], ExecutionOptions::default())
-            .expect("oversized runtime should remain callable after deployment");
-        assert!(call_result.return_data.is_empty());
-    }
-
-    #[test]
-    fn runtime_instance_persists_state() {
-        if !solc_available() {
-            eprintln!("skipping runtime_instance_persists_state because solc is missing");
-            return;
-        }
-        let yul = r#"
-object "Counter" {
-    code {
-        datacopy(0, dataoffset("runtime"), datasize("runtime"))
-        return(0, datasize("runtime"))
-    }
-    object "runtime" {
-        code {
-            let current := sload(0)
-            let next := add(current, 1)
-            sstore(0, next)
-            mstore(0x00, next)
-            return(0x00, 0x20)
-        }
-    }
-}
-"#;
-        let contract =
-            compile_single_contract("Counter", yul, false, true).expect("yul compilation succeeds");
-        let mut instance =
-            RuntimeInstance::new(&contract.runtime_bytecode).expect("runtime instantiation");
-        let options = ExecutionOptions::default();
-        let first = instance
-            .call_raw(&[0u8; 0], options)
-            .expect("first call succeeds");
-        assert_eq!(bytes_to_u256(&first.return_data).unwrap(), U256::from(1));
-        let second = instance
-            .call_raw(&[0u8; 0], options)
-            .expect("second call succeeds");
-        assert_eq!(bytes_to_u256(&second.return_data).unwrap(), U256::from(2));
-    }
-
     #[test]
     fn erc20_contract_test() {
-        if !solc_available() {
-            eprintln!("skipping erc20_contract_test because solc is missing");
-            return;
-        }
-
         let source_path = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../codegen/tests/fixtures/erc20.fe"
@@ -3980,13 +3723,6 @@ object "Counter" {
 
     #[test]
     fn fixed_array_contract_round_trips_bool_array_64() {
-        if !solc_available() {
-            eprintln!(
-                "skipping fixed_array_contract_round_trips_bool_array_64 because solc is missing"
-            );
-            return;
-        }
-
         let source = fixed_bool_array_contract_source(64);
         let harness = FeContractHarness::compile_from_source(
             "FixedBoolArrayBoundary",
@@ -4015,13 +3751,6 @@ object "Counter" {
 
     #[test]
     fn fixed_array_contract_round_trips_bool_array_65() {
-        if !solc_available() {
-            eprintln!(
-                "skipping fixed_array_contract_round_trips_bool_array_65 because solc is missing"
-            );
-            return;
-        }
-
         let source = fixed_bool_array_contract_source(65);
         let harness = FeContractHarness::compile_from_source(
             "FixedBoolArrayBoundary",
@@ -4050,13 +3779,6 @@ object "Counter" {
 
     #[test]
     fn fixed_array_contract_round_trips_string_and_bytes_array_65() {
-        if !solc_available() {
-            eprintln!(
-                "skipping fixed_array_contract_round_trips_string_and_bytes_array_65 because solc is missing"
-            );
-            return;
-        }
-
         let source = fixed_dynamic_array_contract_source(65);
         let harness = FeContractHarness::compile_from_source(
             "FixedDynamicArrayBoundary",
@@ -4105,10 +3827,6 @@ object "Counter" {
 
     #[test]
     fn runtime_constructs_contract() {
-        if !solc_available() {
-            eprintln!("skipping runtime_constructs_contract because solc is missing");
-            return;
-        }
         let fixture_dir = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../codegen/tests/fixtures/runtime_constructs"
@@ -4133,13 +3851,16 @@ object "Counter" {
 
         let root_file = ingot.root_file(&db).expect("ingot should have root file");
         let top_mod = db.top_mod(root_file);
-        let yul =
-            emit_module_object_yul(&db, top_mod, "Parent").expect("yul emission should succeed");
-        let contract = compile_single_contract("Parent", &yul, false, true)
-            .expect("solc compilation should succeed");
+        let bytecode =
+            emit_module_sonatina_bytecode(&db, top_mod, OptLevel::default(), Some("Parent"))
+                .expect("Sonatina bytecode should compile");
+        let contract = bytecode
+            .get("Parent")
+            .expect("Parent bytecode should exist");
+        let init_bytecode = hex::encode(&contract.deploy);
 
         let mut instance =
-            RuntimeInstance::deploy(&contract.bytecode).expect("parent deployment should succeed");
+            RuntimeInstance::deploy(&init_bytecode).expect("parent deployment should succeed");
         let parent_res = instance
             .call_raw(&[], ExecutionOptions::default())
             .expect("parent runtime should succeed");

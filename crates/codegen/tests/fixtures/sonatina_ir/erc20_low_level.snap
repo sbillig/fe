@@ -542,8 +542,10 @@ func private %init(v0.objref<@layout_1>) {
         call %do_init v2 v0 v0;
         v5.i256 = sym_size &__Erc20Contract_runtime;
         v6.i256 = sym_addr &__Erc20Contract_runtime;
-        call %codecopy v0 0.i256 v6 v5;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_0402 0.i256 v5;
+        v7.*i8 = evm_malloc v5;
+        v8.i256 = ptr_to_int v7 i256;
+        call %codecopy v0 v8 v6 v5;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_0402 v8 v5;
         unreachable;
 }
 

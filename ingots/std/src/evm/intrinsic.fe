@@ -1,4 +1,4 @@
-/// EVM-related compiler intrinsics (not Yul builtins).
+/// EVM-related compiler intrinsics.
 ///
 /// These are provided by the compiler backend and/or resolved at compile time.
 extern {

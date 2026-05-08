@@ -195,7 +195,7 @@ pub trait RawStorage {
     }
 }
 
-/// Access to low-level EVM op functions (Yul-exposed builtins, excluding raw stack ops).
+/// Access to low-level EVM op functions (excluding raw stack ops).
 pub trait RawOps: RawMem + RawStorage {
     fn calldataload(self, _: u256) -> u256
     fn calldatasize(self) -> u256
@@ -750,8 +750,9 @@ impl ContractHost for Evm {
     fn create_contract<F>(mut self, _ runtime: F) -> ! {
         let len = self.code_region_len(runtime)
         let offset = self.code_region_offset(runtime)
-        self.codecopy(dest: 0, offset: offset, len: len)
-        self.return_data(offset: 0, len: len)
+        let ptr = mem::alloc(len)
+        self.codecopy(dest: ptr, offset: offset, len: len)
+        self.return_data(offset: ptr, len: len)
     }
 
     fn abort(self) -> ! {

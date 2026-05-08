@@ -88,13 +88,12 @@ For `build` and `check`:
 
 Compiles Fe contracts to EVM bytecode.
 
-- `--backend sonatina` (default): generates bytecode directly (no `solc` required).
-- `--backend yul`: emits Yul and invokes `solc`.
+Builds use the Sonatina codegen pipeline and generate EVM bytecode directly.
 
 ### Synopsis
 
 ```
-fe build [--standalone] [--contract <name>] [--backend <backend>] [--opt-level <level>] [--optimize] [--solc <path>] [--out-dir <dir>] [--report [--report-out <out>] [--report-failed-only]] [path]
+fe build [--standalone] [--contract <name>] [--optimize <level>] [--out-dir <dir>] [--report [--report-out <out>] [--report-failed-only]] [path]
 ```
 
 If `path` is omitted, it defaults to `.`.
@@ -159,53 +158,19 @@ Workspace member selection:
     - It also prints “Available contracts:” for the workspace (unique contract names), capped at `50`, followed by `... and N more` if applicable.
   - If **multiple** members contain the contract, it errors and prints a “Matches:” list and a hint to build a specific member by name or path.
 
-### Backend selection: `--backend <backend>`
-
-`fe build` currently supports:
-
-- `sonatina` (default): directly generates EVM bytecode via Sonatina IR.
-  - `--opt-level <level>` controls Sonatina optimizations (see below).
-  - `--solc` is ignored; if passed, it prints `Warning: --solc is only used with --backend yul; ignoring --solc`.
-  - `FE_SOLC_PATH` is ignored.
-- `yul`: emits Yul and invokes `solc` to produce bytecode.
-
-### Solc selection (Yul backend only): `--solc` and `FE_SOLC_PATH`
-
-When `--backend yul`, `fe build` invokes `solc` using:
-
-1) `--solc <path>` if provided (highest priority),
-2) `FE_SOLC_PATH` if set,
-3) otherwise `solc` resolved via `PATH`.
-
-If `solc` fails, `fe build` prints an error and a hint:
-
-```
-Error: solc failed for contract "<name>": <details>
-Hint: install solc, set FE_SOLC_PATH, or pass --solc <path>.
-```
-
 ### Optimization
 
-Optimization is controlled by `--opt-level <level>` (and the `--optimize` shorthand).
+Optimization is controlled by `--optimize <level>` / `-O <level>`.
 
 Defaults:
 
-- `--opt-level` defaults to `s` (for both backends).
-
-Backend behavior:
-
-- Yul backend: `--opt-level 0` disables the solc optimizer, and `--opt-level 1` / `2` enables it.
-  - Note: `--opt-level 2` currently has no additional effect over `--opt-level 1` for solc; the CLI prints a warning.
-- Sonatina backend: `--opt-level <level>` controls Sonatina optimizations:
+- `--optimize` defaults to `1`.
+- Supported levels:
   - `0`: none
-  - `s`: size-optimized (default)
-  - `1`: balanced
+  - `s`: size-oriented
+  - `1`: balanced (default)
   - `2`: aggressive
 
-`--optimize` is shorthand for `--opt-level 1`.
-
-- If you pass `--optimize --opt-level 0`, the CLI errors.
-- If you pass `--optimize --opt-level 2`, it has no effect.
 
 ### Artifacts and filenames
 
@@ -242,7 +207,7 @@ This sanitization is also what the workspace collision check uses.
 The build report is best-effort and includes:
 
 - `inputs/`: the ingot or `.fe` file inputs (same rules as `fe check` / `fe test`).
-- `artifacts/`: emitted IR (e.g. Yul) and bytecode artifacts (when available).
+- `artifacts/`: emitted Sonatina IR and bytecode artifacts (when available).
 - `errors/`: best-effort captured errors/panics (if any).
 - `meta/`: environment and tool metadata.
 
@@ -374,7 +339,7 @@ Runs Fe tests via the test harness (revm-based execution).
 ### Synopsis
 
 ```
-fe test [--filter <pattern>] [--jobs <n>] [--grouped] [--show-logs] [--debug[=<mode>]] [--backend <backend>] [--solc <path>] [--opt-level <level>] [--optimize] [--trace-evm] [--trace-evm-keep <n>] [--trace-evm-stack-n <n>] [--sonatina-symtab] [--debug-dir <dir>] [--report [--report-out <out>]] [--report-dir <dir> [--report-failed-only]] [--call-trace] [path]...
+fe test [--filter <pattern>] [--jobs <n>] [--grouped] [--show-logs] [--optimize <level>] [--trace-evm] [--trace-evm-keep <n>] [--trace-evm-stack-n <n>] [--debug-dir <dir>] [--report [--report-out <out>]] [--report-dir <dir> [--report-failed-only]] [--call-trace] [path]...
 ```
 
 ### Inputs
@@ -396,11 +361,9 @@ fe test [--filter <pattern>] [--jobs <n>] [--grouped] [--show-logs] [--debug[=<m
 
 ### Debugging
 
-- `--debug[=<failures|all>]` prints Yul output when using the Yul backend.
 - `--trace-evm`, `--trace-evm-keep`, `--trace-evm-stack-n` enable EVM opcode tracing.
-- `--sonatina-symtab` dumps the Sonatina runtime symbol table (function offsets/sizes).
-- `--debug-dir <dir>` writes debug outputs (traces, symtabs) into a directory.
-- `--call-trace` prints a normalized call trace for each test (backend comparison).
+- `--debug-dir <dir>` writes debug outputs (traces) into a directory.
+- `--call-trace` prints a normalized call trace for each test.
 
 ### Output
 
@@ -417,26 +380,10 @@ fe test [--filter <pattern>] [--jobs <n>] [--grouped] [--show-logs] [--debug[=<m
 - `--report-dir <dir>` writes one `.tar.gz` report per input suite into `<dir>` (useful with globs).
 - `--report-failed-only` only writes per-suite reports for failing suites (requires `--report-dir`).
 
-### Solc dependency
-
-Default backend is `sonatina`.
-
-When `--backend yul`, `fe test` compiles generated Yul using `solc` selected by:
-
-1) `--solc <path>` if provided (highest priority),
-2) `FE_SOLC_PATH` if set,
-3) otherwise `solc` resolved via `PATH`.
-
 Optimization flags:
 
-- Optimization is controlled by `--opt-level <level>` (and the `--optimize` shorthand).
-- Sonatina backend: `--opt-level <level>` controls the optimization pipeline.
-- Yul backend: `--opt-level 0` disables the solc optimizer, and `--opt-level 1` / `2` enables it.
-  - Note: `--opt-level 2` currently has no additional effect over `--opt-level 1` for Yul/solc; the CLI prints a warning.
-- `--optimize` is shorthand for `--opt-level 1`.
-  - If you pass `--optimize --opt-level 0`, the CLI errors.
-
-When `--backend sonatina`, `fe test` generates bytecode directly and does not require `solc` (`--solc` is ignored with a warning).
+- Optimization is controlled by `--optimize <level>` / `-O <level>`.
+- Supported levels are `0`, `s`, `1`, and `2`.
 
 ## `fe new`
 

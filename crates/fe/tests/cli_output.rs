@@ -1,6 +1,6 @@
 use dir_test::{Fixture, dir_test};
 use serde_json::Value;
-use std::{fs, io::IsTerminal, path::Path, process::Command, sync::OnceLock};
+use std::{fs, io::IsTerminal, path::Path, process::Command};
 use tempfile::tempdir;
 use test_utils::{
     normalize::{normalize_newlines, normalize_path_separators, replace_path_token},
@@ -71,75 +71,6 @@ fn normalize_timing_line(line: &str) -> String {
     normalized
 }
 
-fn canonicalize_backend_test_stdout(output: &str) -> String {
-    let lines: Vec<_> = output.lines().collect();
-    let mut statuses = Vec::new();
-    let mut call_traces = Vec::new();
-    let mut others = Vec::new();
-    let mut summaries = Vec::new();
-    let mut idx = 0;
-
-    while idx < lines.len() {
-        let line = lines[idx];
-        if line.starts_with("PASS  [") || line.starts_with("FAIL  [") {
-            statuses.push(line.to_string());
-            idx += 1;
-            continue;
-        }
-        if line == "--- call trace ---" {
-            let mut trace = vec![line.to_string()];
-            idx += 1;
-            while idx < lines.len() {
-                let current = lines[idx];
-                trace.push(current.to_string());
-                idx += 1;
-                if current == "--- end trace ---" {
-                    break;
-                }
-            }
-            call_traces.push(trace.join("\n"));
-            continue;
-        }
-        if line.starts_with("test result: ") {
-            summaries.push(line.to_string());
-            idx += 1;
-            continue;
-        }
-        if !line.trim().is_empty() {
-            others.push(line.to_string());
-        }
-        idx += 1;
-    }
-
-    statuses.sort();
-    call_traces.sort();
-    others.sort();
-    summaries.sort();
-
-    let mut canonical = String::new();
-    for line in statuses {
-        canonical.push_str(&line);
-        canonical.push('\n');
-    }
-    for trace in call_traces {
-        canonical.push_str(&trace);
-        canonical.push('\n');
-    }
-    for line in others {
-        canonical.push_str(&line);
-        canonical.push('\n');
-    }
-    if !summaries.is_empty() {
-        canonical.push('\n');
-        for summary in summaries {
-            canonical.push_str(&summary);
-            canonical.push('\n');
-        }
-    }
-
-    canonical
-}
-
 // Helper function to run fe check
 fn run_fe_check(path: &str) -> (String, i32) {
     run_fe_command("check", path)
@@ -166,11 +97,6 @@ fn run_fe_command_with_args(subcommand: &str, path: &str, extra: &[&str]) -> (St
 // Helper function to run fe binary with specified args
 fn run_fe_main(args: &[&str]) -> (String, i32) {
     let out = run_fe_main_impl(args, None, &[]);
-    (out.combined(), out.exit_code)
-}
-
-fn run_fe_main_with_env(args: &[&str], extra_env: &[(&str, &str)]) -> (String, i32) {
-    let out = run_fe_main_impl(args, None, extra_env);
     (out.combined(), out.exit_code)
 }
 
@@ -233,15 +159,6 @@ fn trigger() {
     );
 }
 
-fn run_fe_main_in_dir_with_env(
-    args: &[&str],
-    cwd: &Path,
-    extra_env: &[(&str, &str)],
-) -> (String, i32) {
-    let out = run_fe_main_impl(args, Some(cwd), extra_env);
-    (out.combined(), out.exit_code)
-}
-
 struct FeOutput {
     stdout: String,
     stderr: String,
@@ -298,71 +215,6 @@ fn fe_test_runner_fixture_dir(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
-#[cfg(unix)]
-fn write_fake_solc(temp: &tempfile::TempDir) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
-    let path = temp.path().join("fake-solc");
-    let script = r#"#!/bin/sh
-set -e
-if [ "$1" = "--version" ]; then
-  echo "solc, the Solidity compiler version 0.0.0+fake"
-  exit 0
-fi
-
-INPUT="$(cat)"
-
-EXPECTED_OPTIMIZE="${FAKE_SOLC_EXPECT_OPTIMIZE:-}"
-if [ -n "$EXPECTED_OPTIMIZE" ]; then
-  if [ "$EXPECTED_OPTIMIZE" = "true" ]; then
-    echo "$INPUT" | grep -q '"enabled":true' || {
-      echo "expected optimizer enabled" >&2
-      exit 1
-    }
-  else
-    echo "$INPUT" | grep -q '"enabled":false' || {
-      echo "expected optimizer disabled" >&2
-      exit 1
-    }
-  fi
-fi
-
-NAME="${FAKE_SOLC_CONTRACT:-}"
-if [ -n "$NAME" ]; then
-  cat <<EOF
-{"contracts":{"input.yul":{"$NAME":{"evm":{"bytecode":{"object":"6000"},"deployedBytecode":{"object":"6000"}}}}}}
-EOF
-  exit 0
-fi
-
-cat <<EOF
-{"contracts":{"input.yul":{"Foo":{"evm":{"bytecode":{"object":"6000"},"deployedBytecode":{"object":"6000"}}},"Bar":{"evm":{"bytecode":{"object":"6000"},"deployedBytecode":{"object":"6000"}}}}}}
-EOF
-"#;
-    fs::write(&path, script).expect("write fake solc");
-    let mut perms = fs::metadata(&path).expect("stat fake solc").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&path, perms).expect("chmod fake solc");
-    path
-}
-
-fn solc_available() -> bool {
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        let solc_path = std::env::var_os("FE_SOLC_PATH")
-            .map(std::path::PathBuf::from)
-            .filter(|path| path.is_file())
-            .unwrap_or_else(|| std::path::PathBuf::from("solc"));
-        Command::new(solc_path)
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
-    })
-}
-
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/tests/fixtures/cli_output/build",
     glob: "*.fe",
@@ -383,112 +235,6 @@ fn test_cli_build_contract_not_found(fixture: Fixture<&str>) {
     snap_test!(output, snapshot_path.to_str().unwrap());
 }
 
-#[cfg(unix)]
-#[dir_test(
-    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/cli_output/build",
-    glob: "*.fe",
-)]
-fn test_cli_build_fake_solc_artifacts(fixture: Fixture<&str>) {
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-
-    let out_dir = temp.path().join("out");
-    let out_dir_str = out_dir.to_string_lossy().to_string();
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "build",
-            "--backend",
-            "yul",
-            "--contract",
-            "Foo",
-            "--out-dir",
-            out_dir_str.as_str(),
-            fixture.path(),
-        ],
-        &[
-            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
-            ("FAKE_SOLC_CONTRACT", "Foo"),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
-
-    let deploy_path = out_dir.join("Foo.bin");
-    let runtime_path = out_dir.join("Foo.runtime.bin");
-    let deploy = fs::read_to_string(&deploy_path).expect("read deploy bytecode");
-    let runtime = fs::read_to_string(&runtime_path).expect("read runtime bytecode");
-
-    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
-    snapshot.push_str("\n\n=== ARTIFACTS ===\n");
-    snapshot.push_str(&format!("Foo.bin: {}\n", deploy.trim()));
-    snapshot.push_str(&format!("Foo.runtime.bin: {}\n", runtime.trim()));
-
-    let fixture_path = std::path::Path::new(fixture.path());
-    let fixture_name = fixture_path
-        .file_stem()
-        .expect("fixture should have stem")
-        .to_str()
-        .expect("fixture stem should be utf8");
-    let snapshot_path = fixture_path
-        .parent()
-        .expect("fixture should have parent")
-        .join(format!("{fixture_name}_build_fake_solc.case"));
-    snap_test!(snapshot, snapshot_path.to_str().unwrap());
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_build_all_contracts_fake_solc_artifacts() {
-    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cli_output/build/multi_contract.fe");
-    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-
-    let out_dir = temp.path().join("out");
-    let out_dir_str = out_dir.to_string_lossy().to_string();
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "build",
-            "--backend",
-            "yul",
-            "--out-dir",
-            out_dir_str.as_str(),
-            fixture_path_str,
-        ],
-        &[
-            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
-            ("FAKE_SOLC_CONTRACT", ""),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
-
-    let bar_deploy_path = out_dir.join("Bar.bin");
-    let bar_runtime_path = out_dir.join("Bar.runtime.bin");
-    let foo_deploy_path = out_dir.join("Foo.bin");
-    let foo_runtime_path = out_dir.join("Foo.runtime.bin");
-
-    let bar_deploy = fs::read_to_string(&bar_deploy_path).expect("read Bar deploy bytecode");
-    let bar_runtime = fs::read_to_string(&bar_runtime_path).expect("read Bar runtime bytecode");
-    let foo_deploy = fs::read_to_string(&foo_deploy_path).expect("read Foo deploy bytecode");
-    let foo_runtime = fs::read_to_string(&foo_runtime_path).expect("read Foo runtime bytecode");
-
-    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
-    snapshot.push_str("\n\n=== ARTIFACTS ===\n");
-    snapshot.push_str(&format!("Bar.bin: {}\n", bar_deploy.trim()));
-    snapshot.push_str(&format!("Bar.runtime.bin: {}\n", bar_runtime.trim()));
-    snapshot.push_str(&format!("Foo.bin: {}\n", foo_deploy.trim()));
-    snapshot.push_str(&format!("Foo.runtime.bin: {}\n", foo_runtime.trim()));
-
-    let snapshot_path = fixture_path
-        .parent()
-        .expect("fixture should have parent")
-        .join("multi_contract_build_all_fake_solc.case");
-    snap_test!(snapshot, snapshot_path.to_str().unwrap());
-}
-
 #[test]
 fn test_cli_build_sonatina_ir_respects_contract_filter() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -501,8 +247,6 @@ fn test_cli_build_sonatina_ir_respects_contract_filter() {
 
     let (output, exit_code) = run_fe_main(&[
         "build",
-        "--backend",
-        "sonatina",
         "--emit",
         "ir",
         "--contract",
@@ -1003,146 +747,6 @@ pub contract Foo {
     );
 }
 
-#[cfg(unix)]
-#[test]
-fn test_cli_build_ingot_dir_fake_solc_artifacts() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cli_output/build_ingots/simple");
-    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-
-    let out_dir = temp.path().join("out");
-    let out_dir_str = out_dir.to_string_lossy().to_string();
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "build",
-            "--backend",
-            "yul",
-            "--contract",
-            "Foo",
-            "--out-dir",
-            out_dir_str.as_str(),
-            fixture_dir_str,
-        ],
-        &[
-            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
-            ("FAKE_SOLC_CONTRACT", ""),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
-
-    let deploy_path = out_dir.join("Foo.bin");
-    let runtime_path = out_dir.join("Foo.runtime.bin");
-    let deploy = fs::read_to_string(&deploy_path).expect("read deploy bytecode");
-    let runtime = fs::read_to_string(&runtime_path).expect("read runtime bytecode");
-
-    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
-    snapshot.push_str("\n\n=== ARTIFACTS ===\n");
-    snapshot.push_str(&format!("Foo.bin: {}\n", deploy.trim()));
-    snapshot.push_str(&format!("Foo.runtime.bin: {}\n", runtime.trim()));
-
-    let snapshot_path = fixture_dir.join("build_fake_solc.case");
-    snap_test!(snapshot, snapshot_path.to_str().unwrap());
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_build_ingot_dir_all_contracts_multi_file_fake_solc_artifacts() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cli_output/build_ingots/multi_file");
-    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-
-    let out_dir = temp.path().join("out");
-    let out_dir_str = out_dir.to_string_lossy().to_string();
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "build",
-            "--backend",
-            "yul",
-            "--out-dir",
-            out_dir_str.as_str(),
-            fixture_dir_str,
-        ],
-        &[
-            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
-            ("FAKE_SOLC_CONTRACT", ""),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
-
-    let bar_deploy_path = out_dir.join("Bar.bin");
-    let bar_runtime_path = out_dir.join("Bar.runtime.bin");
-    let foo_deploy_path = out_dir.join("Foo.bin");
-    let foo_runtime_path = out_dir.join("Foo.runtime.bin");
-
-    let bar_deploy = fs::read_to_string(&bar_deploy_path).expect("read Bar deploy bytecode");
-    let bar_runtime = fs::read_to_string(&bar_runtime_path).expect("read Bar runtime bytecode");
-    let foo_deploy = fs::read_to_string(&foo_deploy_path).expect("read Foo deploy bytecode");
-    let foo_runtime = fs::read_to_string(&foo_runtime_path).expect("read Foo runtime bytecode");
-
-    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
-    snapshot.push_str("\n\n=== ARTIFACTS ===\n");
-    snapshot.push_str(&format!("Bar.bin: {}\n", bar_deploy.trim()));
-    snapshot.push_str(&format!("Bar.runtime.bin: {}\n", bar_runtime.trim()));
-    snapshot.push_str(&format!("Foo.bin: {}\n", foo_deploy.trim()));
-    snapshot.push_str(&format!("Foo.runtime.bin: {}\n", foo_runtime.trim()));
-
-    let snapshot_path = fixture_dir.join("build_all_fake_solc.case");
-    snap_test!(snapshot, snapshot_path.to_str().unwrap());
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_build_ingot_root_reexported_contract_fake_solc_artifacts() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cli_output/build_ingots/root_reexport_contract");
-    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-
-    let out_dir = temp.path().join("out");
-    let out_dir_str = out_dir.to_string_lossy().to_string();
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "build",
-            "--backend",
-            "yul",
-            "--contract",
-            "KeyperSet",
-            "--out-dir",
-            out_dir_str.as_str(),
-            fixture_dir_str,
-        ],
-        &[
-            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
-            ("FAKE_SOLC_CONTRACT", "KeyperSet"),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
-
-    let deploy_path = out_dir.join("KeyperSet.bin");
-    let runtime_path = out_dir.join("KeyperSet.runtime.bin");
-    let deploy = fs::read_to_string(&deploy_path).expect("read KeyperSet deploy bytecode");
-    let runtime = fs::read_to_string(&runtime_path).expect("read KeyperSet runtime bytecode");
-
-    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
-    snapshot.push_str("\n\n=== ARTIFACTS ===\n");
-    snapshot.push_str(&format!("KeyperSet.bin: {}\n", deploy.trim()));
-    snapshot.push_str(&format!("KeyperSet.runtime.bin: {}\n", runtime.trim()));
-
-    let snapshot_path = fixture_dir.join("reexport_build_fake_solc.case");
-    snap_test!(snapshot, snapshot_path.to_str().unwrap());
-}
-
 #[test]
 fn test_cli_build_ingot_root_reexported_contract_sonatina_artifacts() {
     let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1155,8 +759,6 @@ fn test_cli_build_ingot_root_reexported_contract_sonatina_artifacts() {
 
     let (output, exit_code) = run_fe_main(&[
         "build",
-        "--backend",
-        "sonatina",
         "--contract",
         "KeyperSet",
         "--out-dir",
@@ -1180,8 +782,6 @@ fn test_cli_build_ingot_sonatina_ir_respects_contract_filter() {
 
     let (output, exit_code) = run_fe_main(&[
         "build",
-        "--backend",
-        "sonatina",
         "--emit",
         "ir",
         "--contract",
@@ -1272,31 +872,6 @@ fn test_tree_output(fixture: Fixture<&str>) {
     snap_test!(output, snapshot_path.to_str().unwrap());
 }
 
-/// Runs both backends on each fixture, asserts each passes, and asserts they produce
-/// identical test results.
-#[dir_test(
-    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test",
-    glob: "*.fe",
-)]
-fn test_fe_test_both_backends(fixture: Fixture<&str>) {
-    assert_fe_test_backends_agree(fixture.path(), false);
-}
-
-/// Runs a focused subset of fixtures with call tracing enabled to preserve
-/// call-trace parity coverage without slowing down the full backend matrix.
-#[test]
-fn test_fe_test_both_backends_call_trace() {
-    let fixtures_dir =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fe_test");
-    for fixture in ["contract_call.fe", "factory.fe", "should_revert.fe"] {
-        let path = fixtures_dir.join(fixture);
-        let path = path
-            .to_str()
-            .unwrap_or_else(|| panic!("fixture path is not utf-8: {}", path.display()));
-        assert_fe_test_backends_agree(path, true);
-    }
-}
-
 #[test]
 fn test_fe_test_rejects_oversized_balance_literal() {
     let temp = tempdir().expect("tempdir");
@@ -1313,19 +888,17 @@ fn too_big_balance() {}
         .to_str()
         .unwrap_or_else(|| panic!("fixture path is not utf-8: {}", path.display()));
 
-    for backend in ["sonatina", "yul"] {
-        let (output, exit_code) = run_fe_main(&["test", "--backend", backend, path]);
-        assert_ne!(
-            exit_code, 0,
-            "expected fe test to reject oversized #[test(balance = ...)] for backend {backend}:\n{output}"
-        );
-        assert!(
-            output.contains(
-                "invalid #[test] function `too_big_balance`: #[test(balance = ...)] must fit in u256"
-            ),
-            "expected oversized balance error for backend {backend}, got:\n{output}"
-        );
-    }
+    let (output, exit_code) = run_fe_main(&["test", path]);
+    assert_ne!(
+        exit_code, 0,
+        "expected fe test to reject oversized #[test(balance = ...)]:\n{output}"
+    );
+    assert!(
+        output.contains(
+            "invalid #[test] function `too_big_balance`: #[test(balance = ...)] must fit in u256"
+        ),
+        "expected oversized balance error, got:\n{output}"
+    );
 }
 
 #[test]
@@ -1357,73 +930,16 @@ fn non_integer_balance_value() {}
             .to_str()
             .unwrap_or_else(|| panic!("fixture path is not utf-8: {}", path.display()));
 
-        for backend in ["sonatina", "yul"] {
-            let (output, exit_code) = run_fe_main(&["test", "--backend", backend, path]);
-            assert_ne!(
-                exit_code, 0,
-                "expected fe test to reject malformed #[test(balance = ...)] for backend {backend}:\n{output}"
-            );
-            assert!(
-                output.contains(expected),
-                "expected malformed balance error for backend {backend}, got:\n{output}"
-            );
-        }
+        let (output, exit_code) = run_fe_main(&["test", path]);
+        assert_ne!(
+            exit_code, 0,
+            "expected fe test to reject malformed #[test(balance = ...)]:\n{output}"
+        );
+        assert!(
+            output.contains(expected),
+            "expected malformed balance error, got:\n{output}"
+        );
     }
-}
-
-#[allow(clippy::print_stderr)]
-fn assert_fe_test_backends_agree(path: &str, call_trace: bool) {
-    let mut yul_args = vec!["test", "--backend", "yul", path];
-    let mut sonatina_args = vec!["test", "--backend", "sonatina", path];
-    if call_trace {
-        yul_args.insert(1, "--call-trace");
-        sonatina_args.insert(1, "--call-trace");
-    }
-    let trace_flag = if call_trace { "--call-trace " } else { "" };
-    let sonatina = run_fe_main_impl(&sonatina_args, None, &[]);
-    assert_eq!(
-        sonatina.exit_code,
-        0,
-        "fe test (sonatina) failed for {path}:\n{so}\n\nTo reproduce:\n  cargo run --bin fe -- test {trace_flag}--backend sonatina --report {path}",
-        path = path,
-        trace_flag = trace_flag,
-        so = sonatina.combined(),
-    );
-
-    if !solc_available() {
-        #[allow(clippy::print_stdout)]
-        {
-            println!("skipping yul backend comparison because `solc` is missing");
-        }
-        return;
-    }
-
-    let yul = run_fe_main_impl(&yul_args, None, &[]);
-
-    // Check each backend independently first for clearer diagnostics.
-    assert_eq!(
-        yul.exit_code,
-        0,
-        "fe test (yul) failed for {path}:\n{yo}\n\nTo reproduce:\n  cargo run --bin fe -- test {trace_flag}--backend yul --report {path}",
-        path = path,
-        trace_flag = trace_flag,
-        yo = yul.combined(),
-    );
-
-    // Compare normalized stdout order-insensitively. Parallel test execution
-    // can reorder PASS/FAIL lines and trace blocks without changing semantics.
-    let yul_stdout = canonicalize_backend_test_stdout(&yul.stdout);
-    let sonatina_stdout = canonicalize_backend_test_stdout(&sonatina.stdout);
-    assert_eq!(
-        yul_stdout,
-        sonatina_stdout,
-        "Test output mismatch for {path}:\n\n--- yul ---\n{yo}\n\n--- sonatina ---\n{so}\n\n--- canonical yul ---\n{cy}\n\n--- canonical sonatina ---\n{cs}",
-        path = path,
-        yo = yul.stdout,
-        so = sonatina.stdout,
-        cy = yul_stdout,
-        cs = sonatina_stdout,
-    );
 }
 
 /// Runs `fe test` and snapshots the output to verify behavior of passing/failing tests and logs.
@@ -2321,267 +1837,6 @@ members = [
     assert_eq!(exit_code, 0, "fe check --ingot a failed:\n{output}");
 }
 
-#[cfg(unix)]
-#[test]
-fn test_cli_build_workspace_root_fake_solc_artifacts() {
-    let root = workspace_fixture("build_workspace_root");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-
-    let out_dir = temp.path().join("out");
-    let out_dir_str = out_dir.to_string_lossy().to_string();
-
-    let (output, exit_code) = run_fe_main_in_dir_with_env(
-        &[
-            "build",
-            "--backend",
-            "yul",
-            "--out-dir",
-            out_dir_str.as_str(),
-        ],
-        &root,
-        &[
-            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
-            ("FAKE_SOLC_CONTRACT", ""),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
-
-    let foo_deploy_path = out_dir.join("Foo.bin");
-    let foo_runtime_path = out_dir.join("Foo.runtime.bin");
-    let bar_deploy_path = out_dir.join("Bar.bin");
-    let bar_runtime_path = out_dir.join("Bar.runtime.bin");
-
-    let foo_deploy = fs::read_to_string(&foo_deploy_path).expect("read Foo deploy bytecode");
-    let foo_runtime = fs::read_to_string(&foo_runtime_path).expect("read Foo runtime bytecode");
-    let bar_deploy = fs::read_to_string(&bar_deploy_path).expect("read Bar deploy bytecode");
-    let bar_runtime = fs::read_to_string(&bar_runtime_path).expect("read Bar runtime bytecode");
-
-    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
-    snapshot.push_str("\n\n=== ARTIFACTS ===\n");
-    snapshot.push_str(&format!("Foo.bin: {}\n", foo_deploy.trim()));
-    snapshot.push_str(&format!("Foo.runtime.bin: {}\n", foo_runtime.trim()));
-    snapshot.push_str(&format!("Bar.bin: {}\n", bar_deploy.trim()));
-    snapshot.push_str(&format!("Bar.runtime.bin: {}\n", bar_runtime.trim()));
-
-    let snapshot_path = root.join("build_workspace_root_fake_solc.case");
-    snap_test!(snapshot, snapshot_path.to_str().unwrap());
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_build_workspace_root_skips_library_member_fake_solc_artifacts() {
-    let root = workspace_fixture("build_workspace_root_skips_library_member");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-
-    let out_dir = temp.path().join("out");
-    let out_dir_str = out_dir.to_string_lossy().to_string();
-
-    let (output, exit_code) = run_fe_main_in_dir_with_env(
-        &[
-            "build",
-            "--backend",
-            "yul",
-            "--out-dir",
-            out_dir_str.as_str(),
-        ],
-        &root,
-        &[
-            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
-            ("FAKE_SOLC_CONTRACT", ""),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
-
-    let foo_deploy_path = out_dir.join("Foo.bin");
-    let foo_runtime_path = out_dir.join("Foo.runtime.bin");
-    let bar_deploy_path = out_dir.join("Bar.bin");
-    let bar_runtime_path = out_dir.join("Bar.runtime.bin");
-
-    let foo_deploy = fs::read_to_string(&foo_deploy_path).expect("read Foo deploy bytecode");
-    let foo_runtime = fs::read_to_string(&foo_runtime_path).expect("read Foo runtime bytecode");
-    let bar_deploy = fs::read_to_string(&bar_deploy_path).expect("read Bar deploy bytecode");
-    let bar_runtime = fs::read_to_string(&bar_runtime_path).expect("read Bar runtime bytecode");
-
-    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
-    snapshot.push_str("\n\n=== ARTIFACTS ===\n");
-    snapshot.push_str(&format!("Foo.bin: {}\n", foo_deploy.trim()));
-    snapshot.push_str(&format!("Foo.runtime.bin: {}\n", foo_runtime.trim()));
-    snapshot.push_str(&format!("Bar.bin: {}\n", bar_deploy.trim()));
-    snapshot.push_str(&format!("Bar.runtime.bin: {}\n", bar_runtime.trim()));
-
-    let snapshot_path = root.join("build_workspace_root_skips_library_member_fake_solc.case");
-    snap_test!(snapshot, snapshot_path.to_str().unwrap());
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_build_workspace_root_contract_filter_fake_solc_artifacts() {
-    let root = workspace_fixture("build_workspace_root");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-
-    let out_dir = temp.path().join("out");
-    let out_dir_str = out_dir.to_string_lossy().to_string();
-
-    let (output, exit_code) = run_fe_main_in_dir_with_env(
-        &[
-            "build",
-            "--backend",
-            "yul",
-            "--contract",
-            "Foo",
-            "--out-dir",
-            out_dir_str.as_str(),
-        ],
-        &root,
-        &[
-            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
-            ("FAKE_SOLC_CONTRACT", ""),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
-
-    let foo_deploy_path = out_dir.join("Foo.bin");
-    let foo_runtime_path = out_dir.join("Foo.runtime.bin");
-    assert!(
-        !out_dir.join("Bar.bin").exists(),
-        "expected contract filter to skip non-matching member"
-    );
-
-    let foo_deploy = fs::read_to_string(&foo_deploy_path).expect("read Foo deploy bytecode");
-    let foo_runtime = fs::read_to_string(&foo_runtime_path).expect("read Foo runtime bytecode");
-
-    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
-    snapshot.push_str("\n\n=== ARTIFACTS ===\n");
-    snapshot.push_str(&format!("Foo.bin: {}\n", foo_deploy.trim()));
-    snapshot.push_str(&format!("Foo.runtime.bin: {}\n", foo_runtime.trim()));
-
-    let snapshot_path = root.join("build_workspace_root_filter_fake_solc.case");
-    snap_test!(snapshot, snapshot_path.to_str().unwrap());
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_build_workspace_member_by_name_fake_solc_artifacts() {
-    let root = workspace_fixture("build_workspace_root");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-
-    let out_dir = temp.path().join("out");
-    let out_dir_str = out_dir.to_string_lossy().to_string();
-
-    let (output, exit_code) = run_fe_main_in_dir_with_env(
-        &[
-            "build",
-            "--backend",
-            "yul",
-            "--contract",
-            "Foo",
-            "--out-dir",
-            out_dir_str.as_str(),
-            "a",
-        ],
-        &root,
-        &[
-            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
-            ("FAKE_SOLC_CONTRACT", "Foo"),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
-
-    let deploy_path = out_dir.join("Foo.bin");
-    let runtime_path = out_dir.join("Foo.runtime.bin");
-    let deploy = fs::read_to_string(&deploy_path).expect("read deploy bytecode");
-    let runtime = fs::read_to_string(&runtime_path).expect("read runtime bytecode");
-
-    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
-    snapshot.push_str("\n\n=== ARTIFACTS ===\n");
-    snapshot.push_str(&format!("Foo.bin: {}\n", deploy.trim()));
-    snapshot.push_str(&format!("Foo.runtime.bin: {}\n", runtime.trim()));
-
-    let snapshot_path = root.join("build_member_by_name_fake_solc.case");
-    snap_test!(snapshot, snapshot_path.to_str().unwrap());
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_build_solc_flag_overrides_env() {
-    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cli_output/build/simple_contract.fe");
-    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-    let fake_solc_str = fake_solc.to_str().expect("fake solc utf8");
-
-    let out_dir = temp.path().join("out");
-    let out_dir_str = out_dir.to_string_lossy().to_string();
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "build",
-            "--backend",
-            "yul",
-            "--contract",
-            "Foo",
-            "--solc",
-            fake_solc_str,
-            "--out-dir",
-            out_dir_str.as_str(),
-            fixture_path_str,
-        ],
-        &[
-            ("FE_SOLC_PATH", "/no/such/solc"),
-            ("FAKE_SOLC_CONTRACT", "Foo"),
-            ("FAKE_SOLC_EXPECT_OPTIMIZE", "true"),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
-    assert!(
-        out_dir.join("Foo.bin").is_file(),
-        "expected Foo.bin artifact to be written"
-    );
-    assert!(
-        out_dir.join("Foo.runtime.bin").is_file(),
-        "expected Foo.runtime.bin artifact to be written"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_test_solc_flag_overrides_env() {
-    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/fe_test_runner/pass.fe");
-    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-    let fake_solc_str = fake_solc.to_str().expect("fake solc utf8");
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "test",
-            "--backend",
-            "yul",
-            "--solc",
-            fake_solc_str,
-            fixture_path_str,
-        ],
-        &[
-            ("FE_SOLC_PATH", "/no/such/solc"),
-            ("FAKE_SOLC_CONTRACT", "test_test_pass"),
-            ("FAKE_SOLC_EXPECT_OPTIMIZE", "true"),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
-}
-
 #[test]
 fn test_cli_build_opt_level_flag_is_error() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2622,341 +1877,6 @@ fn test_cli_test_opt_level_flag_is_error() {
         output.contains("unexpected argument '--opt-level'"),
         "expected `fe test` to reject `--opt-level`, got:\n{output}"
     );
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_test_default_opt_level_enables_solc_optimizer_for_yul() {
-    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/fe_test_runner/pass.fe");
-    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-    let fake_solc_str = fake_solc.to_str().expect("fake solc utf8");
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "test",
-            "--backend",
-            "yul",
-            "--solc",
-            fake_solc_str,
-            fixture_path_str,
-        ],
-        &[
-            ("FE_SOLC_PATH", "/no/such/solc"),
-            ("FAKE_SOLC_CONTRACT", "test_test_pass"),
-            ("FAKE_SOLC_EXPECT_OPTIMIZE", "true"),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_test_optimize_s_enables_solc_optimizer_for_yul() {
-    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/fe_test_runner/pass.fe");
-    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-    let fake_solc_str = fake_solc.to_str().expect("fake solc utf8");
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "test",
-            "--backend",
-            "yul",
-            "--optimize",
-            "s",
-            "--solc",
-            fake_solc_str,
-            fixture_path_str,
-        ],
-        &[
-            ("FE_SOLC_PATH", "/no/such/solc"),
-            ("FAKE_SOLC_CONTRACT", "test_test_pass"),
-            ("FAKE_SOLC_EXPECT_OPTIMIZE", "true"),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_test_optimize_1_enables_solc_optimizer_for_yul() {
-    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/fe_test_runner/pass.fe");
-    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-    let fake_solc_str = fake_solc.to_str().expect("fake solc utf8");
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "test",
-            "--backend",
-            "yul",
-            "-O",
-            "1",
-            "--solc",
-            fake_solc_str,
-            fixture_path_str,
-        ],
-        &[
-            ("FE_SOLC_PATH", "/no/such/solc"),
-            ("FAKE_SOLC_CONTRACT", "test_test_pass"),
-            ("FAKE_SOLC_EXPECT_OPTIMIZE", "true"),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_test_optimize_2_enables_solc_optimizer_for_yul() {
-    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/fe_test_runner/pass.fe");
-    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-    let fake_solc_str = fake_solc.to_str().expect("fake solc utf8");
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "test",
-            "--backend",
-            "yul",
-            "--optimize",
-            "2",
-            "--solc",
-            fake_solc_str,
-            fixture_path_str,
-        ],
-        &[
-            ("FE_SOLC_PATH", "/no/such/solc"),
-            ("FAKE_SOLC_CONTRACT", "test_test_pass"),
-            ("FAKE_SOLC_EXPECT_OPTIMIZE", "true"),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_test_optimize_0_disables_solc_optimizer_for_yul() {
-    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/fe_test_runner/pass.fe");
-    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-    let fake_solc_str = fake_solc.to_str().expect("fake solc utf8");
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "test",
-            "--backend",
-            "yul",
-            "--optimize",
-            "0",
-            "--solc",
-            fake_solc_str,
-            fixture_path_str,
-        ],
-        &[
-            ("FE_SOLC_PATH", "/no/such/solc"),
-            ("FAKE_SOLC_CONTRACT", "test_test_pass"),
-            ("FAKE_SOLC_EXPECT_OPTIMIZE", "false"),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_build_default_opt_level_enables_solc_optimizer_for_yul() {
-    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cli_output/build/simple_contract.fe");
-    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-
-    let out_dir = temp.path().join("out");
-    let out_dir_str = out_dir.to_string_lossy().to_string();
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "build",
-            "--backend",
-            "yul",
-            "--contract",
-            "Foo",
-            "--out-dir",
-            out_dir_str.as_str(),
-            fixture_path_str,
-        ],
-        &[
-            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
-            ("FAKE_SOLC_CONTRACT", "Foo"),
-            ("FAKE_SOLC_EXPECT_OPTIMIZE", "true"),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_build_optimize_s_enables_solc_optimizer_for_yul() {
-    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cli_output/build/simple_contract.fe");
-    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-
-    let out_dir = temp.path().join("out");
-    let out_dir_str = out_dir.to_string_lossy().to_string();
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "build",
-            "--backend",
-            "yul",
-            "--contract",
-            "Foo",
-            "--optimize",
-            "s",
-            "--out-dir",
-            out_dir_str.as_str(),
-            fixture_path_str,
-        ],
-        &[
-            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
-            ("FAKE_SOLC_CONTRACT", "Foo"),
-            ("FAKE_SOLC_EXPECT_OPTIMIZE", "true"),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_build_optimize_1_enables_solc_optimizer_for_yul() {
-    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cli_output/build/simple_contract.fe");
-    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-
-    let out_dir = temp.path().join("out");
-    let out_dir_str = out_dir.to_string_lossy().to_string();
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "build",
-            "--backend",
-            "yul",
-            "--contract",
-            "Foo",
-            "-O",
-            "1",
-            "--out-dir",
-            out_dir_str.as_str(),
-            fixture_path_str,
-        ],
-        &[
-            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
-            ("FAKE_SOLC_CONTRACT", "Foo"),
-            ("FAKE_SOLC_EXPECT_OPTIMIZE", "true"),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_build_optimize_0_disables_solc_optimizer_for_yul() {
-    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cli_output/build/simple_contract.fe");
-    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-
-    let out_dir = temp.path().join("out");
-    let out_dir_str = out_dir.to_string_lossy().to_string();
-
-    let (output, exit_code) = run_fe_main_with_env(
-        &[
-            "build",
-            "--backend",
-            "yul",
-            "--contract",
-            "Foo",
-            "--optimize",
-            "0",
-            "--out-dir",
-            out_dir_str.as_str(),
-            fixture_path_str,
-        ],
-        &[
-            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
-            ("FAKE_SOLC_CONTRACT", "Foo"),
-            ("FAKE_SOLC_EXPECT_OPTIMIZE", "false"),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_build_workspace_dependency_in_scope_file_path_fake_solc_artifacts() {
-    let root = workspace_fixture("dependency_scope");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_solc = write_fake_solc(&temp);
-
-    let out_dir = temp.path().join("out");
-    let out_dir_str = out_dir.to_string_lossy().to_string();
-
-    let (output, exit_code) = run_fe_main_in_dir_with_env(
-        &[
-            "build",
-            "--backend",
-            "yul",
-            "--contract",
-            "Foo",
-            "--out-dir",
-            out_dir_str.as_str(),
-            "ingots/app/src/lib.fe",
-        ],
-        &root,
-        &[
-            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
-            ("FAKE_SOLC_CONTRACT", "Foo"),
-        ],
-    );
-    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
-
-    let deploy_path = out_dir.join("Foo.bin");
-    let runtime_path = out_dir.join("Foo.runtime.bin");
-    let deploy = fs::read_to_string(&deploy_path).expect("read deploy bytecode");
-    let runtime = fs::read_to_string(&runtime_path).expect("read runtime bytecode");
-
-    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
-    snapshot.push_str("\n\n=== ARTIFACTS ===\n");
-    snapshot.push_str(&format!("Foo.bin: {}\n", deploy.trim()));
-    snapshot.push_str(&format!("Foo.runtime.bin: {}\n", runtime.trim()));
-
-    let snapshot_path = root.join("build_dependency_in_scope_file_path_fake_solc.case");
-    snap_test!(snapshot, snapshot_path.to_str().unwrap());
 }
 
 #[test]

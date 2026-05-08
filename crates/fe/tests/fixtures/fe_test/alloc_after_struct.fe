@@ -2,8 +2,8 @@ use std::evm::mem
 
 /// Regression test: allocating a struct whose fields land at 0x80 must not
 /// corrupt subsequent calls to mem::alloc.  Previously, mem::alloc read
-/// mload(0x80) as a sonatina stack-pointer guard, but under the yul backend
-/// 0x80 holds user data, causing wild pointer values.
+/// mload(0x80) as a Sonatina stack-pointer guard even though 0x80 can hold
+/// user data, causing wild pointer values.
 struct Pair {
     a: Address,
     b: Address,

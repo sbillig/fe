@@ -17,7 +17,6 @@ use crate::backend::Backend;
 
 enum CodegenKind {
     Mir,
-    Yul,
     SonatinaIr,
 }
 
@@ -25,7 +24,6 @@ impl CodegenKind {
     fn extension(&self) -> &'static str {
         match self {
             CodegenKind::Mir => "mir",
-            CodegenKind::Yul => "yul",
             CodegenKind::SonatinaIr => "sonatina",
         }
     }
@@ -33,7 +31,6 @@ impl CodegenKind {
     fn label(&self) -> &'static str {
         match self {
             CodegenKind::Mir => "MIR",
-            CodegenKind::Yul => "Yul",
             CodegenKind::SonatinaIr => "Sonatina IR",
         }
     }
@@ -49,9 +46,6 @@ fn generate_codegen_string(
             let package = build_runtime_package(db, top_mod)
                 .map_err(|e| format!("runtime package lowering: {e}"))?;
             Ok(format!("{package:#?}"))
-        }
-        CodegenKind::Yul => {
-            codegen::emit_module_yul(db, top_mod).map_err(|e| format!("Yul emit: {e}"))
         }
         CodegenKind::SonatinaIr => codegen::emit_module_sonatina_ir(db, top_mod)
             .map_err(|e| format!("Sonatina IR emit: {e}")),
@@ -69,7 +63,6 @@ pub async fn handle_execute_command(
 
     let kind = match params.command.as_str() {
         "fe.viewMir" => CodegenKind::Mir,
-        "fe.viewYul" => CodegenKind::Yul,
         "fe.viewSonatinaIr" => CodegenKind::SonatinaIr,
         other => {
             return Err(ResponseError::new(

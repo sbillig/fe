@@ -156,8 +156,10 @@ func private %init(v0.objref<@layout_1>) {
     block1:
         v1.i256 = sym_size &__BalanceMap_runtime;
         v2.i256 = sym_addr &__BalanceMap_runtime;
-        call %codecopy v0 0.i256 v2 v1;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_ad81 0.i256 v1;
+        v3.*i8 = evm_malloc v1;
+        v4.i256 = ptr_to_int v3 i256;
+        call %codecopy v0 v4 v2 v1;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_ad81 v4 v1;
         unreachable;
 }
 

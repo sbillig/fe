@@ -1,4 +1,4 @@
-/// Low-level EVM/Yul builtins exposed as `extern` functions.
+/// Low-level EVM builtins exposed as `extern` functions.
 ///
 /// This module is intended to be internal to `std` (it should not be re-exported
 /// to non-std ingots). Higher-level access is provided via `std::evm::effects`.

@@ -12,7 +12,6 @@ pub struct TestMetadata {
     pub hir_name: String,
     pub symbol_name: String,
     pub object_name: String,
-    pub yul: String,
     pub bytecode: Vec<u8>,
     pub sonatina_observability_json: Option<String>,
     pub value_param_count: usize,

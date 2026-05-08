@@ -1,18 +1,18 @@
-use std::evm::{Create, Evm, RawMem, RawOps}
+use std::evm::{Create, Evm, RawOps, mem}
 
 #[contract_init(Foo)]
 fn init() uses (evm: mut Evm) {
     { // create child contract
         let len = evm.code_region_len(child_init)
         let offset = evm.code_region_offset(child_init)
-        let dest = with (RawMem = evm) { allocate(bytes: len) }
+        let dest = mem::alloc(len)
         evm.codecopy(dest: dest, offset: offset, len: len)
         evm.create2_raw(value: 0, offset: dest, len: len, salt: 0x1234)
     }
 
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    let dest = with (RawMem = evm) { allocate(bytes: len) }
+    let dest = mem::alloc(len)
     evm.codecopy(dest: dest, offset: offset, len: len)
     evm.return_data(offset: dest, len: len)
 }
@@ -33,23 +33,15 @@ fn runtime() uses (evm: mut Evm) {
 fn child_init() uses (evm: mut Evm) {
     let len = evm.code_region_len(child_runtime)
     let offset = evm.code_region_offset(child_runtime)
-    evm.codecopy(dest: 0, offset: offset, len: len)
-    evm.return_data(offset: 0, len: len)
+    let dest = mem::alloc(len)
+    evm.codecopy(dest: dest, offset: offset, len: len)
+    evm.return_data(offset: dest, len: len)
 }
 
 #[contract_runtime(Child)]
 fn child_runtime() uses (evm: mut Evm) {
     evm.calldatacopy(dest: 0, offset: 0, len: 4)
     evm.return_data(offset: 0, len: 4)
-}
-
-fn allocate(bytes: u256) -> u256 uses (mem: mut RawMem) {
-    let mut ptr = mem.mload(0x40)
-    if ptr == 0 {
-        ptr = 0x60
-    }
-    mem.mstore(addr: 0x40, value: ptr + bytes)
-    ptr
 }
 
 fn balance() uses (ops: RawOps) {

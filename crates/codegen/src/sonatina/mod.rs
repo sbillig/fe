@@ -330,7 +330,8 @@ fn filter_runtime_package_to_root_objects<'db>(
         .iter()
         .map(|object| object.name(db).clone())
         .collect::<FxHashSet<_>>();
-    let section_set = reachable_sections(db, roots);
+    let package_objects = package.objects(db);
+    let section_set = reachable_sections(db, &package_objects, roots);
     let objects = package
         .objects(db)
         .into_iter()
@@ -338,7 +339,9 @@ fn filter_runtime_package_to_root_objects<'db>(
             let sections = object
                 .sections(db)
                 .into_iter()
-                .filter(|section| section_set.contains(&(object, section.name.clone())))
+                .filter(|section| {
+                    section_set.contains(&runtime_section_key(db, object, &section.name))
+                })
                 .collect::<Vec<_>>();
             (!sections.is_empty())
                 .then(|| mir::RuntimeObject::new(db, object.name(db).clone(), sections))
@@ -359,7 +362,7 @@ fn filter_runtime_package_to_root_objects<'db>(
     let code_regions = package
         .code_regions(db)
         .into_iter()
-        .filter(|region| section_set.contains(&section_ref_key(region.source(db))))
+        .filter(|region| section_set.contains(&section_ref_key(db, region.source(db))))
         .collect::<Vec<_>>();
     let root_objects = package
         .objects(db)
@@ -400,8 +403,9 @@ fn filter_runtime_package_to_root_objects<'db>(
 
 fn reachable_sections<'db>(
     db: &'db dyn mir::MirDb,
+    objects: &[mir::RuntimeObject<'db>],
     roots: &[mir::RuntimeObject<'db>],
-) -> FxHashSet<(mir::RuntimeObject<'db>, mir::RuntimeSectionName)> {
+) -> FxHashSet<(String, mir::RuntimeSectionName)> {
     let mut seen = FxHashSet::default();
     let mut queue = roots
         .iter()
@@ -409,32 +413,50 @@ fn reachable_sections<'db>(
             object
                 .sections(db)
                 .into_iter()
-                .map(|section| (*object, section.name))
+                .map(|section| runtime_section_key(db, *object, &section.name))
         })
         .collect::<VecDeque<_>>();
-    while let Some((object, section_name)) = queue.pop_front() {
-        if !seen.insert((object, section_name.clone())) {
+    while let Some((object_name, section_name)) = queue.pop_front() {
+        if !seen.insert((object_name.clone(), section_name.clone())) {
             continue;
         }
-        for section in object
-            .sections(db)
-            .into_iter()
-            .filter(|section| section.name == section_name)
+        for section in objects
+            .iter()
+            .flat_map(|object| {
+                object
+                    .sections(db)
+                    .into_iter()
+                    .map(move |section| (*object, section))
+            })
+            .filter(|(object, _)| object.name(db) == object_name)
+            .filter(|(_, section)| section.name == section_name)
+            .map(|(_, section)| section)
         {
             for embed in section.embeds {
-                queue.push_back(section_ref_key(embed.source));
+                queue.push_back(section_ref_key(db, embed.source));
             }
         }
     }
     seen
 }
 
+fn runtime_section_key<'db>(
+    db: &'db dyn mir::MirDb,
+    object: mir::RuntimeObject<'db>,
+    section: &mir::RuntimeSectionName,
+) -> (String, mir::RuntimeSectionName) {
+    (object.name(db).clone(), section.clone())
+}
+
 fn section_ref_key<'db>(
+    db: &'db dyn mir::MirDb,
     section_ref: mir::RuntimeSectionRef<'db>,
-) -> (mir::RuntimeObject<'db>, mir::RuntimeSectionName) {
+) -> (String, mir::RuntimeSectionName) {
     match section_ref {
         mir::RuntimeSectionRef::Local { object, section }
-        | mir::RuntimeSectionRef::External { object, section } => (object, section),
+        | mir::RuntimeSectionRef::External { object, section } => {
+            runtime_section_key(db, object, &section)
+        }
     }
 }
 
@@ -728,7 +750,6 @@ pub fn emit_test_module_sonatina(
             hir_name: metadata.hir_name,
             symbol_name: section.entry.symbol(db).clone(),
             object_name: object.name(db).clone(),
-            yul: String::new(),
             bytecode: wrap_as_init_code(&runtime.bytes),
             sonatina_observability_json: artifact.observability_json(),
             value_param_count: 0,

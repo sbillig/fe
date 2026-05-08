@@ -12,8 +12,8 @@ Fe is a statically typed language for the Ethereum Virtual Machine (EVM). The sy
 
 `fe test` has a few flags that are useful when debugging runtime/codegen issues:
 
-- EVM trace (last 400 steps): `RUSTC_WRAPPER= cargo run -q -p fe -- test --backend sonatina --trace-evm --trace-evm-keep 400 --trace-evm-stack-n 18 <path/to/test.fe>`
-- Sonatina symtab + stackify traces written to files: `RUSTC_WRAPPER= cargo run -q -p fe -- test --backend sonatina --sonatina-symtab --sonatina-stackify-trace --sonatina-stackify-filter solencoder --debug-dir target/fe-debug <path/to/test.fe>`
+- EVM trace (last 400 steps): `RUSTC_WRAPPER= cargo run -q -p fe -- test --trace-evm --trace-evm-keep 400 --trace-evm-stack-n 18 <path/to/test.fe>`
+- EVM traces written to files: `RUSTC_WRAPPER= cargo run -q -p fe -- test --trace-evm --debug-dir target/fe-debug <path/to/test.fe>`
 
 ## Community
 
