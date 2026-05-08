@@ -195,7 +195,7 @@ pub trait RawStorage {
     }
 }
 
-/// Access to low-level EVM op functions (Yul-exposed builtins, excluding raw stack ops).
+/// Access to low-level EVM op functions (excluding raw stack ops).
 pub trait RawOps: RawMem + RawStorage {
     fn calldataload(self, _: u256) -> u256
     fn calldatasize(self) -> u256

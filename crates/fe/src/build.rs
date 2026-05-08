@@ -4,7 +4,7 @@ use std::{
 };
 
 use camino::{Utf8Path, Utf8PathBuf};
-use codegen::{BackendKind, OptLevel, SonatinaContractBytecode};
+use codegen::{OptLevel, SonatinaContractBytecode};
 use common::{InputDb, config::Config, dependencies::WorkspaceMemberRecord, file::IngotFileKind};
 use driver::DriverDataBase;
 use driver::cli_target::{CliTarget, resolve_cli_target};
@@ -12,7 +12,6 @@ use hir::hir_def::{HirIngot, ManualContractRootAttr, TopLevelMod};
 use mir::build_runtime_package;
 use salsa::Setter;
 use smol_str::SmolStr;
-use solc_runner::compile_single_contract_with_solc;
 use url::Url;
 
 use crate::{
@@ -93,11 +92,9 @@ fn write_build_manifest(
     ingot: Option<&str>,
     force_standalone: bool,
     contract: Option<&str>,
-    backend_kind: BackendKind,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: Option<&Utf8PathBuf>,
-    solc: Option<&str>,
     has_errors: bool,
 ) {
     let mut out = String::new();
@@ -106,14 +103,13 @@ fn write_build_manifest(
     out.push_str(&format!("ingot: {}\n", ingot.unwrap_or("<all>")));
     out.push_str(&format!("standalone: {force_standalone}\n"));
     out.push_str(&format!("contract: {}\n", contract.unwrap_or("<all>")));
-    out.push_str(&format!("backend: {}\n", backend_kind.name()));
+    out.push_str("backend: sonatina\n");
     out.push_str(&format!("opt_level: {opt_level}\n"));
     out.push_str(&format!("emit: {}\n", describe_emit_selection(emit)));
     out.push_str(&format!(
         "out_dir: {}\n",
         out_dir.map(|p| p.as_str()).unwrap_or("<default>")
     ));
-    out.push_str(&format!("solc: {}\n", solc.unwrap_or("<default>")));
     out.push_str(&format!(
         "status: {}\n",
         if has_errors { "failed" } else { "ok" }
@@ -138,12 +134,10 @@ pub fn build(
     ingot: Option<&str>,
     force_standalone: bool,
     contract: Option<&str>,
-    backend_kind: BackendKind,
     opt_level: OptLevel,
     emit: &[BuildEmit],
     out_dir: Option<&Utf8PathBuf>,
     profile: &str,
-    solc: Option<&str>,
     report_out: Option<&Utf8PathBuf>,
     report_failed_only: bool,
     use_recovery_mode: bool,
@@ -213,11 +207,9 @@ pub fn build(
                         ingot,
                         force_standalone,
                         contract,
-                        backend_kind,
                         opt_level,
                         emit,
                         out_dir,
-                        solc,
                         has_errors,
                     );
                     if let Err(err) = tar_gz_dir(&staging.root_dir, &out) {
@@ -252,11 +244,9 @@ pub fn build(
             &file_path,
             ingot,
             contract,
-            backend_kind,
             opt_level,
             emit,
             out_dir,
-            solc,
             report_ctx.as_ref(),
         ),
         CliTarget::Directory(dir_path) => build_directory(
@@ -264,11 +254,9 @@ pub fn build(
             &dir_path,
             ingot,
             contract,
-            backend_kind,
             opt_level,
             emit,
             out_dir,
-            solc,
             report_ctx.as_ref(),
         ),
     };
@@ -282,11 +270,9 @@ pub fn build(
                 ingot,
                 force_standalone,
                 contract,
-                backend_kind,
                 opt_level,
                 emit,
                 out_dir,
-                solc,
                 had_errors,
             );
             if let Err(err) = tar_gz_dir(&staging.root_dir, &out) {
@@ -313,11 +299,9 @@ fn build_file(
     file_path: &Utf8PathBuf,
     ingot: Option<&str>,
     contract: Option<&str>,
-    backend_kind: BackendKind,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: Option<&Utf8PathBuf>,
-    solc: Option<&str>,
     report: Option<&BuildReportContext>,
 ) -> bool {
     if ingot.is_some() {
@@ -400,14 +384,12 @@ fn build_file(
         db,
         top_mod,
         contract,
-        backend_kind,
         opt_level,
         emit,
         &out_dir,
         &out_dir,
         ir_file_stem.as_str(),
         true,
-        solc,
         report_dir.as_ref(),
     )
     .had_errors
@@ -419,11 +401,9 @@ fn build_directory(
     dir_path: &Utf8PathBuf,
     ingot: Option<&str>,
     contract: Option<&str>,
-    backend_kind: BackendKind,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: Option<&Utf8PathBuf>,
-    solc: Option<&str>,
     report: Option<&BuildReportContext>,
 ) -> bool {
     let canonical = match dir_path.canonicalize_utf8() {
@@ -471,17 +451,7 @@ fn build_directory(
 
     match config {
         Config::Workspace(_) => build_workspace(
-            db,
-            &canonical,
-            url,
-            ingot,
-            contract,
-            backend_kind,
-            opt_level,
-            emit,
-            out_dir,
-            solc,
-            report,
+            db, &canonical, url, ingot, contract, opt_level, emit, out_dir, report,
         ),
         Config::Ingot(_) => {
             if ingot.is_some() {
@@ -504,14 +474,12 @@ fn build_directory(
                 db,
                 &url,
                 contract,
-                backend_kind,
                 opt_level,
                 emit,
                 &out_dir,
                 None,
                 None,
                 true,
-                solc,
                 report_dir.as_ref(),
             )
             .had_errors
@@ -526,11 +494,9 @@ fn build_workspace(
     workspace_url: Url,
     ingot: Option<&str>,
     contract: Option<&str>,
-    backend_kind: BackendKind,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: Option<&Utf8PathBuf>,
-    solc: Option<&str>,
     report: Option<&BuildReportContext>,
 ) -> bool {
     let mut members = db
@@ -623,14 +589,12 @@ fn build_workspace(
                     db,
                     &matches[0].url,
                     Some(contract),
-                    backend_kind,
                     opt_level,
                     emit,
                     &out_dir,
                     workspace_member_ir_out_dir(emit, &out_dir, matches[0].name.as_str()),
                     Some(matches[0].name.as_str()),
                     true,
-                    solc,
                     report_dir.as_ref(),
                 );
                 return summary.had_errors;
@@ -677,14 +641,12 @@ fn build_workspace(
             db,
             &member.url,
             None,
-            backend_kind,
             opt_level,
             emit,
             &out_dir,
             workspace_member_ir_out_dir(emit, &out_dir, member.name.as_str()),
             Some(member.name.as_str()),
             true,
-            solc,
             report_dir.as_ref(),
         );
         had_errors |= summary.had_errors;
@@ -878,14 +840,12 @@ fn build_ingot_url(
     db: &mut DriverDataBase,
     ingot_url: &Url,
     contract: Option<&str>,
-    backend_kind: BackendKind,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: &Utf8Path,
     ir_out_dir: Option<Utf8PathBuf>,
     ir_file_stem: Option<&str>,
     missing_contract_is_error: bool,
-    solc: Option<&str>,
     report_dir: Option<&Utf8PathBuf>,
 ) -> BuildSummary {
     let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
@@ -926,14 +886,12 @@ fn build_ingot_url(
         db,
         ingot,
         contract,
-        backend_kind,
         opt_level,
         emit,
         out_dir,
         ir_out_dir.as_ref().map_or(out_dir, Utf8PathBuf::as_path),
         ir_file_stem.as_str(),
         missing_contract_is_error,
-        solc,
         report_dir,
     )
 }
@@ -943,14 +901,12 @@ fn build_ingot(
     db: &DriverDataBase,
     ingot: hir::Ingot<'_>,
     contract: Option<&str>,
-    backend_kind: BackendKind,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: &Utf8Path,
     ir_out_dir: &Utf8Path,
     ir_file_stem: &str,
     missing_contract_is_error: bool,
-    solc: Option<&str>,
     report_dir: Option<&Utf8PathBuf>,
 ) -> BuildSummary {
     let contract_names = match collect_ingot_contract_names(db, ingot) {
@@ -979,84 +935,38 @@ fn build_ingot(
 
     let mut had_errors = false;
     if emit.ir || emit.writes_any_bytecode() {
-        match backend_kind {
-            BackendKind::Yul => {
-                let optimize = opt_level.yul_optimize();
-                let yul = match codegen::emit_ingot_yul(db, ingot) {
-                    Ok(yul) => yul,
+        if emit.ir {
+            let ir = match codegen::emit_ingot_sonatina_ir_optimized(db, ingot, opt_level, contract)
+            {
+                Ok(ir) => ir,
+                Err(err) => {
+                    eprintln!("Error: Failed to compile Sonatina IR: {err}");
+                    return BuildSummary { had_errors: true };
+                }
+            };
+            if let Err(err) =
+                write_named_ir_artifact(ir_out_dir, report_dir, ir_file_stem, "sona", &ir)
+            {
+                eprintln!("Error: {err}");
+                had_errors = true;
+            }
+        }
+        if emit.writes_any_bytecode() {
+            let bytecode =
+                match codegen::emit_ingot_sonatina_bytecode(db, ingot, opt_level, contract) {
+                    Ok(bytecode) => bytecode,
                     Err(err) => {
-                        eprintln!("Error: Failed to emit Yul: {err}");
+                        eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
                         return BuildSummary { had_errors: true };
                     }
                 };
-                if let Some(dir) = report_dir {
-                    let path = dir.join("ingot.yul");
-                    let _ = std::fs::write(path.as_std_path(), &yul);
-                    let path = dir.join("runtime_package.txt");
-                    let _ = std::fs::write(
-                        path.as_std_path(),
-                        format_ingot_runtime_packages(db, ingot),
-                    );
-                }
-                if emit.ir
-                    && let Err(err) =
-                        write_named_ir_artifact(ir_out_dir, report_dir, ir_file_stem, "yul", &yul)
-                {
-                    eprintln!("Error: {err}");
-                    had_errors = true;
-                }
-                if emit.writes_any_bytecode() {
-                    had_errors |= write_yul_bytecode_artifacts(
-                        &names_to_build,
-                        optimize,
-                        out_dir,
-                        report_dir,
-                        emit,
-                        solc,
-                        |name| {
-                            codegen::emit_ingot_object_yul(db, ingot, name)
-                                .map_err(|err| format!("Failed to emit Yul for `{name}`: {err}"))
-                        },
-                    );
-                }
-            }
-            BackendKind::Sonatina => {
-                if emit.ir {
-                    let ir = match codegen::emit_ingot_sonatina_ir_optimized(
-                        db, ingot, opt_level, contract,
-                    ) {
-                        Ok(ir) => ir,
-                        Err(err) => {
-                            eprintln!("Error: Failed to compile Sonatina IR: {err}");
-                            return BuildSummary { had_errors: true };
-                        }
-                    };
-                    if let Err(err) =
-                        write_named_ir_artifact(ir_out_dir, report_dir, ir_file_stem, "sona", &ir)
-                    {
-                        eprintln!("Error: {err}");
-                        had_errors = true;
-                    }
-                }
-                if emit.writes_any_bytecode() {
-                    let bytecode =
-                        match codegen::emit_ingot_sonatina_bytecode(db, ingot, opt_level, contract)
-                        {
-                            Ok(bytecode) => bytecode,
-                            Err(err) => {
-                                eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
-                                return BuildSummary { had_errors: true };
-                            }
-                        };
-                    had_errors |= write_sonatina_bytecode_artifacts(
-                        &names_to_build,
-                        &bytecode,
-                        out_dir,
-                        report_dir,
-                        emit,
-                    );
-                }
-            }
+            had_errors |= write_sonatina_bytecode_artifacts(
+                &names_to_build,
+                &bytecode,
+                out_dir,
+                report_dir,
+                emit,
+            );
         }
     }
 
@@ -1076,14 +986,12 @@ fn build_top_mod(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     contract: Option<&str>,
-    backend_kind: BackendKind,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: &Utf8Path,
     ir_out_dir: &Utf8Path,
     ir_file_stem: &str,
     missing_contract_is_error: bool,
-    solc: Option<&str>,
     report_dir: Option<&Utf8PathBuf>,
 ) -> BuildSummary {
     let contract_names = match collect_contract_names(db, top_mod) {
@@ -1112,81 +1020,39 @@ fn build_top_mod(
 
     let mut had_errors = false;
     if emit.ir || emit.writes_any_bytecode() {
-        match backend_kind {
-            BackendKind::Yul => {
-                let optimize = opt_level.yul_optimize();
-                let yul = match codegen::emit_module_yul(db, top_mod) {
-                    Ok(yul) => yul,
+        if emit.ir {
+            let ir = match codegen::emit_module_sonatina_ir_optimized(
+                db, top_mod, opt_level, contract,
+            ) {
+                Ok(ir) => ir,
+                Err(err) => {
+                    eprintln!("Error: Failed to compile Sonatina IR: {err}");
+                    return BuildSummary { had_errors: true };
+                }
+            };
+            if let Err(err) =
+                write_named_ir_artifact(ir_out_dir, report_dir, ir_file_stem, "sona", &ir)
+            {
+                eprintln!("Error: {err}");
+                had_errors = true;
+            }
+        }
+        if emit.writes_any_bytecode() {
+            let bytecode =
+                match codegen::emit_module_sonatina_bytecode(db, top_mod, opt_level, contract) {
+                    Ok(bytecode) => bytecode,
                     Err(err) => {
-                        eprintln!("Error: Failed to emit Yul: {err}");
+                        eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
                         return BuildSummary { had_errors: true };
                     }
                 };
-                if let Some(dir) = report_dir {
-                    let path = dir.join("module.yul");
-                    let _ = std::fs::write(path.as_std_path(), &yul);
-                    let path = dir.join("runtime_package.txt");
-                    let _ = std::fs::write(path.as_std_path(), format_runtime_package(db, top_mod));
-                }
-                if emit.ir
-                    && let Err(err) =
-                        write_named_ir_artifact(ir_out_dir, report_dir, ir_file_stem, "yul", &yul)
-                {
-                    eprintln!("Error: {err}");
-                    had_errors = true;
-                }
-                if emit.writes_any_bytecode() {
-                    had_errors |= write_yul_bytecode_artifacts(
-                        &names_to_build,
-                        optimize,
-                        out_dir,
-                        report_dir,
-                        emit,
-                        solc,
-                        |name| {
-                            codegen::emit_module_object_yul(db, top_mod, name)
-                                .map_err(|err| format!("Failed to emit Yul for `{name}`: {err}"))
-                        },
-                    );
-                }
-            }
-            BackendKind::Sonatina => {
-                if emit.ir {
-                    let ir = match codegen::emit_module_sonatina_ir_optimized(
-                        db, top_mod, opt_level, contract,
-                    ) {
-                        Ok(ir) => ir,
-                        Err(err) => {
-                            eprintln!("Error: Failed to compile Sonatina IR: {err}");
-                            return BuildSummary { had_errors: true };
-                        }
-                    };
-                    if let Err(err) =
-                        write_named_ir_artifact(ir_out_dir, report_dir, ir_file_stem, "sona", &ir)
-                    {
-                        eprintln!("Error: {err}");
-                        had_errors = true;
-                    }
-                }
-                if emit.writes_any_bytecode() {
-                    let bytecode = match codegen::emit_module_sonatina_bytecode(
-                        db, top_mod, opt_level, contract,
-                    ) {
-                        Ok(bytecode) => bytecode,
-                        Err(err) => {
-                            eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
-                            return BuildSummary { had_errors: true };
-                        }
-                    };
-                    had_errors |= write_sonatina_bytecode_artifacts(
-                        &names_to_build,
-                        &bytecode,
-                        out_dir,
-                        report_dir,
-                        emit,
-                    );
-                }
-            }
+            had_errors |= write_sonatina_bytecode_artifacts(
+                &names_to_build,
+                &bytecode,
+                out_dir,
+                report_dir,
+                emit,
+            );
         }
     }
 
@@ -1250,23 +1116,6 @@ fn collect_workspace_contract_names(db: &DriverDataBase, ingot: hir::Ingot<'_>) 
         }
     }
     names.into_iter().collect()
-}
-
-fn format_runtime_package(db: &DriverDataBase, top_mod: TopLevelMod<'_>) -> String {
-    match build_runtime_package(db, top_mod) {
-        Ok(package) => format!("{package:#?}"),
-        Err(err) => format!("runtime package error: {err}"),
-    }
-}
-
-fn format_ingot_runtime_packages(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> String {
-    let mut out = String::new();
-    for &top_mod in ingot.all_modules(db) {
-        out.push_str(&format!("=== {:?} ===\n", top_mod.name(db)));
-        out.push_str(&format_runtime_package(db, top_mod));
-        out.push_str("\n\n");
-    }
-    out
 }
 
 fn collect_ingot_abi_artifact_names(
@@ -1425,56 +1274,6 @@ fn write_named_ir_artifact(
     }
     println!("Wrote {out_dir}/{file_name}");
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn write_yul_bytecode_artifacts(
-    names_to_build: &[String],
-    optimize: bool,
-    out_dir: &Utf8Path,
-    report_dir: Option<&Utf8Path>,
-    emit: EmitSelection,
-    solc: Option<&str>,
-    mut yul_for_name: impl FnMut(&str) -> Result<String, String>,
-) -> bool {
-    let mut had_errors = false;
-    for name in names_to_build {
-        let yul = match yul_for_name(name) {
-            Ok(yul) => yul,
-            Err(err) => {
-                eprintln!("Error: {err}");
-                had_errors = true;
-                continue;
-            }
-        };
-        if let Some(dir) = report_dir {
-            let file_name = format!("{}.solc.yul", sanitize_filename(name));
-            let _ = std::fs::write(dir.join(file_name).as_std_path(), &yul);
-        }
-        match compile_single_contract_with_solc(name, &yul, optimize, true, solc) {
-            Ok(bytecode) => {
-                if let Err(err) = write_contract_artifacts(
-                    out_dir,
-                    report_dir,
-                    name,
-                    &bytecode.bytecode,
-                    &bytecode.runtime_bytecode,
-                    emit,
-                ) {
-                    eprintln!("Error: {err}");
-                    had_errors = true;
-                } else {
-                    print_contract_artifact_paths(out_dir, name, emit);
-                }
-            }
-            Err(err) => {
-                eprintln!("Error: solc failed for contract \"{name}\": {}", err.0);
-                eprintln!("Hint: install solc, set FE_SOLC_PATH, or pass --solc <path>.");
-                had_errors = true;
-            }
-        }
-    }
-    had_errors
 }
 
 fn write_sonatina_bytecode_artifacts(

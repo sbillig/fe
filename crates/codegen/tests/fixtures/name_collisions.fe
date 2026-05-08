@@ -1,6 +1,6 @@
 // This test demonstrates various name collision issues in symbol mangling.
 // Each section shows a different category of collision that can produce
-// invalid Yul (duplicate function definitions).
+// invalid backend output (duplicate function definitions).
 
 // =============================================================================
 // 1. Module qualifier flattening collisions
@@ -180,9 +180,8 @@ fn test_user_defined_conversion_pattern_name() -> u256 {
 // =============================================================================
 // 7. `ret` parameter name collision
 // =============================================================================
-// Codegen uses a fixed return name `ret` in Yul signatures. Parameters are
-// uniqued against each other, but not against this implicit return name, so a
-// parameter named `ret` produces invalid Yul.
+// Codegen uses a fixed return name `ret` in backend signatures. Parameters are
+// uniqued against each other, but not against this implicit return name.
 
 fn ret_param_collision(_ ret: u32) -> u32 {
     ret + 1
@@ -193,16 +192,15 @@ fn test_ret_param_collision() -> u32 {
 }
 
 // =============================================================================
-// 8. Yul reserved function name collision
+// 8. Backend reserved function name collision
 // =============================================================================
-// Function symbols are not escaped against Yul reserved words/opcodes. Defining
-// a function named `add` produces invalid Yul and can also shadow the builtin.
+// Function symbols must not collide with backend-reserved words/opcodes.
 
 fn add() -> u32 {
     123
 }
 
-fn test_yul_reserved_fn_collision() -> u32 {
+fn test_backend_reserved_fn_collision() -> u32 {
     add()
 }
 
@@ -217,6 +215,6 @@ pub fn main() -> u32 {
     let _ = test_param_local_collision()
     let _ = test_user_defined_conversion_pattern_name()
     let _ = test_ret_param_collision()
-    let _ = test_yul_reserved_fn_collision()
+    let _ = test_backend_reserved_fn_collision()
     0
 }

@@ -257,7 +257,7 @@ pub fn write_report_meta(root: &Utf8PathBuf, kind: &str, suite: Option<&str>) {
     }
     write_best_effort(&meta.join("args.txt"), args);
 
-    let keys = ["RUST_BACKTRACE", "FE_SOLC_PATH"];
+    let keys = ["RUST_BACKTRACE"];
     let mut env_txt = String::new();
     for k in keys {
         if let Ok(v) = std::env::var(k) {

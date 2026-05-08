@@ -34,14 +34,6 @@ pub enum ColorChoice {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum TestDebug {
-    /// Print Yul output for any failing test.
-    Failures,
-    /// Print Yul output for all executed tests.
-    All,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum BuildEmit {
     Bytecode,
     RuntimeBytecode,
@@ -76,7 +68,6 @@ pub struct OptimizeArgs {
     ///
     /// Defaults to `1`
     ///
-    /// Note: with `--backend yul`, optimize levels `s`, `1`, and `2` are currently equivalent.
     #[arg(
         long = "optimize",
         short = 'O',
@@ -111,16 +102,8 @@ pub enum Command {
         /// Build a specific contract by name (defaults to all contracts in the target).
         #[arg(long)]
         contract: Option<String>,
-        /// Code generation backend to use (yul or sonatina).
-        #[arg(long, default_value = "sonatina")]
-        backend: String,
         #[command(flatten)]
         optimize: OptimizeArgs,
-        /// solc binary to use (overrides FE_SOLC_PATH).
-        ///
-        /// Only used with `--backend yul` (ignored with a warning otherwise).
-        #[arg(long)]
-        solc: Option<String>,
         /// Output directory for artifacts.
         #[arg(long)]
         out_dir: Option<Utf8PathBuf>,
@@ -245,29 +228,12 @@ pub enum Command {
         /// Show event logs from test execution.
         #[arg(long)]
         show_logs: bool,
-        /// Print Yul output (`failures` or `all`) when using the Yul backend.
-        #[arg(
-            long,
-            value_enum,
-            num_args = 0..=1,
-            default_missing_value = "failures",
-            require_equals = true
-        )]
-        debug: Option<TestDebug>,
         /// Write test-module IR artifacts (`ir`, `rmir`) to the suite `out/` directory.
         #[arg(long, value_enum, value_delimiter = ',')]
         emit: Vec<TestEmit>,
-        /// Backend to use for codegen (yul or sonatina).
-        #[arg(long, default_value = "sonatina")]
-        backend: String,
         /// Compilation profile to use when resolving profile-aware config.
         #[arg(long, default_value = "test", value_name = "PROFILE")]
         profile: String,
-        /// solc binary to use (overrides FE_SOLC_PATH).
-        ///
-        /// Only used with `--backend yul` (ignored with a warning otherwise).
-        #[arg(long)]
-        solc: Option<String>,
         #[command(flatten)]
         optimize: OptimizeArgs,
         /// Trace executed EVM opcodes while running tests.
@@ -302,7 +268,7 @@ pub enum Command {
         /// When used with `--report-dir`, only write reports for suites that failed.
         #[arg(long, requires = "report_dir")]
         report_failed_only: bool,
-        /// Print a normalized call trace for each test (for backend comparison).
+        /// Print a normalized call trace for each test.
         #[arg(long)]
         call_trace: bool,
         /// Use recovery mode when parsing.
@@ -458,9 +424,7 @@ pub fn run(opts: &Options) {
             ingot,
             standalone,
             contract,
-            backend,
             optimize,
-            solc,
             out_dir,
             profile,
             emit,
@@ -469,34 +433,22 @@ pub fn run(opts: &Options) {
             report_failed_only,
             recovery_mode,
         } => {
-            let backend_kind: codegen::BackendKind = match backend.parse() {
-                Ok(kind) => kind,
-                Err(err) => {
-                    eprintln!("Error: {err}");
-                    std::process::exit(1);
-                }
-            };
-            let opt_level = match effective_opt_level(backend_kind, optimize.as_deref()) {
+            let opt_level = match effective_opt_level(optimize.as_deref()) {
                 Ok(level) => level,
                 Err(err) => {
                     eprintln!("Error: {err}");
                     std::process::exit(1);
                 }
             };
-            if backend_kind != codegen::BackendKind::Yul && solc.is_some() {
-                eprintln!("Warning: --solc is only used with --backend yul; ignoring --solc");
-            }
             build(
                 path,
                 ingot.as_deref(),
                 *standalone,
                 contract.as_deref(),
-                backend_kind,
                 opt_level,
                 emit,
                 out_dir.as_ref(),
                 profile,
-                solc.as_deref(),
                 (*report).then_some(report_out),
                 *report_failed_only,
                 *recovery_mode,
@@ -574,11 +526,8 @@ pub fn run(opts: &Options) {
             jobs,
             grouped,
             show_logs,
-            debug: test_debug,
             emit,
-            backend,
             profile,
-            solc,
             optimize,
             trace_evm,
             trace_evm_keep,
@@ -591,29 +540,17 @@ pub fn run(opts: &Options) {
             call_trace,
             recovery_mode,
         } => {
-            let backend_kind: codegen::BackendKind = match backend.parse() {
-                Ok(kind) => kind,
-                Err(err) => {
-                    eprintln!("Error: {err}");
-                    std::process::exit(1);
-                }
-            };
-            let opt_level = match effective_opt_level(backend_kind, optimize.as_deref()) {
+            let opt_level = match effective_opt_level(optimize.as_deref()) {
                 Ok(level) => level,
                 Err(err) => {
                     eprintln!("Error: {err}");
                     std::process::exit(1);
                 }
             };
-            if backend_kind != codegen::BackendKind::Yul && solc.is_some() {
-                eprintln!("Warning: --solc is only used with --backend yul; ignoring --solc");
-            }
             let debug = TestDebugOptions {
                 trace_evm: *trace_evm,
                 trace_evm_keep: *trace_evm_keep,
                 trace_evm_stack_n: *trace_evm_stack_n,
-                dump_yul_on_failure: matches!(test_debug, Some(TestDebug::Failures)),
-                dump_yul_for_all: matches!(test_debug, Some(TestDebug::All)),
                 debug_dir: debug_dir.clone(),
             };
             let paths = if paths.is_empty() {
@@ -621,13 +558,6 @@ pub fn run(opts: &Options) {
             } else {
                 paths.clone()
             };
-            let solc = if backend_kind == codegen::BackendKind::Yul {
-                solc.as_deref()
-            } else {
-                None
-            };
-            let yul_optimize =
-                backend_kind == codegen::BackendKind::Yul && opt_level.yul_optimize();
             match test::run_tests(
                 &paths,
                 ingot.as_deref(),
@@ -635,10 +565,7 @@ pub fn run(opts: &Options) {
                 *jobs,
                 *grouped,
                 *show_logs,
-                backend,
                 profile,
-                yul_optimize,
-                solc,
                 opt_level,
                 emit,
                 &debug,
@@ -904,25 +831,8 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>) -> String {
     html
 }
 
-fn effective_opt_level(
-    backend_kind: codegen::BackendKind,
-    optimize: Option<&str>,
-) -> Result<codegen::OptLevel, String> {
-    let default_optimize = match backend_kind {
-        codegen::BackendKind::Sonatina => "1",
-        codegen::BackendKind::Yul => "2",
-    };
-    let level: codegen::OptLevel = optimize.unwrap_or(default_optimize).parse()?;
-
-    if backend_kind == codegen::BackendKind::Yul
-        && let Some(optimize @ ("1" | "2")) = optimize
-    {
-        eprintln!(
-            "Warning: --optimize {optimize} has no additional effect for --backend yul (same as s)"
-        );
-    }
-
-    Ok(level)
+fn effective_opt_level(optimize: Option<&str>) -> Result<codegen::OptLevel, String> {
+    optimize.unwrap_or("1").parse()
 }
 
 fn run_lsif(path: &Utf8PathBuf, output: Option<&Utf8PathBuf>) {

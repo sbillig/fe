@@ -17,8 +17,8 @@ use crate::workspace_ingot::{
 use camino::Utf8PathBuf;
 use codegen::{
     ExpectedRevert, OptLevel, SonatinaTestOptions, TestMetadata, TestModuleOutput,
-    emit_runtime_package_sonatina_ir_optimized, emit_runtime_package_yul, emit_test_ingot_sonatina,
-    emit_test_ingot_yul, emit_test_module_sonatina, emit_test_module_yul,
+    emit_runtime_package_sonatina_ir_optimized, emit_test_ingot_sonatina,
+    emit_test_module_sonatina,
 };
 use colored::Colorize;
 use common::{
@@ -26,14 +26,13 @@ use common::{
     config::{Config, WorkspaceMemberSelection},
     ingot::Ingot,
 };
-use contract_harness::{CallGasProfile, EvmTraceOptions, ExecutionOptions, RuntimeInstance, U256};
+use contract_harness::{EvmTraceOptions, ExecutionOptions, RuntimeInstance, U256};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod, item::ItemKind};
 use mir::{build_runtime_package, build_test_runtime_package, format_runtime_package};
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Setter;
-use solc_runner::compile_single_contract_with_solc;
 use std::{
     collections::HashSet,
     fmt::Write as _,
@@ -42,9 +41,6 @@ use std::{
 };
 use url::Url;
 
-mod gas;
-
-pub(super) const YUL_VERIFY_RUNTIME: bool = true;
 const MAX_STREAMED_SUITE_LABEL_CHARS: usize = 20;
 const STREAMED_SUITE_LABEL_ELLIPSIS: &str = "..";
 const STREAMED_STATUS_COLUMN_WIDTH: usize = 16;
@@ -85,12 +81,6 @@ pub struct TestResult {
     pub name: String,
     pub passed: bool,
     pub error_message: Option<String>,
-    /// Runtime test-call gas (the empty-calldata call into the deployed test object).
-    pub gas_used: Option<u64>,
-    /// Gas used by the deployment transaction that instantiates the test object.
-    pub deploy_gas_used: Option<u64>,
-    /// Combined deployment + runtime-call gas, when both are available.
-    pub total_gas_used: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -98,439 +88,7 @@ pub(super) struct TestOutcome {
     result: TestResult,
     logs: Vec<String>,
     trace: Option<contract_harness::CallTrace>,
-    step_count: Option<u64>,
-    runtime_metrics: Option<EvmRuntimeMetrics>,
-    gas_profile: Option<CallGasProfile>,
     elapsed: Duration,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct GasComparisonCase {
-    pub(super) display_name: String,
-    pub(super) symbol_name: String,
-    pub(super) yul: Option<TestMetadata>,
-    pub(super) sonatina: Option<TestMetadata>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct GasMeasurement {
-    pub(super) gas_used: Option<u64>,
-    pub(super) deploy_gas_used: Option<u64>,
-    pub(super) total_gas_used: Option<u64>,
-    pub(super) step_count: Option<u64>,
-    pub(super) runtime_metrics: Option<EvmRuntimeMetrics>,
-    pub(super) gas_profile: Option<CallGasProfile>,
-    pub(super) passed: bool,
-    pub(super) error_message: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct EvmRuntimeMetrics {
-    pub(super) byte_len: usize,
-    pub(super) op_count: usize,
-    pub(super) push_ops: usize,
-    pub(super) dup_ops: usize,
-    pub(super) swap_ops: usize,
-    pub(super) pop_ops: usize,
-    pub(super) jump_ops: usize,
-    pub(super) jumpi_ops: usize,
-    pub(super) jumpdest_ops: usize,
-    pub(super) iszero_ops: usize,
-    pub(super) mload_ops: usize,
-    pub(super) mstore_ops: usize,
-    pub(super) sload_ops: usize,
-    pub(super) sstore_ops: usize,
-    pub(super) keccak_ops: usize,
-    pub(super) call_ops: usize,
-    pub(super) staticcall_ops: usize,
-    pub(super) returndatacopy_ops: usize,
-    pub(super) calldatacopy_ops: usize,
-    pub(super) mcopy_ops: usize,
-    pub(super) return_ops: usize,
-    pub(super) revert_ops: usize,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct ComparisonTotals {
-    pub(super) compared_with_gas: usize,
-    pub(super) sonatina_lower: usize,
-    pub(super) sonatina_higher: usize,
-    pub(super) equal: usize,
-    pub(super) incomplete: usize,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct GasTotals {
-    pub(super) tests_in_scope: usize,
-    pub(super) vs_yul_opt: ComparisonTotals,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct DeltaMagnitudeTotals {
-    pub(super) compared_with_gas: usize,
-    pub(super) pct_rows: usize,
-    pub(super) baseline_gas_sum: u128,
-    pub(super) sonatina_gas_sum: u128,
-    pub(super) delta_gas_sum: i128,
-    pub(super) abs_delta_gas_sum: u128,
-    pub(super) delta_pct_sum: f64,
-    pub(super) abs_delta_pct_sum: f64,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct GasMagnitudeTotals {
-    pub(super) vs_yul_opt: DeltaMagnitudeTotals,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct OpcodeAggregateTotals {
-    pub(super) steps_sum: u128,
-    pub(super) runtime_bytes_sum: u128,
-    pub(super) runtime_ops_sum: u128,
-    pub(super) swap_ops_sum: u128,
-    pub(super) pop_ops_sum: u128,
-    pub(super) jump_ops_sum: u128,
-    pub(super) jumpi_ops_sum: u128,
-    pub(super) iszero_ops_sum: u128,
-    pub(super) mem_rw_ops_sum: u128,
-    pub(super) storage_rw_ops_sum: u128,
-    pub(super) mload_ops_sum: u128,
-    pub(super) mstore_ops_sum: u128,
-    pub(super) sload_ops_sum: u128,
-    pub(super) sstore_ops_sum: u128,
-    pub(super) keccak_ops_sum: u128,
-    pub(super) call_family_ops_sum: u128,
-    pub(super) copy_ops_sum: u128,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct OpcodeMagnitudeTotals {
-    pub(super) compared_with_metrics: usize,
-    pub(super) yul_opt: OpcodeAggregateTotals,
-    pub(super) sonatina: OpcodeAggregateTotals,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct GasHotspotRow {
-    pub(super) suite: String,
-    pub(super) test: String,
-    pub(super) symbol: String,
-    pub(super) yul_opt_gas: Option<u64>,
-    pub(super) sonatina_gas: Option<u64>,
-    pub(super) delta_vs_yul_opt: i128,
-    pub(super) delta_vs_yul_opt_pct: String,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct SuiteDeltaTotals {
-    pub(super) tests_with_delta: usize,
-    pub(super) delta_vs_yul_opt_sum: i128,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ObservabilityCoverageRow {
-    pub(super) suite: String,
-    pub(super) test: String,
-    pub(super) section: String,
-    pub(super) schema_version: String,
-    pub(super) section_bytes: u64,
-    pub(super) code_bytes: u64,
-    pub(super) data_bytes: u64,
-    pub(super) embed_bytes: u64,
-    pub(super) mapped_code_bytes: u64,
-    pub(super) unmapped_code_bytes: u64,
-    pub(super) unmapped_no_ir_inst: u64,
-    pub(super) unmapped_label_or_fixup_only: u64,
-    pub(super) unmapped_synthetic: u64,
-    pub(super) unmapped_unknown: u64,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct ObservabilityCoverageTotals {
-    pub(super) section_bytes: u128,
-    pub(super) code_bytes: u128,
-    pub(super) data_bytes: u128,
-    pub(super) embed_bytes: u128,
-    pub(super) mapped_code_bytes: u128,
-    pub(super) unmapped_code_bytes: u128,
-    pub(super) unmapped_no_ir_inst: u128,
-    pub(super) unmapped_label_or_fixup_only: u128,
-    pub(super) unmapped_synthetic: u128,
-    pub(super) unmapped_unknown: u128,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ObservabilityPcRange {
-    pub(super) start: u32,
-    pub(super) end: u32,
-    pub(super) func_name: String,
-    pub(super) reason: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ObservabilityRuntimeSnapshot {
-    pub(super) section: String,
-    pub(super) schema_version: String,
-    pub(super) section_bytes: u64,
-    pub(super) code_bytes: u64,
-    pub(super) data_bytes: u64,
-    pub(super) embed_bytes: u64,
-    pub(super) mapped_code_bytes: u64,
-    pub(super) unmapped_code_bytes: u64,
-    pub(super) unmapped_no_ir_inst: u64,
-    pub(super) unmapped_label_or_fixup_only: u64,
-    pub(super) unmapped_synthetic: u64,
-    pub(super) unmapped_unknown: u64,
-    pub(super) pc_ranges: Vec<ObservabilityPcRange>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct TraceObservabilityHotspotRow {
-    pub(super) suite: String,
-    pub(super) test: String,
-    pub(super) function: String,
-    pub(super) reason: String,
-    pub(super) tail_steps_total: usize,
-    pub(super) tail_steps_mapped: usize,
-    pub(super) steps_in_bucket: usize,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct DeploymentGasAttributionRow {
-    pub(super) test: String,
-    pub(super) symbol: String,
-    pub(super) yul_opt_step_total_gas: Option<u64>,
-    pub(super) sonatina_step_total_gas: Option<u64>,
-    pub(super) yul_opt_create_opcode_gas: Option<u64>,
-    pub(super) sonatina_create_opcode_gas: Option<u64>,
-    pub(super) yul_opt_create2_opcode_gas: Option<u64>,
-    pub(super) sonatina_create2_opcode_gas: Option<u64>,
-    pub(super) yul_opt_constructor_frame_gas: Option<u64>,
-    pub(super) sonatina_constructor_frame_gas: Option<u64>,
-    pub(super) yul_opt_non_constructor_frame_gas: Option<u64>,
-    pub(super) sonatina_non_constructor_frame_gas: Option<u64>,
-    pub(super) yul_opt_create_opcode_steps: Option<u64>,
-    pub(super) sonatina_create_opcode_steps: Option<u64>,
-    pub(super) yul_opt_create2_opcode_steps: Option<u64>,
-    pub(super) sonatina_create2_opcode_steps: Option<u64>,
-    pub(super) note: String,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct DeploymentGasAttributionTotals {
-    pub(super) compared_with_profile: usize,
-    pub(super) yul_opt_step_total_gas: u128,
-    pub(super) sonatina_step_total_gas: u128,
-    pub(super) yul_opt_create_opcode_gas: u128,
-    pub(super) sonatina_create_opcode_gas: u128,
-    pub(super) yul_opt_create2_opcode_gas: u128,
-    pub(super) sonatina_create2_opcode_gas: u128,
-    pub(super) yul_opt_constructor_frame_gas: u128,
-    pub(super) sonatina_constructor_frame_gas: u128,
-    pub(super) yul_opt_non_constructor_frame_gas: u128,
-    pub(super) sonatina_non_constructor_frame_gas: u128,
-}
-
-pub(super) const DEPLOYMENT_ATTRIBUTION_CSV_HEADER: &str = "test,symbol,yul_opt_step_total_gas,sonatina_step_total_gas,yul_opt_create_opcode_gas,sonatina_create_opcode_gas,yul_opt_create2_opcode_gas,sonatina_create2_opcode_gas,yul_opt_constructor_frame_gas,sonatina_constructor_frame_gas,yul_opt_non_constructor_frame_gas,sonatina_non_constructor_frame_gas,yul_opt_create_opcode_steps,sonatina_create_opcode_steps,yul_opt_create2_opcode_steps,sonatina_create2_opcode_steps,note";
-pub(super) const DEPLOYMENT_ATTRIBUTION_CSV_HEADER_WITH_SUITE: &str = "suite,test,symbol,yul_opt_step_total_gas,sonatina_step_total_gas,yul_opt_create_opcode_gas,sonatina_create_opcode_gas,yul_opt_create2_opcode_gas,sonatina_create2_opcode_gas,yul_opt_constructor_frame_gas,sonatina_constructor_frame_gas,yul_opt_non_constructor_frame_gas,sonatina_non_constructor_frame_gas,yul_opt_create_opcode_steps,sonatina_create_opcode_steps,yul_opt_create2_opcode_steps,sonatina_create2_opcode_steps,note";
-pub(super) const DEPLOYMENT_ATTRIBUTION_FIELD_COUNT: usize = 17;
-
-impl GasMeasurement {
-    pub(super) fn from_test_outcome(outcome: &TestOutcome) -> Self {
-        Self {
-            gas_used: outcome.result.gas_used,
-            deploy_gas_used: outcome.result.deploy_gas_used,
-            total_gas_used: outcome.result.total_gas_used,
-            step_count: outcome.step_count,
-            runtime_metrics: outcome.runtime_metrics,
-            gas_profile: outcome.gas_profile,
-            passed: outcome.result.passed,
-            error_message: outcome.result.error_message.clone(),
-        }
-    }
-
-    pub(super) fn status_label(&self) -> String {
-        if self.passed {
-            "ok".to_string()
-        } else if let Some(msg) = &self.error_message {
-            format!("failed: {msg}")
-        } else {
-            "failed".to_string()
-        }
-    }
-}
-
-impl DeploymentGasAttributionTotals {
-    pub(super) fn add_observation(&mut self, yul_opt: CallGasProfile, sonatina: CallGasProfile) {
-        self.compared_with_profile += 1;
-        self.yul_opt_step_total_gas += yul_opt.total_step_gas as u128;
-        self.sonatina_step_total_gas += sonatina.total_step_gas as u128;
-        self.yul_opt_create_opcode_gas += yul_opt.create_opcode_gas as u128;
-        self.sonatina_create_opcode_gas += sonatina.create_opcode_gas as u128;
-        self.yul_opt_create2_opcode_gas += yul_opt.create2_opcode_gas as u128;
-        self.sonatina_create2_opcode_gas += sonatina.create2_opcode_gas as u128;
-        self.yul_opt_constructor_frame_gas += yul_opt.constructor_frame_gas as u128;
-        self.sonatina_constructor_frame_gas += sonatina.constructor_frame_gas as u128;
-        self.yul_opt_non_constructor_frame_gas += yul_opt.non_constructor_frame_gas as u128;
-        self.sonatina_non_constructor_frame_gas += sonatina.non_constructor_frame_gas as u128;
-    }
-}
-
-impl GasTotals {
-    pub(super) fn add(&mut self, other: Self) {
-        self.tests_in_scope += other.tests_in_scope;
-        self.vs_yul_opt.compared_with_gas += other.vs_yul_opt.compared_with_gas;
-        self.vs_yul_opt.sonatina_lower += other.vs_yul_opt.sonatina_lower;
-        self.vs_yul_opt.sonatina_higher += other.vs_yul_opt.sonatina_higher;
-        self.vs_yul_opt.equal += other.vs_yul_opt.equal;
-        self.vs_yul_opt.incomplete += other.vs_yul_opt.incomplete;
-    }
-}
-
-impl ObservabilityCoverageTotals {
-    pub(super) fn add_row(&mut self, row: &ObservabilityCoverageRow) {
-        self.section_bytes += row.section_bytes as u128;
-        self.code_bytes += row.code_bytes as u128;
-        self.data_bytes += row.data_bytes as u128;
-        self.embed_bytes += row.embed_bytes as u128;
-        self.mapped_code_bytes += row.mapped_code_bytes as u128;
-        self.unmapped_code_bytes += row.unmapped_code_bytes as u128;
-        self.unmapped_no_ir_inst += row.unmapped_no_ir_inst as u128;
-        self.unmapped_label_or_fixup_only += row.unmapped_label_or_fixup_only as u128;
-        self.unmapped_synthetic += row.unmapped_synthetic as u128;
-        self.unmapped_unknown += row.unmapped_unknown as u128;
-    }
-}
-
-impl DeltaMagnitudeTotals {
-    pub(super) fn add(&mut self, other: Self) {
-        self.compared_with_gas += other.compared_with_gas;
-        self.pct_rows += other.pct_rows;
-        self.baseline_gas_sum += other.baseline_gas_sum;
-        self.sonatina_gas_sum += other.sonatina_gas_sum;
-        self.delta_gas_sum += other.delta_gas_sum;
-        self.abs_delta_gas_sum += other.abs_delta_gas_sum;
-        self.delta_pct_sum += other.delta_pct_sum;
-        self.abs_delta_pct_sum += other.abs_delta_pct_sum;
-    }
-
-    pub(super) fn mean_delta_gas(self) -> Option<f64> {
-        if self.compared_with_gas == 0 {
-            None
-        } else {
-            Some(self.delta_gas_sum as f64 / self.compared_with_gas as f64)
-        }
-    }
-
-    pub(super) fn mean_abs_delta_gas(self) -> Option<f64> {
-        if self.compared_with_gas == 0 {
-            None
-        } else {
-            Some(self.abs_delta_gas_sum as f64 / self.compared_with_gas as f64)
-        }
-    }
-
-    pub(super) fn mean_delta_pct(self) -> Option<f64> {
-        if self.pct_rows == 0 {
-            None
-        } else {
-            Some(self.delta_pct_sum / self.pct_rows as f64)
-        }
-    }
-
-    pub(super) fn mean_abs_delta_pct(self) -> Option<f64> {
-        if self.pct_rows == 0 {
-            None
-        } else {
-            Some(self.abs_delta_pct_sum / self.pct_rows as f64)
-        }
-    }
-
-    pub(super) fn weighted_delta_pct(self) -> Option<f64> {
-        if self.baseline_gas_sum == 0 {
-            None
-        } else {
-            Some(self.delta_gas_sum as f64 * 100.0 / self.baseline_gas_sum as f64)
-        }
-    }
-}
-
-impl GasMagnitudeTotals {
-    pub(super) fn add(&mut self, other: Self) {
-        self.vs_yul_opt.add(other.vs_yul_opt);
-    }
-}
-
-impl OpcodeAggregateTotals {
-    pub(super) fn add_observation(&mut self, steps: u64, metrics: EvmRuntimeMetrics) {
-        self.steps_sum += steps as u128;
-        self.runtime_bytes_sum += metrics.byte_len as u128;
-        self.runtime_ops_sum += metrics.op_count as u128;
-        self.swap_ops_sum += metrics.swap_ops as u128;
-        self.pop_ops_sum += metrics.pop_ops as u128;
-        self.jump_ops_sum += metrics.jump_ops as u128;
-        self.jumpi_ops_sum += metrics.jumpi_ops as u128;
-        self.iszero_ops_sum += metrics.iszero_ops as u128;
-        self.mem_rw_ops_sum += metrics.mem_rw_ops_total() as u128;
-        self.storage_rw_ops_sum += metrics.storage_rw_ops_total() as u128;
-        self.mload_ops_sum += metrics.mload_ops as u128;
-        self.mstore_ops_sum += metrics.mstore_ops as u128;
-        self.sload_ops_sum += metrics.sload_ops as u128;
-        self.sstore_ops_sum += metrics.sstore_ops as u128;
-        self.keccak_ops_sum += metrics.keccak_ops as u128;
-        self.call_family_ops_sum += metrics.call_family_ops_total() as u128;
-        self.copy_ops_sum += metrics.copy_ops_total() as u128;
-    }
-
-    pub(super) fn add(&mut self, other: Self) {
-        self.steps_sum += other.steps_sum;
-        self.runtime_bytes_sum += other.runtime_bytes_sum;
-        self.runtime_ops_sum += other.runtime_ops_sum;
-        self.swap_ops_sum += other.swap_ops_sum;
-        self.pop_ops_sum += other.pop_ops_sum;
-        self.jump_ops_sum += other.jump_ops_sum;
-        self.jumpi_ops_sum += other.jumpi_ops_sum;
-        self.iszero_ops_sum += other.iszero_ops_sum;
-        self.mem_rw_ops_sum += other.mem_rw_ops_sum;
-        self.storage_rw_ops_sum += other.storage_rw_ops_sum;
-        self.mload_ops_sum += other.mload_ops_sum;
-        self.mstore_ops_sum += other.mstore_ops_sum;
-        self.sload_ops_sum += other.sload_ops_sum;
-        self.sstore_ops_sum += other.sstore_ops_sum;
-        self.keccak_ops_sum += other.keccak_ops_sum;
-        self.call_family_ops_sum += other.call_family_ops_sum;
-        self.copy_ops_sum += other.copy_ops_sum;
-    }
-}
-
-impl OpcodeMagnitudeTotals {
-    pub(super) fn add(&mut self, other: Self) {
-        self.compared_with_metrics += other.compared_with_metrics;
-        self.yul_opt.add(other.yul_opt);
-        self.sonatina.add(other.sonatina);
-    }
-}
-
-impl EvmRuntimeMetrics {
-    pub(super) fn stack_ops_total(self) -> usize {
-        self.push_ops + self.dup_ops + self.swap_ops + self.pop_ops
-    }
-
-    pub(super) fn mem_rw_ops_total(self) -> usize {
-        self.mload_ops + self.mstore_ops
-    }
-
-    pub(super) fn storage_rw_ops_total(self) -> usize {
-        self.sload_ops + self.sstore_ops
-    }
-
-    pub(super) fn call_family_ops_total(self) -> usize {
-        self.call_ops + self.staticcall_ops
-    }
-
-    pub(super) fn copy_ops_total(self) -> usize {
-        self.calldatacopy_ops + self.returndatacopy_ops + self.mcopy_ops
-    }
 }
 
 fn suite_error_result(suite: &str, kind: &str, message: String) -> Vec<TestResult> {
@@ -538,9 +96,6 @@ fn suite_error_result(suite: &str, kind: &str, message: String) -> Vec<TestResul
         name: format!("{suite}::{kind}"),
         passed: false,
         error_message: Some(message),
-        gas_used: None,
-        deploy_gas_used: None,
-        total_gas_used: None,
     }]
 }
 
@@ -619,7 +174,6 @@ struct PreparedSuite {
     plan: SuitePlan,
     results: Vec<TestResult>,
     single_jobs: Vec<SingleTestJob>,
-    gas_comparison_cases: Option<Vec<GasComparisonCase>>,
     aggregate_suite_staging: Option<ReportStaging>,
     build_elapsed: Duration,
 }
@@ -627,10 +181,8 @@ struct PreparedSuite {
 #[derive(Debug)]
 struct SingleRunResult {
     suite_key: String,
-    symbol_name: String,
     result: TestResult,
     output: String,
-    measurement: Option<GasMeasurement>,
     elapsed: Duration,
 }
 
@@ -638,8 +190,6 @@ struct SingleRunResult {
 struct SuiteState {
     plan: SuitePlan,
     results: Vec<TestResult>,
-    primary_measurements: FxHashMap<String, GasMeasurement>,
-    gas_comparison_cases: Option<Vec<GasComparisonCase>>,
     expected_singles: usize,
     completed_singles: usize,
     aggregate_suite_staging: Option<ReportStaging>,
@@ -648,23 +198,18 @@ struct SuiteState {
 #[derive(Debug)]
 struct DiscoverResult {
     tests: Vec<TestMetadata>,
-    gas_comparison_cases: Option<Vec<GasComparisonCase>>,
 }
 
 #[derive(Debug)]
 struct SuitePreparation {
     results: Vec<TestResult>,
     single_jobs: Vec<SingleTestJob>,
-    gas_comparison_cases: Option<Vec<GasComparisonCase>>,
 }
 
 #[derive(Debug)]
 struct WorkerSharedConfig {
     show_logs: bool,
-    backend: String,
     profile: String,
-    yul_optimize: bool,
-    solc: Option<String>,
     opt_level: OptLevel,
     emit: TestEmitSelection,
     debug: TestDebugOptions,
@@ -680,7 +225,6 @@ struct RequestedSuiteArtifacts<'a> {
     source_path: &'a Utf8PathBuf,
     suite_key: &'a str,
     filter: Option<&'a str>,
-    backend: &'a str,
     opt_level: OptLevel,
     emit: TestEmitSelection,
 }
@@ -857,8 +401,6 @@ impl OutcomeCollectorState {
                     SuiteState {
                         plan: prepared.plan,
                         results: prepared.results,
-                        primary_measurements: FxHashMap::default(),
-                        gas_comparison_cases: prepared.gas_comparison_cases,
                         expected_singles,
                         completed_singles: 0,
                         aggregate_suite_staging: prepared.aggregate_suite_staging,
@@ -904,11 +446,6 @@ impl OutcomeCollectorState {
                     })?;
                     state.completed_singles += 1;
                     state.results.push(single.result);
-                    if let Some(measurement) = single.measurement {
-                        state
-                            .primary_measurements
-                            .insert(single.symbol_name, measurement);
-                    }
                     state.completed_singles == state.expected_singles
                 };
                 self.handle_outcome(
@@ -975,8 +512,6 @@ pub struct TestDebugOptions {
     pub trace_evm: bool,
     pub trace_evm_keep: usize,
     pub trace_evm_stack_n: usize,
-    pub dump_yul_on_failure: bool,
-    pub dump_yul_for_all: bool,
     pub debug_dir: Option<Utf8PathBuf>,
 }
 
@@ -1136,7 +671,6 @@ fn displayed_suite_label(suite_key: &str) -> String {
 /// * `paths` - Paths to .fe files or directories containing ingots (supports globs)
 /// * `filter` - Optional filter pattern for test names
 /// * `show_logs` - Whether to show event logs from test execution
-/// * `backend` - Codegen backend for test artifacts ("yul" or "sonatina")
 /// * `report_out` - Optional report output path (`.tar.gz`)
 ///
 /// Returns `Ok(true)` if any tests failed, `Ok(false)` if all passed,
@@ -1149,10 +683,7 @@ pub fn run_tests(
     jobs: usize,
     grouped: bool,
     show_logs: bool,
-    backend: &str,
     profile: &str,
-    yul_optimize: bool,
-    solc: Option<&str>,
     opt_level: OptLevel,
     emit: &[TestEmit],
     debug: &TestDebugOptions,
@@ -1207,10 +738,7 @@ pub fn run_tests(
     let filter = filter.map(str::to_owned);
     let shared = Arc::new(WorkerSharedConfig {
         show_logs,
-        backend: backend.to_string(),
         profile: profile.to_string(),
-        yul_optimize,
-        solc: solc.map(str::to_owned),
         opt_level,
         emit: TestEmitSelection::from_requested(emit),
         debug: debug.clone(),
@@ -1329,11 +857,8 @@ pub fn run_tests(
     }
 
     if let Some((out, staging)) = report_root {
-        gas::write_run_gas_comparison_summary(&staging.root_dir, backend, yul_optimize, opt_level);
         write_report_manifest(
             &staging.root_dir,
-            backend,
-            yul_optimize,
             opt_level,
             filter.as_deref(),
             &test_results,
@@ -1565,8 +1090,6 @@ fn emit_grouped_suite_outcome(
     let mut state = SuiteState {
         plan: prepared.plan,
         results: prepared.results,
-        primary_measurements: FxHashMap::default(),
-        gas_comparison_cases: prepared.gas_comparison_cases,
         expected_singles: prepared.single_jobs.len(),
         completed_singles: 0,
         aggregate_suite_staging: prepared.aggregate_suite_staging,
@@ -1591,11 +1114,6 @@ fn emit_grouped_suite_outcome(
         }
         state.completed_singles += 1;
         state.results.push(single.result);
-        if let Some(measurement) = single.measurement {
-            state
-                .primary_measurements
-                .insert(single.symbol_name, measurement);
-        }
     }
     let (suite_run, output) =
         finalize_suite_state(state, cfg.shared.as_ref(), cfg.filter.as_deref());
@@ -1735,7 +1253,6 @@ fn prepare_suite_job(
                         plan: plan.clone(),
                         results: suite_error_result(&plan.suite, "setup", err),
                         single_jobs: Vec::new(),
-                        gas_comparison_cases: None,
                         aggregate_suite_staging: None,
                         build_elapsed: Duration::default(),
                     },
@@ -1760,7 +1277,6 @@ fn prepare_suite_job(
                     plan: plan.clone(),
                     results: suite_error_result(&plan.suite, "setup", err),
                     single_jobs: Vec::new(),
-                    gas_comparison_cases: None,
                     aggregate_suite_staging: None,
                     build_elapsed: Duration::default(),
                 },
@@ -1785,7 +1301,6 @@ fn prepare_suite_job(
                 plan: plan.clone(),
                 results: suite_error_result(&plan.suite, "setup", err),
                 single_jobs: Vec::new(),
-                gas_comparison_cases: None,
                 aggregate_suite_staging: None,
                 build_elapsed: Duration::default(),
             },
@@ -1811,7 +1326,6 @@ fn prepare_suite_job(
             &plan.suite,
             &plan.suite_key,
             filter,
-            shared.backend.as_str(),
             shared.opt_level,
             shared.emit,
             &suite_debug,
@@ -1826,7 +1340,6 @@ fn prepare_suite_job(
             &plan.suite,
             &plan.suite_key,
             filter,
-            shared.backend.as_str(),
             shared.opt_level,
             shared.emit,
             &suite_debug,
@@ -1842,7 +1355,6 @@ fn prepare_suite_job(
                 "Path must be either a .fe file or a directory containing fe.toml".to_string(),
             ),
             single_jobs: Vec::new(),
-            gas_comparison_cases: None,
         }
     };
 
@@ -1851,7 +1363,6 @@ fn prepare_suite_job(
             plan: plan.clone(),
             results: prep.results,
             single_jobs: prep.single_jobs,
-            gas_comparison_cases: prep.gas_comparison_cases,
             aggregate_suite_staging: suite_report_staging,
             build_elapsed: build_started.elapsed(),
         },
@@ -1867,31 +1378,17 @@ fn run_single_test_job(job: SingleTestJob, shared: &WorkerSharedConfig) -> Singl
     let outcome = compile_and_run_test(
         &case,
         shared.show_logs,
-        &shared.backend,
-        shared.yul_optimize,
-        shared.solc.as_deref(),
         job.evm_trace.as_ref(),
         report_ctx.as_ref(),
         shared.call_trace,
-        report_ctx.is_some(),
     );
-    let measurement = GasMeasurement::from_test_outcome(&outcome);
     let elapsed = outcome.elapsed;
     let mut output = String::new();
-    write_case_output(
-        &mut output,
-        &case,
-        &outcome,
-        shared.show_logs,
-        &shared.backend,
-        &shared.debug,
-    );
+    write_case_output(&mut output, &outcome, shared.show_logs);
     SingleRunResult {
         suite_key: job.suite_key,
-        symbol_name: case.symbol_name,
         result: outcome.result,
         output,
-        measurement: Some(measurement),
         elapsed,
     }
 }
@@ -1922,35 +1419,12 @@ fn finalize_suite_state(
 ) -> (SuiteRunResult, String) {
     let mut output = String::new();
     let mut aggregate_suite_staging = state.aggregate_suite_staging;
-    if let Some(staging) = aggregate_suite_staging.as_ref()
-        && let Some(cases) = state.gas_comparison_cases.as_ref()
-    {
-        let report = ReportContext {
-            root_dir: staging.root_dir.clone(),
-        };
-        gas::write_gas_comparison_report(
-            &report,
-            &shared.backend,
-            shared.yul_optimize,
-            shared.opt_level,
-            cases,
-            &state.primary_measurements,
-        );
-    }
-
     if let Some(out) = &state.plan.suite_report_out
         && let Some(staging) = aggregate_suite_staging.take()
     {
         let should_write = !shared.report_failed_only || state.results.iter().any(|r| !r.passed);
         if should_write {
-            write_report_manifest(
-                &staging.root_dir,
-                &shared.backend,
-                shared.yul_optimize,
-                shared.opt_level,
-                filter,
-                &state.results,
-            );
+            write_report_manifest(&staging.root_dir, shared.opt_level, filter, &state.results);
             match tar_gz_dir(&staging.root_dir, out) {
                 Ok(()) => {
                     let _ = std::fs::remove_dir_all(&staging.temp_dir);
@@ -1989,7 +1463,6 @@ fn prepare_tests_single_file(
     suite: &str,
     suite_key: &str,
     filter: Option<&str>,
-    backend: &str,
     opt_level: OptLevel,
     emit: TestEmitSelection,
     debug: &TestDebugOptions,
@@ -2007,7 +1480,6 @@ fn prepare_tests_single_file(
                     format!("Cannot canonicalize {file_path}: {e}"),
                 ),
                 single_jobs: Vec::new(),
-                gas_comparison_cases: None,
             };
         }
     };
@@ -2021,7 +1493,6 @@ fn prepare_tests_single_file(
                     format!("Invalid file path: {file_path}"),
                 ),
                 single_jobs: Vec::new(),
-                gas_comparison_cases: None,
             };
         }
     };
@@ -2036,7 +1507,6 @@ fn prepare_tests_single_file(
                     format!("Error reading file {file_path}: {err}"),
                 ),
                 single_jobs: Vec::new(),
-                gas_comparison_cases: None,
             };
         }
     };
@@ -2050,7 +1520,6 @@ fn prepare_tests_single_file(
                 format!("Could not process file {file_path}"),
             ),
             single_jobs: Vec::new(),
-            gas_comparison_cases: None,
         };
     };
     let top_mod = db.top_mod(file);
@@ -2086,7 +1555,6 @@ fn prepare_tests_single_file(
                 format!("Compilation errors in {file_url}"),
             ),
             single_jobs: Vec::new(),
-            gas_comparison_cases: None,
         };
     }
 
@@ -2094,11 +1562,10 @@ fn prepare_tests_single_file(
         return SuitePreparation {
             results: Vec::new(),
             single_jobs: Vec::new(),
-            gas_comparison_cases: None,
         };
     }
 
-    maybe_write_suite_ir(db, top_mod, backend, opt_level, report);
+    maybe_write_suite_ir(db, top_mod, opt_level, report);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         maybe_write_requested_suite_artifacts_for_top_mod(
             db,
@@ -2107,7 +1574,6 @@ fn prepare_tests_single_file(
                 source_path: file_path,
                 suite_key,
                 filter,
-                backend,
                 opt_level,
                 emit,
             },
@@ -2124,7 +1590,6 @@ fn prepare_tests_single_file(
             return SuitePreparation {
                 results: suite_error_result(suite, "codegen", msg),
                 single_jobs: Vec::new(),
-                gas_comparison_cases: None,
             };
         }
         Err(payload) => {
@@ -2139,7 +1604,6 @@ fn prepare_tests_single_file(
             return SuitePreparation {
                 results: suite_error_result(suite, "codegen", msg),
                 single_jobs: Vec::new(),
-                gas_comparison_cases: None,
             };
         }
     }
@@ -2149,7 +1613,6 @@ fn prepare_tests_single_file(
         suite,
         suite_key,
         filter,
-        backend,
         opt_level,
         debug,
         sonatina_options,
@@ -2165,7 +1628,6 @@ fn prepare_tests_ingot(
     suite: &str,
     suite_key: &str,
     filter: Option<&str>,
-    backend: &str,
     opt_level: OptLevel,
     emit: TestEmitSelection,
     debug: &TestDebugOptions,
@@ -2183,7 +1645,6 @@ fn prepare_tests_ingot(
                     format!("Invalid or non-existent directory path: {dir_path}"),
                 ),
                 single_jobs: Vec::new(),
-                gas_comparison_cases: None,
             };
         }
     };
@@ -2198,7 +1659,6 @@ fn prepare_tests_ingot(
                     format!("Invalid directory path: {dir_path}"),
                 ),
                 single_jobs: Vec::new(),
-                gas_comparison_cases: None,
             };
         }
     };
@@ -2213,7 +1673,6 @@ fn prepare_tests_ingot(
         return SuitePreparation {
             results: suite_error_result(suite, "compile", msg),
             single_jobs: Vec::new(),
-            gas_comparison_cases: None,
         };
     }
 
@@ -2225,7 +1684,6 @@ fn prepare_tests_ingot(
                 "Could not resolve ingot from directory".to_string(),
             ),
             single_jobs: Vec::new(),
-            gas_comparison_cases: None,
         };
     };
 
@@ -2254,7 +1712,6 @@ fn prepare_tests_ingot(
         return SuitePreparation {
             results: suite_error_result(suite, "compile", "Compilation errors".to_string()),
             single_jobs: Vec::new(),
-            gas_comparison_cases: None,
         };
     }
 
@@ -2269,7 +1726,6 @@ fn prepare_tests_ingot(
         return SuitePreparation {
             results: suite_error_result(suite, "compile", dependency_errors.message().to_string()),
             single_jobs: Vec::new(),
-            gas_comparison_cases: None,
         };
     }
 
@@ -2278,11 +1734,10 @@ fn prepare_tests_ingot(
         return SuitePreparation {
             results: Vec::new(),
             single_jobs: Vec::new(),
-            gas_comparison_cases: None,
         };
     }
 
-    maybe_write_suite_ir(db, root_mod, backend, opt_level, report);
+    maybe_write_suite_ir(db, root_mod, opt_level, report);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         maybe_write_requested_suite_artifacts_for_ingot(
             db,
@@ -2291,7 +1746,6 @@ fn prepare_tests_ingot(
                 source_path: dir_path,
                 suite_key,
                 filter,
-                backend,
                 opt_level,
                 emit,
             },
@@ -2308,7 +1762,6 @@ fn prepare_tests_ingot(
             return SuitePreparation {
                 results: suite_error_result(suite, "codegen", msg),
                 single_jobs: Vec::new(),
-                gas_comparison_cases: None,
             };
         }
         Err(payload) => {
@@ -2323,7 +1776,6 @@ fn prepare_tests_ingot(
             return SuitePreparation {
                 results: suite_error_result(suite, "codegen", msg),
                 single_jobs: Vec::new(),
-                gas_comparison_cases: None,
             };
         }
     }
@@ -2333,7 +1785,6 @@ fn prepare_tests_ingot(
         suite,
         suite_key,
         filter,
-        backend,
         opt_level,
         debug,
         sonatina_options,
@@ -2349,7 +1800,6 @@ fn prepare_discovered_tests(
     suite: &str,
     suite_key: &str,
     filter: Option<&str>,
-    backend: &str,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     sonatina_options: SonatinaTestOptions,
@@ -2361,7 +1811,6 @@ fn prepare_discovered_tests(
         top_mod,
         suite,
         filter,
-        backend,
         opt_level,
         sonatina_options,
         report,
@@ -2372,7 +1821,6 @@ fn prepare_discovered_tests(
             return SuitePreparation {
                 results,
                 single_jobs: Vec::new(),
-                gas_comparison_cases: None,
             };
         }
     };
@@ -2387,7 +1835,6 @@ fn prepare_ingot_discovered_tests(
     suite: &str,
     suite_key: &str,
     filter: Option<&str>,
-    backend: &str,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     sonatina_options: SonatinaTestOptions,
@@ -2399,7 +1846,6 @@ fn prepare_ingot_discovered_tests(
         ingot,
         suite,
         filter,
-        backend,
         opt_level,
         sonatina_options,
         report,
@@ -2410,7 +1856,6 @@ fn prepare_ingot_discovered_tests(
             return SuitePreparation {
                 results,
                 single_jobs: Vec::new(),
-                gas_comparison_cases: None,
             };
         }
     };
@@ -2445,9 +1890,6 @@ fn suite_preparation_from_discovered(
                     name: case.display_name.clone(),
                     passed: false,
                     error_message: Some(err),
-                    gas_used: None,
-                    deploy_gas_used: None,
-                    total_gas_used: None,
                 });
                 continue;
             }
@@ -2464,7 +1906,6 @@ fn suite_preparation_from_discovered(
     SuitePreparation {
         results,
         single_jobs,
-        gas_comparison_cases: discovered.gas_comparison_cases,
     }
 }
 
@@ -2519,61 +1960,26 @@ fn discover_tests(
     top_mod: TopLevelMod<'_>,
     suite: &str,
     filter: Option<&str>,
-    backend: &str,
     opt_level: OptLevel,
     sonatina_options: SonatinaTestOptions,
     report: Option<&ReportContext>,
     output: &mut String,
 ) -> Result<DiscoverResult, Vec<TestResult>> {
-    let backend = backend.to_lowercase();
-    let emit_result = match backend.as_str() {
-        "yul" => emit_with_catch_unwind(
-            || emit_test_module_yul(db, top_mod, filter),
-            "Yul",
-            suite,
-            report,
-            output,
-        ),
-        "sonatina" => emit_with_catch_unwind(
-            || emit_test_module_sonatina(db, top_mod, opt_level, sonatina_options, filter),
-            "Sonatina",
-            suite,
-            report,
-            output,
-        ),
-        other => {
-            return Err(suite_error_result(
-                suite,
-                "setup",
-                format!("unknown backend `{other}` (expected 'yul' or 'sonatina')"),
-            ));
-        }
-    };
+    let emit_result = emit_with_catch_unwind(
+        || emit_test_module_sonatina(db, top_mod, opt_level, sonatina_options, filter),
+        "Sonatina",
+        suite,
+        report,
+        output,
+    );
     let module_output = emit_result?;
 
     if module_output.tests.is_empty() {
-        return Ok(DiscoverResult {
-            tests: Vec::new(),
-            gas_comparison_cases: None,
-        });
+        return Ok(DiscoverResult { tests: Vec::new() });
     }
-
-    let gas_comparison_cases = report.map(|ctx| {
-        gas::collect_gas_comparison_cases(
-            db,
-            top_mod,
-            suite,
-            filter,
-            ctx,
-            backend.as_str(),
-            opt_level,
-            &module_output.tests,
-        )
-    });
 
     Ok(DiscoverResult {
         tests: module_output.tests,
-        gas_comparison_cases,
     })
 }
 
@@ -2583,82 +1989,34 @@ fn discover_ingot_tests(
     ingot: Ingot<'_>,
     suite: &str,
     filter: Option<&str>,
-    backend: &str,
     opt_level: OptLevel,
     sonatina_options: SonatinaTestOptions,
     report: Option<&ReportContext>,
     output: &mut String,
 ) -> Result<DiscoverResult, Vec<TestResult>> {
-    let backend = backend.to_lowercase();
-    let emit_result = match backend.as_str() {
-        "yul" => emit_with_catch_unwind(
-            || emit_test_ingot_yul(db, ingot, filter),
-            "Yul",
-            suite,
-            report,
-            output,
-        ),
-        "sonatina" => emit_with_catch_unwind(
-            || emit_test_ingot_sonatina(db, ingot, opt_level, sonatina_options, filter),
-            "Sonatina",
-            suite,
-            report,
-            output,
-        ),
-        other => {
-            return Err(suite_error_result(
-                suite,
-                "setup",
-                format!("unknown backend `{other}` (expected 'yul' or 'sonatina')"),
-            ));
-        }
-    };
+    let emit_result = emit_with_catch_unwind(
+        || emit_test_ingot_sonatina(db, ingot, opt_level, sonatina_options, filter),
+        "Sonatina",
+        suite,
+        report,
+        output,
+    );
     let module_output = emit_result?;
 
     if module_output.tests.is_empty() {
-        return Ok(DiscoverResult {
-            tests: Vec::new(),
-            gas_comparison_cases: None,
-        });
+        return Ok(DiscoverResult { tests: Vec::new() });
     }
-
-    let gas_comparison_cases = report.map(|ctx| {
-        gas::collect_ingot_gas_comparison_cases(
-            db,
-            ingot,
-            suite,
-            filter,
-            ctx,
-            backend.as_str(),
-            opt_level,
-            &module_output.tests,
-        )
-    });
 
     Ok(DiscoverResult {
         tests: module_output.tests,
-        gas_comparison_cases,
     })
 }
 
-fn write_case_output(
-    output: &mut String,
-    case: &TestMetadata,
-    outcome: &TestOutcome,
-    show_logs: bool,
-    backend: &str,
-    debug: &TestDebugOptions,
-) {
+fn write_case_output(output: &mut String, outcome: &TestOutcome, show_logs: bool) {
     if !outcome.result.passed
         && let Some(ref msg) = outcome.result.error_message
     {
         let _ = writeln!(output, "    {msg}");
-    }
-
-    let should_dump_yul = backend == "yul"
-        && (debug.dump_yul_for_all || (debug.dump_yul_on_failure && !outcome.result.passed));
-    if should_dump_yul {
-        write_test_yul(output, case);
     }
 
     if let Some(trace) = &outcome.trace {
@@ -2705,17 +2063,6 @@ fn write_case_status_line(output: &mut String, passed: bool, elapsed: Duration, 
     };
     let status = colorize_streamed_status(kind, &format_streamed_status(kind, Some(elapsed)));
     let _ = writeln!(output, "{status} {name}");
-}
-
-fn write_test_yul(output: &mut String, case: &TestMetadata) {
-    let _ = writeln!(output);
-    let _ = writeln!(
-        output,
-        "---- yul output for test {} ({}) ----",
-        case.display_name, case.object_name
-    );
-    let _ = writeln!(output, "{}", case.yul);
-    let _ = writeln!(output, "---- end yul output ----");
 }
 
 pub(super) fn test_case_matches_filter(case: &TestMetadata, filter: Option<&str>) -> bool {
@@ -2767,25 +2114,14 @@ fn default_test_emit_dir(path: &Utf8PathBuf) -> Result<Utf8PathBuf, String> {
 
 fn emit_runtime_package_ir(
     db: &DriverDataBase,
-    backend: &str,
     opt_level: OptLevel,
     package: &mir::RuntimePackage<'_>,
 ) -> Result<(&'static str, String), String> {
-    match backend.to_lowercase().as_str() {
-        "sonatina" => Ok((
-            "sona",
-            emit_runtime_package_sonatina_ir_optimized(db, package, codegen::EVM_LAYOUT, opt_level)
-                .map_err(|err| err.to_string())?,
-        )),
-        "yul" => Ok((
-            "yul",
-            emit_runtime_package_yul(db, package, codegen::EVM_LAYOUT)
-                .map_err(|err| err.to_string())?,
-        )),
-        other => Err(format!(
-            "unknown backend `{other}` (expected 'yul' or 'sonatina')"
-        )),
-    }
+    Ok((
+        "sona",
+        emit_runtime_package_sonatina_ir_optimized(db, package, codegen::EVM_LAYOUT, opt_level)
+            .map_err(|err| err.to_string())?,
+    ))
 }
 
 fn maybe_write_requested_suite_artifacts_for_top_mod(
@@ -2803,7 +2139,7 @@ fn maybe_write_requested_suite_artifacts_for_top_mod(
     let out_dir = default_test_emit_dir(request.source_path)?;
     let stem = test_emit_stem(request.suite_key);
     if request.emit.ir {
-        let (ext, ir) = emit_runtime_package_ir(db, request.backend, request.opt_level, &package)?;
+        let (ext, ir) = emit_runtime_package_ir(db, request.opt_level, &package)?;
         write_test_emit_artifact(&out_dir, &stem, ext, &ir, output)?;
     }
     if request.emit.rmir {
@@ -2850,16 +2186,10 @@ fn maybe_write_requested_suite_artifacts_for_ingot(
                 ir.push_str("\n\n");
             }
             let _ = writeln!(ir, "=== {module_name} ===");
-            let (_, module_ir) =
-                emit_runtime_package_ir(db, request.backend, request.opt_level, package)?;
+            let (_, module_ir) = emit_runtime_package_ir(db, request.opt_level, package)?;
             ir.push_str(&module_ir);
         }
-        let ext = if request.backend.eq_ignore_ascii_case("yul") {
-            "yul"
-        } else {
-            "sona"
-        };
-        write_test_emit_artifact(&out_dir, &stem, ext, &ir, output)?;
+        write_test_emit_artifact(&out_dir, &stem, "sona", &ir, output)?;
     }
     if request.emit.rmir {
         let mut rmir = String::new();
@@ -2878,7 +2208,6 @@ fn maybe_write_requested_suite_artifacts_for_ingot(
 fn maybe_write_suite_ir(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
-    backend: &str,
     opt_level: OptLevel,
     report: Option<&ReportContext>,
 ) {
@@ -2900,49 +2229,36 @@ fn maybe_write_suite_ir(
         }
     }
 
-    if backend.eq_ignore_ascii_case("sonatina") {
-        match codegen::emit_module_sonatina_ir(db, top_mod) {
-            Ok(ir) => {
-                let path = artifacts_dir.join("sonatina_ir.txt");
-                let _ = std::fs::write(&path, ir);
-            }
-            Err(err) => {
-                let path = artifacts_dir.join("sonatina_ir_error.txt");
-                let _ = std::fs::write(&path, format!("{err}"));
-            }
+    match codegen::emit_module_sonatina_ir(db, top_mod) {
+        Ok(ir) => {
+            let path = artifacts_dir.join("sonatina_ir.txt");
+            let _ = std::fs::write(&path, ir);
         }
+        Err(err) => {
+            let path = artifacts_dir.join("sonatina_ir_error.txt");
+            let _ = std::fs::write(&path, format!("{err}"));
+        }
+    }
 
-        match codegen::emit_module_sonatina_ir_optimized(db, top_mod, opt_level, None) {
-            Ok(ir) => {
-                let path = artifacts_dir.join("sonatina_ir_optimized.txt");
-                let _ = std::fs::write(&path, ir);
-            }
-            Err(err) => {
-                let path = artifacts_dir.join("sonatina_ir_optimized_error.txt");
-                let _ = std::fs::write(&path, format!("{err}"));
-            }
+    match codegen::emit_module_sonatina_ir_optimized(db, top_mod, opt_level, None) {
+        Ok(ir) => {
+            let path = artifacts_dir.join("sonatina_ir_optimized.txt");
+            let _ = std::fs::write(&path, ir);
         }
+        Err(err) => {
+            let path = artifacts_dir.join("sonatina_ir_optimized_error.txt");
+            let _ = std::fs::write(&path, format!("{err}"));
+        }
+    }
 
-        match codegen::validate_module_sonatina_ir(db, top_mod) {
-            Ok(report) => {
-                let path = artifacts_dir.join("sonatina_validate.txt");
-                let _ = std::fs::write(&path, report);
-            }
-            Err(err) => {
-                let path = artifacts_dir.join("sonatina_validate_error.txt");
-                let _ = std::fs::write(&path, format!("{err}"));
-            }
+    match codegen::validate_module_sonatina_ir(db, top_mod) {
+        Ok(report) => {
+            let path = artifacts_dir.join("sonatina_validate.txt");
+            let _ = std::fs::write(&path, report);
         }
-    } else if backend.eq_ignore_ascii_case("yul") {
-        match codegen::emit_module_yul(db, top_mod) {
-            Ok(yul) => {
-                let path = artifacts_dir.join("yul_module.yul");
-                let _ = std::fs::write(&path, yul);
-            }
-            Err(err) => {
-                let path = artifacts_dir.join("yul_module_error.txt");
-                let _ = std::fs::write(&path, format!("{err}"));
-            }
+        Err(err) => {
+            let path = artifacts_dir.join("sonatina_validate_error.txt");
+            let _ = std::fs::write(&path, format!("{err}"));
         }
     }
 }
@@ -3148,13 +2464,9 @@ fn create_suite_report_staging(suite: &str) -> Result<ReportStaging, String> {
 pub(super) fn compile_and_run_test(
     case: &TestMetadata,
     show_logs: bool,
-    backend: &str,
-    yul_optimize: bool,
-    solc: Option<&str>,
     evm_trace: Option<&EvmTraceOptions>,
     report: Option<&ReportContext>,
     call_trace: bool,
-    collect_step_count: bool,
 ) -> TestOutcome {
     let started = Instant::now();
     let failure = |message: String| TestOutcome {
@@ -3162,15 +2474,9 @@ pub(super) fn compile_and_run_test(
             name: case.display_name.clone(),
             passed: false,
             error_message: Some(message),
-            gas_used: None,
-            deploy_gas_used: None,
-            total_gas_used: None,
         },
         logs: Vec::new(),
         trace: None,
-        step_count: None,
-        runtime_metrics: None,
-        gas_profile: None,
         elapsed: started.elapsed(),
     };
 
@@ -3203,80 +2509,28 @@ pub(super) fn compile_and_run_test(
         }
     };
 
-    if backend == "sonatina" {
-        if case.bytecode.is_empty() {
-            return failure(format!("missing test bytecode for `{}`", case.display_name));
-        }
-
-        if let Some(report) = report {
-            write_sonatina_case_artifacts(report, case);
-        }
-
-        let runtime_metrics = extract_runtime_from_sonatina_initcode(&case.bytecode)
-            .map(gas::evm_runtime_metrics_from_bytes);
-        let bytecode_hex = hex::encode(&case.bytecode);
-        let (result, logs, trace, step_count, gas_profile) = execute_test(
-            &case.display_name,
-            &bytecode_hex,
-            show_logs,
-            case.expected_revert.as_ref(),
-            evm_trace,
-            call_trace,
-            collect_step_count,
-            initial_balance,
-        );
-        return TestOutcome {
-            result,
-            logs,
-            trace,
-            step_count,
-            runtime_metrics,
-            gas_profile,
-            elapsed: started.elapsed(),
-        };
-    }
-
-    // Default backend: compile Yul to bytecode using solc.
-    if case.yul.trim().is_empty() {
-        return failure(format!("missing test Yul for `{}`", case.display_name));
+    if case.bytecode.is_empty() {
+        return failure(format!("missing test bytecode for `{}`", case.display_name));
     }
 
     if let Some(report) = report {
-        write_yul_case_artifacts(report, case, solc);
+        write_sonatina_case_artifacts(report, case);
     }
 
-    let (bytecode, runtime_metrics) = match compile_single_contract_with_solc(
-        &case.object_name,
-        &case.yul,
-        yul_optimize,
-        YUL_VERIFY_RUNTIME,
-        solc,
-    ) {
-        Ok(contract) => (
-            contract.bytecode,
-            gas::evm_runtime_metrics_from_hex(&contract.runtime_bytecode),
-        ),
-        Err(err) => return failure(format!("Failed to compile test: {}", err.0)),
-    };
-
-    // Execute the test bytecode in revm
-    let (result, logs, trace, step_count, gas_profile) = execute_test(
+    let bytecode = hex::encode(&case.bytecode);
+    let (result, logs, trace) = execute_test(
         &case.display_name,
         &bytecode,
         show_logs,
         case.expected_revert.as_ref(),
         evm_trace,
         call_trace,
-        collect_step_count,
         initial_balance,
     );
     TestOutcome {
         result,
         logs,
         trace,
-        step_count,
-        runtime_metrics,
-        gas_profile,
         elapsed: started.elapsed(),
     }
 }
@@ -3301,50 +2555,6 @@ fn write_sonatina_case_artifacts(report: &ReportContext, case: &TestMetadata) {
     if let Some(json) = &case.sonatina_observability_json {
         let _ = std::fs::write(dir.join("observability.json"), json);
     }
-}
-
-pub(super) fn write_yul_case_artifacts(
-    report: &ReportContext,
-    case: &TestMetadata,
-    solc: Option<&str>,
-) {
-    let dir = report
-        .root_dir
-        .join("artifacts")
-        .join("tests")
-        .join(sanitize_filename(&case.display_name))
-        .join("yul");
-    let _ = create_dir_all_utf8(&dir);
-
-    let _ = std::fs::write(dir.join("source.yul"), &case.yul);
-
-    let opt = compile_single_contract_with_solc(
-        &case.object_name,
-        &case.yul,
-        true,
-        YUL_VERIFY_RUNTIME,
-        solc,
-    );
-    if let Ok(contract) = opt {
-        let _ = std::fs::write(dir.join("bytecode.opt.hex"), &contract.bytecode);
-        let _ = std::fs::write(dir.join("runtime.opt.hex"), &contract.runtime_bytecode);
-        write_evm_mnemonic_artifact(
-            dir.join("bytecode.opt.evm.txt"),
-            contract.bytecode_opcodes.as_deref(),
-        );
-        write_evm_mnemonic_artifact(
-            dir.join("runtime.opt.evm.txt"),
-            contract.runtime_bytecode_opcodes.as_deref(),
-        );
-    }
-}
-
-fn write_evm_mnemonic_artifact(path: Utf8PathBuf, opcodes: Option<&str>) {
-    let output = match opcodes.map(str::trim) {
-        Some(opcodes) if !opcodes.is_empty() => format!("{opcodes}\n"),
-        _ => "solc did not emit opcodes for this artifact\n".to_string(),
-    };
-    let _ = std::fs::write(path, output);
 }
 
 fn extract_runtime_from_sonatina_initcode(init: &[u8]) -> Option<&[u8]> {
@@ -3386,28 +2596,19 @@ fn extract_runtime_from_sonatina_initcode(init: &[u8]) -> Option<&[u8]> {
 
 fn write_report_manifest(
     staging: &Utf8PathBuf,
-    backend: &str,
-    yul_optimize: bool,
     opt_level: OptLevel,
     filter: Option<&str>,
     results: &[TestResult],
 ) {
     let mut out = String::new();
     out.push_str("fe test report\n");
-    out.push_str(&format!("backend: {backend}\n"));
-    out.push_str(&format!("yul_optimize: {yul_optimize}\n"));
+    out.push_str("backend: sonatina\n");
     out.push_str(&format!("opt_level: {opt_level}\n"));
     out.push_str(&format!("filter: {}\n", filter.unwrap_or("<none>")));
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
     out.push_str("sonatina_ir: Sonatina reports include pre-opt IR at `artifacts/sonatina_ir.txt` and post-selected-opt-level IR at `artifacts/sonatina_ir_optimized.txt` (with `opt_level: 0`, both represent the same unoptimized module)\n");
-    out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_comparison.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_deployment_attribution.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
-    out.push_str("gas_comparison_yul_artifacts: in Sonatina comparison runs, Yul baselines are stored under `artifacts/tests/<test>/yul/{source.yul,bytecode.opt.hex,bytecode.opt.evm.txt,runtime.opt.hex,runtime.opt.evm.txt}`\n");
     out.push_str("sonatina_observability: when available, Sonatina test artifacts include `artifacts/tests/<test>/sonatina/observability.json`\n");
-    out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_breakdown_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_deployment_attribution_all.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, and `artifacts/gas_tail_trace_observability_hotspots.csv`\n");
-    out.push_str("sonatina_observability_aggregate: run-level reports also include `artifacts/observability_coverage_all.csv` for per-test coverage totals from observability maps\n");
-    out.push_str("gas_opcode_profile: see `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for opcode and step-count diagnostics when available\n");
-    out.push_str("gas_opcode_profile_aggregate: run-level reports also include `artifacts/gas_opcode_comparison_all.csv`\n");
     out.push_str(&format!("tests: {}\n", results.len()));
     let passed = results.iter().filter(|r| r.passed).count();
     out.push_str(&format!("passed: {passed}\n"));
@@ -3450,32 +2651,19 @@ fn execute_test(
     expected_revert: Option<&ExpectedRevert>,
     evm_trace: Option<&EvmTraceOptions>,
     call_trace: bool,
-    collect_step_count: bool,
     initial_balance: Option<U256>,
-) -> (
-    TestResult,
-    Vec<String>,
-    Option<contract_harness::CallTrace>,
-    Option<u64>,
-    Option<CallGasProfile>,
-) {
+) -> (TestResult, Vec<String>, Option<contract_harness::CallTrace>) {
     // Deploy the test contract
-    let (mut instance, deploy_gas_used) = match RuntimeInstance::deploy_tracked(bytecode_hex) {
+    let (mut instance, _) = match RuntimeInstance::deploy_tracked(bytecode_hex) {
         Ok(deployed) => deployed,
         Err(err) => {
-            let deploy_gas_used = harness_error_gas_used(&err);
             return (
                 TestResult {
                     name: name.to_string(),
                     passed: false,
                     error_message: Some(format!("Failed to deploy test: {err}")),
-                    gas_used: None,
-                    deploy_gas_used,
-                    total_gas_used: deploy_gas_used,
                 },
                 Vec::new(),
-                None,
-                None,
                 None,
             );
         }
@@ -3497,79 +2685,46 @@ fn execute_test(
     } else {
         None
     };
-    let gas_profile = if collect_step_count {
-        Some(instance.call_raw_gas_profile(&[], options))
-    } else {
-        None
-    };
-    let step_count = gas_profile.map(|profile| profile.step_count);
 
     let call_result = if show_logs {
         instance
             .call_raw_with_logs(&[], options)
-            .map(|outcome| (outcome.result.gas_used, outcome.logs))
+            .map(|outcome| outcome.logs)
     } else {
-        instance
-            .call_raw(&[], options)
-            .map(|result| (result.gas_used, Vec::new()))
+        instance.call_raw(&[], options).map(|_| Vec::new())
     };
 
     match (call_result, expected_revert) {
         // Normal test: execution succeeded
-        (Ok((gas_used, logs)), None) => {
-            let total_gas_used = Some(deploy_gas_used.saturating_add(gas_used));
-            (
-                TestResult {
-                    name: name.to_string(),
-                    passed: true,
-                    error_message: None,
-                    gas_used: Some(gas_used),
-                    deploy_gas_used: Some(deploy_gas_used),
-                    total_gas_used,
-                },
-                logs,
-                trace,
-                step_count,
-                gas_profile,
-            )
-        }
+        (Ok(logs), None) => (
+            TestResult {
+                name: name.to_string(),
+                passed: true,
+                error_message: None,
+            },
+            logs,
+            trace,
+        ),
         // Normal test: execution reverted (failure)
-        (Err(err), None) => {
-            let gas_used = harness_error_gas_used(&err);
-            let total_gas_used = gas_used.map(|call_gas| deploy_gas_used.saturating_add(call_gas));
-            (
-                TestResult {
-                    name: name.to_string(),
-                    passed: false,
-                    error_message: Some(format_harness_error(err)),
-                    gas_used,
-                    deploy_gas_used: Some(deploy_gas_used),
-                    total_gas_used,
-                },
-                Vec::new(),
-                trace,
-                step_count,
-                gas_profile,
-            )
-        }
+        (Err(err), None) => (
+            TestResult {
+                name: name.to_string(),
+                passed: false,
+                error_message: Some(format_harness_error(err)),
+            },
+            Vec::new(),
+            trace,
+        ),
         // Expected revert: execution succeeded (failure - should have reverted)
-        (Ok((gas_used, _)), Some(_)) => {
-            let total_gas_used = Some(deploy_gas_used.saturating_add(gas_used));
-            (
-                TestResult {
-                    name: name.to_string(),
-                    passed: false,
-                    error_message: Some("Expected test to revert, but it succeeded".to_string()),
-                    gas_used: Some(gas_used),
-                    deploy_gas_used: Some(deploy_gas_used),
-                    total_gas_used,
-                },
-                Vec::new(),
-                trace,
-                step_count,
-                gas_profile,
-            )
-        }
+        (Ok(_), Some(_)) => (
+            TestResult {
+                name: name.to_string(),
+                passed: false,
+                error_message: Some("Expected test to revert, but it succeeded".to_string()),
+            },
+            Vec::new(),
+            trace,
+        ),
         // Expected revert: execution reverted — check revert data against expectation
         (Err(contract_harness::HarnessError::Revert(data)), Some(expected)) => {
             let mismatch = match expected {
@@ -3603,53 +2758,34 @@ fn execute_test(
                         name: name.to_string(),
                         passed: true,
                         error_message: None,
-                        gas_used: None,
-                        deploy_gas_used: Some(deploy_gas_used),
-                        total_gas_used: None,
                     },
                     Vec::new(),
                     trace,
-                    step_count,
-                    gas_profile,
                 ),
                 Some(msg) => (
                     TestResult {
                         name: name.to_string(),
                         passed: false,
                         error_message: Some(msg),
-                        gas_used: None,
-                        deploy_gas_used: Some(deploy_gas_used),
-                        total_gas_used: None,
                     },
                     Vec::new(),
                     trace,
-                    step_count,
-                    gas_profile,
                 ),
             }
         }
         // Expected revert: execution failed for a different reason (failure)
-        (Err(err), Some(_)) => {
-            let gas_used = harness_error_gas_used(&err);
-            let total_gas_used = gas_used.map(|call_gas| deploy_gas_used.saturating_add(call_gas));
-            (
-                TestResult {
-                    name: name.to_string(),
-                    passed: false,
-                    error_message: Some(format!(
-                        "Expected test to revert, but it failed with: {}",
-                        format_harness_error(err)
-                    )),
-                    gas_used,
-                    deploy_gas_used: Some(deploy_gas_used),
-                    total_gas_used,
-                },
-                Vec::new(),
-                trace,
-                step_count,
-                gas_profile,
-            )
-        }
+        (Err(err), Some(_)) => (
+            TestResult {
+                name: name.to_string(),
+                passed: false,
+                error_message: Some(format!(
+                    "Expected test to revert, but it failed with: {}",
+                    format_harness_error(err)
+                )),
+            },
+            Vec::new(),
+            trace,
+        ),
     }
 }
 
@@ -3661,13 +2797,6 @@ fn format_harness_error(err: contract_harness::HarnessError) -> String {
             format!("Test halted: {reason:?} (gas: {gas_used})")
         }
         other => format!("Test execution error: {other}"),
-    }
-}
-
-fn harness_error_gas_used(err: &contract_harness::HarnessError) -> Option<u64> {
-    match err {
-        contract_harness::HarnessError::Halted { gas_used, .. } => Some(*gas_used),
-        _ => None,
     }
 }
 

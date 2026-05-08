@@ -4,7 +4,7 @@
 //! IR text. This helps catch IR lowering bugs and makes it easy to review what
 //! IR is generated for each fixture.
 //!
-//! Snapshots are stored in `fixtures/sonatina_ir/` to avoid conflicting with Yul snapshots.
+//! Snapshots are stored in `fixtures/sonatina_ir/`.
 
 use common::InputDb;
 use dir_test::{Fixture, dir_test};
@@ -356,9 +356,8 @@ pub contract C {
 // NOTE: `dir_test` discovers fixtures at compile time; new fixture files will be picked up on a
 // clean build (e.g. CI) or whenever this test target is recompiled.
 //
-// Unlike the Yul tests which run on all fixtures, Sonatina IR tests only run on fixtures
-// that the backend currently supports. Unsupported fixtures will produce LowerError::Unsupported
-// which we skip gracefully.
+// Sonatina IR tests only run on fixtures that the backend currently supports. Unsupported
+// fixtures will produce LowerError::Unsupported, which we skip gracefully.
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/tests/fixtures",
     glob: "*.fe"
@@ -390,7 +389,7 @@ fn sonatina_ir_snap(fixture: Fixture<&str>) {
         Err(err) => panic!("Sonatina IR lowering failed: {err}"),
     };
 
-    // Store snapshots in sonatina_ir/ subdirectory to avoid conflicting with Yul snapshots
+    // Store snapshots in the sonatina_ir/ subdirectory.
     let fixture_path = Path::new(fixture.path());
     let fixture_name = fixture_path.file_stem().unwrap().to_str().unwrap();
     let snapshot_dir = fixture_path.parent().unwrap().join("sonatina_ir");

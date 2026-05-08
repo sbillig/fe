@@ -30,12 +30,6 @@ impl std::str::FromStr for OptLevel {
     }
 }
 
-impl OptLevel {
-    pub fn yul_optimize(&self) -> bool {
-        !matches!(self, OptLevel::O0)
-    }
-}
-
 impl fmt::Display for OptLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -49,43 +43,19 @@ impl fmt::Display for OptLevel {
 
 #[derive(Debug, Clone)]
 pub enum BackendOutput {
-    Yul { source: String, solc_optimize: bool },
     Bytecode(Vec<u8>),
 }
 
 impl BackendOutput {
-    pub fn as_yul(&self) -> Option<&str> {
-        match self {
-            BackendOutput::Yul { source, .. } => Some(source),
-            BackendOutput::Bytecode(_) => None,
-        }
-    }
-
-    pub fn yul_solc_optimize(&self) -> Option<bool> {
-        match self {
-            BackendOutput::Yul { solc_optimize, .. } => Some(*solc_optimize),
-            BackendOutput::Bytecode(_) => None,
-        }
-    }
-
     pub fn as_bytecode(&self) -> Option<&[u8]> {
         match self {
             BackendOutput::Bytecode(bytes) => Some(bytes),
-            BackendOutput::Yul { .. } => None,
-        }
-    }
-
-    pub fn into_yul(self) -> Option<String> {
-        match self {
-            BackendOutput::Yul { source, .. } => Some(source),
-            BackendOutput::Bytecode(_) => None,
         }
     }
 
     pub fn into_bytecode(self) -> Option<Vec<u8>> {
         match self {
             BackendOutput::Bytecode(bytes) => Some(bytes),
-            BackendOutput::Yul { .. } => None,
         }
     }
 }
@@ -93,7 +63,6 @@ impl BackendOutput {
 #[derive(Debug)]
 pub enum BackendError {
     RuntimeLower(mir::LowerError),
-    Yul(crate::yul::YulError),
     Sonatina(String),
 }
 
@@ -101,7 +70,6 @@ impl fmt::Display for BackendError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BackendError::RuntimeLower(err) => write!(f, "{err}"),
-            BackendError::Yul(err) => write!(f, "{err}"),
             BackendError::Sonatina(message) => write!(f, "sonatina error: {message}"),
         }
     }
@@ -115,24 +83,9 @@ impl From<mir::LowerError> for BackendError {
     }
 }
 
-impl From<crate::yul::YulError> for BackendError {
-    fn from(err: crate::yul::YulError) -> Self {
-        BackendError::Yul(err)
-    }
-}
-
 impl From<crate::sonatina::LowerError> for BackendError {
     fn from(err: crate::sonatina::LowerError) -> Self {
         BackendError::Sonatina(err.to_string())
-    }
-}
-
-impl From<crate::EmitModuleError> for BackendError {
-    fn from(err: crate::EmitModuleError) -> Self {
-        match err {
-            crate::EmitModuleError::RuntimeLower(err) => BackendError::RuntimeLower(err),
-            crate::EmitModuleError::Yul(err) => BackendError::Yul(err),
-        }
     }
 }
 
@@ -150,7 +103,6 @@ pub trait Backend {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BackendKind {
-    Yul,
     #[default]
     Sonatina,
 }
@@ -158,14 +110,12 @@ pub enum BackendKind {
 impl BackendKind {
     pub fn name(&self) -> &'static str {
         match self {
-            BackendKind::Yul => "yul",
             BackendKind::Sonatina => "sonatina",
         }
     }
 
     pub fn create(&self) -> Box<dyn Backend> {
         match self {
-            BackendKind::Yul => Box::new(YulBackend),
             BackendKind::Sonatina => Box::new(SonatinaBackend),
         }
     }
@@ -176,35 +126,9 @@ impl std::str::FromStr for BackendKind {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "yul" => Ok(BackendKind::Yul),
             "sonatina" => Ok(BackendKind::Sonatina),
-            _ => Err(format!(
-                "unknown backend: {s} (expected 'yul' or 'sonatina')"
-            )),
+            _ => Err(format!("unknown backend: {s} (expected 'sonatina')")),
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct YulBackend;
-
-impl Backend for YulBackend {
-    fn name(&self) -> &'static str {
-        "yul"
-    }
-
-    fn compile(
-        &self,
-        db: &DriverDataBase,
-        top_mod: TopLevelMod<'_>,
-        layout: TargetDataLayout,
-        opt_level: OptLevel,
-    ) -> Result<BackendOutput, BackendError> {
-        let yul = crate::emit_module_yul_with_layout(db, top_mod, layout)?;
-        Ok(BackendOutput::Yul {
-            source: yul,
-            solc_optimize: opt_level.yul_optimize(),
-        })
     }
 }
 

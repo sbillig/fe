@@ -81,7 +81,6 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
         execute_command_provider: Some(async_lsp::lsp_types::ExecuteCommandOptions {
             commands: vec![
                 "fe.viewMir".into(),
-                "fe.viewYul".into(),
                 "fe.viewSonatinaIr".into(),
                 "fe.openDocs".into(),
             ],

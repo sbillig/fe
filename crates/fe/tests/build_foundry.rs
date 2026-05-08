@@ -383,8 +383,6 @@ fn test_fe_build_artifacts_with_foundry() {
     let (output, exit_code) = run_fe_main_with_env(
         &[
             "build",
-            "--backend",
-            "sonatina",
             "--contract",
             "Foo",
             "--out-dir",
@@ -398,8 +396,6 @@ fn test_fe_build_artifacts_with_foundry() {
     let (output, exit_code) = run_fe_main_with_env(
         &[
             "build",
-            "--backend",
-            "sonatina",
             "--contract",
             "CoolCoin",
             "--out-dir",
