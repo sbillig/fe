@@ -842,13 +842,8 @@ fn runtime_boundary_spec<'db>(
         }
         let pointee = stored_class_for_ty_in_context(db, inner, scope, assumptions);
         let inner_is_copy = scope.is_some_and(|scope| ty_is_copy(db, scope, inner, assumptions));
-        if inner_is_copy {
-            return inner_boundary.or_else(|| {
-                pointee
-                    .aggregate_layout()
-                    .is_some()
-                    .then_some(RuntimeBoundarySpec::ExactShape(pointee.clone()))
-            });
+        if inner_is_copy && pointee.aggregate_layout().is_none() {
+            return inner_boundary;
         }
         if pointee.aggregate_layout().is_none()
             && !matches!(

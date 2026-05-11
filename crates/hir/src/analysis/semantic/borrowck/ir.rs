@@ -95,6 +95,7 @@ pub struct NLocalRootDemand {
     pub read_by_place: bool,
     pub written_by_place: bool,
     pub borrowed_or_addr_taken: bool,
+    pub mut_borrowed_or_addr_taken: bool,
     pub passed_by_place: bool,
     pub nonself_backing_place: bool,
     pub always_rooted: bool,
@@ -105,6 +106,7 @@ impl NLocalRootDemand {
         self.read_by_place
             || self.written_by_place
             || self.borrowed_or_addr_taken
+            || self.mut_borrowed_or_addr_taken
             || self.passed_by_place
             || self.nonself_backing_place
             || self.always_rooted
@@ -114,7 +116,12 @@ impl NLocalRootDemand {
         self.read_by_place
             || self.written_by_place
             || self.borrowed_or_addr_taken
+            || self.mut_borrowed_or_addr_taken
             || self.passed_by_place
+    }
+
+    pub fn disallows_const_ref_storage(self) -> bool {
+        self.written_by_place || self.mut_borrowed_or_addr_taken
     }
 }
 
@@ -239,6 +246,7 @@ pub struct NEffectArg<'db> {
     pub binding_idx: u32,
     pub arg: NEffectArgValue<'db>,
     pub pass_mode: EffectPassMode,
+    pub required_mut: bool,
     pub target_ty: Option<TyId<'db>>,
     pub provider: Option<ProviderAddressSpace>,
 }

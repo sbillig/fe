@@ -337,7 +337,12 @@ impl<'summary, 'lookup, 'db> ReturnSliceInferer<'summary, 'lookup, 'db> {
             .get(local.index())
             .cloned()
             .unwrap_or(RuntimeCarrier::Erased);
-        let desired = merge_runtime_carrier(self.db, current, desired);
+        let desired = merge_runtime_carrier(
+            self.db,
+            &self.summary.semantic_body.locals[local.index()],
+            current,
+            desired,
+        );
         if self.carriers[local.index()] == desired {
             return false;
         }

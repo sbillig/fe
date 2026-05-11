@@ -29,6 +29,7 @@ use super::{
         runtime_class_for_direct_value_provider_in_context,
         runtime_class_for_effect_binding_provider_in_context, runtime_class_for_provider_binding,
     },
+    conversion::RuntimeConversionPlanner,
     returns::runtime_return_class,
     type_info::{
         provider_class_for_target_in_context, stored_class_for_ty_in_context,
@@ -89,7 +90,12 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
             .get(local.index())
             .cloned()
             .unwrap_or(RuntimeCarrier::Erased);
-        let desired = merge_runtime_carrier(self.env.db(), current, desired);
+        let desired = merge_runtime_carrier(
+            self.env.db(),
+            &self.env.body().locals[local.index()],
+            current,
+            desired,
+        );
         if self.carriers[local.index()] == desired {
             return false;
         }
@@ -795,14 +801,146 @@ fn materialized_place_class_from_runtime_source<'db>(
 
 pub(crate) fn merge_runtime_carrier<'db>(
     db: &'db dyn MirDb,
+    local: &NSLocal<'db>,
     current: RuntimeCarrier<'db>,
     desired: RuntimeCarrier<'db>,
 ) -> RuntimeCarrier<'db> {
     match (current, desired) {
         (RuntimeCarrier::Erased, desired) | (desired, RuntimeCarrier::Erased) => desired,
         (RuntimeCarrier::Value(current), RuntimeCarrier::Value(desired)) => {
-            RuntimeCarrier::Value(merge_runtime_class(db, &current, &desired).unwrap_or(desired))
+            let demand = RuntimeJoinDemand::for_local(local);
+            RuntimeCarrier::Value(join_runtime_class(db, demand, &current, &desired).unwrap_or_else(
+                || {
+                    panic!(
+                        "runtime carrier classes have no common realizable join: local={local:?}; current={current:?}; desired={desired:?}"
+                    )
+                },
+            ))
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RuntimeJoinDemand {
+    prefer_owned_object: bool,
+    prefer_transport: bool,
+}
+
+impl RuntimeJoinDemand {
+    fn for_local(local: &NSLocal<'_>) -> Self {
+        Self {
+            prefer_owned_object: local.facts.root_demand.needs_projectable_owned_storage(),
+            prefer_transport: matches!(
+                local.facts.interface,
+                SemanticLocalKind::PlaceCarrier | SemanticLocalKind::DirectCarrier
+            ) || local.facts.origin.root_provider().is_some(),
+        }
+    }
+}
+
+fn join_runtime_class<'db>(
+    db: &'db dyn MirDb,
+    demand: RuntimeJoinDemand,
+    current: &RuntimeClass<'db>,
+    desired: &RuntimeClass<'db>,
+) -> Option<RuntimeClass<'db>> {
+    if current == desired {
+        return Some(current.clone());
+    }
+    if let Some(merged) = merge_runtime_class(db, current, desired) {
+        return Some(merged);
+    }
+
+    let mut candidates = Vec::new();
+    push_join_candidate(&mut candidates, current.clone());
+    push_join_candidate(&mut candidates, desired.clone());
+    push_materialized_join_candidates(&mut candidates, current);
+    push_materialized_join_candidates(&mut candidates, desired);
+    if let (Some(current_layout), Some(desired_layout)) =
+        (current.aggregate_layout(), desired.aggregate_layout())
+        && let Some(layout) = merge_layouts(db, current_layout, desired_layout)
+    {
+        push_join_candidate(&mut candidates, RuntimeClass::AggregateValue { layout });
+        push_join_candidate(&mut candidates, RuntimeClass::object_ref(layout));
+    }
+    if let Some(merged) = merge_runtime_class(db, current, desired) {
+        push_join_candidate(&mut candidates, merged);
+    }
+
+    candidates
+        .into_iter()
+        .filter(|candidate| can_join_as(db, current, desired, candidate))
+        .min_by_key(|candidate| join_candidate_rank(demand, candidate))
+}
+
+fn push_materialized_join_candidates<'db>(
+    candidates: &mut Vec<RuntimeClass<'db>>,
+    class: &RuntimeClass<'db>,
+) {
+    if let Some(pointee) = class.pointee() {
+        push_join_candidate(candidates, pointee.clone());
+    }
+    if let Some(layout) = class.aggregate_layout() {
+        push_join_candidate(candidates, RuntimeClass::AggregateValue { layout });
+        push_join_candidate(candidates, RuntimeClass::object_ref(layout));
+    }
+}
+
+fn push_join_candidate<'db>(candidates: &mut Vec<RuntimeClass<'db>>, candidate: RuntimeClass<'db>) {
+    if !candidates.contains(&candidate) {
+        candidates.push(candidate);
+    }
+}
+
+fn can_realize_as<'db>(
+    db: &'db dyn MirDb,
+    source: &RuntimeClass<'db>,
+    target: &RuntimeClass<'db>,
+) -> bool {
+    source == target || RuntimeConversionPlanner::plan(db, source.clone(), target.clone()).is_ok()
+}
+
+fn can_join_as<'db>(
+    db: &'db dyn MirDb,
+    current: &RuntimeClass<'db>,
+    desired: &RuntimeClass<'db>,
+    candidate: &RuntimeClass<'db>,
+) -> bool {
+    merge_runtime_class(db, current, desired).as_ref() == Some(candidate)
+        || can_realize_as(db, current, candidate) && can_realize_as(db, desired, candidate)
+}
+
+fn join_candidate_rank(demand: RuntimeJoinDemand, candidate: &RuntimeClass<'_>) -> u8 {
+    match candidate {
+        RuntimeClass::Scalar(_) => 0,
+        RuntimeClass::AggregateValue { .. }
+            if !demand.prefer_owned_object && !demand.prefer_transport =>
+        {
+            1
+        }
+        RuntimeClass::Ref {
+            kind: RefKind::Object,
+            ..
+        } if demand.prefer_owned_object => 1,
+        RuntimeClass::Ref {
+            kind: RefKind::Provider { .. },
+            ..
+        } if demand.prefer_transport => 1,
+        RuntimeClass::RawAddr { .. } if demand.prefer_transport => 2,
+        RuntimeClass::Ref {
+            kind: RefKind::Object,
+            ..
+        } => 2,
+        RuntimeClass::AggregateValue { .. } => 3,
+        RuntimeClass::Ref {
+            kind: RefKind::Provider { .. },
+            ..
+        } => 4,
+        RuntimeClass::RawAddr { .. } => 5,
+        RuntimeClass::Ref {
+            kind: RefKind::Const,
+            ..
+        } => 6,
     }
 }
 
@@ -1069,6 +1207,83 @@ mod tests {
         )
     }
 
+    fn test_pair_layout<'db>(db: &'db dyn MirDb) -> LayoutId<'db> {
+        let word = RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int {
+                bits: 256,
+                signed: false,
+            },
+            role: ScalarRole::Plain,
+        });
+        LayoutId::new(
+            db,
+            LayoutKey::Struct(StructLayout {
+                source_ty: TyId::unit(db),
+                fields: vec![word.clone(), word].into(),
+            }),
+        )
+    }
+
+    fn plain_value_join_demand() -> RuntimeJoinDemand {
+        RuntimeJoinDemand {
+            prefer_owned_object: false,
+            prefer_transport: false,
+        }
+    }
+
+    fn owned_object_join_demand() -> RuntimeJoinDemand {
+        RuntimeJoinDemand {
+            prefer_owned_object: true,
+            prefer_transport: false,
+        }
+    }
+
+    #[test]
+    fn join_runtime_class_materializes_const_ref_to_aggregate_for_plain_values() {
+        let db = DriverDataBase::default();
+        let layout = test_pair_layout(&db);
+        let aggregate = RuntimeClass::AggregateValue { layout };
+        let const_ref = RuntimeClass::const_ref(layout);
+
+        assert_eq!(
+            join_runtime_class(&db, plain_value_join_demand(), &const_ref, &aggregate),
+            Some(aggregate.clone())
+        );
+        assert_eq!(
+            join_runtime_class(&db, plain_value_join_demand(), &aggregate, &const_ref),
+            Some(aggregate)
+        );
+    }
+
+    #[test]
+    fn join_runtime_class_materializes_const_ref_to_object_for_owned_storage() {
+        let db = DriverDataBase::default();
+        let layout = test_pair_layout(&db);
+        let aggregate = RuntimeClass::AggregateValue { layout };
+        let const_ref = RuntimeClass::const_ref(layout);
+        let object_ref = RuntimeClass::object_ref(layout);
+
+        assert_eq!(
+            join_runtime_class(&db, owned_object_join_demand(), &const_ref, &aggregate),
+            Some(object_ref.clone())
+        );
+        assert_eq!(
+            join_runtime_class(&db, owned_object_join_demand(), &aggregate, &const_ref),
+            Some(object_ref)
+        );
+    }
+
+    #[test]
+    fn join_runtime_class_keeps_matching_const_refs() {
+        let db = DriverDataBase::default();
+        let const_ref = RuntimeClass::const_ref(test_pair_layout(&db));
+
+        assert_eq!(
+            join_runtime_class(&db, plain_value_join_demand(), &const_ref, &const_ref),
+            Some(const_ref)
+        );
+    }
+
     #[test]
     fn merge_runtime_class_prefers_non_memory_provider_enum_layouts() {
         let db = DriverDataBase::default();
@@ -1115,6 +1330,66 @@ mod tests {
         );
         assert_eq!(
             merge_runtime_class(&db, &memory_class, &storage_class),
+            Some(storage_class)
+        );
+    }
+
+    #[test]
+    fn join_runtime_class_preserves_structural_aggregate_merge() {
+        let db = DriverDataBase::default();
+        let source_ty = TyId::unit(&db);
+        let pointee = RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int {
+                bits: 256,
+                signed: false,
+            },
+            role: ScalarRole::Plain,
+        });
+        let storage_class = RuntimeClass::AggregateValue {
+            layout: test_enum_layout(
+                &db,
+                source_ty,
+                RuntimeClass::Ref {
+                    pointee: Box::new(pointee.clone()),
+                    kind: RefKind::Provider {
+                        provider_ty: TyId::bool(&db),
+                        space: AddressSpaceKind::Storage,
+                    },
+                    view: RefView::Whole,
+                },
+            ),
+        };
+        let memory_class = RuntimeClass::AggregateValue {
+            layout: test_enum_layout(
+                &db,
+                source_ty,
+                RuntimeClass::Ref {
+                    pointee: Box::new(pointee),
+                    kind: RefKind::Provider {
+                        provider_ty: TyId::u256(&db),
+                        space: AddressSpaceKind::Memory,
+                    },
+                    view: RefView::Whole,
+                },
+            ),
+        };
+
+        assert_eq!(
+            join_runtime_class(
+                &db,
+                plain_value_join_demand(),
+                &storage_class,
+                &memory_class
+            ),
+            Some(storage_class.clone())
+        );
+        assert_eq!(
+            join_runtime_class(
+                &db,
+                plain_value_join_demand(),
+                &memory_class,
+                &storage_class
+            ),
             Some(storage_class)
         );
     }

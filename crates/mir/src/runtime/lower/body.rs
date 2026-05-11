@@ -605,7 +605,7 @@ impl<'db> RmirEmitter<'db> {
         if !self.semantic_body.locals[dst.index()]
             .facts
             .root_demand
-            .written_by_place
+            .disallows_const_ref_storage()
             && let NExpr::Const(SConst::Ref(cref)) = expr
             && let Some(actual) =
                 self.const_ref_runtime_class(*cref, self.locals[dst_value.index()].semantic_ty)

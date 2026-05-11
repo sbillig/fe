@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use common::indexmap::IndexSet;
 use cranelift_entity::{EntityRef, PrimaryMap};
 use hir::analysis::{
@@ -35,9 +33,9 @@ use crate::{
     db::MirDb,
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
     runtime::{
-        AddressSpaceKind, BorrowAccess, ConstRegionId, Layout, LayoutId, RefKind, RefView,
-        RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey,
-        RuntimeParamPlan, SaturatingBinOp, ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        AddressSpaceKind, BorrowAccess, Layout, LayoutId, RefKind, RefView, RuntimeBoundarySpec,
+        RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan,
+        SaturatingBinOp, ScalarClass, ScalarRepr, ScalarRole, VariantId,
     },
 };
 
@@ -54,7 +52,7 @@ use super::{
         CompiledCallInputPlan, CompiledMaterializationPlan, compile_call_input_plan_for_semantic,
         compile_value_pass_plan,
     },
-    consts::{aggregate_const_ref_class, lower_const_region},
+    consts::aggregate_const_ref_class,
     infer::{fallback_root_transport_class, local_place_root_class},
     interface::runtime_visible_binding_plans,
     layout::{
@@ -264,13 +262,11 @@ impl<'db> BodyStaticFacts<'db> {
     ) -> Self {
         let mut boundary_sites = BoundarySiteAllocator::default();
         let normalized_facts = NormalizedBodyFacts::new(body);
-        let const_ref_regions = collect_const_ref_regions(db, type_env, body);
         let expr_facts_builder = ExprStaticFactsBuilder {
             db,
             body,
             typed_body,
             type_env,
-            const_ref_regions: &const_ref_regions,
         };
         let local_facts: Vec<_> = body
             .locals
@@ -915,38 +911,11 @@ fn lowered_place_like_ty<'db>(
     }
 }
 
-fn collect_const_ref_regions<'db>(
-    db: &'db dyn MirDb,
-    type_env: RuntimeTypeEnv<'db>,
-    body: &NormalizedSemanticBody<'db>,
-) -> HashSet<ConstRegionId<'db>> {
-    body.blocks
-        .iter()
-        .flat_map(|block| block.stmts.iter())
-        .filter_map(|stmt| {
-            let hir::analysis::semantic::NSStmtKind::Assign { dst, expr } = &stmt.kind else {
-                return None;
-            };
-            let NExpr::Const(SConst::Ref(cref)) = expr else {
-                return None;
-            };
-            let value = eval_const_ref(db, *cref)
-                .unwrap_or_else(|err| panic!("CTFE failed for {cref:?}: {err:?}"));
-            let value =
-                reify_runtime_const_for_ty(db, body.owner, body.locals[dst.index()].ty, value)
-                    .unwrap_or(value);
-            aggregate_const_ref_class(db, type_env, value)?;
-            lower_const_region(db, type_env, value)
-        })
-        .collect()
-}
-
 struct ExprStaticFactsBuilder<'a, 'db> {
     db: &'db dyn MirDb,
     body: &'a NormalizedSemanticBody<'db>,
     typed_body: &'a hir::analysis::ty::ty_check::TypedBody<'db>,
     type_env: RuntimeTypeEnv<'db>,
-    const_ref_regions: &'a HashSet<ConstRegionId<'db>>,
 }
 
 impl<'db> ExprStaticFactsBuilder<'_, 'db> {
@@ -961,7 +930,6 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
         let body = self.body;
         let typed_body = self.typed_body;
         let type_env = self.type_env;
-        let const_ref_regions = self.const_ref_regions;
         Some(match expr {
             NExpr::Use(_) | NExpr::CodeRegionRef { .. } => return None,
             NExpr::Const(const_) => ExprStaticFacts::Const(match const_ {
@@ -970,18 +938,12 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                     if ty == TyId::unit(db) {
                         None
                     } else {
-                        let dst_is_written_by_place = body
-                            .locals
-                            .get(dst.index())
-                            .is_some_and(|local| local.facts.root_demand.written_by_place);
-                        (!dst_is_written_by_place)
-                            .then(|| {
-                                aggregate_const_ref_class(db, type_env, *value)?;
-                                let region = lower_const_region(db, type_env, *value)?;
-                                const_ref_regions
-                                    .contains(&region)
-                                    .then(|| RuntimeClass::const_ref(region.layout(db)))
-                            })
+                        let dst_disallows_const_ref_storage =
+                            body.locals.get(dst.index()).is_some_and(|local| {
+                                local.facts.root_demand.disallows_const_ref_storage()
+                            });
+                        (!dst_disallows_const_ref_storage)
+                            .then(|| aggregate_const_ref_class(db, type_env, *value))
                             .flatten()
                             .or_else(|| {
                                 top_level_class_for_ty_in_env(
@@ -999,11 +961,11 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                     let value = reify_runtime_const_for_ty(db, body.owner, result_ty, value)
                         .unwrap_or(value);
                     let ty = sem_const_ty(db, value);
-                    let dst_is_written_by_place = body
+                    let dst_disallows_const_ref_storage = body
                         .locals
                         .get(dst.index())
-                        .is_some_and(|local| local.facts.root_demand.written_by_place);
-                    (!dst_is_written_by_place)
+                        .is_some_and(|local| local.facts.root_demand.disallows_const_ref_storage());
+                    (!dst_disallows_const_ref_storage)
                         .then(|| aggregate_const_ref_class(db, type_env, value))
                         .flatten()
                         .or_else(|| {

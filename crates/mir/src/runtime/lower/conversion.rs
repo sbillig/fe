@@ -432,8 +432,10 @@ impl<'db> RuntimeConversionPlanner<'db> {
                     space,
                     target: target_layout,
                 },
-            ) if target_layout
-                .is_none_or(|target_layout| Some(target_layout) == pointee.aggregate_layout()) =>
+            ) if pointee.aggregate_layout().is_some()
+                && target_layout.is_none_or(|target_layout| {
+                    Some(target_layout) == pointee.aggregate_layout()
+                }) =>
             {
                 let layout = pointee.aggregate_layout().expect("aggregate ref layout");
                 steps.push(RuntimeConversionStep::AddrOfRef {
@@ -800,6 +802,25 @@ mod tests {
         ));
         assert!(matches!(
             RuntimeConversionPlanner::plan(&db, word_class(), memory_provider),
+            Err(RuntimeConversionError::Unsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn scalar_ref_to_untyped_raw_addr_is_unsupported() {
+        let db = DriverDataBase::default();
+        let source = RuntimeClass::Ref {
+            pointee: Box::new(word_class()),
+            kind: RefKind::Object,
+            view: RefView::Whole,
+        };
+        let target = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Memory,
+            target: None,
+        };
+
+        assert!(matches!(
+            RuntimeConversionPlanner::plan(&db, source, target),
             Err(RuntimeConversionError::Unsupported { .. })
         ));
     }

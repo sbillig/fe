@@ -295,6 +295,7 @@ pub struct SEffectArg<'db> {
     pub binding_idx: u32,
     pub arg: SEffectArgValue<'db>,
     pub pass_mode: EffectPassMode,
+    pub required_mut: bool,
     pub target_ty: Option<TyId<'db>>,
     pub provider: Option<ProviderAddressSpace>,
 }

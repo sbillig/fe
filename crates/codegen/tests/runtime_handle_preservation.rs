@@ -4,8 +4,8 @@ use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_runtime_package_sonatin
 use mir::runtime::{AddressSpaceKind, RefKind};
 use mir::{
     IntrinsicArithBinOp, Layout, LayoutId, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt,
-    RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, build_runtime_package,
-    build_test_runtime_package,
+    RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeInstance, RuntimeLocalRoot,
+    build_runtime_package, build_test_runtime_package,
 };
 use url::Url;
 
@@ -500,10 +500,10 @@ fn mem_ptr_from_raw_helpers_use_raw_addr_transport_in_rmir() {
 }
 
 #[test]
-fn object_backed_nested_handle_fields_follow_carriers_before_projecting_children() {
+fn object_backed_nested_const_handle_fields_load_carriers_before_const_projection() {
     let mut db = DriverDataBase::default();
     let file_url = Url::parse(
-        "file:///object_backed_nested_handle_fields_follow_carriers_before_projecting_children.fe",
+        "file:///object_backed_nested_const_handle_fields_load_carriers_before_const_projection.fe",
     )
     .unwrap();
     db.workspace().touch(
@@ -540,8 +540,8 @@ pub fn entry() -> u256 {
     let read = sonatina_function_body(&output, "read");
 
     assert!(
-        contains_op_subsequence(read, &["obj.proj", "obj.load", "obj.proj"]),
-        "nested object-backed handle field access should load/follow the carrier before projecting children:\n{read}"
+        contains_op_subsequence(read, &["obj.proj", "obj.load", "const.proj", "const.load"]),
+        "object-backed aggregates may store nested const refs, but field access must load the handle carrier before projecting through the const ref:\n{read}"
     );
 }
 
@@ -1322,6 +1322,277 @@ pub fn entry() -> u256 {
     assert!(
         !ir.contains("obj.init.const"),
         "borrowing a const-backed local should not materialize the full array:\n{ir}"
+    );
+}
+
+#[test]
+fn const_backed_view_params_lower_as_const_refs_in_sonatina() {
+    let mut db = DriverDataBase::default();
+    let file_url =
+        Url::parse("file:///const_backed_view_params_lower_as_const_refs_in_sonatina.fe").unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            r#"
+const C: [u256; 4] = [11, 22, 33, 44]
+
+fn pick(values: [u256; 4], idx: usize) -> u256 {
+    values[idx]
+}
+
+pub fn entry() -> u256 {
+    let values: [u256; 4] = C
+    let idx: usize = 2
+    pick(values, idx)
+}
+"#
+            .to_string(),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let ir = emit_module_sonatina_ir(&db, top_mod)
+        .expect("const-backed view parameter should lower in Sonatina");
+    let pick = sonatina_function_body(&ir, "pick");
+
+    assert!(
+        pick.contains("constref<[i256; 4]>"),
+        "view array parameter should be passed as a const ref:\n{ir}"
+    );
+    assert!(
+        pick.contains("const.index") && pick.contains("const.load"),
+        "const-backed view parameter should load through const data projections:\n{pick}"
+    );
+    assert!(
+        !ir.contains("obj.init.const"),
+        "view parameter should not materialize the full const-backed array:\n{ir}"
+    );
+}
+
+#[test]
+fn mutable_with_provider_reuses_materialized_root_for_later_readonly_effects() {
+    let mut db = DriverDataBase::default();
+    let file_url = Url::parse(
+        "file:///mutable_with_provider_reuses_materialized_root_for_later_readonly_effects.fe",
+    )
+    .unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            format!(
+                "{}\n#[test]\nfn test_with_temp_block_custom_effect() {{\n    let out: u256 = with (Counter = Counter {{ value: 0 }}) {{\n        inc()\n        read()\n    }}\n\n    assert(out == 1)\n}}\n",
+                include_str!("../../fe/tests/fixtures/fe_test/with_block_custom_effect.fe")
+            ),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let package = build_test_runtime_package(&db, top_mod, None).expect("runtime test package");
+    let incs = package
+        .functions(&db)
+        .iter()
+        .copied()
+        .filter(|function| function.symbol(&db).contains("inc"))
+        .map(|function| function.instance(&db))
+        .collect::<Vec<_>>();
+    let reads = package
+        .functions(&db)
+        .iter()
+        .copied()
+        .filter(|function| function.symbol(&db).contains("read"))
+        .map(|function| function.instance(&db))
+        .collect::<Vec<_>>();
+    assert!(!incs.is_empty(), "missing inc runtime function");
+    assert!(!reads.is_empty(), "missing read runtime function");
+    let assert_shared_root = |test_symbol: &str| {
+        let test = package
+            .functions(&db)
+            .iter()
+            .copied()
+            .find(|function| function.symbol(&db) == test_symbol)
+            .unwrap_or_else(|| panic!("missing {test_symbol} runtime function"));
+        let body = test.instance(&db).body(&db);
+
+        let call_arg = |callees: &[RuntimeInstance<'_>]| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.stmts.iter())
+                .find_map(|stmt| match stmt {
+                    RStmt::Assign {
+                        expr:
+                            RExpr::Call {
+                                callee: target,
+                                args,
+                            },
+                        ..
+                    } if callees.contains(target) => Some(args[0]),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing call in test body:\n{body:#?}"))
+        };
+        let provider_root = |arg| {
+            if let Some(root) = body
+                .blocks
+                .iter()
+                .flat_map(|block| block.stmts.iter())
+                .find_map(|stmt| match stmt {
+                    RStmt::Assign {
+                        dst,
+                        expr: RExpr::AddrOf { place },
+                    } if *dst == arg && place.path.is_empty() => match place.root {
+                        PlaceRoot::Ref(root) => Some(root),
+                        PlaceRoot::Slot(_) | PlaceRoot::Ptr { .. } | PlaceRoot::Provider(_) => None,
+                    },
+                    _ => None,
+                })
+            {
+                return root;
+            }
+
+            if matches!(
+                body.value_class(arg),
+                Some(RuntimeClass::Ref {
+                    kind: RefKind::Object,
+                    ..
+                })
+            ) {
+                return arg;
+            }
+
+            panic!("call arg should carry or address the provider root:\n{body:#?}")
+        };
+
+        let inc_arg = call_arg(&incs);
+        let read_arg = call_arg(&reads);
+        let inc_root = provider_root(inc_arg);
+        let read_root = provider_root(read_arg);
+
+        assert_eq!(
+            inc_root, read_root,
+            "mutable and readonly uses of the same with-provider should share one root:\n{body:#?}"
+        );
+        assert!(
+            matches!(
+                body.value_class(inc_root),
+                Some(RuntimeClass::Ref {
+                    kind: RefKind::Object,
+                    ..
+                })
+            ),
+            "shared mutable with-provider root should be object-backed:\n{body:#?}"
+        );
+        assert!(
+            matches!(
+                body.value_class(read_arg),
+                Some(RuntimeClass::Ref {
+                    kind: RefKind::Object,
+                    ..
+                })
+            ),
+            "later readonly effect should read from the object-backed provider root, not the original const ref:\n{body:#?}"
+        );
+    };
+
+    assert_shared_root("test_with_block_custom_effect");
+    assert_shared_root("test_with_temp_block_custom_effect");
+}
+
+#[test]
+fn readonly_with_provider_can_remain_const_backed() {
+    let mut db = DriverDataBase::default();
+    let file_url = Url::parse("file:///readonly_with_provider_can_remain_const_backed.fe").unwrap();
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(
+            r#"pub struct Counter {
+    pub value: u256,
+}
+
+fn read() -> u256 uses (counter: Counter) {
+    counter.value
+}
+
+#[test]
+fn test_readonly_with_provider() {
+    let out: u256 = with (Counter = Counter { value: 7 }) {
+        read() + read()
+    }
+
+    assert(out == 14)
+}"#
+            .to_string(),
+        ),
+    );
+    let file = db
+        .workspace()
+        .get(&db, &file_url)
+        .expect("file should be loaded");
+    let top_mod = db.top_mod(file);
+    let package = build_test_runtime_package(&db, top_mod, None).expect("runtime test package");
+    let read = package
+        .functions(&db)
+        .iter()
+        .copied()
+        .find(|function| function.symbol(&db) == "read")
+        .expect("read runtime function")
+        .instance(&db);
+    let test = package
+        .functions(&db)
+        .iter()
+        .copied()
+        .find(|function| function.symbol(&db) == "test_readonly_with_provider")
+        .expect("test runtime function");
+    let body = test.instance(&db).body(&db);
+    let read_args = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .filter_map(|stmt| match stmt {
+            RStmt::Assign {
+                expr: RExpr::Call { callee, args },
+                ..
+            } if *callee == read => Some(args[0]),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        read_args.len(),
+        2,
+        "readonly with-provider test should call read twice:\n{body:#?}"
+    );
+    assert!(
+        read_args.iter().all(|arg| matches!(
+            body.value_class(*arg),
+            Some(RuntimeClass::Ref {
+                kind: RefKind::Const,
+                ..
+            })
+        )),
+        "readonly-only with-provider should stay const-backed:\n{body:#?}"
+    );
+    assert!(
+        !body
+            .blocks
+            .iter()
+            .flat_map(|block| block.stmts.iter())
+            .any(|stmt| matches!(
+                stmt,
+                RStmt::Assign {
+                    expr: RExpr::MaterializeToObject { .. } | RExpr::AllocObject { .. },
+                    ..
+                }
+            )),
+        "readonly-only with-provider should not materialize the aggregate provider root:\n{body:#?}"
     );
 }
 
