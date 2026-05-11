@@ -17,7 +17,7 @@ use crate::{
 
 use super::{
     layout::layout_for_ty_in_env,
-    type_info::{RuntimeTypeEnv, scalar_class_for_ty_in_env},
+    type_info::{RuntimeTypeEnv, runtime_zero_sized_ty, scalar_class_for_ty_in_env},
 };
 
 pub(super) fn const_scalar_from_value<'db>(
@@ -151,7 +151,11 @@ pub(super) fn lower_const_region<'db>(
     env: RuntimeTypeEnv<'db>,
     value: SemConstId<'db>,
 ) -> Option<ConstRegionId<'db>> {
-    let layout = layout_for_ty_in_env(db, env, sem_const_ty(db, value));
+    let ty = sem_const_ty(db, value);
+    if runtime_zero_sized_ty(db, ty, env.scope, env.assumptions) {
+        return None;
+    }
+    let layout = layout_for_ty_in_env(db, env, ty);
     let value = lower_const_node(db, env, value)?;
     Some(ConstRegionId::new(db, layout, value))
 }
@@ -161,21 +165,22 @@ pub(super) fn aggregate_const_ref_class<'db>(
     env: RuntimeTypeEnv<'db>,
     value: SemConstId<'db>,
 ) -> Option<RuntimeClass<'db>> {
-    if !matches!(
-        value.value(db),
-        SemConstValue::Tuple { .. } | SemConstValue::Struct { .. } | SemConstValue::Array { .. }
-    ) {
+    let ty = sem_const_ty(db, value);
+    if runtime_zero_sized_ty(db, ty, env.scope, env.assumptions)
+        || !matches!(
+            value.value(db),
+            SemConstValue::Tuple { .. }
+                | SemConstValue::Struct { .. }
+                | SemConstValue::Array { .. }
+        )
+    {
         return None;
     }
     let node = lower_const_node(db, env, value)?;
     if !const_node_supports_data_ref(db, &node) {
         return None;
     }
-    Some(RuntimeClass::const_ref(layout_for_ty_in_env(
-        db,
-        env,
-        sem_const_ty(db, value),
-    )))
+    Some(RuntimeClass::const_ref(layout_for_ty_in_env(db, env, ty)))
 }
 
 fn const_node_supports_data_ref<'db>(db: &'db dyn MirDb, node: &ConstNode<'db>) -> bool {

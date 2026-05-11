@@ -43,6 +43,35 @@ fn sonatina_function_names(ir: &str) -> Vec<String> {
 }
 
 #[test]
+fn zero_sized_const_aggregates_do_not_emit_const_regions() {
+    let ir = with_top_mod_for_source(
+        "zero_sized_const_aggregates_do_not_emit_const_regions.fe",
+        r#"
+struct Empty {
+}
+
+pub fn new_empty() -> Empty {
+    Empty {}
+}
+"#,
+        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit"),
+    );
+
+    assert!(
+        !ir.contains("global private const"),
+        "zero-sized const aggregate should not emit a const global:\n{ir}"
+    );
+    assert!(
+        !ir.contains("const.ref"),
+        "zero-sized const aggregate should not emit a const ref:\n{ir}"
+    );
+    assert!(
+        !ir.contains("data $const_region"),
+        "zero-sized const aggregate should not emit section data:\n{ir}"
+    );
+}
+
+#[test]
 fn sonatina_function_names_disambiguate_module_conflicts() {
     let ir = with_top_mod_for_source(
         "sonatina_function_names_disambiguate_module_conflicts.fe",
