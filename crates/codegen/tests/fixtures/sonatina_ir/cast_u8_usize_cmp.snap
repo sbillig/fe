@@ -5,44 +5,21 @@ input_file: crates/codegen/tests/fixtures/cast_u8_usize_cmp.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %cast_u8_usize_cmp(v0.[i8; 8], v1.i256, v2.i256) -> i8 {
+global private const [i8; 8] $const_region_0 = [1, 2, 3, 4, 5, 6, 7, 8];
+
+func private %cast_u8_usize_cmp(v0.constref<[i8; 8]>, v1.i256, v2.i256) -> i8 {
     block0:
-        v3.objref<[i8; 8]> = obj.alloc [i8; 8];
+        v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v7.objref<i8> = obj.index v3 0.i256;
-        v8.i8 = extract_value v0 0.i256;
-        obj.store v7 v8;
-        v10.objref<i8> = obj.index v3 1.i256;
-        v11.i8 = extract_value v0 1.i256;
-        obj.store v10 v11;
-        v13.objref<i8> = obj.index v3 2.i256;
-        v14.i8 = extract_value v0 2.i256;
-        obj.store v13 v14;
-        v16.objref<i8> = obj.index v3 3.i256;
-        v17.i8 = extract_value v0 3.i256;
-        obj.store v16 v17;
-        v19.objref<i8> = obj.index v3 4.i256;
-        v20.i8 = extract_value v0 4.i256;
-        obj.store v19 v20;
-        v22.objref<i8> = obj.index v3 5.i256;
-        v23.i8 = extract_value v0 5.i256;
-        obj.store v22 v23;
-        v25.objref<i8> = obj.index v3 6.i256;
-        v26.i8 = extract_value v0 6.i256;
-        obj.store v25 v26;
-        v28.objref<i8> = obj.index v3 7.i256;
-        v29.i8 = extract_value v0 7.i256;
-        obj.store v28 v29;
-        mstore v4 v1 i256;
-        mstore v5 v2 i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
         jump block1;
 
     block1:
-        v30.i256 = mload v4 i256;
-        v32.i1 = lt v30 8.i256;
-        v33.i1 = is_zero v32;
-        br v33 block11 block12;
+        v5.i256 = mload v3 i256;
+        v8.i1 = lt v5 8.i256;
+        v9.i1 = is_zero v8;
+        br v9 block11 block12;
 
     block2:
         return 1.i8;
@@ -51,10 +28,10 @@ func private %cast_u8_usize_cmp(v0.[i8; 8], v1.i256, v2.i256) -> i8 {
         jump block4;
 
     block4:
-        v40.i256 = mload v5 i256;
-        v42.i256 = zext v35 i256;
-        v43.i1 = eq v40 v42;
-        br v43 block5 block6;
+        v17.i256 = mload v4 i256;
+        v19.i256 = zext v12 i256;
+        v20.i1 = eq v17 v19;
+        br v20 block5 block6;
 
     block5:
         return 2.i8;
@@ -63,10 +40,10 @@ func private %cast_u8_usize_cmp(v0.[i8; 8], v1.i256, v2.i256) -> i8 {
         jump block7;
 
     block7:
-        v45.i256 = mload v5 i256;
-        v47.i256 = zext v35 i256;
-        v48.i1 = gt v45 v47;
-        br v48 block8 block9;
+        v22.i256 = mload v4 i256;
+        v24.i256 = zext v12 i256;
+        v25.i1 = gt v22 v24;
+        br v25 block8 block9;
 
     block8:
         return 3.i8;
@@ -81,12 +58,12 @@ func private %cast_u8_usize_cmp(v0.[i8; 8], v1.i256, v2.i256) -> i8 {
         evm_revert 0.i256 0.i256;
 
     block12:
-        v34.objref<i8> = obj.index v3 v30;
-        v35.i8 = obj.load v34;
-        v36.i256 = mload v5 i256;
-        v37.i256 = zext v35 i256;
-        v38.i1 = lt v36 v37;
-        br v38 block2 block3;
+        v11.constref<i8> = const.index v0 v5;
+        v12.i8 = const.load v11;
+        v13.i256 = mload v4 i256;
+        v14.i256 = zext v12 i256;
+        v15.i1 = lt v13 v14;
+        br v15 block2 block3;
 }
 
 func private %main() -> i8 {
@@ -94,26 +71,9 @@ func private %main() -> i8 {
         jump block1;
 
     block1:
-        v8.objref<[i8; 8]> = obj.alloc [i8; 8];
-        v10.objref<i8> = obj.index v8 0.i256;
-        obj.store v10 1.i8;
-        v12.objref<i8> = obj.index v8 1.i256;
-        obj.store v12 2.i8;
-        v14.objref<i8> = obj.index v8 2.i256;
-        obj.store v14 3.i8;
-        v16.objref<i8> = obj.index v8 3.i256;
-        obj.store v16 4.i8;
-        v18.objref<i8> = obj.index v8 4.i256;
-        obj.store v18 5.i8;
-        v20.objref<i8> = obj.index v8 5.i256;
-        obj.store v20 6.i8;
-        v22.objref<i8> = obj.index v8 6.i256;
-        obj.store v22 7.i8;
-        v24.objref<i8> = obj.index v8 7.i256;
-        obj.store v24 8.i8;
-        v25.[i8; 8] = obj.load v8;
-        v26.i8 = call %cast_u8_usize_cmp v25 1.i256 2.i256;
-        return v26;
+        v8.constref<[i8; 8]> = const.ref $const_region_0;
+        v11.i8 = call %cast_u8_usize_cmp v8 1.i256 2.i256;
+        return v11;
 }
 
 func private %main_root() {

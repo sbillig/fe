@@ -8,11 +8,11 @@ use hir::analysis::{
         SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance, SemanticInstanceKey,
         SemanticLocalKind, VariantIndex,
         borrowck::{
-            NBorrowRoot, NBorrowRootId, NEffectArg, NExpr, NLocalOrigin, NOperand, NSPlace,
-            NSPlaceRoot, NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind,
-            NormalizedBindingLowering, NormalizedSemanticBody, normalize_semantic_body,
+            NBorrowRoot, NEffectArg, NExpr, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot, NSStmt,
+            NSStmtKind, NSTerminator, NSTerminatorKind, NormalizedSemanticBody,
+            normalize_semantic_body,
         },
-        eval_const_ref, get_or_build_semantic_instance, reify_runtime_const_for_ty, sem_const_ty,
+        get_or_build_semantic_instance, reify_runtime_const_for_ty, sem_const_ty,
     },
     ty::{
         corelib::{
@@ -60,8 +60,9 @@ use super::{
         resolve_runtime_call_key, semantic_return_ty, snapshot_source_place,
     },
     consts::{
-        aggregate_const_ref_class, const_scalar_for_class, const_scalar_from_value,
-        enum_tag_scalar, lower_const_region,
+        aggregate_const_ref_class, aggregate_const_ref_region, const_scalar_for_class,
+        const_scalar_from_value, enum_tag_scalar, evaluated_const_ref_value, lower_const_region,
+        reified_const_ref_value_for_ty,
     },
     conversion::{RuntimeConversionEmitter, RuntimeConversionError, emit_runtime_coercion},
     infer::{InferenceResult, LocalStateInferer, merge_runtime_class},
@@ -74,6 +75,10 @@ use super::{
         RuntimeArgSource, RuntimeValueUseEmitter, SelectedRuntimeArg, emit_runtime_value_use_plan,
     },
     returns::runtime_return_class,
+    source::{
+        RuntimeSourceMode, RuntimeSourceQuery, SemanticPlaceValueSource,
+        alias_source_place_for_local as source_alias_source_place_for_local,
+    },
     tuple::RuntimeTupleFieldEmitter,
     type_info::{
         RuntimeTypeEnv, effect_handle_class_for_ty_in_context, provider_class_for_target_in_env,
@@ -277,13 +282,11 @@ fn collect_const_ref_regions<'db>(
             let NExpr::Const(SConst::Ref(cref)) = expr else {
                 return None;
             };
-            let value = eval_const_ref(db, *cref)
-                .unwrap_or_else(|err| panic!("CTFE failed for {cref:?}: {err:?}"));
-            let value =
-                reify_runtime_const_for_ty(db, body.owner, body.locals[dst.index()].ty, value)
-                    .unwrap_or(value);
-            aggregate_const_ref_class(db, env, value)?;
-            lower_const_region(db, env, value)
+            aggregate_const_ref_region(
+                db,
+                env,
+                reified_const_ref_value_for_ty(db, body.owner, *cref, body.locals[dst.index()].ty),
+            )
         })
         .collect()
 }
@@ -313,11 +316,16 @@ enum LoweredBuiltinCall<'db> {
     Terminator(RTerminator<'db>),
 }
 
-struct LoweredSemanticLocals<'db> {
-    carriers: Vec<RuntimeCarrier<'db>>,
-    roots: Vec<RuntimeLocalRoot<'db>>,
-    semantic_locals: Vec<RuntimeLocalLowering<'db>>,
-    provider_bindings: Vec<RuntimeProviderBinding<'db>>,
+enum ValueExtractStep<'db> {
+    Aggregate {
+        index: u32,
+        class: RuntimeClass<'db>,
+    },
+    EnumField {
+        variant: VariantId<'db>,
+        field: FieldIndex,
+        class: RuntimeClass<'db>,
+    },
 }
 
 impl<'db> RuntimeConversionEmitter<'db> for RmirEmitter<'db> {
@@ -416,17 +424,12 @@ impl<'db> RmirEmitter<'db> {
         let semantic = key
             .semantic(db)
             .expect("semantic lowering only applies to semantic runtime instances");
-        let LoweredSemanticLocals {
+        let InferenceResult {
             carriers,
             roots,
             semantic_locals,
             provider_bindings,
-        } = LoweredSemanticLocals {
-            carriers: inferred.carriers,
-            roots: inferred.roots,
-            semantic_locals: inferred.semantic_locals,
-            provider_bindings: inferred.provider_bindings,
-        };
+        } = inferred;
         let semantic_carriers = carriers.clone();
         let env = RuntimeTypeEnv::for_semantic(db, semantic);
         let const_ref_regions = collect_const_ref_regions(db, env, &semantic_body);
@@ -602,10 +605,20 @@ impl<'db> RmirEmitter<'db> {
         let Some(target) = self.value_class(dst_value).cloned() else {
             return;
         };
-        if !self.semantic_body.locals[dst.index()]
+        if matches!(
+            self.semantic_local_lowering(dst),
+            RuntimeLocalLowering::DirectValue
+        ) && !self.semantic_body.locals[dst.index()]
             .facts
             .root_demand
             .disallows_const_ref_storage()
+            && effect_handle_class_for_ty_in_context(
+                self.db,
+                self.semantic_body.locals[dst.index()].ty,
+                self.env.scope,
+                self.env.assumptions,
+            )
+            .is_none()
             && let NExpr::Const(SConst::Ref(cref)) = expr
             && let Some(actual) =
                 self.const_ref_runtime_class(*cref, self.locals[dst_value.index()].semantic_ty)
@@ -711,6 +724,9 @@ impl<'db> RmirEmitter<'db> {
                 );
             }
             NExpr::ReadPlace { place, .. } => {
+                if self.lower_value_extract_place_read(bb, dst, place) {
+                    return;
+                }
                 if self.lower_single_field_transport_place_read(bb, dst, place) {
                     return;
                 }
@@ -953,8 +969,7 @@ impl<'db> RmirEmitter<'db> {
                 self.lower_sem_const_for_class(bb, dst, *value, expected_ty, &target);
             }
             SConst::Ref(cref) => {
-                let value = eval_const_ref(self.db, *cref)
-                    .unwrap_or_else(|err| panic!("CTFE failed for {cref:?}: {err:?}"));
+                let value = evaluated_const_ref_value(self.db, *cref);
                 if sem_const_ty(self.db, value) == TyId::unit(self.db) {
                     return;
                 }
@@ -978,7 +993,9 @@ impl<'db> RmirEmitter<'db> {
         target: &RuntimeClass<'db>,
     ) {
         let value = self.reify_runtime_const(expected_ty, value);
-        if aggregate_const_ref_class(self.db, self.env, value).is_some() {
+        if aggregate_const_ref_class(self.db, self.env, value).is_some()
+            && self.target_accepts_const_ref_source(target)
+        {
             let src = self.lower_sem_const_as_const_handle(bb, value, expected_ty);
             let value = if self.value_class(src) == Some(target) {
                 src
@@ -1116,6 +1133,17 @@ impl<'db> RmirEmitter<'db> {
                 self.lower_non_scalar_const_as_class(bb, value, ty, target)
             }
         }
+    }
+
+    fn target_accepts_const_ref_source(&self, target: &RuntimeClass<'db>) -> bool {
+        !matches!(
+            target,
+            RuntimeClass::RawAddr { .. }
+                | RuntimeClass::Ref {
+                    kind: RefKind::Provider { .. },
+                    ..
+                }
+        )
     }
 
     fn lower_sem_const_as_value(
@@ -1373,8 +1401,7 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn known_const_ref_region(&self, value: SemConstId<'db>) -> Option<ConstRegionId<'db>> {
-        aggregate_const_ref_class(self.db, self.env, value)?;
-        let region = lower_const_region(self.db, self.env, value)?;
+        let region = aggregate_const_ref_region(self.db, self.env, value)?;
         self.const_ref_regions.contains(&region).then_some(region)
     }
 
@@ -1383,11 +1410,8 @@ impl<'db> RmirEmitter<'db> {
         cref: SemanticConstRef<'db>,
         expected_ty: TyId<'db>,
     ) -> Option<RuntimeClass<'db>> {
-        let value = eval_const_ref(self.db, cref)
-            .unwrap_or_else(|err| panic!("CTFE failed for {cref:?}: {err:?}"));
         let value =
-            reify_runtime_const_for_ty(self.db, self.semantic_body.owner, expected_ty, value)
-                .unwrap_or(value);
+            reified_const_ref_value_for_ty(self.db, self.semantic_body.owner, cref, expected_ty);
         aggregate_const_ref_class(self.db, self.env, value)
     }
 
@@ -1907,6 +1931,11 @@ impl<'db> RmirEmitter<'db> {
         elem: PlaceElem<'db>,
     ) {
         if let PlaceElem::Field(FieldIndex(field_idx)) = &elem
+            && self.lower_single_field_value_extract_local_read(bb, dst, base, *field_idx as usize)
+        {
+            return;
+        }
+        if let PlaceElem::Field(FieldIndex(field_idx)) = &elem
             && self.lower_single_field_transport_local_read(bb, dst, base, *field_idx as usize)
         {
             return;
@@ -1948,6 +1977,163 @@ impl<'db> RmirEmitter<'db> {
                 expr: RExpr::Use(copied),
             },
         );
+    }
+
+    fn lower_value_extract_place_read(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        place: &NSPlace<'db>,
+    ) -> bool {
+        let base = match place.root {
+            NSPlaceRoot::CarrierDerefLocal(base) => base,
+            NSPlaceRoot::Root(root) => match self.semantic_body.root(root) {
+                Some(NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local }) => *local,
+                Some(NBorrowRoot::Provider { .. }) | None => return false,
+            },
+        };
+        let path = place.path.iter().cloned().collect::<Vec<_>>();
+        self.lower_value_extract_path_read(bb, dst, base, &path)
+    }
+
+    fn lower_single_field_value_extract_local_read(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        base: SLocalId,
+        field_idx: usize,
+    ) -> bool {
+        self.lower_value_extract_path_read(bb, dst, base, &[Projection::Field(field_idx)])
+    }
+
+    fn lower_value_extract_path_read(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        base: SLocalId,
+        path: &[Projection<TyId<'db>, VariantIndex, SLocalId>],
+    ) -> bool {
+        if !matches!(self.locals[base.index()].root, RuntimeLocalRoot::None) {
+            return false;
+        }
+        let mut value = self.runtime_value(base);
+        let Some(mut class) = self.value_class(value).cloned() else {
+            return false;
+        };
+        if path.is_empty() {
+            let target = self
+                .value_class(dst)
+                .cloned()
+                .expect("value read result must have class");
+            let value = self.coerce_value(bb, value, &target);
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst,
+                    expr: RExpr::Use(value),
+                },
+            );
+            return true;
+        }
+        if !matches!(class, RuntimeClass::AggregateValue { .. }) {
+            return false;
+        }
+        for (path_idx, elem) in path.iter().enumerate() {
+            let step = match elem {
+                Projection::Field(field) => {
+                    let field = FieldIndex((*field).try_into().expect("field index fits in u16"));
+                    ValueExtractStep::Aggregate {
+                        index: u32::from(field.0),
+                        class: project_field_class(self.db, class, field),
+                    }
+                }
+                Projection::Index(IndexSource::Constant(index)) => {
+                    let index = (*index).try_into().expect("constant index fits in u32");
+                    ValueExtractStep::Aggregate {
+                        index,
+                        class: project_index_class(self.db, class),
+                    }
+                }
+                Projection::VariantField {
+                    variant, field_idx, ..
+                } => {
+                    let field =
+                        FieldIndex((*field_idx).try_into().expect("field index fits in u16"));
+                    let variant = VariantId {
+                        enum_layout: class
+                            .aggregate_layout()
+                            .expect("variant-field value extract should project from enum layout"),
+                        index: variant.0,
+                    };
+                    ValueExtractStep::EnumField {
+                        variant,
+                        field,
+                        class: project_variant_field_class(self.db, class, variant, field),
+                    }
+                }
+                Projection::Deref
+                | Projection::Index(IndexSource::Dynamic(_))
+                | Projection::Discriminant => return false,
+            };
+            let extracted_class = match &step {
+                ValueExtractStep::Aggregate { class, .. }
+                | ValueExtractStep::EnumField { class, .. } => class.clone(),
+            };
+            let is_last = path_idx + 1 == path.len();
+            if is_last {
+                let target = self
+                    .value_class(dst)
+                    .cloned()
+                    .expect("value extract result must have class");
+                if extracted_class == target {
+                    self.push_value_extract_step(bb, dst, value, step);
+                } else {
+                    let temp = self.alloc_runtime_temp(
+                        self.locals[dst.index()].semantic_ty,
+                        RuntimeCarrier::Value(extracted_class),
+                    );
+                    self.push_value_extract_step(bb, temp, value, step);
+                    let copied = self.coerce_value(bb, temp, &target);
+                    self.push_stmt(
+                        bb,
+                        RStmt::Assign {
+                            dst,
+                            expr: RExpr::Use(copied),
+                        },
+                    );
+                }
+                return true;
+            }
+            let temp = self.alloc_runtime_temp(
+                self.locals[dst.index()].semantic_ty,
+                RuntimeCarrier::Value(extracted_class.clone()),
+            );
+            self.push_value_extract_step(bb, temp, value, step);
+            value = temp;
+            class = extracted_class;
+        }
+        false
+    }
+
+    fn push_value_extract_step(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        value: RLocalId,
+        step: ValueExtractStep<'db>,
+    ) {
+        let expr = match step {
+            ValueExtractStep::Aggregate { index, .. } => RExpr::AggregateExtract { value, index },
+            ValueExtractStep::EnumField { variant, field, .. } => {
+                self.push_stmt(bb, RStmt::EnumAssertVariant { value, variant });
+                RExpr::EnumExtract {
+                    value,
+                    variant,
+                    field,
+                }
+            }
+        };
+        self.push_stmt(bb, RStmt::Assign { dst, expr });
     }
 
     fn lower_single_field_transport_place_read(
@@ -2987,9 +3173,11 @@ impl<'db> RmirEmitter<'db> {
         args: &[NOperand],
         plan: &CompiledCallInputPlan<'db>,
     ) -> (Vec<RLocalId>, Vec<RuntimeClass<'db>>) {
+        let roots = self.runtime_roots();
         let selected = self.with_current_body_cx(|cx| {
             let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
             RuntimeArgSelector::new(cx.env, cx.carriers, Some(&mut class_cache))
+                .with_concrete_roots(&roots)
                 .selected_param_inputs(args, &plan.param_plans)
         });
         RuntimeArgLowerer::new(self, bb).lower_all(&selected)
@@ -3002,9 +3190,11 @@ impl<'db> RmirEmitter<'db> {
         effect_args: &[NEffectArg<'db>],
         plan: &CompiledCallInputPlan<'db>,
     ) -> (Vec<RLocalId>, Vec<RuntimeClass<'db>>) {
+        let roots = self.runtime_roots();
         let selected = self.with_current_body_cx(|cx| {
             let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
             RuntimeArgSelector::new(cx.env, cx.carriers, Some(&mut class_cache))
+                .with_concrete_roots(&roots)
                 .selected_call_inputs(args, effect_args, plan)
         });
         RuntimeArgLowerer::new(self, bb).lower_all(&selected)
@@ -3824,44 +4014,7 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn alias_source_place_for_local(&self, local: SLocalId) -> Option<NSPlace<'db>> {
-        let local_data = self.semantic_body.local(local)?;
-        if let Some(place) = local_data.backing_place() {
-            return Some(place.clone());
-        }
-        match &local_data.lowering {
-            NormalizedBindingLowering::CarrierLocal { provider, .. } => {
-                let root = if let Some(provider) = provider {
-                    NSPlaceRoot::Root(self.provider_borrow_root(provider)?)
-                } else {
-                    NSPlaceRoot::CarrierDerefLocal(local)
-                };
-                Some(NSPlace {
-                    root,
-                    path: Default::default(),
-                })
-            }
-            NormalizedBindingLowering::Erased
-            | NormalizedBindingLowering::ValueLocal { .. }
-            | NormalizedBindingLowering::PlaceBoundValue { .. } => None,
-        }
-    }
-
-    fn provider_borrow_root(
-        &self,
-        provider: &hir::semantic::ProviderBinding<'db>,
-    ) -> Option<NBorrowRootId> {
-        self.semantic_body
-            .borrow_roots
-            .iter()
-            .enumerate()
-            .find_map(|(idx, root)| match root {
-                NBorrowRoot::Provider { binding } if binding == provider => {
-                    Some(NBorrowRootId::from_u32(idx as u32))
-                }
-                NBorrowRoot::Param { .. }
-                | NBorrowRoot::LocalSlot { .. }
-                | NBorrowRoot::Provider { .. } => None,
-            })
+        source_alias_source_place_for_local(&self.semantic_body, local)
     }
 
     fn semantic_value_class(&self, local: SLocalId) -> Option<RuntimeClass<'db>> {
@@ -3922,11 +4075,8 @@ impl<'db> RmirEmitter<'db> {
         if let RuntimeLocalLowering::PlaceBoundValue {
             provider: Some(provider),
             ..
-        } = self.semantic_local_lowering(local)
-        {
-            return Some(PlaceRoot::Provider(*provider));
         }
-        if let RuntimeLocalLowering::DirectCarrier {
+        | RuntimeLocalLowering::DirectCarrier {
             provider: Some(provider),
             ..
         } = self.semantic_local_lowering(local)
@@ -4045,22 +4195,38 @@ impl<'db> RmirEmitter<'db> {
             ),
             RuntimeLocalLowering::PlaceCarrier { .. }
             | RuntimeLocalLowering::PlaceBoundValue { .. } => {
+                if let Some(source) = self.semantic_place_value_source(local) {
+                    match source {
+                        SemanticPlaceValueSource::PlaceValue { place, semantic_ty } => {
+                            let place = self.lower_place(bb, &place);
+                            return self.load_runtime_place_value(bb, place, semantic_ty);
+                        }
+                        SemanticPlaceValueSource::ValueExtract { place, semantic_ty } => {
+                            if let Some(class) = self.semantic_value_class(local) {
+                                let temp = self
+                                    .alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(class));
+                                if self.lower_value_extract_place_read(bb, temp, &place) {
+                                    return temp;
+                                }
+                            }
+                        }
+                    }
+                }
                 let place = self.semantic_place(bb, local);
-                let place_class = self.project_place_class(&place);
-                let temp = self.alloc_runtime_temp(
-                    self.locals[local.index()].semantic_ty,
-                    RuntimeCarrier::Value(place_class),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::Load { place },
-                    },
-                );
-                temp
+                self.load_runtime_place_value(bb, place, self.locals[local.index()].semantic_ty)
             }
         }
+    }
+
+    fn semantic_place_value_source(
+        &self,
+        local: SLocalId,
+    ) -> Option<SemanticPlaceValueSource<'db>> {
+        let roots = self.runtime_roots();
+        self.with_current_body_cx(|cx| {
+            RuntimeSourceQuery::new(cx.env, cx.carriers, RuntimeSourceMode::Concrete(&roots))
+                .semantic_place_value_source(local)
+        })
     }
 
     fn read_semantic_operand(&mut self, bb: RBlockId, operand: NOperand) -> RLocalId {
@@ -4086,8 +4252,10 @@ impl<'db> RmirEmitter<'db> {
         operand: NOperand,
         target: &RuntimeClass<'db>,
     ) -> RLocalId {
+        let roots = self.runtime_roots();
         let selected = self.with_current_body_cx(|cx| {
             RuntimeArgSelector::new(cx.env, cx.carriers, None)
+                .with_concrete_roots(&roots)
                 .selected_semantic_operand_for_class(operand, target)
         });
         self.lower_selected_runtime_arg(bb, operand, &selected)
@@ -4190,8 +4358,10 @@ impl<'db> RmirEmitter<'db> {
         operand: NOperand,
         boundary: &crate::runtime::RuntimeBoundarySpec<'db>,
     ) -> RLocalId {
+        let roots = self.runtime_roots();
         let selected = self.with_current_body_cx(|cx| {
             RuntimeArgSelector::new(cx.env, cx.carriers, None)
+                .with_concrete_roots(&roots)
                 .selected_semantic_operand_for_boundary(operand, boundary)
         });
         self.lower_selected_runtime_arg(bb, operand, &selected)
@@ -4225,11 +4395,9 @@ impl<'db> RmirEmitter<'db> {
             RuntimeLocalLowering::DirectValue | RuntimeLocalLowering::PlaceCarrier { .. } => {
                 Some(self.runtime_value(local))
             }
-            RuntimeLocalLowering::PlaceBoundValue {
-                provider: Some(provider),
-                ..
-            } => Some(self.provider_binding_value(*provider)),
-            RuntimeLocalLowering::PlaceBoundValue { provider: None, .. } => None,
+            RuntimeLocalLowering::PlaceBoundValue { provider, .. } => {
+                provider.map(|provider| self.provider_binding_value(provider))
+            }
             RuntimeLocalLowering::DirectCarrier { provider, .. } => Some(provider.map_or_else(
                 || self.runtime_value(local),
                 |provider| self.provider_binding_value(provider),
@@ -4612,6 +4780,10 @@ impl<'db> RmirEmitter<'db> {
         }
     }
 
+    fn runtime_roots(&self) -> Vec<RuntimeLocalRoot<'db>> {
+        self.locals.iter().map(|local| local.root.clone()).collect()
+    }
+
     fn value_class(&self, local: RLocalId) -> Option<&RuntimeClass<'db>> {
         match self.locals.get(local.index())?.carrier {
             RuntimeCarrier::Erased => None,
@@ -4728,30 +4900,18 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
                 };
                 self.apply_use_plan(value, use_plan.clone(), self.semantic_local_ty(*local))
             }
-            (RuntimeArgSource::RuntimeValue { local }, use_plan) => {
+            (RuntimeArgSource::RuntimeValue(local), use_plan) => {
                 let value = self.emitter.runtime_value(*local);
                 self.apply_use_plan(value, use_plan.clone(), self.semantic_local_ty(*local))
             }
-            (RuntimeArgSource::HandleLikeValue { local }, use_plan) => {
+            (RuntimeArgSource::HandleLikeValue(local), use_plan) => {
                 let value = self
                     .emitter
                     .handle_like_semantic_value(*local)
                     .unwrap_or_else(|| self.emitter.read_semantic_value(self.bb, *local));
                 self.apply_use_plan(value, use_plan.clone(), self.semantic_local_ty(*local))
             }
-            (
-                RuntimeArgSource::PlaceAddress { place, semantic_ty },
-                RuntimeValueUsePlan::UseValue,
-            ) => {
-                let place = self.emitter.lower_place(self.bb, place);
-                self.emitter.lower_place_addr_of_for_class(
-                    *semantic_ty,
-                    self.bb,
-                    place,
-                    selected.class.clone(),
-                )
-            }
-            (RuntimeArgSource::PlaceAddress { place, semantic_ty }, use_plan) => {
+            (RuntimeArgSource::PlaceAddress(place, semantic_ty), use_plan) => {
                 let place = self.emitter.lower_place(self.bb, place);
                 let value = self.emitter.lower_place_addr_of_for_class(
                     *semantic_ty,
@@ -4761,7 +4921,7 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
                 );
                 self.apply_use_plan(value, use_plan.clone(), *semantic_ty)
             }
-            (RuntimeArgSource::PlaceValue { place, semantic_ty }, use_plan) => {
+            (RuntimeArgSource::PlaceValue(place, semantic_ty), use_plan) => {
                 let place = self.emitter.lower_place(self.bb, place);
                 let value = self
                     .emitter
@@ -4769,18 +4929,28 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
                 self.apply_use_plan(value, use_plan.clone(), *semantic_ty)
             }
             (
-                RuntimeArgSource::SemanticPlaceAddress { local, semantic_ty },
-                RuntimeValueUsePlan::UseValue,
-            ) => {
-                let place = self.emitter.semantic_place(self.bb, *local);
-                self.emitter.lower_place_addr_of_for_class(
-                    *semantic_ty,
-                    self.bb,
+                RuntimeArgSource::ValueExtract {
                     place,
-                    selected.class.clone(),
-                )
+                    semantic_ty,
+                    value_class,
+                },
+                use_plan,
+            ) => {
+                let value = self
+                    .emitter
+                    .alloc_runtime_temp(*semantic_ty, RuntimeCarrier::Value(value_class.clone()));
+                if !self
+                    .emitter
+                    .lower_value_extract_place_read(self.bb, value, place)
+                {
+                    panic!(
+                        "selected value-extract runtime source was not lowerable: caller={:?}; selected={selected:?}",
+                        self.emitter.current_semantic_key(),
+                    )
+                }
+                self.apply_use_plan(value, use_plan.clone(), *semantic_ty)
             }
-            (RuntimeArgSource::SemanticPlaceAddress { local, semantic_ty }, use_plan) => {
+            (RuntimeArgSource::SemanticPlaceAddress(local, semantic_ty), use_plan) => {
                 let place = self.emitter.semantic_place(self.bb, *local);
                 let value = self.emitter.lower_place_addr_of_for_class(
                     *semantic_ty,
@@ -4790,7 +4960,7 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
                 );
                 self.apply_use_plan(value, use_plan.clone(), *semantic_ty)
             }
-            (RuntimeArgSource::AggregateFromRuntimeSource { local }, use_plan) => {
+            (RuntimeArgSource::AggregateFromRuntimeSource(local), use_plan) => {
                 let Some(value) = self
                     .emitter
                     .actual_aggregate_value_from_runtime_source(self.bb, *local)
@@ -4802,10 +4972,7 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
                 };
                 self.apply_use_plan(value, use_plan.clone(), self.semantic_local_ty(*local))
             }
-            (RuntimeArgSource::Placeholder { semantic_ty }, RuntimeValueUsePlan::UseValue) => {
-                self.lower_placeholder(*semantic_ty, selected.class.clone())
-            }
-            (RuntimeArgSource::Placeholder { semantic_ty }, use_plan) => {
+            (RuntimeArgSource::Placeholder(semantic_ty), use_plan) => {
                 let value = self.lower_placeholder(*semantic_ty, selected.class.clone());
                 self.apply_use_plan(value, use_plan.clone(), *semantic_ty)
             }

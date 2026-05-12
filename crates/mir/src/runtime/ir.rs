@@ -890,6 +890,10 @@ impl<'db> RuntimeBoundarySpec<'db> {
 pub enum RuntimeParamPlan<'db> {
     Erased,
     Boundary(RuntimeBoundarySpec<'db>),
+    ReadOnlyView {
+        value: RuntimeClass<'db>,
+        borrow: RuntimeBoundarySpec<'db>,
+    },
     PassActual,
 }
 
@@ -1319,6 +1323,10 @@ pub enum RExpr<'db> {
     },
     Load {
         place: RuntimePlace<'db>,
+    },
+    AggregateExtract {
+        value: RValueId,
+        index: u32,
     },
     Call {
         callee: RuntimeInstance<'db>,

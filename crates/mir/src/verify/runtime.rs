@@ -357,6 +357,14 @@ fn verify_assign<'db>(
             Some(expected)
         }
         RExpr::Load { place } => Some(project_place(db, program, body, place)?),
+        RExpr::AggregateExtract { value, index } => {
+            let RuntimeClass::AggregateValue { layout } = runtime_value_class(body, *value)? else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
+            let field = aggregate_index_class(program, *layout, *index as usize)
+                .ok_or(VerifyError::InvalidExprClass(dst))?;
+            Some(field)
+        }
         RExpr::Call { callee, args } => {
             verify_call(db, program, body, *callee, args, RuntimeCallKind::Normal)?;
             program.interface_signature(*callee).ret.clone()
@@ -938,6 +946,18 @@ fn verify_address_operand<'db>(
             ..
         }) => Ok(()),
         _ => Err(VerifyError::InvalidExprClass(value)),
+    }
+}
+
+fn aggregate_index_class<'db>(
+    program: &impl RuntimeProgramView<'db>,
+    layout: crate::runtime::LayoutId<'db>,
+    index: usize,
+) -> Option<RuntimeClass<'db>> {
+    match program.layout(layout) {
+        Layout::Struct(data) => data.fields.get(index).cloned(),
+        Layout::Array(data) => (index < data.len as usize).then(|| data.elem.clone()),
+        Layout::Enum(_) => None,
     }
 }
 

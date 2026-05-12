@@ -8,8 +8,12 @@ use hir::{
             SLocalId, SemanticLocalKind,
             borrowck::{NLocalOrigin, NSLocal, NormalizedBindingLowering, NormalizedSemanticBody},
         },
-        ty::{trait_resolution::PredicateListId, ty_is_copy},
+        ty::{
+            trait_resolution::PredicateListId, ty_check::LocalBinding, ty_def::CapabilityKind,
+            ty_is_copy,
+        },
     },
+    hir_def::FuncParamMode,
     semantic::ProviderBinding,
 };
 
@@ -31,8 +35,10 @@ use super::{
     },
     conversion::RuntimeConversionPlanner,
     returns::runtime_return_class,
+    source::local_read_places_extractable_from_value,
     type_info::{
-        provider_class_for_target_in_context, stored_class_for_ty_in_context,
+        effect_handle_class_for_ty_in_context, provider_class_for_target_in_context,
+        runtime_repr_ty_in_context, stored_class_for_ty_in_context,
         top_level_class_for_ty_in_context,
     },
 };
@@ -134,7 +140,16 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
         for (idx, local) in cx.env.body().locals.iter().enumerate() {
             let local_id = SLocalId::from_u32(idx as u32);
             let mut carrier = carriers[idx].clone();
-            let root = if !local.facts.root_demand.needs_runtime_root() {
+            let root = if !local.facts.root_demand.needs_runtime_root()
+                || local_lowers_as_unrooted_read_value(
+                    cx.env.db(),
+                    cx.env.body(),
+                    local_id,
+                    local,
+                    &carrier,
+                    cx.env.scope(),
+                    cx.env.assumptions(),
+                ) {
                 RuntimeLocalRoot::None
             } else {
                 infer_runtime_local_root(cx, local_id, &mut carrier)
@@ -189,7 +204,13 @@ impl<'a, 'db> SparseAnalysis for LocalStateInferer<'a, 'db> {
         let Some(class) = class else {
             return Ok(false);
         };
-        let desired = desired_runtime_value_carrier(local, class);
+        let desired = desired_runtime_value_carrier(
+            self.env.db(),
+            local,
+            class,
+            self.env.scope(),
+            self.env.assumptions(),
+        );
         if !self.set_carrier(assign.dst, desired) {
             return Ok(false);
         }
@@ -253,8 +274,11 @@ pub(crate) fn seed_root_provider_carriers<'a, 'db>(
 }
 
 pub(crate) fn desired_runtime_value_carrier<'db>(
+    db: &'db dyn MirDb,
     local: &NSLocal<'db>,
     class: RuntimeClass<'db>,
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
 ) -> RuntimeCarrier<'db> {
     if matches!(
         (&local.facts.interface, &local.facts.origin),
@@ -264,6 +288,17 @@ pub(crate) fn desired_runtime_value_carrier<'db>(
         )
     ) {
         return RuntimeCarrier::Erased;
+    }
+    if let Some(transport_class) =
+        effect_handle_class_for_ty_in_context(db, local.ty, scope, assumptions)
+    {
+        return RuntimeCarrier::Value(transport_class);
+    }
+    if !class.is_transport()
+        && matches!(local.facts.interface, SemanticLocalKind::DirectCarrier)
+        && let Some(transport_class) = fallback_root_transport_class(db, local, scope, assumptions)
+    {
+        return RuntimeCarrier::Value(transport_class);
     }
     match class {
         RuntimeClass::AggregateValue { layout }
@@ -548,7 +583,76 @@ fn place_carrier_lowers_as_direct_value<'db>(
     let NormalizedBindingLowering::CarrierLocal { target_ty, .. } = &local.lowering else {
         panic!("place-carrier local missing carrier lowering");
     };
-    scope.is_some_and(|scope| ty_is_copy(db, scope, *target_ty, assumptions))
+    let runtime_target_ty = runtime_repr_ty_in_context(db, *target_ty, scope, assumptions);
+    matches!(
+        local.ty.as_capability(db),
+        Some((CapabilityKind::View, inner))
+            if runtime_repr_ty_in_context(db, inner, scope, assumptions) == runtime_target_ty
+    ) || matches!(
+        local.source,
+        Some(LocalBinding::Param {
+            mode: FuncParamMode::View,
+            ..
+        }) if runtime_repr_ty_in_context(db, local.ty, scope, assumptions) == runtime_target_ty
+    ) || scope.is_some_and(|scope| ty_is_copy(db, scope, *target_ty, assumptions))
+}
+
+fn local_lowers_as_direct_read_value<'db>(
+    db: &'db dyn MirDb,
+    local: &NSLocal<'db>,
+    carrier: &RuntimeCarrier<'db>,
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> bool {
+    if !matches!(
+        carrier_value_class_for_runtime(carrier),
+        Some(RuntimeClass::AggregateValue { .. })
+    ) {
+        return false;
+    }
+    match local.facts.interface {
+        SemanticLocalKind::DirectValue => local_is_read_only_view_param(local),
+        SemanticLocalKind::PlaceCarrier => {
+            local_is_read_only_view_param(local)
+                && place_carrier_lowers_as_direct_value(db, local, carrier, scope, assumptions)
+        }
+        SemanticLocalKind::Erased
+        | SemanticLocalKind::DirectCarrier
+        | SemanticLocalKind::PlaceBoundValue => false,
+    }
+}
+
+fn local_is_read_only_view_param<'db>(local: &NSLocal<'db>) -> bool {
+    matches!(
+        local.source,
+        Some(LocalBinding::Param {
+            mode: FuncParamMode::View,
+            ..
+        })
+    )
+}
+
+fn local_lowers_as_unrooted_read_value<'db>(
+    db: &'db dyn MirDb,
+    body: &NormalizedSemanticBody<'db>,
+    local_id: SLocalId,
+    local: &NSLocal<'db>,
+    carrier: &RuntimeCarrier<'db>,
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> bool {
+    if !local_lowers_as_direct_read_value(db, local, carrier, scope, assumptions) {
+        return false;
+    }
+    let demand = local.facts.root_demand;
+    if demand.written_by_place
+        || demand.borrowed_or_addr_taken
+        || demand.mut_borrowed_or_addr_taken
+        || demand.passed_by_place
+    {
+        return false;
+    }
+    local_read_places_extractable_from_value(body, local_id)
 }
 
 fn runtime_provider_binding_id<'db>(
@@ -862,9 +966,6 @@ fn join_runtime_class<'db>(
     {
         push_join_candidate(&mut candidates, RuntimeClass::AggregateValue { layout });
         push_join_candidate(&mut candidates, RuntimeClass::object_ref(layout));
-    }
-    if let Some(merged) = merge_runtime_class(db, current, desired) {
-        push_join_candidate(&mut candidates, merged);
     }
 
     candidates
@@ -1238,6 +1339,34 @@ mod tests {
         }
     }
 
+    fn provider_enum_classes<'db>(
+        db: &'db DriverDataBase,
+    ) -> (RuntimeClass<'db>, RuntimeClass<'db>) {
+        let source_ty = TyId::unit(db);
+        let pointee = RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int {
+                bits: 256,
+                signed: false,
+            },
+            role: ScalarRole::Plain,
+        });
+        let provider = |provider_ty, space, pointee| RuntimeClass::AggregateValue {
+            layout: test_enum_layout(
+                db,
+                source_ty,
+                RuntimeClass::Ref {
+                    pointee: Box::new(pointee),
+                    kind: RefKind::Provider { provider_ty, space },
+                    view: RefView::Whole,
+                },
+            ),
+        };
+        (
+            provider(TyId::bool(db), AddressSpaceKind::Storage, pointee.clone()),
+            provider(TyId::u256(db), AddressSpaceKind::Memory, pointee),
+        )
+    }
+
     #[test]
     fn join_runtime_class_materializes_const_ref_to_aggregate_for_plain_values() {
         let db = DriverDataBase::default();
@@ -1287,42 +1416,7 @@ mod tests {
     #[test]
     fn merge_runtime_class_prefers_non_memory_provider_enum_layouts() {
         let db = DriverDataBase::default();
-        let source_ty = TyId::unit(&db);
-        let pointee = RuntimeClass::Scalar(ScalarClass {
-            repr: ScalarRepr::Int {
-                bits: 256,
-                signed: false,
-            },
-            role: ScalarRole::Plain,
-        });
-        let storage_class = RuntimeClass::AggregateValue {
-            layout: test_enum_layout(
-                &db,
-                source_ty,
-                RuntimeClass::Ref {
-                    pointee: Box::new(pointee.clone()),
-                    kind: RefKind::Provider {
-                        provider_ty: TyId::bool(&db),
-                        space: AddressSpaceKind::Storage,
-                    },
-                    view: RefView::Whole,
-                },
-            ),
-        };
-        let memory_class = RuntimeClass::AggregateValue {
-            layout: test_enum_layout(
-                &db,
-                source_ty,
-                RuntimeClass::Ref {
-                    pointee: Box::new(pointee),
-                    kind: RefKind::Provider {
-                        provider_ty: TyId::u256(&db),
-                        space: AddressSpaceKind::Memory,
-                    },
-                    view: RefView::Whole,
-                },
-            ),
-        };
+        let (storage_class, memory_class) = provider_enum_classes(&db);
 
         assert_eq!(
             merge_runtime_class(&db, &storage_class, &memory_class),
@@ -1337,42 +1431,7 @@ mod tests {
     #[test]
     fn join_runtime_class_preserves_structural_aggregate_merge() {
         let db = DriverDataBase::default();
-        let source_ty = TyId::unit(&db);
-        let pointee = RuntimeClass::Scalar(ScalarClass {
-            repr: ScalarRepr::Int {
-                bits: 256,
-                signed: false,
-            },
-            role: ScalarRole::Plain,
-        });
-        let storage_class = RuntimeClass::AggregateValue {
-            layout: test_enum_layout(
-                &db,
-                source_ty,
-                RuntimeClass::Ref {
-                    pointee: Box::new(pointee.clone()),
-                    kind: RefKind::Provider {
-                        provider_ty: TyId::bool(&db),
-                        space: AddressSpaceKind::Storage,
-                    },
-                    view: RefView::Whole,
-                },
-            ),
-        };
-        let memory_class = RuntimeClass::AggregateValue {
-            layout: test_enum_layout(
-                &db,
-                source_ty,
-                RuntimeClass::Ref {
-                    pointee: Box::new(pointee),
-                    kind: RefKind::Provider {
-                        provider_ty: TyId::u256(&db),
-                        space: AddressSpaceKind::Memory,
-                    },
-                    view: RefView::Whole,
-                },
-            ),
-        };
+        let (storage_class, memory_class) = provider_enum_classes(&db);
 
         assert_eq!(
             join_runtime_class(

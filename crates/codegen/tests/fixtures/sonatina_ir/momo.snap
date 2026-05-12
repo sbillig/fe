@@ -7,26 +7,16 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {i8, i8};
 
+global private const @layout_0 $const_region_0 = {1, 2};
+
 func private %main() -> i8 {
     block0:
         jump block1;
 
     block1:
-        v2.objref<@layout_0> = obj.alloc @layout_0;
-        v4.objref<i8> = obj.proj v2 0.i256;
-        obj.store v4 1.i8;
-        v6.objref<i8> = obj.proj v2 1.i256;
-        obj.store v6 2.i8;
-        v7.@layout_0 = obj.load v2;
-        v8.objref<@layout_0> = obj.alloc @layout_0;
-        v9.objref<i8> = obj.proj v8 0.i256;
-        v10.i8 = extract_value v7 0.i256;
-        obj.store v9 v10;
-        v11.objref<i8> = obj.proj v8 1.i256;
-        v12.i8 = extract_value v7 1.i256;
-        obj.store v11 v12;
-        v13.i8 = call %read_x v8;
-        return v13;
+        v2.constref<@layout_0> = const.ref $const_region_0;
+        v3.i8 = call %read_x v2;
+        return v3;
 }
 
 func private %main_root() {
@@ -38,15 +28,15 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %read_x(v0.objref<@layout_0>) -> i8 {
+func private %read_x(v0.constref<@layout_0>) -> i8 {
     block0:
         jump block1;
 
     block1:
-        v3.objref<i8> = obj.proj v0 0.i256;
-        v4.i8 = obj.load v3;
-        v6.objref<i8> = obj.proj v0 1.i256;
-        v7.i8 = obj.load v6;
+        v3.constref<i8> = const.proj v0 0.i256;
+        v4.i8 = const.load v3;
+        v6.constref<i8> = const.proj v0 1.i256;
+        v7.i8 = const.load v6;
         (v8.i8, v9.i1) = uaddo v4 v7;
         br v9 block2 block3;
 

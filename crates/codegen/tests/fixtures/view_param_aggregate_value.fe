@@ -1,0 +1,19 @@
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Pair {
+    pub fn sum(self) -> u256 {
+        self.a + self.b
+    }
+}
+
+pub fn view_param_aggregate_value(a: u256, b: u256) -> u256 {
+    let pair = Pair { a: a, b: b }
+    pair.sum()
+}
+
+pub fn call_view_param_aggregate_value() -> u256 {
+    view_param_aggregate_value(40, 2)
+}

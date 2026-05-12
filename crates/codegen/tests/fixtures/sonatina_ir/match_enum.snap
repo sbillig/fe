@@ -17,28 +17,8 @@ func private %main() -> i8 {
 
     block1:
         v0.@layout_0 = enum.make @layout_0 #B;
-        v1.objref<@layout_0> = obj.alloc @layout_0;
-        v2.enumtag(@layout_0) = enum.tag v0;
-        br_table v2 block3 (0.enumtag(@layout_0) block4) (1.enumtag(@layout_0) block5) (2.enumtag(@layout_0) block6);
-
-    block2:
-        v6.i8 = call %match_enum v1;
-        return v6;
-
-    block3:
-        unreachable;
-
-    block4:
-        enum.set_tag v1 #A;
-        jump block2;
-
-    block5:
-        enum.set_tag v1 #B;
-        jump block2;
-
-    block6:
-        enum.set_tag v1 #C;
-        jump block2;
+        v1.i8 = call %match_enum v0;
+        return v1;
 }
 
 func private %main_root() {
@@ -50,18 +30,17 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %match_enum(v0.objref<@layout_0>) -> i8 {
+func private %match_enum(v0.@layout_0) -> i8 {
     block0:
         jump block1;
 
     block1:
-        v2.@layout_0 = obj.load v0;
-        v3.enumtag(@layout_0) = enum.tag v2;
-        br_table v3 (0.enumtag(@layout_0) block3) (1.enumtag(@layout_0) block4) (2.enumtag(@layout_0) block5);
+        v2.enumtag(@layout_0) = enum.tag v0;
+        br_table v2 (0.enumtag(@layout_0) block3) (1.enumtag(@layout_0) block4) (2.enumtag(@layout_0) block5);
 
     block2:
-        v7.i8 = phi (1.i8 block3) (2.i8 block4) (3.i8 block5);
-        return v7;
+        v6.i8 = phi (1.i8 block3) (2.i8 block4) (3.i8 block5);
+        return v6;
 
     block3:
         jump block2;

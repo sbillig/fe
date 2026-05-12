@@ -12,6 +12,9 @@ type @layout_3 = {};
 type @layout_4 = {@layout_3};
 type @layout_5 = {i256, i256};
 
+global private const @layout_0 $const_region_0 = {1};
+global private const @layout_0 $const_region_1 = {2};
+
 func private %abi_payload_size(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
@@ -24,18 +27,14 @@ func private %abi_payload_size(v0.i256) -> i256 {
         return v3;
 }
 
-func private %as_topic(v0.@layout_0) -> i256 {
+func private %as_topic(v0.objref<@layout_0>) -> i256 {
     block0:
-        v1.objref<@layout_0> = obj.alloc @layout_0;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        v4.i256 = extract_value v0 0.i256;
-        obj.store v3 v4;
         jump block1;
 
     block1:
-        v5.objref<i256> = obj.proj v1 0.i256;
-        v6.i256 = obj.load v5;
-        return v6;
+        v3.objref<i256> = obj.proj v0 0.i256;
+        v4.i256 = obj.load v3;
+        return v4;
 }
 
 func private %base(v0.objref<@layout_1>) -> i256 {
@@ -83,11 +82,13 @@ func private %emit__gcd5c(v0.@layout_2, v1.objref<@layout_4>) {
         v27.i256 = obj.load v26;
         v29.objref<@layout_0> = obj.proj v2 0.i256;
         v30.@layout_0 = obj.load v29;
-        v31.i256 = call %as_topic v30;
-        v32.objref<@layout_0> = obj.proj v2 1.i256;
-        v33.@layout_0 = obj.load v32;
-        v34.i256 = call %as_topic v33;
-        call %log3 v1 v25 v27 -15402802100530019096323380498944738953123845089667699673314898783681816316945.i256 v31 v34;
+        v31.objref<@layout_0> = obj.proj v2 0.i256;
+        v32.i256 = call %as_topic v31;
+        v33.objref<@layout_0> = obj.proj v2 1.i256;
+        v34.@layout_0 = obj.load v33;
+        v35.objref<@layout_0> = obj.proj v2 1.i256;
+        v36.i256 = call %as_topic v35;
+        call %log3 v1 v25 v27 -15402802100530019096323380498944738953123845089667699673314898783681816316945.i256 v32 v36;
         return;
 }
 
@@ -100,37 +101,33 @@ func private %emit__g4f95(v0.objref<@layout_4>, v1.@layout_2) {
         return;
 }
 
-func private %emit_transfer(v0.objref<@layout_4>, v1.@layout_0, v2.@layout_0, v3.i256) {
+func private %emit_transfer(v0.objref<@layout_4>, v1.constref<@layout_0>, v2.constref<@layout_0>, v3.i256) {
     block0:
-        v4.objref<@layout_0> = obj.alloc @layout_0;
-        v5.objref<@layout_0> = obj.alloc @layout_0;
-        v6.*i256 = alloca i256;
-        v8.objref<i256> = obj.proj v4 0.i256;
-        v9.i256 = extract_value v1 0.i256;
-        obj.store v8 v9;
-        v10.objref<i256> = obj.proj v5 0.i256;
-        v11.i256 = extract_value v2 0.i256;
-        obj.store v10 v11;
-        mstore v6 v3 i256;
+        v4.*i256 = alloca i256;
+        mstore v4 v3 i256;
         jump block1;
 
     block1:
-        v12.@layout_0 = obj.load v4;
-        v13.@layout_0 = obj.load v5;
-        v14.i256 = mload v6 i256;
-        v15.objref<@layout_2> = obj.alloc @layout_2;
-        v16.objref<@layout_0> = obj.proj v15 0.i256;
-        v17.objref<i256> = obj.proj v16 0.i256;
-        v18.i256 = extract_value v12 0.i256;
-        obj.store v17 v18;
-        v20.objref<@layout_0> = obj.proj v15 1.i256;
-        v21.objref<i256> = obj.proj v20 0.i256;
-        v22.i256 = extract_value v13 0.i256;
-        obj.store v21 v22;
-        v24.objref<i256> = obj.proj v15 2.i256;
-        obj.store v24 v14;
-        v25.@layout_2 = obj.load v15;
-        call %emit__g4f95 v0 v25;
+        v7.i256 = mload v4 i256;
+        v8.objref<@layout_0> = obj.alloc @layout_0;
+        obj.init.const v8 v1;
+        v9.@layout_0 = obj.load v8;
+        v10.objref<@layout_0> = obj.alloc @layout_0;
+        obj.init.const v10 v2;
+        v11.@layout_0 = obj.load v10;
+        v12.objref<@layout_2> = obj.alloc @layout_2;
+        v14.objref<@layout_0> = obj.proj v12 0.i256;
+        v15.objref<i256> = obj.proj v14 0.i256;
+        v16.i256 = extract_value v9 0.i256;
+        obj.store v15 v16;
+        v18.objref<@layout_0> = obj.proj v12 1.i256;
+        v19.objref<i256> = obj.proj v18 0.i256;
+        v20.i256 = extract_value v11 0.i256;
+        obj.store v19 v20;
+        v22.objref<i256> = obj.proj v12 2.i256;
+        obj.store v22 v7;
+        v23.@layout_2 = obj.load v12;
+        call %emit__g4f95 v0 v23;
         return;
 }
 
@@ -218,15 +215,9 @@ func private %main(v0.objref<@layout_4>) {
         jump block1;
 
     block1:
-        v2.objref<@layout_0> = obj.alloc @layout_0;
-        v4.objref<i256> = obj.proj v2 0.i256;
-        obj.store v4 1.i256;
-        v5.@layout_0 = obj.load v2;
-        v7.objref<@layout_0> = obj.alloc @layout_0;
-        v8.objref<i256> = obj.proj v7 0.i256;
-        obj.store v8 2.i256;
-        v9.@layout_0 = obj.load v7;
-        call %emit_transfer v0 v5 v9 100.i256;
+        v2.constref<@layout_0> = const.ref $const_region_0;
+        v4.constref<@layout_0> = const.ref $const_region_1;
+        call %emit_transfer v0 v2 v4 100.i256;
         return;
 }
 

@@ -1222,6 +1222,16 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RExpr::RetagRef { value } => self.local_value(*value)?,
             RExpr::AddrOf { place } => return self.addr_of_place(place, dst),
             RExpr::Load { place } => return self.load_from_place(place),
+            RExpr::AggregateExtract { value, index } => {
+                let value = self.local_value(*value)?;
+                let dst_local = dst.ok_or_else(|| {
+                    LowerError::Internal("aggregate extract missing destination".to_string())
+                })?;
+                let class = self.body.value_class(dst_local).cloned().ok_or_else(|| {
+                    LowerError::Internal("aggregate extract missing destination class".to_string())
+                })?;
+                self.extract_aggregate_field(value, *index as usize, &class)?
+            }
             RExpr::Call { callee, args } => {
                 if let Some(value) = self.lower_intrinsic_call(*callee, args, dst)? {
                     return Ok(Lowered::Value(value));

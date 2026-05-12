@@ -330,37 +330,21 @@ func private %runtime(v0.objref<@layout_1>) {
         jump block13;
 
     block15:
-        v44.@layout_2 = phi (v53 block16) (v56 block17);
-        v45.objref<@layout_2> = obj.alloc @layout_2;
-        v46.enumtag(@layout_2) = enum.tag v44;
-        br_table v46 block20 (0.enumtag(@layout_2) block21) (1.enumtag(@layout_2) block22);
+        v44.@layout_2 = phi (v49 block16) (v52 block17);
+        v45.i256 = call %transfer_result_code v44;
+        call %abi_encode v45 v0;
+        unreachable;
 
     block16:
-        v53.@layout_2 = call %transfer_from_alice v20 v2;
+        v49.@layout_2 = call %transfer_from_alice v20 v2;
         jump block15;
 
     block17:
-        v56.@layout_2 = call %transfer_from_bob v20 v2;
+        v52.@layout_2 = call %transfer_from_bob v20 v2;
         jump block15;
 
     block18:
         jump block17;
-
-    block19:
-        v49.i256 = call %transfer_result_code v45;
-        call %abi_encode v49 v0;
-        unreachable;
-
-    block20:
-        unreachable;
-
-    block21:
-        enum.set_tag v45 #Ok;
-        jump block19;
-
-    block22:
-        enum.set_tag v45 #Insufficient;
-        jump block19;
 }
 
 func private %stor_ptr__g2c78(v0.i256) -> i256 {
@@ -487,18 +471,17 @@ func private %transfer_from_bob(v0.i256, v1.i256) -> @layout_2 {
         return v28;
 }
 
-func private %transfer_result_code(v0.objref<@layout_2>) -> i256 {
+func private %transfer_result_code(v0.@layout_2) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.@layout_2 = obj.load v0;
-        v3.enumtag(@layout_2) = enum.tag v2;
-        br_table v3 (0.enumtag(@layout_2) block3) (1.enumtag(@layout_2) block4);
+        v2.enumtag(@layout_2) = enum.tag v0;
+        br_table v2 (0.enumtag(@layout_2) block3) (1.enumtag(@layout_2) block4);
 
     block2:
-        v6.i256 = phi (0.i256 block3) (1.i256 block4);
-        return v6;
+        v5.i256 = phi (0.i256 block3) (1.i256 block4);
+        return v5;
 
     block3:
         jump block2;

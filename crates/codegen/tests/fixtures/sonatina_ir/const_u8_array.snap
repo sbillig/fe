@@ -37,21 +37,14 @@ func private %big_index() -> i8 {
         return 39.i8;
 }
 
-func private %f(v0.[i8; 2]) -> i8 {
+func private %f(v0.constref<[i8; 2]>) -> i8 {
     block0:
-        v1.objref<[i8; 2]> = obj.alloc [i8; 2];
-        v3.objref<i8> = obj.index v1 0.i256;
-        v4.i8 = extract_value v0 0.i256;
-        obj.store v3 v4;
-        v6.objref<i8> = obj.index v1 1.i256;
-        v7.i8 = extract_value v0 1.i256;
-        obj.store v6 v7;
         jump block1;
 
     block1:
-        v8.objref<i8> = obj.index v1 1.i256;
-        v9.i8 = obj.load v8;
-        return v9;
+        v3.constref<i8> = const.index v0 1.i256;
+        v4.i8 = const.load v3;
+        return v4;
 }
 
 func private %index_direct() -> i8 {
@@ -78,11 +71,8 @@ func private %pass_then_index() -> i8 {
 
     block1:
         v0.constref<[i8; 2]> = const.ref $const_region_0;
-        v1.objref<[i8; 2]> = obj.alloc [i8; 2];
-        obj.init.const v1 v0;
-        v2.[i8; 2] = obj.load v1;
-        v3.i8 = call %f v2;
-        return v3;
+        v1.i8 = call %f v0;
+        return v1;
 }
 
 

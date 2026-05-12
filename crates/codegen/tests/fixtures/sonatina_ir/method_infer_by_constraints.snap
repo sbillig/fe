@@ -8,34 +8,26 @@ target = "evm-ethereum-osaka"
 type @layout_0 = {i64, i64};
 type @layout_1 = {i64};
 
+global private const @layout_1 $const_region_0 = {10};
+
 func private %call() -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        v1.objref<@layout_1> = obj.alloc @layout_1;
-        v3.objref<i64> = obj.proj v1 0.i256;
-        obj.store v3 10.i64;
-        v4.@layout_1 = obj.load v1;
-        v5.objref<@layout_1> = obj.alloc @layout_1;
-        v6.objref<i64> = obj.proj v5 0.i256;
-        obj.store v6 10.i64;
-        v7.@layout_1 = obj.load v5;
-        v8.objref<@layout_1> = obj.alloc @layout_1;
-        v9.objref<i64> = obj.proj v8 0.i256;
-        v10.i64 = extract_value v7 0.i256;
-        obj.store v9 v10;
-        v11.@layout_0 = call %foo v8;
-        return v11;
+        v1.constref<@layout_1> = const.ref $const_region_0;
+        v2.constref<@layout_1> = const.ref $const_region_0;
+        v3.@layout_0 = call %foo v2;
+        return v3;
 }
 
-func private %foo(v0.objref<@layout_1>) -> @layout_0 {
+func private %foo(v0.constref<@layout_1>) -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        v3.objref<i64> = obj.proj v0 0.i256;
-        v4.i64 = obj.load v3;
+        v3.constref<i64> = const.proj v0 0.i256;
+        v4.i64 = const.load v3;
         v6.objref<@layout_0> = obj.alloc @layout_0;
         v7.objref<i64> = obj.proj v6 0.i256;
         obj.store v7 v4;

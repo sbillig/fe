@@ -6,6 +6,7 @@ input_file: crates/codegen/tests/fixtures/const_nested_u8_array.fe
 target = "evm-ethereum-osaka"
 
 global private const [[i8; 2]; 2] $const_region_0 = [[1, 2], [3, 4]];
+global private const [i8; 2] $const_region_1 = [3, 4];
 
 func private %const_nested_u8_array() -> i8 {
     block0:
@@ -13,12 +14,7 @@ func private %const_nested_u8_array() -> i8 {
 
     block1:
         v0.constref<[[i8; 2]; 2]> = const.ref $const_region_0;
-        v4.objref<[i8; 2]> = obj.alloc [i8; 2];
-        v6.objref<i8> = obj.index v4 0.i256;
-        obj.store v6 3.i8;
-        v7.objref<i8> = obj.index v4 1.i256;
-        obj.store v7 4.i8;
-        v8.[i8; 2] = obj.load v4;
+        v2.constref<[i8; 2]> = const.ref $const_region_1;
         return 3.i8;
 }
 

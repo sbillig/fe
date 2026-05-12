@@ -485,6 +485,9 @@ fn format_expr<'db>(db: &'db dyn MirDb, expr: &RExpr<'db>) -> String {
         RExpr::RetagRef { value } => format!("retag_ref {}", format_local_id(*value)),
         RExpr::AddrOf { place } => format!("addr_of {}", format_place(place)),
         RExpr::Load { place } => format!("load {}", format_place(place)),
+        RExpr::AggregateExtract { value, index } => {
+            format!("extract_value {}, {}", format_local_id(*value), index)
+        }
         RExpr::Call { callee, args } => {
             let args = args
                 .iter()

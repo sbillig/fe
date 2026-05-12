@@ -5,72 +5,32 @@ input_file: crates/codegen/tests/fixtures/for_array_large.fe
 ---
 target = "evm-ethereum-osaka"
 
+global private const [i64; 10] $const_region_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
 func private %for_array_large_sum() -> i64 {
     block0:
         v0.*i64 = alloca i64;
         jump block1;
 
     block1:
-        v11.objref<[i64; 10]> = obj.alloc [i64; 10];
-        v13.objref<i64> = obj.index v11 0.i256;
-        obj.store v13 1.i64;
-        v15.objref<i64> = obj.index v11 1.i256;
-        obj.store v15 2.i64;
-        v17.objref<i64> = obj.index v11 2.i256;
-        obj.store v17 3.i64;
-        v19.objref<i64> = obj.index v11 3.i256;
-        obj.store v19 4.i64;
-        v21.objref<i64> = obj.index v11 4.i256;
-        obj.store v21 5.i64;
-        v23.objref<i64> = obj.index v11 5.i256;
-        obj.store v23 6.i64;
-        v25.objref<i64> = obj.index v11 6.i256;
-        obj.store v25 7.i64;
-        v27.objref<i64> = obj.index v11 7.i256;
-        obj.store v27 8.i64;
-        v29.objref<i64> = obj.index v11 8.i256;
-        obj.store v29 9.i64;
-        v31.objref<i64> = obj.index v11 9.i256;
-        obj.store v31 10.i64;
-        v32.[i64; 10] = obj.load v11;
-        v33.objref<[i64; 10]> = obj.alloc [i64; 10];
-        v34.objref<i64> = obj.index v33 0.i256;
-        obj.store v34 1.i64;
-        v35.objref<i64> = obj.index v33 1.i256;
-        obj.store v35 2.i64;
-        v36.objref<i64> = obj.index v33 2.i256;
-        obj.store v36 3.i64;
-        v37.objref<i64> = obj.index v33 3.i256;
-        obj.store v37 4.i64;
-        v38.objref<i64> = obj.index v33 4.i256;
-        obj.store v38 5.i64;
-        v39.objref<i64> = obj.index v33 5.i256;
-        obj.store v39 6.i64;
-        v40.objref<i64> = obj.index v33 6.i256;
-        obj.store v40 7.i64;
-        v41.objref<i64> = obj.index v33 7.i256;
-        obj.store v41 8.i64;
-        v42.objref<i64> = obj.index v33 8.i256;
-        obj.store v42 9.i64;
-        v43.objref<i64> = obj.index v33 9.i256;
-        obj.store v43 10.i64;
-        v44.[i64; 10] = obj.load v33;
-        v46.i256 = call %len v44;
+        v11.constref<[i64; 10]> = const.ref $const_region_0;
+        v12.constref<[i64; 10]> = const.ref $const_region_0;
+        v15.i256 = call %len v12;
         jump block2;
 
     block2:
-        v68.i64 = phi (0.i64 block1) (v60 block7);
-        v47.i256 = phi (0.i256 block1) (v62 block7);
-        v49.i1 = lt v47 v46;
-        br v49 block3 block4;
+        v39.i64 = phi (0.i64 block1) (v30 block7);
+        v16.i256 = phi (0.i256 block1) (v33 block7);
+        v18.i1 = lt v16 v15;
+        br v18 block3 block4;
 
     block3:
-        v52.i64 = call %get v44 v47;
-        (v54.i64, v55.i1) = uaddo v68 v52;
-        br v55 block5 block6;
+        v21.i64 = call %get v12 v16;
+        (v23.i64, v24.i1) = uaddo v39 v21;
+        br v24 block5 block6;
 
     block4:
-        return v68;
+        return v39;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -78,101 +38,39 @@ func private %for_array_large_sum() -> i64 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        mstore v0 v54 i64;
-        v59.i256 = mload v0 i256;
-        v60.i64 = trunc v59 i64;
-        (v62.i256, v63.i1) = uaddo v47 1.i256;
-        br v63 block5 block7;
+        mstore v0 v23 i64;
+        v29.i256 = mload v0 i256;
+        v30.i64 = trunc v29 i64;
+        (v33.i256, v34.i1) = uaddo v16 1.i256;
+        br v34 block5 block7;
 
     block7:
         jump block2;
 }
 
-func private %get(v0.[i64; 10], v1.i256) -> i64 {
+func private %get(v0.constref<[i64; 10]>, v1.i256) -> i64 {
     block0:
-        v2.objref<[i64; 10]> = obj.alloc [i64; 10];
-        v3.*i256 = alloca i256;
-        v5.objref<i64> = obj.index v2 0.i256;
-        v6.i64 = extract_value v0 0.i256;
-        obj.store v5 v6;
-        v8.objref<i64> = obj.index v2 1.i256;
-        v9.i64 = extract_value v0 1.i256;
-        obj.store v8 v9;
-        v11.objref<i64> = obj.index v2 2.i256;
-        v12.i64 = extract_value v0 2.i256;
-        obj.store v11 v12;
-        v14.objref<i64> = obj.index v2 3.i256;
-        v15.i64 = extract_value v0 3.i256;
-        obj.store v14 v15;
-        v17.objref<i64> = obj.index v2 4.i256;
-        v18.i64 = extract_value v0 4.i256;
-        obj.store v17 v18;
-        v20.objref<i64> = obj.index v2 5.i256;
-        v21.i64 = extract_value v0 5.i256;
-        obj.store v20 v21;
-        v23.objref<i64> = obj.index v2 6.i256;
-        v24.i64 = extract_value v0 6.i256;
-        obj.store v23 v24;
-        v26.objref<i64> = obj.index v2 7.i256;
-        v27.i64 = extract_value v0 7.i256;
-        obj.store v26 v27;
-        v29.objref<i64> = obj.index v2 8.i256;
-        v30.i64 = extract_value v0 8.i256;
-        obj.store v29 v30;
-        v32.objref<i64> = obj.index v2 9.i256;
-        v33.i64 = extract_value v0 9.i256;
-        obj.store v32 v33;
-        mstore v3 v1 i256;
+        v2.*i256 = alloca i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
-        v34.i256 = mload v3 i256;
-        v36.i1 = lt v34 10.i256;
-        v37.i1 = is_zero v36;
-        br v37 block2 block3;
+        v3.i256 = mload v2 i256;
+        v6.i1 = lt v3 10.i256;
+        v7.i1 = is_zero v6;
+        br v7 block2 block3;
 
     block2:
         evm_revert 0.i256 0.i256;
 
     block3:
-        v38.objref<i64> = obj.index v2 v34;
-        v39.i64 = obj.load v38;
-        return v39;
+        v9.constref<i64> = const.index v0 v3;
+        v10.i64 = const.load v9;
+        return v10;
 }
 
-func private %len(v0.[i64; 10]) -> i256 {
+func private %len(v0.constref<[i64; 10]>) -> i256 {
     block0:
-        v1.objref<[i64; 10]> = obj.alloc [i64; 10];
-        v3.objref<i64> = obj.index v1 0.i256;
-        v4.i64 = extract_value v0 0.i256;
-        obj.store v3 v4;
-        v6.objref<i64> = obj.index v1 1.i256;
-        v7.i64 = extract_value v0 1.i256;
-        obj.store v6 v7;
-        v9.objref<i64> = obj.index v1 2.i256;
-        v10.i64 = extract_value v0 2.i256;
-        obj.store v9 v10;
-        v12.objref<i64> = obj.index v1 3.i256;
-        v13.i64 = extract_value v0 3.i256;
-        obj.store v12 v13;
-        v15.objref<i64> = obj.index v1 4.i256;
-        v16.i64 = extract_value v0 4.i256;
-        obj.store v15 v16;
-        v18.objref<i64> = obj.index v1 5.i256;
-        v19.i64 = extract_value v0 5.i256;
-        obj.store v18 v19;
-        v21.objref<i64> = obj.index v1 6.i256;
-        v22.i64 = extract_value v0 6.i256;
-        obj.store v21 v22;
-        v24.objref<i64> = obj.index v1 7.i256;
-        v25.i64 = extract_value v0 7.i256;
-        obj.store v24 v25;
-        v27.objref<i64> = obj.index v1 8.i256;
-        v28.i64 = extract_value v0 8.i256;
-        obj.store v27 v28;
-        v30.objref<i64> = obj.index v1 9.i256;
-        v31.i64 = extract_value v0 9.i256;
-        obj.store v30 v31;
         jump block1;
 
     block1:

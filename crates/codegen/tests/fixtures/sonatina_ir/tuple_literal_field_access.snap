@@ -9,6 +9,11 @@ type @layout_0 = {i256, i256};
 type @layout_1 = {i256, @layout_0};
 type @layout_2 = {@layout_0};
 
+global private const @layout_0 $const_region_0 = {1, 2};
+global private const @layout_0 $const_region_1 = {2, 3};
+global private const @layout_1 $const_region_2 = {1, {2, 3}};
+global private const @layout_2 $const_region_3 = {{1, 2}};
+
 func private %main_root() {
     block0:
         jump block1;
@@ -20,115 +25,32 @@ func private %main_root() {
 
 func private %tuple_literal_field_access() -> i256 {
     block0:
-        v0.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
 
     block1:
-        v3.objref<@layout_0> = obj.alloc @layout_0;
-        v5.objref<i256> = obj.proj v3 0.i256;
-        obj.store v5 1.i256;
-        v6.objref<i256> = obj.proj v3 1.i256;
-        obj.store v6 2.i256;
-        v7.@layout_0 = obj.load v3;
-        v8.objref<i256> = obj.proj v0 0.i256;
-        v9.i256 = extract_value v7 0.i256;
-        obj.store v8 v9;
-        v10.objref<i256> = obj.proj v0 1.i256;
-        v11.i256 = extract_value v7 1.i256;
-        obj.store v10 v11;
+        v2.constref<@layout_0> = const.ref $const_region_0;
         return 2.i256;
 }
 
 func private %tuple_literal_nested_access() -> i256 {
     block0:
-        v0.objref<@layout_1> = obj.alloc @layout_1;
         jump block1;
 
     block1:
-        v4.objref<@layout_0> = obj.alloc @layout_0;
-        v6.objref<i256> = obj.proj v4 0.i256;
-        obj.store v6 2.i256;
-        v7.objref<i256> = obj.proj v4 1.i256;
-        obj.store v7 3.i256;
-        v8.@layout_0 = obj.load v4;
-        v9.objref<@layout_0> = obj.alloc @layout_0;
-        v10.objref<i256> = obj.proj v9 0.i256;
-        obj.store v10 2.i256;
-        v11.objref<i256> = obj.proj v9 1.i256;
-        obj.store v11 3.i256;
-        v12.@layout_0 = obj.load v9;
-        v13.objref<@layout_1> = obj.alloc @layout_1;
-        v14.objref<i256> = obj.proj v13 0.i256;
-        obj.store v14 1.i256;
-        v15.objref<@layout_0> = obj.proj v13 1.i256;
-        v16.objref<i256> = obj.proj v15 0.i256;
-        v17.i256 = extract_value v12 0.i256;
-        obj.store v16 v17;
-        v18.objref<i256> = obj.proj v15 1.i256;
-        v19.i256 = extract_value v12 1.i256;
-        obj.store v18 v19;
-        v20.@layout_1 = obj.load v13;
-        v21.objref<i256> = obj.proj v0 0.i256;
-        v22.i256 = extract_value v20 0.i256;
-        obj.store v21 v22;
-        v23.objref<@layout_0> = obj.proj v0 1.i256;
-        v24.@layout_0 = extract_value v20 1.i256;
-        v25.objref<i256> = obj.proj v23 0.i256;
-        v26.i256 = extract_value v24 0.i256;
-        obj.store v25 v26;
-        v27.objref<i256> = obj.proj v23 1.i256;
-        v28.i256 = extract_value v24 1.i256;
-        obj.store v27 v28;
-        v29.objref<@layout_0> = obj.alloc @layout_0;
-        v30.objref<i256> = obj.proj v29 0.i256;
-        obj.store v30 2.i256;
-        v31.objref<i256> = obj.proj v29 1.i256;
-        obj.store v31 3.i256;
-        v32.@layout_0 = obj.load v29;
+        v3.constref<@layout_0> = const.ref $const_region_1;
+        v4.constref<@layout_1> = const.ref $const_region_2;
+        v5.constref<@layout_0> = const.ref $const_region_1;
         return 2.i256;
 }
 
 func private %tuple_literal_struct_chain() -> i256 {
     block0:
-        v0.objref<@layout_2> = obj.alloc @layout_2;
         jump block1;
 
     block1:
-        v3.objref<@layout_0> = obj.alloc @layout_0;
-        v5.objref<i256> = obj.proj v3 0.i256;
-        obj.store v5 1.i256;
-        v6.objref<i256> = obj.proj v3 1.i256;
-        obj.store v6 2.i256;
-        v7.@layout_0 = obj.load v3;
-        v8.objref<@layout_0> = obj.alloc @layout_0;
-        v9.objref<i256> = obj.proj v8 0.i256;
-        obj.store v9 1.i256;
-        v10.objref<i256> = obj.proj v8 1.i256;
-        obj.store v10 2.i256;
-        v11.@layout_0 = obj.load v8;
-        v12.objref<@layout_2> = obj.alloc @layout_2;
-        v13.objref<@layout_0> = obj.proj v12 0.i256;
-        v14.objref<i256> = obj.proj v13 0.i256;
-        v15.i256 = extract_value v11 0.i256;
-        obj.store v14 v15;
-        v16.objref<i256> = obj.proj v13 1.i256;
-        v17.i256 = extract_value v11 1.i256;
-        obj.store v16 v17;
-        v18.@layout_2 = obj.load v12;
-        v19.objref<@layout_0> = obj.proj v0 0.i256;
-        v20.@layout_0 = extract_value v18 0.i256;
-        v21.objref<i256> = obj.proj v19 0.i256;
-        v22.i256 = extract_value v20 0.i256;
-        obj.store v21 v22;
-        v23.objref<i256> = obj.proj v19 1.i256;
-        v24.i256 = extract_value v20 1.i256;
-        obj.store v23 v24;
-        v25.objref<@layout_0> = obj.alloc @layout_0;
-        v26.objref<i256> = obj.proj v25 0.i256;
-        obj.store v26 1.i256;
-        v27.objref<i256> = obj.proj v25 1.i256;
-        obj.store v27 2.i256;
-        v28.@layout_0 = obj.load v25;
+        v2.constref<@layout_0> = const.ref $const_region_0;
+        v3.constref<@layout_2> = const.ref $const_region_3;
+        v4.constref<@layout_0> = const.ref $const_region_0;
         return 2.i256;
 }
 

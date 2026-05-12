@@ -522,8 +522,8 @@ fn preserve_actual_shape_boundary_for_runtime_source<'a, 'db>(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeValueMaterialization<'db> {
-    ObjectRef { layout: LayoutId<'db> },
-    RawAddrSlot { pointee: RuntimeClass<'db> },
+    ObjectRef(LayoutId<'db>),
+    RawAddrSlot(RuntimeClass<'db>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -533,12 +533,8 @@ pub(crate) enum RuntimeValueUsePlan<'db> {
         place: RuntimePlace<'db>,
         class: RuntimeClass<'db>,
     },
-    CoerceValue {
-        target: RuntimeClass<'db>,
-    },
-    MaterializeValue {
-        materialization: RuntimeValueMaterialization<'db>,
-    },
+    CoerceValue(RuntimeClass<'db>),
+    MaterializeValue(RuntimeValueMaterialization<'db>),
 }
 
 impl<'db> RuntimeValueUsePlan<'db> {
@@ -546,8 +542,8 @@ impl<'db> RuntimeValueUsePlan<'db> {
         match self {
             Self::UseValue => source.clone(),
             Self::AddrOfRuntimePlace { class, .. } => class.clone(),
-            Self::CoerceValue { target } => target.clone(),
-            Self::MaterializeValue { materialization } => materialization.class(),
+            Self::CoerceValue(target) => target.clone(),
+            Self::MaterializeValue(materialization) => materialization.class(),
         }
     }
 }
@@ -572,9 +568,9 @@ impl RuntimeValueUsePlanner {
         boundary: &RuntimeBoundarySpec<'db>,
     ) -> Option<RuntimeValueUsePlan<'db>> {
         match boundary {
-            RuntimeBoundarySpec::ExactTransport(target) => Some(RuntimeValueUsePlan::CoerceValue {
-                target: target.clone(),
-            }),
+            RuntimeBoundarySpec::ExactTransport(target) => {
+                Some(RuntimeValueUsePlan::CoerceValue(target.clone()))
+            }
             RuntimeBoundarySpec::ExactShape(target) => {
                 if source.value_satisfies(boundary) {
                     return Some(RuntimeValueUsePlan::UseValue);
@@ -585,9 +581,7 @@ impl RuntimeValueUsePlanner {
                         class: address.class,
                     });
                 }
-                Some(RuntimeValueUsePlan::CoerceValue {
-                    target: target.clone(),
-                })
+                Some(RuntimeValueUsePlan::CoerceValue(target.clone()))
             }
             RuntimeBoundarySpec::BorrowLike { .. } if source.value_satisfies(boundary) => {
                 Some(RuntimeValueUsePlan::UseValue)
@@ -599,9 +593,8 @@ impl RuntimeValueUsePlanner {
                         class: address.class,
                     });
                 }
-                RuntimeValueMaterialization::for_boundary(boundary).map(|materialization| {
-                    RuntimeValueUsePlan::MaterializeValue { materialization }
-                })
+                RuntimeValueMaterialization::for_boundary(boundary)
+                    .map(RuntimeValueUsePlan::MaterializeValue)
             }
         }
     }
@@ -725,16 +718,14 @@ impl<'db> RuntimeValueMaterialization<'db> {
             RuntimeBoundarySpec::BorrowLike { pointee, allow, .. }
                 if pointee.aggregate_layout().is_some() && allow.allow_object =>
             {
-                Some(Self::ObjectRef {
-                    layout: pointee.aggregate_layout().expect("aggregate layout"),
-                })
+                Some(Self::ObjectRef(
+                    pointee.aggregate_layout().expect("aggregate layout"),
+                ))
             }
             RuntimeBoundarySpec::BorrowLike { pointee, allow, .. }
                 if pointee.aggregate_layout().is_none() && allow.allow_raw_addr =>
             {
-                Some(Self::RawAddrSlot {
-                    pointee: pointee.clone(),
-                })
+                Some(Self::RawAddrSlot(pointee.clone()))
             }
             RuntimeBoundarySpec::ExactTransport(_)
             | RuntimeBoundarySpec::ExactShape(_)
@@ -744,8 +735,8 @@ impl<'db> RuntimeValueMaterialization<'db> {
 
     pub(crate) fn class(&self) -> RuntimeClass<'db> {
         match self {
-            Self::ObjectRef { layout } => RuntimeClass::object_ref(*layout),
-            Self::RawAddrSlot { pointee } => RuntimeClass::RawAddr {
+            Self::ObjectRef(layout) => RuntimeClass::object_ref(*layout),
+            Self::RawAddrSlot(pointee) => RuntimeClass::RawAddr {
                 space: AddressSpaceKind::Memory,
                 target: pointee.aggregate_layout(),
             },
@@ -1101,7 +1092,7 @@ mod tests {
         ));
         assert_eq!(
             RuntimeValueUsePlanner::select(source_with_value(source.clone()), &exact_transport),
-            Some(RuntimeValueUsePlan::CoerceValue { target })
+            Some(RuntimeValueUsePlan::CoerceValue(target))
         );
         let shape_plan =
             RuntimeValueUsePlanner::select(source_with_value(source.clone()), &exact_shape)
@@ -1221,11 +1212,9 @@ mod tests {
         );
         assert_eq!(
             RuntimeValueUsePlanner::select(source_with_value(word_class()), &boundary),
-            Some(RuntimeValueUsePlan::MaterializeValue {
-                materialization: RuntimeValueMaterialization::RawAddrSlot {
-                    pointee: word_class(),
-                },
-            })
+            Some(RuntimeValueUsePlan::MaterializeValue(
+                RuntimeValueMaterialization::RawAddrSlot(word_class()),
+            ))
         );
     }
 
@@ -1244,9 +1233,9 @@ mod tests {
                 source_with_value(RuntimeClass::AggregateValue { layout }),
                 &boundary,
             ),
-            Some(RuntimeValueUsePlan::MaterializeValue {
-                materialization: RuntimeValueMaterialization::ObjectRef { layout },
-            })
+            Some(RuntimeValueUsePlan::MaterializeValue(
+                RuntimeValueMaterialization::ObjectRef(layout),
+            ))
         );
     }
 }

@@ -411,7 +411,8 @@ impl<'summary, 'lookup, 'db> SparseAnalysis for ReturnSliceInferer<'summary, 'lo
                 )
             }
         };
-        let class = self.summary.env(self.db).expr_direct_class(
+        let env = self.summary.env(self.db);
+        let class = env.expr_direct_class(
             &self.carriers,
             assign.block_idx,
             assign.stmt_idx,
@@ -422,7 +423,8 @@ impl<'summary, 'lookup, 'db> SparseAnalysis for ReturnSliceInferer<'summary, 'lo
         let Some(class) = class else {
             return Ok(false);
         };
-        let desired = desired_runtime_value_carrier(local, class);
+        let desired =
+            desired_runtime_value_carrier(self.db, local, class, env.scope(), env.assumptions());
         if !self.set_carrier(assign.dst, desired) {
             return Ok(false);
         }

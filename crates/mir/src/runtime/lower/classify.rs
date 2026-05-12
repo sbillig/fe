@@ -9,7 +9,7 @@ use hir::analysis::{
             NAssignmentId, NBorrowRoot, NExpr, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot,
             NormalizedBindingLowering, NormalizedBodyFacts, NormalizedSemanticBody,
         },
-        eval_const_ref, get_or_build_semantic_instance, reify_runtime_const_for_ty, sem_const_ty,
+        get_or_build_semantic_instance,
     },
     ty::{
         ProviderKind,
@@ -20,7 +20,6 @@ use hir::analysis::{
         trait_resolution::{PredicateListId, TraitSolveCx},
         ty_check::{BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite},
         ty_def::{CapabilityKind, TyData, TyId, strip_derived_adt_layout_args},
-        ty_is_copy,
     },
 };
 use hir::hir_def::{ArithBinOp, FuncParamMode};
@@ -52,7 +51,7 @@ use super::{
         CompiledCallInputPlan, CompiledMaterializationPlan, compile_call_input_plan_for_semantic,
         compile_value_pass_plan,
     },
-    consts::aggregate_const_ref_class,
+    consts::{reified_const_ref_value_for_ty, runtime_const_value_class},
     infer::{fallback_root_transport_class, local_place_root_class},
     interface::runtime_visible_binding_plans,
     layout::{
@@ -875,9 +874,7 @@ fn build_local_static_facts<'db>(
                 )
                 .map_or(
                     CompiledMaterializationPlan::AggregateFromSource,
-                    |fallback| CompiledMaterializationPlan::AggregateFromSourceOrFallback {
-                        fallback,
-                    },
+                    CompiledMaterializationPlan::AggregateFromSourceOrFallback,
                 ),
                 SemanticLocalKind::PlaceCarrier
                 | SemanticLocalKind::DirectCarrier
@@ -933,49 +930,24 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
         Some(match expr {
             NExpr::Use(_) | NExpr::CodeRegionRef { .. } => return None,
             NExpr::Const(const_) => ExprStaticFacts::Const(match const_ {
-                SConst::Value(value) => {
-                    let ty = sem_const_ty(db, *value);
-                    if ty == TyId::unit(db) {
-                        None
-                    } else {
-                        let dst_disallows_const_ref_storage =
-                            body.locals.get(dst.index()).is_some_and(|local| {
-                                local.facts.root_demand.disallows_const_ref_storage()
-                            });
-                        (!dst_disallows_const_ref_storage)
-                            .then(|| aggregate_const_ref_class(db, type_env, *value))
-                            .flatten()
-                            .or_else(|| {
-                                top_level_class_for_ty_in_env(
-                                    db,
-                                    type_env,
-                                    ty,
-                                    AddressSpaceKind::Memory,
-                                )
-                            })
-                    }
-                }
-                SConst::Ref(cref) => {
-                    let value = eval_const_ref(db, *cref)
-                        .unwrap_or_else(|err| panic!("CTFE failed for {cref:?}: {err:?}"));
-                    let value = reify_runtime_const_for_ty(db, body.owner, result_ty, value)
-                        .unwrap_or(value);
-                    let ty = sem_const_ty(db, value);
-                    let dst_disallows_const_ref_storage = body
-                        .locals
+                SConst::Value(value) => runtime_const_value_class(
+                    db,
+                    type_env,
+                    *value,
+                    body.locals
                         .get(dst.index())
-                        .is_some_and(|local| local.facts.root_demand.disallows_const_ref_storage());
-                    (!dst_disallows_const_ref_storage)
-                        .then(|| aggregate_const_ref_class(db, type_env, value))
-                        .flatten()
-                        .or_else(|| {
-                            top_level_class_for_ty_in_env(
-                                db,
-                                type_env,
-                                ty,
-                                AddressSpaceKind::Memory,
-                            )
-                        })
+                        .is_none_or(|local| !local.facts.root_demand.disallows_const_ref_storage()),
+                ),
+                SConst::Ref(cref) => {
+                    let value = reified_const_ref_value_for_ty(db, body.owner, *cref, result_ty);
+                    runtime_const_value_class(
+                        db,
+                        type_env,
+                        value,
+                        body.locals.get(dst.index()).is_none_or(|local| {
+                            !local.facts.root_demand.disallows_const_ref_storage()
+                        }),
+                    )
                 }
             }),
             NExpr::Unary { .. }
@@ -1815,12 +1787,24 @@ pub(crate) fn desired_runtime_param_plan<'db>(
     let assumptions = env.assumptions;
     let interface_ty = runtime_interface_ty_in_context(db, binding_ty, scope, assumptions);
     let repr_ty = runtime_repr_ty_in_context(db, binding_ty, scope, assumptions);
-    let plan = if runtime_abstract_param_ty(db, binding_ty, scope, assumptions)
+    if runtime_abstract_param_ty(db, binding_ty, scope, assumptions)
         || matches!(
             repr_ty.base_ty(db).data(db),
             TyData::TyParam(param) if param.is_effect() || param.is_effect_provider()
-        ) {
+        )
+    {
         RuntimeParamPlan::PassActual
+    } else if matches!(
+        binding,
+        LocalBinding::Param {
+            mode: FuncParamMode::View,
+            ..
+        }
+    ) && binding_ty.as_capability(db).is_none()
+    {
+        desired_read_only_view_param_plan(db, typed_body, binding, env, binding_ty)
+    } else if let Some((CapabilityKind::View, inner)) = interface_ty.as_capability(db) {
+        desired_read_only_view_param_plan(db, typed_body, binding, env, inner)
     } else if interface_ty.as_capability(db).is_some() {
         boundary_spec_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory)
             .map(|boundary| {
@@ -1859,39 +1843,47 @@ pub(crate) fn desired_runtime_param_plan<'db>(
                 db, typed_body, binding, env, boundary,
             ))
         }
-    };
-    if let LocalBinding::Param {
-        mode: FuncParamMode::View,
-        ..
-    } = binding
-        && let Some((CapabilityKind::View, inner)) = interface_ty.as_capability(db)
-        && let Some(scope) = scope
-    {
-        let inner = runtime_repr_ty_in_context(db, inner, Some(scope), assumptions);
-        if !inner.has_param(db)
-            && !ty_is_copy(db, scope, inner, assumptions)
-            && stored_class_for_ty_in_context(db, inner, Some(scope), assumptions)
-                .aggregate_layout()
-                .is_some()
-        {
-            debug_assert!(
-                !matches!(
-                    plan,
-                    RuntimeParamPlan::PassActual
-                        | RuntimeParamPlan::Boundary(
-                            RuntimeBoundarySpec::ExactTransport(
-                                RuntimeClass::AggregateValue { .. }
-                            ) | RuntimeBoundarySpec::ExactShape(
-                                RuntimeClass::AggregateValue { .. }
-                            )
-                        )
-                ),
-                "non-copy aggregate view param must use a read-only borrow-like boundary: binding={binding:?}; ty={}",
-                binding_ty.pretty_print(db),
-            );
-        }
     }
-    plan
+}
+
+fn desired_read_only_view_param_plan<'db>(
+    db: &'db dyn MirDb,
+    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
+    binding: LocalBinding<'db>,
+    env: RuntimeTypeEnv<'db>,
+    inner: TyId<'db>,
+) -> RuntimeParamPlan<'db> {
+    let Some(boundary) = boundary_spec_for_ty_in_env(
+        db,
+        env,
+        typed_body.binding_ty(db, binding),
+        AddressSpaceKind::Memory,
+    ) else {
+        return RuntimeParamPlan::Erased;
+    };
+    if binding.is_mut() {
+        return RuntimeParamPlan::Boundary(runtime_param_boundary(
+            db, typed_body, binding, env, boundary,
+        ));
+    }
+    let value = stored_class_for_ty_in_context(db, inner, env.scope, env.assumptions);
+    if value.aggregate_layout().is_none() {
+        return RuntimeParamPlan::Boundary(runtime_param_boundary(
+            db, typed_body, binding, env, boundary,
+        ));
+    }
+    let borrow = match boundary {
+        RuntimeBoundarySpec::BorrowLike { .. } => boundary,
+        _ => RuntimeBoundarySpec::BorrowLike {
+            pointee: value.clone(),
+            access: BorrowAccess::ReadOnly,
+            allow: default_borrow_transport_set(BorrowAccess::ReadOnly, AddressSpaceKind::Memory),
+        },
+    };
+    RuntimeParamPlan::ReadOnlyView {
+        value: runtime_param_class(db, typed_body, binding, env, value),
+        borrow,
+    }
 }
 
 pub(crate) fn resolve_runtime_call_key<'db>(
