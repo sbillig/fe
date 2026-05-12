@@ -648,9 +648,6 @@ where
         let self_expr = self.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
         let tail_ident = IdentId::new(db, "__tail".to_string());
         let base_ident = IdentId::new(db, "base".to_string());
-        let dynamic_payload_size_path = PathId::from_ident(db, self.roots.core)
-            .push_str(db, "abi")
-            .push_str(db, "dynamic_payload_size");
         let head_size = self.abi_size_assoc_expr(TypeId::fallback_self_ty(db), "HEAD_SIZE");
         let encoder_expr = self.ident_expr(encoder_ident);
         let base_expr = self.method_call_expr(encoder_expr, base_ident, vec![]);
@@ -675,9 +672,6 @@ where
                 Partial::Present(FieldIndex::Ident(field)),
             ));
             self.emit_stmt(Stmt::Let(field_pat, None, Some(receiver)));
-            let field_expr = self.ident_expr(field_ident);
-            let dynamic_payload_size = self.path_expr(dynamic_payload_size_path);
-            let field_size = self.call_expr(dynamic_payload_size, vec![field_expr]);
             let encode_field_args = GenericArgListId::given(
                 db,
                 vec![
@@ -705,15 +699,6 @@ where
                 vec![field_value, encoder_arg, tail_arg],
             );
             self.emit_expr_stmt(call);
-            let tail_value = self.ident_expr(tail_ident);
-            let tail_next = self.push_expr(Expr::Bin(
-                tail_value,
-                field_size,
-                BinOp::Arith(ArithBinOp::Add),
-            ));
-            let tail_place = self.ident_expr(tail_ident);
-            let assign = self.push_expr(Expr::Assign(tail_place, tail_next));
-            self.emit_expr_stmt(assign);
         }
     }
 

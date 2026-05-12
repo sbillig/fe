@@ -1,0 +1,37 @@
+use std::abi::sol
+use std::evm::{Ctx, Evm, RawMem}
+
+msg M {
+    #[selector = sol("foo(bytes,bytes)")]
+    Foo { a: Bytes, b: Bytes },
+}
+
+pub contract C uses (ctx: Ctx, mem: mut RawMem) {
+    init() {}
+
+    recv M {
+        Foo { a, b } uses () { return }
+    }
+}
+
+fn build_bytes() -> Bytes
+uses (mem: mut RawMem)
+{
+    let data = std::evm::mem::alloc(64)
+    mem.mstore(addr: data, value: 32)
+    Bytes { data: data, len: 32, size: 64 }
+}
+
+#[test]
+fn test_msg_call_with_two_dynamic_bytes_fields()
+uses (evm: mut Evm, mem: mut RawMem)
+{
+    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+
+    evm.call(
+        addr: c,
+        gas: 2000000,
+        value: 0,
+        message: M::Foo { a: build_bytes(), b: build_bytes() },
+    )
+}

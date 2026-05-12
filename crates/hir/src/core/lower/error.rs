@@ -7,7 +7,7 @@ use super::{
     hir_builder::HirBuilder,
     msg::{
         build_head_size_body_expr, create_direct_encode_assoc_const, create_head_size_assoc_const,
-        create_is_dynamic_assoc_const,
+        create_is_dynamic_assoc_const, create_payload_size_func,
     },
 };
 use crate::{
@@ -411,15 +411,22 @@ fn lower_error_abi_size_impl<'db>(
     let trait_path = PathId::from_ident(db, roots.core)
         .push_str(db, "abi")
         .push_str(db, "AbiSize");
-    let trait_ref = TraitRefId::new(db, Partial::Present(trait_path));
-
-    builder.impl_trait_assocs_build(trait_ref, self_ty, |builder| {
-        let consts = vec![
-            create_head_size_assoc_const(builder, field_specs),
-            create_is_dynamic_assoc_const(builder, field_specs),
-        ];
-        (vec![], consts)
-    });
+    let trait_ref = Partial::Present(TraitRefId::new(db, Partial::Present(trait_path)));
+    let ty = Partial::Present(self_ty);
+    let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
+    builder.with_item_scope(
+        TrackedItemVariant::ImplTrait(impl_trait_idx),
+        |builder, id| {
+            let consts = vec![
+                create_head_size_assoc_const(builder, field_specs),
+                create_is_dynamic_assoc_const(builder, field_specs),
+            ];
+            let impl_trait =
+                builder.new_impl_trait(id, trait_ref, ty, vec![], consts, builder.origin());
+            create_payload_size_func(builder, field_specs);
+            impl_trait
+        },
+    );
 }
 
 fn lower_error_encode_impl<'db>(

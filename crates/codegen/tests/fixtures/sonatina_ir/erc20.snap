@@ -439,7 +439,7 @@ func private %core__lib__abi__abi_payload_size__geb2e_fde6(v0.objref<@layout_3>)
         jump block1;
 
     block1:
-        v2.i256 = call %core__lib__abi__trait_AbiSize__payload_size__geb2e_f424 v0;
+        v2.i256 = call %std__lib__evm__panic__impl_trait_Panic_bf0a__payload_size_1e4f v0;
         return v2;
 }
 
@@ -448,7 +448,7 @@ func private %core__lib__abi__abi_payload_size__geb2e_fde6_0(v0.objref<@layout_3
         jump block1;
 
     block1:
-        v2.i256 = call %core__lib__abi__trait_AbiSize__payload_size__geb2e_f424_0 v0;
+        v2.i256 = call %std__lib__evm__panic__impl_trait_Panic_bf0a__payload_size_1e4f_0 v0;
         return v2;
 }
 
@@ -457,7 +457,7 @@ func private %core__lib__abi__abi_payload_size__geb2e_fde6_1(v0.objref<@layout_3
         jump block1;
 
     block1:
-        v2.i256 = call %core__lib__abi__trait_AbiSize__payload_size__geb2e_f424_1 v0;
+        v2.i256 = call %std__lib__evm__panic__impl_trait_Panic_bf0a__payload_size_1e4f_1 v0;
         return v2;
 }
 
@@ -3998,7 +3998,7 @@ func private %decoder_new(v0.@layout_5) -> @layout_7 {
         return v2;
 }
 
-func private %core__lib__abi__dynamic_payload_size__ge513_455a(v0.i256) -> i256 {
+func private %core__lib__abi__dynamic_payload_size__ge513_7ef0(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -4009,7 +4009,7 @@ func private %core__lib__abi__dynamic_payload_size__ge513_455a(v0.i256) -> i256 
 
     block2:
         v3.i256 = mload v1 i256;
-        v4.i256 = call %core__lib__abi__trait_AbiSize__payload_size__ge513_c755 v3;
+        v4.i256 = call %core__lib__abi__trait_AbiSize__payload_size__ge513_a6ac v3;
         return v4;
 
     block3:
@@ -4019,7 +4019,7 @@ func private %core__lib__abi__dynamic_payload_size__ge513_455a(v0.i256) -> i256 
         return 0.i256;
 }
 
-func private %core__lib__abi__dynamic_payload_size__ge513_455a_0(v0.i256) -> i256 {
+func private %core__lib__abi__dynamic_payload_size__ge513_7ef0_0(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -4030,7 +4030,7 @@ func private %core__lib__abi__dynamic_payload_size__ge513_455a_0(v0.i256) -> i25
 
     block2:
         v3.i256 = mload v1 i256;
-        v4.i256 = call %core__lib__abi__trait_AbiSize__payload_size__ge513_c755_0 v3;
+        v4.i256 = call %core__lib__abi__trait_AbiSize__payload_size__ge513_a6ac_0 v3;
         return v4;
 
     block3:
@@ -4040,7 +4040,7 @@ func private %core__lib__abi__dynamic_payload_size__ge513_455a_0(v0.i256) -> i25
         return 0.i256;
 }
 
-func private %core__lib__abi__dynamic_payload_size__ge513_455a_1(v0.i256) -> i256 {
+func private %core__lib__abi__dynamic_payload_size__ge513_7ef0_1(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -4051,7 +4051,7 @@ func private %core__lib__abi__dynamic_payload_size__ge513_455a_1(v0.i256) -> i25
 
     block2:
         v3.i256 = mload v1 i256;
-        v4.i256 = call %core__lib__abi__trait_AbiSize__payload_size__ge513_c755_1 v3;
+        v4.i256 = call %core__lib__abi__trait_AbiSize__payload_size__ge513_a6ac_1 v3;
         return v4;
 
     block3:
@@ -4169,16 +4169,15 @@ func private %std__lib__evm__panic__impl_trait_Panic_2bdd__encode__g9c6f_02eb(v0
     block0:
         v2.objref<@layout_3> = obj.alloc @layout_3;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v6.objref<i256> = obj.proj v2 0.i256;
-        v7.i256 = extract_value v0 0.i256;
-        obj.store v6 v7;
+        v5.objref<i256> = obj.proj v2 0.i256;
+        v6.i256 = extract_value v0 0.i256;
+        obj.store v5 v6;
         jump block1;
 
     block1:
-        v9.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_7aef v1;
-        (v11.i256, v12.i1) = uaddo v9 32.i256;
-        br v12 block2 block3;
+        v8.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_7aef v1;
+        (v10.i256, v11.i1) = uaddo v8 32.i256;
+        br v11 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -4186,20 +4185,11 @@ func private %std__lib__evm__panic__impl_trait_Panic_2bdd__encode__g9c6f_02eb(v0
         evm_revert 0.i256 36.i256;
 
     block3:
-        mstore v3 v11 i256;
-        v17.objref<i256> = obj.proj v2 0.i256;
-        v18.i256 = obj.load v17;
-        v19.i256 = ptr_to_int v3 i256;
-        call %core__lib__abi__encode_field__g2e64_1064 v18 v1 v19;
-        v22.i256 = call %core__lib__abi__dynamic_payload_size__ge513_455a v18;
-        v23.i256 = mload v3 i256;
-        (v24.i256, v25.i1) = uaddo v23 v22;
-        br v25 block2 block4;
-
-    block4:
-        mstore v4 v24 i256;
-        v26.i256 = mload v4 i256;
-        mstore v3 v26 i256;
+        mstore v3 v10 i256;
+        v16.objref<i256> = obj.proj v2 0.i256;
+        v17.i256 = obj.load v16;
+        v18.i256 = ptr_to_int v3 i256;
+        call %core__lib__abi__encode_field__g2e64_1064 v17 v1 v18;
         return;
 }
 
@@ -4207,16 +4197,15 @@ func private %std__lib__evm__panic__impl_trait_Panic_2bdd__encode__g9c6f_02eb_0(
     block0:
         v2.objref<@layout_3> = obj.alloc @layout_3;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v6.objref<i256> = obj.proj v2 0.i256;
-        v7.i256 = extract_value v0 0.i256;
-        obj.store v6 v7;
+        v5.objref<i256> = obj.proj v2 0.i256;
+        v6.i256 = extract_value v0 0.i256;
+        obj.store v5 v6;
         jump block1;
 
     block1:
-        v9.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_7aef_0 v1;
-        (v11.i256, v12.i1) = uaddo v9 32.i256;
-        br v12 block2 block3;
+        v8.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_7aef_0 v1;
+        (v10.i256, v11.i1) = uaddo v8 32.i256;
+        br v11 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -4224,20 +4213,11 @@ func private %std__lib__evm__panic__impl_trait_Panic_2bdd__encode__g9c6f_02eb_0(
         evm_revert 0.i256 36.i256;
 
     block3:
-        mstore v3 v11 i256;
-        v17.objref<i256> = obj.proj v2 0.i256;
-        v18.i256 = obj.load v17;
-        v19.i256 = ptr_to_int v3 i256;
-        call %core__lib__abi__encode_field__g2e64_1064_0 v18 v1 v19;
-        v22.i256 = call %core__lib__abi__dynamic_payload_size__ge513_455a_0 v18;
-        v23.i256 = mload v3 i256;
-        (v24.i256, v25.i1) = uaddo v23 v22;
-        br v25 block2 block4;
-
-    block4:
-        mstore v4 v24 i256;
-        v26.i256 = mload v4 i256;
-        mstore v3 v26 i256;
+        mstore v3 v10 i256;
+        v16.objref<i256> = obj.proj v2 0.i256;
+        v17.i256 = obj.load v16;
+        v18.i256 = ptr_to_int v3 i256;
+        call %core__lib__abi__encode_field__g2e64_1064_0 v17 v1 v18;
         return;
 }
 
@@ -4245,16 +4225,15 @@ func private %std__lib__evm__panic__impl_trait_Panic_2bdd__encode__g9c6f_02eb_1(
     block0:
         v2.objref<@layout_3> = obj.alloc @layout_3;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v6.objref<i256> = obj.proj v2 0.i256;
-        v7.i256 = extract_value v0 0.i256;
-        obj.store v6 v7;
+        v5.objref<i256> = obj.proj v2 0.i256;
+        v6.i256 = extract_value v0 0.i256;
+        obj.store v5 v6;
         jump block1;
 
     block1:
-        v9.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_7aef_1 v1;
-        (v11.i256, v12.i1) = uaddo v9 32.i256;
-        br v12 block2 block3;
+        v8.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_7aef_1 v1;
+        (v10.i256, v11.i1) = uaddo v8 32.i256;
+        br v11 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -4262,20 +4241,11 @@ func private %std__lib__evm__panic__impl_trait_Panic_2bdd__encode__g9c6f_02eb_1(
         evm_revert 0.i256 36.i256;
 
     block3:
-        mstore v3 v11 i256;
-        v17.objref<i256> = obj.proj v2 0.i256;
-        v18.i256 = obj.load v17;
-        v19.i256 = ptr_to_int v3 i256;
-        call %core__lib__abi__encode_field__g2e64_1064_1 v18 v1 v19;
-        v22.i256 = call %core__lib__abi__dynamic_payload_size__ge513_455a_1 v18;
-        v23.i256 = mload v3 i256;
-        (v24.i256, v25.i1) = uaddo v23 v22;
-        br v25 block2 block4;
-
-    block4:
-        mstore v4 v24 i256;
-        v26.i256 = mload v4 i256;
-        mstore v3 v26 i256;
+        mstore v3 v10 i256;
+        v16.objref<i256> = obj.proj v2 0.i256;
+        v17.i256 = obj.load v16;
+        v18.i256 = ptr_to_int v3 i256;
+        call %core__lib__abi__encode_field__g2e64_1064_1 v17 v1 v18;
         return;
 }
 
@@ -7163,6 +7133,66 @@ func private %core__lib__abi__trait_AbiSize__payload_size__ge513_0454(v0.i256) -
         return 32.i256;
 }
 
+func private %std__lib__evm__panic__impl_trait_Panic_bf0a__payload_size_1e4f(v0.objref<@layout_3>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v5.i256 = obj.load v4;
+        v6.i256 = call %core__lib__abi__dynamic_payload_size__ge513_7ef0 v5;
+        (v7.i256, v8.i1) = uaddo 32.i256 v6;
+        br v8 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        return v7;
+}
+
+func private %std__lib__evm__panic__impl_trait_Panic_bf0a__payload_size_1e4f_0(v0.objref<@layout_3>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v5.i256 = obj.load v4;
+        v6.i256 = call %core__lib__abi__dynamic_payload_size__ge513_7ef0_0 v5;
+        (v7.i256, v8.i1) = uaddo 32.i256 v6;
+        br v8 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        return v7;
+}
+
+func private %std__lib__evm__panic__impl_trait_Panic_bf0a__payload_size_1e4f_1(v0.objref<@layout_3>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v5.i256 = obj.load v4;
+        v6.i256 = call %core__lib__abi__dynamic_payload_size__ge513_7ef0_1 v5;
+        (v7.i256, v8.i1) = uaddo 32.i256 v6;
+        br v8 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        return v7;
+}
+
 func private %core__lib__abi__trait_AbiSize__payload_size__ge513_3812(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
@@ -7259,6 +7289,36 @@ func private %core__lib__abi__impl_trait_String_c06e__payload_size__gc7cf_9b7d_0
         return v7;
 }
 
+func private %core__lib__abi__trait_AbiSize__payload_size__ge513_a6ac(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        return 32.i256;
+}
+
+func private %core__lib__abi__trait_AbiSize__payload_size__ge513_a6ac_0(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        return 32.i256;
+}
+
+func private %core__lib__abi__trait_AbiSize__payload_size__ge513_a6ac_1(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        return 32.i256;
+}
+
 func private %core__lib__abi__trait_AbiSize__payload_size__ge513_a81c(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
@@ -7283,36 +7343,6 @@ func private %core__lib__abi__trait_AbiSize__payload_size__gda9b_b33d_0(v0.i1) -
     block0:
         v1.*i1 = alloca i1;
         mstore v1 v0 i1;
-        jump block1;
-
-    block1:
-        return 32.i256;
-}
-
-func private %core__lib__abi__trait_AbiSize__payload_size__ge513_c755(v0.i256) -> i256 {
-    block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
-        jump block1;
-
-    block1:
-        return 32.i256;
-}
-
-func private %core__lib__abi__trait_AbiSize__payload_size__ge513_c755_0(v0.i256) -> i256 {
-    block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
-        jump block1;
-
-    block1:
-        return 32.i256;
-}
-
-func private %core__lib__abi__trait_AbiSize__payload_size__ge513_c755_1(v0.i256) -> i256 {
-    block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
@@ -7379,30 +7409,6 @@ func private %core__lib__abi__trait_AbiSize__payload_size__g79ff_f3e8_0(v0.i8) -
     block0:
         v1.*i8 = alloca i8;
         mstore v1 v0 i8;
-        jump block1;
-
-    block1:
-        return 32.i256;
-}
-
-func private %core__lib__abi__trait_AbiSize__payload_size__geb2e_f424(v0.objref<@layout_3>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return 32.i256;
-}
-
-func private %core__lib__abi__trait_AbiSize__payload_size__geb2e_f424_0(v0.objref<@layout_3>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return 32.i256;
-}
-
-func private %core__lib__abi__trait_AbiSize__payload_size__geb2e_f424_1(v0.objref<@layout_3>) -> i256 {
-    block0:
         jump block1;
 
     block1:

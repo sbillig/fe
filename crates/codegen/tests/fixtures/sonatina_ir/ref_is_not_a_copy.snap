@@ -16,7 +16,7 @@ func private %abi_payload_size(v0.objref<@layout_0>) -> i256 {
         jump block1;
 
     block1:
-        v2.i256 = call %payload_size__geb2e v0;
+        v2.i256 = call %impl_trait_Panic__payload_size v0;
         return v2;
 }
 
@@ -138,7 +138,7 @@ func private %dynamic_payload_size(v0.i256) -> i256 {
 
     block2:
         v3.i256 = mload v1 i256;
-        v4.i256 = call %core__lib__abi__trait_AbiSize__payload_size__ge513_7da2 v3;
+        v4.i256 = call %core__lib__abi__trait_AbiSize__payload_size__ge513_4dac v3;
         return v4;
 
     block3:
@@ -152,16 +152,15 @@ func private %encode__g9c6f(v0.@layout_0, v1.objref<@layout_1>) {
     block0:
         v2.objref<@layout_0> = obj.alloc @layout_0;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v6.objref<i256> = obj.proj v2 0.i256;
-        v7.i256 = extract_value v0 0.i256;
-        obj.store v6 v7;
+        v5.objref<i256> = obj.proj v2 0.i256;
+        v6.i256 = extract_value v0 0.i256;
+        obj.store v5 v6;
         jump block1;
 
     block1:
-        v9.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_28e3 v1;
-        (v11.i256, v12.i1) = uaddo v9 32.i256;
-        br v12 block2 block3;
+        v8.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_28e3 v1;
+        (v10.i256, v11.i1) = uaddo v8 32.i256;
+        br v11 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -169,20 +168,11 @@ func private %encode__g9c6f(v0.@layout_0, v1.objref<@layout_1>) {
         evm_revert 0.i256 36.i256;
 
     block3:
-        mstore v3 v11 i256;
-        v17.objref<i256> = obj.proj v2 0.i256;
-        v18.i256 = obj.load v17;
-        v19.i256 = ptr_to_int v3 i256;
-        call %encode_field v18 v1 v19;
-        v22.i256 = call %dynamic_payload_size v18;
-        v23.i256 = mload v3 i256;
-        (v24.i256, v25.i1) = uaddo v23 v22;
-        br v25 block2 block4;
-
-    block4:
-        mstore v4 v24 i256;
-        v26.i256 = mload v4 i256;
-        mstore v3 v26 i256;
+        mstore v3 v10 i256;
+        v16.objref<i256> = obj.proj v2 0.i256;
+        v17.i256 = obj.load v16;
+        v18.i256 = ptr_to_int v3 i256;
+        call %encode_field v17 v1 v18;
         return;
 }
 
@@ -411,18 +401,10 @@ func private %new(v0.i256) -> @layout_1 {
         return v13;
 }
 
-func private %core__lib__abi__trait_AbiSize__payload_size__ge513_7da2(v0.i256) -> i256 {
+func private %core__lib__abi__trait_AbiSize__payload_size__ge513_4dac(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
-        jump block1;
-
-    block1:
-        return 32.i256;
-}
-
-func private %payload_size__geb2e(v0.objref<@layout_0>) -> i256 {
-    block0:
         jump block1;
 
     block1:
@@ -437,6 +419,26 @@ func private %core__lib__abi__trait_AbiSize__payload_size__ge513_98c3(v0.i256) -
 
     block1:
         return 32.i256;
+}
+
+func private %impl_trait_Panic__payload_size(v0.objref<@layout_0>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v5.i256 = obj.load v4;
+        v6.i256 = call %dynamic_payload_size v5;
+        (v7.i256, v8.i1) = uaddo 32.i256 v6;
+        br v8 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        return v7;
 }
 
 func private %pos(v0.objref<@layout_1>) -> i256 {

@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/desugar.rs
-assertion_line: 28
 expression: output
 input_file: test_files/desugar/msg.fe
 ---
@@ -99,7 +98,6 @@ mod CounterMsg {
             let mut __tail = e.base() + <Self as core::abi::AbiSize>::HEAD_SIZE
             let __field_0 = self.val
             core::abi::encode_field<std::abi::Sol, u64, E>(__field_0, e, mut __tail)
-            __tail = __tail + core::abi::dynamic_payload_size(__field_0)
         }
 
         fn encode_to_ptr(own self, _ ptr: u256) {
