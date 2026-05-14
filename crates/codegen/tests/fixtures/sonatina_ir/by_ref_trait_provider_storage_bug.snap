@@ -180,7 +180,7 @@ func private %contract_runtime_root_ByRefTraitProviderStorageBug() {
         unreachable;
 }
 
-func private %decode_payload(v0.objref<@layout_3>) {
+func inline(always) private %decode_payload(v0.objref<@layout_3>) {
     block0:
         jump block1;
 
@@ -343,7 +343,7 @@ func private %encoder_new(v0.i256) -> @layout_0 {
         return v3;
 }
 
-func private %fork(v0.@layout_2, v1.i256) -> @layout_2 {
+func inline(always) private %fork(v0.@layout_2, v1.i256) -> @layout_2 {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v1 i256;
@@ -372,7 +372,7 @@ func private %input() -> @layout_1 {
         return v0;
 }
 
-func private %impl_CallData__new() -> @layout_1 {
+func inline(always) private %impl_CallData__new() -> @layout_1 {
     block0:
         jump block1;
 
@@ -384,7 +384,7 @@ func private %impl_CallData__new() -> @layout_1 {
         return v3;
 }
 
-func private %new__gd20d(v0.@layout_1) -> @layout_2 {
+func inline(always) private %new__gd20d(v0.@layout_1) -> @layout_2 {
     block0:
         jump block1;
 
@@ -461,7 +461,7 @@ func private %pos(v0.objref<@layout_0>) -> i256 {
         return v4;
 }
 
-func private %runtime_decoder(v0.objref<@layout_5>) -> @layout_3 {
+func inline(always) private %runtime_decoder(v0.objref<@layout_5>) -> @layout_3 {
     block0:
         jump block1;
 
@@ -541,7 +541,7 @@ func private %use_ctx(v0.i256) -> i256 {
         return v2;
 }
 
-func private %with_base(v0.@layout_1, v1.i256) -> @layout_3 {
+func inline(always) private %with_base(v0.@layout_1, v1.i256) -> @layout_3 {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v1 i256;

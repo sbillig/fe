@@ -86,7 +86,7 @@ func private %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b_1(v0.i25
         return v2;
 }
 
-func private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00(v0.i256) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -99,7 +99,7 @@ func private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00(
         return v5;
 }
 
-func private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0(v0.i256) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -136,7 +136,7 @@ func private %get_balance(v0.i256, v1.objref<@layout_3>) -> i256 {
         return v4;
 }
 
-func private %get__g7fdf(v0.i256) -> i256 {
+func inline(always) private %get__g7fdf(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -338,7 +338,7 @@ func private %runtime(v0.objref<@layout_1>) {
         jump block7;
 }
 
-func private %set__g7fdf(v0.i256, v1.i256) {
+func inline(always) private %set__g7fdf(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v0 i256;
@@ -351,7 +351,7 @@ func private %set__g7fdf(v0.i256, v1.i256) {
         return;
 }
 
-func private %set__gcbe1(v0.i256, v1.i256) {
+func inline(always) private %set__gcbe1(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v0 i256;
@@ -394,7 +394,7 @@ func private %set_balance(v0.i256, v1.i256, v2.objref<@layout_3>) {
         return;
 }
 
-func private %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc(v0.i256, v1.i256) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
@@ -410,7 +410,7 @@ func private %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a
         return v7;
 }
 
-func private %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_0(v0.i256, v1.i256) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_0(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
@@ -426,7 +426,7 @@ func private %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a
         return v7;
 }
 
-func private %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_1(v0.i256, v1.i256) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_1(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
@@ -442,7 +442,7 @@ func private %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a
         return v7;
 }
 
-func private %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d(v0.i256, v1.i256, v2.i256) {
+func inline(always) private %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d(v0.i256, v1.i256, v2.i256) {
     block0:
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
@@ -461,7 +461,7 @@ func private %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d
         return;
 }
 
-func private %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d_0(v0.i256, v1.i256, v2.i256) {
+func inline(always) private %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d_0(v0.i256, v1.i256, v2.i256) {
     block0:
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
@@ -480,7 +480,7 @@ func private %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d
         return;
 }
 
-func private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d(v0.i256, v1.i256) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
@@ -512,7 +512,7 @@ func private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge5
         return v22;
 }
 
-func private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_0(v0.i256, v1.i256) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_0(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
@@ -544,7 +544,7 @@ func private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge5
         return v22;
 }
 
-func private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_1(v0.i256, v1.i256) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_1(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
@@ -576,7 +576,7 @@ func private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge5
         return v22;
 }
 
-func private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_2(v0.i256, v1.i256) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_2(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
@@ -672,7 +672,7 @@ func private %transfer(v0.i256, v1.i256, v2.i256, v3.objref<@layout_3>) -> i256 
         return 0.i256;
 }
 
-func private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c(v0.i256, v1.i256) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
@@ -687,7 +687,7 @@ func private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c(v
         return 32.i256;
 }
 
-func private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_0(v0.i256, v1.i256) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_0(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
@@ -702,7 +702,7 @@ func private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_0
         return 32.i256;
 }
 
-func private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_1(v0.i256, v1.i256) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_1(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
@@ -717,7 +717,7 @@ func private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_1
         return 32.i256;
 }
 
-func private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_2(v0.i256, v1.i256) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_2(v0.i256, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;

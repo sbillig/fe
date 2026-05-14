@@ -195,7 +195,7 @@ func private %contract_runtime_root_TupleReturnContract() {
         unreachable;
 }
 
-func private %decode_payload(v0.objref<@layout_5>) {
+func inline(always) private %decode_payload(v0.objref<@layout_5>) {
     block0:
         jump block1;
 
@@ -658,7 +658,7 @@ func private %encoder_new(v0.i256) -> @layout_2 {
         return v3;
 }
 
-func private %fork(v0.@layout_4, v1.i256) -> @layout_4 {
+func inline(always) private %fork(v0.@layout_4, v1.i256) -> @layout_4 {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v1 i256;
@@ -687,7 +687,7 @@ func private %input() -> @layout_3 {
         return v0;
 }
 
-func private %impl_CallData__new() -> @layout_3 {
+func inline(always) private %impl_CallData__new() -> @layout_3 {
     block0:
         jump block1;
 
@@ -699,7 +699,7 @@ func private %impl_CallData__new() -> @layout_3 {
         return v3;
 }
 
-func private %new__gd20d(v0.@layout_3) -> @layout_4 {
+func inline(always) private %new__gd20d(v0.@layout_3) -> @layout_4 {
     block0:
         jump block1;
 
@@ -880,7 +880,7 @@ func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__pos_d646(v0.objref
         return v4;
 }
 
-func private %runtime_decoder(v0.objref<@layout_7>) -> @layout_5 {
+func inline(always) private %runtime_decoder(v0.objref<@layout_7>) -> @layout_5 {
     block0:
         jump block1;
 
@@ -1013,7 +1013,7 @@ func private %std__lib__abi__sol__impl_trait_Sol_1f5f__store_word_5688(v0.i256, 
         return;
 }
 
-func private %with_base(v0.@layout_3, v1.i256) -> @layout_5 {
+func inline(always) private %with_base(v0.@layout_3, v1.i256) -> @layout_5 {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v1 i256;

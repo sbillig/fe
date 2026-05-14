@@ -65,6 +65,7 @@ impl AbiSize for Address {
 }
 
 impl<A: Abi> Decode<A> for Address {
+    #[inline(always)]
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         let word = d.read_word()
         if word >> 160 != 0 {
