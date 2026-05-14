@@ -37,6 +37,7 @@ mod CounterMsg {
 
     impl core::abi::Decode<std::abi::Sol> for Increment {
 
+        #[inline(always)]
         fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
             return Self {  }
         }
@@ -68,6 +69,7 @@ mod CounterMsg {
 
     impl core::abi::Decode<std::abi::Sol> for Get {
 
+        #[inline(always)]
         fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
             return Self {  }
         }
@@ -107,6 +109,7 @@ mod CounterMsg {
 
     impl core::abi::Decode<std::abi::Sol> for Set {
 
+        #[inline(always)]
         fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
             let val: u64 = core::abi::decode_field<std::abi::Sol, u64, D>(d)
             return Self { val: val }

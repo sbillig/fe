@@ -641,7 +641,7 @@ fn lower_msg_variant_decode_trait_impl<'db>(
         let decoder_ident = builder.ident("d");
         let params = builder.params([builder.param_mut_underscore_named(decoder_ident, d_ty)]);
 
-        builder.func_generic(
+        builder.func_generic_inline_always(
             "decode_payload",
             d_generic_params,
             params,

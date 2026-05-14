@@ -16,9 +16,12 @@ pub struct CallData { pub base: u256 }
 impl Copy for CallData {}
 
 impl CallData {
+    #[inline(always)]
     pub fn new() -> Self {
         CallData { base: 0 }
     }
+
+    #[inline(always)]
     pub fn with_base(_ base: u256) -> Self {
         CallData { base }
     }
@@ -30,6 +33,7 @@ impl CallData {
 }
 
 impl ByteInput for CallData {
+    #[inline(always)]
     fn len(self) -> u256 {
         let total = calldatasize()
         if self.base > total {
@@ -40,11 +44,13 @@ impl ByteInput for CallData {
     }
 
     #[arithmetic(unchecked)]
+    #[inline(always)]
     fn word_at(self, _ byte_offset: u256) -> u256 {
         calldataload(self.base + byte_offset)
     }
 
     #[arithmetic(unchecked)]
+    #[inline(always)]
     fn byte_at(self, _ byte_offset: u256) -> u8 {
         let word_offset = byte_offset - (byte_offset % 32)
         let word = calldataload(self.base + word_offset)

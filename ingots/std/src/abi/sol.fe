@@ -172,6 +172,7 @@ pub struct SolDecoder<I> {
 impl<I> SolDecoder<I>
     where I: ByteInput
 {
+    #[inline(always)]
     pub fn new(_ input: own I) -> Self {
         SolDecoder {
             cur: Cursor::new(input),
@@ -179,6 +180,7 @@ impl<I> SolDecoder<I>
         }
     }
 
+    #[inline(always)]
     pub fn with_base(_ input: own I, _ base: u256) -> Self {
         SolDecoder {
             cur: Cursor::new(input).fork(base),
@@ -341,6 +343,7 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         b
     }
 
+    #[inline(always)]
     fn read_word(mut self) -> u256 {
         let len = self.cur.input.len()
         let new_pos = self.cur.pos + 32
