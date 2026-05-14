@@ -2948,6 +2948,17 @@ impl<'db> RmirEmitter<'db> {
                     None,
                 )
             }
+            RuntimeBuiltinFuncKind::Mcopy => {
+                let [dst, src, len] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Mcopy {
+                        dst: *dst,
+                        src: *src,
+                        len: *len,
+                    },
+                    None,
+                )
+            }
             RuntimeBuiltinFuncKind::Msize => {
                 let [] = args else { return None };
                 builtin(crate::runtime::RuntimeBuiltin::Msize, Some(word.clone()))
@@ -3065,6 +3076,16 @@ impl<'db> RmirEmitter<'db> {
                         lhs: *lhs,
                         rhs: *rhs,
                         modulus: *modulus,
+                    },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::SignExtend => {
+                let [byte, value] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::SignExtend {
+                        byte: *byte,
+                        value: *value,
                     },
                     Some(word.clone()),
                 )

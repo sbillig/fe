@@ -7,30 +7,38 @@ use super::types::SolCompat
 const FULL_WORD_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
 fn canonical_unsigned_word(word: u256, bits: u256) -> u256 {
-    let mask = ((1 as u256) << bits) - 1
-    if word & (FULL_WORD_MASK ^ mask) == 0 {
-        return word & mask
+    // Canonical Solidity ABI encoding for an unsigned integer of width `bits`
+    // requires that all higher bits are zero.
+    //
+    // This shift-based check is cheaper than constructing a `(1 << bits) - 1`
+    // mask for every call.
+    if word >> bits == 0 {
+        return word
     }
     revert(offset: 0, len: 0)
 }
 
 fn canonical_custom_signed_word(word: u256, bits: u256) -> u256 {
-    let mask = ((1 as u256) << bits) - 1
-    let sign_bit = (1 as u256) << (bits - 1)
-    let value = word & mask
-
-    if value & sign_bit != 0 {
-        let canonical = value | (FULL_WORD_MASK ^ mask)
-        if canonical == word {
-            return canonical
+    // Canonical Solidity ABI encoding for a signed integer of width `bits`
+    // requires that all higher bits are a sign-extension of the sign bit.
+    if bits == 0 {
+        if word == 0 {
+            return 0
         }
         revert(offset: 0, len: 0)
     }
 
-    if value == word {
-        return value
+    let sign = (word >> (bits - 1)) & 1
+    if sign == 0 {
+        if word >> bits == 0 {
+            return word
+        }
+        revert(offset: 0, len: 0)
     }
 
+    if word >> bits == (FULL_WORD_MASK >> bits) {
+        return word
+    }
     revert(offset: 0, len: 0)
 }
 

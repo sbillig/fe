@@ -1080,6 +1080,11 @@ pub enum RuntimeBuiltin<'db> {
         addr: RValueId,
         value: RValueId,
     },
+    Mcopy {
+        dst: RValueId,
+        src: RValueId,
+        len: RValueId,
+    },
     Msize,
     Sload {
         slot: RValueId,
@@ -1123,6 +1128,10 @@ pub enum RuntimeBuiltin<'db> {
         lhs: RValueId,
         rhs: RValueId,
         modulus: RValueId,
+    },
+    SignExtend {
+        byte: RValueId,
+        value: RValueId,
     },
     IntrinsicArith {
         op: IntrinsicArithBinOp,
