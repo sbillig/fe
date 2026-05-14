@@ -924,9 +924,10 @@ pub enum InitArgsPlan<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RuntimeInputPlan<'db> {
     None,
-    DecodeCalldataPayload {
+    DecodeHostPayload {
         msg_ty: TyId<'db>,
-        decode_fn: RuntimeInstance<'db>,
+        host: TargetRootProviderBinding<'db>,
+        decode_args_fn: RuntimeInstance<'db>,
         projected_fields: Box<[u32]>,
     },
 }
