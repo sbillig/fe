@@ -1,5 +1,5 @@
 use core::AsBytes
-use core::abi::DynString
+use core::abi::{Abi, AbiDecoder, AbiEncoder, AbiSize, AbiSpan, ByteInput, Decode, DynString, Encode}
 use core::num::IntDowncast
 use ingot::evm::Address
 use ingot::evm::TopicValue
@@ -93,45 +93,117 @@ impl SolCompat for DynString {
     const SOL_TYPE: Self::S = "string"
 }
 
+pub struct Bytes32 { pub val: u256 }
+
+impl SolCompat for Bytes32 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes32"
+}
+
+impl<A: Abi> Encode<A> for Bytes32 {
+    const DIRECT_ENCODE: bool = true
+
+    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+        e.write_word(self.val)
+    }
+
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self.val)
+    }
+}
+
+impl<A: Abi> Decode<A> for Bytes32 {
+    fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
+        Bytes32 { val: d.read_word() }
+    }
+}
+
+impl AbiSize for Bytes32 {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl<A: Abi> AbiSpan<A> for Bytes32 {
+    fn payload_end<I: ByteInput>(_: I, base: u256, pos: u256) -> u256 {
+        pos + 32
+    }
+}
+
+impl Copy for Bytes32 {}
+
+impl TopicValue for Bytes32 {
+    fn as_topic(self) -> u256 {
+        self.val
+    }
+}
+
 impl TopicValue for u8 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 {
+        self.downcast_unchecked()
+    }
 }
 impl TopicValue for u16 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 {
+        self.downcast_unchecked()
+    }
 }
 impl TopicValue for u32 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 {
+        self.downcast_unchecked()
+    }
 }
 impl TopicValue for u64 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 {
+        self.downcast_unchecked()
+    }
 }
 impl TopicValue for u128 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 {
+        self.downcast_unchecked()
+    }
 }
 impl TopicValue for u256 {
-    fn as_topic(self) -> u256 { self }
+    fn as_topic(self) -> u256 {
+        self
+    }
 }
 impl TopicValue for i8 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 {
+        self.downcast_unchecked()
+    }
 }
 impl TopicValue for i16 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 {
+        self.downcast_unchecked()
+    }
 }
 impl TopicValue for i32 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 {
+        self.downcast_unchecked()
+    }
 }
 impl TopicValue for i64 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 {
+        self.downcast_unchecked()
+    }
 }
 impl TopicValue for i128 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 {
+        self.downcast_unchecked()
+    }
 }
 impl TopicValue for i256 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 {
+        self.downcast_unchecked()
+    }
 }
 impl TopicValue for Address {
-    fn as_topic(self) -> u256 { self.inner }
+    fn as_topic(self) -> u256 {
+        self.inner
+    }
 }
 impl TopicValue for bool {
-    fn as_topic(self) -> u256 { if self { 1 } else { 0 } }
+    fn as_topic(self) -> u256 {
+        if self { 1 } else { 0 }
+    }
 }
