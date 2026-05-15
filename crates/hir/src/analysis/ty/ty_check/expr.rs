@@ -1407,9 +1407,12 @@ impl<'db> TyChecker<'db> {
                             target_ty,
                         );
                     }
-                    let provider_space =
-                        self.effect_arg_provider_space(&arg, pass_mode).or_else(|| {
-                            self.concrete_borrow_provider_for_effect_handle_ty(provider.ty)
+                    let provider_space = self
+                        .effect_arg_provider_space(&arg, pass_mode)
+                        .or_else(|| self.concrete_borrow_provider_for_effect_handle_ty(provider.ty))
+                        .or_else(|| {
+                            matches!(pass_mode, super::EffectPassMode::ByTempPlace)
+                                .then_some(super::ProviderAddressSpace::Memory)
                         });
                     if matches!(
                         pass_mode,
@@ -1449,6 +1452,7 @@ impl<'db> TyChecker<'db> {
                         key: key_path,
                         arg,
                         pass_mode,
+                        required_mut: req.required_mut,
                         key_kind,
                         instantiated_key_ty,
                         provider_target_ty,

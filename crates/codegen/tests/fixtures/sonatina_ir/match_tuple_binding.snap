@@ -8,49 +8,32 @@ target = "evm-ethereum-osaka"
 type @layout_0 = {i8, i8};
 type @layout_1 = {@layout_0, i8};
 
+global private const @layout_0 $const_region_0 = {1, 2};
+global private const @layout_1 $const_region_1 = {{1, 2}, 3};
+
 func private %main() -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        v2.objref<@layout_0> = obj.alloc @layout_0;
-        v4.objref<i8> = obj.proj v2 0.i256;
-        obj.store v4 1.i8;
-        v6.objref<i8> = obj.proj v2 1.i256;
-        obj.store v6 2.i8;
-        v7.@layout_0 = obj.load v2;
-        v8.i8 = call %match_tuple_extract v7;
-        v9.objref<@layout_0> = obj.alloc @layout_0;
-        v10.objref<i8> = obj.proj v9 0.i256;
-        obj.store v10 1.i8;
-        v11.objref<i8> = obj.proj v9 1.i256;
-        obj.store v11 2.i8;
-        v12.@layout_0 = obj.load v9;
-        v14.objref<@layout_0> = obj.alloc @layout_0;
-        v15.objref<i8> = obj.proj v14 0.i256;
-        obj.store v15 1.i8;
-        v16.objref<i8> = obj.proj v14 1.i256;
-        obj.store v16 2.i8;
-        v17.@layout_0 = obj.load v14;
-        v18.objref<@layout_1> = obj.alloc @layout_1;
-        v19.objref<@layout_0> = obj.proj v18 0.i256;
-        v20.objref<i8> = obj.proj v19 0.i256;
-        v21.i8 = extract_value v17 0.i256;
-        obj.store v20 v21;
-        v22.objref<i8> = obj.proj v19 1.i256;
-        v23.i8 = extract_value v17 1.i256;
-        obj.store v22 v23;
-        v24.objref<i8> = obj.proj v18 1.i256;
-        obj.store v24 3.i8;
-        v25.@layout_1 = obj.load v18;
-        v26.i8 = call %match_nested_extract v25;
-        v27.objref<@layout_0> = obj.alloc @layout_0;
-        v28.objref<i8> = obj.proj v27 0.i256;
-        obj.store v28 v8;
-        v29.objref<i8> = obj.proj v27 1.i256;
-        obj.store v29 v26;
-        v30.@layout_0 = obj.load v27;
-        return v30;
+        v2.constref<@layout_0> = const.ref $const_region_0;
+        v3.objref<@layout_0> = obj.alloc @layout_0;
+        obj.init.const v3 v2;
+        v4.@layout_0 = obj.load v3;
+        v5.i8 = call %match_tuple_extract v4;
+        v6.constref<@layout_0> = const.ref $const_region_0;
+        v8.constref<@layout_1> = const.ref $const_region_1;
+        v9.objref<@layout_1> = obj.alloc @layout_1;
+        obj.init.const v9 v8;
+        v10.@layout_1 = obj.load v9;
+        v11.i8 = call %match_nested_extract v10;
+        v12.objref<@layout_0> = obj.alloc @layout_0;
+        v14.objref<i8> = obj.proj v12 0.i256;
+        obj.store v14 v5;
+        v16.objref<i8> = obj.proj v12 1.i256;
+        obj.store v16 v11;
+        v17.@layout_0 = obj.load v12;
+        return v17;
 }
 
 func private %main_root() {

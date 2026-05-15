@@ -10,99 +10,31 @@ type @layout_1 = {i1, i1};
 type @layout_2 = {@layout_1, i1};
 type @layout_3 = {@layout_2, i1};
 
+global private const @layout_1 $const_region_0 = {1, 0};
+global private const @layout_2 $const_region_1 = {{1, 0}, 1};
+global private const @layout_1 $const_region_2 = {1, 1};
+global private const @layout_2 $const_region_3 = {{1, 1}, 0};
+global private const @layout_3 $const_region_4 = {{{1, 1}, 0}, 1};
+
 func private %main() -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        v2.objref<@layout_1> = obj.alloc @layout_1;
-        v4.objref<i1> = obj.proj v2 0.i256;
-        obj.store v4 1.i1;
-        v6.objref<i1> = obj.proj v2 1.i256;
-        obj.store v6 0.i1;
-        v7.@layout_1 = obj.load v2;
-        v8.objref<@layout_1> = obj.alloc @layout_1;
-        v9.objref<i1> = obj.proj v8 0.i256;
-        obj.store v9 1.i1;
-        v10.objref<i1> = obj.proj v8 1.i256;
-        obj.store v10 0.i1;
-        v11.@layout_1 = obj.load v8;
-        v12.objref<@layout_2> = obj.alloc @layout_2;
-        v13.objref<@layout_1> = obj.proj v12 0.i256;
-        v14.objref<i1> = obj.proj v13 0.i256;
-        v15.i1 = extract_value v11 0.i256;
-        obj.store v14 v15;
-        v16.objref<i1> = obj.proj v13 1.i256;
-        v17.i1 = extract_value v11 1.i256;
-        obj.store v16 v17;
-        v18.objref<i1> = obj.proj v12 1.i256;
-        obj.store v18 1.i1;
-        v19.@layout_2 = obj.load v12;
-        v20.i8 = call %match_nested_tuple v19;
-        v21.objref<@layout_1> = obj.alloc @layout_1;
-        v22.objref<i1> = obj.proj v21 0.i256;
-        obj.store v22 1.i1;
-        v23.objref<i1> = obj.proj v21 1.i256;
-        obj.store v23 1.i1;
-        v24.@layout_1 = obj.load v21;
-        v25.objref<@layout_1> = obj.alloc @layout_1;
-        v26.objref<i1> = obj.proj v25 0.i256;
-        obj.store v26 1.i1;
-        v27.objref<i1> = obj.proj v25 1.i256;
-        obj.store v27 1.i1;
-        v28.@layout_1 = obj.load v25;
-        v29.objref<@layout_2> = obj.alloc @layout_2;
-        v30.objref<@layout_1> = obj.proj v29 0.i256;
-        v31.objref<i1> = obj.proj v30 0.i256;
-        v32.i1 = extract_value v28 0.i256;
-        obj.store v31 v32;
-        v33.objref<i1> = obj.proj v30 1.i256;
-        v34.i1 = extract_value v28 1.i256;
-        obj.store v33 v34;
-        v35.objref<i1> = obj.proj v29 1.i256;
-        obj.store v35 0.i1;
-        v36.@layout_2 = obj.load v29;
-        v37.objref<@layout_1> = obj.alloc @layout_1;
-        v38.objref<i1> = obj.proj v37 0.i256;
-        obj.store v38 1.i1;
-        v39.objref<i1> = obj.proj v37 1.i256;
-        obj.store v39 1.i1;
-        v40.@layout_1 = obj.load v37;
-        v41.objref<@layout_2> = obj.alloc @layout_2;
-        v42.objref<@layout_1> = obj.proj v41 0.i256;
-        v43.objref<i1> = obj.proj v42 0.i256;
-        v44.i1 = extract_value v40 0.i256;
-        obj.store v43 v44;
-        v45.objref<i1> = obj.proj v42 1.i256;
-        v46.i1 = extract_value v40 1.i256;
-        obj.store v45 v46;
-        v47.objref<i1> = obj.proj v41 1.i256;
-        obj.store v47 0.i1;
-        v48.@layout_2 = obj.load v41;
-        v49.objref<@layout_3> = obj.alloc @layout_3;
-        v50.objref<@layout_2> = obj.proj v49 0.i256;
-        v51.objref<@layout_1> = obj.proj v50 0.i256;
-        v52.@layout_1 = extract_value v48 0.i256;
-        v53.objref<i1> = obj.proj v51 0.i256;
-        v54.i1 = extract_value v52 0.i256;
-        obj.store v53 v54;
-        v55.objref<i1> = obj.proj v51 1.i256;
-        v56.i1 = extract_value v52 1.i256;
-        obj.store v55 v56;
-        v57.objref<i1> = obj.proj v50 1.i256;
-        v58.i1 = extract_value v48 1.i256;
-        obj.store v57 v58;
-        v59.objref<i1> = obj.proj v49 1.i256;
-        obj.store v59 1.i1;
-        v60.@layout_3 = obj.load v49;
-        v61.i8 = call %match_deeply_nested v60;
-        v62.objref<@layout_0> = obj.alloc @layout_0;
-        v63.objref<i8> = obj.proj v62 0.i256;
-        obj.store v63 v20;
-        v64.objref<i8> = obj.proj v62 1.i256;
-        obj.store v64 v61;
-        v65.@layout_0 = obj.load v62;
-        return v65;
+        v2.constref<@layout_1> = const.ref $const_region_0;
+        v3.constref<@layout_2> = const.ref $const_region_1;
+        v4.i8 = call %match_nested_tuple v3;
+        v5.constref<@layout_1> = const.ref $const_region_2;
+        v6.constref<@layout_2> = const.ref $const_region_3;
+        v7.constref<@layout_3> = const.ref $const_region_4;
+        v8.i8 = call %match_deeply_nested v7;
+        v9.objref<@layout_0> = obj.alloc @layout_0;
+        v11.objref<i8> = obj.proj v9 0.i256;
+        obj.store v11 v4;
+        v13.objref<i8> = obj.proj v9 1.i256;
+        obj.store v13 v8;
+        v14.@layout_0 = obj.load v9;
+        return v14;
 }
 
 func private %main_root() {
@@ -114,95 +46,47 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %match_deeply_nested(v0.@layout_3) -> i8 {
+func private %match_deeply_nested(v0.constref<@layout_3>) -> i8 {
     block0:
-        v1.objref<@layout_3> = obj.alloc @layout_3;
-        v3.objref<@layout_2> = obj.proj v1 0.i256;
-        v4.@layout_2 = extract_value v0 0.i256;
-        v5.objref<@layout_1> = obj.proj v3 0.i256;
-        v6.@layout_1 = extract_value v4 0.i256;
-        v7.objref<i1> = obj.proj v5 0.i256;
-        v8.i1 = extract_value v6 0.i256;
-        obj.store v7 v8;
-        v10.objref<i1> = obj.proj v5 1.i256;
-        v11.i1 = extract_value v6 1.i256;
-        obj.store v10 v11;
-        v12.objref<i1> = obj.proj v3 1.i256;
-        v13.i1 = extract_value v4 1.i256;
-        obj.store v12 v13;
-        v14.objref<i1> = obj.proj v1 1.i256;
-        v15.i1 = extract_value v0 1.i256;
-        obj.store v14 v15;
         jump block1;
 
     block1:
-        v16.@layout_3 = obj.load v1;
-        v17.objref<@layout_3> = obj.alloc @layout_3;
-        v18.objref<@layout_2> = obj.proj v17 0.i256;
-        v19.@layout_2 = extract_value v16 0.i256;
-        v20.objref<@layout_1> = obj.proj v18 0.i256;
-        v21.@layout_1 = extract_value v19 0.i256;
-        v22.objref<i1> = obj.proj v20 0.i256;
-        v23.i1 = extract_value v21 0.i256;
-        obj.store v22 v23;
-        v24.objref<i1> = obj.proj v20 1.i256;
-        v25.i1 = extract_value v21 1.i256;
-        obj.store v24 v25;
-        v26.objref<i1> = obj.proj v18 1.i256;
-        v27.i1 = extract_value v19 1.i256;
-        obj.store v26 v27;
-        v28.objref<i1> = obj.proj v17 1.i256;
-        v29.i1 = extract_value v16 1.i256;
-        obj.store v28 v29;
         jump block3;
 
     block2:
-        v30.i8 = phi (0.i8 block7) (8.i8 block10) (8.i8 block13) (15.i8 block15) (8.i8 block16);
-        return v30;
+        v2.i8 = phi (0.i8 block7) (8.i8 block10) (8.i8 block13) (15.i8 block15) (8.i8 block16);
+        return v2;
 
     block3:
-        v31.objref<@layout_2> = obj.alloc @layout_2;
-        v33.objref<@layout_2> = obj.proj v17 0.i256;
-        v34.objref<@layout_1> = obj.proj v31 0.i256;
-        v35.objref<@layout_1> = obj.proj v33 0.i256;
-        v36.objref<i1> = obj.proj v34 0.i256;
-        v37.objref<i1> = obj.proj v35 0.i256;
-        v38.i1 = obj.load v37;
-        obj.store v36 v38;
-        v39.objref<i1> = obj.proj v34 1.i256;
-        v40.objref<i1> = obj.proj v35 1.i256;
-        v41.i1 = obj.load v40;
-        obj.store v39 v41;
-        v42.objref<i1> = obj.proj v31 1.i256;
-        v43.objref<i1> = obj.proj v33 1.i256;
-        v44.i1 = obj.load v43;
-        obj.store v42 v44;
+        v3.objref<@layout_2> = obj.alloc @layout_2;
+        v6.constref<@layout_2> = const.proj v0 0.i256;
+        obj.init.const v3 v6;
         jump block4;
 
     block4:
-        v45.objref<@layout_1> = obj.alloc @layout_1;
-        v47.objref<@layout_1> = obj.proj v31 0.i256;
-        v48.objref<i1> = obj.proj v45 0.i256;
-        v49.objref<i1> = obj.proj v47 0.i256;
-        v50.i1 = obj.load v49;
-        obj.store v48 v50;
-        v51.objref<i1> = obj.proj v45 1.i256;
-        v52.objref<i1> = obj.proj v47 1.i256;
-        v53.i1 = obj.load v52;
-        obj.store v51 v53;
+        v7.objref<@layout_1> = obj.alloc @layout_1;
+        v9.objref<@layout_1> = obj.proj v3 0.i256;
+        v10.objref<i1> = obj.proj v7 0.i256;
+        v11.objref<i1> = obj.proj v9 0.i256;
+        v12.i1 = obj.load v11;
+        obj.store v10 v12;
+        v14.objref<i1> = obj.proj v7 1.i256;
+        v15.objref<i1> = obj.proj v9 1.i256;
+        v16.i1 = obj.load v15;
+        obj.store v14 v16;
         jump block5;
 
     block5:
-        v55.objref<i1> = obj.proj v45 0.i256;
-        v56.i1 = obj.load v55;
-        v58.i1 = eq v56 1.i1;
-        br v58 block6 block8;
+        v18.objref<i1> = obj.proj v7 0.i256;
+        v19.i1 = obj.load v18;
+        v21.i1 = eq v19 1.i1;
+        br v21 block6 block8;
 
     block6:
-        v60.objref<i1> = obj.proj v17 1.i256;
-        v61.i1 = obj.load v60;
-        v62.i1 = eq v61 1.i1;
-        br v62 block9 block11;
+        v23.constref<i1> = const.proj v0 1.i256;
+        v24.i1 = const.load v23;
+        v25.i1 = eq v24 1.i1;
+        br v25 block9 block11;
 
     block7:
         jump block2;
@@ -211,10 +95,10 @@ func private %match_deeply_nested(v0.@layout_3) -> i8 {
         jump block7;
 
     block9:
-        v65.objref<i1> = obj.proj v31 1.i256;
-        v66.i1 = obj.load v65;
-        v67.i1 = eq v66 1.i1;
-        br v67 block12 block14;
+        v28.objref<i1> = obj.proj v3 1.i256;
+        v29.i1 = obj.load v28;
+        v30.i1 = eq v29 1.i1;
+        br v30 block12 block14;
 
     block10:
         jump block2;
@@ -223,10 +107,10 @@ func private %match_deeply_nested(v0.@layout_3) -> i8 {
         jump block10;
 
     block12:
-        v70.objref<i1> = obj.proj v45 1.i256;
-        v71.i1 = obj.load v70;
-        v72.i1 = eq v71 1.i1;
-        br v72 block15 block17;
+        v33.objref<i1> = obj.proj v7 1.i256;
+        v34.i1 = obj.load v33;
+        v35.i1 = eq v34 1.i1;
+        br v35 block15 block17;
 
     block13:
         jump block2;
@@ -244,81 +128,49 @@ func private %match_deeply_nested(v0.@layout_3) -> i8 {
         jump block16;
 }
 
-func private %match_nested_tuple(v0.@layout_2) -> i8 {
+func private %match_nested_tuple(v0.constref<@layout_2>) -> i8 {
     block0:
-        v1.objref<@layout_2> = obj.alloc @layout_2;
-        v3.objref<@layout_1> = obj.proj v1 0.i256;
-        v4.@layout_1 = extract_value v0 0.i256;
-        v5.objref<i1> = obj.proj v3 0.i256;
-        v6.i1 = extract_value v4 0.i256;
-        obj.store v5 v6;
-        v8.objref<i1> = obj.proj v3 1.i256;
-        v9.i1 = extract_value v4 1.i256;
-        obj.store v8 v9;
-        v10.objref<i1> = obj.proj v1 1.i256;
-        v11.i1 = extract_value v0 1.i256;
-        obj.store v10 v11;
         jump block1;
 
     block1:
-        v12.@layout_2 = obj.load v1;
-        v13.objref<@layout_2> = obj.alloc @layout_2;
-        v14.objref<@layout_1> = obj.proj v13 0.i256;
-        v15.@layout_1 = extract_value v12 0.i256;
-        v16.objref<i1> = obj.proj v14 0.i256;
-        v17.i1 = extract_value v15 0.i256;
-        obj.store v16 v17;
-        v18.objref<i1> = obj.proj v14 1.i256;
-        v19.i1 = extract_value v15 1.i256;
-        obj.store v18 v19;
-        v20.objref<i1> = obj.proj v13 1.i256;
-        v21.i1 = extract_value v12 1.i256;
-        obj.store v20 v21;
         jump block3;
 
     block2:
-        v22.i8 = phi (5.i8 block9) (7.i8 block11) (6.i8 block12) (2.i8 block14) (1.i8 block15);
-        return v22;
+        v2.i8 = phi (5.i8 block9) (7.i8 block11) (6.i8 block12) (2.i8 block14) (1.i8 block15);
+        return v2;
 
     block3:
-        v23.objref<@layout_1> = obj.alloc @layout_1;
-        v25.objref<@layout_1> = obj.proj v13 0.i256;
-        v26.objref<i1> = obj.proj v23 0.i256;
-        v27.objref<i1> = obj.proj v25 0.i256;
-        v28.i1 = obj.load v27;
-        obj.store v26 v28;
-        v29.objref<i1> = obj.proj v23 1.i256;
-        v30.objref<i1> = obj.proj v25 1.i256;
-        v31.i1 = obj.load v30;
-        obj.store v29 v31;
+        v3.objref<@layout_1> = obj.alloc @layout_1;
+        v6.constref<@layout_1> = const.proj v0 0.i256;
+        obj.init.const v3 v6;
         jump block4;
 
     block4:
-        v33.objref<i1> = obj.proj v23 0.i256;
-        v34.i1 = obj.load v33;
-        v36.i1 = eq v34 1.i1;
-        br v36 block5 block7;
+        v8.objref<i1> = obj.proj v3 0.i256;
+        v9.i1 = obj.load v8;
+        v11.i1 = eq v9 1.i1;
+        br v11 block5 block7;
 
     block5:
-        v38.objref<i1> = obj.proj v23 1.i256;
-        v39.i1 = obj.load v38;
-        v40.i1 = eq v39 1.i1;
-        br v40 block8 block10;
+        v14.objref<i1> = obj.proj v3 1.i256;
+        v15.i1 = obj.load v14;
+        v16.i1 = eq v15 1.i1;
+        br v16 block8 block10;
 
     block6:
-        v42.objref<i1> = obj.proj v13 1.i256;
-        v43.i1 = obj.load v42;
-        v44.i1 = eq v43 1.i1;
-        br v44 block14 block16;
+        v18.constref<i1> = const.proj v0 1.i256;
+        v19.i1 = const.load v18;
+        v20.i1 = eq v19 1.i1;
+        br v20 block14 block16;
 
     block7:
         jump block6;
 
     block8:
-        v46.objref<i1> = obj.proj v13 1.i256;
-        v47.i1 = obj.load v46;
-        v48.i1 = eq v47 1.i1;
-        br v48 block11 block13;
+        v22.constref<i1> = const.proj v0 1.i256;
+        v23.i1 = const.load v22;
+        v24.i1 = eq v23 1.i1;
+        br v24 block11 block13;
 
     block9:
         jump block2;

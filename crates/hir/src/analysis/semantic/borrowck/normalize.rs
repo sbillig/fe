@@ -13,7 +13,12 @@ use crate::{
             },
             semantic_instance_base_assumptions_for_key,
         },
-        ty::{normalize::normalize_ty, ty_check::LocalBinding, ty_def::TyId, ty_is_copy},
+        ty::{
+            normalize::normalize_ty,
+            ty_check::{EffectPassMode, LocalBinding},
+            ty_def::{BorrowKind, TyId},
+            ty_is_copy,
+        },
     },
     hir_def::ExprId,
     projection::{IndexSource, Projection, ProjectionPath},
@@ -377,17 +382,35 @@ impl<'db> NormalizeCtxt<'db> {
                     demand.read_by_place = true;
                 });
             }
-            NExpr::Borrow { place, .. } => {
+            NExpr::Borrow { kind, place, .. } => {
                 self.mark_place_root_demand(place, |demand| {
                     demand.borrowed_or_addr_taken = true;
+                    if matches!(kind, BorrowKind::Mut) {
+                        demand.mut_borrowed_or_addr_taken = true;
+                    }
                 });
             }
             NExpr::Call { effect_args, .. } => {
                 for arg in effect_args {
-                    if let NEffectArgValue::Place(place) = &arg.arg {
-                        self.mark_place_root_demand(place, |demand| {
-                            demand.passed_by_place = true;
-                        });
+                    match &arg.arg {
+                        NEffectArgValue::Place(place) => {
+                            self.mark_place_root_demand(place, |demand| {
+                                demand.passed_by_place = true;
+                                if arg.required_mut {
+                                    demand.mut_borrowed_or_addr_taken = true;
+                                }
+                            });
+                        }
+                        NEffectArgValue::Value(value)
+                            if arg.required_mut
+                                && matches!(arg.pass_mode, EffectPassMode::ByTempPlace) =>
+                        {
+                            if let Some(demand) = self.root_demands.get_mut(value.local.index()) {
+                                demand.passed_by_place = true;
+                                demand.mut_borrowed_or_addr_taken = true;
+                            }
+                        }
+                        NEffectArgValue::Value(_) => {}
                     }
                 }
             }
@@ -791,11 +814,17 @@ impl<'db> NormalizeCtxt<'db> {
                 crate::analysis::semantic::SEffectArgValue::Place(place) => {
                     NEffectArgValue::Place(self.normalize_place(place, origin)?)
                 }
+                crate::analysis::semantic::SEffectArgValue::Value(value)
+                    if matches!(arg.pass_mode, EffectPassMode::ByTempPlace) =>
+                {
+                    NEffectArgValue::Value(self.normalize_copy_operand(*value, origin))
+                }
                 crate::analysis::semantic::SEffectArgValue::Value(value) => {
                     NEffectArgValue::Value(self.normalize_operand(*value, origin))
                 }
             },
             pass_mode: arg.pass_mode,
+            required_mut: arg.required_mut,
             target_ty: arg.target_ty,
             provider: arg.provider,
         })

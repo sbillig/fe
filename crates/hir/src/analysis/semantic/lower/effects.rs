@@ -107,6 +107,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
             },
             pass_mode: arg.pass_mode,
+            required_mut: arg.required_mut,
             target_ty: arg.provider_target_ty,
             provider: self.effect_arg_provider_space(arg),
         }

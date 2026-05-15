@@ -5,62 +5,16 @@ input_file: crates/codegen/tests/fixtures/const_nested_u8_array.fe
 ---
 target = "evm-ethereum-osaka"
 
+global private const [[i8; 2]; 2] $const_region_0 = [[1, 2], [3, 4]];
+global private const [i8; 2] $const_region_1 = [3, 4];
+
 func private %const_nested_u8_array() -> i8 {
     block0:
-        v0.objref<[[i8; 2]; 2]> = obj.alloc [[i8; 2]; 2];
         jump block1;
 
     block1:
-        v3.objref<[i8; 2]> = obj.alloc [i8; 2];
-        v5.objref<i8> = obj.index v3 0.i256;
-        obj.store v5 1.i8;
-        v7.objref<i8> = obj.index v3 1.i256;
-        obj.store v7 2.i8;
-        v8.[i8; 2] = obj.load v3;
-        v11.objref<[i8; 2]> = obj.alloc [i8; 2];
-        v12.objref<i8> = obj.index v11 0.i256;
-        obj.store v12 3.i8;
-        v13.objref<i8> = obj.index v11 1.i256;
-        obj.store v13 4.i8;
-        v14.[i8; 2] = obj.load v11;
-        v15.objref<[[i8; 2]; 2]> = obj.alloc [[i8; 2]; 2];
-        v16.objref<[i8; 2]> = obj.index v15 0.i256;
-        v17.objref<i8> = obj.index v16 0.i256;
-        v18.i8 = extract_value v8 0.i256;
-        obj.store v17 v18;
-        v19.objref<i8> = obj.index v16 1.i256;
-        v20.i8 = extract_value v8 1.i256;
-        obj.store v19 v20;
-        v21.objref<[i8; 2]> = obj.index v15 1.i256;
-        v22.objref<i8> = obj.index v21 0.i256;
-        v23.i8 = extract_value v14 0.i256;
-        obj.store v22 v23;
-        v24.objref<i8> = obj.index v21 1.i256;
-        v25.i8 = extract_value v14 1.i256;
-        obj.store v24 v25;
-        v26.[[i8; 2]; 2] = obj.load v15;
-        v27.objref<[i8; 2]> = obj.index v0 0.i256;
-        v28.[i8; 2] = extract_value v26 0.i256;
-        v29.objref<i8> = obj.index v27 0.i256;
-        v30.i8 = extract_value v28 0.i256;
-        obj.store v29 v30;
-        v31.objref<i8> = obj.index v27 1.i256;
-        v32.i8 = extract_value v28 1.i256;
-        obj.store v31 v32;
-        v33.objref<[i8; 2]> = obj.index v0 1.i256;
-        v34.[i8; 2] = extract_value v26 1.i256;
-        v35.objref<i8> = obj.index v33 0.i256;
-        v36.i8 = extract_value v34 0.i256;
-        obj.store v35 v36;
-        v37.objref<i8> = obj.index v33 1.i256;
-        v38.i8 = extract_value v34 1.i256;
-        obj.store v37 v38;
-        v39.objref<[i8; 2]> = obj.alloc [i8; 2];
-        v40.objref<i8> = obj.index v39 0.i256;
-        obj.store v40 3.i8;
-        v41.objref<i8> = obj.index v39 1.i256;
-        obj.store v41 4.i8;
-        v42.[i8; 2] = obj.load v39;
+        v0.constref<[[i8; 2]; 2]> = const.ref $const_region_0;
+        v2.constref<[i8; 2]> = const.ref $const_region_1;
         return 3.i8;
 }
 

@@ -21,3 +21,13 @@ fn test_with_block_custom_effect() {
 
     assert(out == 1)
 }
+
+#[test]
+fn test_with_temp_block_custom_effect() {
+    let out: u256 = with (Counter = Counter { value: 0 }) {
+        inc()
+        read()
+    }
+
+    assert(out == 1)
+}

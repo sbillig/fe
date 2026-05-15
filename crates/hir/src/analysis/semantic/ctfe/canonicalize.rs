@@ -287,8 +287,10 @@ fn canonicalize_expr<'db>(
             .unwrap_or_else(|err| panic!("CTFE failed for {cref:?}: {err:?}"));
         let value = canonicalize_const_value(db, instance, value);
         let runtime = reify_runtime_const_for_ty(db, instance, result_ty, value);
-        let value = runtime.unwrap_or(value);
-        return (SExpr::Const(SConst::Value(value)), runtime);
+        return (
+            SExpr::Const(runtime.map_or(SConst::Value(value), |_| SConst::Ref(*cref))),
+            runtime,
+        );
     }
 
     if matches!(mode, ConstCanonicalizationMode::Final)

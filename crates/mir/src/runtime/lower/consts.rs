@@ -1,21 +1,61 @@
 use hir::analysis::{
     semantic::{
-        SemConstId, SemConstScalar, SemConstValue, VariantIndex, normalize_int_to_shape,
+        SemConstId, SemConstScalar, SemConstValue, SemanticConstRef, SemanticInstance,
+        VariantIndex, eval_const_ref, normalize_int_to_shape, reify_runtime_const_for_ty,
         sem_const_ty,
     },
     ty::const_ty::{ConstTyData, EvaluatedConstTy, evaluate_type_level_int_const_expr},
-    ty::ty_def::TyData,
+    ty::ty_def::{TyData, TyId},
 };
 
 use crate::{
     db::MirDb,
-    runtime::{ConstNode, ConstRegionId, ConstScalar, LayoutId, ScalarClass, ScalarRepr},
+    runtime::{
+        AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, Layout, LayoutId, RuntimeClass,
+        ScalarClass, ScalarRepr,
+    },
 };
 
 use super::{
     layout::layout_for_ty_in_env,
-    type_info::{RuntimeTypeEnv, scalar_class_for_ty_in_env},
+    type_info::{
+        RuntimeTypeEnv, runtime_zero_sized_ty, scalar_class_for_ty_in_env,
+        top_level_class_for_ty_in_env,
+    },
 };
+
+pub(super) fn evaluated_const_ref_value<'db>(
+    db: &'db dyn MirDb,
+    cref: SemanticConstRef<'db>,
+) -> SemConstId<'db> {
+    eval_const_ref(db, cref).unwrap_or_else(|err| panic!("CTFE failed for {cref:?}: {err:?}"))
+}
+
+pub(super) fn reified_const_ref_value_for_ty<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    cref: SemanticConstRef<'db>,
+    expected_ty: TyId<'db>,
+) -> SemConstId<'db> {
+    let value = evaluated_const_ref_value(db, cref);
+    reify_runtime_const_for_ty(db, semantic, expected_ty, value).unwrap_or(value)
+}
+
+pub(super) fn runtime_const_value_class<'db>(
+    db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
+    value: SemConstId<'db>,
+    allow_const_ref_storage: bool,
+) -> Option<RuntimeClass<'db>> {
+    let ty = sem_const_ty(db, value);
+    if ty == TyId::unit(db) {
+        return None;
+    }
+    allow_const_ref_storage
+        .then(|| aggregate_const_ref_class(db, env, value))
+        .flatten()
+        .or_else(|| top_level_class_for_ty_in_env(db, env, ty, AddressSpaceKind::Memory))
+}
 
 pub(super) fn const_scalar_from_value<'db>(
     db: &'db dyn MirDb,
@@ -148,9 +188,57 @@ pub(super) fn lower_const_region<'db>(
     env: RuntimeTypeEnv<'db>,
     value: SemConstId<'db>,
 ) -> Option<ConstRegionId<'db>> {
-    let layout = layout_for_ty_in_env(db, env, sem_const_ty(db, value));
+    let ty = sem_const_ty(db, value);
+    if runtime_zero_sized_ty(db, ty, env.scope, env.assumptions) {
+        return None;
+    }
+    let layout = layout_for_ty_in_env(db, env, ty);
     let value = lower_const_node(db, env, value)?;
     Some(ConstRegionId::new(db, layout, value))
+}
+
+pub(super) fn aggregate_const_ref_class<'db>(
+    db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
+    value: SemConstId<'db>,
+) -> Option<RuntimeClass<'db>> {
+    let ty = sem_const_ty(db, value);
+    if runtime_zero_sized_ty(db, ty, env.scope, env.assumptions)
+        || !matches!(
+            value.value(db),
+            SemConstValue::Tuple { .. }
+                | SemConstValue::Struct { .. }
+                | SemConstValue::Array { .. }
+        )
+    {
+        return None;
+    }
+    let node = lower_const_node(db, env, value)?;
+    if !const_node_supports_data_ref(db, &node) {
+        return None;
+    }
+    Some(RuntimeClass::const_ref(layout_for_ty_in_env(db, env, ty)))
+}
+
+pub(super) fn aggregate_const_ref_region<'db>(
+    db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
+    value: SemConstId<'db>,
+) -> Option<ConstRegionId<'db>> {
+    aggregate_const_ref_class(db, env, value)?;
+    lower_const_region(db, env, value)
+}
+
+fn const_node_supports_data_ref<'db>(db: &'db dyn MirDb, node: &ConstNode<'db>) -> bool {
+    match node {
+        ConstNode::Scalar(_) => true,
+        ConstNode::Aggregate { layout, fields } => {
+            !matches!(layout.data(db), Layout::Enum(_))
+                && fields
+                    .iter()
+                    .all(|field| const_node_supports_data_ref(db, field))
+        }
+    }
 }
 
 fn lower_const_node<'db>(

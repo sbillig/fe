@@ -7,7 +7,9 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256};
 
-func private %call_unit_method(v0.objref<@layout_0>) {
+global private const @layout_0 $const_region_0 = {1};
+
+func private %call_unit_method(v0.constref<@layout_0>) {
     block0:
         jump block1;
 
@@ -16,7 +18,7 @@ func private %call_unit_method(v0.objref<@layout_0>) {
         return;
 }
 
-func private %increment(v0.objref<@layout_0>) {
+func private %increment(v0.constref<@layout_0>) {
     block0:
         jump block1;
 
@@ -29,15 +31,8 @@ func private %main() {
         jump block1;
 
     block1:
-        v1.objref<@layout_0> = obj.alloc @layout_0;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        obj.store v3 1.i256;
-        v4.@layout_0 = obj.load v1;
-        v5.objref<@layout_0> = obj.alloc @layout_0;
-        v6.objref<i256> = obj.proj v5 0.i256;
-        v7.i256 = extract_value v4 0.i256;
-        obj.store v6 v7;
-        call %call_unit_method v5;
+        v1.constref<@layout_0> = const.ref $const_region_0;
+        call %call_unit_method v1;
         return;
 }
 

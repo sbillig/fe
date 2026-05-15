@@ -7,48 +7,31 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256, i256};
 
+global private const @layout_0 $const_region_0 = {0, 10};
+
 func private %for_range_sum() -> i256 {
     block0:
         v0.*i256 = alloca i256;
         jump block1;
 
     block1:
-        v3.objref<@layout_0> = obj.alloc @layout_0;
-        v4.objref<i256> = obj.proj v3 0.i256;
-        obj.store v4 0.i256;
-        v6.objref<i256> = obj.proj v3 1.i256;
-        obj.store v6 10.i256;
-        v7.@layout_0 = obj.load v3;
-        v8.objref<@layout_0> = obj.alloc @layout_0;
-        v9.objref<i256> = obj.proj v8 0.i256;
-        v10.i256 = extract_value v7 0.i256;
-        obj.store v9 v10;
-        v11.objref<i256> = obj.proj v8 1.i256;
-        v12.i256 = extract_value v7 1.i256;
-        obj.store v11 v12;
-        v13.i256 = call %len v8;
+        v3.constref<@layout_0> = const.ref $const_region_0;
+        v4.i256 = call %len v3;
         jump block2;
 
     block2:
-        v40.i256 = phi (0.i256 block1) (v32 block7);
-        v14.i256 = phi (0.i256 block1) (v34 block7);
-        v16.i1 = lt v14 v13;
-        br v16 block3 block4;
+        v27.i256 = phi (0.i256 block1) (v18 block7);
+        v5.i256 = phi (0.i256 block1) (v21 block7);
+        v7.i1 = lt v5 v4;
+        br v7 block3 block4;
 
     block3:
-        v18.objref<@layout_0> = obj.alloc @layout_0;
-        v19.objref<i256> = obj.proj v18 0.i256;
-        v20.i256 = extract_value v7 0.i256;
-        obj.store v19 v20;
-        v21.objref<i256> = obj.proj v18 1.i256;
-        v22.i256 = extract_value v7 1.i256;
-        obj.store v21 v22;
-        v24.i256 = call %get v18 v14;
-        (v26.i256, v27.i1) = uaddo v40 v24;
-        br v27 block5 block6;
+        v10.i256 = call %get v3 v5;
+        (v12.i256, v13.i1) = uaddo v27 v10;
+        br v13 block5 block6;
 
     block4:
-        return v40;
+        return v27;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -56,24 +39,24 @@ func private %for_range_sum() -> i256 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        mstore v0 v26 i256;
-        v32.i256 = mload v0 i256;
-        (v34.i256, v35.i1) = uaddo v14 1.i256;
-        br v35 block5 block7;
+        mstore v0 v12 i256;
+        v18.i256 = mload v0 i256;
+        (v21.i256, v22.i1) = uaddo v5 1.i256;
+        br v22 block5 block7;
 
     block7:
         jump block2;
 }
 
-func private %get(v0.objref<@layout_0>, v1.i256) -> i256 {
+func private %get(v0.constref<@layout_0>, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v1 i256;
         jump block1;
 
     block1:
-        v5.objref<i256> = obj.proj v0 0.i256;
-        v6.i256 = obj.load v5;
+        v5.constref<i256> = const.proj v0 0.i256;
+        v6.i256 = const.load v5;
         v7.i256 = mload v2 i256;
         (v8.i256, v9.i1) = uaddo v6 v7;
         br v9 block2 block3;
@@ -87,15 +70,15 @@ func private %get(v0.objref<@layout_0>, v1.i256) -> i256 {
         return v8;
 }
 
-func private %len(v0.objref<@layout_0>) -> i256 {
+func private %len(v0.constref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v3.objref<i256> = obj.proj v0 1.i256;
-        v4.i256 = obj.load v3;
-        v6.objref<i256> = obj.proj v0 0.i256;
-        v7.i256 = obj.load v6;
+        v3.constref<i256> = const.proj v0 1.i256;
+        v4.i256 = const.load v3;
+        v6.constref<i256> = const.proj v0 0.i256;
+        v7.i256 = const.load v6;
         v8.i1 = lt v4 v7;
         br v8 block2 block3;
 
@@ -103,10 +86,10 @@ func private %len(v0.objref<@layout_0>) -> i256 {
         jump block4;
 
     block3:
-        v10.objref<i256> = obj.proj v0 1.i256;
-        v11.i256 = obj.load v10;
-        v12.objref<i256> = obj.proj v0 0.i256;
-        v13.i256 = obj.load v12;
+        v10.constref<i256> = const.proj v0 1.i256;
+        v11.i256 = const.load v10;
+        v12.constref<i256> = const.proj v0 0.i256;
+        v13.i256 = const.load v12;
         (v14.i256, v15.i1) = usubo v11 v13;
         br v15 block5 block6;
 

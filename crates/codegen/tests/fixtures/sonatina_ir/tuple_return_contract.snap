@@ -13,6 +13,8 @@ type @layout_4 = {@layout_3, i256};
 type @layout_5 = {@layout_4, i256};
 type @layout_6 = {i256, i256};
 
+global private const @layout_0 $const_region_0 = {0};
+
 func private %__TupleReturnContract_recv_0_0() -> @layout_1 {
     block0:
         jump block1;
@@ -32,31 +34,21 @@ func private %__TupleReturnContract_recv_0_0() -> @layout_1 {
 
 func private %abi_field_size(v0.@layout_1) -> i256 {
     block0:
-        v1.objref<@layout_1> = obj.alloc @layout_1;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        v4.i256 = extract_value v0 0.i256;
-        obj.store v3 v4;
-        v6.objref<@layout_0> = obj.proj v1 1.i256;
-        v7.@layout_0 = extract_value v0 1.i256;
-        v8.objref<i256> = obj.proj v6 0.i256;
-        v9.i256 = extract_value v7 0.i256;
-        obj.store v8 v9;
         jump block1;
 
     block1:
-        v10.@layout_1 = obj.load v1;
-        v11.i256 = call %core__lib__abi__impl_trait____ccb6__payload_size__g6d15_e33b_0 v10;
+        v2.i256 = call %core__lib__abi__impl_trait____ccb6__payload_size__g6d15_e33b_0 v0;
         br 0.i1 block2 block3;
 
     block2:
-        (v15.i256, v16.i1) = uaddo 32.i256 v11;
-        br v16 block5 block6;
+        (v6.i256, v7.i1) = uaddo 32.i256 v2;
+        br v7 block5 block6;
 
     block3:
         jump block4;
 
     block4:
-        return v11;
+        return v2;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -64,26 +56,16 @@ func private %abi_field_size(v0.@layout_1) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        return v15;
+        return v6;
 }
 
 func private %abi_single_root_size(v0.@layout_1) -> i256 {
     block0:
-        v1.objref<@layout_1> = obj.alloc @layout_1;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        v4.i256 = extract_value v0 0.i256;
-        obj.store v3 v4;
-        v6.objref<@layout_0> = obj.proj v1 1.i256;
-        v7.@layout_0 = extract_value v0 1.i256;
-        v8.objref<i256> = obj.proj v6 0.i256;
-        v9.i256 = extract_value v7 0.i256;
-        obj.store v8 v9;
         jump block1;
 
     block1:
-        v10.@layout_1 = obj.load v1;
-        v11.i256 = call %abi_field_size v10;
-        return v11;
+        v2.i256 = call %abi_field_size v0;
+        return v2;
 }
 
 func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_8e95(v0.objref<@layout_2>) -> i256 {
@@ -260,19 +242,14 @@ func private %decoder_new(v0.@layout_3) -> @layout_5 {
 
 func private %core__lib__abi__dynamic_payload_size__g67a8_baae(v0.@layout_0) -> i256 {
     block0:
-        v1.objref<@layout_0> = obj.alloc @layout_0;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        v4.i256 = extract_value v0 0.i256;
-        obj.store v3 v4;
         jump block1;
 
     block1:
         br 0.i1 block2 block3;
 
     block2:
-        v6.@layout_0 = obj.load v1;
-        v7.i256 = call %core__lib__abi__trait_AbiSize__payload_size__g67a8_75f0 v6;
-        return v7;
+        v3.i256 = call %core__lib__abi__trait_AbiSize__payload_size__g67a8_75f0 v0;
+        return v3;
 
     block3:
         jump block4;
@@ -283,19 +260,14 @@ func private %core__lib__abi__dynamic_payload_size__g67a8_baae(v0.@layout_0) -> 
 
 func private %core__lib__abi__dynamic_payload_size__g67a8_baae_0(v0.@layout_0) -> i256 {
     block0:
-        v1.objref<@layout_0> = obj.alloc @layout_0;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        v4.i256 = extract_value v0 0.i256;
-        obj.store v3 v4;
         jump block1;
 
     block1:
         br 0.i1 block2 block3;
 
     block2:
-        v6.@layout_0 = obj.load v1;
-        v7.i256 = call %core__lib__abi__trait_AbiSize__payload_size__g67a8_75f0_0 v6;
-        return v7;
+        v3.i256 = call %core__lib__abi__trait_AbiSize__payload_size__g67a8_75f0_0 v0;
+        return v3;
 
     block3:
         jump block4;
@@ -764,10 +736,6 @@ func private %impl_SolEncoder__new(v0.i256) -> @layout_2 {
 
 func private %core__lib__abi__trait_AbiSize__payload_size__g67a8_75f0(v0.@layout_0) -> i256 {
     block0:
-        v1.objref<@layout_0> = obj.alloc @layout_0;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        v4.i256 = extract_value v0 0.i256;
-        obj.store v3 v4;
         jump block1;
 
     block1:
@@ -776,10 +744,6 @@ func private %core__lib__abi__trait_AbiSize__payload_size__g67a8_75f0(v0.@layout
 
 func private %core__lib__abi__trait_AbiSize__payload_size__g67a8_75f0_0(v0.@layout_0) -> i256 {
     block0:
-        v1.objref<@layout_0> = obj.alloc @layout_0;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        v4.i256 = extract_value v0 0.i256;
-        obj.store v3 v4;
         jump block1;
 
     block1:
@@ -798,10 +762,6 @@ func private %core__lib__abi__trait_AbiSize__payload_size__ge513_7c20(v0.i256) -
 
 func private %core__lib__abi__trait_AbiSize__payload_size__g67a8_7cab(v0.@layout_0) -> i256 {
     block0:
-        v1.objref<@layout_0> = obj.alloc @layout_0;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        v4.i256 = extract_value v0 0.i256;
-        obj.store v3 v4;
         jump block1;
 
     block1:
@@ -830,23 +790,13 @@ func private %core__lib__abi__trait_AbiSize__payload_size__ge513_c169_0(v0.i256)
 
 func private %core__lib__abi__impl_trait____ccb6__payload_size__g6d15_e33b(v0.@layout_1) -> i256 {
     block0:
-        v1.objref<@layout_1> = obj.alloc @layout_1;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        v4.i256 = extract_value v0 0.i256;
-        obj.store v3 v4;
-        v6.objref<@layout_0> = obj.proj v1 1.i256;
-        v7.@layout_0 = extract_value v0 1.i256;
-        v8.objref<i256> = obj.proj v6 0.i256;
-        v9.i256 = extract_value v7 0.i256;
-        obj.store v8 v9;
         jump block1;
 
     block1:
-        v11.objref<i256> = obj.proj v1 0.i256;
-        v12.i256 = obj.load v11;
-        v13.i256 = call %core__lib__abi__dynamic_payload_size__ge513_f973 v12;
-        (v14.i256, v15.i1) = uaddo 64.i256 v13;
-        br v15 block2 block3;
+        v4.i256 = extract_value v0 0.i256;
+        v5.i256 = call %core__lib__abi__dynamic_payload_size__ge513_f973 v4;
+        (v6.i256, v7.i1) = uaddo 64.i256 v5;
+        br v7 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -854,35 +804,24 @@ func private %core__lib__abi__impl_trait____ccb6__payload_size__g6d15_e33b(v0.@l
         evm_revert 0.i256 36.i256;
 
     block3:
-        v20.objref<@layout_0> = obj.proj v1 1.i256;
-        v21.@layout_0 = obj.load v20;
-        v22.i256 = call %core__lib__abi__dynamic_payload_size__g67a8_baae v21;
-        (v23.i256, v24.i1) = uaddo v14 v22;
-        br v24 block2 block4;
+        v14.@layout_0 = extract_value v0 1.i256;
+        v15.i256 = call %core__lib__abi__dynamic_payload_size__g67a8_baae v14;
+        (v16.i256, v17.i1) = uaddo v6 v15;
+        br v17 block2 block4;
 
     block4:
-        return v23;
+        return v16;
 }
 
 func private %core__lib__abi__impl_trait____ccb6__payload_size__g6d15_e33b_0(v0.@layout_1) -> i256 {
     block0:
-        v1.objref<@layout_1> = obj.alloc @layout_1;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        v4.i256 = extract_value v0 0.i256;
-        obj.store v3 v4;
-        v6.objref<@layout_0> = obj.proj v1 1.i256;
-        v7.@layout_0 = extract_value v0 1.i256;
-        v8.objref<i256> = obj.proj v6 0.i256;
-        v9.i256 = extract_value v7 0.i256;
-        obj.store v8 v9;
         jump block1;
 
     block1:
-        v11.objref<i256> = obj.proj v1 0.i256;
-        v12.i256 = obj.load v11;
-        v13.i256 = call %core__lib__abi__dynamic_payload_size__ge513_f973_0 v12;
-        (v14.i256, v15.i1) = uaddo 64.i256 v13;
-        br v15 block2 block3;
+        v4.i256 = extract_value v0 0.i256;
+        v5.i256 = call %core__lib__abi__dynamic_payload_size__ge513_f973_0 v4;
+        (v6.i256, v7.i1) = uaddo 64.i256 v5;
+        br v7 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -890,14 +829,13 @@ func private %core__lib__abi__impl_trait____ccb6__payload_size__g6d15_e33b_0(v0.
         evm_revert 0.i256 36.i256;
 
     block3:
-        v20.objref<@layout_0> = obj.proj v1 1.i256;
-        v21.@layout_0 = obj.load v20;
-        v22.i256 = call %core__lib__abi__dynamic_payload_size__g67a8_baae_0 v21;
-        (v23.i256, v24.i1) = uaddo v14 v22;
-        br v24 block2 block4;
+        v14.@layout_0 = extract_value v0 1.i256;
+        v15.i256 = call %core__lib__abi__dynamic_payload_size__g67a8_baae_0 v14;
+        (v16.i256, v17.i1) = uaddo v6 v15;
+        br v17 block2 block4;
 
     block4:
-        return v23;
+        return v16;
 }
 
 func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__pos_08db(v0.objref<@layout_2>) -> i256 {
@@ -1143,10 +1081,10 @@ func private %zero() -> @layout_0 {
         jump block1;
 
     block1:
-        v1.objref<@layout_0> = obj.alloc @layout_0;
-        v2.objref<i256> = obj.proj v1 0.i256;
-        obj.store v2 0.i256;
-        v3.@layout_0 = obj.load v1;
+        v1.constref<@layout_0> = const.ref $const_region_0;
+        v2.objref<@layout_0> = obj.alloc @layout_0;
+        obj.init.const v2 v1;
+        v3.@layout_0 = obj.load v2;
         return v3;
 }
 
@@ -1158,5 +1096,6 @@ object @TupleReturnContract {
     }
     section runtime {
         entry %contract_runtime_root_TupleReturnContract;
+        data $const_region_0;
     }
 }

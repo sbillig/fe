@@ -336,6 +336,24 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 steps.push(RuntimeConversionStep::RetagRef { class: target });
                 Ok(())
             }
+            (
+                RuntimeClass::Ref {
+                    pointee,
+                    kind: RefKind::Const,
+                    view: RefView::Whole,
+                },
+                RuntimeClass::AggregateValue { .. },
+            ) if pointee.aggregate_layout().is_some() => {
+                let loaded = pointee.as_ref().clone();
+                let layout = loaded.aggregate_layout().expect("aggregate const layout");
+                steps.push(RuntimeConversionStep::MaterializeToObject {
+                    class: RuntimeClass::object_ref(layout),
+                });
+                steps.push(RuntimeConversionStep::LoadRef {
+                    class: loaded.clone(),
+                });
+                self.convert(loaded, target, steps)
+            }
             (RuntimeClass::Ref { pointee, .. }, _) if !target.is_transport() => {
                 let loaded = pointee.as_ref().clone();
                 steps.push(RuntimeConversionStep::LoadRef {
@@ -414,8 +432,10 @@ impl<'db> RuntimeConversionPlanner<'db> {
                     space,
                     target: target_layout,
                 },
-            ) if target_layout
-                .is_none_or(|target_layout| Some(target_layout) == pointee.aggregate_layout()) =>
+            ) if pointee.aggregate_layout().is_some()
+                && target_layout.is_none_or(|target_layout| {
+                    Some(target_layout) == pointee.aggregate_layout()
+                }) =>
             {
                 let layout = pointee.aggregate_layout().expect("aggregate ref layout");
                 steps.push(RuntimeConversionStep::AddrOfRef {
@@ -782,6 +802,25 @@ mod tests {
         ));
         assert!(matches!(
             RuntimeConversionPlanner::plan(&db, word_class(), memory_provider),
+            Err(RuntimeConversionError::Unsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn scalar_ref_to_untyped_raw_addr_is_unsupported() {
+        let db = DriverDataBase::default();
+        let source = RuntimeClass::Ref {
+            pointee: Box::new(word_class()),
+            kind: RefKind::Object,
+            view: RefView::Whole,
+        };
+        let target = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Memory,
+            target: None,
+        };
+
+        assert!(matches!(
+            RuntimeConversionPlanner::plan(&db, source, target),
             Err(RuntimeConversionError::Unsupported { .. })
         ));
     }

@@ -7,6 +7,8 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {i1, i1, i1, i1, i1, i1};
 
+global private const @layout_0 $const_region_0 = {1, 1, 1, 1, 1, 1};
+
 func private %comparison_ops() -> @layout_0 {
     block0:
         v0.*i256 = alloca i256;
@@ -24,21 +26,11 @@ func private %comparison_ops() -> @layout_0 {
         mstore v3 2.i256 i256;
         mstore v4 2.i256 i256;
         mstore v5 3.i256 i256;
-        v10.objref<@layout_0> = obj.alloc @layout_0;
-        v12.objref<i1> = obj.proj v10 0.i256;
-        obj.store v12 1.i1;
-        v13.objref<i1> = obj.proj v10 1.i256;
-        obj.store v13 1.i1;
-        v14.objref<i1> = obj.proj v10 2.i256;
-        obj.store v14 1.i1;
-        v15.objref<i1> = obj.proj v10 3.i256;
-        obj.store v15 1.i1;
-        v17.objref<i1> = obj.proj v10 4.i256;
-        obj.store v17 1.i1;
-        v19.objref<i1> = obj.proj v10 5.i256;
-        obj.store v19 1.i1;
-        v20.@layout_0 = obj.load v10;
-        return v20;
+        v10.constref<@layout_0> = const.ref $const_region_0;
+        v11.objref<@layout_0> = obj.alloc @layout_0;
+        obj.init.const v11 v10;
+        v12.@layout_0 = obj.load v11;
+        return v12;
 }
 
 func private %main_root() {

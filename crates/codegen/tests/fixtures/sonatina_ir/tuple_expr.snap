@@ -7,6 +7,8 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {i64, i1};
 
+global private const @layout_0 $const_region_0 = {3, 1};
+
 func private %main_root() {
     block0:
         jump block1;
@@ -21,13 +23,11 @@ func private %tuple_expr() -> @layout_0 {
         jump block1;
 
     block1:
-        v5.objref<@layout_0> = obj.alloc @layout_0;
-        v7.objref<i64> = obj.proj v5 0.i256;
-        obj.store v7 3.i64;
-        v9.objref<i1> = obj.proj v5 1.i256;
-        obj.store v9 1.i1;
-        v10.@layout_0 = obj.load v5;
-        return v10;
+        v5.constref<@layout_0> = const.ref $const_region_0;
+        v6.objref<@layout_0> = obj.alloc @layout_0;
+        obj.init.const v6 v5;
+        v7.@layout_0 = obj.load v6;
+        return v7;
 }
 
 

@@ -1,0 +1,73 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/view_param_aggregate_value.fe
+---
+target = "evm-ethereum-osaka"
+
+type @layout_0 = {i256, i256};
+
+func private %call_view_param_aggregate_value() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %view_param_aggregate_value 40.i256 2.i256;
+        return v2;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = call %call_view_param_aggregate_value;
+        evm_stop;
+}
+
+func private %sum(v0.@layout_0) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 0.i256;
+        v5.i256 = extract_value v0 1.i256;
+        (v6.i256, v7.i1) = uaddo v3 v5;
+        br v7 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        return v6;
+}
+
+func private %view_param_aggregate_value(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        mstore v2 v0 i256;
+        mstore v3 v1 i256;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        v6.objref<@layout_0> = obj.alloc @layout_0;
+        v8.objref<i256> = obj.proj v6 0.i256;
+        obj.store v8 v4;
+        v10.objref<i256> = obj.proj v6 1.i256;
+        obj.store v10 v5;
+        v11.@layout_0 = obj.load v6;
+        v12.i256 = call %sum v11;
+        return v12;
+}
+
+
+object @main {
+    section main {
+        entry %main_root;
+    }
+}

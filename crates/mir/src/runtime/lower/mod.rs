@@ -12,6 +12,7 @@ pub(crate) mod layout;
 mod place;
 pub(crate) mod realize;
 pub(crate) mod returns;
+pub(crate) mod source;
 pub(crate) mod tuple;
 pub(crate) mod type_info;
 

@@ -21,7 +21,7 @@ use mir::{
     RuntimeLinkage, RuntimeLocalRoot, RuntimePackage, RuntimePlace, SaturatingBinOp, ScalarClass,
     ScalarRepr, VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, GlobalVariableData, GlobalVariableRef, I256, Immediate, Linkage, Module, Signature,
@@ -95,6 +95,7 @@ struct ModuleLowerer<'db, 'a> {
     layout_names: FxHashMap<LayoutId<'db>, String>,
     const_globals: FxHashMap<ConstRegionId<'db>, GlobalVariableRef>,
     const_names: FxHashMap<ConstRegionId<'db>, String>,
+    explicit_code_region_sections: FxHashSet<(mir::RuntimeObject<'db>, mir::RuntimeSectionName)>,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -116,6 +117,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             layout_names: FxHashMap::default(),
             const_globals: FxHashMap::default(),
             const_names: FxHashMap::default(),
+            explicit_code_region_sections: FxHashSet::default(),
         }
     }
 
@@ -305,8 +307,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 let section_builder =
                     object_builder.section(super::section_name_for_runtime(&section.name));
                 section_builder.entry(self.func_ref(section.entry.instance(self.db))?);
-                for region in &section.const_regions {
-                    section_builder.data(self.lower_const_region(*region)?);
+                if self.section_needs_const_data(object, &section.name) {
+                    for region in &section.const_regions {
+                        section_builder.data(self.lower_const_region(*region)?);
+                    }
                 }
                 for embed in &section.embeds {
                     match &embed.source {
@@ -331,6 +335,35 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 .map_err(|err| LowerError::Internal(format!("failed to declare object: {err}")))?;
         }
         Ok(())
+    }
+
+    fn section_needs_const_data(
+        &self,
+        object: mir::RuntimeObject<'db>,
+        section: &mir::RuntimeSectionName,
+    ) -> bool {
+        matches!(section, mir::RuntimeSectionName::CodeRegion(_))
+            || self
+                .explicit_code_region_sections
+                .contains(&(object, section.clone()))
+    }
+
+    fn mark_explicit_code_region(&mut self, region: mir::RuntimeCodeRegion<'db>) {
+        let Some(resolved) = self
+            .package
+            .code_regions(self.db)
+            .into_iter()
+            .find(|resolved| resolved.region(self.db) == region)
+        else {
+            return;
+        };
+        match resolved.source(self.db) {
+            mir::RuntimeSectionRef::Local { object, section }
+            | mir::RuntimeSectionRef::External { object, section } => {
+                self.explicit_code_region_sections
+                    .insert((object, section.clone()));
+            }
+        }
     }
 
     fn func_ref(&self, instance: mir::RuntimeInstance<'db>) -> Result<FuncRef, LowerError> {
@@ -1189,6 +1222,16 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RExpr::RetagRef { value } => self.local_value(*value)?,
             RExpr::AddrOf { place } => return self.addr_of_place(place, dst),
             RExpr::Load { place } => return self.load_from_place(place),
+            RExpr::AggregateExtract { value, index } => {
+                let value = self.local_value(*value)?;
+                let dst_local = dst.ok_or_else(|| {
+                    LowerError::Internal("aggregate extract missing destination".to_string())
+                })?;
+                let class = self.body.value_class(dst_local).cloned().ok_or_else(|| {
+                    LowerError::Internal("aggregate extract missing destination class".to_string())
+                })?;
+                self.extract_aggregate_field(value, *index as usize, &class)?
+            }
             RExpr::Call { callee, args } => {
                 if let Some(value) = self.lower_intrinsic_call(*callee, args, dst)? {
                     return Ok(Lowered::Value(value));
@@ -1520,14 +1563,16 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 SymSize::new(self.module.inst_set(), SymbolRef::CurrentSection),
                 Type::I256,
             ),
-            RuntimeBuiltin::CodeRegionOffset { region } => self.fb.insert_inst(
-                SymAddr::new(self.module.inst_set(), self.code_region_symbol_ref(*region)),
-                Type::I256,
-            ),
-            RuntimeBuiltin::CodeRegionLen { region } => self.fb.insert_inst(
-                SymSize::new(self.module.inst_set(), self.code_region_symbol_ref(*region)),
-                Type::I256,
-            ),
+            RuntimeBuiltin::CodeRegionOffset { region } => {
+                let symbol = self.code_region_symbol_ref(*region);
+                self.fb
+                    .insert_inst(SymAddr::new(self.module.inst_set(), symbol), Type::I256)
+            }
+            RuntimeBuiltin::CodeRegionLen { region } => {
+                let symbol = self.code_region_symbol_ref(*region);
+                self.fb
+                    .insert_inst(SymSize::new(self.module.inst_set(), symbol), Type::I256)
+            }
             RuntimeBuiltin::Malloc { size } => {
                 let size = self.local_value(*size)?;
                 let ptr_ty = self.fb.ptr_type(Type::I8);
@@ -1761,7 +1806,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         })
     }
 
-    fn code_region_symbol_ref(&self, region: mir::RuntimeCodeRegion<'db>) -> SymbolRef {
+    fn code_region_symbol_ref(&mut self, region: mir::RuntimeCodeRegion<'db>) -> SymbolRef {
+        self.module.mark_explicit_code_region(region);
         if !self.current_sections.is_empty()
             && self
                 .module
@@ -2581,6 +2627,26 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ObjLoad::new(self.module.inst_set(), value),
                 self.module.ty_for_class(&class)?,
             ),
+            PlaceTerminal::Const { value, class } if class.aggregate_layout().is_some() => {
+                let layout = class.aggregate_layout().expect("const aggregate layout");
+                let layout_ty = self.module.ty_for_layout(layout)?;
+                let object = self.fb.insert_inst(
+                    ObjAlloc::new(self.module.inst_set(), layout_ty),
+                    self.fb.module_builder.objref_type(layout_ty),
+                );
+                self.copy_source_into_object(
+                    CopySource::Const {
+                        value,
+                        class: class.clone(),
+                    },
+                    &class,
+                    object,
+                )?;
+                self.fb.insert_inst(
+                    ObjLoad::new(self.module.inst_set(), object),
+                    self.module.ty_for_class(&class)?,
+                )
+            }
             PlaceTerminal::Const { value, .. } => self.fb.insert_inst(
                 ConstLoad::new(self.module.inst_set(), value),
                 self.module.ty_for_class(&class)?,
@@ -2683,8 +2749,18 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             class: source_class,
         } = &source
             && source_class == class
-            && self.fb.type_of(*value) == self.fb.type_of(object)
+            && matches!(class, RuntimeClass::AggregateValue { .. })
         {
+            let class_ty = self.module.ty_for_class(class)?;
+            let object_ty = self.fb.module_builder.objref_type(class_ty);
+            let const_ty = self.fb.module_builder.constref_type(class_ty);
+            if self.fb.type_of(object) != object_ty || self.fb.type_of(*value) != const_ty {
+                return Err(LowerError::Internal(format!(
+                    "const object copy type mismatch: object={:?} const={:?} class={class:?}",
+                    self.fb.type_of(object),
+                    self.fb.type_of(*value),
+                )));
+            }
             self.fb.insert_inst_no_result(ObjInitConst::new(
                 self.module.inst_set(),
                 object,
@@ -3086,9 +3162,22 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         };
         match terminal {
             PlaceTerminal::Object { value, .. } => Ok(Lowered::Value(value)),
-            PlaceTerminal::Const { .. } => Err(LowerError::Unsupported(
-                "borrowing const-backed places is not supported".to_string(),
-            )),
+            PlaceTerminal::Const { value, .. } => {
+                if let Some(dst) = dst
+                    && matches!(
+                        self.body.value_class(dst),
+                        Some(RuntimeClass::Ref {
+                            kind: RefKind::Const,
+                            ..
+                        })
+                    )
+                {
+                    return Ok(Lowered::Value(value));
+                }
+                Err(LowerError::Unsupported(
+                    "borrowing const-backed places requires a const-backed destination".to_string(),
+                ))
+            }
             PlaceTerminal::Ptr { addr, .. } => {
                 if let Some(dst) = dst
                     && matches!(

@@ -2426,6 +2426,7 @@ pub struct ResolvedEffectArg<'db> {
     pub key: PathId<'db>,
     pub arg: EffectArg<'db>,
     pub pass_mode: EffectPassMode,
+    pub required_mut: bool,
     pub key_kind: EffectKeyKind,
     pub instantiated_key_ty: Option<TyId<'db>>,
     pub provider_target_ty: Option<TyId<'db>>,
