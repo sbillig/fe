@@ -848,8 +848,8 @@ fn is_core_dyn_string_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
         .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
 }
 
-/// Recognise `std::abi::sol` SolCompat wrapper types like `Uint160` / `Int24`
-/// and return their Solidity ABI type string (e.g. `"uint160"`, `"int24"`).
+/// Recognise `std::abi::sol` SolCompat wrapper types like `Uint160` / `Int24` / `Bytes32`
+/// and return their Solidity ABI type string (e.g. `"uint160"`, `"int24"`, `"bytes32"`).
 fn std_sol_compat_abi_type(
     db: &DriverDataBase,
     ty: TyId<'_>,
@@ -862,6 +862,11 @@ fn std_sol_compat_abi_type(
         return None;
     }
     let name = adt_ref.name(db)?.data(db).to_string();
+
+    if let Some(digits) = name.strip_prefix("Bytes") {
+        let bytes: u8 = digits.parse().ok()?;
+        return (1..=32).contains(&bytes).then(|| format!("bytes{bytes}"));
+    }
 
     // Match Uint{N} or Int{N} where N is a valid Solidity bit width (8..=256, multiple of 8)
     let (prefix, digits) = if let Some(rest) = name.strip_prefix("Uint") {
@@ -1863,19 +1868,21 @@ pub contract Foo uses (log: mut Log) {
     fn sol_compat_wrapper_types_emit_correct_abi_type() {
         let code = r#"
 use std::abi::sol
+use std::abi::sol::Bytes32
 use std::abi::sol::Uint160
 use std::abi::sol::Int24
 
 msg FooMsg {
-    #[selector = sol("set(uint160,int24)")]
-    Set { addr: Uint160, value: Int24 },
+    #[selector = sol("set(uint160,int24,bytes32)")]
+    Set { addr: Uint160, value: Int24, key: Bytes32 },
 }
 
 pub contract Foo {
     recv FooMsg {
-        Set { addr, value } uses () {
+        Set { addr, value, key } uses () {
             let _ = addr
             let _ = value
+            let _ = key
         }
     }
 }
@@ -1892,5 +1899,7 @@ pub contract Foo {
         assert_eq!(function["inputs"][0]["name"], "addr");
         assert_eq!(function["inputs"][1]["type"], "int24");
         assert_eq!(function["inputs"][1]["name"], "value");
+        assert_eq!(function["inputs"][2]["type"], "bytes32");
+        assert_eq!(function["inputs"][2]["name"], "key");
     }
 }
