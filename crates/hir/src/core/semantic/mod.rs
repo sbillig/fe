@@ -1664,6 +1664,12 @@ pub struct ProviderBinding<'db> {
     pub semantics: ProviderSemantics<'db>,
 }
 
+impl<'db> ProviderBinding<'db> {
+    pub fn effective_target_ty(&self) -> TyId<'db> {
+        self.semantics.target_ty.unwrap_or(self.provider_ty)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct ResolvedEffectBinding {
     pub requirement_idx: u32,
