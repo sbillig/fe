@@ -318,6 +318,83 @@ fn test_cli_build_emit_abi_writes_json_artifact() {
     assert_eq!(function["outputs"][0]["type"], "uint256");
 }
 
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_build_native_executable_uses_main_return_as_exit_code() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_exit.fe");
+    fs::write(
+        &source,
+        r#"
+pub fn main() -> i32 {
+    42
+}
+"#,
+    )
+    .expect("write native source");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let source_str = source.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "--out-dir",
+        out_dir_str.as_str(),
+        source_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 0, "fe native build failed:\n{output}");
+
+    let executable = out_dir.join("native_exit");
+    assert!(executable.is_file(), "missing native executable:\n{output}");
+    let status = Command::new(&executable)
+        .status()
+        .expect("run native executable");
+    assert_eq!(status.code(), Some(42));
+}
+
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_build_native_rejects_evm_artifacts() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_exit.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").expect("write native source");
+    let source_str = source.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "--emit",
+        "bytecode",
+        source_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 1, "expected native build rejection:\n{output}");
+    assert!(
+        output.contains("native backend only supports `--emit executable` and `--emit ir`"),
+        "unexpected output:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_build_sonatina_rejects_executable_emit() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("contract.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").expect("write source");
+    let source_str = source.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&["build", "--emit", "executable", source_str.as_str()]);
+    assert_eq!(
+        exit_code, 1,
+        "expected executable emit rejection:\n{output}"
+    );
+    assert!(
+        output.contains("`--emit executable` requires `--backend native`"),
+        "unexpected output:\n{output}"
+    );
+}
+
 #[test]
 fn test_cli_build_emit_abi_includes_constructor_and_mutability_metadata() {
     let temp = tempdir().expect("tempdir");

@@ -56,7 +56,7 @@ use sonatina_ir::{
     types::{CompoundType, EnumReprHint, EnumVariantRef, VariantData},
 };
 
-use super::{LowerError, create_module_ctx};
+use super::LowerError;
 use crate::{
     TargetDataLayout,
     function_symbols::{FunctionSymbolInput, FunctionSymbolStyle, assign_function_symbols},
@@ -135,6 +135,13 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
     fn inst_set(&self) -> &'static dyn sonatina_ir::InstSetBase {
         self.builder.inst_set()
+    }
+
+    fn is_native_target(&self) -> bool {
+        !matches!(
+            self.builder.ctx.triple.architecture,
+            sonatina_triple::Architecture::Evm
+        )
     }
 
     fn function_symbol(&self, instance: RuntimeInstance<'db>) -> String {
@@ -309,37 +316,14 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     }
 
     fn lower_bodies_native(&mut self) -> Result<(), LowerError> {
-        let all_functions: Vec<_> = self.package.functions(self.db);
-        eprintln!(
-            "[native] lower_bodies_native: {} functions in package",
-            all_functions.len()
-        );
-        for function in all_functions {
+        for function in self.package.functions(self.db) {
             if runtime_intrinsic(self.db, function.instance(self.db)).is_some() {
                 continue;
             }
             let body = function.instance(self.db).body(self.db);
             let func_ref = self.func_ref(function.instance(self.db))?;
-            let symbol = self.function_symbol(function.instance(self.db));
-            eprintln!("[native] lowering function: {symbol}");
-
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let ctx = FunctionLowerer::new(self, body.clone(), func_ref)?;
-                ctx.lower()
-            }));
-
-            match result {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    tracing::warn!("skipping function {symbol} for native target: {e}");
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        "skipping function {symbol} for native target: \
-                         uses unsupported EVM-specific instructions"
-                    );
-                }
-            }
+            let ctx = FunctionLowerer::new(self, body, func_ref)?;
+            ctx.lower()?;
         }
         Ok(())
     }
@@ -863,6 +847,7 @@ struct FunctionLowerer<'ctx, 'db, 'a> {
     body: RuntimeBody<'db>,
     current_sections: Vec<mir::RuntimeSectionRef<'db>>,
     fb: FunctionBuilder<InstInserter>,
+    func_ref: FuncRef,
     prologue_block: BlockId,
     block_map: Vec<Option<BlockId>>,
     reachable_blocks: Vec<bool>,
@@ -921,6 +906,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             body,
             current_sections,
             fb,
+            func_ref,
             prologue_block,
             block_map,
             reachable_blocks,
@@ -1391,6 +1377,66 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     }
 
     fn lower_builtin(&mut self, builtin: &RuntimeBuiltin<'db>) -> Result<ValueId, LowerError> {
+        if self.module.is_native_target()
+            && let Some(name) = match builtin {
+                RuntimeBuiltin::Mload { .. }
+                | RuntimeBuiltin::Mstore { .. }
+                | RuntimeBuiltin::AddMod { .. }
+                | RuntimeBuiltin::MulMod { .. }
+                | RuntimeBuiltin::IntrinsicArith { .. }
+                | RuntimeBuiltin::Saturating { .. } => None,
+                RuntimeBuiltin::Mstore8 { .. } => Some("mstore8"),
+                RuntimeBuiltin::Mcopy { .. } => Some("mcopy"),
+                RuntimeBuiltin::Msize => Some("msize"),
+                RuntimeBuiltin::Sload { .. } => Some("sload"),
+                RuntimeBuiltin::Sstore { .. } => Some("sstore"),
+                RuntimeBuiltin::CallValue => Some("callvalue"),
+                RuntimeBuiltin::ReturnDataSize => Some("returndatasize"),
+                RuntimeBuiltin::CallDataSize => Some("calldatasize"),
+                RuntimeBuiltin::CallDataLoad { .. } => Some("calldataload"),
+                RuntimeBuiltin::ReturnDataCopy { .. } => Some("returndatacopy"),
+                RuntimeBuiltin::CallDataCopy { .. } => Some("calldatacopy"),
+                RuntimeBuiltin::CodeSize => Some("codesize"),
+                RuntimeBuiltin::CodeCopy { .. } => Some("codecopy"),
+                RuntimeBuiltin::Keccak256 { .. } => Some("keccak256"),
+                RuntimeBuiltin::SignExtend { .. } => Some("signextend"),
+                RuntimeBuiltin::Address => Some("address"),
+                RuntimeBuiltin::Caller => Some("caller"),
+                RuntimeBuiltin::Origin => Some("origin"),
+                RuntimeBuiltin::GasPrice => Some("gasprice"),
+                RuntimeBuiltin::CoinBase => Some("coinbase"),
+                RuntimeBuiltin::Timestamp => Some("timestamp"),
+                RuntimeBuiltin::Number => Some("number"),
+                RuntimeBuiltin::PrevRandao => Some("prevrandao"),
+                RuntimeBuiltin::GasLimit => Some("gaslimit"),
+                RuntimeBuiltin::ChainId => Some("chainid"),
+                RuntimeBuiltin::BaseFee => Some("basefee"),
+                RuntimeBuiltin::SelfBalance => Some("selfbalance"),
+                RuntimeBuiltin::BlockHash { .. } => Some("blockhash"),
+                RuntimeBuiltin::Gas => Some("gas"),
+                RuntimeBuiltin::CurrentCodeRegionLen => Some("current code region length"),
+                RuntimeBuiltin::CodeRegionOffset { .. } => Some("code region offset"),
+                RuntimeBuiltin::CodeRegionLen { .. } => Some("code region length"),
+                RuntimeBuiltin::Malloc { .. } => Some("malloc"),
+                RuntimeBuiltin::Call { .. } => Some("call"),
+                RuntimeBuiltin::StaticCall { .. } => Some("staticcall"),
+                RuntimeBuiltin::DelegateCall { .. } => Some("delegatecall"),
+                RuntimeBuiltin::Create { .. } => Some("create"),
+                RuntimeBuiltin::Create2 { .. } => Some("create2"),
+                RuntimeBuiltin::Log0 { .. } => Some("log0"),
+                RuntimeBuiltin::Log1 { .. } => Some("log1"),
+                RuntimeBuiltin::Log2 { .. } => Some("log2"),
+                RuntimeBuiltin::Log3 { .. } => Some("log3"),
+                RuntimeBuiltin::Log4 { .. } => Some("log4"),
+                RuntimeBuiltin::CallDataSelector => Some("calldata selector"),
+                RuntimeBuiltin::MakeContractFieldRef { .. } => Some("contract field ref"),
+            }
+        {
+            return Err(LowerError::Unsupported(format!(
+                "native target does not support EVM builtin `{name}`"
+            )));
+        }
+
         Ok(match builtin {
             RuntimeBuiltin::Mload { addr } => {
                 let addr = self.local_value(*addr)?;
@@ -2172,21 +2218,36 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     args,
                 ));
                 self.fb
-                    .insert_inst_no_result(Unreachable::new_unchecked(self.module.inst_set()));
+                    .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
             }
             RTerminator::ReturnData { offset, len } => {
+                if self.module.is_native_target() {
+                    return Err(LowerError::Unsupported(
+                        "native target does not support EVM return-data terminators".to_string(),
+                    ));
+                }
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
                 self.fb
                     .insert_inst_no_result(EvmReturn::new(self.module.inst_set(), offset, len));
             }
             RTerminator::Revert { offset, len } => {
+                if self.module.is_native_target() {
+                    return Err(LowerError::Unsupported(
+                        "native target does not support EVM revert terminators".to_string(),
+                    ));
+                }
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
                 self.fb
                     .insert_inst_no_result(EvmRevert::new(self.module.inst_set(), offset, len));
             }
             RTerminator::SelfDestruct { beneficiary } => {
+                if self.module.is_native_target() {
+                    return Err(LowerError::Unsupported(
+                        "native target does not support EVM selfdestruct terminators".to_string(),
+                    ));
+                }
                 let beneficiary = self.local_value(*beneficiary)?;
                 self.fb.insert_inst_no_result(EvmSelfDestruct::new(
                     self.module.inst_set(),
@@ -2194,8 +2255,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ));
             }
             RTerminator::Trap => {
-                self.fb
-                    .insert_inst_no_result(EvmInvalid::new(self.module.inst_set()));
+                if self.module.is_native_target() {
+                    self.fb
+                        .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+                } else {
+                    self.fb
+                        .insert_inst_no_result(EvmInvalid::new(self.module.inst_set()));
+                }
             }
             RTerminator::Return(value) => match value {
                 Some(value) => {
@@ -2208,8 +2274,25 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     .insert_inst_no_result(Return::new_unit(self.module.inst_set())),
             },
             RTerminator::Stop => {
-                self.fb
-                    .insert_inst_no_result(EvmStop::new(self.module.inst_set()));
+                if self.module.is_native_target() {
+                    if self
+                        .module
+                        .builder
+                        .ctx
+                        .func_sig(self.func_ref, |sig| sig.returns_unit())
+                    {
+                        self.fb
+                            .insert_inst_no_result(Return::new_unit(self.module.inst_set()));
+                    } else {
+                        return Err(LowerError::Unsupported(
+                            "native target does not support EVM stop in non-unit functions"
+                                .to_string(),
+                        ));
+                    }
+                } else {
+                    self.fb
+                        .insert_inst_no_result(EvmStop::new(self.module.inst_set()));
+                }
             }
         }
         Ok(())
@@ -2279,24 +2362,6 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             .copied()
             .ok_or_else(|| LowerError::Internal(format!("missing variable for {local:?}")))?;
         Ok(self.fb.use_var(var))
-    }
-
-    fn local_scalar_value(&mut self, local: RLocalId) -> Result<ValueId, LowerError> {
-        let val = self.local_value(local)?;
-        if let Some(class) = self.body.value_class(local) {
-            if let RuntimeClass::Ref {
-                pointee,
-                kind: RefKind::Object,
-                ..
-            } = class
-            {
-                let pointee_ty = self.module.ty_for_class(pointee)?;
-                return Ok(self
-                    .fb
-                    .insert_inst(ObjLoad::new(self.module.inst_set(), val), pointee_ty));
-            }
-        }
-        Ok(val)
     }
 
     fn local_ty(&mut self, local: RLocalId) -> Result<Type, LowerError> {

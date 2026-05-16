@@ -44,18 +44,21 @@ impl fmt::Display for OptLevel {
 #[derive(Debug, Clone)]
 pub enum BackendOutput {
     Bytecode(Vec<u8>),
+    NativeObject(Vec<u8>),
 }
 
 impl BackendOutput {
     pub fn as_bytecode(&self) -> Option<&[u8]> {
         match self {
             BackendOutput::Bytecode(bytes) => Some(bytes),
+            BackendOutput::NativeObject(_) => None,
         }
     }
 
     pub fn into_bytecode(self) -> Option<Vec<u8>> {
         match self {
             BackendOutput::Bytecode(bytes) => Some(bytes),
+            BackendOutput::NativeObject(_) => None,
         }
     }
 }
@@ -106,22 +109,10 @@ impl Backend for NativeBackend {
         layout: TargetDataLayout,
         opt_level: OptLevel,
     ) -> Result<BackendOutput, BackendError> {
-        let package = mir::build_runtime_package(db, top_mod)?;
-        let module =
-            crate::sonatina::compile_runtime_package_sonatina_native(db, &package, layout)?;
-
-        let clif_backend = sonatina_codegen::isa::cranelift::CraneliftBackend::new();
-        let compile = sonatina_codegen::Compile::new(module, clif_backend)
-            .with_opt_level(crate::sonatina::to_sonatina_opt_level(opt_level));
-        let artifact = compile.compile().map_err(|errs| {
-            let msgs: Vec<_> = errs.iter().map(|e| format!("{e}")).collect();
-            BackendError::Sonatina(msgs.join("; "))
-        })?;
-
-        // For now, return empty bytecode — the artifact is JIT-compiled native code.
-        // The real output mechanism for native targets is TBD (execute directly,
-        // write object file, etc.)
-        Ok(BackendOutput::Bytecode(Vec::new()))
+        let _ = layout;
+        crate::sonatina::emit_module_native_object(db, top_mod, opt_level)
+            .map(BackendOutput::NativeObject)
+            .map_err(BackendError::from)
     }
 }
 

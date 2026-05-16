@@ -1,3 +1,5 @@
+#[cfg(feature = "cranelift")]
+use std::process::Command;
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fs,
@@ -15,7 +17,7 @@ use smol_str::SmolStr;
 use url::Url;
 
 use crate::{
-    BuildEmit,
+    BuildBackend, BuildEmit,
     report::{
         ReportStaging, copy_input_into_report, create_dir_all_utf8, create_report_staging_root,
         enable_panic_report, normalize_report_out_path, tar_gz_dir, write_report_meta,
@@ -47,6 +49,7 @@ struct EmitSelection {
     runtime_bytecode: bool,
     ir: bool,
     abi: bool,
+    executable: bool,
 }
 
 impl EmitSelection {
@@ -56,6 +59,7 @@ impl EmitSelection {
             runtime_bytecode: false,
             ir: false,
             abi: false,
+            executable: false,
         };
         for emit in requested {
             match emit {
@@ -63,6 +67,7 @@ impl EmitSelection {
                 BuildEmit::RuntimeBytecode => selection.runtime_bytecode = true,
                 BuildEmit::Ir => selection.ir = true,
                 BuildEmit::Abi => selection.abi = true,
+                BuildEmit::Executable => selection.executable = true,
             }
         }
         selection
@@ -75,6 +80,39 @@ impl EmitSelection {
 
 fn create_build_report_staging() -> Result<ReportStaging, String> {
     create_report_staging_root("target/fe-build-report-staging", "fe-build-report")
+}
+
+fn validate_build_request(
+    backend: BuildBackend,
+    ingot: Option<&str>,
+    contract: Option<&str>,
+    emit: EmitSelection,
+) -> Result<(), String> {
+    #[cfg(not(feature = "cranelift"))]
+    let _ = (ingot, contract);
+
+    match backend {
+        BuildBackend::Sonatina => {
+            if emit.executable {
+                return Err("`--emit executable` requires `--backend native`".to_string());
+            }
+        }
+        #[cfg(feature = "cranelift")]
+        BuildBackend::Native => {
+            if ingot.is_some() {
+                return Err("native executable output does not support `--ingot` yet".to_string());
+            }
+            if contract.is_some() {
+                return Err("native executable output does not support `--contract`".to_string());
+            }
+            if emit.writes_any_bytecode() || emit.abi {
+                return Err(
+                    "native backend only supports `--emit executable` and `--emit ir`".to_string(),
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn write_report_file(report: &BuildReportContext, rel: &str, contents: &str) {
@@ -92,6 +130,7 @@ fn write_build_manifest(
     ingot: Option<&str>,
     force_standalone: bool,
     contract: Option<&str>,
+    backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: Option<&Utf8PathBuf>,
@@ -103,7 +142,7 @@ fn write_build_manifest(
     out.push_str(&format!("ingot: {}\n", ingot.unwrap_or("<all>")));
     out.push_str(&format!("standalone: {force_standalone}\n"));
     out.push_str(&format!("contract: {}\n", contract.unwrap_or("<all>")));
-    out.push_str("backend: sonatina\n");
+    out.push_str(&format!("backend: {}\n", backend.name()));
     out.push_str(&format!("opt_level: {opt_level}\n"));
     out.push_str(&format!("emit: {}\n", describe_emit_selection(emit)));
     out.push_str(&format!(
@@ -134,6 +173,7 @@ pub fn build(
     ingot: Option<&str>,
     force_standalone: bool,
     contract: Option<&str>,
+    backend: BuildBackend,
     opt_level: OptLevel,
     emit: &[BuildEmit],
     out_dir: Option<&Utf8PathBuf>,
@@ -143,6 +183,10 @@ pub fn build(
     use_recovery_mode: bool,
 ) {
     let emit = EmitSelection::from_requested(emit);
+    if let Err(err) = validate_build_request(backend, ingot, contract, emit) {
+        eprintln!("Error: {err}");
+        std::process::exit(1);
+    }
     let mut db = DriverDataBase::default();
     db.compiler_options()
         .set_recovery_mode(&mut db)
@@ -207,6 +251,7 @@ pub fn build(
                         ingot,
                         force_standalone,
                         contract,
+                        backend,
                         opt_level,
                         emit,
                         out_dir,
@@ -244,6 +289,7 @@ pub fn build(
             &file_path,
             ingot,
             contract,
+            backend,
             opt_level,
             emit,
             out_dir,
@@ -254,6 +300,7 @@ pub fn build(
             &dir_path,
             ingot,
             contract,
+            backend,
             opt_level,
             emit,
             out_dir,
@@ -270,6 +317,7 @@ pub fn build(
                 ingot,
                 force_standalone,
                 contract,
+                backend,
                 opt_level,
                 emit,
                 out_dir,
@@ -299,6 +347,7 @@ fn build_file(
     file_path: &Utf8PathBuf,
     ingot: Option<&str>,
     contract: Option<&str>,
+    backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: Option<&Utf8PathBuf>,
@@ -384,6 +433,7 @@ fn build_file(
         db,
         top_mod,
         contract,
+        backend,
         opt_level,
         emit,
         &out_dir,
@@ -401,11 +451,21 @@ fn build_directory(
     dir_path: &Utf8PathBuf,
     ingot: Option<&str>,
     contract: Option<&str>,
+    backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
+    #[cfg(not(feature = "cranelift"))]
+    let _ = backend;
+
+    #[cfg(feature = "cranelift")]
+    if matches!(backend, BuildBackend::Native) {
+        eprintln!("Error: native executable output only supports standalone `.fe` files");
+        return true;
+    }
+
     let canonical = match dir_path.canonicalize_utf8() {
         Ok(path) => path,
         Err(_) => {
@@ -986,6 +1046,7 @@ fn build_top_mod(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     contract: Option<&str>,
+    backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: &Utf8Path,
@@ -994,6 +1055,22 @@ fn build_top_mod(
     missing_contract_is_error: bool,
     report_dir: Option<&Utf8PathBuf>,
 ) -> BuildSummary {
+    #[cfg(not(feature = "cranelift"))]
+    let _ = backend;
+
+    #[cfg(feature = "cranelift")]
+    if matches!(backend, BuildBackend::Native) {
+        return build_native_top_mod(
+            db,
+            top_mod,
+            opt_level,
+            emit,
+            out_dir,
+            ir_file_stem,
+            report_dir,
+        );
+    }
+
     let contract_names = match collect_contract_names(db, top_mod) {
         Ok(names) => names,
         Err(err) => {
@@ -1058,6 +1135,58 @@ fn build_top_mod(
 
     if emit.abi {
         had_errors |= write_abi_artifacts(db, top_mod, &names_to_build, out_dir, report_dir);
+    }
+
+    BuildSummary { had_errors }
+}
+
+#[cfg(feature = "cranelift")]
+fn build_native_top_mod(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    emit: EmitSelection,
+    out_dir: &Utf8Path,
+    ir_file_stem: &str,
+    report_dir: Option<&Utf8PathBuf>,
+) -> BuildSummary {
+    if let Err(err) = ensure_output_dirs(emit, out_dir, out_dir) {
+        eprintln!("Error: {err}");
+        return BuildSummary { had_errors: true };
+    }
+    let report_dir = report_dir.map(Utf8PathBuf::as_path);
+
+    let mut had_errors = false;
+    if emit.ir {
+        let ir = match codegen::emit_module_native_ir(db, top_mod, opt_level) {
+            Ok(ir) => ir,
+            Err(err) => {
+                eprintln!("Error: Failed to compile native Sonatina IR: {err}");
+                return BuildSummary { had_errors: true };
+            }
+        };
+        if let Err(err) =
+            write_named_ir_artifact(out_dir, report_dir, ir_file_stem, "native.sona", &ir)
+        {
+            eprintln!("Error: {err}");
+            had_errors = true;
+        }
+    }
+
+    if emit.executable {
+        let object = match codegen::emit_module_native_object(db, top_mod, opt_level) {
+            Ok(object) => object,
+            Err(err) => {
+                eprintln!("Error: Failed to compile native object: {err}");
+                return BuildSummary { had_errors: true };
+            }
+        };
+        if let Err(err) =
+            write_native_executable_artifact(out_dir, report_dir, ir_file_stem, &object)
+        {
+            eprintln!("Error: {err}");
+            had_errors = true;
+        }
     }
 
     BuildSummary { had_errors }
@@ -1184,7 +1313,7 @@ fn ensure_output_dirs(
     out_dir: &Utf8Path,
     ir_out_dir: &Utf8Path,
 ) -> Result<(), String> {
-    if emit.writes_any_bytecode() || emit.abi {
+    if emit.writes_any_bytecode() || emit.abi || emit.executable {
         fs::create_dir_all(out_dir.as_std_path())
             .map_err(|err| format!("Failed to create output directory {out_dir}: {err}"))?;
     }
@@ -1335,7 +1464,63 @@ fn describe_emit_selection(emit: EmitSelection) -> String {
     if emit.abi {
         parts.push("abi");
     }
+    if emit.executable {
+        parts.push("executable");
+    }
     parts.join(",")
+}
+
+#[cfg(feature = "cranelift")]
+fn write_native_executable_artifact(
+    out_dir: &Utf8Path,
+    report_dir: Option<&Utf8Path>,
+    file_stem: &str,
+    object: &[u8],
+) -> Result<(), String> {
+    let base = sanitize_name_with_default(file_stem, "main");
+    let object_dir = out_dir.join(".fe-native");
+    fs::create_dir_all(object_dir.as_std_path())
+        .map_err(|err| format!("Failed to create native object directory {object_dir}: {err}"))?;
+
+    let object_path = object_dir.join(format!("{base}.o"));
+    fs::write(object_path.as_std_path(), object)
+        .map_err(|err| format!("Failed to write native object {object_path}: {err}"))?;
+
+    let executable_name = native_executable_name(&base);
+    let executable_path = out_dir.join(&executable_name);
+    let output = Command::new("cc")
+        .arg(object_path.as_str())
+        .arg("-o")
+        .arg(executable_path.as_str())
+        .output()
+        .map_err(|err| format!("Failed to run host linker `cc`: {err}"))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "host linker failed for {object_path}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        ));
+    }
+
+    if let Some(dir) = report_dir {
+        let _ = fs::write(dir.join(format!("{base}.o")).as_std_path(), object);
+        let _ = fs::copy(
+            executable_path.as_std_path(),
+            dir.join(&executable_name).as_std_path(),
+        );
+    }
+    println!("Wrote {executable_path}");
+    Ok(())
+}
+
+#[cfg(feature = "cranelift")]
+fn native_executable_name(base: &str) -> String {
+    if cfg!(windows) {
+        format!("{base}.exe")
+    } else {
+        base.to_string()
+    }
 }
 
 fn write_contract_artifacts(
@@ -1421,6 +1606,7 @@ mod tests {
             runtime_bytecode: false,
             ir: false,
             abi: true,
+            executable: false,
         };
         assert_eq!(describe_emit_selection(emit), "abi");
     }

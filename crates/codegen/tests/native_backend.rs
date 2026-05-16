@@ -3,6 +3,8 @@
 //! These verify that Fe source code can be lowered to Sonatina IR
 //! targeting the native ISA, then compiled to native code via Cranelift.
 
+#![allow(clippy::crosspointer_transmute)]
+
 use common::InputDb;
 use driver::DriverDataBase;
 use url::Url;
@@ -25,8 +27,8 @@ fn with_top_mod_for_source<T>(
 }
 
 #[test]
-fn native_ir_for_simple_contract_produces_pure_functions() {
-    let ir = with_top_mod_for_source(
+fn native_ir_for_contract_rejects_evm_dispatch() {
+    let err = with_top_mod_for_source(
         "native_simple.fe",
         r#"
 pub contract Arith {
@@ -35,25 +37,13 @@ pub contract Arith {
     }
 }
 "#,
-        |db, top_mod| fe_codegen::emit_module_sonatina_ir_native(db, top_mod),
-    );
-
-    let ir_text = ir.expect("native IR emission should succeed (skipping EVM-only functions)");
-    eprintln!("=== Native Sonatina IR ===\n{ir_text}");
-    // Currently: the contract dispatcher functions (init_abi, init_root,
-    // runtime_root) are skipped because they use EVM instructions.
-    // The user's add_u64 function is inlined INTO the runtime_root by Fe's
-    // MIR, so it also gets skipped.
-    //
-    // To fix: for native targets, Fe should lower user functions independently
-    // of the contract model. This requires a different MIR → Sonatina path
-    // that extracts functions without the ABI dispatcher wrapping.
-    //
-    // For now, verify the module structure is valid (has target triple,
-    // function declarations exist even if bodies are missing).
+        fe_codegen::emit_module_sonatina_ir_native,
+    )
+    .expect_err("native IR emission should reject contract EVM dispatch roots");
+    let message = err.to_string();
     assert!(
-        ir_text.contains("x86_64-unknown-native") || ir_text.contains("aarch64-unknown-native"),
-        "expected native target triple in IR"
+        message.contains("native target does not support EVM builtin"),
+        "expected native unsupported EVM builtin error, got: {message}"
     );
 }
 
@@ -71,7 +61,7 @@ pub fn compute() -> u64 {
     a + b
 }
 "#,
-        |db, top_mod| fe_codegen::emit_module_sonatina_ir_native(db, top_mod),
+        fe_codegen::emit_module_sonatina_ir_native,
     );
 
     let ir_text = ir.expect("native IR emission should succeed for standalone function");
@@ -1177,7 +1167,7 @@ pub contract Arith {
     }
 }
 "#,
-        |db, top_mod| fe_codegen::emit_module_sonatina_ir(db, top_mod),
+        fe_codegen::emit_module_sonatina_ir,
     );
 
     let ir_text = ir.expect("EVM IR emission should succeed");
