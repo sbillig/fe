@@ -1795,15 +1795,21 @@ fn runtime_function_for_instance<'db>(
     referenced_const_regions: Vec<ConstRegionId<'db>>,
 ) -> RuntimeFunction<'db> {
     match instance.key(db).source(db) {
-        RuntimeInstanceSource::Semantic(semantic) => make_runtime_function(
-            db,
-            instance,
-            symbol,
-            RuntimeLinkage::Private,
-            inline_hint_for_semantic(db, semantic),
-            RuntimeFunctionOwner::Semantic(semantic),
-            referenced_const_regions,
-        ),
+        RuntimeInstanceSource::Semantic(semantic) => {
+            let linkage = match semantic.key(db).owner(db) {
+                BodyOwner::Func(func) if func.is_extern(db) => RuntimeLinkage::External,
+                _ => RuntimeLinkage::Private,
+            };
+            make_runtime_function(
+                db,
+                instance,
+                symbol,
+                linkage,
+                inline_hint_for_semantic(db, semantic),
+                RuntimeFunctionOwner::Semantic(semantic),
+                referenced_const_regions,
+            )
+        }
         RuntimeInstanceSource::Synthetic(synthetic) => {
             let spec = synthetic.spec(db).clone();
             make_runtime_function(

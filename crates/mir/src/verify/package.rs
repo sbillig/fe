@@ -4,7 +4,7 @@ use crate::{
     db::MirDb,
     runtime::{
         DispatchDefault, RExpr, RStmt, RTerminator, ResolvedCodeRegion, RuntimeCodeRegion,
-        RuntimeFunctionOwner, RuntimeObject, RuntimePackage, RuntimeProgramView,
+        RuntimeFunctionOwner, RuntimeLinkage, RuntimeObject, RuntimePackage, RuntimeProgramView,
         RuntimeSyntheticSpec,
         code_region::{code_region_runtime_entry, code_region_section_name, code_region_symbol},
     },
@@ -74,6 +74,9 @@ pub fn verify_runtime_package<'db>(
             return Err(VerifyError::DuplicateRuntimeSymbol(
                 function.symbol(db).clone(),
             ));
+        }
+        if function.linkage(db) == RuntimeLinkage::External {
+            continue;
         }
         let body = function.instance(db).body(db);
         verify_runtime_body(db, &view, &body)?;

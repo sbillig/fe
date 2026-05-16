@@ -1,0 +1,311 @@
+use std::io::{Read, Write, host, read_char, write, write_char}
+
+const EOF: i32 = -1
+const SKIP: i32 = -3
+const HEX_PREFIX: i32 = -2
+
+const ASCII_0: i32 = 48
+const ASCII_9: i32 = 57
+const ASCII_A: i32 = 65
+const ASCII_F: i32 = 70
+const ASCII_X: i32 = 88
+const ASCII_a: i32 = 97
+const ASCII_f: i32 = 102
+const ASCII_x: i32 = 120
+
+fn newline()
+uses (w: mut Write)
+{
+    write_char(10)
+}
+
+fn space()
+uses (w: mut Write)
+{
+    write_char(32)
+}
+
+fn hex_digit(_ value: i32) -> i32 {
+    if value < 10 {
+        ASCII_0 + value
+    } else {
+        87 + value
+    }
+}
+
+fn write_hex_byte(_ value: i32)
+uses (w: mut Write)
+{
+    write_char(hex_digit(value / 16))
+    write_char(hex_digit(value % 16))
+}
+
+fn write_hex4(_ value: i32)
+uses (w: mut Write)
+{
+    write_char(hex_digit((value / 4096) % 16))
+    write_char(hex_digit((value / 256) % 16))
+    write_char(hex_digit((value / 16) % 16))
+    write_char(hex_digit(value % 16))
+}
+
+fn write_decimal_1_to_32(_ value: i32)
+uses (w: mut Write)
+{
+    if value >= 10 {
+        write_char(ASCII_0 + (value / 10))
+    }
+    write_char(ASCII_0 + (value % 10))
+}
+
+fn token_value(_ c: i32) -> i32 {
+    if c >= ASCII_0 && c <= ASCII_9 {
+        return c - ASCII_0
+    }
+    if c >= ASCII_A && c <= ASCII_F {
+        return c - 55
+    }
+    if c >= ASCII_a && c <= ASCII_f {
+        return c - 87
+    }
+    if c == ASCII_x || c == ASCII_X {
+        HEX_PREFIX
+    } else {
+        SKIP
+    }
+}
+
+fn read_token() -> i32
+uses (r: mut Read)
+{
+    let mut c: i32 = read_char()
+    while c != EOF {
+        let value = token_value(c)
+        if value != SKIP {
+            return value
+        }
+        c = read_char()
+    }
+    EOF
+}
+
+fn read_hex_byte() -> i32
+uses (r: mut Read)
+{
+    let mut hi: i32 = read_token()
+    while hi == HEX_PREFIX {
+        hi = read_token()
+    }
+    if hi < 0 {
+        return EOF
+    }
+
+    let mut lo: i32 = read_token()
+    while hi == 0 && lo == HEX_PREFIX {
+        hi = read_token()
+        if hi < 0 {
+            return EOF
+        }
+        lo = read_token()
+    }
+    while lo == HEX_PREFIX {
+        lo = read_token()
+    }
+    if lo < 0 {
+        EOF
+    } else {
+        hi * 16 + lo
+    }
+}
+
+fn write_opcode_name(_ op: i32)
+uses (w: mut Write)
+{
+    match op {
+        0x00 => write("STOP"),
+        0x01 => write("ADD"),
+        0x02 => write("MUL"),
+        0x03 => write("SUB"),
+        0x04 => write("DIV"),
+        0x05 => write("SDIV"),
+        0x06 => write("MOD"),
+        0x07 => write("SMOD"),
+        0x08 => write("ADDMOD"),
+        0x09 => write("MULMOD"),
+        0x0a => write("EXP"),
+        0x0b => write("SIGNEXTEND"),
+        0x10 => write("LT"),
+        0x11 => write("GT"),
+        0x12 => write("SLT"),
+        0x13 => write("SGT"),
+        0x14 => write("EQ"),
+        0x15 => write("ISZERO"),
+        0x16 => write("AND"),
+        0x17 => write("OR"),
+        0x18 => write("XOR"),
+        0x19 => write("NOT"),
+        0x1a => write("BYTE"),
+        0x1b => write("SHL"),
+        0x1c => write("SHR"),
+        0x1d => write("SAR"),
+        0x20 => write("SHA3"),
+        0x30 => write("ADDRESS"),
+        0x31 => write("BALANCE"),
+        0x32 => write("ORIGIN"),
+        0x33 => write("CALLER"),
+        0x34 => write("CALLVALUE"),
+        0x35 => write("CALLDATALOAD"),
+        0x36 => write("CALLDATASIZE"),
+        0x37 => write("CALLDATACOPY"),
+        0x38 => write("CODESIZE"),
+        0x39 => write("CODECOPY"),
+        0x3a => write("GASPRICE"),
+        0x3b => write("EXTCODESIZE"),
+        0x3c => write("EXTCODECOPY"),
+        0x3d => write("RETURNDATASIZE"),
+        0x3e => write("RETURNDATACOPY"),
+        0x3f => write("EXTCODEHASH"),
+        0x40 => write("BLOCKHASH"),
+        0x41 => write("COINBASE"),
+        0x42 => write("TIMESTAMP"),
+        0x43 => write("NUMBER"),
+        0x44 => write("PREVRANDAO"),
+        0x45 => write("GASLIMIT"),
+        0x46 => write("CHAINID"),
+        0x47 => write("SELFBALANCE"),
+        0x48 => write("BASEFEE"),
+        0x49 => write("BLOBHASH"),
+        0x4a => write("BLOBBASEFEE"),
+        0x50 => write("POP"),
+        0x51 => write("MLOAD"),
+        0x52 => write("MSTORE"),
+        0x53 => write("MSTORE8"),
+        0x54 => write("SLOAD"),
+        0x55 => write("SSTORE"),
+        0x56 => write("JUMP"),
+        0x57 => write("JUMPI"),
+        0x58 => write("PC"),
+        0x59 => write("MSIZE"),
+        0x5a => write("GAS"),
+        0x5b => write("JUMPDEST"),
+        0x5c => write("TLOAD"),
+        0x5d => write("TSTORE"),
+        0x5e => write("MCOPY"),
+        0x5f => write("PUSH0"),
+        0xf0 => write("CREATE"),
+        0xf1 => write("CALL"),
+        0xf2 => write("CALLCODE"),
+        0xf3 => write("RETURN"),
+        0xf4 => write("DELEGATECALL"),
+        0xf5 => write("CREATE2"),
+        0xfa => write("STATICCALL"),
+        0xfd => write("REVERT"),
+        0xfe => write("INVALID"),
+        0xff => write("SELFDESTRUCT"),
+        _ => write("UNKNOWN"),
+    }
+}
+
+fn write_push_name(_ op: i32) -> i32
+uses (w: mut Write)
+{
+    if op >= 0x60 && op <= 0x7f {
+        write("PUSH")
+        let n = op - 0x5f
+        write_decimal_1_to_32(n)
+        n
+    } else {
+        0
+    }
+}
+
+fn write_numbered_name(_ prefix: i32, _ index: i32)
+uses (w: mut Write)
+{
+    if prefix == 0 {
+        write("DUP")
+    } else {
+        if prefix == 1 {
+            write("SWAP")
+        } else {
+            write("LOG")
+        }
+    }
+    write_decimal_1_to_32(index)
+}
+
+fn write_dup_swap_log_name(_ op: i32) -> bool
+uses (w: mut Write)
+{
+    if op >= 0x80 && op <= 0x8f {
+        write_numbered_name(0, op - 0x7f)
+        return true
+    }
+    if op >= 0x90 && op <= 0x9f {
+        write_numbered_name(1, op - 0x8f)
+        return true
+    }
+    if op >= 0xa0 && op <= 0xa4 {
+        write_numbered_name(2, op - 0xa0)
+        return true
+    }
+    false
+}
+
+fn write_push_data(_ n: i32) -> i32
+uses (r: mut Read, w: mut Write)
+{
+    write(" 0x")
+    let mut i: i32 = 0
+    let mut consumed: i32 = 0
+    while i < n {
+        let b = read_hex_byte()
+        if b < 0 {
+            write("??")
+        } else {
+            write_hex_byte(b)
+            consumed = consumed + 1
+        }
+        i = i + 1
+    }
+    consumed
+}
+
+fn disassemble_one(_ pc: i32, _ op: i32) -> i32
+uses (r: mut Read, w: mut Write)
+{
+    write_hex4(pc)
+    space()
+
+    let push_len = write_push_name(op)
+    if push_len > 0 {
+        let consumed = write_push_data(push_len)
+        newline()
+        consumed
+    } else {
+        if !write_dup_swap_log_name(op) {
+            write_opcode_name(op)
+        }
+        newline()
+        0
+    }
+}
+
+fn disassemble() -> i32
+uses (r: mut Read, w: mut Write)
+{
+    let mut pc: i32 = 0
+    let mut op: i32 = read_hex_byte()
+    while op >= 0 {
+        let consumed = disassemble_one(pc, op)
+        pc = pc + 1 + consumed
+        op = read_hex_byte()
+    }
+    0
+}
+
+pub fn main() -> i32 {
+    with (Read = host(), Write = host()) {
+        disassemble()
+    }
+}

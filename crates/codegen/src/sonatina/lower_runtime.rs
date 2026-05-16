@@ -17,9 +17,10 @@ use mir::runtime::RefKind;
 use mir::{
     AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, IntrinsicArithBinOp, Layout, LayoutId,
     RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem, ResolvedPlaceRootKind,
-    RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction, RuntimeInlineHint, RuntimeInstance,
-    RuntimeLinkage, RuntimeLocalRoot, RuntimePackage, RuntimePlace, SaturatingBinOp, ScalarClass,
-    ScalarRepr, VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
+    RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction, RuntimeFunctionOwner,
+    RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot, RuntimePackage,
+    RuntimePlace, SaturatingBinOp, ScalarClass, ScalarRepr, VariantId,
+    instance::RuntimeInstanceSource, resolve_runtime_place,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::{SmallVec, smallvec};
@@ -29,7 +30,7 @@ use sonatina_ir::{
     builder::{FunctionBuilder, ModuleBuilder, ObjectBuilder, Variable},
     func_cursor::InstInserter,
     inst::{
-        arith::{Add, Mul, Neg, Sar, Shl, Shr, Sub},
+        arith::{Add, Mul, Neg, Sar, Sdiv, Shl, Shr, Smod, Sub, Udiv, Umod},
         cast::{Bitcast, IntToPtr, PtrToInt, Sext, Trunc, Zext},
         cmp::{Eq, Gt, IsZero, Lt, Ne, Slt},
         control_flow::{Br, BrTable, Call, Jump, Phi, Return, Unreachable},
@@ -48,6 +49,16 @@ use sonatina_ir::{
             EvmPrevRandao, EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSdiv,
             EvmSelfBalance, EvmSelfDestruct, EvmSignExtend, EvmSload, EvmSmod, EvmSstore,
             EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore, EvmUdiv, EvmUmod,
+        },
+        evm::{
+            EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue,
+            EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy,
+            EvmCodeSize, EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmGas,
+            EvmGasLimit, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
+            EvmMalloc, EvmMcopy, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin,
+            EvmPrevRandao, EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert,
+            EvmSelfBalance, EvmSelfDestruct, EvmSignExtend, EvmSload, EvmSstore, EvmStaticCall,
+            EvmStop, EvmTimestamp, EvmTload, EvmTstore,
         },
         logic::{And, Not, Or, Xor},
     },
@@ -304,7 +315,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
     fn lower_bodies(&mut self) -> Result<(), LowerError> {
         for function in self.package.functions(self.db) {
-            if runtime_intrinsic(self.db, function.instance(self.db)).is_some() {
+            if function.linkage(self.db) == RuntimeLinkage::External
+                || runtime_intrinsic(self.db, function.instance(self.db)).is_some()
+            {
                 continue;
             }
             let body = function.instance(self.db).body(self.db);
@@ -317,7 +330,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
     fn lower_bodies_native(&mut self) -> Result<(), LowerError> {
         for function in self.package.functions(self.db) {
-            if runtime_intrinsic(self.db, function.instance(self.db)).is_some() {
+            if function.linkage(self.db) == RuntimeLinkage::External
+                || runtime_intrinsic(self.db, function.instance(self.db)).is_some()
+            {
                 continue;
             }
             let body = function.instance(self.db).body(self.db);
@@ -585,7 +600,12 @@ fn assign_sonatina_function_symbols<'db>(
         .into_iter()
         .filter(|function| runtime_intrinsic(db, function.instance(db)).is_none())
         .collect::<Vec<_>>();
-    let inputs = functions
+    let local_functions = functions
+        .iter()
+        .copied()
+        .filter(|function| function.linkage(db) != RuntimeLinkage::External)
+        .collect::<Vec<_>>();
+    let inputs = local_functions
         .iter()
         .map(|function| FunctionSymbolInput {
             owner: function.owner(db).clone(),
@@ -594,7 +614,7 @@ fn assign_sonatina_function_symbols<'db>(
             disambiguator: mir::runtime_instance_symbol_key(db, function.instance(db)),
         })
         .collect::<Vec<_>>();
-    functions
+    let mut symbols = local_functions
         .into_iter()
         .zip(assign_function_symbols(
             db,
@@ -602,7 +622,27 @@ fn assign_sonatina_function_symbols<'db>(
             &SONATINA_FUNCTION_SYMBOL_STYLE,
         ))
         .map(|(function, symbol)| (function.instance(db), symbol))
-        .collect()
+        .collect::<FxHashMap<_, _>>();
+    symbols.extend(functions.into_iter().filter_map(|function| {
+        let owner = function.owner(db);
+        if function.linkage(db) != RuntimeLinkage::External {
+            return None;
+        }
+        let RuntimeFunctionOwner::Semantic(semantic) = owner else {
+            return Some((function.instance(db), function.symbol(db).clone()));
+        };
+        let BodyOwner::Func(func) = semantic.key(db).owner(db) else {
+            return Some((function.instance(db), function.symbol(db).clone()));
+        };
+        Some((
+            function.instance(db),
+            func.name(db)
+                .to_opt()
+                .map(|name| name.data(db).to_string())
+                .unwrap_or_else(|| function.symbol(db).clone()),
+        ))
+    }));
+    symbols
 }
 
 fn sanitize_sonatina_ident_segment(value: &str) -> String {
@@ -2093,22 +2133,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     NumericIntrinsicOp::BitXor => self
                         .fb
                         .insert_inst(Xor::new(self.module.inst_set(), lhs, rhs), op_ty),
-                    NumericIntrinsicOp::Div => {
-                        let [raw, _overflow] = if signed {
-                            self.fb.insert_evm_sdivo(lhs, rhs)
-                        } else {
-                            self.fb.insert_evm_udivo(lhs, rhs)
-                        };
-                        raw
-                    }
-                    NumericIntrinsicOp::Rem => {
-                        let [raw, _overflow] = if signed {
-                            self.fb.insert_evm_smodo(lhs, rhs)
-                        } else {
-                            self.fb.insert_evm_umodo(lhs, rhs)
-                        };
-                        raw
-                    }
+                    NumericIntrinsicOp::Div => self.lower_unchecked_div(lhs, rhs, op_ty, signed),
+                    NumericIntrinsicOp::Rem => self.lower_unchecked_rem(lhs, rhs, op_ty, signed),
                     _ => unreachable!(),
                 }
             }
@@ -3985,23 +4011,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             }
             ArithBinOp::Div => {
                 self.emit_division_by_zero_revert(rhs, ty)?;
-                let [raw, overflow] = if signed {
-                    self.fb.insert_evm_sdivo(lhs, rhs)
-                } else {
-                    self.fb.insert_evm_udivo(lhs, rhs)
-                };
-                self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
-                raw
+                if signed {
+                    self.emit_signed_div_overflow_revert(lhs, rhs, ty)?;
+                }
+                self.lower_unchecked_div(lhs, rhs, ty, signed)
             }
             ArithBinOp::Rem => {
                 self.emit_division_by_zero_revert(rhs, ty)?;
-                if signed {
-                    self.fb
-                        .insert_inst(EvmSmod::new(self.module.inst_set(), lhs, rhs), ty)
-                } else {
-                    self.fb
-                        .insert_inst(EvmUmod::new(self.module.inst_set(), lhs, rhs), ty)
-                }
+                self.lower_unchecked_rem(lhs, rhs, ty, signed)
             }
             ArithBinOp::Pow => self
                 .fb
@@ -4059,24 +4076,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             (IntrinsicArithBinOp::Mul, false) => self
                 .fb
                 .insert_inst(Mul::new(self.module.inst_set(), lhs, rhs), ty),
-            (IntrinsicArithBinOp::Div, false) => {
-                if signed {
-                    self.fb
-                        .insert_inst(EvmSdiv::new(self.module.inst_set(), lhs, rhs), ty)
-                } else {
-                    self.fb
-                        .insert_inst(EvmUdiv::new(self.module.inst_set(), lhs, rhs), ty)
-                }
-            }
-            (IntrinsicArithBinOp::Rem, false) => {
-                if signed {
-                    self.fb
-                        .insert_inst(EvmSmod::new(self.module.inst_set(), lhs, rhs), ty)
-                } else {
-                    self.fb
-                        .insert_inst(EvmUmod::new(self.module.inst_set(), lhs, rhs), ty)
-                }
-            }
+            (IntrinsicArithBinOp::Div, false) => self.lower_unchecked_div(lhs, rhs, ty, signed),
+            (IntrinsicArithBinOp::Rem, false) => self.lower_unchecked_rem(lhs, rhs, ty, signed),
             (IntrinsicArithBinOp::Pow, false) => self
                 .fb
                 .insert_inst(EvmExp::new(self.module.inst_set(), lhs, rhs), ty),
@@ -4109,23 +4110,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             }
             (IntrinsicArithBinOp::Div, true) => {
                 self.emit_division_by_zero_revert(rhs, ty)?;
-                let [raw, overflow] = if signed {
-                    self.fb.insert_evm_sdivo(lhs, rhs)
-                } else {
-                    self.fb.insert_evm_udivo(lhs, rhs)
-                };
-                self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
-                raw
+                if signed {
+                    self.emit_signed_div_overflow_revert(lhs, rhs, ty)?;
+                }
+                self.lower_unchecked_div(lhs, rhs, ty, signed)
             }
             (IntrinsicArithBinOp::Rem, true) => {
                 self.emit_division_by_zero_revert(rhs, ty)?;
-                if signed {
-                    self.fb
-                        .insert_inst(EvmSmod::new(self.module.inst_set(), lhs, rhs), ty)
-                } else {
-                    self.fb
-                        .insert_inst(EvmUmod::new(self.module.inst_set(), lhs, rhs), ty)
-                }
+                self.lower_unchecked_rem(lhs, rhs, ty, signed)
             }
             (IntrinsicArithBinOp::Pow, true) => {
                 self.lower_checked_pow_builtin(lhs, rhs, ty, signed)?
@@ -4350,6 +4342,59 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         Ok(())
     }
 
+    fn lower_unchecked_div(
+        &mut self,
+        lhs: ValueId,
+        rhs: ValueId,
+        ty: Type,
+        signed: bool,
+    ) -> ValueId {
+        if signed {
+            self.fb
+                .insert_inst(Sdiv::new(self.module.inst_set(), lhs, rhs), ty)
+        } else {
+            self.fb
+                .insert_inst(Udiv::new(self.module.inst_set(), lhs, rhs), ty)
+        }
+    }
+
+    fn lower_unchecked_rem(
+        &mut self,
+        lhs: ValueId,
+        rhs: ValueId,
+        ty: Type,
+        signed: bool,
+    ) -> ValueId {
+        if signed {
+            self.fb
+                .insert_inst(Smod::new(self.module.inst_set(), lhs, rhs), ty)
+        } else {
+            self.fb
+                .insert_inst(Umod::new(self.module.inst_set(), lhs, rhs), ty)
+        }
+    }
+
+    fn emit_signed_div_overflow_revert(
+        &mut self,
+        lhs: ValueId,
+        rhs: ValueId,
+        ty: Type,
+    ) -> Result<(), LowerError> {
+        let min = self.fb.make_imm_value(Immediate::signed_min(ty));
+        let neg_one = self.fb.make_imm_value(Immediate::all_one(ty));
+        let lhs_is_min = self
+            .fb
+            .insert_inst(Eq::new(self.module.inst_set(), lhs, min), Type::I1);
+        let rhs_is_neg_one = self
+            .fb
+            .insert_inst(Eq::new(self.module.inst_set(), rhs, neg_one), Type::I1);
+        let overflow = self.fb.insert_inst(
+            And::new(self.module.inst_set(), lhs_is_min, rhs_is_neg_one),
+            Type::I1,
+        );
+        self.emit_panic_revert(overflow, PANIC_OVERFLOW)
+    }
+
     fn emit_panic_revert(&mut self, overflow_flag: ValueId, code: u64) -> Result<(), LowerError> {
         let revert_block = self.ensure_panic_revert_block(code);
         let continue_block = self.fb.append_block();
@@ -4549,6 +4594,7 @@ fn linkage_for_runtime(linkage: RuntimeLinkage) -> Linkage {
     match linkage {
         RuntimeLinkage::Private => Linkage::Private,
         RuntimeLinkage::Internal => Linkage::Public,
+        RuntimeLinkage::External => Linkage::External,
     }
 }
 

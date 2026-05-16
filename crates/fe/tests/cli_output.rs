@@ -1,6 +1,11 @@
 use dir_test::{Fixture, dir_test};
 use serde_json::Value;
-use std::{fs, io::IsTerminal, path::Path, process::Command};
+use std::{
+    fs,
+    io::{IsTerminal, Write},
+    path::Path,
+    process::{Command, Stdio},
+};
 use tempfile::tempdir;
 use test_utils::{
     normalize::{normalize_newlines, normalize_path_separators, replace_path_token},
@@ -352,6 +357,182 @@ pub fn main() -> i32 {
         .status()
         .expect("run native executable");
     assert_eq!(status.code(), Some(42));
+}
+
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_build_native_executable_supports_signed_div_and_rem() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_div_rem.fe");
+    fs::write(
+        &source,
+        r#"
+pub fn main() -> i32 {
+    let value: i32 = -65
+    let q: i32 = value / -10
+    let r: i32 = value % -10
+    (q * 10) - r
+}
+"#,
+    )
+    .expect("write native source");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let source_str = source.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "--out-dir",
+        out_dir_str.as_str(),
+        source_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 0, "fe native build failed:\n{output}");
+
+    let executable = out_dir.join("native_div_rem");
+    assert!(executable.is_file(), "missing native executable:\n{output}");
+    let status = Command::new(&executable)
+        .status()
+        .expect("run native executable");
+    assert_eq!(status.code(), Some(65));
+}
+
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_build_native_executable_can_use_scalar_host_stdio_imports() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_echo.fe");
+    fs::write(
+        &source,
+        r#"
+extern {
+    fn getchar() -> i32
+    fn putchar(c: i32) -> i32
+}
+
+pub fn main() -> i32 {
+    let mut c: i32 = getchar()
+    while c != -1 {
+        let _ = putchar(c: c)
+        c = getchar()
+    }
+    0
+}
+"#,
+    )
+    .expect("write native source");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let source_str = source.to_string_lossy().to_string();
+
+    let (build_output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "--out-dir",
+        out_dir_str.as_str(),
+        source_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 0, "fe native build failed:\n{build_output}");
+
+    let executable = out_dir.join("native_echo");
+    assert!(
+        executable.is_file(),
+        "missing native executable:\n{build_output}"
+    );
+    let mut child = Command::new(&executable)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("run native executable");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe")
+        .write_all(b"native stdin/stdout\n")
+        .expect("write stdin");
+    let output = child
+        .wait_with_output()
+        .expect("read native executable output");
+
+    assert!(
+        output.status.success(),
+        "native executable failed: {output:?}"
+    );
+    assert_eq!(output.stdout, b"native stdin/stdout\n");
+}
+
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_build_native_executable_can_use_stdio_capabilities() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_cap_io.fe");
+    fs::write(
+        &source,
+        r#"
+use std::io::{Read, Write, host, read_char, write, write_char, writeln}
+
+fn echo_line()
+uses (r: mut Read, w: mut Write)
+{
+    write("echo: ")
+    let mut c: i32 = read_char()
+    while c != -1 && c != 10 {
+        write_char(c)
+        c = read_char()
+    }
+    writeln("!")
+}
+
+pub fn main() -> i32 {
+    with (Read = host(), Write = host()) {
+        echo_line()
+    }
+    0
+}
+"#,
+    )
+    .expect("write native source");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let source_str = source.to_string_lossy().to_string();
+
+    let (build_output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "--out-dir",
+        out_dir_str.as_str(),
+        source_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 0, "fe native build failed:\n{build_output}");
+
+    let executable = out_dir.join("native_cap_io");
+    assert!(
+        executable.is_file(),
+        "missing native executable:\n{build_output}"
+    );
+    let mut child = Command::new(&executable)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("run native executable");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe")
+        .write_all(b"capabilities\n")
+        .expect("write stdin");
+    let output = child
+        .wait_with_output()
+        .expect("read native executable output");
+
+    assert!(
+        output.status.success(),
+        "native executable failed: {output:?}"
+    );
+    assert_eq!(output.stdout, b"echo: capabilities!\n");
 }
 
 #[cfg(feature = "cranelift")]

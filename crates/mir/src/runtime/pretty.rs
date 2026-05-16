@@ -226,6 +226,7 @@ fn write_function_summary<'db>(
     let linkage = match function.linkage(db) {
         RuntimeLinkage::Private => "private",
         RuntimeLinkage::Internal => "internal",
+        RuntimeLinkage::External => "external",
     };
     let _ = writeln!(
         out,
