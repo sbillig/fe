@@ -164,6 +164,7 @@ pub trait Ctx {
     fn caller(self) -> Address
     fn origin(self) -> Address
     fn coinbase(self) -> Address
+    fn balance(self, _: Address) -> u256
     fn value(self) -> u256
     fn timestamp(self) -> u256
     fn block_number(self) -> u256
@@ -431,6 +432,9 @@ impl Ctx for Evm {
     }
     fn coinbase(self) -> Address {
         Address { inner: ops::coinbase() }
+    }
+    fn balance(self, _ addr: Address) -> u256 {
+        ops::balance(addr.inner)
     }
     fn value(self) -> u256 {
         ops::callvalue()

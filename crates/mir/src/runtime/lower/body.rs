@@ -3428,6 +3428,13 @@ impl<'db> RmirEmitter<'db> {
                 let [] = args else { return None };
                 builtin(crate::runtime::RuntimeBuiltin::CoinBase, Some(word.clone()))
             }
+            RuntimeBuiltinFuncKind::Balance => {
+                let [addr] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Balance { addr: *addr },
+                    Some(word.clone()),
+                )
+            }
             RuntimeBuiltinFuncKind::Timestamp => {
                 let [] = args else { return None };
                 builtin(

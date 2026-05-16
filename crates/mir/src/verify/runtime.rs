@@ -592,6 +592,10 @@ fn verify_builtin<'db>(
         | RuntimeBuiltin::BaseFee
         | RuntimeBuiltin::SelfBalance
         | RuntimeBuiltin::Gas => Ok(Some(RuntimeClass::Scalar(word_scalar_class()))),
+        RuntimeBuiltin::Balance { addr } => {
+            verify_word_value(body, *addr)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
         RuntimeBuiltin::Sload { slot } => {
             verify_address_operand(body, *slot, AddressSpaceKind::Storage)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))

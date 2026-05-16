@@ -40,11 +40,11 @@ use sonatina_ir::{
             ObjLoad, ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
         },
         evm::{
-            EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmByte, EvmCall, EvmCallValue,
-            EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy,
-            EvmCodeSize, EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmGas,
-            EvmGasLimit, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
-            EvmMalloc, EvmMcopy, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin,
+            EvmAddMod, EvmAddress, EvmBalance, EvmBaseFee, EvmBlockHash, EvmByte, EvmCall,
+            EvmCallValue, EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId,
+            EvmCodeCopy, EvmCodeSize, EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp,
+            EvmGas, EvmGasLimit, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3,
+            EvmLog4, EvmMalloc, EvmMcopy, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin,
             EvmPrevRandao, EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSdiv,
             EvmSelfBalance, EvmSelfDestruct, EvmSignExtend, EvmSload, EvmSmod, EvmSstore,
             EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore, EvmUdiv, EvmUmod,
@@ -1536,6 +1536,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RuntimeBuiltin::CoinBase => self
                 .fb
                 .insert_inst(EvmCoinBase::new(self.module.inst_set()), Type::I256),
+            RuntimeBuiltin::Balance { addr } => {
+                let addr = self.local_value(*addr)?;
+                self.fb
+                    .insert_inst(EvmBalance::new(self.module.inst_set(), addr), Type::I256)
+            }
             RuntimeBuiltin::Timestamp => self
                 .fb
                 .insert_inst(EvmTimestamp::new(self.module.inst_set()), Type::I256),

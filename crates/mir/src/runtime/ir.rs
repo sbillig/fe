@@ -1159,6 +1159,9 @@ pub enum RuntimeBuiltin<'db> {
     Origin,
     GasPrice,
     CoinBase,
+    Balance {
+        addr: RValueId,
+    },
     Timestamp,
     Number,
     PrevRandao,

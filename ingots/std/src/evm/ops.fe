@@ -46,6 +46,7 @@ extern {
     pub(ingot) fn origin() -> u256
     pub(ingot) fn gasprice() -> u256
     pub(ingot) fn coinbase() -> u256
+    pub(ingot) fn balance(_: u256) -> u256
     pub(ingot) fn timestamp() -> u256
     pub(ingot) fn number() -> u256
     pub(ingot) fn prevrandao() -> u256

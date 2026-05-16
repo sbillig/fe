@@ -733,6 +733,7 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
         RuntimeBuiltin::Origin => "origin".to_string(),
         RuntimeBuiltin::GasPrice => "gasprice".to_string(),
         RuntimeBuiltin::CoinBase => "coinbase".to_string(),
+        RuntimeBuiltin::Balance { addr } => format!("balance {}", format_local_id(*addr)),
         RuntimeBuiltin::Timestamp => "timestamp".to_string(),
         RuntimeBuiltin::Number => "number".to_string(),
         RuntimeBuiltin::PrevRandao => "prevrandao".to_string(),

@@ -141,3 +141,9 @@ fn test_selfbalance() uses (evm: mut Evm) {
     let balance: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PayableMsg::GetBalance {})
     assert(balance == 500)
 }
+
+#[test(balance = 1000000000)]
+fn test_balance() uses (evm: mut Evm) {
+    let addr = evm.create2<PayableBox>(value: 123, args: (), salt: 0)
+    assert(evm.balance(addr) == 123)
+}
