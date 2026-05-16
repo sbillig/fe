@@ -157,7 +157,7 @@ fn diagnostic_func_ref(location: &Location) -> Option<FuncRef> {
     }
 }
 
-fn to_sonatina_opt_level(opt_level: OptLevel) -> SonatinaOptLevel {
+pub(crate) fn to_sonatina_opt_level(opt_level: OptLevel) -> SonatinaOptLevel {
     match opt_level {
         OptLevel::O0 => SonatinaOptLevel::O0,
         OptLevel::O1 => SonatinaOptLevel::O1,
@@ -243,6 +243,42 @@ pub fn compile_runtime_package_sonatina(
     layout: TargetDataLayout,
 ) -> Result<Module, LowerError> {
     lower_runtime::compile_runtime_package_sonatina(db, package, layout)
+}
+
+pub fn compile_library_sonatina_native(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+) -> Result<Module, LowerError> {
+    let package = mir::build_library_package(db, top_mod)?;
+    let isa = create_native_isa();
+    let ctx = ModuleCtx::new(&isa);
+    lower_runtime::compile_runtime_package_sonatina_with_ctx(db, &package, crate::EVM_LAYOUT, ctx)
+}
+
+pub fn compile_runtime_package_sonatina_native(
+    db: &DriverDataBase,
+    package: &RuntimePackage<'_>,
+    layout: TargetDataLayout,
+) -> Result<Module, LowerError> {
+    let isa = create_native_isa();
+    let ctx = ModuleCtx::new(&isa);
+    lower_runtime::compile_runtime_package_sonatina_with_ctx(db, package, layout, ctx)
+}
+
+fn create_native_isa() -> sonatina_ir::isa::native::Native {
+    use sonatina_triple::{Architecture, OperatingSystem, Vendor};
+    let arch = if cfg!(target_arch = "x86_64") {
+        Architecture::X86_64
+    } else if cfg!(target_arch = "aarch64") {
+        Architecture::Aarch64
+    } else {
+        Architecture::X86_64
+    };
+    sonatina_ir::isa::native::Native::new(TargetTriple::new(
+        arch,
+        Vendor::Unknown,
+        OperatingSystem::Native,
+    ))
 }
 
 fn select_runtime_package_contract<'db>(
@@ -503,6 +539,16 @@ pub fn emit_runtime_package_sonatina_ir(
 ) -> Result<String, LowerError> {
     ensure_runtime_package_has_roots(db, package, "Sonatina IR")?;
     let module = compile_runtime_package_sonatina(db, package, layout)?;
+    let mut writer = ModuleWriter::new(&module);
+    Ok(writer.dump_string())
+}
+
+pub fn emit_module_sonatina_ir_native(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+) -> Result<String, LowerError> {
+    let package = build_runtime_package(db, top_mod)?;
+    let module = compile_runtime_package_sonatina_native(db, &package, crate::EVM_LAYOUT)?;
     let mut writer = ModuleWriter::new(&module);
     Ok(writer.dump_string())
 }

@@ -89,6 +89,42 @@ impl From<crate::sonatina::LowerError> for BackendError {
     }
 }
 
+#[cfg(feature = "cranelift")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeBackend;
+
+#[cfg(feature = "cranelift")]
+impl Backend for NativeBackend {
+    fn name(&self) -> &'static str {
+        "native"
+    }
+
+    fn compile(
+        &self,
+        db: &DriverDataBase,
+        top_mod: TopLevelMod<'_>,
+        layout: TargetDataLayout,
+        opt_level: OptLevel,
+    ) -> Result<BackendOutput, BackendError> {
+        let package = mir::build_runtime_package(db, top_mod)?;
+        let module =
+            crate::sonatina::compile_runtime_package_sonatina_native(db, &package, layout)?;
+
+        let clif_backend = sonatina_codegen::isa::cranelift::CraneliftBackend::new();
+        let compile = sonatina_codegen::Compile::new(module, clif_backend)
+            .with_opt_level(crate::sonatina::to_sonatina_opt_level(opt_level));
+        let artifact = compile.compile().map_err(|errs| {
+            let msgs: Vec<_> = errs.iter().map(|e| format!("{e}")).collect();
+            BackendError::Sonatina(msgs.join("; "))
+        })?;
+
+        // For now, return empty bytecode — the artifact is JIT-compiled native code.
+        // The real output mechanism for native targets is TBD (execute directly,
+        // write object file, etc.)
+        Ok(BackendOutput::Bytecode(Vec::new()))
+    }
+}
+
 pub trait Backend {
     fn name(&self) -> &'static str;
 
@@ -105,18 +141,24 @@ pub trait Backend {
 pub enum BackendKind {
     #[default]
     Sonatina,
+    #[cfg(feature = "cranelift")]
+    Native,
 }
 
 impl BackendKind {
     pub fn name(&self) -> &'static str {
         match self {
             BackendKind::Sonatina => "sonatina",
+            #[cfg(feature = "cranelift")]
+            BackendKind::Native => "native",
         }
     }
 
     pub fn create(&self) -> Box<dyn Backend> {
         match self {
             BackendKind::Sonatina => Box::new(SonatinaBackend),
+            #[cfg(feature = "cranelift")]
+            BackendKind::Native => Box::new(NativeBackend),
         }
     }
 }
@@ -127,7 +169,9 @@ impl std::str::FromStr for BackendKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "sonatina" => Ok(BackendKind::Sonatina),
-            _ => Err(format!("unknown backend: {s} (expected 'sonatina')")),
+            #[cfg(feature = "cranelift")]
+            "native" => Ok(BackendKind::Native),
+            _ => Err(format!("unknown backend: {s}")),
         }
     }
 }

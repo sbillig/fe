@@ -452,6 +452,62 @@ fn build_contract_package<'db>(
     Ok(package)
 }
 
+/// Build a library package that exports parameterized functions directly
+/// as section entries without synthetic root wrapping.
+///
+/// Unlike `build_runtime_package` (which requires parameterless roots and wraps
+/// them in a MainRoot synthetic), this exports each pub function as its own
+/// section entry. This is the right mode for non-EVM targets where functions
+/// are called directly (not through a calldata dispatcher).
+pub fn build_library_package<'db>(
+    db: &'db dyn MirDb,
+    top_mod: TopLevelMod<'db>,
+) -> Result<RuntimePackage<'db>, LowerError> {
+    let funcs: Vec<Func<'db>> = top_mod
+        .all_funcs(db)
+        .iter()
+        .copied()
+        .filter(|func| func.top_mod(db) == top_mod)
+        .filter(|func| !func.is_extern(db) && !is_test_func(db, *func))
+        .filter(|func| func.vis(db).is_pub())
+        .collect();
+
+    let mut roots = Vec::new();
+    let mut objects = Vec::new();
+
+    for func in funcs {
+        let name = func
+            .name(db)
+            .to_opt()
+            .map(|name| name.data(db).to_string())
+            .unwrap_or_else(|| "<anonymous>".to_string());
+
+        let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
+        let instance = runtime_instance_for_semantic(db, semantic);
+
+        roots.push(instance);
+        objects.push((
+            sanitize_object_name(&name),
+            vec![(RuntimeSectionName::Main, instance)],
+        ));
+    }
+
+    if objects.is_empty() {
+        return Ok(RuntimePackage::new(
+            db,
+            top_mod,
+            Vec::new(),
+            RuntimePackagePlan::new(db, Vec::new(), Vec::new(), Vec::new(), Vec::new(), None),
+        ));
+    }
+
+    let primary = (objects.len() == 1).then(|| objects[0].0.clone());
+    let package = build_sectioned_package(db, top_mod, roots, objects, primary.as_deref())?;
+    verify_runtime_package(db, package)
+        .map_err(|err| LowerError::Unsupported(format!("invalid library package: {err:?}")))?;
+    Ok(package)
+}
+
 fn manual_contract_objects<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
