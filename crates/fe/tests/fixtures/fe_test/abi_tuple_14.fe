@@ -1,0 +1,82 @@
+use std::evm::{Evm, encode_abi_payload}
+
+msg Tuple14Msg {
+    #[selector = 0x01]
+    Check {
+        flags: (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool),
+    } -> (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool),
+}
+
+pub contract Tuple14Receiver {
+    recv Tuple14Msg {
+        Check { flags } -> (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool) {
+            let (a, b, c, d, e, f, g, h, i, j, k, l, m, n) = flags
+            assert(a)
+            assert(!b)
+            assert(c)
+            assert(!d)
+            assert(e)
+            assert(!f)
+            assert(g)
+            assert(!h)
+            assert(i)
+            assert(!j)
+            assert(k)
+            assert(!l)
+            assert(m)
+            assert(!n)
+            (a, b, c, d, e, f, g, h, i, j, k, l, m, n)
+        }
+    }
+}
+
+#[test]
+fn test_abi_tuple_14_payload_encoding() uses (evm: Evm) {
+    let payload = (true, false, true, false, true, false, true, false, true, false, true, false, true, false)
+    let (ptr, len) = encode_abi_payload(payload)
+
+    assert(len == 448)
+    assert(evm.mload(ptr) == 1)
+    assert(evm.mload(ptr + 32) == 0)
+    assert(evm.mload(ptr + 64) == 1)
+    assert(evm.mload(ptr + 96) == 0)
+    assert(evm.mload(ptr + 128) == 1)
+    assert(evm.mload(ptr + 160) == 0)
+    assert(evm.mload(ptr + 192) == 1)
+    assert(evm.mload(ptr + 224) == 0)
+    assert(evm.mload(ptr + 256) == 1)
+    assert(evm.mload(ptr + 288) == 0)
+    assert(evm.mload(ptr + 320) == 1)
+    assert(evm.mload(ptr + 352) == 0)
+    assert(evm.mload(ptr + 384) == 1)
+    assert(evm.mload(ptr + 416) == 0)
+}
+
+#[test]
+fn test_msg_tuple_14_decode_and_encode() uses (evm: mut Evm) {
+    let receiver = evm.create2<Tuple14Receiver>(value: 0, args: (), salt: 0)
+    let result: (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool) = evm.call(
+        addr: receiver,
+        gas: 1000000,
+        value: 0,
+        message: Tuple14Msg::Check {
+            flags: (true, false, true, false, true, false, true, false, true, false, true, false, true, false),
+        },
+    )
+
+    let (a, b, c, d, e, f, g, h, i, j, k, l, m, n) = result
+    assert(a)
+    assert(!b)
+    assert(c)
+    assert(!d)
+    assert(e)
+    assert(!f)
+    assert(g)
+    assert(!h)
+    assert(i)
+    assert(!j)
+    assert(k)
+    assert(!l)
+    assert(m)
+    assert(!n)
+}
