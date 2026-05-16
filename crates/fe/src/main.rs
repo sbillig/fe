@@ -275,6 +275,21 @@ pub enum Command {
         #[arg(long, default_value = "false")]
         recovery_mode: bool,
     },
+    /// Run gas benchmarks comparing Fe (Sonatina) against Solidity.
+    Bench {
+        /// Path to benchmark fixtures directory.
+        #[arg(value_name = "PATH", default_value = "bench_fixtures")]
+        path: Utf8PathBuf,
+        /// Filter benchmarks by name.
+        #[arg(short, long)]
+        filter: Option<String>,
+        /// solc binary to use (overrides FE_SOLC_PATH).
+        #[arg(long)]
+        solc: Option<String>,
+        /// Output directory for CSV reports.
+        #[arg(long, short)]
+        output: Option<Utf8PathBuf>,
+    },
     /// Create a new ingot or workspace.
     New {
         /// Path to create the ingot or workspace in.
@@ -586,6 +601,23 @@ pub fn run(opts: &Options) {
                 }
             }
         }
+        Command::Bench {
+            path,
+            filter,
+            solc,
+            output,
+        } => match fe::bench::run_benchmarks(
+            path.as_path(),
+            filter.as_deref(),
+            solc.as_deref(),
+            output.as_ref().map(|p| p.as_path()),
+        ) {
+            Ok(()) => {}
+            Err(err) => {
+                eprintln!("Error: {err}");
+                std::process::exit(1);
+            }
+        },
         Command::New {
             path,
             workspace,
