@@ -701,6 +701,11 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
             format_local_id(*rhs),
             format_local_id(*modulus)
         ),
+        RuntimeBuiltin::Byte { pos, value } => format!(
+            "byte {}, {}",
+            format_local_id(*pos),
+            format_local_id(*value)
+        ),
         RuntimeBuiltin::SignExtend { byte, value } => format!(
             "signextend {}, {}",
             format_local_id(*byte),

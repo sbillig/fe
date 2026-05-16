@@ -3381,6 +3381,16 @@ impl<'db> RmirEmitter<'db> {
                     Some(word.clone()),
                 )
             }
+            RuntimeBuiltinFuncKind::Byte => {
+                let [pos, value] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Byte {
+                        pos: *pos,
+                        value: *value,
+                    },
+                    Some(word.clone()),
+                )
+            }
             RuntimeBuiltinFuncKind::SignExtend => {
                 let [byte, value] = args else { return None };
                 builtin(

@@ -1133,6 +1133,10 @@ pub enum RuntimeBuiltin<'db> {
         rhs: RValueId,
         modulus: RValueId,
     },
+    Byte {
+        pos: RValueId,
+        value: RValueId,
+    },
     SignExtend {
         byte: RValueId,
         value: RValueId,

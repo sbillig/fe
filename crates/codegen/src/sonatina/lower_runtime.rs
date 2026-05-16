@@ -40,7 +40,7 @@ use sonatina_ir::{
             ObjLoad, ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
         },
         evm::{
-            EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue,
+            EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmByte, EvmCall, EvmCallValue,
             EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy,
             EvmCodeSize, EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmGas,
             EvmGasLimit, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
@@ -1477,6 +1477,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     EvmMulMod::new(self.module.inst_set(), lhs, rhs, modulus),
                     Type::I256,
                 )
+            }
+            RuntimeBuiltin::Byte { pos, value } => {
+                let pos = self.local_value(*pos)?;
+                let value = self.local_value(*value)?;
+                self.fb
+                    .insert_inst(EvmByte::new(self.module.inst_set(), pos, value), Type::I256)
             }
             RuntimeBuiltin::SignExtend { byte, value } => {
                 let byte = self.local_value(*byte)?;

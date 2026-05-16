@@ -625,6 +625,11 @@ fn verify_builtin<'db>(
             verify_word_value(body, *modulus)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
+        RuntimeBuiltin::Byte { pos, value } => {
+            verify_word_value(body, *pos)?;
+            verify_word_value(body, *value)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
         RuntimeBuiltin::SignExtend { byte, value } => {
             verify_word_value(body, *byte)?;
             verify_word_value(body, *value)?;

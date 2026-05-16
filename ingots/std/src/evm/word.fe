@@ -1,5 +1,14 @@
 use core::num::*
 use super::effects::Address
+use super::ops
+
+/// Returns byte `pos` of `value`, using EVM word byte indexing.
+///
+/// Position `0` selects the most significant byte and position `31` selects
+/// the least significant byte, matching the EVM `BYTE` opcode.
+pub fn byte(_ pos: u256, _ value: u256) -> u256 {
+    ops::byte(pos, value)
+}
 
 /// A value that can round-trip through an EVM word (`u256`).
 ///
