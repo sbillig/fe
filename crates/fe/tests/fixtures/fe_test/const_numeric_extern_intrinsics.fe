@@ -96,4 +96,13 @@ fn const_numeric_extern_intrinsics() {
     assert(BOOL_XOR)
     assert(BOOL_EQ)
     assert(BOOL_NE)
+
+    let true_word: u256 = true as u256
+    let false_word: u256 = false as u256
+    let true_i32: i32 = true as i32
+    let false_u8: u8 = false as u8
+    assert(true_word == 1)
+    assert(false_word == 0)
+    assert(true_i32 == 1)
+    assert(false_u8 == 0)
 }

@@ -20,14 +20,6 @@ error[8-0055]: cast is not provably lossless
   = try using `.downcast()` for checked narrowing/sign changes, or `.downcast_truncate()` / `.downcast_saturate()` / `.downcast_unchecked()`
 
 error[8-0055]: cast is not provably lossless
-   ┌─ cast_invalid.fe:10:5
-   │
-10 │     x as u8
-   │     ^^^^^^^ cannot cast `bool` to `u8` with `as`
-   │
-   = casts involving `bool` are not supported
-
-error[8-0055]: cast is not provably lossless
    ┌─ cast_invalid.fe:14:5
    │
 14 │     256 as u8

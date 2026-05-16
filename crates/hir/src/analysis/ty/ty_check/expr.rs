@@ -588,11 +588,6 @@ impl<'db> TyChecker<'db> {
             return true;
         }
 
-        // Disallow casts involving `bool` unless they are identity (handled above).
-        if from.is_bool(self.db) || to.is_bool(self.db) {
-            return false;
-        }
-
         let from_leaf = self.peel_transparent_newtypes(from);
         let to_leaf = self.peel_transparent_newtypes(to);
 
@@ -600,8 +595,11 @@ impl<'db> TyChecker<'db> {
             return true;
         }
 
-        // Disallow casts involving `bool` through wrappers.
-        if from_leaf.is_bool(self.db) || to_leaf.is_bool(self.db) {
+        if from_leaf.is_bool(self.db) {
+            return self.prim_int_signed_bits(to_leaf).is_some();
+        }
+
+        if to_leaf.is_bool(self.db) {
             return false;
         }
 
