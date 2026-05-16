@@ -530,6 +530,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
                     return self.lower_call_like_expr(expr, ty, Some(*lhs), &[*rhs]);
                 }
+                if matches!(op, BinOp::Logical(_)) {
+                    return self.lower_logical_expr(expr);
+                }
                 let lhs = self.lower_expr_operand(*lhs);
                 let rhs = self.lower_expr_operand(*rhs);
                 self.emit_expr_with_origin(origin, ty, SExpr::Binary { op: *op, lhs, rhs })
@@ -1275,6 +1278,93 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
         self.switch_to(join_bb);
         result
+    }
+
+    fn lower_logical_expr(&mut self, expr: ExprId) -> SValueId {
+        // This deliberately lowers expression-context `&&` and `||` through a
+        // simple true/false/join CFG, matching condition lowering and keeping
+        // RHS evaluation lazy. The pre-opt Sonatina IR has extra constant
+        // assignment blocks, but normal Sonatina optimization collapses this
+        // shape and can use the LHS branch fact to simplify checked RHS
+        // arithmetic. A cleaner Fe-side lowering could instead thread the
+        // destination temp through recursive logical lowering and assign
+        // directly on each short-circuit edge, e.g. `a || b` writes `true` from
+        // the LHS-true edge and only lowers/assigns `b` on the LHS-false edge.
+        let result = self.alloc_temp(TyId::bool(self.db));
+        let true_bb = self.new_block();
+        let false_bb = self.new_block();
+        let join_bb = self.new_block();
+        let mut join_reachable = false;
+
+        self.lower_expr_branch(expr, true_bb, false_bb);
+
+        self.switch_to(true_bb);
+        if !self.is_terminated(self.current) {
+            join_reachable = true;
+            let value = self.emit_expr_with_origin(
+                SemOrigin::Expr(expr),
+                TyId::bool(self.db),
+                SExpr::Const(SConst::Value(bool_const(self.db, true))),
+            );
+            self.push_synthetic_stmt(SStmtKind::Assign {
+                dst: result,
+                expr: SExpr::Forward(SOperand::synthetic(value)),
+            });
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
+        }
+
+        self.switch_to(false_bb);
+        if !self.is_terminated(self.current) {
+            join_reachable = true;
+            let value = self.emit_expr_with_origin(
+                SemOrigin::Expr(expr),
+                TyId::bool(self.db),
+                SExpr::Const(SConst::Value(bool_const(self.db, false))),
+            );
+            self.push_synthetic_stmt(SStmtKind::Assign {
+                dst: result,
+                expr: SExpr::Forward(SOperand::synthetic(value)),
+            });
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
+        }
+
+        if !join_reachable {
+            self.set_synthetic_terminator(join_bb, STerminatorKind::Goto(join_bb));
+        }
+        self.switch_to(join_bb);
+        result
+    }
+
+    fn lower_expr_branch(&mut self, expr: ExprId, then_bb: SBlockId, else_bb: SBlockId) {
+        let Partial::Present(expr_data) = expr.data(self.db, self.body) else {
+            panic!("cannot lower absent condition expression")
+        };
+
+        match expr_data {
+            Expr::Bin(lhs, rhs, BinOp::Logical(LogicalBinOp::And)) => {
+                let rhs_bb = self.new_block();
+                self.lower_expr_branch(*lhs, rhs_bb, else_bb);
+                self.switch_to(rhs_bb);
+                self.lower_expr_branch(*rhs, then_bb, else_bb);
+            }
+            Expr::Bin(lhs, rhs, BinOp::Logical(LogicalBinOp::Or)) => {
+                let rhs_bb = self.new_block();
+                self.lower_expr_branch(*lhs, then_bb, rhs_bb);
+                self.switch_to(rhs_bb);
+                self.lower_expr_branch(*rhs, then_bb, else_bb);
+            }
+            _ => {
+                let cond = self.lower_expr(expr);
+                self.set_synthetic_terminator(
+                    self.current,
+                    STerminatorKind::Branch {
+                        cond: SOperand::expr(cond, expr),
+                        then_bb,
+                        else_bb,
+                    },
+                );
+            }
+        }
     }
 
     fn lower_match_expr(

@@ -1,0 +1,15 @@
+#[test]
+fn logical_or_expression_skips_rhs_overflow() {
+    let value: u8 = 255
+    let result = value == 255 || value + 1 > 0
+
+    assert(result)
+}
+
+#[test]
+fn logical_and_expression_skips_rhs_overflow() {
+    let value: u8 = 255
+    let result = value != 255 && value + 1 > 0
+
+    assert(!result)
+}

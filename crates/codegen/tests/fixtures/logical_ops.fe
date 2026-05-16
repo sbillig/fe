@@ -1,3 +1,11 @@
-pub fn logical_ops() -> bool {
-    true && false
+fn logical_or(_ value: u8) -> bool {
+    value == 255 || value + 1 > 0
+}
+
+fn logical_and(_ value: u8) -> bool {
+    value != 255 && value + 1 > 0
+}
+
+pub fn logical_ops() -> (bool, bool) {
+    (logical_or(255), logical_and(255))
 }
