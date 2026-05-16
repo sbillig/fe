@@ -163,18 +163,9 @@ func private %contract_recv_abi_NewtypeByPlaceEffectArg_1() {
         call %decode_runtime_args v5;
         v8.i256 = call %__NewtypeByPlaceEffectArg_recv_0_0 1.i256 0.i256;
         v9.@layout_6 = call %encode_single_root_alloc v8;
-        v10.objref<@layout_6> = obj.alloc @layout_6;
-        v11.objref<i256> = obj.proj v10 0.i256;
-        v12.i256 = extract_value v9 0.i256;
-        obj.store v11 v12;
-        v13.objref<i256> = obj.proj v10 1.i256;
-        v14.i256 = extract_value v9 1.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v10 0.i256;
-        v16.i256 = obj.load v15;
-        v17.objref<i256> = obj.proj v10 1.i256;
-        v18.i256 = obj.load v17;
-        evm_return v16 v18;
+        v10.i256 = extract_value v9 0.i256;
+        v11.i256 = extract_value v9 1.i256;
+        evm_return v10 v11;
 }
 
 func private %contract_runtime_root_NewtypeByPlaceEffectArg() {

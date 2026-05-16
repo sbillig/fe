@@ -193,18 +193,9 @@ func private %contract_init_abi_EchoContract() {
         v39.i256 = extract_value v27 1.i256;
         obj.store v38 v39;
         v40.@layout_8 = call %decode_payload__g4770 v1;
-        v41.objref<@layout_8> = obj.alloc @layout_8;
-        v42.objref<i256> = obj.proj v41 0.i256;
-        v43.i256 = extract_value v40 0.i256;
-        obj.store v42 v43;
-        v44.objref<i256> = obj.proj v41 1.i256;
-        v45.i256 = extract_value v40 1.i256;
-        obj.store v44 v45;
-        v46.objref<i256> = obj.proj v41 0.i256;
-        v47.i256 = obj.load v46;
-        v48.objref<i256> = obj.proj v41 1.i256;
-        v49.i256 = obj.load v48;
-        call %__EchoContract_init v47 v49 0.i256;
+        v41.i256 = extract_value v40 0.i256;
+        v42.i256 = extract_value v40 1.i256;
+        call %__EchoContract_init v41 v42 0.i256;
         return;
 }
 
@@ -238,18 +229,9 @@ func private %contract_recv_abi_EchoContract_1() {
         call %decode_runtime_args__g235a v5;
         v7.i256 = call %__EchoContract_recv_0_0;
         v8.@layout_8 = call %encode_single_root_alloc v7;
-        v9.objref<@layout_8> = obj.alloc @layout_8;
-        v10.objref<i256> = obj.proj v9 0.i256;
-        v11.i256 = extract_value v8 0.i256;
-        obj.store v10 v11;
-        v13.objref<i256> = obj.proj v9 1.i256;
-        v14.i256 = extract_value v8 1.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v9 0.i256;
-        v16.i256 = obj.load v15;
-        v17.objref<i256> = obj.proj v9 1.i256;
-        v18.i256 = obj.load v17;
-        evm_return v16 v18;
+        v9.i256 = extract_value v8 0.i256;
+        v11.i256 = extract_value v8 1.i256;
+        evm_return v9 v11;
 }
 
 func private %contract_recv_abi_EchoContract_2() {
@@ -268,26 +250,12 @@ func private %contract_recv_abi_EchoContract_2() {
     block3:
         v5.objref<@layout_10> = obj.alloc @layout_10;
         v6.@layout_7 = call %decode_runtime_args__g9e33 v5;
-        v7.objref<@layout_7> = obj.alloc @layout_7;
-        v8.objref<i256> = obj.proj v7 0.i256;
-        v9.i256 = extract_value v6 0.i256;
-        obj.store v8 v9;
-        v10.objref<i256> = obj.proj v7 0.i256;
-        v11.i256 = obj.load v10;
-        v12.i256 = call %__EchoContract_recv_0_1 v11;
-        v13.@layout_8 = call %encode_single_root_alloc v12;
-        v14.objref<@layout_8> = obj.alloc @layout_8;
-        v15.objref<i256> = obj.proj v14 0.i256;
-        v16.i256 = extract_value v13 0.i256;
-        obj.store v15 v16;
-        v18.objref<i256> = obj.proj v14 1.i256;
-        v19.i256 = extract_value v13 1.i256;
-        obj.store v18 v19;
-        v20.objref<i256> = obj.proj v14 0.i256;
-        v21.i256 = obj.load v20;
-        v22.objref<i256> = obj.proj v14 1.i256;
-        v23.i256 = obj.load v22;
-        evm_return v21 v23;
+        v7.i256 = extract_value v6 0.i256;
+        v8.i256 = call %__EchoContract_recv_0_1 v7;
+        v9.@layout_8 = call %encode_single_root_alloc v8;
+        v10.i256 = extract_value v9 0.i256;
+        v12.i256 = extract_value v9 1.i256;
+        evm_return v10 v12;
 }
 
 func private %contract_recv_abi_EchoContract_3() {
@@ -308,18 +276,9 @@ func private %contract_recv_abi_EchoContract_3() {
         call %decode_runtime_args__gf173 v5;
         v7.i256 = call %__EchoContract_recv_0_2 0.i256;
         v8.@layout_8 = call %encode_single_root_alloc v7;
-        v9.objref<@layout_8> = obj.alloc @layout_8;
-        v10.objref<i256> = obj.proj v9 0.i256;
-        v11.i256 = extract_value v8 0.i256;
-        obj.store v10 v11;
-        v13.objref<i256> = obj.proj v9 1.i256;
-        v14.i256 = extract_value v8 1.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v9 0.i256;
-        v16.i256 = obj.load v15;
-        v17.objref<i256> = obj.proj v9 1.i256;
-        v18.i256 = obj.load v17;
-        evm_return v16 v18;
+        v9.i256 = extract_value v8 0.i256;
+        v11.i256 = extract_value v8 1.i256;
+        evm_return v9 v11;
 }
 
 func private %contract_runtime_root_EchoContract() {

@@ -1321,22 +1321,11 @@ func private %contract_init_abi_CoolCoin() {
         v39.i256 = extract_value v27 1.i256;
         obj.store v38 v39;
         v40.@layout_18 = call %decode_payload__gf566 v1;
-        v41.objref<@layout_18> = obj.alloc @layout_18;
-        v42.objref<i256> = obj.proj v41 0.i256;
-        v43.i256 = extract_value v40 0.i256;
-        obj.store v42 v43;
-        v44.objref<@layout_0> = obj.proj v41 1.i256;
-        v45.@layout_0 = extract_value v40 1.i256;
-        v46.objref<i256> = obj.proj v44 0.i256;
-        v47.i256 = extract_value v45 0.i256;
-        obj.store v46 v47;
-        v48.objref<i256> = obj.proj v41 0.i256;
-        v49.i256 = obj.load v48;
-        v50.objref<@layout_0> = obj.proj v41 1.i256;
-        v51.@layout_0 = obj.load v50;
-        v53.objref<@layout_2> = obj.alloc @layout_2;
-        v54.objref<@layout_2> = obj.alloc @layout_2;
-        call %__CoolCoin_init v49 v51 0.i256 3.i256 v53 v54;
+        v41.i256 = extract_value v40 0.i256;
+        v42.@layout_0 = extract_value v40 1.i256;
+        v44.objref<@layout_2> = obj.alloc @layout_2;
+        v45.objref<@layout_2> = obj.alloc @layout_2;
+        call %__CoolCoin_init v41 v42 0.i256 3.i256 v44 v45;
         return;
 }
 
@@ -1368,35 +1357,15 @@ func private %contract_recv_abi_CoolCoin_1086394137() {
     block3:
         v5.objref<@layout_2> = obj.alloc @layout_2;
         v6.@layout_21 = call %decode_runtime_args__g2273 v5;
-        v7.objref<@layout_21> = obj.alloc @layout_21;
-        v8.objref<@layout_0> = obj.proj v7 0.i256;
-        v9.@layout_0 = extract_value v6 0.i256;
-        v10.objref<i256> = obj.proj v8 0.i256;
-        v11.i256 = extract_value v9 0.i256;
-        obj.store v10 v11;
-        v13.objref<i256> = obj.proj v7 1.i256;
-        v14.i256 = extract_value v6 1.i256;
-        obj.store v13 v14;
-        v15.objref<@layout_0> = obj.proj v7 0.i256;
-        v16.@layout_0 = obj.load v15;
-        v17.objref<i256> = obj.proj v7 1.i256;
-        v18.i256 = obj.load v17;
-        v19.objref<@layout_2> = obj.alloc @layout_2;
-        v20.objref<@layout_2> = obj.alloc @layout_2;
-        v22.i1 = call %__CoolCoin_recv_1_0 v16 v18 v19 0.i256 v20 3.i256;
-        v23.@layout_24 = call %encode_single_root_alloc__g09ca v22;
-        v24.objref<@layout_24> = obj.alloc @layout_24;
-        v25.objref<i256> = obj.proj v24 0.i256;
-        v26.i256 = extract_value v23 0.i256;
-        obj.store v25 v26;
-        v27.objref<i256> = obj.proj v24 1.i256;
-        v28.i256 = extract_value v23 1.i256;
-        obj.store v27 v28;
-        v29.objref<i256> = obj.proj v24 0.i256;
-        v30.i256 = obj.load v29;
-        v31.objref<i256> = obj.proj v24 1.i256;
-        v32.i256 = obj.load v31;
-        evm_return v30 v32;
+        v7.@layout_0 = extract_value v6 0.i256;
+        v9.i256 = extract_value v6 1.i256;
+        v10.objref<@layout_2> = obj.alloc @layout_2;
+        v11.objref<@layout_2> = obj.alloc @layout_2;
+        v13.i1 = call %__CoolCoin_recv_1_0 v7 v9 v10 0.i256 v11 3.i256;
+        v14.@layout_24 = call %encode_single_root_alloc__g09ca v13;
+        v15.i256 = extract_value v14 0.i256;
+        v16.i256 = extract_value v14 1.i256;
+        evm_return v15 v16;
 }
 
 func private %contract_recv_abi_CoolCoin_1117154408() {
@@ -1415,28 +1384,14 @@ func private %contract_recv_abi_CoolCoin_1117154408() {
     block3:
         v5.objref<@layout_2> = obj.alloc @layout_2;
         v6.@layout_13 = call %decode_runtime_args__gf629 v5;
-        v7.objref<@layout_13> = obj.alloc @layout_13;
-        v8.objref<i256> = obj.proj v7 0.i256;
-        v9.i256 = extract_value v6 0.i256;
-        obj.store v8 v9;
-        v10.objref<i256> = obj.proj v7 0.i256;
-        v11.i256 = obj.load v10;
-        v12.objref<@layout_2> = obj.alloc @layout_2;
-        v13.objref<@layout_2> = obj.alloc @layout_2;
-        v14.i1 = call %__CoolCoin_recv_1_1 v11 v12 0.i256 v13;
-        v15.@layout_24 = call %encode_single_root_alloc__g09ca v14;
-        v16.objref<@layout_24> = obj.alloc @layout_24;
-        v17.objref<i256> = obj.proj v16 0.i256;
-        v18.i256 = extract_value v15 0.i256;
-        obj.store v17 v18;
-        v20.objref<i256> = obj.proj v16 1.i256;
-        v21.i256 = extract_value v15 1.i256;
-        obj.store v20 v21;
-        v22.objref<i256> = obj.proj v16 0.i256;
-        v23.i256 = obj.load v22;
-        v24.objref<i256> = obj.proj v16 1.i256;
-        v25.i256 = obj.load v24;
-        evm_return v23 v25;
+        v7.i256 = extract_value v6 0.i256;
+        v8.objref<@layout_2> = obj.alloc @layout_2;
+        v9.objref<@layout_2> = obj.alloc @layout_2;
+        v10.i1 = call %__CoolCoin_recv_1_1 v7 v8 0.i256 v9;
+        v11.@layout_24 = call %encode_single_root_alloc__g09ca v10;
+        v12.i256 = extract_value v11 0.i256;
+        v14.i256 = extract_value v11 1.i256;
+        evm_return v12 v14;
 }
 
 func private %contract_recv_abi_CoolCoin_117300739() {
@@ -1457,18 +1412,9 @@ func private %contract_recv_abi_CoolCoin_117300739() {
         call %decode_runtime_args__gce2e v5;
         v7.i256 = call %__CoolCoin_recv_0_6;
         v8.@layout_24 = call %encode_single_root_alloc__g472d v7;
-        v9.objref<@layout_24> = obj.alloc @layout_24;
-        v10.objref<i256> = obj.proj v9 0.i256;
-        v11.i256 = extract_value v8 0.i256;
-        obj.store v10 v11;
-        v13.objref<i256> = obj.proj v9 1.i256;
-        v14.i256 = extract_value v8 1.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v9 0.i256;
-        v16.i256 = obj.load v15;
-        v17.objref<i256> = obj.proj v9 1.i256;
-        v18.i256 = obj.load v17;
-        evm_return v16 v18;
+        v9.i256 = extract_value v8 0.i256;
+        v11.i256 = extract_value v8 1.i256;
+        evm_return v9 v11;
 }
 
 func private %contract_recv_abi_CoolCoin_157198259() {
@@ -1487,35 +1433,15 @@ func private %contract_recv_abi_CoolCoin_157198259() {
     block3:
         v5.objref<@layout_2> = obj.alloc @layout_2;
         v6.@layout_14 = call %decode_runtime_args__g7a2c v5;
-        v7.objref<@layout_14> = obj.alloc @layout_14;
-        v8.objref<@layout_0> = obj.proj v7 0.i256;
-        v9.@layout_0 = extract_value v6 0.i256;
-        v10.objref<i256> = obj.proj v8 0.i256;
-        v11.i256 = extract_value v9 0.i256;
-        obj.store v10 v11;
-        v13.objref<i256> = obj.proj v7 1.i256;
-        v14.i256 = extract_value v6 1.i256;
-        obj.store v13 v14;
-        v15.objref<@layout_0> = obj.proj v7 0.i256;
-        v16.@layout_0 = obj.load v15;
-        v17.objref<i256> = obj.proj v7 1.i256;
-        v18.i256 = obj.load v17;
-        v19.objref<@layout_2> = obj.alloc @layout_2;
-        v20.objref<@layout_2> = obj.alloc @layout_2;
-        v21.i1 = call %__CoolCoin_recv_0_1 v16 v18 v19 0.i256 v20;
-        v22.@layout_24 = call %encode_single_root_alloc__g09ca v21;
-        v23.objref<@layout_24> = obj.alloc @layout_24;
-        v24.objref<i256> = obj.proj v23 0.i256;
-        v25.i256 = extract_value v22 0.i256;
-        obj.store v24 v25;
-        v26.objref<i256> = obj.proj v23 1.i256;
-        v27.i256 = extract_value v22 1.i256;
-        obj.store v26 v27;
-        v28.objref<i256> = obj.proj v23 0.i256;
-        v29.i256 = obj.load v28;
-        v30.objref<i256> = obj.proj v23 1.i256;
-        v31.i256 = obj.load v30;
-        evm_return v29 v31;
+        v7.@layout_0 = extract_value v6 0.i256;
+        v9.i256 = extract_value v6 1.i256;
+        v10.objref<@layout_2> = obj.alloc @layout_2;
+        v11.objref<@layout_2> = obj.alloc @layout_2;
+        v12.i1 = call %__CoolCoin_recv_0_1 v7 v9 v10 0.i256 v11;
+        v13.@layout_24 = call %encode_single_root_alloc__g09ca v12;
+        v14.i256 = extract_value v13 0.i256;
+        v15.i256 = extract_value v13 1.i256;
+        evm_return v14 v15;
 }
 
 func private %contract_recv_abi_CoolCoin_1889567281() {
@@ -1534,28 +1460,12 @@ func private %contract_recv_abi_CoolCoin_1889567281() {
     block3:
         v5.objref<@layout_2> = obj.alloc @layout_2;
         v6.@layout_12 = call %decode_runtime_args__g953d v5;
-        v7.objref<@layout_12> = obj.alloc @layout_12;
-        v8.objref<@layout_0> = obj.proj v7 0.i256;
-        v9.@layout_0 = extract_value v6 0.i256;
-        v10.objref<i256> = obj.proj v8 0.i256;
-        v11.i256 = extract_value v9 0.i256;
-        obj.store v10 v11;
-        v12.objref<@layout_0> = obj.proj v7 0.i256;
-        v13.@layout_0 = obj.load v12;
-        v14.i256 = call %__CoolCoin_recv_0_3 v13 0.i256;
-        v15.@layout_24 = call %encode_single_root_alloc__gac80 v14;
-        v16.objref<@layout_24> = obj.alloc @layout_24;
-        v17.objref<i256> = obj.proj v16 0.i256;
-        v18.i256 = extract_value v15 0.i256;
-        obj.store v17 v18;
-        v20.objref<i256> = obj.proj v16 1.i256;
-        v21.i256 = extract_value v15 1.i256;
-        obj.store v20 v21;
-        v22.objref<i256> = obj.proj v16 0.i256;
-        v23.i256 = obj.load v22;
-        v24.objref<i256> = obj.proj v16 1.i256;
-        v25.i256 = obj.load v24;
-        evm_return v23 v25;
+        v7.@layout_0 = extract_value v6 0.i256;
+        v8.i256 = call %__CoolCoin_recv_0_3 v7 0.i256;
+        v9.@layout_24 = call %encode_single_root_alloc__gac80 v8;
+        v10.i256 = extract_value v9 0.i256;
+        v12.i256 = extract_value v9 1.i256;
+        evm_return v10 v12;
 }
 
 func private %contract_recv_abi_CoolCoin_2043438992() {
@@ -1574,35 +1484,15 @@ func private %contract_recv_abi_CoolCoin_2043438992() {
     block3:
         v5.objref<@layout_2> = obj.alloc @layout_2;
         v6.@layout_17 = call %decode_runtime_args__g216b v5;
-        v7.objref<@layout_17> = obj.alloc @layout_17;
-        v8.objref<@layout_0> = obj.proj v7 0.i256;
-        v9.@layout_0 = extract_value v6 0.i256;
-        v10.objref<i256> = obj.proj v8 0.i256;
-        v11.i256 = extract_value v9 0.i256;
-        obj.store v10 v11;
-        v13.objref<i256> = obj.proj v7 1.i256;
-        v14.i256 = extract_value v6 1.i256;
-        obj.store v13 v14;
-        v15.objref<@layout_0> = obj.proj v7 0.i256;
-        v16.@layout_0 = obj.load v15;
-        v17.objref<i256> = obj.proj v7 1.i256;
-        v18.i256 = obj.load v17;
-        v19.objref<@layout_2> = obj.alloc @layout_2;
-        v20.objref<@layout_2> = obj.alloc @layout_2;
-        v21.i1 = call %__CoolCoin_recv_1_2 v16 v18 v19 0.i256 v20;
-        v22.@layout_24 = call %encode_single_root_alloc__g09ca v21;
-        v23.objref<@layout_24> = obj.alloc @layout_24;
-        v24.objref<i256> = obj.proj v23 0.i256;
-        v25.i256 = extract_value v22 0.i256;
-        obj.store v24 v25;
-        v26.objref<i256> = obj.proj v23 1.i256;
-        v27.i256 = extract_value v22 1.i256;
-        obj.store v26 v27;
-        v28.objref<i256> = obj.proj v23 0.i256;
-        v29.i256 = obj.load v28;
-        v30.objref<i256> = obj.proj v23 1.i256;
-        v31.i256 = obj.load v30;
-        evm_return v29 v31;
+        v7.@layout_0 = extract_value v6 0.i256;
+        v9.i256 = extract_value v6 1.i256;
+        v10.objref<@layout_2> = obj.alloc @layout_2;
+        v11.objref<@layout_2> = obj.alloc @layout_2;
+        v12.i1 = call %__CoolCoin_recv_1_2 v7 v9 v10 0.i256 v11;
+        v13.@layout_24 = call %encode_single_root_alloc__g09ca v12;
+        v14.i256 = extract_value v13 0.i256;
+        v15.i256 = extract_value v13 1.i256;
+        evm_return v14 v15;
 }
 
 func private %contract_recv_abi_CoolCoin_2514000705() {
@@ -1623,18 +1513,9 @@ func private %contract_recv_abi_CoolCoin_2514000705() {
         call %decode_runtime_args__g295c v5;
         v7.i256 = call %__CoolCoin_recv_0_7;
         v8.@layout_24 = call %encode_single_root_alloc__g0c18 v7;
-        v9.objref<@layout_24> = obj.alloc @layout_24;
-        v10.objref<i256> = obj.proj v9 0.i256;
-        v11.i256 = extract_value v8 0.i256;
-        obj.store v10 v11;
-        v13.objref<i256> = obj.proj v9 1.i256;
-        v14.i256 = extract_value v8 1.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v9 0.i256;
-        v16.i256 = obj.load v15;
-        v17.objref<i256> = obj.proj v9 1.i256;
-        v18.i256 = obj.load v17;
-        evm_return v16 v18;
+        v9.i256 = extract_value v8 0.i256;
+        v11.i256 = extract_value v8 1.i256;
+        evm_return v9 v11;
 }
 
 func private %contract_recv_abi_CoolCoin_2757214935() {
@@ -1653,35 +1534,15 @@ func private %contract_recv_abi_CoolCoin_2757214935() {
     block3:
         v5.objref<@layout_2> = obj.alloc @layout_2;
         v6.@layout_11 = call %decode_runtime_args__g6a7c v5;
-        v7.objref<@layout_11> = obj.alloc @layout_11;
-        v8.objref<@layout_0> = obj.proj v7 0.i256;
-        v9.@layout_0 = extract_value v6 0.i256;
-        v10.objref<i256> = obj.proj v8 0.i256;
-        v11.i256 = extract_value v9 0.i256;
-        obj.store v10 v11;
-        v13.objref<i256> = obj.proj v7 1.i256;
-        v14.i256 = extract_value v6 1.i256;
-        obj.store v13 v14;
-        v15.objref<@layout_0> = obj.proj v7 0.i256;
-        v16.@layout_0 = obj.load v15;
-        v17.objref<i256> = obj.proj v7 1.i256;
-        v18.i256 = obj.load v17;
-        v19.objref<@layout_2> = obj.alloc @layout_2;
-        v20.objref<@layout_2> = obj.alloc @layout_2;
-        v21.i1 = call %__CoolCoin_recv_1_4 v16 v18 v19 0.i256 v20;
-        v22.@layout_24 = call %encode_single_root_alloc__g09ca v21;
-        v23.objref<@layout_24> = obj.alloc @layout_24;
-        v24.objref<i256> = obj.proj v23 0.i256;
-        v25.i256 = extract_value v22 0.i256;
-        obj.store v24 v25;
-        v26.objref<i256> = obj.proj v23 1.i256;
-        v27.i256 = extract_value v22 1.i256;
-        obj.store v26 v27;
-        v28.objref<i256> = obj.proj v23 0.i256;
-        v29.i256 = obj.load v28;
-        v30.objref<i256> = obj.proj v23 1.i256;
-        v31.i256 = obj.load v30;
-        evm_return v29 v31;
+        v7.@layout_0 = extract_value v6 0.i256;
+        v9.i256 = extract_value v6 1.i256;
+        v10.objref<@layout_2> = obj.alloc @layout_2;
+        v11.objref<@layout_2> = obj.alloc @layout_2;
+        v12.i1 = call %__CoolCoin_recv_1_4 v7 v9 v10 0.i256 v11;
+        v13.@layout_24 = call %encode_single_root_alloc__g09ca v12;
+        v14.i256 = extract_value v13 0.i256;
+        v15.i256 = extract_value v13 1.i256;
+        evm_return v14 v15;
 }
 
 func private %contract_recv_abi_CoolCoin_2835717307() {
@@ -1700,35 +1561,15 @@ func private %contract_recv_abi_CoolCoin_2835717307() {
     block3:
         v5.objref<@layout_2> = obj.alloc @layout_2;
         v6.@layout_16 = call %decode_runtime_args__ge035 v5;
-        v7.objref<@layout_16> = obj.alloc @layout_16;
-        v8.objref<@layout_0> = obj.proj v7 0.i256;
-        v9.@layout_0 = extract_value v6 0.i256;
-        v10.objref<i256> = obj.proj v8 0.i256;
-        v11.i256 = extract_value v9 0.i256;
-        obj.store v10 v11;
-        v13.objref<i256> = obj.proj v7 1.i256;
-        v14.i256 = extract_value v6 1.i256;
-        obj.store v13 v14;
-        v15.objref<@layout_0> = obj.proj v7 0.i256;
-        v16.@layout_0 = obj.load v15;
-        v17.objref<i256> = obj.proj v7 1.i256;
-        v18.i256 = obj.load v17;
-        v19.objref<@layout_2> = obj.alloc @layout_2;
-        v20.objref<@layout_2> = obj.alloc @layout_2;
-        v21.i1 = call %__CoolCoin_recv_0_0 v16 v18 v19 0.i256 v20;
-        v22.@layout_24 = call %encode_single_root_alloc__g09ca v21;
-        v23.objref<@layout_24> = obj.alloc @layout_24;
-        v24.objref<i256> = obj.proj v23 0.i256;
-        v25.i256 = extract_value v22 0.i256;
-        obj.store v24 v25;
-        v26.objref<i256> = obj.proj v23 1.i256;
-        v27.i256 = extract_value v22 1.i256;
-        obj.store v26 v27;
-        v28.objref<i256> = obj.proj v23 0.i256;
-        v29.i256 = obj.load v28;
-        v30.objref<i256> = obj.proj v23 1.i256;
-        v31.i256 = obj.load v30;
-        evm_return v29 v31;
+        v7.@layout_0 = extract_value v6 0.i256;
+        v9.i256 = extract_value v6 1.i256;
+        v10.objref<@layout_2> = obj.alloc @layout_2;
+        v11.objref<@layout_2> = obj.alloc @layout_2;
+        v12.i1 = call %__CoolCoin_recv_0_0 v7 v9 v10 0.i256 v11;
+        v13.@layout_24 = call %encode_single_root_alloc__g09ca v12;
+        v14.i256 = extract_value v13 0.i256;
+        v15.i256 = extract_value v13 1.i256;
+        evm_return v14 v15;
 }
 
 func private %contract_recv_abi_CoolCoin_3714247998() {
@@ -1747,35 +1588,13 @@ func private %contract_recv_abi_CoolCoin_3714247998() {
     block3:
         v5.objref<@layout_2> = obj.alloc @layout_2;
         v6.@layout_20 = call %decode_runtime_args__gc772 v5;
-        v7.objref<@layout_20> = obj.alloc @layout_20;
-        v8.objref<@layout_0> = obj.proj v7 0.i256;
-        v9.@layout_0 = extract_value v6 0.i256;
-        v10.objref<i256> = obj.proj v8 0.i256;
-        v11.i256 = extract_value v9 0.i256;
-        obj.store v10 v11;
-        v13.objref<@layout_0> = obj.proj v7 1.i256;
-        v14.@layout_0 = extract_value v6 1.i256;
-        v15.objref<i256> = obj.proj v13 0.i256;
-        v16.i256 = extract_value v14 0.i256;
-        obj.store v15 v16;
-        v17.objref<@layout_0> = obj.proj v7 0.i256;
-        v18.@layout_0 = obj.load v17;
-        v19.objref<@layout_0> = obj.proj v7 1.i256;
-        v20.@layout_0 = obj.load v19;
-        v21.i256 = call %__CoolCoin_recv_0_4 v18 v20 0.i256;
-        v22.@layout_24 = call %encode_single_root_alloc__gac80 v21;
-        v23.objref<@layout_24> = obj.alloc @layout_24;
-        v24.objref<i256> = obj.proj v23 0.i256;
-        v25.i256 = extract_value v22 0.i256;
-        obj.store v24 v25;
-        v26.objref<i256> = obj.proj v23 1.i256;
-        v27.i256 = extract_value v22 1.i256;
-        obj.store v26 v27;
-        v28.objref<i256> = obj.proj v23 0.i256;
-        v29.i256 = obj.load v28;
-        v30.objref<i256> = obj.proj v23 1.i256;
-        v31.i256 = obj.load v30;
-        evm_return v29 v31;
+        v7.@layout_0 = extract_value v6 0.i256;
+        v9.@layout_0 = extract_value v6 1.i256;
+        v10.i256 = call %__CoolCoin_recv_0_4 v7 v9 0.i256;
+        v11.@layout_24 = call %encode_single_root_alloc__gac80 v10;
+        v12.i256 = extract_value v11 0.i256;
+        v13.i256 = extract_value v11 1.i256;
+        evm_return v12 v13;
 }
 
 func private %contract_recv_abi_CoolCoin_404098525() {
@@ -1796,18 +1615,9 @@ func private %contract_recv_abi_CoolCoin_404098525() {
         call %decode_runtime_args__gce7d v5;
         v7.i256 = call %__CoolCoin_recv_0_5 0.i256;
         v8.@layout_24 = call %encode_single_root_alloc__gac80 v7;
-        v9.objref<@layout_24> = obj.alloc @layout_24;
-        v10.objref<i256> = obj.proj v9 0.i256;
-        v11.i256 = extract_value v8 0.i256;
-        obj.store v10 v11;
-        v13.objref<i256> = obj.proj v9 1.i256;
-        v14.i256 = extract_value v8 1.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v9 0.i256;
-        v16.i256 = obj.load v15;
-        v17.objref<i256> = obj.proj v9 1.i256;
-        v18.i256 = obj.load v17;
-        evm_return v16 v18;
+        v9.i256 = extract_value v8 0.i256;
+        v11.i256 = extract_value v8 1.i256;
+        evm_return v9 v11;
 }
 
 func private %contract_recv_abi_CoolCoin_599290589() {
@@ -1826,42 +1636,16 @@ func private %contract_recv_abi_CoolCoin_599290589() {
     block3:
         v5.objref<@layout_2> = obj.alloc @layout_2;
         v6.@layout_15 = call %decode_runtime_args__g4e54 v5;
-        v7.objref<@layout_15> = obj.alloc @layout_15;
-        v8.objref<@layout_0> = obj.proj v7 0.i256;
-        v9.@layout_0 = extract_value v6 0.i256;
-        v10.objref<i256> = obj.proj v8 0.i256;
-        v11.i256 = extract_value v9 0.i256;
-        obj.store v10 v11;
-        v13.objref<@layout_0> = obj.proj v7 1.i256;
-        v14.@layout_0 = extract_value v6 1.i256;
-        v15.objref<i256> = obj.proj v13 0.i256;
-        v16.i256 = extract_value v14 0.i256;
-        obj.store v15 v16;
-        v18.objref<i256> = obj.proj v7 2.i256;
-        v19.i256 = extract_value v6 2.i256;
-        obj.store v18 v19;
-        v20.objref<@layout_0> = obj.proj v7 0.i256;
-        v21.@layout_0 = obj.load v20;
-        v22.objref<@layout_0> = obj.proj v7 1.i256;
-        v23.@layout_0 = obj.load v22;
-        v24.objref<i256> = obj.proj v7 2.i256;
-        v25.i256 = obj.load v24;
-        v26.objref<@layout_2> = obj.alloc @layout_2;
-        v27.objref<@layout_2> = obj.alloc @layout_2;
-        v28.i1 = call %__CoolCoin_recv_0_2 v21 v23 v25 v26 0.i256 v27;
-        v29.@layout_24 = call %encode_single_root_alloc__g09ca v28;
-        v30.objref<@layout_24> = obj.alloc @layout_24;
-        v31.objref<i256> = obj.proj v30 0.i256;
-        v32.i256 = extract_value v29 0.i256;
-        obj.store v31 v32;
-        v33.objref<i256> = obj.proj v30 1.i256;
-        v34.i256 = extract_value v29 1.i256;
-        obj.store v33 v34;
-        v35.objref<i256> = obj.proj v30 0.i256;
-        v36.i256 = obj.load v35;
-        v37.objref<i256> = obj.proj v30 1.i256;
-        v38.i256 = obj.load v37;
-        evm_return v36 v38;
+        v7.@layout_0 = extract_value v6 0.i256;
+        v9.@layout_0 = extract_value v6 1.i256;
+        v11.i256 = extract_value v6 2.i256;
+        v12.objref<@layout_2> = obj.alloc @layout_2;
+        v13.objref<@layout_2> = obj.alloc @layout_2;
+        v14.i1 = call %__CoolCoin_recv_0_2 v7 v9 v11 v12 0.i256 v13;
+        v15.@layout_24 = call %encode_single_root_alloc__g09ca v14;
+        v16.i256 = extract_value v15 0.i256;
+        v17.i256 = extract_value v15 1.i256;
+        evm_return v16 v17;
 }
 
 func private %contract_recv_abi_CoolCoin_826074471() {
@@ -1882,18 +1666,9 @@ func private %contract_recv_abi_CoolCoin_826074471() {
         call %decode_runtime_args__g5a0b v5;
         v7.i8 = call %__CoolCoin_recv_0_8;
         v8.@layout_24 = call %encode_single_root_alloc__gcb0a v7;
-        v9.objref<@layout_24> = obj.alloc @layout_24;
-        v10.objref<i256> = obj.proj v9 0.i256;
-        v11.i256 = extract_value v8 0.i256;
-        obj.store v10 v11;
-        v13.objref<i256> = obj.proj v9 1.i256;
-        v14.i256 = extract_value v8 1.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v9 0.i256;
-        v16.i256 = obj.load v15;
-        v17.objref<i256> = obj.proj v9 1.i256;
-        v18.i256 = obj.load v17;
-        evm_return v16 v18;
+        v9.i256 = extract_value v8 0.i256;
+        v11.i256 = extract_value v8 1.i256;
+        evm_return v9 v11;
 }
 
 func private %contract_recv_abi_CoolCoin_961581905() {
@@ -1912,35 +1687,15 @@ func private %contract_recv_abi_CoolCoin_961581905() {
     block3:
         v5.objref<@layout_2> = obj.alloc @layout_2;
         v6.@layout_19 = call %decode_runtime_args__g698d v5;
-        v7.objref<@layout_19> = obj.alloc @layout_19;
-        v8.objref<@layout_0> = obj.proj v7 0.i256;
-        v9.@layout_0 = extract_value v6 0.i256;
-        v10.objref<i256> = obj.proj v8 0.i256;
-        v11.i256 = extract_value v9 0.i256;
-        obj.store v10 v11;
-        v13.objref<i256> = obj.proj v7 1.i256;
-        v14.i256 = extract_value v6 1.i256;
-        obj.store v13 v14;
-        v15.objref<@layout_0> = obj.proj v7 0.i256;
-        v16.@layout_0 = obj.load v15;
-        v17.objref<i256> = obj.proj v7 1.i256;
-        v18.i256 = obj.load v17;
-        v19.objref<@layout_2> = obj.alloc @layout_2;
-        v20.objref<@layout_2> = obj.alloc @layout_2;
-        v21.i1 = call %__CoolCoin_recv_1_3 v16 v18 v19 0.i256 v20;
-        v22.@layout_24 = call %encode_single_root_alloc__g09ca v21;
-        v23.objref<@layout_24> = obj.alloc @layout_24;
-        v24.objref<i256> = obj.proj v23 0.i256;
-        v25.i256 = extract_value v22 0.i256;
-        obj.store v24 v25;
-        v26.objref<i256> = obj.proj v23 1.i256;
-        v27.i256 = extract_value v22 1.i256;
-        obj.store v26 v27;
-        v28.objref<i256> = obj.proj v23 0.i256;
-        v29.i256 = obj.load v28;
-        v30.objref<i256> = obj.proj v23 1.i256;
-        v31.i256 = obj.load v30;
-        evm_return v29 v31;
+        v7.@layout_0 = extract_value v6 0.i256;
+        v9.i256 = extract_value v6 1.i256;
+        v10.objref<@layout_2> = obj.alloc @layout_2;
+        v11.objref<@layout_2> = obj.alloc @layout_2;
+        v12.i1 = call %__CoolCoin_recv_1_3 v7 v9 v10 0.i256 v11;
+        v13.@layout_24 = call %encode_single_root_alloc__g09ca v12;
+        v14.i256 = extract_value v13 0.i256;
+        v15.i256 = extract_value v13 1.i256;
+        evm_return v14 v15;
 }
 
 func private %contract_runtime_root_CoolCoin() {

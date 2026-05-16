@@ -165,18 +165,9 @@ func private %contract_init_abi_Child() {
         v39.i256 = extract_value v27 1.i256;
         obj.store v38 v39;
         v40.@layout_2 = call %decode_payload__g4770 v1;
-        v41.objref<@layout_2> = obj.alloc @layout_2;
-        v42.objref<i256> = obj.proj v41 0.i256;
-        v43.i256 = extract_value v40 0.i256;
-        obj.store v42 v43;
-        v44.objref<i256> = obj.proj v41 1.i256;
-        v45.i256 = extract_value v40 1.i256;
-        obj.store v44 v45;
-        v46.objref<i256> = obj.proj v41 0.i256;
-        v47.i256 = obj.load v46;
-        v48.objref<i256> = obj.proj v41 1.i256;
-        v49.i256 = obj.load v48;
-        call %__Child_init v47 v49;
+        v41.i256 = extract_value v40 0.i256;
+        v42.i256 = extract_value v40 1.i256;
+        call %__Child_init v41 v42;
         return;
 }
 
@@ -240,14 +231,9 @@ func private %contract_init_abi_Parent() {
         v39.i256 = extract_value v27 1.i256;
         obj.store v38 v39;
         v40.@layout_8 = call %decode_payload__g3854 v1;
-        v41.objref<@layout_8> = obj.alloc @layout_8;
-        v42.objref<i256> = obj.proj v41 0.i256;
-        v43.i256 = extract_value v40 0.i256;
-        obj.store v42 v43;
-        v44.objref<i256> = obj.proj v41 0.i256;
-        v45.i256 = obj.load v44;
-        v46.objref<@layout_1> = obj.alloc @layout_1;
-        call %__Parent_init v45 v46;
+        v41.i256 = extract_value v40 0.i256;
+        v42.objref<@layout_1> = obj.alloc @layout_1;
+        call %__Parent_init v41 v42;
         return;
 }
 
