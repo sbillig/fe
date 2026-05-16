@@ -353,6 +353,9 @@ fn parse_event_fields<'db>(
 /// ```text
 /// keccak(("StructName", "(", Field1Type::SOL_TYPE, ",", Field2Type::SOL_TYPE, ..., ")"))
 /// ```
+///
+/// Long signatures are nested into chunks so generated event code stays within
+/// the tuple arity supported by `core::AsBytes` while preserving byte order.
 fn create_topic0_const<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     desugared: EventDesugared,
@@ -421,9 +424,15 @@ fn create_topic0_const<'db>(
     )));
     tuple_elems.push(body_ctxt.push_expr(close_paren, origin.clone()));
 
-    // Build the tuple expression and wrap in keccak call
-    let tuple_expr = Expr::Tuple(tuple_elems);
-    let tuple_id = body_ctxt.push_expr(tuple_expr, origin.clone());
+    const MAX_FLAT_TUPLE_ARITY: usize = 16;
+    while tuple_elems.len() > MAX_FLAT_TUPLE_ARITY {
+        tuple_elems = tuple_elems
+            .chunks(MAX_FLAT_TUPLE_ARITY)
+            .map(|chunk| body_ctxt.push_expr(Expr::Tuple(chunk.to_vec()), origin.clone()))
+            .collect();
+    }
+
+    let tuple_id = body_ctxt.push_expr(Expr::Tuple(tuple_elems), origin.clone());
 
     let call = Expr::Call(
         callee_id,

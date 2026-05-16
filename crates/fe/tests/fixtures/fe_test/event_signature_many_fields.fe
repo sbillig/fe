@@ -1,0 +1,46 @@
+use std::abi::sol::{Bytes32, Int24, Uint24, Uint160}
+use std::evm::{Address, Evm}
+
+#[event]
+struct Initialize {
+    #[indexed]
+    id: Bytes32,
+    #[indexed]
+    currency0: Address,
+    #[indexed]
+    currency1: Address,
+    fee: Uint24,
+    tick_spacing: Int24,
+    hooks: Address,
+    sqrt_price_x96: Uint160,
+    tick: Int24,
+}
+
+#[test]
+fn event_signature_with_many_fields() {
+    assert(
+        Initialize::TOPIC0 == 0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438,
+    )
+}
+
+#[test]
+fn emit_event_with_many_fields() uses (evm: mut Evm) {
+    evm.emit(Initialize {
+        id: Bytes32 { val: 1 },
+        currency0: Address {
+            inner: 0x1111111111111111111111111111111111111111,
+        },
+        currency1: Address {
+            inner: 0x2222222222222222222222222222222222222222,
+        },
+        fee: Uint24 { val: 3000 },
+        tick_spacing: Int24 { val: 60 },
+        hooks: Address {
+            inner: 0x3333333333333333333333333333333333333333,
+        },
+        sqrt_price_x96: Uint160 {
+            val: 79228162514264337593543950336,
+        },
+        tick: Int24 { val: 0 },
+    })
+}
