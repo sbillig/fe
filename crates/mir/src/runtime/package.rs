@@ -8,10 +8,10 @@ use hir::{
         },
         ty::{
             const_ty::ConstTyData,
-            corelib::{resolve_core_trait, resolve_lib_type_path},
+            corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
             trait_def::{TraitInstId, resolve_trait_method_instance},
             trait_resolution::TraitSolveCx,
-            ty_check::{BodyOwner, LocalBinding},
+            ty_check::{BodyOwner, EffectParamSite, LocalBinding},
             ty_def::{TyData, TyId},
         },
     },
@@ -31,8 +31,12 @@ use crate::{
         runtime_effect_binding_plan, runtime_param_class, runtime_visible_binding_class,
     },
     runtime::lower::interface::runtime_visible_binding_plans,
-    runtime::lower::type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
-    runtime::root_effects::{EntryEffectContext, entry_effect_arg_plans},
+    runtime::lower::type_info::{
+        RuntimeTypeEnv, provider_class_for_target_in_env, top_level_class_for_ty_in_env,
+    },
+    runtime::root_effects::{
+        EntryEffectContext, entry_effect_arg_plans, target_root_provider_materialization,
+    },
     runtime::stable_key::{
         item_identity, semantic_instance_identity, semantic_instance_symbol_identity,
         stable_identity_hash, type_identity,
@@ -44,7 +48,7 @@ use crate::{
         RuntimeFunctionOwner, RuntimeInlineHint, RuntimeInputPlan, RuntimeLinkage, RuntimeObject,
         RuntimePackage, RuntimePackagePlan, RuntimeReturnPlan, RuntimeSection, RuntimeSectionName,
         RuntimeSectionRef, RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
-        TargetRootProviderMaterialization,
+        TargetRootProviderBinding, TargetRootProviderMaterialization,
     },
     verify::verify_runtime_package,
 };
@@ -726,7 +730,12 @@ fn contract_init_abi_plan<'db>(
     } else {
         InitArgsPlan::DecodeInitTail {
             tuple_ty: contract.init_args_ty(db),
-            decode_fn: resolve_decode_instance(db, contract.scope(), contract.init_args_ty(db))?,
+            decode_fn: resolve_decode_instance(
+                db,
+                contract.scope(),
+                contract.init_args_ty(db),
+                memory_bytes_ty(db, contract.scope())?,
+            )?,
             projected_fields,
         }
     };
@@ -747,47 +756,33 @@ fn contract_recv_wrapper<'db>(
     let contract = arm.contract(db);
     let abi_info = arm.abi_info(db, abi_ty);
     let recv = arm.recv(db);
-    let user_recv = runtime_instance_for_semantic(
-        db,
-        semantic_instance_for_root_owner(
-            db,
-            BodyOwner::ContractRecvArm {
-                contract,
-                recv_idx: recv.recv_idx(db),
-                arm_idx: arm.arm_idx(db),
-            },
-        )?,
-    );
+    let owner = BodyOwner::ContractRecvArm {
+        contract,
+        recv_idx: recv.recv_idx(db),
+        arm_idx: arm.arm_idx(db),
+    };
+    let semantic = semantic_instance_for_root_owner(db, owner)?;
+    let user_recv = runtime_instance_for_semantic(db, semantic);
     let entry_effect_args = entry_effect_arg_plans(
         db,
         EntryEffectContext::HighLevelContract { contract },
-        semantic_instance_for_root_owner(
-            db,
-            BodyOwner::ContractRecvArm {
-                contract,
-                recv_idx: recv.recv_idx(db),
-                arm_idx: arm.arm_idx(db),
-            },
-        )?,
+        semantic,
     )?;
-    let projected_fields = visible_recv_arg_fields(
-        db,
-        semantic_instance_for_root_owner(
-            db,
-            BodyOwner::ContractRecvArm {
-                contract,
-                recv_idx: recv.recv_idx(db),
-                arm_idx: arm.arm_idx(db),
-            },
-        )?,
-        arm,
-    );
+    let projected_fields = visible_recv_arg_fields(db, semantic, arm);
     let input = if abi_info.args_ty == TyId::unit(db) {
         RuntimeInputPlan::None
     } else {
-        RuntimeInputPlan::DecodeCalldataPayload {
+        let host = contract_recv_host_binding(db, contract, recv.recv_idx(db), arm.arm_idx(db))?;
+        RuntimeInputPlan::DecodeHostPayload {
             msg_ty: abi_info.args_ty,
-            decode_fn: resolve_decode_instance(db, contract.scope(), abi_info.args_ty)?,
+            decode_args_fn: resolve_decode_runtime_args_instance(
+                db,
+                contract.scope(),
+                host.declared_ty,
+                host.class.clone(),
+                abi_info.args_ty,
+            )?,
+            host,
             projected_fields,
         }
     };
@@ -815,6 +810,49 @@ fn contract_recv_wrapper<'db>(
         Vec::new(),
     );
     Ok((abi_info, wrapper))
+}
+
+fn contract_recv_host_binding<'db>(
+    db: &'db dyn MirDb,
+    contract: Contract<'db>,
+    recv_idx: u32,
+    arm_idx: u32,
+) -> Result<TargetRootProviderBinding<'db>, LowerError> {
+    let site = EffectParamSite::ContractRecvArm {
+        contract,
+        recv_idx,
+        arm_idx,
+    };
+    let registration = hir::analysis::ty::registered_root_providers(db, site)
+        .first()
+        .ok_or_else(|| {
+            LowerError::Unsupported(format!(
+                "contract `{}` recv arm has no registered root provider",
+                contract_name(db, contract)
+            ))
+        })?;
+    let env = RuntimeTypeEnv::new(
+        Some(contract.scope()),
+        hir::analysis::ty::trait_resolution::PredicateListId::empty_list(db),
+    );
+    let class = provider_class_for_target_in_env(
+        db,
+        env,
+        Some(registration.provider_ty),
+        AddressSpaceKind::Memory,
+    );
+    let materialization = target_root_provider_materialization(&class).ok_or_else(|| {
+        LowerError::Unsupported(format!(
+            "contract `{}` recv root provider class `{:?}` has no supported entry materialization",
+            contract_name(db, contract),
+            class
+        ))
+    })?;
+    Ok(TargetRootProviderBinding {
+        declared_ty: registration.provider_ty,
+        class,
+        materialization,
+    })
 }
 
 fn build_non_contract_package<'db>(
@@ -1520,13 +1558,44 @@ fn resolve_decode_instance<'db>(
     db: &'db dyn MirDb,
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
     ty: TyId<'db>,
+    input_ty: TyId<'db>,
 ) -> Result<RuntimeInstance<'db>, LowerError> {
     let abi_ty = sol_abi_ty(db, scope)?;
-    let decoder_ty = sol_decoder_ty(db, scope)?;
+    let decoder_ty = sol_decoder_ty(db, scope, input_ty)?;
     let decode_trait = resolve_core_trait(db, scope, &["abi", "Decode"])
         .ok_or_else(|| LowerError::Unsupported("missing required core::abi::Decode".to_string()))?;
     let inst = TraitInstId::new_simple(db, decode_trait, vec![ty, abi_ty]);
     resolve_trait_runtime_instance(db, scope, inst, "decode_payload", vec![decoder_ty])
+}
+
+fn resolve_decode_runtime_args_instance<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    host_ty: TyId<'db>,
+    host_class: RuntimeClass<'db>,
+    msg_ty: TyId<'db>,
+) -> Result<RuntimeInstance<'db>, LowerError> {
+    let func = resolve_lib_func_path(db, scope, "core::contracts::decode_runtime_args")
+        .ok_or_else(|| {
+            LowerError::Unsupported(
+                "missing required core::contracts::decode_runtime_args".to_string(),
+            )
+        })?;
+    let assumptions = hir::analysis::ty::trait_resolution::PredicateListId::empty_list(db);
+    let key = SemanticInstanceKey::new(
+        db,
+        BodyOwner::Func(func),
+        GenericSubst::new(db, vec![host_ty, sol_abi_ty(db, scope)?, msg_ty]),
+        hir::analysis::semantic::EffectProviderSubst::empty(db),
+        ImplEnv::new(db, scope, assumptions, vec![]),
+    );
+    let semantic = get_or_build_semantic_instance(db, key);
+    let key = RuntimeInstanceKey::new(
+        db,
+        RuntimeInstanceSource::Semantic(semantic),
+        vec![host_class],
+    );
+    Ok(get_or_build_runtime_instance(db, key))
 }
 
 fn resolve_trait_runtime_instance<'db>(
@@ -1615,10 +1684,11 @@ fn memory_bytes_ty<'db>(
 fn sol_decoder_ty<'db>(
     db: &'db dyn MirDb,
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    input_ty: TyId<'db>,
 ) -> Result<TyId<'db>, LowerError> {
     let ctor = resolve_lib_type_path(db, scope, "std::abi::sol::SolDecoder")
         .ok_or_else(|| LowerError::Unsupported("missing std::abi::sol::SolDecoder".to_string()))?;
-    Ok(TyId::app(db, ctor, memory_bytes_ty(db, scope)?))
+    Ok(TyId::app(db, ctor, input_ty))
 }
 
 fn make_runtime_function<'db>(
@@ -2072,14 +2142,16 @@ fn init_args_plan_sort_key<'db>(db: &'db dyn MirDb, plan: &InitArgsPlan<'db>) ->
 fn runtime_input_plan_symbol_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPlan<'db>) -> String {
     match plan {
         RuntimeInputPlan::None => "none".to_string(),
-        RuntimeInputPlan::DecodeCalldataPayload {
+        RuntimeInputPlan::DecodeHostPayload {
             msg_ty,
-            decode_fn,
+            host,
+            decode_args_fn,
             projected_fields,
         } => format!(
-            "decode:{}:{}:{projected_fields:?}",
+            "decode:{}:{}:{}:{projected_fields:?}",
             type_identity(db, *msg_ty),
-            runtime_instance_symbol_key(db, *decode_fn)
+            target_root_provider_binding_sort_key(db, host),
+            runtime_instance_symbol_key(db, *decode_args_fn)
         ),
     }
 }
@@ -2087,16 +2159,30 @@ fn runtime_input_plan_symbol_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPla
 fn runtime_input_plan_sort_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPlan<'db>) -> String {
     match plan {
         RuntimeInputPlan::None => "none".to_string(),
-        RuntimeInputPlan::DecodeCalldataPayload {
+        RuntimeInputPlan::DecodeHostPayload {
             msg_ty,
-            decode_fn,
+            host,
+            decode_args_fn,
             projected_fields,
         } => format!(
-            "decode:{}:{}:{projected_fields:?}",
+            "decode:{}:{}:{}:{projected_fields:?}",
             type_identity(db, *msg_ty),
-            runtime_instance_sort_key(db, *decode_fn)
+            target_root_provider_binding_sort_key(db, host),
+            runtime_instance_sort_key(db, *decode_args_fn)
         ),
     }
+}
+
+fn target_root_provider_binding_sort_key<'db>(
+    db: &'db dyn MirDb,
+    binding: &TargetRootProviderBinding<'db>,
+) -> String {
+    format!(
+        "{}:{}:{}",
+        type_identity(db, binding.declared_ty),
+        runtime_class_sort_key(db, &binding.class),
+        target_root_provider_materialization_sort_key(db, binding.materialization)
+    )
 }
 
 fn dispatch_default_symbol_key<'db>(db: &'db dyn MirDb, default: &DispatchDefault<'db>) -> String {
@@ -2684,11 +2770,11 @@ pub contract DecodeHarness {
         let top_mod = db.top_mod(file);
 
         let raw_plan = recv_wrapper_plan(&db, top_mod, "raw(uint256)");
-        let RuntimeInputPlan::DecodeCalldataPayload {
+        let RuntimeInputPlan::DecodeHostPayload {
             projected_fields, ..
         } = raw_plan.input
         else {
-            panic!("raw(uint256) should decode calldata payload");
+            panic!("raw(uint256) should decode host payload");
         };
         assert!(
             projected_fields.is_empty(),
@@ -2696,11 +2782,11 @@ pub contract DecodeHarness {
         );
 
         let swap_plan = recv_wrapper_plan(&db, top_mod, "swap(uint64,uint64)");
-        let RuntimeInputPlan::DecodeCalldataPayload {
+        let RuntimeInputPlan::DecodeHostPayload {
             projected_fields, ..
         } = swap_plan.input
         else {
-            panic!("swap(uint64,uint64) should decode calldata payload");
+            panic!("swap(uint64,uint64) should decode host payload");
         };
         assert_eq!(
             projected_fields.as_ref(),

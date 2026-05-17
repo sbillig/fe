@@ -57,6 +57,7 @@ pub struct Cursor<I> {
 impl<I> Cursor<I>
     where I: ByteInput
 {
+    #[inline(always)]
     pub fn new(input: own I) -> Self {
         Cursor {
             input,
@@ -64,6 +65,7 @@ impl<I> Cursor<I>
         }
     }
 
+    #[inline(always)]
     pub fn fork(self, _ pos: u256) -> Self {
         Cursor {
             input: self.input,
@@ -235,6 +237,7 @@ pub fn decode_single_root<A: Abi, T, D>(_ d: mut D) -> T
     decode_field<A, T, D>(mut d)
 }
 
+#[inline(always)]
 pub fn decode_field<A: Abi, T, D>(_ d: mut D) -> T
     where T: Decode<A> + AbiSize,
           D: AbiDecoder<A>
@@ -1167,6 +1170,7 @@ impl<A: Abi> AbiSpan<A> for () {
 }
 
 impl<A: Abi> Decode<A> for u256 {
+    #[inline(always)]
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         d.read_word()
     }
@@ -1257,6 +1261,7 @@ impl<A: Abi> Encode<A> for DynString {
 }
 
 impl<A: Abi> Decode<A> for bool {
+    #[inline(always)]
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         A::decode_bool_word(d.read_word())
     }

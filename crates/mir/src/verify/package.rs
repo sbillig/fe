@@ -141,13 +141,28 @@ fn verify_synthetic_function<'db>(
                 let Some(entry) = body.blocks.first() else {
                     return Err(VerifyError::InvalidReturnClass);
                 };
-                let RTerminator::SwitchScalar {
-                    cases,
-                    default: default_bb,
-                    ..
-                } = &entry.terminator
-                else {
-                    return Err(VerifyError::InvalidReturnClass);
+                let (cases, default_bb) = match &entry.terminator {
+                    RTerminator::SwitchScalar { cases, default, .. } => (cases, default),
+                    RTerminator::Branch {
+                        then_bb, else_bb, ..
+                    } => {
+                        let Some(selector_block) = body.block(*else_bb) else {
+                            return Err(VerifyError::MissingRuntimeBlock(*else_bb));
+                        };
+                        let RTerminator::SwitchScalar {
+                            cases,
+                            default: default_bb,
+                            ..
+                        } = &selector_block.terminator
+                        else {
+                            return Err(VerifyError::InvalidReturnClass);
+                        };
+                        if then_bb != default_bb {
+                            return Err(VerifyError::InvalidReturnClass);
+                        }
+                        (cases, default_bb)
+                    }
+                    _ => return Err(VerifyError::InvalidReturnClass),
                 };
                 if cases.len() != dispatch.len() {
                     return Err(VerifyError::InvalidReturnClass);

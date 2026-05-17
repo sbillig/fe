@@ -441,8 +441,9 @@ impl<'db> SyntheticBodyBuilder<'db> {
             );
             let input =
                 self.push_memory_bytes_value(decode_bb, plan.contract.scope(), tail_ptr, tail_len);
-            let decoder_new =
-                resolve_sol_decoder_new(self.db, plan.contract.scope()).expect("decoder_new");
+            let input_ty = self.locals[input.index()].semantic_ty;
+            let decoder_new = resolve_sol_decoder_new(self.db, plan.contract.scope(), input_ty)
+                .expect("decoder_new");
             let decoder = self.push_call_result(decode_bb, decoder_new, vec![input]);
             if let Some(decoded) = self.push_call(decode_bb, decode_fn, vec![decoder]) {
                 call_args.extend(self.extract_selected_tuple_fields(
@@ -469,7 +470,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
 
     fn build_contract_recv_abi(&mut self, plan: ContractRecvAbiPlan<'db>) {
         let zero = self.push_const_word(RBlockId::from_u32(0), 0);
-        let four = self.push_const_word(RBlockId::from_u32(0), 4);
         let cont_bb = if plan.payable {
             RBlockId::from_u32(0)
         } else {
@@ -477,43 +477,15 @@ impl<'db> SyntheticBodyBuilder<'db> {
         };
 
         let mut call_args = Vec::new();
-        if let RuntimeInputPlan::DecodeCalldataPayload {
+        if let RuntimeInputPlan::DecodeHostPayload {
             msg_ty,
-            decode_fn,
+            host,
+            decode_args_fn,
             projected_fields,
         } = plan.input
         {
-            let size = self.push_builtin_value(
-                cont_bb,
-                TyId::u256(self.db),
-                RuntimeClass::Scalar(word_scalar_class()),
-                RuntimeBuiltin::CallDataSize,
-            );
-            let payload_len = self.push_binary_word(cont_bb, ArithBinOp::Sub, size, four);
-            let payload_ptr = self.push_builtin_value(
-                cont_bb,
-                TyId::u256(self.db),
-                RuntimeClass::Scalar(word_scalar_class()),
-                RuntimeBuiltin::Malloc { size: payload_len },
-            );
-            self.push_side_effect_builtin(
-                cont_bb,
-                RuntimeBuiltin::CallDataCopy {
-                    dst: payload_ptr,
-                    offset: four,
-                    len: payload_len,
-                },
-            );
-            let input = self.push_memory_bytes_value(
-                cont_bb,
-                plan.contract.scope(),
-                payload_ptr,
-                payload_len,
-            );
-            let decoder_new =
-                resolve_sol_decoder_new(self.db, plan.contract.scope()).expect("decoder_new");
-            let decoder = self.push_call_result(cont_bb, decoder_new, vec![input]);
-            if let Some(decoded) = self.push_call(cont_bb, decode_fn, vec![decoder]) {
+            let host = self.emit_target_root_provider(cont_bb, &host);
+            if let Some(decoded) = self.push_call(cont_bb, decode_args_fn, vec![host]) {
                 call_args.extend(self.extract_selected_tuple_fields(
                     cont_bb,
                     decoded,
@@ -605,13 +577,23 @@ impl<'db> SyntheticBodyBuilder<'db> {
         default: DispatchDefault<'db>,
     ) {
         let zero = self.push_const_word(RBlockId::from_u32(0), 0);
-        let selector = self.push_builtin_value(
+        let four = self.push_const_word(RBlockId::from_u32(0), 4);
+        let calldata_size = self.push_builtin_value(
             RBlockId::from_u32(0),
+            TyId::u256(self.db),
+            RuntimeClass::Scalar(word_scalar_class()),
+            RuntimeBuiltin::CallDataSize,
+        );
+        let short_calldata =
+            self.push_bool_binary(RBlockId::from_u32(0), CompBinOp::Lt, calldata_size, four);
+        let selector_bb = self.new_block();
+        let default_bb = self.new_block();
+        let selector = self.push_builtin_value(
+            selector_bb,
             TyId::u256(self.db),
             RuntimeClass::Scalar(selector_scalar_class()),
             RuntimeBuiltin::CallDataSelector,
         );
-        let default_bb = self.new_block();
         let mut cases = Vec::with_capacity(dispatch.len());
         for arm in dispatch {
             let block = self.new_block();
@@ -631,7 +613,12 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 args: Box::default(),
             },
         };
-        self.blocks[0].terminator = RTerminator::SwitchScalar {
+        self.blocks[0].terminator = RTerminator::Branch {
+            cond: short_calldata,
+            then_bb: default_bb,
+            else_bb: selector_bb,
+        };
+        self.blocks[selector_bb.index()].terminator = RTerminator::SwitchScalar {
             discr: selector,
             cases: cases.into_boxed_slice(),
             default: default_bb,
@@ -1506,9 +1493,9 @@ fn u32_scalar(value: u32) -> ConstScalar {
 fn resolve_sol_decoder_new<'db>(
     db: &'db dyn MirDb,
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    input_ty: TyId<'db>,
 ) -> Option<RuntimeInstance<'db>> {
     let abi_ty = sol_abi_ty(db, scope)?;
-    let input_ty = memory_bytes_ty(db, scope)?;
     let abi_trait = resolve_core_trait(db, scope, &["abi", "Abi"])?;
     let inst = TraitInstId::new_simple(db, abi_trait, vec![abi_ty]);
     resolve_trait_runtime_instance(db, scope, inst, "decoder_new", vec![input_ty]).ok()

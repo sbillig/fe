@@ -1,4 +1,4 @@
-use super::abi::{Abi, AbiSize, ByteInput, Encode, encode_single_root_alloc}
+use super::abi::{Abi, AbiDecoder, AbiSize, ByteInput, Decode, Encode, encode_single_root_alloc}
 use super::effect_ref::StorPtr
 
 /// Host interface required by compiler-generated contract entrypoints.
@@ -35,6 +35,7 @@ pub trait ContractHost {
         A::selector_from_prefix(input.word_at(0))
     }
 
+    #[inline(always)]
     fn runtime_decoder<A: Abi>(mut self) -> A::Decoder<Self::Input> {
         A::decoder_with_base(self.input(), A::SELECTOR_SIZE)
     }
@@ -45,6 +46,17 @@ pub trait ContractHost {
         let out: (u256, u256) = encode_single_root_alloc<A, T>(value)
         self.return_bytes(ptr: out.0, len: out.1)
     }
+}
+
+#[inline(always)]
+pub fn decode_runtime_args<H, A, T>(_ host: mut H) -> T
+    where H: ContractHost,
+          A: Abi,
+          T: Decode<A>,
+          A::Decoder<H::Input>: AbiDecoder<A>
+{
+    let mut d = host.runtime_decoder<A>()
+    T::decode_payload(mut d)
 }
 
 /// Target configuration used by compiler-generated contract entrypoints.

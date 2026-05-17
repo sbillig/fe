@@ -5,13 +5,13 @@ use parser::ast::prelude::AstNode;
 use crate::{
     HirDb,
     hir_def::{
-        ArithBinOp, AssocConstDef, AssocTyDef, AttrListId, BinOp, Body, BodyKind,
+        ArithBinOp, AssocConstDef, AssocTyDef, Attr, AttrArg, AttrListId, BinOp, Body, BodyKind,
         EffectParamListId, Expr, ExprId, FieldDefListId, FieldIndex, Func, FuncModifiers,
         FuncParam, FuncParamListId, FuncParamMode, FuncParamName, GenericArg, GenericArgListId,
-        GenericParam, GenericParamListId, IdentId, ImplTrait, ItemKind, Mod, Partial, Pat, PatId,
-        PathId, PathKind, Stmt, StmtId, Struct, TopLevelMod, TrackedItemId, TrackedItemVariant,
-        TraitRefId, TypeBound, TypeGenericArg, TypeGenericParam, TypeId, TypeKind, TypeMode, UnOp,
-        Visibility, WhereClauseId, expr::CallArg,
+        GenericParam, GenericParamListId, IdentId, ImplTrait, ItemKind, Mod, NormalAttr, Partial,
+        Pat, PatId, PathId, PathKind, Stmt, StmtId, Struct, TopLevelMod, TrackedItemId,
+        TrackedItemVariant, TraitRefId, TypeBound, TypeGenericArg, TypeGenericParam, TypeId,
+        TypeKind, TypeMode, UnOp, Visibility, WhereClauseId, expr::CallArg,
     },
     span::{DesugaredOrigin, HirOrigin},
 };
@@ -51,6 +51,15 @@ where
     ctxt: &'ctxt mut FileLowerCtxt<'db>,
     roots: LibRoots<'db>,
     desugared: O,
+}
+
+struct FuncBodySpec<'db> {
+    name: IdentId<'db>,
+    attrs: AttrListId<'db>,
+    generic_params: GenericParamListId<'db>,
+    params: FuncParamListId<'db>,
+    ret_ty: Option<TypeId<'db>>,
+    modifiers: FuncModifiers,
 }
 
 impl<'ctxt, 'db, O> HirBuilder<'ctxt, 'db, O>
@@ -106,6 +115,24 @@ where
 
     pub(super) fn empty_attrs(&self) -> AttrListId<'db> {
         AttrListId::new(self.db(), vec![])
+    }
+
+    pub(super) fn inline_always_attrs(&self) -> AttrListId<'db> {
+        let db = self.db();
+        AttrListId::new(
+            db,
+            vec![Attr::Normal(NormalAttr {
+                path: Partial::Present(PathId::from_ident(db, self.ident("inline"))),
+                value: None,
+                has_value: false,
+                has_args: true,
+                args: vec![AttrArg {
+                    key: Partial::Present(PathId::from_ident(db, self.ident("always"))),
+                    value: None,
+                    has_value: false,
+                }],
+            })],
+        )
     }
 
     pub(super) fn empty_generic_params(&self) -> GenericParamListId<'db> {
@@ -426,11 +453,28 @@ where
         modifiers: FuncModifiers,
         build_body: impl FnOnce(&mut BodyBuilder<'_, 'db, O>),
     ) -> Func<'db> {
-        let attrs = self.empty_attrs();
+        self.func_with_body_spec(
+            FuncBodySpec {
+                name,
+                attrs: self.empty_attrs(),
+                generic_params,
+                params,
+                ret_ty,
+                modifiers,
+            },
+            build_body,
+        )
+    }
+
+    fn func_with_body_spec(
+        &mut self,
+        spec: FuncBodySpec<'db>,
+        build_body: impl FnOnce(&mut BodyBuilder<'_, 'db, O>),
+    ) -> Func<'db> {
         let where_clause = self.empty_where_clause();
         let effects = self.empty_effect_params();
         self.with_item_scope(
-            TrackedItemVariant::Func(Partial::Present(name)),
+            TrackedItemVariant::Func(Partial::Present(spec.name)),
             |this, id| {
                 let mut body_builder = BodyBuilder::new(
                     this.ctxt,
@@ -444,14 +488,14 @@ where
                 Func::new(
                     this.db(),
                     id,
-                    Partial::Present(name),
-                    attrs,
-                    generic_params,
+                    Partial::Present(spec.name),
+                    spec.attrs,
+                    spec.generic_params,
                     where_clause,
-                    Partial::Present(params),
+                    Partial::Present(spec.params),
                     effects,
-                    ret_ty,
-                    modifiers,
+                    spec.ret_ty,
+                    spec.modifiers,
                     Some(body),
                     this.top_mod(),
                     this.origin(),
@@ -475,6 +519,28 @@ where
             params,
             ret_ty,
             modifiers,
+            build_body,
+        )
+    }
+
+    pub(super) fn func_generic_inline_always(
+        &mut self,
+        name: &str,
+        generic_params: GenericParamListId<'db>,
+        params: FuncParamListId<'db>,
+        ret_ty: Option<TypeId<'db>>,
+        modifiers: FuncModifiers,
+        build_body: impl FnOnce(&mut BodyBuilder<'_, 'db, O>),
+    ) -> Func<'db> {
+        self.func_with_body_spec(
+            FuncBodySpec {
+                name: self.ident(name),
+                attrs: self.inline_always_attrs(),
+                generic_params,
+                params,
+                ret_ty,
+                modifiers,
+            },
             build_body,
         )
     }

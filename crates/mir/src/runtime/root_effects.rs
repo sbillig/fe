@@ -187,7 +187,7 @@ fn contract_field_binding<'db>(
     })
 }
 
-fn target_root_provider_materialization<'db>(
+pub(crate) fn target_root_provider_materialization<'db>(
     class: &RuntimeClass<'db>,
 ) -> Option<TargetRootProviderMaterialization<'db>> {
     match class {
