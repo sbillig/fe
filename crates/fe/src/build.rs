@@ -1349,20 +1349,20 @@ fn write_contract_artifacts(
     let base = sanitize_filename(contract_name);
     if emit.bytecode {
         let deploy_path = out_dir.join(format!("{base}.bin"));
-        fs::write(deploy_path.as_std_path(), format!("{bytecode}\n"))
+        fs::write(deploy_path.as_std_path(), bytecode)
             .map_err(|err| format!("Failed to write {deploy_path}: {err}"))?;
         if let Some(dir) = report_dir {
             let deploy_path = dir.join(format!("{base}.bin"));
-            let _ = fs::write(deploy_path.as_std_path(), format!("{bytecode}\n"));
+            let _ = fs::write(deploy_path.as_std_path(), bytecode);
         }
     }
     if emit.runtime_bytecode {
         let runtime_path = out_dir.join(format!("{base}.runtime.bin"));
-        fs::write(runtime_path.as_std_path(), format!("{runtime_bytecode}\n"))
+        fs::write(runtime_path.as_std_path(), runtime_bytecode)
             .map_err(|err| format!("Failed to write {runtime_path}: {err}"))?;
         if let Some(dir) = report_dir {
             let runtime_path = dir.join(format!("{base}.runtime.bin"));
-            let _ = fs::write(runtime_path.as_std_path(), format!("{runtime_bytecode}\n"));
+            let _ = fs::write(runtime_path.as_std_path(), runtime_bytecode);
         }
     }
     Ok(())
