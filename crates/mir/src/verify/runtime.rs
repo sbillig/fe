@@ -663,7 +663,10 @@ fn verify_builtin<'db>(
         }
         RuntimeBuiltin::Malloc { size } => {
             verify_word_value(body, *size)?;
-            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+            Ok(Some(RuntimeClass::RawAddr {
+                space: AddressSpaceKind::Memory,
+                target: None,
+            }))
         }
         RuntimeBuiltin::Call {
             gas,

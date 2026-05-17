@@ -1,0 +1,38 @@
+use core::ops::{Add, Sub}
+
+struct Data {
+    a: u256,
+    b: u256,
+}
+
+pub fn sum_first_class_pointers() -> u256 {
+    let data = core::ptr::alloc<Data>()
+    core::ptr::write(data, Data { a: 5, b: 8 })
+
+    let words = core::ptr::cast<Data, u256>(data)
+    let second = core::ptr::offset(words, 1)
+    core::ptr::write(second, core::ptr::read(second) + 3)
+
+    let byte_ptr = core::ptr::as_bytes(data)
+    let roundtrip = core::ptr::cast<u8, Data>(byte_ptr)
+    let first = core::ptr::read(roundtrip)
+
+    let raw_array = core::ptr::alloc_array<u256>(1)
+    core::ptr::write(raw_array, 3)
+
+    let byte_alloc = core::ptr::alloc_bytes(1)
+    let byte_distance = core::ptr::addr(byte_alloc) - core::ptr::addr(byte_alloc)
+
+    let slice = core::ptr::alloc_slice<u256>(2)
+    core::ptr::write(slice.ptr, first.a)
+    core::ptr::write(core::ptr::offset(slice.ptr, 1), first.b)
+
+    let bytes = slice.as_bytes()
+    let ptr_distance = core::ptr::offset(slice.ptr, 1) - slice.ptr
+    core::ptr::read(slice.ptr)
+        + core::ptr::read(core::ptr::offset(slice.ptr, 1))
+        + core::ptr::read(raw_array)
+        + bytes.len
+        + ptr_distance
+        + byte_distance
+}

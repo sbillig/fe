@@ -1,0 +1,158 @@
+use super::effect_ref::MemPtr
+use super::intrinsic::size_of
+use super::marker::Copy
+use super::ops::{Add, AddAssign, Sub, SubAssign}
+
+/// Dynamic allocation in linear memory.
+///
+/// This is a compiler intrinsic: backend-specific lowering is handled in codegen.
+extern {
+    /// Allocates `size` bytes and returns a pointer to the first byte.
+    pub fn alloc_raw(_ size: u256) -> *u8
+}
+
+/// A sized view over linear memory.
+pub struct MemorySlice<T> {
+    pub ptr: *T,
+    pub len: u256,
+}
+
+impl<T> Copy for *T {}
+impl<T> Copy for MemorySlice<T> {}
+
+impl<T> MemorySlice<T> {
+    pub fn byte_len(self) -> u256 {
+        self.len * size_of<T>()
+    }
+
+    pub fn as_bytes(self) -> MemorySlice<u8> {
+        MemorySlice {
+            ptr: self.ptr as *u8,
+            len: self.byte_len(),
+        }
+    }
+}
+
+pub fn addr<T>(_ ptr: *T) -> u256 {
+    ptr as u256
+}
+
+pub fn from_addr<T>(_ addr: u256) -> *T {
+    addr as *T
+}
+
+pub fn null<T>() -> *T {
+    from_addr(0)
+}
+
+pub fn cast<T, U>(_ ptr: *T) -> *U {
+    ptr as *U
+}
+
+#[arithmetic(unchecked)]
+pub fn offset_bytes<T>(_ ptr: *T, _ offset: u256) -> *T {
+    (addr(ptr) + offset) as *T
+}
+
+#[arithmetic(unchecked)]
+pub fn offset<T>(_ ptr: *T, _ count: u256) -> *T {
+    offset_bytes(ptr, count * size_of<T>())
+}
+
+pub fn as_bytes<T>(_ ptr: *T) -> *u8 {
+    ptr as *u8
+}
+
+pub fn alloc<T>() -> *T {
+    alloc_raw(size_of<T>()) as *T
+}
+
+#[arithmetic(unchecked)]
+pub fn alloc_array<T>(_ len: u256) -> *T {
+    alloc_raw(len * size_of<T>()) as *T
+}
+
+pub fn alloc_bytes(_ len: u256) -> *u8 {
+    alloc_raw(len)
+}
+
+pub fn alloc_slice<T>(_ len: u256) -> MemorySlice<T> {
+    MemorySlice {
+        ptr: alloc_array<T>(len),
+        len,
+    }
+}
+
+pub fn alloc_byte_slice(_ len: u256) -> MemorySlice<u8> {
+    MemorySlice {
+        ptr: alloc_bytes(len),
+        len,
+    }
+}
+
+fn ptr_read<T>() -> T
+    uses (slot: T)
+{
+    slot
+}
+
+fn ptr_write<T>(_ value: own T)
+    uses (slot: mut T)
+{
+    slot = value
+}
+
+pub fn read<T>(_ ptr: *T) -> T {
+    let provider: MemPtr<T> = MemPtr::from_ptr(ptr)
+    with (provider) {
+        ptr_read<T>()
+    }
+}
+
+pub fn write<T>(_ ptr: *T, _ value: own T) {
+    let provider: MemPtr<T> = MemPtr::from_ptr(ptr)
+    with (provider) {
+        ptr_write<T>(value)
+    }
+}
+
+impl<T> Add<u256> for *T {
+    type Output = *T
+
+    #[arithmetic(unchecked)]
+    fn add(own self, _ offset: own u256) -> *T {
+        offset_bytes(self, offset)
+    }
+}
+
+impl<T> AddAssign<u256> for *T {
+    #[arithmetic(unchecked)]
+    fn add_assign(mut self, _ offset: own u256) {
+        self = self + offset
+    }
+}
+
+impl<T> Sub<u256> for *T {
+    type Output = *T
+
+    #[arithmetic(unchecked)]
+    fn sub(own self, _ offset: own u256) -> *T {
+        (addr(self) - offset) as *T
+    }
+}
+
+impl<T> SubAssign<u256> for *T {
+    #[arithmetic(unchecked)]
+    fn sub_assign(mut self, _ offset: own u256) {
+        self = self - offset
+    }
+}
+
+impl<T, U> Sub<*U> for *T {
+    type Output = u256
+
+    #[arithmetic(unchecked)]
+    fn sub(own self, _ other: own *U) -> u256 {
+        addr(self) - addr(other)
+    }
+}

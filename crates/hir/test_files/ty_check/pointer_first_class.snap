@@ -1,0 +1,269 @@
+---
+source: crates/hir/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/pointer_first_class.fe
+---
+note:
+   ┌─ pointer_first_class.fe:8:77
+   │
+ 8 │   fn pointer_casts_and_arithmetic(raw: u256, data: *Data, bytes: *u8) -> u256 {
+   │ ╭─────────────────────────────────────────────────────────────────────────────^
+ 9 │ │     let typed_from_raw: *Data = raw as *Data
+10 │ │     let raw_again: u256 = typed_from_raw as u256
+11 │ │     let bytes_from_typed: *u8 = typed_from_raw as *u8
+   · │
+18 │ │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+19 │ │ }
+   │ ╰─^ u256
+
+note:
+  ┌─ pointer_first_class.fe:9:9
+  │
+9 │     let typed_from_raw: *Data = raw as *Data
+  │         ^^^^^^^^^^^^^^ *<Data>
+
+note:
+  ┌─ pointer_first_class.fe:9:33
+  │
+9 │     let typed_from_raw: *Data = raw as *Data
+  │                                 ^^^ u256
+
+note:
+  ┌─ pointer_first_class.fe:9:33
+  │
+9 │     let typed_from_raw: *Data = raw as *Data
+  │                                 ^^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:10:9
+   │
+10 │     let raw_again: u256 = typed_from_raw as u256
+   │         ^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:10:27
+   │
+10 │     let raw_again: u256 = typed_from_raw as u256
+   │                           ^^^^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:10:27
+   │
+10 │     let raw_again: u256 = typed_from_raw as u256
+   │                           ^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:11:9
+   │
+11 │     let bytes_from_typed: *u8 = typed_from_raw as *u8
+   │         ^^^^^^^^^^^^^^^^ *<u8>
+
+note:
+   ┌─ pointer_first_class.fe:11:33
+   │
+11 │     let bytes_from_typed: *u8 = typed_from_raw as *u8
+   │                                 ^^^^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:11:33
+   │
+11 │     let bytes_from_typed: *u8 = typed_from_raw as *u8
+   │                                 ^^^^^^^^^^^^^^^^^^^^^ *<u8>
+
+note:
+   ┌─ pointer_first_class.fe:12:9
+   │
+12 │     let typed_again: *Data = bytes_from_typed as *Data
+   │         ^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:12:30
+   │
+12 │     let typed_again: *Data = bytes_from_typed as *Data
+   │                              ^^^^^^^^^^^^^^^^ *<u8>
+
+note:
+   ┌─ pointer_first_class.fe:12:30
+   │
+12 │     let typed_again: *Data = bytes_from_typed as *Data
+   │                              ^^^^^^^^^^^^^^^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:13:9
+   │
+13 │     let next: *Data = typed_again + 32
+   │         ^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:13:23
+   │
+13 │     let next: *Data = typed_again + 32
+   │                       ^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:13:23
+   │
+13 │     let next: *Data = typed_again + 32
+   │                       ^^^^^^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:13:37
+   │
+13 │     let next: *Data = typed_again + 32
+   │                                     ^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:14:9
+   │
+14 │     let prev: *Data = next - 32
+   │         ^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:14:23
+   │
+14 │     let prev: *Data = next - 32
+   │                       ^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:14:23
+   │
+14 │     let prev: *Data = next - 32
+   │                       ^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:14:30
+   │
+14 │     let prev: *Data = next - 32
+   │                              ^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:15:9
+   │
+15 │     let distance: u256 = next - typed_again
+   │         ^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:15:26
+   │
+15 │     let distance: u256 = next - typed_again
+   │                          ^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:15:26
+   │
+15 │     let distance: u256 = next - typed_again
+   │                          ^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:15:33
+   │
+15 │     let distance: u256 = next - typed_again
+   │                                 ^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:16:9
+   │
+16 │     let raw_bytes: *u8 = 0 as *u8
+   │         ^^^^^^^^^ *<u8>
+
+note:
+   ┌─ pointer_first_class.fe:16:26
+   │
+16 │     let raw_bytes: *u8 = 0 as *u8
+   │                          ^ u256
+
+note:
+   ┌─ pointer_first_class.fe:16:26
+   │
+16 │     let raw_bytes: *u8 = 0 as *u8
+   │                          ^^^^^^^^ *<u8>
+
+note:
+   ┌─ pointer_first_class.fe:18:5
+   │
+18 │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+   │     ^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:18:5
+   │
+18 │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+   │     ^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:18:5
+   │
+18 │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:18:5
+   │
+18 │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:18:5
+   │
+18 │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:18:5
+   │
+18 │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:18:17
+   │
+18 │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+   │                 ^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:18:29
+   │
+18 │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+   │                             ^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:18:29
+   │
+18 │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+   │                             ^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:18:46
+   │
+18 │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+   │                                              ^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:18:46
+   │
+18 │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+   │                                              ^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:18:63
+   │
+18 │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+   │                                                               ^^^^^ *<u8>
+
+note:
+   ┌─ pointer_first_class.fe:18:63
+   │
+18 │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+   │                                                               ^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:18:81
+   │
+18 │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+   │                                                                                 ^^^^^^^^^ *<u8>
+
+note:
+   ┌─ pointer_first_class.fe:18:81
+   │
+18 │     raw_again + distance + (prev as u256) + (data as u256) + (bytes as u256) + (raw_bytes as u256)
+   │                                                                                 ^^^^^^^^^^^^^^^^^ u256

@@ -865,6 +865,13 @@ fn build_local_static_facts<'db>(
             CompiledMaterializationPlan::Erased
         } else {
             match local_data.facts.interface {
+                SemanticLocalKind::DirectValue
+                    if runtime_repr_ty_in_context(db, local_data.ty, scope, assumptions)
+                        .as_ptr(db)
+                        .is_some() =>
+                {
+                    CompiledMaterializationPlan::SemanticValue
+                }
                 SemanticLocalKind::DirectValue => top_level_class_for_ty_in_context(
                     db,
                     local_data.ty,
@@ -2532,6 +2539,9 @@ fn runtime_abstract_param_ty<'db>(
     assumptions: PredicateListId<'db>,
 ) -> bool {
     let ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
+    if ty.as_ptr(db).is_some() {
+        return false;
+    }
     ty.has_param(db) || ty.contains_assoc_ty_of_param(db)
 }
 

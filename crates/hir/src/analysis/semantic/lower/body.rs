@@ -10,13 +10,14 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             CallSiteId, FieldIndex, Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId,
-            SOperand, SPlace, SStmt, SStmtKind, STerminator, STerminatorKind, SValueId,
+            SOperand, SPlace, SStmt, SStmtKind, STerminator, STerminatorKind, SValueId, SemConstId,
             SemConstValue, SemOrigin, SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole,
             VariantIndex, bool_const, bytes_const, int_const, reify_runtime_const_for_ty,
             runtime_size_bytes, sem_const_from_ty, unit_const,
         },
         ty::{
-            const_ty::const_ty_or_abstract_from_assoc_const_use,
+            const_expr::{ConstExpr, ConstExprId},
+            const_ty::{ConstTyData, ConstTyId, const_ty_or_abstract_from_assoc_const_use},
             normalize::normalize_ty,
             ty_check::{
                 BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, LocalBinding,
@@ -1015,18 +1016,48 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.assumptions,
             ),
         };
-        let size = runtime_size_bytes(self.db, ty).unwrap_or_else(|| {
+        let result_ty = self.expr_ty(expr);
+        let Some(size) = runtime_size_bytes(self.db, ty) else {
+            if ty.has_param(self.db) || ty.has_var(self.db) {
+                let CallableDef::Func(func) = callable.callable_def() else {
+                    panic!("const intrinsic should resolve to a function");
+                };
+                let const_expr = match kind {
+                    ConstIntrinsicKind::SizeOf => ConstExpr::ExternConstFnCall {
+                        func,
+                        generic_args: callable.generic_args().to_vec(),
+                        args: Vec::new(),
+                    },
+                };
+                let const_ty = ConstTyId::new(
+                    self.db,
+                    ConstTyData::Abstract(ConstExprId::new(self.db, const_expr), result_ty),
+                );
+                let value = SemConstId::new(
+                    self.db,
+                    SemConstValue::TypeLevel {
+                        ty: result_ty,
+                        const_ty: TyId::const_ty(self.db, const_ty),
+                    },
+                );
+                return self.emit_expr_with_origin(
+                    SemOrigin::Expr(expr),
+                    result_ty,
+                    SExpr::Const(SConst::Value(value)),
+                );
+            }
+
             panic!(
                 "core::size_of should resolve for {}",
                 ty.pretty_print(self.db)
-            )
-        });
+            );
+        };
         self.emit_expr_with_origin(
             SemOrigin::Expr(expr),
-            self.expr_ty(expr),
+            result_ty,
             SExpr::Const(SConst::Value(int_const(
                 self.db,
-                self.expr_ty(expr),
+                result_ty,
                 BigInt::from(size),
             ))),
         )

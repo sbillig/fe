@@ -67,7 +67,10 @@ use crate::analysis::{
         PathRes, QueryDirective,
         diagnostics::PathResDiag,
         is_scope_visible_from,
-        method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate},
+        method_selection::{
+            MethodCandidate, MethodSelectionError, select_method_candidate,
+            select_trait_method_candidates,
+        },
         resolve_name_res, resolve_query,
     },
     place::resolve_place_field_index,
@@ -508,15 +511,21 @@ impl<'db> TyChecker<'db> {
             inner_expr.data(self.db, self.body())
         {
             let value = int_id.data(self.db);
+            let leaf = self.peel_transparent_newtypes(to);
+            if leaf.as_ptr(self.db).is_some()
+                && self.int_literal_fits_in_ty(value, TyId::u256(self.db))
+            {
+                let _ = self.table.unify(from, TyId::u256(self.db));
+                return ExprProp::new(to, true);
+            }
+
             if self.int_literal_fits_in_ty(value, to) {
                 // Unify the literal's type variable with the target leaf type
                 // so it doesn't remain unresolved.
-                let leaf = self.peel_transparent_newtypes(to);
                 let _ = self.table.unify(from, leaf);
                 return ExprProp::new(to, true);
             }
 
-            let leaf = self.peel_transparent_newtypes(to);
             // Unify to prevent a spurious "type annotation needed" error.
             let _ = self.table.unify(from, leaf);
             let diag = BodyDiag::InvalidCast {
@@ -607,12 +616,21 @@ impl<'db> TyChecker<'db> {
             return true;
         }
 
+        if self.is_pointer_word_cast(from_leaf, to_leaf) {
+            return true;
+        }
+
         self.is_lossless_int_cast(from_leaf, to_leaf)
     }
 
     fn is_string_word_cast(&self, from: TyId<'db>, to: TyId<'db>) -> bool {
         (from.is_string(self.db) && self.is_plain_u256(to))
             || (self.is_plain_u256(from) && to.is_string(self.db))
+    }
+
+    fn is_pointer_word_cast(&self, from: TyId<'db>, to: TyId<'db>) -> bool {
+        from.as_ptr(self.db).is_some() && (to.as_ptr(self.db).is_some() || self.is_plain_u256(to))
+            || self.is_plain_u256(from) && to.as_ptr(self.db).is_some()
     }
 
     fn is_plain_u256(&self, ty: TyId<'db>) -> bool {
@@ -3169,7 +3187,6 @@ impl<'db> TyChecker<'db> {
                 }
             }
         };
-
         match res {
             ResolvedPathInBody::Binding(binding) => {
                 let ty = self
@@ -4091,77 +4108,78 @@ impl<'db> TyChecker<'db> {
         let lhs_candidates = self.capability_fallback_candidates(lhs_ty);
         let method_assumptions = self.env.assumptions();
 
-        let mut selected_lhs_ty = lhs_candidates[0];
-        let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
-        let mut method_candidate = select_method_candidate(
-            self.db,
-            &c_lhs_ty,
-            op.trait_method(self.db),
-            self.env.scope(),
-            method_assumptions,
-            Some(trait_def),
-        );
-        if matches!(
-            method_candidate,
-            Err(MethodSelectionError::NotFound | MethodSelectionError::ReceiverTypeMustBeKnown)
-        ) {
-            for &candidate_ty in lhs_candidates.iter().skip(1) {
-                let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
-                let fallback = select_method_candidate(
-                    self.db,
-                    &c_candidate_ty,
-                    op.trait_method(self.db),
-                    self.env.scope(),
-                    method_assumptions,
-                    Some(trait_def),
-                );
-                if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound)) {
-                    selected_lhs_ty = candidate_ty;
-                    c_lhs_ty = c_candidate_ty;
-                    method_candidate = fallback;
-                    break;
+        let (method, inst) = if let Some(rhs_expr) = rhs_expr {
+            let mut selected_lhs_ty = lhs_candidates[0];
+            let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
+            let mut method_candidates = select_trait_method_candidates(
+                self.db,
+                &c_lhs_ty,
+                op.trait_method(self.db),
+                self.env.scope(),
+                method_assumptions,
+                trait_def,
+            );
+            if matches!(
+                method_candidates,
+                Err(MethodSelectionError::NotFound | MethodSelectionError::ReceiverTypeMustBeKnown)
+            ) {
+                for &candidate_ty in lhs_candidates.iter().skip(1) {
+                    let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
+                    let fallback = select_trait_method_candidates(
+                        self.db,
+                        &c_candidate_ty,
+                        op.trait_method(self.db),
+                        self.env.scope(),
+                        method_assumptions,
+                        trait_def,
+                    );
+                    if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound))
+                    {
+                        selected_lhs_ty = candidate_ty;
+                        c_lhs_ty = c_candidate_ty;
+                        method_candidates = fallback;
+                        break;
+                    }
                 }
             }
-        }
 
-        let (method, inst) = match method_candidate {
-            Ok(MethodCandidate::InherentMethod(_)) => unreachable!(),
-            Ok(
-                res @ (MethodCandidate::TraitMethod(cand)
-                | MethodCandidate::NeedsConfirmation(cand)),
-            ) => {
-                let inst = c_lhs_ty.extract_solution(&mut self.table, cand.inst);
-                if matches!(res, MethodCandidate::NeedsConfirmation(_)) {
-                    self.env.register_trait_obligation(TraitObligation {
-                        goal: inst,
-                        origin: TraitObligationOrigin::GenericConfirmation,
-                        span: expr.span(self.body()).into(),
-                    });
-                }
-
-                let func_ty =
-                    self.instantiate_trait_method_to_term(cand.method, selected_lhs_ty, inst);
-
-                if let Some(rhs_expr) = rhs_expr
-                    && let Some(expected_rhs) = self.instantiated_ops_rhs_ty(func_ty, inst)
-                {
-                    self.check_or_constrain_expr_to_expected(rhs_expr, expected_rhs);
-                }
-
-                (func_ty, inst)
-            }
-            Err(MethodSelectionError::AmbiguousTraitMethod(ambiguous)) => {
-                let Some(rhs_expr) = rhs_expr else {
-                    unreachable!("unary core::ops ambiguity");
-                };
-
-                let rhs = self.check_expr_unknown(rhs_expr);
-                if rhs.ty.has_invalid(self.db) {
+            let method_candidates = match method_candidates {
+                Ok(method_candidates) => method_candidates,
+                Err(MethodSelectionError::NotFound) => {
+                    let diag = BodyDiag::ops_trait_not_implemented(
+                        self.db,
+                        expr.span(self.body()).into(),
+                        lhs_ty,
+                        op,
+                    );
+                    self.push_diag(diag);
                     return ExprProp::invalid(self.db);
                 }
+                Err(err) => {
+                    let span = expr.span(self.body());
+                    let diag = body_diag_from_method_selection_err(
+                        self.db,
+                        err,
+                        Spanned::new(lhs_ty, span.clone().into()),
+                        Spanned::new(op.trait_method(self.db), span.into()),
+                    );
+                    self.push_diag(diag);
+                    return ExprProp::invalid(self.db);
+                }
+            };
+            let rhs = self
+                .env
+                .typed_expr(rhs_expr)
+                .unwrap_or_else(|| self.check_expr_unknown(rhs_expr));
+            if rhs.ty.has_invalid(self.db) {
+                return ExprProp::invalid(self.db);
+            }
 
+            let mut viable = if let [candidate] = method_candidates.candidates.as_slice() {
+                vec![*candidate]
+            } else {
                 let mut viable = Vec::new();
-                for candidate in ambiguous.candidates.iter().copied() {
+                for candidate in method_candidates.candidates.iter().copied() {
                     let snapshot = self.snapshot_state();
                     let unifies = (|| {
                         let inst = c_lhs_ty.extract_solution(&mut self.table, candidate.cand.inst);
@@ -4190,85 +4208,140 @@ impl<'db> TyChecker<'db> {
                         viable.push(candidate);
                     }
                 }
+                viable
+            };
 
-                match viable.len() {
-                    0 => {
-                        let diag = BodyDiag::ops_trait_not_implemented(
-                            self.db,
-                            expr.span(self.body()).into(),
-                            lhs_ty,
-                            op,
-                        );
-                        self.push_diag(diag);
-                        return ExprProp::invalid(self.db);
-                    }
-                    1 => {
-                        let candidate = viable.pop().unwrap();
-                        let inst = c_lhs_ty.extract_solution(&mut self.table, candidate.cand.inst);
-                        if candidate.needs_confirmation {
-                            self.env.register_trait_obligation(TraitObligation {
-                                goal: inst,
-                                origin: TraitObligationOrigin::GenericConfirmation,
-                                span: expr.span(self.body()).into(),
-                            });
-                        }
-                        let func_ty = self.instantiate_trait_method_to_term(
-                            candidate.cand.method,
-                            selected_lhs_ty,
-                            inst,
-                        );
-                        if let Some(expected_rhs) = self.instantiated_ops_rhs_ty(func_ty, inst) {
-                            let rhs_ty = self
-                                .try_coerce_capability_for_expr_to_expected(
-                                    rhs_expr,
-                                    rhs.ty,
-                                    expected_rhs,
-                                )
-                                .unwrap_or(rhs.ty);
-                            self.unify_ty(
-                                Typeable::Expr(rhs_expr, rhs.clone()),
-                                rhs_ty,
-                                expected_rhs,
-                            );
-                        }
-                        (func_ty, inst)
-                    }
-                    _ => {
-                        let cands = viable
-                            .into_iter()
-                            .map(|candidate| {
-                                c_lhs_ty.extract_solution(&mut self.table, candidate.cand.inst)
-                            })
-                            .collect();
-                        self.push_diag(BodyDiag::AmbiguousTraitInst {
-                            primary: expr.span(self.body()).into(),
-                            cands,
-                            required_by: None,
+            match viable.len() {
+                0 => {
+                    let diag = BodyDiag::ops_trait_not_implemented(
+                        self.db,
+                        expr.span(self.body()).into(),
+                        lhs_ty,
+                        op,
+                    );
+                    self.push_diag(diag);
+                    return ExprProp::invalid(self.db);
+                }
+                1 => {
+                    let candidate = viable.pop().unwrap();
+                    let inst = c_lhs_ty.extract_solution(&mut self.table, candidate.cand.inst);
+                    if candidate.needs_confirmation {
+                        self.env.register_trait_obligation(TraitObligation {
+                            goal: inst,
+                            origin: TraitObligationOrigin::GenericConfirmation,
+                            span: expr.span(self.body()).into(),
                         });
-                        return ExprProp::invalid(self.db);
+                    }
+                    let func_ty = self.instantiate_trait_method_to_term(
+                        candidate.cand.method,
+                        selected_lhs_ty,
+                        inst,
+                    );
+                    if let Some(expected_rhs) = self.instantiated_ops_rhs_ty(func_ty, inst) {
+                        let rhs_ty = self
+                            .try_coerce_capability_for_expr_to_expected(
+                                rhs_expr,
+                                rhs.ty,
+                                expected_rhs,
+                            )
+                            .unwrap_or(rhs.ty);
+                        self.unify_ty(Typeable::Expr(rhs_expr, rhs.clone()), rhs_ty, expected_rhs);
+                    }
+                    (func_ty, inst)
+                }
+                _ => {
+                    let cands = viable
+                        .into_iter()
+                        .map(|candidate| {
+                            c_lhs_ty.extract_solution(&mut self.table, candidate.cand.inst)
+                        })
+                        .collect();
+                    self.push_diag(BodyDiag::AmbiguousTraitInst {
+                        primary: expr.span(self.body()).into(),
+                        cands,
+                        required_by: None,
+                    });
+                    return ExprProp::invalid(self.db);
+                }
+            }
+        } else {
+            let mut selected_lhs_ty = lhs_candidates[0];
+            let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
+            let mut method_candidate = select_method_candidate(
+                self.db,
+                &c_lhs_ty,
+                op.trait_method(self.db),
+                self.env.scope(),
+                method_assumptions,
+                Some(trait_def),
+            );
+            if matches!(
+                method_candidate,
+                Err(MethodSelectionError::NotFound | MethodSelectionError::ReceiverTypeMustBeKnown)
+            ) {
+                for &candidate_ty in lhs_candidates.iter().skip(1) {
+                    let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
+                    let fallback = select_method_candidate(
+                        self.db,
+                        &c_candidate_ty,
+                        op.trait_method(self.db),
+                        self.env.scope(),
+                        method_assumptions,
+                        Some(trait_def),
+                    );
+                    if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound))
+                    {
+                        selected_lhs_ty = candidate_ty;
+                        c_lhs_ty = c_candidate_ty;
+                        method_candidate = fallback;
+                        break;
                     }
                 }
             }
-            Err(MethodSelectionError::NotFound) => {
-                let diag = BodyDiag::ops_trait_not_implemented(
-                    self.db,
-                    expr.span(self.body()).into(),
-                    lhs_ty,
-                    op,
-                );
-                self.push_diag(diag);
-                return ExprProp::invalid(self.db);
-            }
-            Err(err) => {
-                let span = expr.span(self.body());
-                let diag = body_diag_from_method_selection_err(
-                    self.db,
-                    err,
-                    Spanned::new(lhs_ty, span.clone().into()),
-                    Spanned::new(op.trait_method(self.db), span.into()),
-                );
-                self.push_diag(diag);
-                return ExprProp::invalid(self.db);
+
+            match method_candidate {
+                Ok(MethodCandidate::InherentMethod(_)) => unreachable!(),
+                Ok(
+                    res @ (MethodCandidate::TraitMethod(cand)
+                    | MethodCandidate::NeedsConfirmation(cand)),
+                ) => {
+                    let inst = c_lhs_ty.extract_solution(&mut self.table, cand.inst);
+                    if matches!(res, MethodCandidate::NeedsConfirmation(_)) {
+                        self.env.register_trait_obligation(TraitObligation {
+                            goal: inst,
+                            origin: TraitObligationOrigin::GenericConfirmation,
+                            span: expr.span(self.body()).into(),
+                        });
+                    }
+
+                    let func_ty =
+                        self.instantiate_trait_method_to_term(cand.method, selected_lhs_ty, inst);
+                    (func_ty, inst)
+                }
+                Err(MethodSelectionError::AmbiguousTraitMethod(_)) => {
+                    unreachable!("unary core::ops ambiguity")
+                }
+                Err(MethodSelectionError::NotFound) => {
+                    let diag = BodyDiag::ops_trait_not_implemented(
+                        self.db,
+                        expr.span(self.body()).into(),
+                        lhs_ty,
+                        op,
+                    );
+                    self.push_diag(diag);
+                    return ExprProp::invalid(self.db);
+                }
+                Err(err) => {
+                    let span = expr.span(self.body());
+                    let diag = body_diag_from_method_selection_err(
+                        self.db,
+                        err,
+                        Spanned::new(lhs_ty, span.clone().into()),
+                        Spanned::new(op.trait_method(self.db), span.into()),
+                    );
+                    self.push_diag(diag);
+                    return ExprProp::invalid(self.db);
+                }
             }
         };
 
@@ -4296,17 +4369,6 @@ impl<'db> TyChecker<'db> {
         let mut subst = AssocTySubst::new(inst);
         expected_rhs = self.normalize_ty(expected_rhs.fold_with(self.db, &mut subst));
         Some(expected_rhs)
-    }
-
-    fn check_or_constrain_expr_to_expected(&mut self, expr: ExprId, expected: TyId<'db>) {
-        let Some(prop) = self.env.typed_expr(expr) else {
-            self.check_expr(expr, expected);
-            return;
-        };
-        let actual = self
-            .try_coerce_capability_for_expr_to_expected(expr, prop.ty, expected)
-            .unwrap_or(prop.ty);
-        self.unify_ty(Typeable::Expr(expr, prop), actual, expected);
     }
 
     fn check_assign_lhs(&mut self, lhs: ExprId, typed_lhs: &ExprProp<'db>) -> AssignLhsStatus {

@@ -6,6 +6,7 @@ pub use super::{
     message::MsgVariant,
     num::IntDowncast,
     option::Option::{self, *},
+    ptr::{MemorySlice, addr, as_bytes, cast, from_addr, null, offset, offset_bytes, read, write},
     result::Result::{self, *},
     todo, panic,
 }

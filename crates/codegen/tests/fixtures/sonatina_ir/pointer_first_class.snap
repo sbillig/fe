@@ -1,0 +1,398 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/pointer_first_class.fe
+---
+target = "evm-ethereum-osaka"
+
+type @layout_0 = {i256, i256};
+type @layout_1 = {i256, i256};
+type @layout_2 = {i256, i256};
+
+global private const @layout_2 $const_region_0 = {5, 8};
+
+func private %addr__g79ff(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %addr__ge513(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %alloc() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.*i8 = evm_malloc 64.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        return v2;
+}
+
+func private %alloc_array(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v4.i256 = mul v2 32.i256;
+        v5.*i8 = evm_malloc v4;
+        v6.i256 = ptr_to_int v5 i256;
+        return v6;
+}
+
+func private %alloc_bytes(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
+
+func private %alloc_slice(v0.i256) -> @layout_0 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i256 = call %alloc_array v2;
+        v4.i256 = mload v1 i256;
+        v5.objref<@layout_0> = obj.alloc @layout_0;
+        v7.objref<i256> = obj.proj v5 0.i256;
+        obj.store v7 v3;
+        v9.objref<i256> = obj.proj v5 1.i256;
+        obj.store v9 v4;
+        v10.@layout_0 = obj.load v5;
+        return v10;
+}
+
+func private %as_bytes__g8571(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %as_bytes__ge513(v0.objref<@layout_0>) -> @layout_1 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.objref<i256> = obj.proj v0 0.i256;
+        v4.i256 = obj.load v3;
+        v5.i256 = call %byte_len v0;
+        v6.objref<@layout_1> = obj.alloc @layout_1;
+        v7.objref<i256> = obj.proj v6 0.i256;
+        obj.store v7 v4;
+        v9.objref<i256> = obj.proj v6 1.i256;
+        obj.store v9 v5;
+        v10.@layout_1 = obj.load v6;
+        return v10;
+}
+
+func private %byte_len(v0.objref<@layout_0>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.objref<i256> = obj.proj v0 1.i256;
+        v4.i256 = obj.load v3;
+        (v6.i256, v7.i1) = umulo v4 32.i256;
+        br v7 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        return v6;
+}
+
+func private %cast__gcc0a(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %cast__g5398(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %from_ptr__ge513(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %from_ptr__g8571(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = call %sum_first_class_pointers;
+        evm_stop;
+}
+
+func private %offset(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        mstore v2 v1 i256;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v6.i256 = mul v4 32.i256;
+        v7.i256 = call %offset_bytes v0 v6;
+        return v7;
+}
+
+func private %offset_bytes(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        mstore v2 v1 i256;
+        jump block1;
+
+    block1:
+        v4.i256 = call %addr__ge513 v0;
+        v5.i256 = mload v2 i256;
+        v6.i256 = add v4 v5;
+        return v6;
+}
+
+func private %ptr_read__g2654(v0.i256) -> @layout_2 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = mload v0 i256;
+        v5.@layout_2 = insert_value undef.@layout_2 0.i256 v3;
+        v7.i256 = add v0 32.i256;
+        v8.i256 = mload v7 i256;
+        v10.@layout_2 = insert_value v5 1.i256 v8;
+        return v10;
+}
+
+func private %ptr_read__g390b(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = mload v0 i256;
+        return v2;
+}
+
+func private %ptr_write__g390b(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        mstore v1 v0 i256;
+        return;
+}
+
+func private %ptr_write__g2654(v0.@layout_2, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v5.i256 = extract_value v0 0.i256;
+        mstore v1 v5 i256;
+        v7.i256 = extract_value v0 1.i256;
+        v9.i256 = add v1 32.i256;
+        mstore v9 v7 i256;
+        return;
+}
+
+func private %read__ge513(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %from_ptr__ge513 v0;
+        v3.i256 = call %ptr_read__g390b v2;
+        return v3;
+}
+
+func private %read__g8571(v0.i256) -> @layout_2 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %from_ptr__g8571 v0;
+        v3.@layout_2 = call %ptr_read__g2654 v2;
+        return v3;
+}
+
+func private %sum_first_class_pointers() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = call %alloc;
+        v3.constref<@layout_2> = const.ref $const_region_0;
+        v4.objref<@layout_2> = obj.alloc @layout_2;
+        obj.init.const v4 v3;
+        v5.@layout_2 = obj.load v4;
+        call %write__g8571 v0 v5;
+        v7.i256 = call %cast__g5398 v0;
+        v9.i256 = call %offset v7 1.i256;
+        v10.i256 = call %read__ge513 v9;
+        (v12.i256, v13.i1) = uaddo v10 3.i256;
+        br v13 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        call %write__ge513 v9 v12;
+        v22.i256 = call %as_bytes__g8571 v0;
+        v23.i256 = call %cast__gcc0a v22;
+        v24.@layout_2 = call %read__g8571 v23;
+        v25.objref<@layout_2> = obj.alloc @layout_2;
+        v26.objref<i256> = obj.proj v25 0.i256;
+        v27.i256 = extract_value v24 0.i256;
+        obj.store v26 v27;
+        v28.objref<i256> = obj.proj v25 1.i256;
+        v29.i256 = extract_value v24 1.i256;
+        obj.store v28 v29;
+        v30.i256 = call %alloc_array 1.i256;
+        call %write__ge513 v30 3.i256;
+        v32.i256 = call %alloc_bytes 1.i256;
+        v33.i256 = call %addr__g79ff v32;
+        v34.i256 = call %addr__g79ff v32;
+        (v35.i256, v36.i1) = usubo v33 v34;
+        br v36 block2 block4;
+
+    block4:
+        v38.@layout_0 = call %alloc_slice 2.i256;
+        v39.objref<@layout_0> = obj.alloc @layout_0;
+        v40.objref<i256> = obj.proj v39 0.i256;
+        v41.i256 = extract_value v38 0.i256;
+        obj.store v40 v41;
+        v42.objref<i256> = obj.proj v39 1.i256;
+        v43.i256 = extract_value v38 1.i256;
+        obj.store v42 v43;
+        v44.objref<i256> = obj.proj v39 0.i256;
+        v45.i256 = obj.load v44;
+        v47.objref<i256> = obj.proj v25 0.i256;
+        v48.i256 = obj.load v47;
+        call %write__ge513 v45 v48;
+        v50.objref<i256> = obj.proj v39 0.i256;
+        v51.i256 = obj.load v50;
+        v52.i256 = call %offset v51 1.i256;
+        v53.objref<i256> = obj.proj v25 1.i256;
+        v54.i256 = obj.load v53;
+        call %write__ge513 v52 v54;
+        v56.@layout_1 = call %as_bytes__ge513 v39;
+        v57.objref<@layout_1> = obj.alloc @layout_1;
+        v58.objref<i256> = obj.proj v57 0.i256;
+        v59.i256 = extract_value v56 0.i256;
+        obj.store v58 v59;
+        v60.objref<i256> = obj.proj v57 1.i256;
+        v61.i256 = extract_value v56 1.i256;
+        obj.store v60 v61;
+        v62.objref<i256> = obj.proj v39 0.i256;
+        v63.i256 = obj.load v62;
+        v64.i256 = call %offset v63 1.i256;
+        v65.objref<i256> = obj.proj v39 0.i256;
+        v66.i256 = obj.load v65;
+        (v67.i256, v68.i1) = usubo v64 v66;
+        br v68 block2 block5;
+
+    block5:
+        v70.objref<i256> = obj.proj v39 0.i256;
+        v71.i256 = obj.load v70;
+        v72.i256 = call %read__ge513 v71;
+        v73.objref<i256> = obj.proj v39 0.i256;
+        v74.i256 = obj.load v73;
+        v75.i256 = call %offset v74 1.i256;
+        v76.i256 = call %read__ge513 v75;
+        (v77.i256, v78.i1) = uaddo v72 v76;
+        br v78 block2 block6;
+
+    block6:
+        v80.i256 = call %read__ge513 v30;
+        (v81.i256, v82.i1) = uaddo v77 v80;
+        br v82 block2 block7;
+
+    block7:
+        v84.objref<i256> = obj.proj v57 1.i256;
+        v85.i256 = obj.load v84;
+        (v86.i256, v87.i1) = uaddo v81 v85;
+        br v87 block2 block8;
+
+    block8:
+        (v89.i256, v90.i1) = uaddo v86 v67;
+        br v90 block2 block9;
+
+    block9:
+        (v92.i256, v93.i1) = uaddo v89 v35;
+        br v93 block2 block10;
+
+    block10:
+        return v92;
+}
+
+func private %write__g8571(v0.i256, v1.@layout_2) {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = call %from_ptr__g8571 v0;
+        call %ptr_write__g2654 v1 v3;
+        return;
+}
+
+func private %write__ge513(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = call %from_ptr__ge513 v0;
+        call %ptr_write__g390b v1 v3;
+        return;
+}
+
+
+object @main {
+    section main {
+        entry %main_root;
+    }
+}

@@ -453,41 +453,42 @@ fn effect_handle_from_raw_helpers_preserve_transport_in_rmir() {
 }
 
 #[test]
-fn mem_ptr_from_raw_helpers_use_raw_addr_transport_in_rmir() {
+fn mem_ptr_from_ptr_helpers_use_raw_addr_transport_in_rmir() {
     with_runtime_package!(
-        "mem_ptr_from_raw_helpers_use_raw_addr_transport_in_rmir.fe",
-        include_str!("fixtures/raw_log_emit.fe").to_string(),
+        "mem_ptr_from_ptr_helpers_use_raw_addr_transport_in_rmir.fe",
+        include_str!("fixtures/pointer_first_class.fe").to_string(),
         |db, package| {
-            let from_raw_helpers = package
+            let from_ptr_helpers = package
                 .functions(&db)
                 .iter()
                 .copied()
-                .filter(|function| function.symbol(&db).contains("from_raw"))
+                .filter(|function| function.symbol(&db).contains("from_ptr"))
                 .collect::<Vec<_>>();
             assert!(
-                !from_raw_helpers.is_empty(),
-                "expected generated MemPtr::from_raw helper in runtime package"
+                !from_ptr_helpers.is_empty(),
+                "expected generated MemPtr::from_ptr helper in runtime package"
             );
 
-            for function in from_raw_helpers {
+            for function in from_ptr_helpers {
                 let body = function.instance(&db).body(&db);
                 assert!(
-                    body.blocks
-                        .iter()
-                        .flat_map(|block| block.stmts.iter())
-                        .any(|stmt| {
-                            matches!(
-                                stmt,
-                                RStmt::Assign {
-                                    expr: RExpr::WordToRawAddr {
-                                        space: AddressSpaceKind::Memory,
-                                        ..
-                                    },
-                                    ..
-                                }
-                            )
-                        }),
-                    "MemPtr::from_raw should keep memory handles as raw-address transport:\n{body:#?}"
+                    matches!(
+                        body.signature.params.as_slice(),
+                        [param] if matches!(
+                            &param.class,
+                            RuntimeClass::RawAddr {
+                                space: AddressSpaceKind::Memory,
+                                ..
+                            }
+                        )
+                    ) && matches!(
+                        &body.signature.ret,
+                        Some(RuntimeClass::RawAddr {
+                            space: AddressSpaceKind::Memory,
+                            ..
+                        })
+                    ),
+                    "MemPtr::from_ptr should take and return raw memory addresses:\n{body:#?}"
                 );
                 assert!(
                     !body
@@ -501,12 +502,16 @@ fn mem_ptr_from_raw_helpers_use_raw_addr_transport_in_rmir() {
                                     expr: RExpr::ProviderFromRaw {
                                         space: AddressSpaceKind::Memory,
                                         ..
-                                    },
+                                    } | RExpr::WordToRawAddr {
+                                        space: AddressSpaceKind::Memory,
+                                        ..
+                                    } | RExpr::AddrOf { .. }
+                                        | RExpr::MaterializeToObject { .. },
                                     ..
-                                }
+                                } | RStmt::CopyInto { .. }
                             )
                         }),
-                    "MemPtr::from_raw must not reconstruct memory provider refs:\n{body:#?}"
+                    "MemPtr::from_ptr should preserve raw-address transport:\n{body:#?}"
                 );
             }
         }

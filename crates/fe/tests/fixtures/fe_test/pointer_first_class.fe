@@ -1,0 +1,40 @@
+use core::ops::{Add, Sub}
+
+struct Data {
+    a: u256,
+    b: u256,
+}
+
+#[test]
+fn test_first_class_memory_pointers() {
+    let data = core::ptr::alloc<Data>()
+    core::ptr::write(data, Data { a: 5, b: 8 })
+
+    let words = core::ptr::cast<Data, u256>(data)
+    let second = core::ptr::offset(words, 1)
+    core::ptr::write(second, core::ptr::read(second) + 3)
+
+    let byte_ptr = core::ptr::as_bytes(data)
+    let roundtrip = core::ptr::cast<u8, Data>(byte_ptr)
+    let first = core::ptr::read(roundtrip)
+    assert(first.a == 5)
+    assert(first.b == 11)
+
+    let raw_array = core::ptr::alloc_array<u256>(1)
+    core::ptr::write(raw_array, 19)
+    assert(core::ptr::read(raw_array) == 19)
+
+    let byte_alloc = core::ptr::alloc_bytes(1)
+    assert(core::ptr::addr(byte_alloc) != 0)
+
+    let slice = core::ptr::alloc_slice<u256>(2)
+    core::ptr::write(slice.ptr, first.a)
+    core::ptr::write(core::ptr::offset(slice.ptr, 1), first.b)
+
+    let bytes = slice.as_bytes()
+    assert(slice.len == 2)
+    assert(bytes.len == 64)
+    assert(core::ptr::addr(bytes.ptr) == core::ptr::addr(slice.ptr))
+    assert(core::ptr::offset(slice.ptr, 1) - slice.ptr == 32)
+    assert(core::ptr::read(slice.ptr) + core::ptr::read(core::ptr::offset(slice.ptr, 1)) == 16)
+}
