@@ -1,8 +1,20 @@
 use core::AsBytes
-use core::abi::{Bytes, DynString}
+use core::abi::{
+    Abi,
+    AbiDecoder,
+    AbiEncoder,
+    AbiSize,
+    AbiSpan,
+    ByteInput,
+    Bytes,
+    Decode,
+    DynString,
+    Encode,
+}
 use core::num::IntDowncast
 use ingot::evm::Address
 use ingot::evm::TopicValue
+use ingot::evm::ops::revert
 
 /// Maps a Fe type to its Solidity ABI type name.
 ///
@@ -98,6 +110,283 @@ impl SolCompat for Bytes {
     const SOL_TYPE: Self::S = "bytes"
 }
 
+#[arithmetic(unchecked)]
+fn encode_fixed_bytes_word(value: u256, len: u256) -> u256 {
+    if len == 0 || len > 32 {
+        revert(offset: 0, len: 0)
+    }
+
+    if len == 32 {
+        return value
+    }
+
+    if value >> (len * 8) == 0 {
+        return value << ((32 - len) * 8)
+    }
+
+    revert(offset: 0, len: 0)
+}
+
+#[arithmetic(unchecked)]
+fn decode_fixed_bytes_word(word: u256, len: u256) -> u256 {
+    if len == 0 || len > 32 {
+        revert(offset: 0, len: 0)
+    }
+
+    if len == 32 {
+        return word
+    }
+
+    if word << (len * 8) == 0 {
+        return word >> ((32 - len) * 8)
+    }
+
+    revert(offset: 0, len: 0)
+}
+
+/// Solidity `bytesN` for `1 <= N <= 32`.
+///
+/// The ABI representation is a single word with the `N` bytes left-aligned and
+/// the remaining bytes zero-padded. `val` stores the human-sized value
+/// right-aligned; e.g. `FixedBytes<4> { val: 0x01ffc9a7 }` encodes as
+/// `0x01ffc9a7...00`.
+///
+/// Use the aliases `Bytes1` through `Bytes32` for Solidity-compatible source
+/// signatures. Encoding or decoding an unsupported width (`N == 0` or
+/// `N > 32`) reverts.
+pub struct FixedBytes<const N: usize> {
+    /// Right-aligned byte value before ABI padding.
+    pub val: u256,
+}
+
+impl<const N: usize> FixedBytes<N> {
+    /// Return the canonical ABI word for this fixed-byte value.
+    ///
+    /// The returned word is left-aligned and zero-padded as required by
+    /// Solidity ABI `bytesN`.
+    #[arithmetic(unchecked)]
+    pub fn word(self) -> u256 {
+        encode_fixed_bytes_word(value: self.val, len: N as u256)
+    }
+}
+
+impl<const N: usize> AbiSize for FixedBytes<N> {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl<A: Abi, const N: usize> AbiSpan<A> for FixedBytes<N> {
+    fn payload_end<I: ByteInput>(_: I, base: u256, pos: u256) -> u256 { pos + 32 }
+}
+
+impl<A: Abi, const N: usize> Decode<A> for FixedBytes<N> {
+    fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
+        FixedBytes { val: decode_fixed_bytes_word(word: d.read_word(), len: N as u256) }
+    }
+}
+
+impl<A: Abi, const N: usize> Encode<A> for FixedBytes<N> {
+    const DIRECT_ENCODE: bool = true
+
+    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.word()) }
+
+    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.word()) }
+}
+
+/// Solidity ABI `bytes1`.
+pub type Bytes1 = FixedBytes<1>
+/// Solidity ABI `bytes2`.
+pub type Bytes2 = FixedBytes<2>
+/// Solidity ABI `bytes3`.
+pub type Bytes3 = FixedBytes<3>
+/// Solidity ABI `bytes4`.
+pub type Bytes4 = FixedBytes<4>
+/// Solidity ABI `bytes5`.
+pub type Bytes5 = FixedBytes<5>
+/// Solidity ABI `bytes6`.
+pub type Bytes6 = FixedBytes<6>
+/// Solidity ABI `bytes7`.
+pub type Bytes7 = FixedBytes<7>
+/// Solidity ABI `bytes8`.
+pub type Bytes8 = FixedBytes<8>
+/// Solidity ABI `bytes9`.
+pub type Bytes9 = FixedBytes<9>
+/// Solidity ABI `bytes10`.
+pub type Bytes10 = FixedBytes<10>
+/// Solidity ABI `bytes11`.
+pub type Bytes11 = FixedBytes<11>
+/// Solidity ABI `bytes12`.
+pub type Bytes12 = FixedBytes<12>
+/// Solidity ABI `bytes13`.
+pub type Bytes13 = FixedBytes<13>
+/// Solidity ABI `bytes14`.
+pub type Bytes14 = FixedBytes<14>
+/// Solidity ABI `bytes15`.
+pub type Bytes15 = FixedBytes<15>
+/// Solidity ABI `bytes16`.
+pub type Bytes16 = FixedBytes<16>
+/// Solidity ABI `bytes17`.
+pub type Bytes17 = FixedBytes<17>
+/// Solidity ABI `bytes18`.
+pub type Bytes18 = FixedBytes<18>
+/// Solidity ABI `bytes19`.
+pub type Bytes19 = FixedBytes<19>
+/// Solidity ABI `bytes20`.
+pub type Bytes20 = FixedBytes<20>
+/// Solidity ABI `bytes21`.
+pub type Bytes21 = FixedBytes<21>
+/// Solidity ABI `bytes22`.
+pub type Bytes22 = FixedBytes<22>
+/// Solidity ABI `bytes23`.
+pub type Bytes23 = FixedBytes<23>
+/// Solidity ABI `bytes24`.
+pub type Bytes24 = FixedBytes<24>
+/// Solidity ABI `bytes25`.
+pub type Bytes25 = FixedBytes<25>
+/// Solidity ABI `bytes26`.
+pub type Bytes26 = FixedBytes<26>
+/// Solidity ABI `bytes27`.
+pub type Bytes27 = FixedBytes<27>
+/// Solidity ABI `bytes28`.
+pub type Bytes28 = FixedBytes<28>
+/// Solidity ABI `bytes29`.
+pub type Bytes29 = FixedBytes<29>
+/// Solidity ABI `bytes30`.
+pub type Bytes30 = FixedBytes<30>
+/// Solidity ABI `bytes31`.
+pub type Bytes31 = FixedBytes<31>
+/// Solidity ABI `bytes32`.
+pub type Bytes32 = FixedBytes<32>
+
+impl SolCompat for Bytes1 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "bytes1"
+}
+impl SolCompat for Bytes2 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "bytes2"
+}
+impl SolCompat for Bytes3 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "bytes3"
+}
+impl SolCompat for Bytes4 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "bytes4"
+}
+impl SolCompat for Bytes5 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "bytes5"
+}
+impl SolCompat for Bytes6 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "bytes6"
+}
+impl SolCompat for Bytes7 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "bytes7"
+}
+impl SolCompat for Bytes8 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "bytes8"
+}
+impl SolCompat for Bytes9 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "bytes9"
+}
+impl SolCompat for Bytes10 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes10"
+}
+impl SolCompat for Bytes11 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes11"
+}
+impl SolCompat for Bytes12 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes12"
+}
+impl SolCompat for Bytes13 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes13"
+}
+impl SolCompat for Bytes14 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes14"
+}
+impl SolCompat for Bytes15 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes15"
+}
+impl SolCompat for Bytes16 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes16"
+}
+impl SolCompat for Bytes17 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes17"
+}
+impl SolCompat for Bytes18 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes18"
+}
+impl SolCompat for Bytes19 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes19"
+}
+impl SolCompat for Bytes20 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes20"
+}
+impl SolCompat for Bytes21 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes21"
+}
+impl SolCompat for Bytes22 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes22"
+}
+impl SolCompat for Bytes23 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes23"
+}
+impl SolCompat for Bytes24 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes24"
+}
+impl SolCompat for Bytes25 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes25"
+}
+impl SolCompat for Bytes26 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes26"
+}
+impl SolCompat for Bytes27 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes27"
+}
+impl SolCompat for Bytes28 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes28"
+}
+impl SolCompat for Bytes29 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes29"
+}
+impl SolCompat for Bytes30 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes30"
+}
+impl SolCompat for Bytes31 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes31"
+}
+impl SolCompat for Bytes32 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes32"
+}
+
 impl TopicValue for u8 {
     fn as_topic(self) -> u256 { self.downcast_unchecked() }
 }
@@ -139,4 +428,7 @@ impl TopicValue for Address {
 }
 impl TopicValue for bool {
     fn as_topic(self) -> u256 { if self { 1 } else { 0 } }
+}
+impl<const N: usize> TopicValue for FixedBytes<N> {
+    fn as_topic(self) -> u256 { self.word() }
 }
