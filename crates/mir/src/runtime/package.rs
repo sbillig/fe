@@ -4,7 +4,7 @@ use hir::{
         semantic::{
             GenericSubst, ImplEnv, ManualContractSection, RootSemanticInstanceError,
             SemanticInstance, SemanticInstanceKey, get_or_build_semantic_instance,
-            owner_effect_bindings, root_semantic_instance_key,
+            identity_semantic_instance_key, owner_effect_bindings, root_semantic_instance_key,
         },
         ty::{
             const_ty::ConstTyData,
@@ -508,7 +508,7 @@ pub fn build_library_package<'db>(
     Ok(package)
 }
 
-/// Build a native executable package rooted only at `pub fn main()`.
+/// Build a native executable package rooted only at native `pub fn main`.
 ///
 /// This intentionally ignores contracts and other public functions in the same
 /// ingot module. Native executable output should compile only the code reachable
@@ -541,26 +541,16 @@ pub fn build_native_main_package<'db>(
     }
     if !func.vis(db).is_pub() {
         return Err(LowerError::Unsupported(
-            "native executable output requires `pub fn main() -> i32`".to_string(),
+            "native executable output requires `pub fn main() -> i32` or `pub fn main(argc: i32, argv: **u8) -> i32`"
+                .to_string(),
         ));
     }
 
-    let func = match runtime_root_candidate(db, func)? {
-        RuntimeRootCandidate::Root(func) => func,
-        RuntimeRootCandidate::NotRoot => {
-            return Err(LowerError::Unsupported(
-                "native executable output requires `pub fn main() -> i32`".to_string(),
-            ));
-        }
-        RuntimeRootCandidate::Rejected(rejection) => {
-            return Err(LowerError::Unsupported(format_runtime_root_rejection(
-                db, &rejection,
-            )));
-        }
-    };
-
-    let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
-    let instance = runtime_instance_for_semantic(db, semantic);
+    let semantic = get_or_build_semantic_instance(
+        db,
+        identity_semantic_instance_key(db, BodyOwner::Func(func)),
+    );
+    let instance = runtime_instance_for_native_main(db, semantic);
     let package = build_non_contract_package(
         db,
         top_mod,
@@ -575,6 +565,27 @@ pub fn build_native_main_package<'db>(
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid native main package: {err:?}")))?;
     Ok(package)
+}
+
+fn runtime_instance_for_native_main<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+) -> RuntimeInstance<'db> {
+    let typed_body = semantic.key(db).typed_body(db);
+    let env = RuntimeTypeEnv::for_semantic(db, semantic);
+    let mut params = Vec::new();
+    let mut idx = 0;
+    while let Some(binding) = typed_body.param_binding(idx) {
+        let ty = semantic.binding_ty(db, binding);
+        if let Some(class) = top_level_class_for_ty_in_env(db, env, ty, AddressSpaceKind::Memory) {
+            params.push(runtime_param_class(db, typed_body, binding, env, class));
+        }
+        idx += 1;
+    }
+    get_or_build_runtime_instance(
+        db,
+        RuntimeInstanceKey::new(db, RuntimeInstanceSource::Semantic(semantic), params),
+    )
 }
 
 fn manual_contract_objects<'db>(

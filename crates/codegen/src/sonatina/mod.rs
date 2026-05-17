@@ -10,7 +10,7 @@ use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rustc_hash::FxHashSet;
 use sonatina_codegen::{EvmCompile, OptLevel as SonatinaOptLevel};
 #[cfg(feature = "cranelift")]
-use sonatina_ir::{Linkage, Type, ir_writer::IrWrite};
+use sonatina_ir::{Linkage, Signature, Type, ir_writer::IrWrite};
 use sonatina_ir::{
     Module,
     ir_writer::{FuncWriter, ModuleWriter},
@@ -62,6 +62,20 @@ pub struct SonatinaContractBytecode {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SonatinaTestOptions {
     pub emit_observability: bool,
+}
+
+#[cfg(feature = "cranelift")]
+#[derive(Debug, Clone)]
+pub struct NativeObject {
+    pub bytes: Vec<u8>,
+    pub main_abi: NativeMainAbi,
+}
+
+#[cfg(feature = "cranelift")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeMainAbi {
+    NoArgs,
+    ArgcArgv,
 }
 
 pub(crate) fn create_evm_isa() -> Evm {
@@ -309,32 +323,33 @@ fn select_ingot_native_main_top_mod<'db>(
 }
 
 #[cfg(feature = "cranelift")]
-fn compile_native_object_bytes(module: Module, opt_level: OptLevel) -> Result<Vec<u8>, LowerError> {
-    let main = ensure_native_main_signature(&module)?;
-    module.ctx.update_func_linkage(main, Linkage::Public);
+fn compile_native_object(module: Module, opt_level: OptLevel) -> Result<NativeObject, LowerError> {
+    let main = prepare_native_entry(&module)?;
 
     let backend = sonatina_codegen::isa::cranelift::CraneliftBackend::new();
     let mut compile = sonatina_codegen::Compile::new(module, backend)
         .with_opt_level(to_sonatina_opt_level(opt_level));
     compile.optimize();
-    ensure_native_main_signature(compile.module())?;
+    ensure_native_entry_signature(compile.module(), main.main_abi)?;
     compile
         .backend()
         .compile_module_to_object(compile.module())
-        .map(|artifact| artifact.bytes)
+        .map(|artifact| NativeObject {
+            bytes: artifact.bytes,
+            main_abi: main.main_abi,
+        })
         .map_err(|errors| LowerError::Internal(format_cranelift_errors(&errors)))
 }
 
 #[cfg(feature = "cranelift")]
 fn compile_native_ir_text(module: Module, opt_level: OptLevel) -> Result<String, LowerError> {
-    let main = ensure_native_main_signature(&module)?;
-    module.ctx.update_func_linkage(main, Linkage::Public);
+    let main = prepare_native_entry(&module)?;
 
     let backend = sonatina_codegen::isa::cranelift::CraneliftBackend::new();
     let mut compile = sonatina_codegen::Compile::new(module, backend)
         .with_opt_level(to_sonatina_opt_level(opt_level));
     compile.optimize();
-    ensure_native_main_signature(compile.module())?;
+    ensure_native_entry_signature(compile.module(), main.main_abi)?;
     let mut writer = ModuleWriter::new(compile.module());
     Ok(writer.dump_string())
 }
@@ -346,7 +361,7 @@ pub fn emit_module_native_object(
     opt_level: OptLevel,
 ) -> Result<Vec<u8>, LowerError> {
     let module = compile_native_main_sonatina(db, top_mod)?;
-    compile_native_object_bytes(module, opt_level)
+    compile_native_object(module, opt_level).map(|object| object.bytes)
 }
 
 #[cfg(feature = "cranelift")]
@@ -357,7 +372,28 @@ pub fn emit_ingot_native_object(
 ) -> Result<Vec<u8>, LowerError> {
     let top_mod = select_ingot_native_main_top_mod(db, ingot)?;
     let module = compile_native_main_sonatina(db, top_mod)?;
-    compile_native_object_bytes(module, opt_level)
+    compile_native_object(module, opt_level).map(|object| object.bytes)
+}
+
+#[cfg(feature = "cranelift")]
+pub fn emit_module_native_object_with_abi(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+) -> Result<NativeObject, LowerError> {
+    let module = compile_native_main_sonatina(db, top_mod)?;
+    compile_native_object(module, opt_level)
+}
+
+#[cfg(feature = "cranelift")]
+pub fn emit_ingot_native_object_with_abi(
+    db: &DriverDataBase,
+    ingot: hir::Ingot<'_>,
+    opt_level: OptLevel,
+) -> Result<NativeObject, LowerError> {
+    let top_mod = select_ingot_native_main_top_mod(db, ingot)?;
+    let module = compile_native_main_sonatina(db, top_mod)?;
+    compile_native_object(module, opt_level)
 }
 
 #[cfg(feature = "cranelift")]
@@ -382,7 +418,20 @@ pub fn emit_ingot_native_ir(
 }
 
 #[cfg(feature = "cranelift")]
-fn ensure_native_main_signature(module: &Module) -> Result<FuncRef, LowerError> {
+struct NativeMain {
+    func_ref: FuncRef,
+    main_abi: NativeMainAbi,
+}
+
+#[cfg(feature = "cranelift")]
+fn prepare_native_entry(module: &Module) -> Result<NativeMain, LowerError> {
+    let main = ensure_native_main_signature(module)?;
+    rename_native_main_entry(module, main.func_ref, main.main_abi)?;
+    Ok(main)
+}
+
+#[cfg(feature = "cranelift")]
+fn ensure_native_main_signature(module: &Module) -> Result<NativeMain, LowerError> {
     let signatures = module
         .funcs()
         .into_iter()
@@ -404,7 +453,7 @@ fn ensure_native_main_signature(module: &Module) -> Result<FuncRef, LowerError> 
         });
     let Some((func_ref, args, ret_tys)) = main_signatures.next() else {
         return Err(LowerError::Unsupported(format!(
-            "native executable output requires `pub fn main() -> i32`; defined functions: {}",
+            "native executable output requires `pub fn main() -> i32` or `pub fn main(argc: i32, argv: **u8) -> i32`; defined functions: {}",
             describe_native_signatures(&signatures, module)
         )));
     };
@@ -413,13 +462,106 @@ fn ensure_native_main_signature(module: &Module) -> Result<FuncRef, LowerError> 
             "native executable output requires exactly one exported `main` function".to_string(),
         ));
     }
-    if args.is_empty() && ret_tys.as_slice() == [Type::I32] {
-        Ok(*func_ref)
-    } else {
-        Err(LowerError::Unsupported(
-            "native executable `main` must have signature `pub fn main() -> i32`".to_string(),
-        ))
+    let main_abi = match (args.as_slice(), ret_tys.as_slice()) {
+        ([], [Type::I32]) => NativeMainAbi::NoArgs,
+        ([Type::I32, Type::I256], [Type::I32]) => NativeMainAbi::ArgcArgv,
+        _ => {
+            return Err(LowerError::Unsupported(
+                "native executable `main` must have signature `pub fn main() -> i32` or `pub fn main(argc: i32, argv: **u8) -> i32`"
+                    .to_string(),
+            ));
+        }
+    };
+    Ok(NativeMain {
+        func_ref: *func_ref,
+        main_abi,
+    })
+}
+
+#[cfg(feature = "cranelift")]
+fn ensure_native_entry_signature(
+    module: &Module,
+    expected: NativeMainAbi,
+) -> Result<FuncRef, LowerError> {
+    let signatures = module
+        .funcs()
+        .into_iter()
+        .filter_map(|func_ref| {
+            module.ctx.func_sig(func_ref, |sig| {
+                Some((
+                    func_ref,
+                    sig.name().to_string(),
+                    sig.args().to_vec(),
+                    sig.ret_tys().to_vec(),
+                ))
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut entries = signatures
+        .iter()
+        .filter_map(|(func_ref, name, args, ret_tys)| {
+            (name == "__fe_main").then_some((func_ref, args, ret_tys))
+        });
+    let Some((func_ref, args, ret_tys)) = entries.next() else {
+        return Err(LowerError::Internal(format!(
+            "native executable entry `__fe_main` is missing after lowering; defined functions: {}",
+            describe_native_signatures(&signatures, module)
+        )));
+    };
+    if entries.next().is_some() {
+        return Err(LowerError::Internal(
+            "native executable output produced multiple `__fe_main` functions".to_string(),
+        ));
     }
+    let actual = match (args.as_slice(), ret_tys.as_slice()) {
+        ([], [Type::I32]) => NativeMainAbi::NoArgs,
+        ([Type::I32, Type::I256], [Type::I32]) => NativeMainAbi::ArgcArgv,
+        _ => {
+            return Err(LowerError::Internal(format!(
+                "native executable entry has unsupported signature: __fe_main({}) -> {}",
+                args.iter()
+                    .map(|ty| format_native_type(*ty, module))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                ret_tys
+                    .iter()
+                    .map(|ty| format_native_type(*ty, module))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    };
+    if actual != expected {
+        return Err(LowerError::Internal(
+            "native executable entry ABI changed during optimization".to_string(),
+        ));
+    }
+    Ok(*func_ref)
+}
+
+#[cfg(feature = "cranelift")]
+fn rename_native_main_entry(
+    module: &Module,
+    func_ref: FuncRef,
+    main_abi: NativeMainAbi,
+) -> Result<(), LowerError> {
+    let (args, ret_tys) = module.ctx.func_sig(func_ref, |sig| {
+        (sig.args().to_vec(), sig.ret_tys().to_vec())
+    });
+    let expected = match main_abi {
+        NativeMainAbi::NoArgs => (Vec::new(), vec![Type::I32]),
+        NativeMainAbi::ArgcArgv => (vec![Type::I32, Type::I256], vec![Type::I32]),
+    };
+    if (args.clone(), ret_tys.clone()) != expected {
+        return Err(LowerError::Internal(
+            "native executable entry signature did not match selected ABI".to_string(),
+        ));
+    }
+    module.ctx.declared_funcs.insert(
+        func_ref,
+        Signature::new("__fe_main", Linkage::Public, &args, &ret_tys),
+    );
+    Ok(())
 }
 
 #[cfg(feature = "cranelift")]

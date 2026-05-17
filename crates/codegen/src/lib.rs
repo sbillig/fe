@@ -18,7 +18,8 @@ pub use sonatina::{
 };
 #[cfg(feature = "cranelift")]
 pub use sonatina::{
-    emit_ingot_native_ir, emit_ingot_native_object, emit_module_native_ir,
-    emit_module_native_object,
+    NativeMainAbi, NativeObject, emit_ingot_native_ir, emit_ingot_native_object,
+    emit_ingot_native_object_with_abi, emit_module_native_ir, emit_module_native_object,
+    emit_module_native_object_with_abi,
 };
 pub use test_output::{ExpectedRevert, TestMetadata, TestModuleOutput, parse_expected_revert};

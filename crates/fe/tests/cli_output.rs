@@ -677,6 +677,65 @@ pub fn main() -> i32 {
 
 #[cfg(feature = "cranelift")]
 #[test]
+fn test_cli_build_native_executable_passes_argc_argv() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_args.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::Args
+
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    let args = Args::new(argc, argv)
+    if args.len() != 3 {
+        return 1
+    }
+    if !args.get(1).eq_bytes("alpha") {
+        return 2
+    }
+    if !args.get(2).eq_bytes("42") {
+        return 3
+    }
+
+    if !args.get(2).is_u256() {
+        return 4
+    }
+    if args.get(2).parse_u256() != 42 {
+        return 4
+    }
+    0
+}
+"#,
+    )
+    .expect("write native source");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let source_str = source.to_string_lossy().to_string();
+
+    let (build_output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "--out-dir",
+        out_dir_str.as_str(),
+        source_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 0, "fe native build failed:\n{build_output}");
+
+    let executable = out_dir.join("native_args");
+    assert!(
+        executable.is_file(),
+        "missing native executable:\n{build_output}"
+    );
+    let status = Command::new(&executable)
+        .args(["alpha", "42"])
+        .status()
+        .expect("run native executable");
+    assert_eq!(status.code(), Some(0));
+}
+
+#[cfg(feature = "cranelift")]
+#[test]
 fn test_cli_build_native_rejects_evm_artifacts() {
     let temp = tempdir().expect("tempdir");
     let source = temp.path().join("native_exit.fe");

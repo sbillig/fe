@@ -177,7 +177,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             }
             let signature = self.lower_signature(function)?;
             let func_ref = self.builder.declare_function(signature).map_err(|err| {
-                LowerError::Internal(format!("failed to declare function: {err}"))
+                LowerError::Internal(format!(
+                    "failed to declare function `{}`: {err}",
+                    self.function_symbol(function.instance(self.db))
+                ))
             })?;
             self.apply_inline_hint(func_ref, function.inline_hint(self.db));
             self.func_map.insert(function.instance(self.db), func_ref);

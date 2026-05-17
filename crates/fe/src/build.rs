@@ -1120,16 +1120,20 @@ fn build_native_ingot(
     }
 
     if emit.executable {
-        let object = match codegen::emit_ingot_native_object(db, ingot, opt_level) {
+        let object = match codegen::emit_ingot_native_object_with_abi(db, ingot, opt_level) {
             Ok(object) => object,
             Err(err) => {
                 eprintln!("Error: Failed to compile native object: {err}");
                 return BuildSummary { had_errors: true };
             }
         };
-        if let Err(err) =
-            write_native_executable_artifact(out_dir, report_dir, ir_file_stem, &object)
-        {
+        if let Err(err) = write_native_executable_artifact(
+            out_dir,
+            report_dir,
+            ir_file_stem,
+            &object.bytes,
+            object.main_abi,
+        ) {
             eprintln!("Error: {err}");
             had_errors = true;
         }
@@ -1271,16 +1275,20 @@ fn build_native_top_mod(
     }
 
     if emit.executable {
-        let object = match codegen::emit_module_native_object(db, top_mod, opt_level) {
+        let object = match codegen::emit_module_native_object_with_abi(db, top_mod, opt_level) {
             Ok(object) => object,
             Err(err) => {
                 eprintln!("Error: Failed to compile native object: {err}");
                 return BuildSummary { had_errors: true };
             }
         };
-        if let Err(err) =
-            write_native_executable_artifact(out_dir, report_dir, ir_file_stem, &object)
-        {
+        if let Err(err) = write_native_executable_artifact(
+            out_dir,
+            report_dir,
+            ir_file_stem,
+            &object.bytes,
+            object.main_abi,
+        ) {
             eprintln!("Error: {err}");
             had_errors = true;
         }
@@ -1573,6 +1581,7 @@ fn write_native_executable_artifact(
     report_dir: Option<&Utf8Path>,
     file_stem: &str,
     object: &[u8],
+    main_abi: codegen::NativeMainAbi,
 ) -> Result<(), String> {
     let base = sanitize_name_with_default(file_stem, "main");
     let object_dir = out_dir.join(".fe-native");
@@ -1587,11 +1596,17 @@ fn write_native_executable_artifact(
     fs::write(runtime_path.as_std_path(), NATIVE_U256_RUNTIME_C)
         .map_err(|err| format!("Failed to write native runtime {runtime_path}: {err}"))?;
 
+    let launcher = native_main_launcher_c(main_abi);
+    let launcher_path = object_dir.join("fe_native_main.c");
+    fs::write(launcher_path.as_std_path(), launcher)
+        .map_err(|err| format!("Failed to write native main launcher {launcher_path}: {err}"))?;
+
     let executable_name = native_executable_name(&base);
     let executable_path = out_dir.join(&executable_name);
     let output = Command::new("cc")
         .arg(object_path.as_str())
         .arg(runtime_path.as_str())
+        .arg(launcher_path.as_str())
         .arg("-o")
         .arg(executable_path.as_str())
         .output()
@@ -1611,6 +1626,7 @@ fn write_native_executable_artifact(
             dir.join("fe_native_u256_runtime.c").as_std_path(),
             NATIVE_U256_RUNTIME_C,
         );
+        let _ = fs::write(dir.join("fe_native_main.c").as_std_path(), launcher);
         let _ = fs::copy(
             executable_path.as_std_path(),
             dir.join(&executable_name).as_std_path(),
@@ -1619,6 +1635,51 @@ fn write_native_executable_artifact(
     println!("Wrote {executable_path}");
     Ok(())
 }
+
+#[cfg(feature = "cranelift")]
+fn native_main_launcher_c(main_abi: codegen::NativeMainAbi) -> &'static str {
+    match main_abi {
+        codegen::NativeMainAbi::NoArgs => NATIVE_MAIN_NO_ARGS_C,
+        codegen::NativeMainAbi::ArgcArgv => NATIVE_MAIN_ARGC_ARGV_C,
+    }
+}
+
+#[cfg(feature = "cranelift")]
+const NATIVE_MAIN_NO_ARGS_C: &str = r#"
+#include <stdint.h>
+
+extern int32_t __fe_main(void);
+
+int main(void) {
+    return __fe_main();
+}
+"#;
+
+#[cfg(feature = "cranelift")]
+const NATIVE_MAIN_ARGC_ARGV_C: &str = r#"
+#include <stdint.h>
+#include <stdlib.h>
+
+extern int32_t __fe_main(int32_t argc, const uint64_t *argv_word);
+
+int main(int argc, char **argv) {
+    size_t count = argc > 0 ? (size_t)argc : 0;
+    uintptr_t *argv_values = calloc(count + 1, sizeof(uintptr_t));
+    if (argv_values == NULL) {
+        free(argv_values);
+        return 127;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        argv_values[i] = (uintptr_t)argv[i];
+    }
+
+    uint64_t argv_word[4] = { (uint64_t)(uintptr_t)argv_values, 0, 0, 0 };
+    int32_t status = __fe_main((int32_t)argc, argv_word);
+    free(argv_values);
+    return status;
+}
+"#;
 
 #[cfg(feature = "cranelift")]
 const NATIVE_U256_RUNTIME_C: &str = r#"

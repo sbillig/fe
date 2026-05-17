@@ -1,0 +1,96 @@
+use core::{AsBytes, ptr}
+use core::num::WordValue
+
+pub struct Args {
+    pub argc: i32,
+    pub argv: **u8,
+}
+
+pub struct Arg {
+    pub ptr: *u8,
+}
+
+pub fn args(_ argc: i32, _ argv: **u8) -> Args {
+    Args { argc, argv }
+}
+
+impl Args {
+    pub fn new(_ argc: i32, _ argv: **u8) -> Self {
+        Args { argc, argv }
+    }
+
+    pub fn len(self) -> usize {
+        if self.argc <= 0 {
+            return 0
+        }
+        self.argc.downcast_unchecked()
+    }
+
+    pub fn get(self, _ index: usize) -> Arg {
+        let argv = ptr::cast<*u8, u64>(self.argv)
+        let addr = ptr::read(ptr::offset(argv, index as u256))
+        Arg { ptr: (addr as u256) as *u8 }
+    }
+}
+
+impl Arg {
+    pub fn byte_at(self, _ index: usize) -> u8 {
+        ptr::read(ptr::offset(self.ptr, index as u256))
+    }
+
+    pub fn len(self) -> usize {
+        let mut len: usize = 0
+        while self.byte_at(len) != 0 {
+            len = len + 1
+        }
+        len
+    }
+
+    pub fn eq_bytes<T: AsBytes + WordValue>(self, _ expected: T) -> bool {
+        let len = self.len()
+        if len != T::N {
+            return false
+        }
+
+        let bytes = expected.to_word()
+        let mut i: usize = 0
+        while i < len {
+            let shift = ((T::N - i - 1) as u256) * 8
+            let byte: u8 = ((bytes >> shift) & 0xff).downcast_unchecked()
+            if self.byte_at(i) != byte {
+                return false
+            }
+            i = i + 1
+        }
+        true
+    }
+
+    pub fn is_u256(self) -> bool {
+        let len = self.len()
+        if len == 0 {
+            return false
+        }
+
+        let mut i: usize = 0
+        while i < len {
+            let c = self.byte_at(i)
+            if c < 48 || c > 57 {
+                return false
+            }
+            i = i + 1
+        }
+        true
+    }
+
+    pub fn parse_u256(self) -> u256 {
+        let mut value: u256 = 0
+        let mut i: usize = 0
+        let len = self.len()
+        while i < len {
+            let c = self.byte_at(i)
+            value = value * 10 + ((c as u256) - 48)
+            i = i + 1
+        }
+        value
+    }
+}

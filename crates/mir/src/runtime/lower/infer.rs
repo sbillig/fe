@@ -78,7 +78,7 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
 
     pub(super) fn run(mut self) -> InferenceResult<'db> {
         seed_root_provider_carriers(self.env, &mut self.carriers);
-        seed_direct_pointer_carriers(self.env, &mut self.carriers);
+        seed_direct_transport_carriers(self.env, &mut self.carriers);
         solve_sparse(&mut self, &mut ());
         let roots = self.infer_roots();
         let (semantic_locals, provider_bindings) =
@@ -274,16 +274,13 @@ pub(crate) fn seed_root_provider_carriers<'a, 'db>(
     }
 }
 
-pub(crate) fn seed_direct_pointer_carriers<'a, 'db>(
+pub(crate) fn seed_direct_transport_carriers<'a, 'db>(
     env: BodyEnv<'a, 'db>,
     carriers: &mut [RuntimeCarrier<'db>],
 ) {
     for (idx, local) in env.body().locals.iter().enumerate() {
         if !matches!(carriers[idx], RuntimeCarrier::Erased)
             || !matches!(local.facts.interface, SemanticLocalKind::DirectValue)
-            || runtime_repr_ty_in_context(env.db(), local.ty, env.scope(), env.assumptions())
-                .as_ptr(env.db())
-                .is_none()
         {
             continue;
         }
@@ -296,6 +293,12 @@ pub(crate) fn seed_direct_pointer_carriers<'a, 'db>(
         ) else {
             continue;
         };
+        if !matches!(
+            class,
+            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. }
+        ) {
+            continue;
+        }
         carriers[idx] =
             desired_runtime_value_carrier(env.db(), local, class, env.scope(), env.assumptions());
     }
