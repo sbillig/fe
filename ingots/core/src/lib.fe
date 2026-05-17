@@ -21,3 +21,9 @@ extern {
     pub fn panic_with_value<T>(_: own T) -> !
     pub fn todo() -> !
 }
+
+pub fn assert(_ condition: own bool) {
+    if !condition {
+        panic()
+    }
+}

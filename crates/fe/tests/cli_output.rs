@@ -2492,9 +2492,7 @@ fn test_fe_test_native_backend_passes_and_fails_by_process_status() {
 #[test]
 fn native_pass() {
     let value: u256 = 1
-    if value != 1 {
-        core::panic()
-    }
+    core::assert(value == 1)
 }
 "#,
     )
@@ -2505,9 +2503,7 @@ fn native_pass() {
 #[test]
 fn native_fail() {
     let value: u256 = 1
-    if value != 2 {
-        core::panic()
-    }
+    core::assert(value == 2)
 }
 "#,
     )
