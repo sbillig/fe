@@ -241,7 +241,7 @@ func private %do_init(v0.i256, v1.objref<@layout_1>, v2.objref<@layout_1>) {
         jump block1;
 
     block1:
-        v4.@layout_2 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_1c07;
+        v4.@layout_2 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_1c07_0;
         call %set_owner_once v0 v4 v2;
         return;
 }
@@ -845,7 +845,7 @@ func private %set_owner_once(v0.i256, v1.@layout_2, v2.objref<@layout_1>) {
         br v16 block2 block3;
 
     block2:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_7c32_1 0.i256 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_7c32_0 0.i256 0.i256;
         unreachable;
 
     block3:
@@ -1296,7 +1296,7 @@ func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_16d9__tran
         br v10 block2 block3;
 
     block2:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_7c32_0 0.i256 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_7c32_1 0.i256 0.i256;
         unreachable;
 
     block3:
@@ -1372,7 +1372,7 @@ func private %transfer__gd1d8(v0.@layout_2, v1.i256, v2.i256, v3.objref<@layout_
         jump block1;
 
     block1:
-        v7.@layout_2 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_1c07_0;
+        v7.@layout_2 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_1c07;
         v9.i256 = mload v5 i256;
         call %standalone_erc20_low_level__erc20_low_level__impl_Erc20_16d9__transfer__g0f37_4c1a v2 v7 v0 v9 v4;
         return 1.i256;

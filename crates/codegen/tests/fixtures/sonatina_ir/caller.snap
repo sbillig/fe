@@ -59,7 +59,7 @@ func private %standalone_caller__caller__who_called__gcd5c_8e9e(v0.objref<@layou
         jump block1;
 
     block1:
-        v1.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5;
+        v1.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5_0;
         return v1;
 }
 
@@ -68,7 +68,7 @@ func private %standalone_caller__caller__who_called__gcd5c_b6e7(v0.objref<@layou
         jump block1;
 
     block1:
-        v1.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5_0;
+        v1.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5;
         return v1;
 }
 
