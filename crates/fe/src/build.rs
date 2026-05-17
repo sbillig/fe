@@ -1133,6 +1133,7 @@ fn build_native_ingot(
             ir_file_stem,
             &object.bytes,
             object.main_abi,
+            true,
         ) {
             eprintln!("Error: {err}");
             had_errors = true;
@@ -1288,6 +1289,7 @@ fn build_native_top_mod(
             ir_file_stem,
             &object.bytes,
             object.main_abi,
+            true,
         ) {
             eprintln!("Error: {err}");
             had_errors = true;
@@ -1576,12 +1578,13 @@ fn describe_emit_selection(emit: EmitSelection) -> String {
 }
 
 #[cfg(feature = "cranelift")]
-fn write_native_executable_artifact(
+pub(crate) fn write_native_executable_artifact(
     out_dir: &Utf8Path,
     report_dir: Option<&Utf8Path>,
     file_stem: &str,
     object: &[u8],
     main_abi: codegen::NativeMainAbi,
+    announce: bool,
 ) -> Result<(), String> {
     let base = sanitize_name_with_default(file_stem, "main");
     let object_dir = out_dir.join(".fe-native");
@@ -1632,17 +1635,30 @@ fn write_native_executable_artifact(
             dir.join(&executable_name).as_std_path(),
         );
     }
-    println!("Wrote {executable_path}");
+    if announce {
+        println!("Wrote {executable_path}");
+    }
     Ok(())
 }
 
 #[cfg(feature = "cranelift")]
 fn native_main_launcher_c(main_abi: codegen::NativeMainAbi) -> &'static str {
     match main_abi {
+        codegen::NativeMainAbi::NoArgsVoid => NATIVE_MAIN_NO_ARGS_VOID_C,
         codegen::NativeMainAbi::NoArgs => NATIVE_MAIN_NO_ARGS_C,
         codegen::NativeMainAbi::ArgcArgv => NATIVE_MAIN_ARGC_ARGV_C,
     }
 }
+
+#[cfg(feature = "cranelift")]
+const NATIVE_MAIN_NO_ARGS_VOID_C: &str = r#"
+extern void __fe_main(void);
+
+int main(void) {
+    __fe_main();
+    return 0;
+}
+"#;
 
 #[cfg(feature = "cranelift")]
 const NATIVE_MAIN_NO_ARGS_C: &str = r#"
@@ -1803,7 +1819,7 @@ void __u256_mulmod(
 "#;
 
 #[cfg(feature = "cranelift")]
-fn native_executable_name(base: &str) -> String {
+pub(crate) fn native_executable_name(base: &str) -> String {
     if cfg!(windows) {
         format!("{base}.exe")
     } else {

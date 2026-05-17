@@ -23,7 +23,7 @@ use sonatina_verifier::{
 };
 
 use crate::{
-    OptLevel, TargetDataLayout, TestMetadata, TestModuleOutput,
+    ExpectedRevert, OptLevel, TargetDataLayout, TestMetadata, TestModuleOutput,
     runtime_package::ensure_runtime_package_has_roots,
     test_output::{TestRootMetadataError, runtime_test_root_metadata},
 };
@@ -65,7 +65,7 @@ pub struct SonatinaTestOptions {
 }
 
 #[cfg(feature = "cranelift")]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeObject {
     pub bytes: Vec<u8>,
     pub main_abi: NativeMainAbi,
@@ -74,8 +74,46 @@ pub struct NativeObject {
 #[cfg(feature = "cranelift")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeMainAbi {
+    NoArgsVoid,
     NoArgs,
     ArgcArgv,
+}
+
+#[cfg(feature = "cranelift")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeTestMetadata {
+    pub display_name: String,
+    pub hir_name: String,
+    pub symbol_name: String,
+    pub object_name: String,
+    pub object: NativeObject,
+    pub value_param_count: usize,
+    pub effect_param_count: usize,
+    pub expected_revert: Option<ExpectedRevert>,
+    pub initial_balance: Option<Vec<u8>>,
+}
+
+#[cfg(feature = "cranelift")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeTestModuleOutput {
+    pub tests: Vec<NativeTestMetadata>,
+}
+
+#[cfg(feature = "cranelift")]
+impl NativeTestModuleOutput {
+    pub(crate) fn extend(&mut self, other: Self) {
+        self.tests.extend(other.tests);
+    }
+
+    pub(crate) fn sort_tests(&mut self) {
+        self.tests.sort_by(|left, right| {
+            left.display_name
+                .cmp(&right.display_name)
+                .then_with(|| left.hir_name.cmp(&right.hir_name))
+                .then_with(|| left.symbol_name.cmp(&right.symbol_name))
+                .then_with(|| left.object_name.cmp(&right.object_name))
+        });
+    }
 }
 
 pub(crate) fn create_evm_isa() -> Evm {
@@ -325,18 +363,36 @@ fn select_ingot_native_main_top_mod<'db>(
 #[cfg(feature = "cranelift")]
 fn compile_native_object(module: Module, opt_level: OptLevel) -> Result<NativeObject, LowerError> {
     let main = prepare_native_entry(&module)?;
+    compile_prepared_native_object(module, opt_level, main.main_abi)
+}
 
+#[cfg(feature = "cranelift")]
+fn compile_native_test_object(
+    module: Module,
+    opt_level: OptLevel,
+    entry_symbol: &str,
+) -> Result<NativeObject, LowerError> {
+    rename_native_entry_by_name(&module, entry_symbol, NativeMainAbi::NoArgsVoid)?;
+    compile_prepared_native_object(module, opt_level, NativeMainAbi::NoArgsVoid)
+}
+
+#[cfg(feature = "cranelift")]
+fn compile_prepared_native_object(
+    module: Module,
+    opt_level: OptLevel,
+    main_abi: NativeMainAbi,
+) -> Result<NativeObject, LowerError> {
     let backend = sonatina_codegen::isa::cranelift::CraneliftBackend::new();
     let mut compile = sonatina_codegen::Compile::new(module, backend)
         .with_opt_level(to_sonatina_opt_level(opt_level));
     compile.optimize();
-    ensure_native_entry_signature(compile.module(), main.main_abi)?;
+    ensure_native_entry_signature(compile.module(), main_abi)?;
     compile
         .backend()
         .compile_module_to_object(compile.module())
         .map(|artifact| NativeObject {
             bytes: artifact.bytes,
-            main_abi: main.main_abi,
+            main_abi,
         })
         .map_err(|errors| LowerError::Internal(format_cranelift_errors(&errors)))
 }
@@ -514,6 +570,7 @@ fn ensure_native_entry_signature(
         ));
     }
     let actual = match (args.as_slice(), ret_tys.as_slice()) {
+        ([], []) => NativeMainAbi::NoArgsVoid,
         ([], [Type::I32]) => NativeMainAbi::NoArgs,
         ([Type::I32, Type::I256], [Type::I32]) => NativeMainAbi::ArgcArgv,
         _ => {
@@ -549,6 +606,7 @@ fn rename_native_main_entry(
         (sig.args().to_vec(), sig.ret_tys().to_vec())
     });
     let expected = match main_abi {
+        NativeMainAbi::NoArgsVoid => (Vec::new(), Vec::new()),
         NativeMainAbi::NoArgs => (Vec::new(), vec![Type::I32]),
         NativeMainAbi::ArgcArgv => (vec![Type::I32, Type::I256], vec![Type::I32]),
     };
@@ -560,6 +618,59 @@ fn rename_native_main_entry(
     module.ctx.declared_funcs.insert(
         func_ref,
         Signature::new("__fe_main", Linkage::Public, &args, &ret_tys),
+    );
+    Ok(())
+}
+
+#[cfg(feature = "cranelift")]
+fn rename_native_entry_by_name(
+    module: &Module,
+    entry_name: &str,
+    main_abi: NativeMainAbi,
+) -> Result<(), LowerError> {
+    let signatures = module
+        .funcs()
+        .into_iter()
+        .filter_map(|func_ref| {
+            module.ctx.func_sig(func_ref, |sig| {
+                Some((
+                    func_ref,
+                    sig.name().to_string(),
+                    sig.args().to_vec(),
+                    sig.ret_tys().to_vec(),
+                ))
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut entries = signatures
+        .iter()
+        .filter_map(|(func_ref, name, args, ret_tys)| {
+            (name == entry_name).then_some((func_ref, args, ret_tys))
+        });
+    let Some((func_ref, args, ret_tys)) = entries.next() else {
+        return Err(LowerError::Internal(format!(
+            "native test entry `{entry_name}` is missing; defined functions: {}",
+            describe_native_signatures(&signatures, module)
+        )));
+    };
+    if entries.next().is_some() {
+        return Err(LowerError::Internal(format!(
+            "native test entry `{entry_name}` resolved to multiple functions"
+        )));
+    }
+    let expected = match main_abi {
+        NativeMainAbi::NoArgsVoid => (Vec::new(), Vec::new()),
+        NativeMainAbi::NoArgs => (Vec::new(), vec![Type::I32]),
+        NativeMainAbi::ArgcArgv => (vec![Type::I32, Type::I256], vec![Type::I32]),
+    };
+    if (args.to_vec(), ret_tys.to_vec()) != expected {
+        return Err(LowerError::Unsupported(format!(
+            "native test entry `{entry_name}` has unsupported signature"
+        )));
+    }
+    module.ctx.declared_funcs.insert(
+        *func_ref,
+        Signature::new("__fe_main", Linkage::Public, args, ret_tys),
     );
     Ok(())
 }
@@ -1153,6 +1264,84 @@ pub fn emit_test_module_sonatina(
     Ok(TestModuleOutput { tests })
 }
 
+#[cfg(feature = "cranelift")]
+pub fn emit_test_module_native(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    filter: Option<&str>,
+) -> Result<NativeTestModuleOutput, LowerError> {
+    let package = build_test_runtime_package(db, top_mod, filter)?;
+    if package.root_objects(db).is_empty() {
+        return Ok(NativeTestModuleOutput { tests: Vec::new() });
+    }
+
+    let mut tests = Vec::new();
+    for object in package.root_objects(db) {
+        let sections = object.sections(db);
+        let Some(section) = sections.first() else {
+            continue;
+        };
+        let mir::RuntimeSectionName::Test(_) = &section.name else {
+            continue;
+        };
+        let metadata = runtime_test_root_metadata(db, &section.entry.owner(db), &section.name)
+            .map_err(|err| match err {
+                TestRootMetadataError::InvalidPackage(message) => LowerError::Internal(message),
+                TestRootMetadataError::Unsupported(message) => LowerError::Unsupported(message),
+            })?;
+        let isa = create_native_isa();
+        let ctx = ModuleCtx::new(&isa);
+        let module = lower_runtime::compile_runtime_package_sonatina_with_ctx(
+            db,
+            &package,
+            crate::EVM_LAYOUT,
+            ctx,
+        )?;
+        let object =
+            compile_native_test_object(module, opt_level, section.entry.symbol(db).as_str())?;
+        tests.push(NativeTestMetadata {
+            display_name: metadata.display_name,
+            hir_name: metadata.hir_name,
+            symbol_name: section.entry.symbol(db).clone(),
+            object_name: object_name_for_native_test(&section.name),
+            object,
+            value_param_count: 0,
+            effect_param_count: 0,
+            expected_revert: metadata.expected_revert,
+            initial_balance: metadata.initial_balance,
+        });
+    }
+    Ok(NativeTestModuleOutput { tests })
+}
+
+#[cfg(feature = "cranelift")]
+fn object_name_for_native_test(name: &mir::RuntimeSectionName) -> String {
+    match name {
+        mir::RuntimeSectionName::Test(name) => sanitize_native_test_name(name),
+        _ => "test".to_string(),
+    }
+}
+
+#[cfg(feature = "cranelift")]
+fn sanitize_native_test_name(name: &str) -> String {
+    let sanitized = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "test".to_string()
+    } else {
+        sanitized
+    }
+}
+
 pub fn emit_test_ingot_sonatina(
     db: &DriverDataBase,
     ingot: Ingot<'_>,
@@ -1168,6 +1357,24 @@ pub fn emit_test_ingot_sonatina(
         output.extend(emit_test_module_sonatina(
             db, top_mod, opt_level, options, filter,
         )?);
+    }
+    output.sort_tests();
+    Ok(output)
+}
+
+#[cfg(feature = "cranelift")]
+pub fn emit_test_ingot_native(
+    db: &DriverDataBase,
+    ingot: Ingot<'_>,
+    opt_level: OptLevel,
+    filter: Option<&str>,
+) -> Result<NativeTestModuleOutput, LowerError> {
+    let mut top_mods = ingot.all_modules(db).to_vec();
+    top_mods.sort_by(|left, right| left.name(db).cmp(&right.name(db)));
+
+    let mut output = NativeTestModuleOutput { tests: Vec::new() };
+    for top_mod in top_mods {
+        output.extend(emit_test_module_native(db, top_mod, opt_level, filter)?);
     }
     output.sort_tests();
     Ok(output)

@@ -77,6 +77,13 @@ pub enum TestEmit {
     Rmir,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TestBackend {
+    Sonatina,
+    #[cfg(feature = "cranelift")]
+    Native,
+}
+
 #[derive(Debug, Clone, Parser)]
 #[command(version, about, long_about = None)]
 pub struct Options {
@@ -246,6 +253,9 @@ pub enum Command {
         /// Optional filter pattern for test names.
         #[arg(short, long)]
         filter: Option<String>,
+        /// Backend used to compile and execute tests.
+        #[arg(long, value_enum, default_value = "sonatina")]
+        backend: TestBackend,
         /// Number of suites to run in parallel (0 = auto).
         #[arg(long, default_value_t = 8, value_name = "N")]
         jobs: usize,
@@ -557,6 +567,7 @@ pub fn run(opts: &Options) {
             paths,
             ingot,
             filter,
+            backend,
             jobs,
             grouped,
             show_logs,
@@ -596,6 +607,7 @@ pub fn run(opts: &Options) {
                 &paths,
                 ingot.as_deref(),
                 filter.as_deref(),
+                *backend,
                 *jobs,
                 *grouped,
                 *show_logs,

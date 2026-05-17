@@ -3,7 +3,8 @@
 //! Discovers functions marked with `#[test]` attribute, compiles them, and
 //! executes them using revm.
 
-use crate::TestEmit;
+#[cfg(feature = "cranelift")]
+use crate::build::{native_executable_name, write_native_executable_artifact};
 use crate::dependency_diagnostics::DependencyIssues;
 use crate::report::{
     PanicReportGuard, ReportStaging, copy_input_into_report, create_dir_all_utf8,
@@ -14,12 +15,15 @@ use crate::report::{
 use crate::workspace_ingot::{
     INGOT_REQUIRES_WORKSPACE_ROOT, WorkspaceMemberRef, select_workspace_member_paths,
 };
+use crate::{TestBackend, TestEmit};
 use camino::Utf8PathBuf;
 use codegen::{
-    ExpectedRevert, OptLevel, SonatinaTestOptions, TestMetadata, TestModuleOutput,
+    ExpectedRevert, OptLevel, SonatinaTestOptions, TestMetadata,
     emit_runtime_package_sonatina_ir_optimized, emit_test_ingot_sonatina,
     emit_test_module_sonatina,
 };
+#[cfg(feature = "cranelift")]
+use codegen::{NativeTestMetadata, emit_test_ingot_native, emit_test_module_native};
 use colored::Colorize;
 use common::{
     InputDb,
@@ -36,8 +40,9 @@ use salsa::Setter;
 use std::{
     collections::HashSet,
     fmt::Write as _,
+    process::Command,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use url::Url;
 
@@ -65,6 +70,34 @@ impl TestEmitSelection {
 
     fn is_empty(self) -> bool {
         !self.ir && !self.rmir
+    }
+}
+
+fn validate_test_backend_options(
+    backend: TestBackend,
+    show_logs: bool,
+    emit: &[TestEmit],
+    debug: &TestDebugOptions,
+    call_trace: bool,
+) -> Result<(), String> {
+    match backend {
+        TestBackend::Sonatina => Ok(()),
+        #[cfg(feature = "cranelift")]
+        TestBackend::Native => {
+            if show_logs {
+                return Err("native test backend does not support `--show-logs`".to_string());
+            }
+            if !emit.is_empty() {
+                return Err("native test backend does not support `--emit` yet".to_string());
+            }
+            if debug.trace_evm {
+                return Err("native test backend does not support `--trace-evm`".to_string());
+            }
+            if call_trace {
+                return Err("native test backend does not support `--call-trace`".to_string());
+            }
+            Ok(())
+        }
     }
 }
 
@@ -138,9 +171,26 @@ struct SuiteRunResult {
 #[derive(Debug, Clone)]
 struct SingleTestJob {
     suite_key: String,
-    case: TestMetadata,
+    case: TestJobCase,
     evm_trace: Option<EvmTraceOptions>,
     report_root: Option<Utf8PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+enum TestJobCase {
+    Sonatina(TestMetadata),
+    #[cfg(feature = "cranelift")]
+    Native(NativeTestMetadata),
+}
+
+impl TestJobCase {
+    fn display_name(&self) -> &str {
+        match self {
+            TestJobCase::Sonatina(case) => &case.display_name,
+            #[cfg(feature = "cranelift")]
+            TestJobCase::Native(case) => &case.display_name,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -198,7 +248,7 @@ struct SuiteState {
 
 #[derive(Debug)]
 struct DiscoverResult {
-    tests: Vec<TestMetadata>,
+    tests: Vec<TestJobCase>,
 }
 
 #[derive(Debug)]
@@ -209,6 +259,7 @@ struct SuitePreparation {
 
 #[derive(Debug)]
 struct WorkerSharedConfig {
+    backend: TestBackend,
     show_logs: bool,
     profile: String,
     opt_level: OptLevel,
@@ -682,6 +733,7 @@ pub fn run_tests(
     paths: &[Utf8PathBuf],
     ingot: Option<&str>,
     filter: Option<&str>,
+    backend: TestBackend,
     jobs: usize,
     grouped: bool,
     show_logs: bool,
@@ -695,6 +747,7 @@ pub fn run_tests(
     call_trace: bool,
     use_recovery: bool,
 ) -> Result<bool, String> {
+    validate_test_backend_options(backend, show_logs, emit, debug, call_trace)?;
     let expanded_paths = expand_test_paths(paths)?;
     if ingot.is_some() && expanded_paths.len() != 1 {
         return Err(INGOT_REQUIRES_WORKSPACE_ROOT.to_string());
@@ -739,6 +792,7 @@ pub fn run_tests(
 
     let filter = filter.map(str::to_owned);
     let shared = Arc::new(WorkerSharedConfig {
+        backend,
         show_logs,
         profile: profile.to_string(),
         opt_level,
@@ -1373,6 +1427,7 @@ fn prepare_suite_job(
             &plan.suite,
             &plan.suite_key,
             filter,
+            shared.backend,
             shared.opt_level,
             shared.emit,
             &suite_debug,
@@ -1387,6 +1442,7 @@ fn prepare_suite_job(
             &plan.suite,
             &plan.suite_key,
             filter,
+            shared.backend,
             shared.opt_level,
             shared.emit,
             &suite_debug,
@@ -1422,13 +1478,29 @@ fn run_single_test_job(job: SingleTestJob, shared: &WorkerSharedConfig) -> Singl
         root_dir: root.clone(),
     });
     let case = job.case;
-    let outcome = compile_and_run_test(
-        &case,
-        shared.show_logs,
-        job.evm_trace.as_ref(),
-        report_ctx.as_ref(),
-        shared.call_trace,
-    );
+    let outcome = match (&case, shared.backend) {
+        (TestJobCase::Sonatina(case), TestBackend::Sonatina) => compile_and_run_test(
+            case,
+            shared.show_logs,
+            job.evm_trace.as_ref(),
+            report_ctx.as_ref(),
+            shared.call_trace,
+        ),
+        #[cfg(feature = "cranelift")]
+        (TestJobCase::Native(case), TestBackend::Native) => {
+            compile_and_run_native_test(case, report_ctx.as_ref())
+        }
+        _ => TestOutcome {
+            result: TestResult {
+                name: case.display_name().to_string(),
+                passed: false,
+                error_message: Some("internal error: test case/backend mismatch".to_string()),
+            },
+            logs: Vec::new(),
+            trace: None,
+            elapsed: Duration::ZERO,
+        },
+    };
     let elapsed = outcome.elapsed;
     let mut output = String::new();
     write_case_output(&mut output, &outcome, shared.show_logs);
@@ -1510,6 +1582,7 @@ fn prepare_tests_single_file(
     suite: &str,
     suite_key: &str,
     filter: Option<&str>,
+    backend: TestBackend,
     opt_level: OptLevel,
     emit: TestEmitSelection,
     debug: &TestDebugOptions,
@@ -1660,6 +1733,7 @@ fn prepare_tests_single_file(
         suite,
         suite_key,
         filter,
+        backend,
         opt_level,
         debug,
         sonatina_options,
@@ -1675,6 +1749,7 @@ fn prepare_tests_ingot(
     suite: &str,
     suite_key: &str,
     filter: Option<&str>,
+    backend: TestBackend,
     opt_level: OptLevel,
     emit: TestEmitSelection,
     debug: &TestDebugOptions,
@@ -1832,6 +1907,7 @@ fn prepare_tests_ingot(
         suite,
         suite_key,
         filter,
+        backend,
         opt_level,
         debug,
         sonatina_options,
@@ -1847,6 +1923,7 @@ fn prepare_discovered_tests(
     suite: &str,
     suite_key: &str,
     filter: Option<&str>,
+    backend: TestBackend,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     sonatina_options: SonatinaTestOptions,
@@ -1858,6 +1935,7 @@ fn prepare_discovered_tests(
         top_mod,
         suite,
         filter,
+        backend,
         opt_level,
         sonatina_options,
         report,
@@ -1882,6 +1960,7 @@ fn prepare_ingot_discovered_tests(
     suite: &str,
     suite_key: &str,
     filter: Option<&str>,
+    backend: TestBackend,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     sonatina_options: SonatinaTestOptions,
@@ -1893,6 +1972,7 @@ fn prepare_ingot_discovered_tests(
         ingot,
         suite,
         filter,
+        backend,
         opt_level,
         sonatina_options,
         report,
@@ -1924,17 +2004,17 @@ fn suite_preparation_from_discovered(
     let mut results = Vec::new();
     let mut single_jobs = Vec::new();
     for case in discovered.tests {
-        if !test_case_matches_filter(&case, filter) {
+        if !test_case_matches_filter(case.display_name(), filter) {
             continue;
         }
 
-        let evm_trace = match debug.evm_trace_options_for_test(Some(suite), &case.display_name) {
+        let evm_trace = match debug.evm_trace_options_for_test(Some(suite), case.display_name()) {
             Ok(value) => value,
             Err(err) => {
-                write_case_status_line(output, false, Duration::ZERO, &case.display_name);
+                write_case_status_line(output, false, Duration::ZERO, case.display_name());
                 let _ = writeln!(output, "    {err}");
                 results.push(TestResult {
-                    name: case.display_name.clone(),
+                    name: case.display_name().to_string(),
                     passed: false,
                     error_message: Some(err),
                 });
@@ -1961,13 +2041,13 @@ fn suite_preparation_from_discovered(
 /// Wraps `emit_fn` in `catch_unwind`, writes error/panic info into the report
 /// staging directory when present, and returns the output or an early-return
 /// error result vector.
-pub(super) fn emit_with_catch_unwind<E: std::fmt::Display>(
-    emit_fn: impl FnOnce() -> Result<TestModuleOutput, E>,
+pub(super) fn emit_with_catch_unwind<T, E: std::fmt::Display>(
+    emit_fn: impl FnOnce() -> Result<T, E>,
     backend_label: &str,
     suite: &str,
     report: Option<&ReportContext>,
     output: &mut String,
-) -> Result<TestModuleOutput, Vec<TestResult>> {
+) -> Result<T, Vec<TestResult>> {
     let _hook = report.map(|r| install_report_panic_hook(r, "codegen_panic_full.txt"));
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(emit_fn)) {
         Ok(Ok(output)) => Ok(output),
@@ -2007,27 +2087,49 @@ fn discover_tests(
     top_mod: TopLevelMod<'_>,
     suite: &str,
     filter: Option<&str>,
+    backend: TestBackend,
     opt_level: OptLevel,
     sonatina_options: SonatinaTestOptions,
     report: Option<&ReportContext>,
     output: &mut String,
 ) -> Result<DiscoverResult, Vec<TestResult>> {
-    let emit_result = emit_with_catch_unwind(
-        || emit_test_module_sonatina(db, top_mod, opt_level, sonatina_options, filter),
-        "Sonatina",
-        suite,
-        report,
-        output,
-    );
-    let module_output = emit_result?;
-
-    if module_output.tests.is_empty() {
-        return Ok(DiscoverResult { tests: Vec::new() });
+    match backend {
+        TestBackend::Sonatina => {
+            let emit_result = emit_with_catch_unwind(
+                || emit_test_module_sonatina(db, top_mod, opt_level, sonatina_options, filter),
+                "Sonatina",
+                suite,
+                report,
+                output,
+            );
+            let module_output = emit_result?;
+            Ok(DiscoverResult {
+                tests: module_output
+                    .tests
+                    .into_iter()
+                    .map(TestJobCase::Sonatina)
+                    .collect(),
+            })
+        }
+        #[cfg(feature = "cranelift")]
+        TestBackend::Native => {
+            let emit_result = emit_with_catch_unwind(
+                || emit_test_module_native(db, top_mod, opt_level, filter),
+                "native",
+                suite,
+                report,
+                output,
+            );
+            let module_output = emit_result?;
+            Ok(DiscoverResult {
+                tests: module_output
+                    .tests
+                    .into_iter()
+                    .map(TestJobCase::Native)
+                    .collect(),
+            })
+        }
     }
-
-    Ok(DiscoverResult {
-        tests: module_output.tests,
-    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2036,27 +2138,49 @@ fn discover_ingot_tests(
     ingot: Ingot<'_>,
     suite: &str,
     filter: Option<&str>,
+    backend: TestBackend,
     opt_level: OptLevel,
     sonatina_options: SonatinaTestOptions,
     report: Option<&ReportContext>,
     output: &mut String,
 ) -> Result<DiscoverResult, Vec<TestResult>> {
-    let emit_result = emit_with_catch_unwind(
-        || emit_test_ingot_sonatina(db, ingot, opt_level, sonatina_options, filter),
-        "Sonatina",
-        suite,
-        report,
-        output,
-    );
-    let module_output = emit_result?;
-
-    if module_output.tests.is_empty() {
-        return Ok(DiscoverResult { tests: Vec::new() });
+    match backend {
+        TestBackend::Sonatina => {
+            let emit_result = emit_with_catch_unwind(
+                || emit_test_ingot_sonatina(db, ingot, opt_level, sonatina_options, filter),
+                "Sonatina",
+                suite,
+                report,
+                output,
+            );
+            let module_output = emit_result?;
+            Ok(DiscoverResult {
+                tests: module_output
+                    .tests
+                    .into_iter()
+                    .map(TestJobCase::Sonatina)
+                    .collect(),
+            })
+        }
+        #[cfg(feature = "cranelift")]
+        TestBackend::Native => {
+            let emit_result = emit_with_catch_unwind(
+                || emit_test_ingot_native(db, ingot, opt_level, filter),
+                "native",
+                suite,
+                report,
+                output,
+            );
+            let module_output = emit_result?;
+            Ok(DiscoverResult {
+                tests: module_output
+                    .tests
+                    .into_iter()
+                    .map(TestJobCase::Native)
+                    .collect(),
+            })
+        }
     }
-
-    Ok(DiscoverResult {
-        tests: module_output.tests,
-    })
 }
 
 fn write_case_output(output: &mut String, outcome: &TestOutcome, show_logs: bool) {
@@ -2112,13 +2236,11 @@ fn write_case_status_line(output: &mut String, passed: bool, elapsed: Duration, 
     let _ = writeln!(output, "{status} {name}");
 }
 
-pub(super) fn test_case_matches_filter(case: &TestMetadata, filter: Option<&str>) -> bool {
+pub(super) fn test_case_matches_filter(name: &str, filter: Option<&str>) -> bool {
     let Some(pattern) = filter else {
         return true;
     };
-    case.hir_name.contains(pattern)
-        || case.symbol_name.contains(pattern)
-        || case.display_name.contains(pattern)
+    name.contains(pattern)
 }
 
 fn test_emit_stem(suite_key: &str) -> String {
@@ -2580,6 +2702,97 @@ pub(super) fn compile_and_run_test(
         trace,
         elapsed: started.elapsed(),
     }
+}
+
+#[cfg(feature = "cranelift")]
+fn compile_and_run_native_test(
+    case: &NativeTestMetadata,
+    _report: Option<&ReportContext>,
+) -> TestOutcome {
+    let started = Instant::now();
+    let failure = |message: String| TestOutcome {
+        result: TestResult {
+            name: case.display_name.clone(),
+            passed: false,
+            error_message: Some(message),
+        },
+        logs: Vec::new(),
+        trace: None,
+        elapsed: started.elapsed(),
+    };
+
+    if case.value_param_count > 0 {
+        return failure(format!(
+            "native tests with value parameters are not supported (found {})",
+            case.value_param_count
+        ));
+    }
+    if case.effect_param_count > 0 {
+        return failure(format!(
+            "native tests with effect parameters are not supported (found {})",
+            case.effect_param_count
+        ));
+    }
+    if case.expected_revert.is_some() {
+        return failure("native test backend does not support expected reverts".to_string());
+    }
+    if case.initial_balance.is_some() {
+        return failure("native test backend does not support initial balances".to_string());
+    }
+
+    let output_root = Utf8PathBuf::from("target/fe-native-test");
+    if let Err(err) = create_dir_all_utf8(&output_root) {
+        return failure(format!("failed to create native test output dir: {err}"));
+    }
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let out_dir = output_root.join(format!(
+        "{}-{}-{unique}",
+        std::process::id(),
+        sanitize_filename(&case.display_name)
+    ));
+    if let Err(err) = create_dir_all_utf8(&out_dir) {
+        return failure(format!("failed to create native test case dir: {err}"));
+    }
+    let file_stem = sanitize_filename(&case.display_name);
+    if let Err(err) = write_native_executable_artifact(
+        &out_dir,
+        None,
+        &file_stem,
+        &case.object.bytes,
+        case.object.main_abi,
+        false,
+    ) {
+        return failure(format!("failed to link native test executable: {err}"));
+    }
+    let executable = out_dir.join(native_executable_name(&file_stem));
+    let output = match Command::new(executable.as_str()).output() {
+        Ok(output) => output,
+        Err(err) => return failure(format!("failed to run native test executable: {err}")),
+    };
+    if output.status.success() {
+        return TestOutcome {
+            result: TestResult {
+                name: case.display_name.clone(),
+                passed: true,
+                error_message: None,
+            },
+            logs: Vec::new(),
+            trace: None,
+            elapsed: started.elapsed(),
+        };
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    failure(format!(
+        "native test exited with status {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output
+            .status
+            .code()
+            .map_or_else(|| "signal".to_string(), |code| code.to_string())
+    ))
 }
 
 fn write_sonatina_case_artifacts(report: &ReportContext, case: &TestMetadata) {

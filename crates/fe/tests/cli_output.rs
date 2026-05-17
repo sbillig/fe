@@ -2479,3 +2479,50 @@ fn test_cli_workspace_exclude_skips_member() {
     let (output, _) = run_fe_main_in_dir(&["check"], &root);
     snap_test!(output, snapshot_path.to_str().unwrap());
 }
+
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_fe_test_native_backend_passes_and_fails_by_process_status() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pass = temp.path().join("native_pass.fe");
+    let fail = temp.path().join("native_fail.fe");
+    std::fs::write(
+        &pass,
+        r#"
+#[test]
+fn native_pass() {
+    let value: u256 = 1
+    if value != 1 {
+        core::panic()
+    }
+}
+"#,
+    )
+    .expect("write pass fixture");
+    std::fs::write(
+        &fail,
+        r#"
+#[test]
+fn native_fail() {
+    let value: u256 = 1
+    if value != 2 {
+        core::panic()
+    }
+}
+"#,
+    )
+    .expect("write fail fixture");
+
+    let pass_path = pass.to_str().expect("utf8 pass path");
+    let fail_path = fail.to_str().expect("utf8 fail path");
+    let (pass_output, pass_exit) = run_fe_main(&["test", "--backend", "native", pass_path]);
+    assert_eq!(pass_exit, 0, "native pass test failed:\n{pass_output}");
+    assert!(pass_output.contains("PASS"));
+    assert!(pass_output.contains("native_pass"));
+
+    let (fail_output, fail_exit) = run_fe_main(&["test", "--backend", "native", fail_path]);
+    assert_ne!(fail_exit, 0, "native fail test unexpectedly passed");
+    assert!(fail_output.contains("FAIL"));
+    assert!(fail_output.contains("native_fail"));
+    assert!(fail_output.contains("native test exited with status"));
+}
