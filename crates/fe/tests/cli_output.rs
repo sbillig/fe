@@ -442,6 +442,104 @@ pub fn main() -> i32 {
 
 #[cfg(feature = "cranelift")]
 #[test]
+fn test_cli_build_native_ingot_compiles_only_main_reachable_dependency_code() {
+    let temp = tempdir().expect("tempdir");
+    let app = temp.path().join("app");
+    let dep = temp.path().join("zk");
+    fs::create_dir_all(app.join("src")).expect("create app src");
+    fs::create_dir_all(dep.join("src")).expect("create dep src");
+    fs::write(
+        app.join("fe.toml"),
+        r#"
+[ingot]
+name = "app"
+version = "0.1.0"
+
+[dependencies]
+zk = { path = "../zk" }
+"#,
+    )
+    .expect("write app fe.toml");
+    fs::write(
+        app.join("src/lib.fe"),
+        r#"
+use zk::poseidon::hash2
+
+pub fn main() -> i32 {
+    let h: u256 = hash2(a: 7, b: 11)
+    if h == 46 {
+        return 0
+    }
+    1
+}
+"#,
+    )
+    .expect("write app source");
+    fs::write(
+        dep.join("fe.toml"),
+        r#"
+[ingot]
+name = "zk"
+version = "0.1.0"
+"#,
+    )
+    .expect("write dep fe.toml");
+    fs::write(dep.join("src/lib.fe"), "").expect("write dep lib");
+    fs::write(
+        dep.join("src/poseidon.fe"),
+        r#"
+use std::evm::crypto::{addmod, mulmod}
+
+const FIELD: u256 = 97
+
+pub fn hash2(a: u256, b: u256) -> u256 {
+    let mixed: u256 = mulmod(a, 5, FIELD)
+    addmod(mixed, b, FIELD)
+}
+
+msg DepMsg {
+    #[selector = 0x12345678]
+    Ping -> u256,
+}
+
+pub contract DepContract {
+    recv DepMsg {
+        Ping -> u256 {
+            return 1
+        }
+    }
+}
+"#,
+    )
+    .expect("write dep poseidon source");
+
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let app_str = app.to_string_lossy().to_string();
+
+    let (build_output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "--out-dir",
+        out_dir_str.as_str(),
+        app_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 0, "fe native build failed:\n{build_output}");
+
+    let executable = out_dir.join("app");
+    assert!(
+        executable.is_file(),
+        "missing native executable:\n{build_output}"
+    );
+    let status = Command::new(&executable)
+        .status()
+        .expect("run native executable");
+    assert_eq!(status.code(), Some(0));
+}
+
+#[cfg(feature = "cranelift")]
+#[test]
 fn test_cli_build_native_executable_can_use_scalar_host_stdio_imports() {
     let temp = tempdir().expect("tempdir");
     let source = temp.path().join("native_echo.fe");

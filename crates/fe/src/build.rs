@@ -88,8 +88,9 @@ fn validate_build_request(
     contract: Option<&str>,
     emit: EmitSelection,
 ) -> Result<(), String> {
+    let _ = ingot;
     #[cfg(not(feature = "cranelift"))]
-    let _ = (ingot, contract);
+    let _ = contract;
 
     match backend {
         BuildBackend::Sonatina => {
@@ -99,9 +100,6 @@ fn validate_build_request(
         }
         #[cfg(feature = "cranelift")]
         BuildBackend::Native => {
-            if ingot.is_some() {
-                return Err("native executable output does not support `--ingot` yet".to_string());
-            }
             if contract.is_some() {
                 return Err("native executable output does not support `--contract`".to_string());
             }
@@ -457,15 +455,6 @@ fn build_directory(
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
-    #[cfg(not(feature = "cranelift"))]
-    let _ = backend;
-
-    #[cfg(feature = "cranelift")]
-    if matches!(backend, BuildBackend::Native) {
-        eprintln!("Error: native executable output only supports standalone `.fe` files");
-        return true;
-    }
-
     let canonical = match dir_path.canonicalize_utf8() {
         Ok(path) => path,
         Err(_) => {
@@ -511,7 +500,7 @@ fn build_directory(
 
     match config {
         Config::Workspace(_) => build_workspace(
-            db, &canonical, url, ingot, contract, opt_level, emit, out_dir, report,
+            db, &canonical, url, ingot, contract, backend, opt_level, emit, out_dir, report,
         ),
         Config::Ingot(_) => {
             if ingot.is_some() {
@@ -539,6 +528,7 @@ fn build_directory(
                 &out_dir,
                 None,
                 None,
+                backend,
                 true,
                 report_dir.as_ref(),
             )
@@ -554,11 +544,15 @@ fn build_workspace(
     workspace_url: Url,
     ingot: Option<&str>,
     contract: Option<&str>,
+    backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
+    #[cfg(not(feature = "cranelift"))]
+    let _ = backend;
+
     let mut members = db
         .dependency_graph()
         .workspace_member_records(db, &workspace_url);
@@ -590,6 +584,39 @@ fn build_workspace(
     let out_dir = out_dir
         .cloned()
         .unwrap_or_else(|| workspace_root.join("out"));
+
+    #[cfg(feature = "cranelift")]
+    if matches!(backend, BuildBackend::Native) {
+        let mut had_errors = false;
+        let mut built_any = false;
+        for member in members {
+            let member_path = workspace_root.join(member.path.as_str());
+            if !selected_member_paths.contains(&member_path) {
+                continue;
+            }
+            let report_dir = report_scope_dir(report, &format!("member-{}", member.name.as_str()));
+            let summary = build_ingot_url(
+                db,
+                &member.url,
+                None,
+                opt_level,
+                emit,
+                &out_dir,
+                workspace_member_ir_out_dir(emit, &out_dir, member.name.as_str()),
+                Some(member.name.as_str()),
+                backend,
+                true,
+                report_dir.as_ref(),
+            );
+            had_errors |= summary.had_errors;
+            built_any = true;
+        }
+        if !built_any {
+            eprintln!("Error: No workspace members selected to build");
+            return true;
+        }
+        return had_errors;
+    }
 
     let abi_collision_check_needs_filtering =
         emit.abi && !emit.writes_any_bytecode() && contract.is_none();
@@ -654,6 +681,7 @@ fn build_workspace(
                     &out_dir,
                     workspace_member_ir_out_dir(emit, &out_dir, matches[0].name.as_str()),
                     Some(matches[0].name.as_str()),
+                    backend,
                     true,
                     report_dir.as_ref(),
                 );
@@ -706,6 +734,7 @@ fn build_workspace(
             &out_dir,
             workspace_member_ir_out_dir(emit, &out_dir, member.name.as_str()),
             Some(member.name.as_str()),
+            backend,
             true,
             report_dir.as_ref(),
         );
@@ -905,6 +934,7 @@ fn build_ingot_url(
     out_dir: &Utf8Path,
     ir_out_dir: Option<Utf8PathBuf>,
     ir_file_stem: Option<&str>,
+    backend: BuildBackend,
     missing_contract_is_error: bool,
     report_dir: Option<&Utf8PathBuf>,
 ) -> BuildSummary {
@@ -951,6 +981,7 @@ fn build_ingot_url(
         out_dir,
         ir_out_dir.as_ref().map_or(out_dir, Utf8PathBuf::as_path),
         ir_file_stem.as_str(),
+        backend,
         missing_contract_is_error,
         report_dir,
     )
@@ -966,9 +997,23 @@ fn build_ingot(
     out_dir: &Utf8Path,
     ir_out_dir: &Utf8Path,
     ir_file_stem: &str,
+    backend: BuildBackend,
     missing_contract_is_error: bool,
     report_dir: Option<&Utf8PathBuf>,
 ) -> BuildSummary {
+    #[cfg(feature = "cranelift")]
+    if matches!(backend, BuildBackend::Native) {
+        return build_native_ingot(
+            db,
+            ingot,
+            opt_level,
+            emit,
+            out_dir,
+            ir_file_stem,
+            report_dir,
+        );
+    }
+
     let contract_names = match collect_ingot_contract_names(db, ingot) {
         Ok(names) => names,
         Err(err) => {
@@ -1035,6 +1080,58 @@ fn build_ingot(
         use hir::hir_def::HirIngot;
         for top_mod in ingot.all_modules(db) {
             had_errors |= write_abi_artifacts(db, *top_mod, &names_to_build, out_dir, report_dir);
+        }
+    }
+
+    BuildSummary { had_errors }
+}
+
+#[cfg(feature = "cranelift")]
+fn build_native_ingot(
+    db: &DriverDataBase,
+    ingot: hir::Ingot<'_>,
+    opt_level: OptLevel,
+    emit: EmitSelection,
+    out_dir: &Utf8Path,
+    ir_file_stem: &str,
+    report_dir: Option<&Utf8PathBuf>,
+) -> BuildSummary {
+    if let Err(err) = ensure_output_dirs(emit, out_dir, out_dir) {
+        eprintln!("Error: {err}");
+        return BuildSummary { had_errors: true };
+    }
+    let report_dir = report_dir.map(Utf8PathBuf::as_path);
+
+    let mut had_errors = false;
+    if emit.ir {
+        let ir = match codegen::emit_ingot_native_ir(db, ingot, opt_level) {
+            Ok(ir) => ir,
+            Err(err) => {
+                eprintln!("Error: Failed to compile native Sonatina IR: {err}");
+                return BuildSummary { had_errors: true };
+            }
+        };
+        if let Err(err) =
+            write_named_ir_artifact(out_dir, report_dir, ir_file_stem, "native.sona", &ir)
+        {
+            eprintln!("Error: {err}");
+            had_errors = true;
+        }
+    }
+
+    if emit.executable {
+        let object = match codegen::emit_ingot_native_object(db, ingot, opt_level) {
+            Ok(object) => object,
+            Err(err) => {
+                eprintln!("Error: Failed to compile native object: {err}");
+                return BuildSummary { had_errors: true };
+            }
+        };
+        if let Err(err) =
+            write_native_executable_artifact(out_dir, report_dir, ir_file_stem, &object)
+        {
+            eprintln!("Error: {err}");
+            had_errors = true;
         }
     }
 

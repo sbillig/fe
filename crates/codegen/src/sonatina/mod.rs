@@ -267,12 +267,49 @@ pub fn compile_library_sonatina_native(
 }
 
 #[cfg(feature = "cranelift")]
-pub fn emit_module_native_object(
+fn compile_native_main_sonatina(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
-    opt_level: OptLevel,
-) -> Result<Vec<u8>, LowerError> {
-    let module = compile_library_sonatina_native(db, top_mod)?;
+) -> Result<Module, LowerError> {
+    let package = mir::build_native_main_package(db, top_mod)?;
+    if package.root_objects(db).is_empty() {
+        return Err(LowerError::Unsupported(
+            "native executable output requires `pub fn main() -> i32`".to_string(),
+        ));
+    }
+    let isa = create_native_isa();
+    let ctx = ModuleCtx::new(&isa);
+    lower_runtime::compile_runtime_package_sonatina_with_ctx(db, &package, crate::EVM_LAYOUT, ctx)
+}
+
+#[cfg(feature = "cranelift")]
+fn select_ingot_native_main_top_mod<'db>(
+    db: &'db DriverDataBase,
+    ingot: hir::Ingot<'db>,
+) -> Result<TopLevelMod<'db>, LowerError> {
+    let mut matches = Vec::new();
+    for &top_mod in ingot.all_modules(db) {
+        let package = mir::build_native_main_package(db, top_mod)?;
+        if !package.root_objects(db).is_empty() {
+            matches.push(top_mod);
+        }
+    }
+
+    match matches.as_slice() {
+        [] => Err(LowerError::Unsupported(
+            "native executable output requires exactly one `pub fn main() -> i32` in the selected ingot"
+                .to_string(),
+        )),
+        [top_mod] => Ok(*top_mod),
+        _ => Err(LowerError::Unsupported(
+            "native executable output requires exactly one `pub fn main() -> i32` in the selected ingot"
+                .to_string(),
+        )),
+    }
+}
+
+#[cfg(feature = "cranelift")]
+fn compile_native_object_bytes(module: Module, opt_level: OptLevel) -> Result<Vec<u8>, LowerError> {
     let main = ensure_native_main_signature(&module)?;
     module.ctx.update_func_linkage(main, Linkage::Public);
 
@@ -289,12 +326,7 @@ pub fn emit_module_native_object(
 }
 
 #[cfg(feature = "cranelift")]
-pub fn emit_module_native_ir(
-    db: &DriverDataBase,
-    top_mod: TopLevelMod<'_>,
-    opt_level: OptLevel,
-) -> Result<String, LowerError> {
-    let module = compile_library_sonatina_native(db, top_mod)?;
+fn compile_native_ir_text(module: Module, opt_level: OptLevel) -> Result<String, LowerError> {
     let main = ensure_native_main_signature(&module)?;
     module.ctx.update_func_linkage(main, Linkage::Public);
 
@@ -305,6 +337,48 @@ pub fn emit_module_native_ir(
     ensure_native_main_signature(compile.module())?;
     let mut writer = ModuleWriter::new(compile.module());
     Ok(writer.dump_string())
+}
+
+#[cfg(feature = "cranelift")]
+pub fn emit_module_native_object(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+) -> Result<Vec<u8>, LowerError> {
+    let module = compile_native_main_sonatina(db, top_mod)?;
+    compile_native_object_bytes(module, opt_level)
+}
+
+#[cfg(feature = "cranelift")]
+pub fn emit_ingot_native_object(
+    db: &DriverDataBase,
+    ingot: hir::Ingot<'_>,
+    opt_level: OptLevel,
+) -> Result<Vec<u8>, LowerError> {
+    let top_mod = select_ingot_native_main_top_mod(db, ingot)?;
+    let module = compile_native_main_sonatina(db, top_mod)?;
+    compile_native_object_bytes(module, opt_level)
+}
+
+#[cfg(feature = "cranelift")]
+pub fn emit_module_native_ir(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+) -> Result<String, LowerError> {
+    let module = compile_native_main_sonatina(db, top_mod)?;
+    compile_native_ir_text(module, opt_level)
+}
+
+#[cfg(feature = "cranelift")]
+pub fn emit_ingot_native_ir(
+    db: &DriverDataBase,
+    ingot: hir::Ingot<'_>,
+    opt_level: OptLevel,
+) -> Result<String, LowerError> {
+    let top_mod = select_ingot_native_main_top_mod(db, ingot)?;
+    let module = compile_native_main_sonatina(db, top_mod)?;
+    compile_native_ir_text(module, opt_level)
 }
 
 #[cfg(feature = "cranelift")]

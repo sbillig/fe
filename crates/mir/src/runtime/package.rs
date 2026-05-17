@@ -508,6 +508,75 @@ pub fn build_library_package<'db>(
     Ok(package)
 }
 
+/// Build a native executable package rooted only at `pub fn main()`.
+///
+/// This intentionally ignores contracts and other public functions in the same
+/// ingot module. Native executable output should compile only the code reachable
+/// from `main`, while library mode remains available for direct JIT exports.
+pub fn build_native_main_package<'db>(
+    db: &'db dyn MirDb,
+    top_mod: TopLevelMod<'db>,
+) -> Result<RuntimePackage<'db>, LowerError> {
+    let funcs = top_mod
+        .all_funcs(db)
+        .iter()
+        .copied()
+        .filter(|func| func.top_mod(db) == top_mod)
+        .filter(|func| !func.is_extern(db) && !is_test_func(db, *func))
+        .filter(|func| is_main_func(db, *func))
+        .collect::<Vec<_>>();
+
+    let Some(func) = funcs.first().copied() else {
+        return Ok(RuntimePackage::new(
+            db,
+            top_mod,
+            Vec::new(),
+            RuntimePackagePlan::new(db, Vec::new(), Vec::new(), Vec::new(), Vec::new(), None),
+        ));
+    };
+    if funcs.len() > 1 {
+        return Err(LowerError::Unsupported(
+            "native executable output requires exactly one `main` function per module".to_string(),
+        ));
+    }
+    if !func.vis(db).is_pub() {
+        return Err(LowerError::Unsupported(
+            "native executable output requires `pub fn main() -> i32`".to_string(),
+        ));
+    }
+
+    let func = match runtime_root_candidate(db, func)? {
+        RuntimeRootCandidate::Root(func) => func,
+        RuntimeRootCandidate::NotRoot => {
+            return Err(LowerError::Unsupported(
+                "native executable output requires `pub fn main() -> i32`".to_string(),
+            ));
+        }
+        RuntimeRootCandidate::Rejected(rejection) => {
+            return Err(LowerError::Unsupported(format_runtime_root_rejection(
+                db, &rejection,
+            )));
+        }
+    };
+
+    let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
+    let instance = runtime_instance_for_semantic(db, semantic);
+    let package = build_non_contract_package(
+        db,
+        top_mod,
+        vec![instance],
+        vec![(
+            sanitize_object_name("main"),
+            RuntimeSectionName::Main,
+            instance,
+        )],
+        Some("main"),
+    )?;
+    verify_runtime_package(db, package)
+        .map_err(|err| LowerError::Unsupported(format!("invalid native main package: {err:?}")))?;
+    Ok(package)
+}
+
 fn manual_contract_objects<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
