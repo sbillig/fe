@@ -128,7 +128,9 @@ impl<'db> SuperTraitRefView<'db> {
                     "super-trait bound",
                 ));
             }
-            Err(TraitRefLowerError::Ignored) => return None,
+            Err(TraitRefLowerError::UnsafeLocalBoundBlanketImpl | TraitRefLowerError::Ignored) => {
+                return None;
+            }
         };
 
         // Do not emit when subject contains assoc types of params
@@ -305,7 +307,7 @@ impl<'db> WherePredicateBoundView<'db> {
             Err(TraitRefLowerError::Cycle) => {
                 out.push(cyclic_trait_ref_diag(span.path().into(), "trait bound"));
             }
-            Err(TraitRefLowerError::Ignored) => {}
+            Err(TraitRefLowerError::UnsafeLocalBoundBlanketImpl | TraitRefLowerError::Ignored) => {}
         }
 
         out
@@ -1309,7 +1311,10 @@ impl<'db> GenericParamOwner<'db> {
                     Err(TraitRefLowerError::Cycle) => {
                         out.push(cyclic_trait_ref_diag(span.path().into(), "trait bound"));
                     }
-                    Err(TraitRefLowerError::Ignored) => {}
+                    Err(
+                        TraitRefLowerError::UnsafeLocalBoundBlanketImpl
+                        | TraitRefLowerError::Ignored,
+                    ) => {}
                 }
             }
         }

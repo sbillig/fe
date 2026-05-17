@@ -426,6 +426,7 @@ pub(crate) enum TraitRefLowerError<'db> {
     PathResError(PathResError<'db>),
     InvalidDomain(PathRes<'db>),
     Cycle,
+    UnsafeLocalBoundBlanketImpl,
     /// Error is expected to be reported elsewhere.
     Ignored,
 }

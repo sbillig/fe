@@ -1,0 +1,62 @@
+use core::ops::{
+    SaturatingAdd, SaturatingMul, SaturatingSub, WrappingAdd, WrappingMul, WrappingSub,
+}
+
+pub trait PublicMarker {}
+
+struct PublicType {}
+
+impl PublicMarker for PublicType {}
+
+impl<T: PublicMarker> WrappingAdd for T {
+    fn wrapping_add(self, _ other: T) -> Self {
+        self
+    }
+}
+
+trait MethodMarker {
+    fn marker(self)
+}
+
+impl<T: MethodMarker> WrappingSub for T {
+    fn wrapping_sub(self, _ other: T) -> Self {
+        self
+    }
+}
+
+trait GenericMarker<U> {}
+
+impl<T: GenericMarker<u256>> WrappingMul for T {
+    fn wrapping_mul(self, _ other: T) -> Self {
+        self
+    }
+}
+
+trait SuperMarker {}
+trait SubMarker: SuperMarker {}
+
+impl<T: SubMarker> SaturatingAdd for T {
+    fn saturating_add(self, _ other: T) -> Self {
+        self
+    }
+}
+
+trait BlanketMarker {}
+
+impl<T> BlanketMarker for T {}
+
+impl<T: BlanketMarker> SaturatingSub for T {
+    fn saturating_sub(self, _ other: T) -> Self {
+        self
+    }
+}
+
+trait PrimitiveMarker {}
+
+impl PrimitiveMarker for u256 {}
+
+impl<T: PrimitiveMarker> SaturatingMul for T {
+    fn saturating_mul(self, _ other: T) -> Self {
+        self
+    }
+}

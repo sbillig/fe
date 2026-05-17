@@ -4202,6 +4202,19 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                 error_code,
             },
 
+            Self::UnsafeLocalBoundBlanketImpl(impl_trait) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "external trait blanket impl is not anchored by a sealed local marker"
+                    .to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "external trait blanket impl must be anchored by a sealed local marker trait implemented only for local types".to_string(),
+                    span: impl_trait.span().resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::ConflictTraitImpl {
                 primary,
                 conflict_with,
