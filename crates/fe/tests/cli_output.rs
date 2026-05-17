@@ -806,17 +806,16 @@ fn assert_hex_artifact(path: &std::path::Path) {
         panic!("read artifact {path:?}: {err}");
     });
     assert!(
-        contents.ends_with('\n'),
-        "expected artifact to end with newline: {path:?}"
+        !contents.chars().any(char::is_whitespace),
+        "expected artifact to contain only hex digits: {path:?}"
     );
-    let trimmed = contents.trim();
-    assert!(!trimmed.is_empty(), "expected non-empty hex: {path:?}");
+    assert!(!contents.is_empty(), "expected non-empty hex: {path:?}");
     assert!(
-        trimmed.chars().all(|c| c.is_ascii_hexdigit()),
+        contents.chars().all(|c| c.is_ascii_hexdigit()),
         "expected hex bytes in artifact: {path:?}"
     );
     assert_eq!(
-        trimmed.len() % 2,
+        contents.len() % 2,
         0,
         "expected even-length hex in artifact: {path:?}"
     );
