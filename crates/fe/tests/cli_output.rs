@@ -400,6 +400,48 @@ pub fn main() -> i32 {
 
 #[cfg(feature = "cranelift")]
 #[test]
+fn test_cli_build_native_executable_links_u256_mod_runtime() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_mod_runtime.fe");
+    fs::write(
+        &source,
+        r#"
+use std::evm::crypto::{addmod, mulmod}
+
+pub fn main() -> i32 {
+    let product: u256 = mulmod(3, 5, 13)
+    let sum: u256 = addmod(10, 9, 13)
+    let product_code: i32 = product.downcast_unchecked()
+    let sum_code: i32 = sum.downcast_unchecked()
+    (product_code * 10) + sum_code
+}
+"#,
+    )
+    .expect("write native source");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let source_str = source.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "--out-dir",
+        out_dir_str.as_str(),
+        source_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 0, "fe native build failed:\n{output}");
+
+    let executable = out_dir.join("native_mod_runtime");
+    assert!(executable.is_file(), "missing native executable:\n{output}");
+    let status = Command::new(&executable)
+        .status()
+        .expect("run native executable");
+    assert_eq!(status.code(), Some(26));
+}
+
+#[cfg(feature = "cranelift")]
+#[test]
 fn test_cli_build_native_executable_can_use_scalar_host_stdio_imports() {
     let temp = tempdir().expect("tempdir");
     let source = temp.path().join("native_echo.fe");

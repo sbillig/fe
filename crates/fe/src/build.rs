@@ -1486,10 +1486,15 @@ fn write_native_executable_artifact(
     fs::write(object_path.as_std_path(), object)
         .map_err(|err| format!("Failed to write native object {object_path}: {err}"))?;
 
+    let runtime_path = object_dir.join("fe_native_u256_runtime.c");
+    fs::write(runtime_path.as_std_path(), NATIVE_U256_RUNTIME_C)
+        .map_err(|err| format!("Failed to write native runtime {runtime_path}: {err}"))?;
+
     let executable_name = native_executable_name(&base);
     let executable_path = out_dir.join(&executable_name);
     let output = Command::new("cc")
         .arg(object_path.as_str())
+        .arg(runtime_path.as_str())
         .arg("-o")
         .arg(executable_path.as_str())
         .output()
@@ -1505,6 +1510,10 @@ fn write_native_executable_artifact(
 
     if let Some(dir) = report_dir {
         let _ = fs::write(dir.join(format!("{base}.o")).as_std_path(), object);
+        let _ = fs::write(
+            dir.join("fe_native_u256_runtime.c").as_std_path(),
+            NATIVE_U256_RUNTIME_C,
+        );
         let _ = fs::copy(
             executable_path.as_std_path(),
             dir.join(&executable_name).as_std_path(),
@@ -1513,6 +1522,127 @@ fn write_native_executable_artifact(
     println!("Wrote {executable_path}");
     Ok(())
 }
+
+#[cfg(feature = "cranelift")]
+const NATIVE_U256_RUNTIME_C: &str = r#"
+#include <stdint.h>
+#include <string.h>
+
+static int u256_is_zero(const uint64_t value[4]) {
+    return value[0] == 0 && value[1] == 0 && value[2] == 0 && value[3] == 0;
+}
+
+static int u256_cmp(const uint64_t lhs[4], const uint64_t rhs[4]) {
+    for (int i = 3; i >= 0; --i) {
+        if (lhs[i] > rhs[i]) {
+            return 1;
+        }
+        if (lhs[i] < rhs[i]) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static void add_mod_reduced(
+    const uint64_t lhs[4],
+    const uint64_t rhs[4],
+    const uint64_t modulus[4],
+    uint64_t out[4]
+) {
+    uint64_t sum[5] = {0, 0, 0, 0, 0};
+    unsigned __int128 carry = 0;
+    for (int i = 0; i < 4; ++i) {
+        unsigned __int128 total = (unsigned __int128)lhs[i] + rhs[i] + carry;
+        sum[i] = (uint64_t)total;
+        carry = total >> 64;
+    }
+    sum[4] = (uint64_t)carry;
+
+    if (sum[4] != 0 || u256_cmp(sum, modulus) >= 0) {
+        uint64_t borrow = 0;
+        for (int i = 0; i < 5; ++i) {
+            uint64_t subtrahend = i < 4 ? modulus[i] : 0;
+            unsigned __int128 total_subtrahend = (unsigned __int128)subtrahend + borrow;
+            if ((unsigned __int128)sum[i] >= total_subtrahend) {
+                sum[i] = (uint64_t)((unsigned __int128)sum[i] - total_subtrahend);
+                borrow = 0;
+            } else {
+                sum[i] = (uint64_t)((((unsigned __int128)1) << 64) + sum[i] - total_subtrahend);
+                borrow = 1;
+            }
+        }
+    }
+
+    memcpy(out, sum, sizeof(uint64_t) * 4);
+}
+
+static void reduce_mod(const uint64_t value[4], const uint64_t modulus[4], uint64_t out[4]) {
+    uint64_t acc[4] = {0, 0, 0, 0};
+    const uint64_t one[4] = {1, 0, 0, 0};
+
+    if (u256_is_zero(modulus)) {
+        memset(out, 0, sizeof(uint64_t) * 4);
+        return;
+    }
+
+    for (int bit = 255; bit >= 0; --bit) {
+        add_mod_reduced(acc, acc, modulus, acc);
+        if ((value[bit / 64] >> (bit % 64)) & 1) {
+            add_mod_reduced(acc, one, modulus, acc);
+        }
+    }
+
+    memcpy(out, acc, sizeof(uint64_t) * 4);
+}
+
+void __u256_addmod(
+    const uint64_t *lhs,
+    const uint64_t *rhs,
+    const uint64_t *modulus,
+    uint64_t *result
+) {
+    uint64_t lhs_reduced[4];
+    uint64_t rhs_reduced[4];
+
+    if (u256_is_zero(modulus)) {
+        memset(result, 0, sizeof(uint64_t) * 4);
+        return;
+    }
+
+    reduce_mod(lhs, modulus, lhs_reduced);
+    reduce_mod(rhs, modulus, rhs_reduced);
+    add_mod_reduced(lhs_reduced, rhs_reduced, modulus, result);
+}
+
+void __u256_mulmod(
+    const uint64_t *lhs,
+    const uint64_t *rhs,
+    const uint64_t *modulus,
+    uint64_t *result
+) {
+    uint64_t acc[4] = {0, 0, 0, 0};
+    uint64_t base[4];
+
+    if (u256_is_zero(modulus)) {
+        memset(result, 0, sizeof(uint64_t) * 4);
+        return;
+    }
+
+    reduce_mod(lhs, modulus, base);
+    for (int limb = 0; limb < 4; ++limb) {
+        uint64_t bits = rhs[limb];
+        for (int bit = 0; bit < 64; ++bit) {
+            if ((bits >> bit) & 1) {
+                add_mod_reduced(acc, base, modulus, acc);
+            }
+            add_mod_reduced(base, base, modulus, base);
+        }
+    }
+
+    memcpy(result, acc, sizeof(uint64_t) * 4);
+}
+"#;
 
 #[cfg(feature = "cranelift")]
 fn native_executable_name(base: &str) -> String {
