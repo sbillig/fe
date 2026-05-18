@@ -1,0 +1,30 @@
+#![arithmetic(unchecked)]
+
+use std::sp1::{ProverInput, PublicValues, commit_u32, read_u32, sp1}
+
+fn fib(_ n: u32) -> u32 {
+    let mut a: u32 = 0
+    let mut b: u32 = 1
+    let mut i: u32 = 0
+    while i < n {
+        let next = a + b
+        a = b
+        b = next
+        i = i + 1
+    }
+    a
+}
+
+fn prove()
+uses (input: mut ProverInput, pv: mut PublicValues)
+{
+    let n = read_u32()
+    commit_u32(fib(n))
+}
+
+pub fn main() -> i32 {
+    with (ProverInput = sp1(), PublicValues = sp1()) {
+        prove()
+    }
+    0
+}

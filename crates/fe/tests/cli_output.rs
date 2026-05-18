@@ -843,6 +843,36 @@ pub fn main() -> i32 {
     assert!(elf.starts_with(b"\x7fELF"), "not an ELF artifact");
 }
 
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_build_sp1_fib_example() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates parent")
+        .parent()
+        .expect("workspace root")
+        .join("examples/sp1_fib.fe");
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let source_str = source.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "sp1",
+        "--out-dir",
+        out_dir_str.as_str(),
+        source_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 0, "fe SP1 build failed:\n{output}");
+
+    let elf_path = out_dir.join("sp1_fib.elf");
+    assert!(elf_path.is_file(), "missing SP1 ELF:\n{output}");
+    let elf = fs::read(&elf_path).expect("read SP1 ELF");
+    assert!(elf.starts_with(b"\x7fELF"), "not an ELF artifact");
+}
+
 #[test]
 fn test_cli_build_sonatina_rejects_executable_emit() {
     let temp = tempdir().expect("tempdir");
