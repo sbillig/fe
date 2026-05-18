@@ -71,19 +71,48 @@ pub fn compile_single_contract_with_solc(
     parse_contract_output_for_source(name, &solc_output, "input.yul", verify_runtime_bytecode)
 }
 
+/// Selects which Solidity compilation pipeline to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SolidityPipeline {
+    /// Classic codegen pipeline (Solidity -> EVM assembly).
+    Legacy,
+    /// IR-based pipeline (Solidity -> Yul -> EVM); `--via-ir` / `settings.viaIR`.
+    ViaIR,
+}
+
 /// Compiles a Solidity source file to bytecode using `solc`.
 ///
 /// * `name` - Contract name as declared in the Solidity source.
 /// * `solidity_src` - Solidity source code.
 /// * `optimize` - Enables `solc`'s optimizer when `true`.
 /// * `solc_path` - Optional path to `solc` binary; falls back to `FE_SOLC_PATH` / `solc`.
+///
+/// Defaults to the legacy pipeline; use [`compile_solidity_with_pipeline`] to opt
+/// into `viaIR`.
 pub fn compile_solidity(
     name: &str,
     solidity_src: &str,
     optimize: bool,
     solc_path: Option<&str>,
 ) -> Result<ContractBytecode, YulcError> {
-    let input_json = build_standard_json_solidity(solidity_src, optimize)?;
+    compile_solidity_with_pipeline(
+        name,
+        solidity_src,
+        optimize,
+        SolidityPipeline::Legacy,
+        solc_path,
+    )
+}
+
+/// Like [`compile_solidity`] but lets the caller pick the codegen pipeline.
+pub fn compile_solidity_with_pipeline(
+    name: &str,
+    solidity_src: &str,
+    optimize: bool,
+    pipeline: SolidityPipeline,
+    solc_path: Option<&str>,
+) -> Result<ContractBytecode, YulcError> {
+    let input_json = build_standard_json_solidity(solidity_src, optimize, pipeline)?;
     let solc_output = run_solc_with_path(&input_json, solc_path)?;
     parse_contract_output_for_source(name, &solc_output, "input.sol", true)
 }
@@ -119,13 +148,18 @@ fn build_standard_json_yul(yul_src: &str, optimize: bool) -> Result<String, Yulc
 }
 
 /// Builds the standard JSON input for Solidity compilation.
-fn build_standard_json_solidity(solidity_src: &str, optimize: bool) -> Result<String, YulcError> {
+fn build_standard_json_solidity(
+    solidity_src: &str,
+    optimize: bool,
+    pipeline: SolidityPipeline,
+) -> Result<String, YulcError> {
     let value = json!({
         "language": "Solidity",
         "sources": {
             "input.sol": { "content": solidity_src }
         },
         "settings": {
+            "viaIR": matches!(pipeline, SolidityPipeline::ViaIR),
             "optimizer": {
                 "enabled": optimize,
                 "runs": 200
@@ -314,11 +348,23 @@ mod tests {
 
     #[test]
     fn build_standard_json_solidity_contains_fields() {
-        let json_str = build_standard_json_solidity("contract Foo {}", false).unwrap();
+        let json_str =
+            build_standard_json_solidity("contract Foo {}", false, SolidityPipeline::Legacy)
+                .unwrap();
         let value: Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(value["language"], "Solidity");
         assert_eq!(value["settings"]["optimizer"]["enabled"], false);
+        assert_eq!(value["settings"]["viaIR"], false);
         assert_eq!(value["sources"]["input.sol"]["content"], "contract Foo {}");
+    }
+
+    #[test]
+    fn build_standard_json_solidity_via_ir_sets_flag() {
+        let json_str =
+            build_standard_json_solidity("contract Foo {}", true, SolidityPipeline::ViaIR).unwrap();
+        let value: Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(value["settings"]["viaIR"], true);
+        assert_eq!(value["settings"]["optimizer"]["enabled"], true);
     }
 
     #[test]

@@ -15,7 +15,8 @@ use contract_harness::{ExecutionOptions, HarnessError, RuntimeInstance, U256};
 use ethers_core::abi::{AbiParser, Token};
 use ethers_core::utils::keccak256;
 use fe::bench_support::{
-    GasComparisonRow, compile_fe_sonatina, compile_solidity, print_gas_comparison_table,
+    PRIMARY_SOL_IDX, SOL_VARIANTS, SolGasRow, compile_fe_sonatina, compile_solidity_pipeline,
+    print_sol_gas_table, sol_variant_label,
 };
 use sha2::{Digest, Sha256};
 
@@ -186,10 +187,27 @@ fn compile_fe_deposit_runtime() -> String {
     hex::encode(&bytes)
 }
 
-fn compile_sol_deposit_runtime(solc_path: Option<&str>) -> String {
+fn compile_sol_deposit_runtimes(solc_path: Option<&str>) -> Vec<String> {
     let sol_source = std::fs::read_to_string(fixture_dir().join("OfficialDepositContract.sol"))
         .expect("read sol source");
-    compile_solidity(&sol_source, "DepositContract", true, solc_path).expect("solc compile deposit")
+    SOL_VARIANTS
+        .iter()
+        .map(|(pipeline, optimize)| {
+            compile_solidity_pipeline(
+                &sol_source,
+                "DepositContract",
+                *optimize,
+                *pipeline,
+                solc_path,
+            )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} compile deposit: {e}",
+                    sol_variant_label(*pipeline, *optimize)
+                )
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -264,17 +282,28 @@ fn differential_deposit() {
     let solc_path_str = solc_path.as_deref();
 
     let fe_bytecode = compile_fe_deposit_runtime();
-    let sol_bytecode = compile_sol_deposit_runtime(solc_path_str);
+    let sol_bytecodes = compile_sol_deposit_runtimes(solc_path_str);
 
     let mut fe = RuntimeInstance::deploy(&fe_bytecode).expect("deploy fe");
-    let mut sol = RuntimeInstance::deploy(&sol_bytecode).expect("deploy sol");
+    let mut sols: Vec<RuntimeInstance> = sol_bytecodes
+        .iter()
+        .enumerate()
+        .map(|(i, bc)| {
+            let (pipeline, optimize) = SOL_VARIANTS[i];
+            RuntimeInstance::deploy(bc).unwrap_or_else(|e| {
+                panic!("deploy {}: {e:?}", sol_variant_label(pipeline, optimize))
+            })
+        })
+        .collect();
 
     // Fund the default caller (Address::ZERO) so it can send ETH along with
     // each deposit call, including the "deposit value too high" revert case.
     let caller = contract_harness::Address::ZERO;
     let funding = U256::from(u128::MAX / 2);
     fe.fund_account(caller, funding);
-    sol.fund_account(caller, funding);
+    for sol in &mut sols {
+        sol.fund_account(caller, funding);
+    }
 
     // Both contracts expose the same Solidity-derived ABI, so one selector
     // per method drives both sides.
@@ -297,7 +326,7 @@ fn differential_deposit() {
         let fe_support = fe
             .call_raw(&cd, ExecutionOptions::default())
             .unwrap_or_else(|e| panic!("fe supportsInterface({name}): {e:?}"));
-        let sol_support = sol
+        let sol_support = sols[PRIMARY_SOL_IDX]
             .call_raw(&cd, ExecutionOptions::default())
             .unwrap_or_else(|e| panic!("sol supportsInterface({name}): {e:?}"));
         assert_eq!(
@@ -323,106 +352,100 @@ fn differential_deposit() {
         &valid_root,
     );
 
-    assert_reverts_match(
-        "invalid pubkey length",
-        &mut fe,
-        &mut sol,
-        &deposit_calldata_dyn(
-            sample.pubkey[..47].to_vec(),
-            sample.withdrawal_credentials.to_vec(),
-            sample.signature.to_vec(),
-            &valid_root,
-        ),
-        one_eth,
-    );
-    assert_reverts_match(
-        "invalid withdrawal_credentials length",
-        &mut fe,
-        &mut sol,
-        &deposit_calldata_dyn(
-            sample.pubkey.to_vec(),
-            sample.withdrawal_credentials[..31].to_vec(),
-            sample.signature.to_vec(),
-            &valid_root,
-        ),
-        one_eth,
-    );
-    assert_reverts_match(
-        "invalid signature length",
-        &mut fe,
-        &mut sol,
-        &deposit_calldata_dyn(
-            sample.pubkey.to_vec(),
-            sample.withdrawal_credentials.to_vec(),
-            sample.signature[..95].to_vec(),
-            &valid_root,
-        ),
-        one_eth,
-    );
-    assert_reverts_match(
-        "deposit value too low",
-        &mut fe,
-        &mut sol,
-        &valid_deposit_cd,
-        0,
-    );
-    assert_reverts_match(
-        "deposit value not multiple of gwei",
-        &mut fe,
-        &mut sol,
-        &valid_deposit_cd,
-        one_eth + 1,
-    );
-    assert_reverts_match(
-        "deposit value too high",
-        &mut fe,
-        &mut sol,
-        &valid_deposit_cd,
-        ((u64::MAX as u128) + 1) * 1_000_000_000,
-    );
-    assert_reverts_match(
-        "mismatched deposit_data_root",
-        &mut fe,
-        &mut sol,
-        &deposit_calldata(
-            &sample.pubkey,
-            &sample.withdrawal_credentials,
-            &sample.signature,
-            &[0xff; 32],
-        ),
-        one_eth,
-    );
+    {
+        let sol = &mut sols[PRIMARY_SOL_IDX];
+        assert_reverts_match(
+            "invalid pubkey length",
+            &mut fe,
+            sol,
+            &deposit_calldata_dyn(
+                sample.pubkey[..47].to_vec(),
+                sample.withdrawal_credentials.to_vec(),
+                sample.signature.to_vec(),
+                &valid_root,
+            ),
+            one_eth,
+        );
+        assert_reverts_match(
+            "invalid withdrawal_credentials length",
+            &mut fe,
+            sol,
+            &deposit_calldata_dyn(
+                sample.pubkey.to_vec(),
+                sample.withdrawal_credentials[..31].to_vec(),
+                sample.signature.to_vec(),
+                &valid_root,
+            ),
+            one_eth,
+        );
+        assert_reverts_match(
+            "invalid signature length",
+            &mut fe,
+            sol,
+            &deposit_calldata_dyn(
+                sample.pubkey.to_vec(),
+                sample.withdrawal_credentials.to_vec(),
+                sample.signature[..95].to_vec(),
+                &valid_root,
+            ),
+            one_eth,
+        );
+        assert_reverts_match("deposit value too low", &mut fe, sol, &valid_deposit_cd, 0);
+        assert_reverts_match(
+            "deposit value not multiple of gwei",
+            &mut fe,
+            sol,
+            &valid_deposit_cd,
+            one_eth + 1,
+        );
+        assert_reverts_match(
+            "deposit value too high",
+            &mut fe,
+            sol,
+            &valid_deposit_cd,
+            ((u64::MAX as u128) + 1) * 1_000_000_000,
+        );
+        assert_reverts_match(
+            "mismatched deposit_data_root",
+            &mut fe,
+            sol,
+            &deposit_calldata(
+                &sample.pubkey,
+                &sample.withdrawal_credentials,
+                &sample.signature,
+                &[0xff; 32],
+            ),
+            one_eth,
+        );
 
-    // Sanity: initial roots must match.
-    let fe_root0 = fe
-        .call_raw(&get_root_selector, ExecutionOptions::default())
-        .expect("fe root 0");
-    let sol_root0 = sol
-        .call_raw(&get_root_selector, ExecutionOptions::default())
-        .expect("sol root 0");
-    assert_eq!(
-        &fe_root0.return_data[..],
-        &sol_root0.return_data[..],
-        "initial deposit root mismatch (empty tree)"
-    );
+        // Sanity: initial roots must match.
+        let fe_root0 = fe
+            .call_raw(&get_root_selector, ExecutionOptions::default())
+            .expect("fe root 0");
+        let sol_root0 = sol
+            .call_raw(&get_root_selector, ExecutionOptions::default())
+            .expect("sol root 0");
+        assert_eq!(
+            &fe_root0.return_data[..],
+            &sol_root0.return_data[..],
+            "initial deposit root mismatch (empty tree)"
+        );
 
-    let assert_count_matches = |tag: &str, fe: &mut RuntimeInstance, sol: &mut RuntimeInstance| {
-        let fe_r = fe
+        let fe_count0 = fe
             .call_raw(&get_count_selector, ExecutionOptions::default())
             .expect("fe count");
-        let sol_r = sol
+        let sol_count0 = sol
             .call_raw(&get_count_selector, ExecutionOptions::default())
             .expect("sol count");
         assert_eq!(
-            &fe_r.return_data[..],
-            &sol_r.return_data[..],
-            "{tag}: get_deposit_count return mismatch"
+            &fe_count0.return_data[..],
+            &sol_count0.return_data[..],
+            "empty: get_deposit_count return mismatch"
         );
-    };
-    assert_count_matches("empty", &mut fe, &mut sol);
+    }
 
     // Table for reporting.
-    let mut gas_rows: Vec<GasComparisonRow> = Vec::new();
+    let mut gas_rows: Vec<SolGasRow> = Vec::new();
 
     for (i, v) in vectors().into_iter().enumerate() {
         let amount_gwei: u64 = (v.amount_wei / 1_000_000_000u128) as u64;
@@ -449,36 +472,48 @@ fn differential_deposit() {
         let fe_res = fe
             .call_raw_with_logs(&cd, opts)
             .unwrap_or_else(|e| panic!("fe deposit #{i}: {e:?}"));
-        let sol_res = sol
-            .call_raw_with_logs(&cd, opts)
-            .unwrap_or_else(|e| panic!("sol deposit #{i}: {e:?}"));
 
-        // Compare emitted logs byte-for-byte (topics + data; the emitter
-        // address differs between the two deployments and is not semantic).
-        assert_eq!(
-            fe_res.raw_logs.len(),
-            sol_res.raw_logs.len(),
-            "deposit #{i}: emitted log count differs",
-        );
-        for (idx, (fl, sl)) in fe_res.raw_logs.iter().zip(&sol_res.raw_logs).enumerate() {
-            assert_eq!(
-                fl.data.topics(),
-                sl.data.topics(),
-                "deposit #{i}, log {idx}: topics mismatch",
-            );
-            assert_eq!(
-                fl.data.data, sl.data.data,
-                "deposit #{i}, log {idx}: data mismatch",
-            );
+        // Drive every Solidity variant in lock-step so each one accumulates the
+        // same deposit history. Correctness is asserted against the primary
+        // variant only; the others share its source so logs/state must agree.
+        let mut sol_gas = [0u64; 4];
+        for (idx, sol) in sols.iter_mut().enumerate() {
+            let (pipeline, optimize) = SOL_VARIANTS[idx];
+            let label = sol_variant_label(pipeline, optimize);
+            let res = sol
+                .call_raw_with_logs(&cd, opts)
+                .unwrap_or_else(|e| panic!("{label} deposit #{i}: {e:?}"));
+            sol_gas[idx] = res.result.gas_used;
+
+            if idx == PRIMARY_SOL_IDX {
+                assert_eq!(
+                    fe_res.raw_logs.len(),
+                    res.raw_logs.len(),
+                    "deposit #{i}: emitted log count differs (fe vs {label})",
+                );
+                for (li, (fl, sl)) in fe_res.raw_logs.iter().zip(&res.raw_logs).enumerate() {
+                    assert_eq!(
+                        fl.data.topics(),
+                        sl.data.topics(),
+                        "deposit #{i}, log {li}: topics mismatch (fe vs {label})",
+                    );
+                    assert_eq!(
+                        fl.data.data, sl.data.data,
+                        "deposit #{i}, log {li}: data mismatch (fe vs {label})",
+                    );
+                }
+            }
         }
 
-        gas_rows.push(GasComparisonRow::new(
-            format!("deposit#{i}"),
-            fe_res.result.gas_used,
-            sol_res.result.gas_used,
-        ));
+        gas_rows.push(SolGasRow {
+            label: format!("deposit#{i}"),
+            fe: fe_res.result.gas_used,
+            sol_variants: sol_gas,
+        });
 
-        // After each deposit, roots must match.
+        // After each deposit, roots and counts must match between Fe and the
+        // primary Solidity variant.
+        let sol = &mut sols[PRIMARY_SOL_IDX];
         let fe_root = fe
             .call_raw(&get_root_selector, ExecutionOptions::default())
             .expect("fe root");
@@ -490,14 +525,23 @@ fn differential_deposit() {
             &sol_root.return_data[..],
             "deposit #{i}: root mismatch after deposit"
         );
-        assert_count_matches(&format!("after deposit #{i}"), &mut fe, &mut sol);
+        let fe_count = fe
+            .call_raw(&get_count_selector, ExecutionOptions::default())
+            .expect("fe count");
+        let sol_count = sol
+            .call_raw(&get_count_selector, ExecutionOptions::default())
+            .expect("sol count");
+        assert_eq!(
+            &fe_count.return_data[..],
+            &sol_count.return_data[..],
+            "after deposit #{i}: get_deposit_count return mismatch"
+        );
     }
 
-    // Report.
     println!();
     println!(
         "Differential deposit — correctness OK across {} deposits.",
         gas_rows.len()
     );
-    print_gas_comparison_table(&gas_rows, "call", "fe gas", "sol gas", "fe-sol");
+    print_sol_gas_table(&gas_rows, "call", 12);
 }

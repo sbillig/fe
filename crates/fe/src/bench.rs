@@ -7,7 +7,10 @@
 use std::fmt::Write as _;
 use std::fs;
 
-use crate::bench_support::{compile_fe_sonatina, compile_solidity, fmt_delta_pct, fmt_gas};
+use crate::bench_support::{
+    SOL_VARIANTS, SolGasRow, compile_fe_sonatina, compile_solidity_pipeline, fmt_gas,
+    print_sol_gas_table, sol_variant_label,
+};
 use camino::{Utf8Path, Utf8PathBuf};
 use contract_harness::{ExecutionOptions, RuntimeInstance};
 use ethers_core::abi::AbiParser;
@@ -34,8 +37,14 @@ struct BenchResult {
     fixture: String,
     function: String,
     fe_sonatina_gas: u64,
-    sol_gas: u64,
-    sol_opt_gas: u64,
+    /// Gas per Solidity variant, indexed by [`SOL_VARIANTS`].
+    sol_gas: [u64; 4],
+}
+
+impl BenchResult {
+    fn sol_best(&self) -> u64 {
+        *self.sol_gas.iter().min().unwrap()
+    }
 }
 
 /// TOML manifest deserialized from `<fixture>.toml`.
@@ -76,12 +85,19 @@ pub fn run_benchmarks(
     for fixture in &fixtures {
         println!("--- {} ---", fixture.name);
 
-        let sol_bytecode =
-            compile_solidity(&fixture.sol_source, &fixture.contract_name, false, solc)
-                .map_err(|e| format!("[{}] {e}", fixture.name))?;
-        let sol_opt_bytecode =
-            compile_solidity(&fixture.sol_source, &fixture.contract_name, true, solc)
-                .map_err(|e| format!("[{}] {e}", fixture.name))?;
+        let mut sol_bytecodes: Vec<String> = Vec::with_capacity(SOL_VARIANTS.len());
+        for (pipeline, optimize) in SOL_VARIANTS {
+            sol_bytecodes.push(
+                compile_solidity_pipeline(
+                    &fixture.sol_source,
+                    &fixture.contract_name,
+                    optimize,
+                    pipeline,
+                    solc,
+                )
+                .map_err(|e| format!("[{}] {e}", fixture.name))?,
+            );
+        }
         let fe_sonatina_bytecode =
             compile_fe_sonatina(&fixture.fe_source, &fixture.name, &fixture.contract_name)
                 .map_err(|e| format!("[{}] {e}", fixture.name))?;
@@ -92,10 +108,18 @@ pub fn run_benchmarks(
 
             let fe_sonatina_gas = measure_call_bytes(&fe_sonatina_bytecode, &calldata)
                 .map_err(|e| format!("[{}/fe] {}: {e}", fixture.name, call.signature))?;
-            let sol_gas = measure_call(&sol_bytecode, &calldata)
-                .map_err(|e| format!("[{}/sol] {}: {e}", fixture.name, call.signature))?;
-            let sol_opt_gas = measure_call(&sol_opt_bytecode, &calldata)
-                .map_err(|e| format!("[{}/sol+opt] {}: {e}", fixture.name, call.signature))?;
+
+            let mut sol_gas = [0u64; 4];
+            for (idx, ((pipeline, optimize), bytecode)) in SOL_VARIANTS
+                .iter()
+                .copied()
+                .zip(sol_bytecodes.iter())
+                .enumerate()
+            {
+                let label = sol_variant_label(pipeline, optimize);
+                sol_gas[idx] = measure_call(bytecode, &calldata)
+                    .map_err(|e| format!("[{}/{label}] {}: {e}", fixture.name, call.signature))?;
+            }
 
             let fn_name = call.signature.split('(').next().unwrap_or(&call.signature);
             all_results.push(BenchResult {
@@ -103,15 +127,23 @@ pub fn run_benchmarks(
                 function: fn_name.to_string(),
                 fe_sonatina_gas,
                 sol_gas,
-                sol_opt_gas,
             });
         }
     }
 
-    // Print results
-    print_table(&all_results);
+    print_sol_gas_table(
+        &all_results
+            .iter()
+            .map(|r| SolGasRow {
+                label: format!("{}/{}", r.fixture, r.function),
+                fe: r.fe_sonatina_gas,
+                sol_variants: r.sol_gas,
+            })
+            .collect::<Vec<_>>(),
+        "fixture/fn",
+        32,
+    );
 
-    // Write CSV if requested
     if let Some(out_dir) = output {
         write_csv(&all_results, out_dir)?;
     }
@@ -298,33 +330,6 @@ fn measure_call_bytes(bytecode: &[u8], calldata: &[u8]) -> Result<u64, String> {
 // Reporting
 // ---------------------------------------------------------------------------
 
-fn print_table(results: &[BenchResult]) {
-    if results.is_empty() {
-        println!("No results.");
-        return;
-    }
-
-    // Header
-    println!(
-        "{:<20} {:<12} {:>10} {:>10} {:>10} {:>10}",
-        "Fixture", "Function", "Sonatina", "Sol", "Sol+O", "vs Sol+O"
-    );
-    println!("{}", "-".repeat(74));
-
-    for r in results {
-        let delta = fmt_delta_pct(r.fe_sonatina_gas, r.sol_opt_gas);
-        println!(
-            "{:<20} {:<12} {:>10} {:>10} {:>10} {:>10}",
-            r.fixture,
-            r.function,
-            fmt_gas(r.fe_sonatina_gas),
-            fmt_gas(r.sol_gas),
-            fmt_gas(r.sol_opt_gas),
-            delta,
-        );
-    }
-}
-
 fn fmt_delta_pct_csv(lhs: u64, rhs: u64) -> String {
     if rhs == 0 {
         return String::new();
@@ -339,20 +344,24 @@ fn write_csv(results: &[BenchResult], out_dir: &Utf8Path) -> Result<(), String> 
     let mut csv = String::new();
     writeln!(
         csv,
-        "fixture,function,fe_sonatina,sol,sol_opt,delta_fe_sonatina_vs_sol_opt_pct"
+        "fixture,function,fe_sonatina,sol,sol_opt,sol_ir,sol_ir_opt,sol_best,delta_fe_sonatina_vs_sol_best_pct"
     )
     .unwrap();
 
     for r in results {
+        let best = r.sol_best();
         writeln!(
             csv,
-            "{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{}",
             r.fixture,
             r.function,
             fmt_gas(r.fe_sonatina_gas),
-            fmt_gas(r.sol_gas),
-            fmt_gas(r.sol_opt_gas),
-            fmt_delta_pct_csv(r.fe_sonatina_gas, r.sol_opt_gas),
+            fmt_gas(r.sol_gas[0]),
+            fmt_gas(r.sol_gas[1]),
+            fmt_gas(r.sol_gas[2]),
+            fmt_gas(r.sol_gas[3]),
+            fmt_gas(best),
+            fmt_delta_pct_csv(r.fe_sonatina_gas, best),
         )
         .unwrap();
     }
