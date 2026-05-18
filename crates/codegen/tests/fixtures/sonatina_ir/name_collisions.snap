@@ -148,10 +148,10 @@ func private %main() -> i32 {
     block1:
         v0.i32 = call %standalone_name_collisions__name_collisions__test_module_qualifier_flatten_collision_0454_0;
         v1.i32 = call %standalone_name_collisions__name_collisions__test_generic_type_collision_baa3_0;
-        v2.i32 = call %standalone_name_collisions__name_collisions__test_impl_method_collision_666c;
+        v2.i32 = call %standalone_name_collisions__name_collisions__test_impl_method_collision_666c_0;
         v3.i32 = call %standalone_name_collisions__name_collisions__test_trait_method_collision_540b_0;
         v4.i32 = call %standalone_name_collisions__name_collisions__test_param_local_collision_c9bd_0;
-        v5.i256 = call %standalone_name_collisions__name_collisions__test_user_defined_conversion_pattern_name_d546;
+        v5.i256 = call %standalone_name_collisions__name_collisions__test_user_defined_conversion_pattern_name_d546_0;
         v6.i32 = call %standalone_name_collisions__name_collisions__test_ret_param_collision_dc54_0;
         v7.i32 = call %standalone_name_collisions__name_collisions__test_backend_reserved_fn_collision_d33d_0;
         return 0.i32;
@@ -436,11 +436,11 @@ func private %standalone_name_collisions__name_collisions__test_generic_type_col
         v6.objref<@layout_1> = obj.alloc @layout_1;
         obj.init.const v6 v2;
         v7.@layout_1 = obj.load v6;
-        v8.@layout_1 = call %standalone_name_collisions__name_collisions__generic_fn__gb148_5d90_0 v7;
+        v8.@layout_1 = call %standalone_name_collisions__name_collisions__generic_fn__gb148_5d90 v7;
         v9.objref<@layout_0> = obj.alloc @layout_0;
         obj.init.const v9 v5;
         v10.@layout_0 = obj.load v9;
-        v11.@layout_0 = call %standalone_name_collisions__name_collisions__generic_fn__gf088_02a1_0 v10;
+        v11.@layout_0 = call %standalone_name_collisions__name_collisions__generic_fn__gf088_02a1 v10;
         return 42.i32;
 }
 
@@ -456,11 +456,11 @@ func private %standalone_name_collisions__name_collisions__test_generic_type_col
         v6.objref<@layout_1> = obj.alloc @layout_1;
         obj.init.const v6 v2;
         v7.@layout_1 = obj.load v6;
-        v8.@layout_1 = call %standalone_name_collisions__name_collisions__generic_fn__gb148_5d90 v7;
+        v8.@layout_1 = call %standalone_name_collisions__name_collisions__generic_fn__gb148_5d90_0 v7;
         v9.objref<@layout_0> = obj.alloc @layout_0;
         obj.init.const v9 v5;
         v10.@layout_0 = obj.load v9;
-        v11.@layout_0 = call %standalone_name_collisions__name_collisions__generic_fn__gf088_02a1 v10;
+        v11.@layout_0 = call %standalone_name_collisions__name_collisions__generic_fn__gf088_02a1_0 v10;
         return 42.i32;
 }
 
@@ -497,7 +497,7 @@ func private %standalone_name_collisions__name_collisions__test_module_qualifier
         jump block1;
 
     block1:
-        v0.i32 = call %standalone_name_collisions__name_collisions__a__b__flattened_fn_aebd_0;
+        v0.i32 = call %standalone_name_collisions__name_collisions__a__b__flattened_fn_aebd;
         v1.i32 = call %standalone_name_collisions__name_collisions__a_b__flattened_fn_e3ab;
         (v2.i32, v3.i1) = uaddo v0 v1;
         br v3 block2 block3;
@@ -516,7 +516,7 @@ func private %standalone_name_collisions__name_collisions__test_module_qualifier
         jump block1;
 
     block1:
-        v0.i32 = call %standalone_name_collisions__name_collisions__a__b__flattened_fn_aebd;
+        v0.i32 = call %standalone_name_collisions__name_collisions__a__b__flattened_fn_aebd_0;
         v1.i32 = call %standalone_name_collisions__name_collisions__a_b__flattened_fn_e3ab_0;
         (v2.i32, v3.i1) = uaddo v0 v1;
         br v3 block2 block3;
@@ -535,7 +535,7 @@ func private %standalone_name_collisions__name_collisions__test_param_local_coll
         jump block1;
 
     block1:
-        v1.i32 = call %standalone_name_collisions__name_collisions__param_local_collision_a1c4_0 10.i32;
+        v1.i32 = call %standalone_name_collisions__name_collisions__param_local_collision_a1c4 10.i32;
         return v1;
 }
 
@@ -544,7 +544,7 @@ func private %standalone_name_collisions__name_collisions__test_param_local_coll
         jump block1;
 
     block1:
-        v1.i32 = call %standalone_name_collisions__name_collisions__param_local_collision_a1c4 10.i32;
+        v1.i32 = call %standalone_name_collisions__name_collisions__param_local_collision_a1c4_0 10.i32;
         return v1;
 }
 
@@ -576,7 +576,7 @@ func private %standalone_name_collisions__name_collisions__test_trait_method_col
         v3.i32 = call %standalone_name_collisions__name_collisions__impl_trait_MultiTraitImpl_5bd8__same_method_133c v2;
         v4.constref<@layout_4> = const.ref $const_region_4;
         v5.constref<@layout_4> = const.ref $const_region_4;
-        v6.i32 = call %standalone_name_collisions__name_collisions__impl_trait_MultiTraitImpl_b140__same_method_66b3_0 v5;
+        v6.i32 = call %standalone_name_collisions__name_collisions__impl_trait_MultiTraitImpl_b140__same_method_66b3 v5;
         (v7.i32, v8.i1) = uaddo v3 v6;
         br v8 block2 block3;
 
@@ -599,7 +599,7 @@ func private %standalone_name_collisions__name_collisions__test_trait_method_col
         v3.i32 = call %standalone_name_collisions__name_collisions__impl_trait_MultiTraitImpl_5bd8__same_method_133c_0 v2;
         v4.constref<@layout_4> = const.ref $const_region_4;
         v5.constref<@layout_4> = const.ref $const_region_4;
-        v6.i32 = call %standalone_name_collisions__name_collisions__impl_trait_MultiTraitImpl_b140__same_method_66b3 v5;
+        v6.i32 = call %standalone_name_collisions__name_collisions__impl_trait_MultiTraitImpl_b140__same_method_66b3_0 v5;
         (v7.i32, v8.i1) = uaddo v3 v6;
         br v8 block2 block3;
 
@@ -617,7 +617,7 @@ func private %standalone_name_collisions__name_collisions__test_user_defined_con
         jump block1;
 
     block1:
-        v1.i256 = call %standalone_name_collisions__name_collisions____u32_as_u256_56b3_0 42.i32;
+        v1.i256 = call %standalone_name_collisions__name_collisions____u32_as_u256_56b3 42.i32;
         return v1;
 }
 
@@ -626,7 +626,7 @@ func private %standalone_name_collisions__name_collisions__test_user_defined_con
         jump block1;
 
     block1:
-        v1.i256 = call %standalone_name_collisions__name_collisions____u32_as_u256_56b3 42.i32;
+        v1.i256 = call %standalone_name_collisions__name_collisions____u32_as_u256_56b3_0 42.i32;
         return v1;
 }
 

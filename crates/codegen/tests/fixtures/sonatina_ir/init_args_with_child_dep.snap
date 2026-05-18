@@ -147,7 +147,7 @@ func private %contract_init_abi_Child() {
         v25.objref<i256> = obj.proj v0 1.i256;
         obj.store v25 v13;
         v26.@layout_3 = obj.load v0;
-        v27.@layout_5 = call %std__lib__abi__sol__impl_trait_Sol_1f5f__decoder_new__g463e_6eaf v26;
+        v27.@layout_5 = call %std__lib__abi__sol__impl_trait_Sol_1f5f__decoder_new__g463e_6eaf_0 v26;
         v28.objref<@layout_4> = obj.proj v1 0.i256;
         v29.@layout_4 = extract_value v27 0.i256;
         v30.objref<@layout_3> = obj.proj v28 0.i256;
@@ -213,7 +213,7 @@ func private %contract_init_abi_Parent() {
         v25.objref<i256> = obj.proj v0 1.i256;
         obj.store v25 v13;
         v26.@layout_3 = obj.load v0;
-        v27.@layout_5 = call %std__lib__abi__sol__impl_trait_Sol_1f5f__decoder_new__g463e_6eaf_0 v26;
+        v27.@layout_5 = call %std__lib__abi__sol__impl_trait_Sol_1f5f__decoder_new__g463e_6eaf v26;
         v28.objref<@layout_4> = obj.proj v1 0.i256;
         v29.@layout_4 = extract_value v27 0.i256;
         v30.objref<@layout_3> = obj.proj v28 0.i256;
@@ -603,7 +603,7 @@ func private %std__lib__abi__sol__impl_trait_Sol_1f5f__decoder_new__g463e_6eaf(v
         jump block1;
 
     block1:
-        v2.@layout_5 = call %std__lib__abi__sol__impl_SolDecoder_113c__new__g463e_7b57_0 v0;
+        v2.@layout_5 = call %std__lib__abi__sol__impl_SolDecoder_113c__new__g463e_7b57 v0;
         return v2;
 }
 
@@ -612,7 +612,7 @@ func private %std__lib__abi__sol__impl_trait_Sol_1f5f__decoder_new__g463e_6eaf_0
         jump block1;
 
     block1:
-        v2.@layout_5 = call %std__lib__abi__sol__impl_SolDecoder_113c__new__g463e_7b57 v0;
+        v2.@layout_5 = call %std__lib__abi__sol__impl_SolDecoder_113c__new__g463e_7b57_0 v0;
         return v2;
 }
 

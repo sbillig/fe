@@ -845,7 +845,7 @@ func private %set_owner_once(v0.i256, v1.@layout_2, v2.objref<@layout_1>) {
         br v16 block2 block3;
 
     block2:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_7c32_0 0.i256 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_7c32_1 0.i256 0.i256;
         unreachable;
 
     block3:
@@ -1296,7 +1296,7 @@ func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_16d9__tran
         br v10 block2 block3;
 
     block2:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_7c32_1 0.i256 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_7c32_0 0.i256 0.i256;
         unreachable;
 
     block3:
