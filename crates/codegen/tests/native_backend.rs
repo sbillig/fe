@@ -151,16 +151,13 @@ pub fn add(a: u64, b: u64) -> u64 {
                 .compile_module(&module)
                 .map_err(|e| format!("{e:?}"))?;
 
-            // Function takes objref<i64> args (pointers), so pass &i64
-            let f: fn(*const i64, *const i64) -> u64 = unsafe {
+            let f: fn(u64, u64) -> u64 = unsafe {
                 let ptr = artifact
-                    .get_func_ptr::<fn(*const i64, *const i64) -> u64>("add")
+                    .get_func_ptr::<fn(u64, u64) -> u64>("add")
                     .ok_or("add function not found in artifact")?;
                 std::mem::transmute(ptr)
             };
-            let a: i64 = 3;
-            let b: i64 = 4;
-            Ok(f(&a as *const i64, &b as *const i64))
+            Ok(f(3, 4))
         },
     );
 
@@ -580,15 +577,14 @@ pub fn sum_to_n(n: u64) -> u64 {
                 .compile_module(&module)
                 .map_err(|e| format!("{e:?}"))?;
 
-            let f: fn(*const u64) -> u64 = unsafe {
+            let f: fn(u64) -> u64 = unsafe {
                 let ptr = artifact
-                    .get_func_ptr::<fn(*const u64) -> u64>("sum_to_n")
+                    .get_func_ptr::<fn(u64) -> u64>("sum_to_n")
                     .ok_or("sum_to_n not found")?;
                 std::mem::transmute(ptr)
             };
 
-            let n: u64 = 10;
-            Ok(f(&n))
+            Ok(f(10))
         },
     );
 
@@ -620,15 +616,13 @@ pub fn max(a: u64, b: u64) -> u64 {
             let artifact = backend
                 .compile_module(&module)
                 .map_err(|e| format!("{e:?}"))?;
-            let f: fn(*const u64, *const u64) -> u64 = unsafe {
+            let f: fn(u64, u64) -> u64 = unsafe {
                 let ptr = artifact
-                    .get_func_ptr::<fn(*const u64, *const u64) -> u64>("max")
+                    .get_func_ptr::<fn(u64, u64) -> u64>("max")
                     .ok_or("max not found")?;
                 std::mem::transmute(ptr)
             };
-            let a: u64 = 10;
-            let b: u64 = 20;
-            Ok(f(&a, &b))
+            Ok(f(10, 20))
         },
     );
     assert_eq!(result.expect("if-else should work"), 20);
@@ -666,14 +660,13 @@ pub fn fib(n: u64) -> u64 {
             let artifact = backend
                 .compile_module(&module)
                 .map_err(|e| format!("{e:?}"))?;
-            let f: fn(*const u64) -> u64 = unsafe {
+            let f: fn(u64) -> u64 = unsafe {
                 let ptr = artifact
-                    .get_func_ptr::<fn(*const u64) -> u64>("fib")
+                    .get_func_ptr::<fn(u64) -> u64>("fib")
                     .ok_or("fib not found")?;
                 std::mem::transmute(ptr)
             };
-            let n: u64 = 10;
-            Ok(f(&n))
+            Ok(f(10))
         },
     );
     assert_eq!(result.expect("fibonacci should work"), 55);
@@ -769,16 +762,13 @@ pub fn get_elem(idx: u64) -> u64 {
                 .compile_module(&module)
                 .map_err(|e| format!("{e:?}"))?;
 
-            let f: fn(*const u64) -> u64 = unsafe {
+            let f: fn(u64) -> u64 = unsafe {
                 let ptr = artifact
-                    .get_func_ptr::<fn(*const u64) -> u64>("get_elem")
+                    .get_func_ptr::<fn(u64) -> u64>("get_elem")
                     .ok_or("get_elem function not found")?;
                 std::mem::transmute(ptr)
             };
-            let idx0: u64 = 0;
-            let idx1: u64 = 1;
-            let idx2: u64 = 2;
-            Ok((f(&idx0), f(&idx1), f(&idx2)))
+            Ok((f(0), f(1), f(2)))
         },
     );
 

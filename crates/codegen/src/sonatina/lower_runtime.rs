@@ -4653,7 +4653,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 if let Value::Immediate { imm, .. } = self.fb.func.dfg.value(index) {
                     return self.checked_constant_index_value(len, immediate_to_u64_index(*imm));
                 }
-                let len = self.index_value(len);
+                let index_ty = self.fb.type_of(index);
+                let compare_ty = index_compare_ty(index_ty, len);
+                let index = self.cast_scalar(index, compare_ty)?;
+                let len = self.index_value_with_type(len, compare_ty);
                 let in_bounds = self
                     .fb
                     .insert_inst(Lt::new(self.module.inst_set(), index, len), Type::I1);
@@ -4702,6 +4705,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
 
     fn index_value(&mut self, value: u64) -> ValueId {
         self.fb.make_imm_value(I256::from(value))
+    }
+
+    fn index_value_with_type(&mut self, value: u64, ty: Type) -> ValueId {
+        self.fb
+            .make_imm_value(Immediate::from_i256(I256::from(value), ty))
     }
 
     fn offset_address(
@@ -4954,6 +4962,14 @@ fn int_bits(ty: Type) -> u16 {
         Type::I256 => 256,
         _ => 256,
     }
+}
+
+fn index_compare_ty(index_ty: Type, len: u64) -> Type {
+    int_ty(int_bits(index_ty).max(u64_bits(len)))
+}
+
+fn u64_bits(value: u64) -> u16 {
+    (u64::BITS - value.leading_zeros()).max(1) as u16
 }
 
 fn bytes_to_i256(bytes: &[u8], signed: bool) -> I256 {
