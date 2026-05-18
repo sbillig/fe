@@ -806,16 +806,88 @@ fn test_cli_build_sp1_can_use_guest_api_capabilities() {
         r#"
 #![arithmetic(unchecked)]
 
-use std::sp1::{ProverInput, PublicValues, commit_u32, commit_u64, read_u32, sp1}
+use std::sp1::{
+    DebugOutput,
+    Halt,
+    ProverInput,
+    PublicValues,
+    Unconstrained,
+    Verifier,
+    commit_bool,
+    commit_bytes,
+    commit_i8,
+    commit_i16,
+    commit_i32,
+    commit_i64,
+    commit_u8,
+    commit_u16,
+    commit_u32,
+    commit_u64,
+    enter_unconstrained,
+    exit_unconstrained,
+    halt,
+    hint_len,
+    read_bool,
+    read_exact,
+    read_i8,
+    read_i16,
+    read_i32,
+    read_i64,
+    read_u8,
+    read_u16,
+    read_u32,
+    read_u64,
+    sp1,
+    verify_sp1_proof,
+    write_bytes,
+    write_stdout_u8,
+}
 
-fn prove() uses (input: mut ProverInput, pv: mut PublicValues) {
-    let value = read_u32()
-    commit_u32(value + 1)
-    commit_u64(7)
+fn prove()
+uses (
+    input: mut ProverInput,
+    pv: mut PublicValues,
+    out: mut DebugOutput,
+    uc: mut Unconstrained,
+    verifier: mut Verifier,
+    h: mut Halt,
+)
+{
+    let available = hint_len()
+    if available == 1000000 {
+        halt(0)
+    }
+    commit_u8(read_u8())
+    commit_i8(read_i8())
+    commit_u16(read_u16())
+    commit_i16(read_i16())
+    commit_u32(read_u32() + 1)
+    commit_i32(read_i32())
+    commit_u64(read_u64())
+    commit_i64(read_i64())
+    commit_bool(read_bool())
+    let bytes = read_exact<4>()
+    commit_bytes(bytes.bytes, bytes.len)
+    write_stdout_u8(65)
+    write_bytes(2, [69, 82, 82], 3)
+    if enter_unconstrained() {
+        exit_unconstrained()
+    }
+    verify_sp1_proof(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    if read_bool() {
+        halt(0)
+    }
 }
 
 pub fn main() -> i32 {
-    with (ProverInput = sp1(), PublicValues = sp1()) {
+    with (
+        ProverInput = sp1(),
+        PublicValues = sp1(),
+        DebugOutput = sp1(),
+        Unconstrained = sp1(),
+        Verifier = sp1(),
+        Halt = sp1(),
+    ) {
         prove()
     }
     0
@@ -868,6 +940,36 @@ fn test_cli_build_sp1_fib_example() {
     assert_eq!(exit_code, 0, "fe SP1 build failed:\n{output}");
 
     let elf_path = out_dir.join("sp1_fib.elf");
+    assert!(elf_path.is_file(), "missing SP1 ELF:\n{output}");
+    let elf = fs::read(&elf_path).expect("read SP1 ELF");
+    assert!(elf.starts_with(b"\x7fELF"), "not an ELF artifact");
+}
+
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_build_sp1_succinct_fibonacci_example() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates parent")
+        .parent()
+        .expect("workspace root")
+        .join("examples/sp1_succinct_fibonacci.fe");
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let source_str = source.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "sp1",
+        "--out-dir",
+        out_dir_str.as_str(),
+        source_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 0, "fe SP1 build failed:\n{output}");
+
+    let elf_path = out_dir.join("sp1_succinct_fibonacci.elf");
     assert!(elf_path.is_file(), "missing SP1 ELF:\n{output}");
     let elf = fs::read(&elf_path).expect("read SP1 ELF");
     assert!(elf.starts_with(b"\x7fELF"), "not an ELF artifact");

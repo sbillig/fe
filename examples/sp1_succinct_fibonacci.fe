@@ -1,0 +1,48 @@
+#![arithmetic(unchecked)]
+
+use std::sp1::{ProverInput, PublicValues, commit_bytes, read_u32, sp1}
+
+fn fibonacci(_ n: u32) -> (u32, u32) {
+    let mut a: u32 = 0
+    let mut b: u32 = 1
+    let mut i: u32 = 0
+    while i < n {
+        let c = a.wrapping_add(b)
+        a = b
+        b = c
+        i = i + 1
+    }
+    (a, b)
+}
+
+fn encode_u32_word(_ bytes: [u8; 96], _ offset: usize, _ value: u32) -> [u8; 96] {
+    let mut encoded = bytes
+    encoded[offset + 28] = (value >> 24).downcast_unchecked()
+    encoded[offset + 29] = (value >> 16).downcast_unchecked()
+    encoded[offset + 30] = (value >> 8).downcast_unchecked()
+    encoded[offset + 31] = value.downcast_unchecked()
+    encoded
+}
+
+fn encode_public_values(_ n: u32, _ a: u32, _ b: u32) -> [u8; 96] {
+    let mut bytes: [u8; 96] = [0; 96]
+    bytes = encode_u32_word(bytes, 0, n)
+    bytes = encode_u32_word(bytes, 32, a)
+    encode_u32_word(bytes, 64, b)
+}
+
+fn prove()
+uses (input: mut ProverInput, pv: mut PublicValues)
+{
+    let n = read_u32()
+    let (a, b) = fibonacci(n)
+    let bytes = encode_public_values(n, a, b)
+    commit_bytes(bytes, 96)
+}
+
+pub fn main() -> i32 {
+    with (ProverInput = sp1(), PublicValues = sp1()) {
+        prove()
+    }
+    0
+}

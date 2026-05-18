@@ -1,30 +1,102 @@
 extern {
+    fn sys_sp1_hint_len() -> usize
+    fn sys_sp1_read_u8() -> u8
+    fn sys_sp1_read_i8() -> i8
+    fn sys_sp1_read_u16() -> u16
+    fn sys_sp1_read_i16() -> i16
     fn sys_sp1_read_u32() -> u32
     fn sys_sp1_read_i32() -> i32
     fn sys_sp1_read_u64() -> u64
+    fn sys_sp1_read_i64() -> i64
+    fn sys_sp1_read_bool() -> bool
+    fn sys_sp1_commit_u8(value: u8)
+    fn sys_sp1_commit_i8(value: i8)
+    fn sys_sp1_commit_u16(value: u16)
+    fn sys_sp1_commit_i16(value: i16)
     fn sys_sp1_commit_u32(value: u32)
     fn sys_sp1_commit_i32(value: i32)
     fn sys_sp1_commit_u64(value: u64)
-    fn sys_sp1_write_stdout_u8(value: u8)
-    fn sys_sp1_write_stderr_u8(value: u8)
+    fn sys_sp1_commit_i64(value: i64)
+    fn sys_sp1_commit_bool(value: bool)
+    fn sys_sp1_write_u8(fd: u32, value: u8)
+    fn sys_sp1_enter_unconstrained() -> bool
+    fn sys_sp1_exit_unconstrained()
+    fn sys_sp1_verify_sp1_proof(
+        vk0: u64,
+        vk1: u64,
+        vk2: u64,
+        vk3: u64,
+        pv0: u64,
+        pv1: u64,
+        pv2: u64,
+        pv3: u64,
+    )
+    fn sys_sp1_halt(exit_code: u8) -> !
     fn sys_sp1_halt_invalid_hint() -> !
 }
 
+pub const FD_STDOUT: u32 = 1
+pub const FD_STDERR: u32 = 2
+pub const FD_PUBLIC_VALUES: u32 = 13
+pub const FD_HINT: u32 = 14
+
 pub trait ProverInput {
+    fn hint_len(mut self) -> usize
+    fn read_u8(mut self) -> u8
+    fn read_i8(mut self) -> i8
+    fn read_u16(mut self) -> u16
+    fn read_i16(mut self) -> i16
     fn read_u32(mut self) -> u32
     fn read_i32(mut self) -> i32
     fn read_u64(mut self) -> u64
+    fn read_i64(mut self) -> i64
+    fn read_bool(mut self) -> bool
 }
 
 pub trait PublicValues {
+    fn commit_u8(mut self, value: u8)
+    fn commit_i8(mut self, value: i8)
+    fn commit_u16(mut self, value: u16)
+    fn commit_i16(mut self, value: i16)
     fn commit_u32(mut self, value: u32)
     fn commit_i32(mut self, value: i32)
     fn commit_u64(mut self, value: u64)
+    fn commit_i64(mut self, value: i64)
+    fn commit_bool(mut self, value: bool)
 }
 
 pub trait DebugOutput {
+    fn write_u8(mut self, fd: u32, value: u8)
     fn write_stdout_u8(mut self, value: u8)
     fn write_stderr_u8(mut self, value: u8)
+}
+
+pub trait Unconstrained {
+    fn enter_unconstrained(mut self) -> bool
+    fn exit_unconstrained(mut self)
+}
+
+pub trait Verifier {
+    fn verify_sp1_proof(
+        mut self,
+        vk0: u32,
+        vk1: u32,
+        vk2: u32,
+        vk3: u32,
+        vk4: u32,
+        vk5: u32,
+        vk6: u32,
+        vk7: u32,
+        pv0: u64,
+        pv1: u64,
+        pv2: u64,
+        pv3: u64,
+    )
+}
+
+pub trait Halt {
+    fn halt(mut self, exit_code: u8) -> !
+    fn halt_invalid_hint(mut self) -> !
 }
 
 pub struct Guest {
@@ -36,6 +108,26 @@ pub fn sp1() -> Guest {
 }
 
 impl ProverInput for Guest {
+    fn hint_len(mut self) -> usize {
+        sys_sp1_hint_len()
+    }
+
+    fn read_u8(mut self) -> u8 {
+        sys_sp1_read_u8()
+    }
+
+    fn read_i8(mut self) -> i8 {
+        sys_sp1_read_i8()
+    }
+
+    fn read_u16(mut self) -> u16 {
+        sys_sp1_read_u16()
+    }
+
+    fn read_i16(mut self) -> i16 {
+        sys_sp1_read_i16()
+    }
+
     fn read_u32(mut self) -> u32 {
         sys_sp1_read_u32()
     }
@@ -47,9 +139,33 @@ impl ProverInput for Guest {
     fn read_u64(mut self) -> u64 {
         sys_sp1_read_u64()
     }
+
+    fn read_i64(mut self) -> i64 {
+        sys_sp1_read_i64()
+    }
+
+    fn read_bool(mut self) -> bool {
+        sys_sp1_read_bool()
+    }
 }
 
 impl PublicValues for Guest {
+    fn commit_u8(mut self, value: u8) {
+        sys_sp1_commit_u8(value)
+    }
+
+    fn commit_i8(mut self, value: i8) {
+        sys_sp1_commit_i8(value)
+    }
+
+    fn commit_u16(mut self, value: u16) {
+        sys_sp1_commit_u16(value)
+    }
+
+    fn commit_i16(mut self, value: i16) {
+        sys_sp1_commit_i16(value)
+    }
+
     fn commit_u32(mut self, value: u32) {
         sys_sp1_commit_u32(value)
     }
@@ -61,16 +177,146 @@ impl PublicValues for Guest {
     fn commit_u64(mut self, value: u64) {
         sys_sp1_commit_u64(value)
     }
+
+    fn commit_i64(mut self, value: i64) {
+        sys_sp1_commit_i64(value)
+    }
+
+    fn commit_bool(mut self, value: bool) {
+        sys_sp1_commit_bool(value)
+    }
 }
 
 impl DebugOutput for Guest {
+    fn write_u8(mut self, fd: u32, value: u8) {
+        sys_sp1_write_u8(fd, value)
+    }
+
     fn write_stdout_u8(mut self, value: u8) {
-        sys_sp1_write_stdout_u8(value)
+        sys_sp1_write_u8(FD_STDOUT, value)
     }
 
     fn write_stderr_u8(mut self, value: u8) {
-        sys_sp1_write_stderr_u8(value)
+        sys_sp1_write_u8(FD_STDERR, value)
     }
+}
+
+impl Unconstrained for Guest {
+    fn enter_unconstrained(mut self) -> bool {
+        sys_sp1_enter_unconstrained()
+    }
+
+    fn exit_unconstrained(mut self) {
+        sys_sp1_exit_unconstrained()
+    }
+}
+
+impl Verifier for Guest {
+    fn verify_sp1_proof(
+        mut self,
+        vk0: u32,
+        vk1: u32,
+        vk2: u32,
+        vk3: u32,
+        vk4: u32,
+        vk5: u32,
+        vk6: u32,
+        vk7: u32,
+        pv0: u64,
+        pv1: u64,
+        pv2: u64,
+        pv3: u64,
+    ) {
+        sys_sp1_verify_sp1_proof(
+            pack_digest_words(vk0, vk1),
+            pack_digest_words(vk2, vk3),
+            pack_digest_words(vk4, vk5),
+            pack_digest_words(vk6, vk7),
+            pv0,
+            pv1,
+            pv2,
+            pv3,
+        )
+    }
+}
+
+impl Halt for Guest {
+    fn halt(mut self, exit_code: u8) -> ! {
+        sys_sp1_halt(exit_code)
+    }
+
+    fn halt_invalid_hint(mut self) -> ! {
+        sys_sp1_halt_invalid_hint()
+    }
+}
+
+pub struct Input<const N: usize> {
+    pub bytes: [u8; N],
+    pub len: usize,
+}
+
+impl<const N: usize> Input<N> {
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    pub fn byte_at(self, _ index: usize) -> u8 {
+        self.bytes[index]
+    }
+
+    pub fn commit(self)
+    uses (pv: mut PublicValues)
+    {
+        commit_bytes(self.bytes, self.len)
+    }
+
+    pub fn write(self, _ fd: u32)
+    uses (out: mut DebugOutput)
+    {
+        write_bytes(fd, self.bytes, self.len)
+    }
+
+    pub fn write_stdout(self)
+    uses (out: mut DebugOutput)
+    {
+        write_bytes(FD_STDOUT, self.bytes, self.len)
+    }
+
+    pub fn write_stderr(self)
+    uses (out: mut DebugOutput)
+    {
+        write_bytes(FD_STDERR, self.bytes, self.len)
+    }
+}
+
+pub fn hint_len() -> usize
+uses (input: mut ProverInput)
+{
+    input.hint_len()
+}
+
+pub fn read_u8() -> u8
+uses (input: mut ProverInput)
+{
+    input.read_u8()
+}
+
+pub fn read_i8() -> i8
+uses (input: mut ProverInput)
+{
+    input.read_i8()
+}
+
+pub fn read_u16() -> u16
+uses (input: mut ProverInput)
+{
+    input.read_u16()
+}
+
+pub fn read_i16() -> i16
+uses (input: mut ProverInput)
+{
+    input.read_i16()
 }
 
 pub fn read_u32() -> u32
@@ -91,6 +337,54 @@ uses (input: mut ProverInput)
     input.read_u64()
 }
 
+pub fn read_i64() -> i64
+uses (input: mut ProverInput)
+{
+    input.read_i64()
+}
+
+pub fn read_bool() -> bool
+uses (input: mut ProverInput)
+{
+    input.read_bool()
+}
+
+pub fn read_exact<const N: usize>() -> Input<N>
+uses (input: mut ProverInput)
+{
+    let mut bytes: [u8; N] = [0; N]
+    let mut len: usize = 0
+    while len < N {
+        bytes[len] = read_u8()
+        len = len + 1
+    }
+    Input { bytes: bytes, len: len }
+}
+
+pub fn commit_u8(_ value: u8)
+uses (pv: mut PublicValues)
+{
+    pv.commit_u8(value)
+}
+
+pub fn commit_i8(_ value: i8)
+uses (pv: mut PublicValues)
+{
+    pv.commit_i8(value)
+}
+
+pub fn commit_u16(_ value: u16)
+uses (pv: mut PublicValues)
+{
+    pv.commit_u16(value)
+}
+
+pub fn commit_i16(_ value: i16)
+uses (pv: mut PublicValues)
+{
+    pv.commit_i16(value)
+}
+
 pub fn commit_u32(_ value: u32)
 uses (pv: mut PublicValues)
 {
@@ -109,6 +403,34 @@ uses (pv: mut PublicValues)
     pv.commit_u64(value)
 }
 
+pub fn commit_i64(_ value: i64)
+uses (pv: mut PublicValues)
+{
+    pv.commit_i64(value)
+}
+
+pub fn commit_bool(_ value: bool)
+uses (pv: mut PublicValues)
+{
+    pv.commit_bool(value)
+}
+
+pub fn commit_bytes<const N: usize>(_ bytes: [u8; N], _ len: usize)
+uses (pv: mut PublicValues)
+{
+    let mut i: usize = 0
+    while i < len && i < N {
+        commit_u8(bytes[i])
+        i = i + 1
+    }
+}
+
+pub fn write_u8(_ fd: u32, _ value: u8)
+uses (out: mut DebugOutput)
+{
+    out.write_u8(fd, value)
+}
+
 pub fn write_stdout_u8(_ value: u8)
 uses (out: mut DebugOutput)
 {
@@ -121,6 +443,70 @@ uses (out: mut DebugOutput)
     out.write_stderr_u8(value)
 }
 
+pub fn write_bytes<const N: usize>(_ fd: u32, _ bytes: [u8; N], _ len: usize)
+uses (out: mut DebugOutput)
+{
+    let mut i: usize = 0
+    while i < len && i < N {
+        write_u8(fd, bytes[i])
+        i = i + 1
+    }
+}
+
+pub fn write_stdout_bytes<const N: usize>(_ bytes: [u8; N], _ len: usize)
+uses (out: mut DebugOutput)
+{
+    write_bytes(FD_STDOUT, bytes, len)
+}
+
+pub fn write_stderr_bytes<const N: usize>(_ bytes: [u8; N], _ len: usize)
+uses (out: mut DebugOutput)
+{
+    write_bytes(FD_STDERR, bytes, len)
+}
+
+pub fn enter_unconstrained() -> bool
+uses (uc: mut Unconstrained)
+{
+    uc.enter_unconstrained()
+}
+
+pub fn exit_unconstrained()
+uses (uc: mut Unconstrained)
+{
+    uc.exit_unconstrained()
+}
+
+pub fn verify_sp1_proof(
+    _ vk0: u32,
+    _ vk1: u32,
+    _ vk2: u32,
+    _ vk3: u32,
+    _ vk4: u32,
+    _ vk5: u32,
+    _ vk6: u32,
+    _ vk7: u32,
+    _ pv0: u64,
+    _ pv1: u64,
+    _ pv2: u64,
+    _ pv3: u64,
+)
+uses (verifier: mut Verifier)
+{
+    verifier.verify_sp1_proof(vk0, vk1, vk2, vk3, vk4, vk5, vk6, vk7, pv0, pv1, pv2, pv3)
+}
+
+pub fn halt(_ exit_code: u8) -> !
+uses (halt: mut Halt)
+{
+    halt.halt(exit_code)
+}
+
 pub fn halt_invalid_hint() -> ! {
     sys_sp1_halt_invalid_hint()
+}
+
+#[arithmetic(unchecked)]
+fn pack_digest_words(_ low: u32, _ high: u32) -> u64 {
+    (low as u64) | ((high as u64) << 32)
 }
