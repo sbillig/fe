@@ -8,7 +8,7 @@ use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::runtime::ir::RuntimePackagePlan;
 use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rustc_hash::FxHashSet;
-use sonatina_codegen::{EvmCompile, OptLevel as SonatinaOptLevel};
+use sonatina_codegen::{EvmCompile, OptLevel as SonatinaOptLevel, OptPipeline};
 #[cfg(feature = "cranelift")]
 use sonatina_ir::{Linkage, Signature, Type, ir_writer::IrWrite};
 use sonatina_ir::{
@@ -414,7 +414,8 @@ fn compile_prepared_native_object(
 ) -> Result<NativeObject, LowerError> {
     let backend = sonatina_codegen::isa::cranelift::CraneliftBackend::new();
     let mut compile = sonatina_codegen::Compile::new(module, backend)
-        .with_opt_level(to_sonatina_opt_level(opt_level));
+        .with_opt_level(to_sonatina_opt_level(opt_level))
+        .with_opt_pipeline(OptPipeline::Native);
     compile.optimize();
     ensure_native_entry_signature(compile.module(), main_abi)?;
     compile
@@ -437,7 +438,8 @@ fn compile_native_test_module_object(
 
     let backend = sonatina_codegen::isa::cranelift::CraneliftBackend::new();
     let mut compile = sonatina_codegen::Compile::new(module, backend)
-        .with_opt_level(to_sonatina_opt_level(opt_level));
+        .with_opt_level(to_sonatina_opt_level(opt_level))
+        .with_opt_pipeline(OptPipeline::Native);
     compile.optimize();
     for entry_symbol in entry_symbols {
         ensure_native_test_entry_signature(compile.module(), entry_symbol)?;
@@ -458,7 +460,8 @@ fn compile_native_ir_text(module: Module, opt_level: OptLevel) -> Result<String,
 
     let backend = sonatina_codegen::isa::cranelift::CraneliftBackend::new();
     let mut compile = sonatina_codegen::Compile::new(module, backend)
-        .with_opt_level(to_sonatina_opt_level(opt_level));
+        .with_opt_level(to_sonatina_opt_level(opt_level))
+        .with_opt_pipeline(OptPipeline::Native);
     compile.optimize();
     ensure_native_entry_signature(compile.module(), main.main_abi)?;
     let mut writer = ModuleWriter::new(compile.module());
