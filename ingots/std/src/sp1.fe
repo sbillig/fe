@@ -1,0 +1,126 @@
+extern {
+    fn sys_sp1_read_u32() -> u32
+    fn sys_sp1_read_i32() -> i32
+    fn sys_sp1_read_u64() -> u64
+    fn sys_sp1_commit_u32(value: u32)
+    fn sys_sp1_commit_i32(value: i32)
+    fn sys_sp1_commit_u64(value: u64)
+    fn sys_sp1_write_stdout_u8(value: u8)
+    fn sys_sp1_write_stderr_u8(value: u8)
+    fn sys_sp1_halt_invalid_hint() -> !
+}
+
+pub trait ProverInput {
+    fn read_u32(mut self) -> u32
+    fn read_i32(mut self) -> i32
+    fn read_u64(mut self) -> u64
+}
+
+pub trait PublicValues {
+    fn commit_u32(mut self, value: u32)
+    fn commit_i32(mut self, value: i32)
+    fn commit_u64(mut self, value: u64)
+}
+
+pub trait DebugOutput {
+    fn write_stdout_u8(mut self, value: u8)
+    fn write_stderr_u8(mut self, value: u8)
+}
+
+pub struct Guest {
+    token: u8,
+}
+
+pub fn sp1() -> Guest {
+    Guest { token: 0 }
+}
+
+impl ProverInput for Guest {
+    fn read_u32(mut self) -> u32 {
+        sys_sp1_read_u32()
+    }
+
+    fn read_i32(mut self) -> i32 {
+        sys_sp1_read_i32()
+    }
+
+    fn read_u64(mut self) -> u64 {
+        sys_sp1_read_u64()
+    }
+}
+
+impl PublicValues for Guest {
+    fn commit_u32(mut self, value: u32) {
+        sys_sp1_commit_u32(value)
+    }
+
+    fn commit_i32(mut self, value: i32) {
+        sys_sp1_commit_i32(value)
+    }
+
+    fn commit_u64(mut self, value: u64) {
+        sys_sp1_commit_u64(value)
+    }
+}
+
+impl DebugOutput for Guest {
+    fn write_stdout_u8(mut self, value: u8) {
+        sys_sp1_write_stdout_u8(value)
+    }
+
+    fn write_stderr_u8(mut self, value: u8) {
+        sys_sp1_write_stderr_u8(value)
+    }
+}
+
+pub fn read_u32() -> u32
+uses (input: mut ProverInput)
+{
+    input.read_u32()
+}
+
+pub fn read_i32() -> i32
+uses (input: mut ProverInput)
+{
+    input.read_i32()
+}
+
+pub fn read_u64() -> u64
+uses (input: mut ProverInput)
+{
+    input.read_u64()
+}
+
+pub fn commit_u32(_ value: u32)
+uses (pv: mut PublicValues)
+{
+    pv.commit_u32(value)
+}
+
+pub fn commit_i32(_ value: i32)
+uses (pv: mut PublicValues)
+{
+    pv.commit_i32(value)
+}
+
+pub fn commit_u64(_ value: u64)
+uses (pv: mut PublicValues)
+{
+    pv.commit_u64(value)
+}
+
+pub fn write_stdout_u8(_ value: u8)
+uses (out: mut DebugOutput)
+{
+    out.write_stdout_u8(value)
+}
+
+pub fn write_stderr_u8(_ value: u8)
+uses (out: mut DebugOutput)
+{
+    out.write_stderr_u8(value)
+}
+
+pub fn halt_invalid_hint() -> ! {
+    sys_sp1_halt_invalid_hint()
+}

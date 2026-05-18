@@ -796,6 +796,53 @@ fn test_cli_build_sp1_writes_riscv_elf() {
     assert_eq!(flags & 0x6, 0, "expected RISC-V soft-float ABI");
 }
 
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_build_sp1_can_use_guest_api_capabilities() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("sp1_guest_api.fe");
+    fs::write(
+        &source,
+        r#"
+#![arithmetic(unchecked)]
+
+use std::sp1::{ProverInput, PublicValues, commit_u32, commit_u64, read_u32, sp1}
+
+fn prove() uses (input: mut ProverInput, pv: mut PublicValues) {
+    let value = read_u32()
+    commit_u32(value + 1)
+    commit_u64(7)
+}
+
+pub fn main() -> i32 {
+    with (ProverInput = sp1(), PublicValues = sp1()) {
+        prove()
+    }
+    0
+}
+"#,
+    )
+    .expect("write SP1 source");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let source_str = source.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "sp1",
+        "--out-dir",
+        out_dir_str.as_str(),
+        source_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 0, "fe SP1 build failed:\n{output}");
+
+    let elf_path = out_dir.join("sp1_guest_api.elf");
+    assert!(elf_path.is_file(), "missing SP1 ELF:\n{output}");
+    let elf = fs::read(&elf_path).expect("read SP1 ELF");
+    assert!(elf.starts_with(b"\x7fELF"), "not an ELF artifact");
+}
+
 #[test]
 fn test_cli_build_sonatina_rejects_executable_emit() {
     let temp = tempdir().expect("tempdir");
