@@ -17,56 +17,57 @@ pub fn compile_solidity(
     contract_name: &str,
     optimize: bool,
     solc_path: Option<&str>,
-) -> Option<String> {
-    match solc_runner::compile_solidity(contract_name, source, optimize, solc_path) {
-        Ok(bc) => Some(bc.bytecode),
-        Err(e) => {
+) -> Result<String, String> {
+    solc_runner::compile_solidity(contract_name, source, optimize, solc_path)
+        .map(|bc| bc.bytecode)
+        .map_err(|e| {
             let label = if optimize { "sol+opt" } else { "sol" };
-            eprintln!("  {label} compile error: {}", e.0);
-            None
-        }
-    }
+            format!("{label} compile error: {}", e.0)
+        })
 }
 
 /// Compile Fe source to bytecode via Sonatina backend. Returns deploy bytecode as raw bytes.
-pub fn compile_fe_sonatina(fe_source: &str, name: &str, contract_name: &str) -> Option<Vec<u8>> {
-    let contract_name = contract_name.to_string();
+pub fn compile_fe_sonatina(
+    fe_source: &str,
+    name: &str,
+    contract_name: &str,
+) -> Result<Vec<u8>, String> {
+    let contract_name_owned = contract_name.to_string();
+    let name_owned = name.to_string();
     with_fe_ingot(fe_source, name, move |db, ingot| {
         let diags = db.run_on_ingot(ingot);
         if !diags.is_empty() {
-            eprintln!("  fe/sonatina diagnostics for {name}:");
             diags.emit(db);
-            return None;
+            return Err(format!("fe/sonatina diagnostics for {name_owned}"));
         }
 
-        match codegen::emit_ingot_sonatina_bytecode(db, ingot, OptLevel::O2, Some(&contract_name)) {
-            Ok(mut map) => map.remove(&contract_name).map(|bc| bc.deploy),
-            Err(err) => {
-                eprintln!("  fe/sonatina emit error for {name}: {err}");
-                None
-            }
-        }
-    })
-    .flatten()
+        let mut map = codegen::emit_ingot_sonatina_bytecode(
+            db,
+            ingot,
+            OptLevel::O2,
+            Some(&contract_name_owned),
+        )
+        .map_err(|err| format!("fe/sonatina emit error for {name_owned}: {err}"))?;
+        map.remove(&contract_name_owned)
+            .map(|bc| bc.deploy)
+            .ok_or_else(|| {
+                format!("fe/sonatina: no bytecode emitted for contract `{contract_name_owned}`")
+            })
+    })?
 }
 
-/// Format an optional gas value for tabular reports.
-pub fn fmt_gas(gas: Option<u64>) -> String {
-    match gas {
-        Some(g) => g.to_string(),
-        None => "-".to_string(),
-    }
+/// Format a gas value for tabular reports.
+pub fn fmt_gas(gas: u64) -> String {
+    gas.to_string()
 }
 
 /// Format a percentage gas delta as `(lhs - rhs) / rhs`.
-pub fn fmt_delta_pct(lhs: Option<u64>, rhs: Option<u64>) -> String {
-    match (lhs, rhs) {
-        (Some(lhs), Some(rhs)) if rhs > 0 => {
-            let pct = ((lhs as f64 - rhs as f64) / rhs as f64) * 100.0;
-            format!("{pct:+.1}%")
-        }
-        _ => "-".to_string(),
+pub fn fmt_delta_pct(lhs: u64, rhs: u64) -> String {
+    if rhs == 0 {
+        return "-".to_string();
     }
+    let pct = ((lhs as f64 - rhs as f64) / rhs as f64) * 100.0;
+    format!("{pct:+.1}%")
 }
 
 /// One row in a two-way gas comparison.
@@ -139,27 +140,32 @@ fn with_fe_ingot<T>(
     fe_source: &str,
     name: &str,
     f: impl for<'db> FnOnce(&'db DriverDataBase, hir::Ingot<'db>) -> T,
-) -> Option<T> {
+) -> Result<T, String> {
     let tmp = tempfile::Builder::new()
         .prefix(&format!("fe_bench_{name}_"))
         .tempdir()
-        .ok()?;
-    std::fs::create_dir_all(tmp.path().join("src")).ok()?;
+        .map_err(|e| format!("create temp ingot dir for {name}: {e}"))?;
+    std::fs::create_dir_all(tmp.path().join("src"))
+        .map_err(|e| format!("create temp ingot dir for {name}: {e}"))?;
     std::fs::write(
         tmp.path().join("fe.toml"),
         format!("[ingot]\nname = \"{name}\"\nversion = \"0.1.0\"\n"),
     )
-    .ok()?;
-    std::fs::write(tmp.path().join("src").join("lib.fe"), fe_source).ok()?;
+    .map_err(|e| format!("write fe.toml for {name}: {e}"))?;
+    std::fs::write(tmp.path().join("src").join("lib.fe"), fe_source)
+        .map_err(|e| format!("write lib.fe for {name}: {e}"))?;
 
-    let ingot_url = Url::from_directory_path(tmp.path()).ok()?;
+    let ingot_url = Url::from_directory_path(tmp.path())
+        .map_err(|_| format!("non-utf8 temp ingot path for {name}"))?;
     let mut db = DriverDataBase::default();
     let had_errors = driver::init_ingot(&mut db, &ingot_url);
     if had_errors {
-        eprintln!("  fe ingot init errors for {name}");
-        return None;
+        return Err(format!("fe ingot init errors for {name}"));
     }
 
-    let ingot = db.workspace().containing_ingot(&db, ingot_url)?;
-    Some(f(&db, ingot))
+    let ingot = db
+        .workspace()
+        .containing_ingot(&db, ingot_url)
+        .ok_or_else(|| format!("no containing ingot for {name}"))?;
+    Ok(f(&db, ingot))
 }

@@ -33,9 +33,9 @@ struct BenchCall {
 struct BenchResult {
     fixture: String,
     function: String,
-    fe_sonatina_gas: Option<u64>,
-    sol_gas: Option<u64>,
-    sol_opt_gas: Option<u64>,
+    fe_sonatina_gas: u64,
+    sol_gas: u64,
+    sol_opt_gas: u64,
 }
 
 /// TOML manifest deserialized from `<fixture>.toml`.
@@ -76,29 +76,26 @@ pub fn run_benchmarks(
     for fixture in &fixtures {
         println!("--- {} ---", fixture.name);
 
-        // 1. Compile Solidity (unoptimized + optimized)
         let sol_bytecode =
-            compile_solidity(&fixture.sol_source, &fixture.contract_name, false, solc);
+            compile_solidity(&fixture.sol_source, &fixture.contract_name, false, solc)
+                .map_err(|e| format!("[{}] {e}", fixture.name))?;
         let sol_opt_bytecode =
-            compile_solidity(&fixture.sol_source, &fixture.contract_name, true, solc);
-
-        // 2. Compile Fe via Sonatina backend
+            compile_solidity(&fixture.sol_source, &fixture.contract_name, true, solc)
+                .map_err(|e| format!("[{}] {e}", fixture.name))?;
         let fe_sonatina_bytecode =
-            compile_fe_sonatina(&fixture.fe_source, &fixture.name, &fixture.contract_name);
+            compile_fe_sonatina(&fixture.fe_source, &fixture.name, &fixture.contract_name)
+                .map_err(|e| format!("[{}] {e}", fixture.name))?;
 
-        // 3. Deploy all variants and measure gas per call
         for call in &fixture.calls {
-            let calldata = match encode_calldata(&call.signature, &call.args) {
-                Ok(cd) => cd,
-                Err(err) => {
-                    eprintln!("  skip {}: {err}", call.signature);
-                    continue;
-                }
-            };
+            let calldata = encode_calldata(&call.signature, &call.args)
+                .map_err(|e| format!("[{}] {}: {e}", fixture.name, call.signature))?;
 
-            let fe_sonatina_gas = measure_call_bytes(&fe_sonatina_bytecode, &calldata);
-            let sol_gas = measure_call(&sol_bytecode, &calldata);
-            let sol_opt_gas = measure_call(&sol_opt_bytecode, &calldata);
+            let fe_sonatina_gas = measure_call_bytes(&fe_sonatina_bytecode, &calldata)
+                .map_err(|e| format!("[{}/fe] {}: {e}", fixture.name, call.signature))?;
+            let sol_gas = measure_call(&sol_bytecode, &calldata)
+                .map_err(|e| format!("[{}/sol] {}: {e}", fixture.name, call.signature))?;
+            let sol_opt_gas = measure_call(&sol_opt_bytecode, &calldata)
+                .map_err(|e| format!("[{}/sol+opt] {}: {e}", fixture.name, call.signature))?;
 
             let fn_name = call.signature.split('(').next().unwrap_or(&call.signature);
             all_results.push(BenchResult {
@@ -283,24 +280,18 @@ fn parse_arg(
 }
 
 /// Deploy a contract from hex-encoded init bytecode and call it.
-fn measure_call(bytecode_hex: &Option<String>, calldata: &[u8]) -> Option<u64> {
-    let hex = bytecode_hex.as_ref()?;
-    let mut instance = RuntimeInstance::deploy(hex).ok()?;
+fn measure_call(bytecode_hex: &str, calldata: &[u8]) -> Result<u64, String> {
+    let mut instance =
+        RuntimeInstance::deploy(bytecode_hex).map_err(|e| format!("deploy failed: {e}"))?;
     let result = instance
         .call_raw(calldata, ExecutionOptions::default())
-        .ok()?;
-    Some(result.gas_used)
+        .map_err(|e| format!("call failed: {e}"))?;
+    Ok(result.gas_used)
 }
 
 /// Deploy a contract from raw bytes and call it.
-fn measure_call_bytes(bytecode: &Option<Vec<u8>>, calldata: &[u8]) -> Option<u64> {
-    let bytes = bytecode.as_ref()?;
-    let hex_str = hex::encode(bytes);
-    let mut instance = RuntimeInstance::deploy(&hex_str).ok()?;
-    let result = instance
-        .call_raw(calldata, ExecutionOptions::default())
-        .ok()?;
-    Some(result.gas_used)
+fn measure_call_bytes(bytecode: &[u8], calldata: &[u8]) -> Result<u64, String> {
+    measure_call(&hex::encode(bytecode), calldata)
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +325,13 @@ fn print_table(results: &[BenchResult]) {
     }
 }
 
+fn fmt_delta_pct_csv(lhs: u64, rhs: u64) -> String {
+    if rhs == 0 {
+        return String::new();
+    }
+    format!("{:.2}", ((lhs as f64 - rhs as f64) / rhs as f64) * 100.0)
+}
+
 fn write_csv(results: &[BenchResult], out_dir: &Utf8Path) -> Result<(), String> {
     fs::create_dir_all(out_dir.as_std_path()).map_err(|e| format!("create dir {out_dir}: {e}"))?;
 
@@ -346,12 +344,6 @@ fn write_csv(results: &[BenchResult], out_dir: &Utf8Path) -> Result<(), String> 
     .unwrap();
 
     for r in results {
-        let delta = match (r.fe_sonatina_gas, r.sol_opt_gas) {
-            (Some(fe), Some(sol)) if sol > 0 => {
-                format!("{:.2}", ((fe as f64 - sol as f64) / sol as f64) * 100.0)
-            }
-            _ => String::new(),
-        };
         writeln!(
             csv,
             "{},{},{},{},{},{}",
@@ -360,7 +352,7 @@ fn write_csv(results: &[BenchResult], out_dir: &Utf8Path) -> Result<(), String> 
             fmt_gas(r.fe_sonatina_gas),
             fmt_gas(r.sol_gas),
             fmt_gas(r.sol_opt_gas),
-            delta,
+            fmt_delta_pct_csv(r.fe_sonatina_gas, r.sol_opt_gas),
         )
         .unwrap();
     }
