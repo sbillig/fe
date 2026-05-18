@@ -109,6 +109,17 @@ fn validate_build_request(
                 );
             }
         }
+        #[cfg(feature = "cranelift")]
+        BuildBackend::Sp1 => {
+            if contract.is_some() {
+                return Err("SP1 ELF output does not support `--contract`".to_string());
+            }
+            if emit.writes_any_bytecode() || emit.abi {
+                return Err(
+                    "SP1 backend only supports `--emit executable` and `--emit ir`".to_string(),
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -586,7 +597,7 @@ fn build_workspace(
         .unwrap_or_else(|| workspace_root.join("out"));
 
     #[cfg(feature = "cranelift")]
-    if matches!(backend, BuildBackend::Native) {
+    if matches!(backend, BuildBackend::Native | BuildBackend::Sp1) {
         let mut had_errors = false;
         let mut built_any = false;
         for member in members {
@@ -1013,6 +1024,18 @@ fn build_ingot(
             report_dir,
         );
     }
+    #[cfg(feature = "cranelift")]
+    if matches!(backend, BuildBackend::Sp1) {
+        return build_sp1_ingot(
+            db,
+            ingot,
+            opt_level,
+            emit,
+            out_dir,
+            ir_file_stem,
+            report_dir,
+        );
+    }
 
     let contract_names = match collect_ingot_contract_names(db, ingot) {
         Ok(names) => names,
@@ -1143,6 +1166,56 @@ fn build_native_ingot(
     BuildSummary { had_errors }
 }
 
+#[cfg(feature = "cranelift")]
+fn build_sp1_ingot(
+    db: &DriverDataBase,
+    ingot: hir::Ingot<'_>,
+    opt_level: OptLevel,
+    emit: EmitSelection,
+    out_dir: &Utf8Path,
+    ir_file_stem: &str,
+    report_dir: Option<&Utf8PathBuf>,
+) -> BuildSummary {
+    if let Err(err) = ensure_output_dirs(emit, out_dir, out_dir) {
+        eprintln!("Error: {err}");
+        return BuildSummary { had_errors: true };
+    }
+    let report_dir = report_dir.map(Utf8PathBuf::as_path);
+
+    let mut had_errors = false;
+    if emit.ir {
+        let ir = match codegen::emit_ingot_sp1_ir(db, ingot, opt_level) {
+            Ok(ir) => ir,
+            Err(err) => {
+                eprintln!("Error: Failed to compile SP1 Sonatina IR: {err}");
+                return BuildSummary { had_errors: true };
+            }
+        };
+        if let Err(err) =
+            write_named_ir_artifact(out_dir, report_dir, ir_file_stem, "sp1.sona", &ir)
+        {
+            eprintln!("Error: {err}");
+            had_errors = true;
+        }
+    }
+
+    if emit.executable {
+        let elf = match codegen::emit_ingot_sp1_elf(db, ingot, opt_level) {
+            Ok(elf) => elf,
+            Err(err) => {
+                eprintln!("Error: Failed to compile SP1 ELF: {err}");
+                return BuildSummary { had_errors: true };
+            }
+        };
+        if let Err(err) = write_sp1_elf_artifact(out_dir, report_dir, ir_file_stem, &elf.bytes) {
+            eprintln!("Error: {err}");
+            had_errors = true;
+        }
+    }
+
+    BuildSummary { had_errors }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_top_mod(
     db: &DriverDataBase,
@@ -1163,6 +1236,18 @@ fn build_top_mod(
     #[cfg(feature = "cranelift")]
     if matches!(backend, BuildBackend::Native) {
         return build_native_top_mod(
+            db,
+            top_mod,
+            opt_level,
+            emit,
+            out_dir,
+            ir_file_stem,
+            report_dir,
+        );
+    }
+    #[cfg(feature = "cranelift")]
+    if matches!(backend, BuildBackend::Sp1) {
+        return build_sp1_top_mod(
             db,
             top_mod,
             opt_level,
@@ -1291,6 +1376,56 @@ fn build_native_top_mod(
             object.main_abi,
             true,
         ) {
+            eprintln!("Error: {err}");
+            had_errors = true;
+        }
+    }
+
+    BuildSummary { had_errors }
+}
+
+#[cfg(feature = "cranelift")]
+fn build_sp1_top_mod(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    emit: EmitSelection,
+    out_dir: &Utf8Path,
+    ir_file_stem: &str,
+    report_dir: Option<&Utf8PathBuf>,
+) -> BuildSummary {
+    if let Err(err) = ensure_output_dirs(emit, out_dir, out_dir) {
+        eprintln!("Error: {err}");
+        return BuildSummary { had_errors: true };
+    }
+    let report_dir = report_dir.map(Utf8PathBuf::as_path);
+
+    let mut had_errors = false;
+    if emit.ir {
+        let ir = match codegen::emit_module_sp1_ir(db, top_mod, opt_level) {
+            Ok(ir) => ir,
+            Err(err) => {
+                eprintln!("Error: Failed to compile SP1 Sonatina IR: {err}");
+                return BuildSummary { had_errors: true };
+            }
+        };
+        if let Err(err) =
+            write_named_ir_artifact(out_dir, report_dir, ir_file_stem, "sp1.sona", &ir)
+        {
+            eprintln!("Error: {err}");
+            had_errors = true;
+        }
+    }
+
+    if emit.executable {
+        let elf = match codegen::emit_module_sp1_elf(db, top_mod, opt_level) {
+            Ok(elf) => elf,
+            Err(err) => {
+                eprintln!("Error: Failed to compile SP1 ELF: {err}");
+                return BuildSummary { had_errors: true };
+            }
+        };
+        if let Err(err) = write_sp1_elf_artifact(out_dir, report_dir, ir_file_stem, &elf.bytes) {
             eprintln!("Error: {err}");
             had_errors = true;
         }
@@ -1638,6 +1773,25 @@ pub(crate) fn write_native_executable_artifact(
     if announce {
         println!("Wrote {executable_path}");
     }
+    Ok(())
+}
+
+#[cfg(feature = "cranelift")]
+fn write_sp1_elf_artifact(
+    out_dir: &Utf8Path,
+    report_dir: Option<&Utf8Path>,
+    file_stem: &str,
+    elf: &[u8],
+) -> Result<(), String> {
+    let base = sanitize_name_with_default(file_stem, "main");
+    let file_name = format!("{base}.elf");
+    let elf_path = out_dir.join(&file_name);
+    fs::write(elf_path.as_std_path(), elf)
+        .map_err(|err| format!("Failed to write SP1 ELF {elf_path}: {err}"))?;
+    if let Some(dir) = report_dir {
+        let _ = fs::write(dir.join(&file_name).as_std_path(), elf);
+    }
+    println!("Wrote {elf_path}");
     Ok(())
 }
 

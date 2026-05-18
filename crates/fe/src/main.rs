@@ -47,6 +47,8 @@ pub enum BuildBackend {
     Sonatina,
     #[cfg(feature = "cranelift")]
     Native,
+    #[cfg(feature = "cranelift")]
+    Sp1,
 }
 
 impl BuildBackend {
@@ -55,6 +57,8 @@ impl BuildBackend {
             BuildBackend::Sonatina => "sonatina",
             #[cfg(feature = "cranelift")]
             BuildBackend::Native => "native",
+            #[cfg(feature = "cranelift")]
+            BuildBackend::Sp1 => "sp1",
         }
     }
 
@@ -67,6 +71,8 @@ impl BuildBackend {
             ],
             #[cfg(feature = "cranelift")]
             BuildBackend::Native => vec![BuildEmit::Executable],
+            #[cfg(feature = "cranelift")]
+            BuildBackend::Sp1 => vec![BuildEmit::Executable],
         }
     }
 }

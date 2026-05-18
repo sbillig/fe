@@ -54,6 +54,9 @@ sonatina-triple = { path = "../sonatina-multi-backend/crates/triple" }
 sonatina-codegen = { path = "../sonatina-multi-backend/crates/codegen" }
 sonatina-verifier = { path = "../sonatina-multi-backend/crates/verifier" }
 
+[patch.crates-io]
+target-lexicon = { path = "/Users/sean/src/wasmtime/vendor/target-lexicon" }
+
 [profile.dev]
 # Set to 0 to make the build faster and debugging more difficult.
 debug = 0

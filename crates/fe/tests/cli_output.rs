@@ -757,6 +757,45 @@ fn test_cli_build_native_rejects_evm_artifacts() {
     );
 }
 
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_build_sp1_writes_riscv_elf() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("sp1_exit.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").expect("write SP1 source");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let source_str = source.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "sp1",
+        "--out-dir",
+        out_dir_str.as_str(),
+        source_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 0, "fe SP1 build failed:\n{output}");
+
+    let elf_path = out_dir.join("sp1_exit.elf");
+    assert!(elf_path.is_file(), "missing SP1 ELF:\n{output}");
+    assert!(
+        output.contains(&format!("Wrote {}", elf_path.display())),
+        "missing SP1 ELF output line:\n{output}"
+    );
+
+    let elf = fs::read(&elf_path).expect("read SP1 ELF");
+    assert!(elf.starts_with(b"\x7fELF"), "not an ELF artifact");
+    assert_eq!(elf[4], 2, "SP1 ELF should be ELF64");
+    assert_eq!(
+        u16::from_le_bytes([elf[18], elf[19]]),
+        243,
+        "expected RISC-V ELF"
+    );
+    let flags = u32::from_le_bytes(elf[48..52].try_into().expect("ELF flags"));
+    assert_eq!(flags & 0x6, 0, "expected RISC-V soft-float ABI");
+}
+
 #[test]
 fn test_cli_build_sonatina_rejects_executable_emit() {
     let temp = tempdir().expect("tempdir");

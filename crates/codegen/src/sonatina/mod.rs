@@ -72,6 +72,12 @@ pub struct NativeObject {
 }
 
 #[cfg(feature = "cranelift")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sp1Elf {
+    pub bytes: Vec<u8>,
+}
+
+#[cfg(feature = "cranelift")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeMainAbi {
     NoArgsVoid,
@@ -335,6 +341,22 @@ fn compile_native_main_sonatina(
 }
 
 #[cfg(feature = "cranelift")]
+fn compile_sp1_main_sonatina(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+) -> Result<Module, LowerError> {
+    let package = mir::build_native_main_package(db, top_mod)?;
+    if package.root_objects(db).is_empty() {
+        return Err(LowerError::Unsupported(
+            "SP1 ELF output requires `pub fn main() -> i32`".to_string(),
+        ));
+    }
+    let isa = create_sp1_isa();
+    let ctx = ModuleCtx::new(&isa);
+    lower_runtime::compile_runtime_package_sonatina_with_ctx(db, &package, crate::EVM_LAYOUT, ctx)
+}
+
+#[cfg(feature = "cranelift")]
 fn select_ingot_native_main_top_mod<'db>(
     db: &'db DriverDataBase,
     ingot: hir::Ingot<'db>,
@@ -364,6 +386,24 @@ fn select_ingot_native_main_top_mod<'db>(
 fn compile_native_object(module: Module, opt_level: OptLevel) -> Result<NativeObject, LowerError> {
     let main = prepare_native_entry(&module)?;
     compile_prepared_native_object(module, opt_level, main.main_abi)
+}
+
+#[cfg(feature = "cranelift")]
+fn compile_sp1_elf(module: Module, opt_level: OptLevel) -> Result<Sp1Elf, LowerError> {
+    prepare_sp1_entry(&module)?;
+
+    let backend = sonatina_codegen::isa::cranelift::CraneliftBackend::new();
+    let mut compile = sonatina_codegen::Compile::new(module, backend)
+        .with_opt_level(to_sonatina_opt_level(opt_level));
+    compile.optimize();
+    ensure_sp1_main_signature(compile.module())?;
+    compile
+        .backend()
+        .compile_module_to_sp1_elf(compile.module())
+        .map(|artifact| Sp1Elf {
+            bytes: artifact.bytes,
+        })
+        .map_err(|errors| LowerError::Internal(format_cranelift_errors(&errors)))
 }
 
 #[cfg(feature = "cranelift")]
@@ -421,6 +461,16 @@ pub fn emit_module_native_object(
 }
 
 #[cfg(feature = "cranelift")]
+pub fn emit_module_sp1_elf(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+) -> Result<Sp1Elf, LowerError> {
+    let module = compile_sp1_main_sonatina(db, top_mod)?;
+    compile_sp1_elf(module, opt_level)
+}
+
+#[cfg(feature = "cranelift")]
 pub fn emit_ingot_native_object(
     db: &DriverDataBase,
     ingot: hir::Ingot<'_>,
@@ -429,6 +479,17 @@ pub fn emit_ingot_native_object(
     let top_mod = select_ingot_native_main_top_mod(db, ingot)?;
     let module = compile_native_main_sonatina(db, top_mod)?;
     compile_native_object(module, opt_level).map(|object| object.bytes)
+}
+
+#[cfg(feature = "cranelift")]
+pub fn emit_ingot_sp1_elf(
+    db: &DriverDataBase,
+    ingot: hir::Ingot<'_>,
+    opt_level: OptLevel,
+) -> Result<Sp1Elf, LowerError> {
+    let top_mod = select_ingot_native_main_top_mod(db, ingot)?;
+    let module = compile_sp1_main_sonatina(db, top_mod)?;
+    compile_sp1_elf(module, opt_level)
 }
 
 #[cfg(feature = "cranelift")]
@@ -463,6 +524,23 @@ pub fn emit_module_native_ir(
 }
 
 #[cfg(feature = "cranelift")]
+pub fn emit_module_sp1_ir(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+) -> Result<String, LowerError> {
+    let module = compile_sp1_main_sonatina(db, top_mod)?;
+    prepare_sp1_entry(&module)?;
+    let backend = sonatina_codegen::isa::cranelift::CraneliftBackend::new();
+    let mut compile = sonatina_codegen::Compile::new(module, backend)
+        .with_opt_level(to_sonatina_opt_level(opt_level));
+    compile.optimize();
+    ensure_sp1_main_signature(compile.module())?;
+    let mut writer = ModuleWriter::new(compile.module());
+    Ok(writer.dump_string())
+}
+
+#[cfg(feature = "cranelift")]
 pub fn emit_ingot_native_ir(
     db: &DriverDataBase,
     ingot: hir::Ingot<'_>,
@@ -471,6 +549,16 @@ pub fn emit_ingot_native_ir(
     let top_mod = select_ingot_native_main_top_mod(db, ingot)?;
     let module = compile_native_main_sonatina(db, top_mod)?;
     compile_native_ir_text(module, opt_level)
+}
+
+#[cfg(feature = "cranelift")]
+pub fn emit_ingot_sp1_ir(
+    db: &DriverDataBase,
+    ingot: hir::Ingot<'_>,
+    opt_level: OptLevel,
+) -> Result<String, LowerError> {
+    let top_mod = select_ingot_native_main_top_mod(db, ingot)?;
+    emit_module_sp1_ir(db, top_mod, opt_level)
 }
 
 #[cfg(feature = "cranelift")]
@@ -484,6 +572,13 @@ fn prepare_native_entry(module: &Module) -> Result<NativeMain, LowerError> {
     let main = ensure_native_main_signature(module)?;
     rename_native_main_entry(module, main.func_ref, main.main_abi)?;
     Ok(main)
+}
+
+#[cfg(feature = "cranelift")]
+fn prepare_sp1_entry(module: &Module) -> Result<FuncRef, LowerError> {
+    let func_ref = ensure_sp1_main_signature(module)?;
+    mark_sp1_main_entry_public(module, func_ref)?;
+    Ok(func_ref)
 }
 
 #[cfg(feature = "cranelift")]
@@ -597,6 +692,46 @@ fn ensure_native_entry_signature(
 }
 
 #[cfg(feature = "cranelift")]
+fn ensure_sp1_main_signature(module: &Module) -> Result<FuncRef, LowerError> {
+    let signatures = module
+        .funcs()
+        .into_iter()
+        .filter_map(|func_ref| {
+            module.ctx.func_sig(func_ref, |sig| {
+                Some((
+                    func_ref,
+                    sig.name().to_string(),
+                    sig.args().to_vec(),
+                    sig.ret_tys().to_vec(),
+                ))
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut entries = signatures
+        .iter()
+        .filter_map(|(func_ref, name, args, ret_tys)| {
+            (name == "main").then_some((func_ref, args, ret_tys))
+        });
+    let Some((func_ref, args, ret_tys)) = entries.next() else {
+        return Err(LowerError::Internal(format!(
+            "SP1 ELF entry `main` is missing after lowering; defined functions: {}",
+            describe_native_signatures(&signatures, module)
+        )));
+    };
+    if entries.next().is_some() {
+        return Err(LowerError::Internal(
+            "SP1 ELF output produced multiple `main` functions".to_string(),
+        ));
+    }
+    if (args.as_slice(), ret_tys.as_slice()) != (&[][..], &[Type::I32][..]) {
+        return Err(LowerError::Unsupported(
+            "SP1 ELF `main` must have signature `pub fn main() -> i32`".to_string(),
+        ));
+    }
+    Ok(*func_ref)
+}
+
+#[cfg(feature = "cranelift")]
 fn rename_native_main_entry(
     module: &Module,
     func_ref: FuncRef,
@@ -618,6 +753,23 @@ fn rename_native_main_entry(
     module.ctx.declared_funcs.insert(
         func_ref,
         Signature::new("__fe_main", Linkage::Public, &args, &ret_tys),
+    );
+    Ok(())
+}
+
+#[cfg(feature = "cranelift")]
+fn mark_sp1_main_entry_public(module: &Module, func_ref: FuncRef) -> Result<(), LowerError> {
+    let (args, ret_tys) = module.ctx.func_sig(func_ref, |sig| {
+        (sig.args().to_vec(), sig.ret_tys().to_vec())
+    });
+    if !args.is_empty() || ret_tys != [Type::I32] {
+        return Err(LowerError::Internal(
+            "SP1 ELF entry signature did not match selected ABI".to_string(),
+        ));
+    }
+    module.ctx.declared_funcs.insert(
+        func_ref,
+        Signature::new("main", Linkage::Public, &args, &ret_tys),
     );
     Ok(())
 }
@@ -722,7 +874,6 @@ pub fn compile_runtime_package_sonatina_native(
 }
 
 fn create_native_isa() -> sonatina_ir::isa::native::Native {
-    use sonatina_triple::{Architecture, OperatingSystem, Vendor};
     let arch = if cfg!(target_arch = "x86_64") {
         Architecture::X86_64
     } else if cfg!(target_arch = "aarch64") {
@@ -734,6 +885,15 @@ fn create_native_isa() -> sonatina_ir::isa::native::Native {
         arch,
         Vendor::Unknown,
         OperatingSystem::Native,
+    ))
+}
+
+#[cfg(feature = "cranelift")]
+fn create_sp1_isa() -> sonatina_ir::isa::native::Native {
+    sonatina_ir::isa::native::Native::new(TargetTriple::new(
+        Architecture::Riscv64im,
+        Vendor::Succinct,
+        OperatingSystem::ZkvmElf,
     ))
 }
 
