@@ -407,16 +407,6 @@ fn compile_sp1_elf(module: Module, opt_level: OptLevel) -> Result<Sp1Elf, LowerE
 }
 
 #[cfg(feature = "cranelift")]
-fn compile_native_test_object(
-    module: Module,
-    opt_level: OptLevel,
-    entry_symbol: &str,
-) -> Result<NativeObject, LowerError> {
-    rename_native_entry_by_name(&module, entry_symbol, NativeMainAbi::NoArgsVoid)?;
-    compile_prepared_native_object(module, opt_level, NativeMainAbi::NoArgsVoid)
-}
-
-#[cfg(feature = "cranelift")]
 fn compile_prepared_native_object(
     module: Module,
     opt_level: OptLevel,
@@ -433,6 +423,31 @@ fn compile_prepared_native_object(
         .map(|artifact| NativeObject {
             bytes: artifact.bytes,
             main_abi,
+        })
+        .map_err(|errors| LowerError::Internal(format_cranelift_errors(&errors)))
+}
+
+#[cfg(feature = "cranelift")]
+fn compile_native_test_module_object(
+    module: Module,
+    opt_level: OptLevel,
+    entry_symbols: &[String],
+) -> Result<NativeObject, LowerError> {
+    mark_native_test_entries_public(&module, entry_symbols)?;
+
+    let backend = sonatina_codegen::isa::cranelift::CraneliftBackend::new();
+    let mut compile = sonatina_codegen::Compile::new(module, backend)
+        .with_opt_level(to_sonatina_opt_level(opt_level));
+    compile.optimize();
+    for entry_symbol in entry_symbols {
+        ensure_native_test_entry_signature(compile.module(), entry_symbol)?;
+    }
+    compile
+        .backend()
+        .compile_module_to_object(compile.module())
+        .map(|artifact| NativeObject {
+            bytes: artifact.bytes,
+            main_abi: NativeMainAbi::NoArgsVoid,
         })
         .map_err(|errors| LowerError::Internal(format_cranelift_errors(&errors)))
 }
@@ -758,6 +773,27 @@ fn rename_native_main_entry(
 }
 
 #[cfg(feature = "cranelift")]
+fn mark_native_test_entries_public(
+    module: &Module,
+    entry_symbols: &[String],
+) -> Result<(), LowerError> {
+    for entry_symbol in entry_symbols {
+        let (func_ref, args, ret_tys) = find_native_function_signature(module, entry_symbol)
+            .map_err(|message| {
+                LowerError::Internal(format!(
+                    "native test entry `{entry_symbol}` could not be exported; {message}"
+                ))
+            })?;
+        ensure_native_test_signature(module, entry_symbol, &args, &ret_tys)?;
+        module.ctx.declared_funcs.insert(
+            func_ref,
+            Signature::new(entry_symbol, Linkage::Public, &args, &ret_tys),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cranelift")]
 fn mark_sp1_main_entry_public(module: &Module, func_ref: FuncRef) -> Result<(), LowerError> {
     let (args, ret_tys) = module.ctx.func_sig(func_ref, |sig| {
         (sig.args().to_vec(), sig.ret_tys().to_vec())
@@ -775,11 +811,25 @@ fn mark_sp1_main_entry_public(module: &Module, func_ref: FuncRef) -> Result<(), 
 }
 
 #[cfg(feature = "cranelift")]
-fn rename_native_entry_by_name(
+fn ensure_native_test_entry_signature(
     module: &Module,
     entry_name: &str,
-    main_abi: NativeMainAbi,
-) -> Result<(), LowerError> {
+) -> Result<FuncRef, LowerError> {
+    let (func_ref, args, ret_tys) =
+        find_native_function_signature(module, entry_name).map_err(|message| {
+            LowerError::Internal(format!(
+                "native test entry `{entry_name}` is missing after optimization; {message}"
+            ))
+        })?;
+    ensure_native_test_signature(module, entry_name, &args, &ret_tys)?;
+    Ok(func_ref)
+}
+
+#[cfg(feature = "cranelift")]
+fn find_native_function_signature(
+    module: &Module,
+    entry_name: &str,
+) -> Result<(FuncRef, Vec<Type>, Vec<Type>), String> {
     let signatures = module
         .funcs()
         .into_iter()
@@ -800,31 +850,42 @@ fn rename_native_entry_by_name(
             (name == entry_name).then_some((func_ref, args, ret_tys))
         });
     let Some((func_ref, args, ret_tys)) = entries.next() else {
-        return Err(LowerError::Internal(format!(
-            "native test entry `{entry_name}` is missing; defined functions: {}",
+        return Err(format!(
+            "defined functions: {}",
             describe_native_signatures(&signatures, module)
-        )));
+        ));
     };
     if entries.next().is_some() {
-        return Err(LowerError::Internal(format!(
+        return Err(format!(
             "native test entry `{entry_name}` resolved to multiple functions"
-        )));
+        ));
     }
-    let expected = match main_abi {
-        NativeMainAbi::NoArgsVoid => (Vec::new(), Vec::new()),
-        NativeMainAbi::NoArgs => (Vec::new(), vec![Type::I32]),
-        NativeMainAbi::ArgcArgv => (vec![Type::I32, Type::I256], vec![Type::I32]),
-    };
-    if (args.to_vec(), ret_tys.to_vec()) != expected {
-        return Err(LowerError::Unsupported(format!(
-            "native test entry `{entry_name}` has unsupported signature"
-        )));
+    Ok((*func_ref, args.to_vec(), ret_tys.to_vec()))
+}
+
+#[cfg(feature = "cranelift")]
+fn ensure_native_test_signature(
+    module: &Module,
+    entry_name: &str,
+    args: &[Type],
+    ret_tys: &[Type],
+) -> Result<(), LowerError> {
+    if args.is_empty() && ret_tys.is_empty() {
+        return Ok(());
     }
-    module.ctx.declared_funcs.insert(
-        *func_ref,
-        Signature::new("__fe_main", Linkage::Public, args, ret_tys),
-    );
-    Ok(())
+
+    Err(LowerError::Unsupported(format!(
+        "native test entry `{entry_name}` has unsupported signature: {entry_name}({}) -> {}",
+        args.iter()
+            .map(|ty| format_native_type(*ty, module))
+            .collect::<Vec<_>>()
+            .join(", "),
+        ret_tys
+            .iter()
+            .map(|ty| format_native_type(*ty, module))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )))
 }
 
 #[cfg(feature = "cranelift")]
@@ -1431,12 +1492,21 @@ pub fn emit_test_module_native(
     opt_level: OptLevel,
     filter: Option<&str>,
 ) -> Result<NativeTestModuleOutput, LowerError> {
+    struct NativeTestRoot {
+        display_name: String,
+        hir_name: String,
+        symbol_name: String,
+        object_name: String,
+        expected_revert: Option<ExpectedRevert>,
+        initial_balance: Option<Vec<u8>>,
+    }
+
     let package = build_test_runtime_package(db, top_mod, filter)?;
     if package.root_objects(db).is_empty() {
         return Ok(NativeTestModuleOutput { tests: Vec::new() });
     }
 
-    let mut tests = Vec::new();
+    let mut roots = Vec::new();
     for object in package.root_objects(db) {
         let sections = object.sections(db);
         let Some(section) = sections.first() else {
@@ -1450,28 +1520,46 @@ pub fn emit_test_module_native(
                 TestRootMetadataError::InvalidPackage(message) => LowerError::Internal(message),
                 TestRootMetadataError::Unsupported(message) => LowerError::Unsupported(message),
             })?;
-        let isa = create_native_isa();
-        let ctx = ModuleCtx::new(&isa);
-        let module = lower_runtime::compile_runtime_package_sonatina_with_ctx(
-            db,
-            &package,
-            crate::EVM_LAYOUT,
-            ctx,
-        )?;
-        let object =
-            compile_native_test_object(module, opt_level, section.entry.symbol(db).as_str())?;
-        tests.push(NativeTestMetadata {
+        roots.push(NativeTestRoot {
             display_name: metadata.display_name,
             hir_name: metadata.hir_name,
             symbol_name: section.entry.symbol(db).clone(),
             object_name: object_name_for_native_test(&section.name),
-            object,
-            value_param_count: 0,
-            effect_param_count: 0,
             expected_revert: metadata.expected_revert,
             initial_balance: metadata.initial_balance,
         });
     }
+    if roots.is_empty() {
+        return Ok(NativeTestModuleOutput { tests: Vec::new() });
+    }
+
+    let isa = create_native_isa();
+    let ctx = ModuleCtx::new(&isa);
+    let module = lower_runtime::compile_runtime_package_sonatina_with_ctx(
+        db,
+        &package,
+        crate::EVM_LAYOUT,
+        ctx,
+    )?;
+    let entry_symbols = roots
+        .iter()
+        .map(|root| root.symbol_name.clone())
+        .collect::<Vec<_>>();
+    let object = compile_native_test_module_object(module, opt_level, &entry_symbols)?;
+    let tests = roots
+        .into_iter()
+        .map(|root| NativeTestMetadata {
+            display_name: root.display_name,
+            hir_name: root.hir_name,
+            symbol_name: root.symbol_name,
+            object_name: root.object_name,
+            object: object.clone(),
+            value_param_count: 0,
+            effect_param_count: 0,
+            expected_revert: root.expected_revert,
+            initial_balance: root.initial_balance,
+        })
+        .collect();
     Ok(NativeTestModuleOutput { tests })
 }
 

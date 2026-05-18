@@ -1721,6 +1721,34 @@ pub(crate) fn write_native_executable_artifact(
     main_abi: codegen::NativeMainAbi,
     announce: bool,
 ) -> Result<(), String> {
+    let launcher = native_main_launcher_c(main_abi).to_string();
+    write_native_executable_artifact_with_launcher(
+        out_dir, report_dir, file_stem, object, &launcher, announce,
+    )
+}
+
+#[cfg(feature = "cranelift")]
+pub(crate) fn write_native_test_executable_artifact(
+    out_dir: &Utf8Path,
+    file_stem: &str,
+    object: &[u8],
+    entry_symbol: &str,
+) -> Result<(), String> {
+    let launcher = native_test_launcher_c(entry_symbol)?;
+    write_native_executable_artifact_with_launcher(
+        out_dir, None, file_stem, object, &launcher, false,
+    )
+}
+
+#[cfg(feature = "cranelift")]
+fn write_native_executable_artifact_with_launcher(
+    out_dir: &Utf8Path,
+    report_dir: Option<&Utf8Path>,
+    file_stem: &str,
+    object: &[u8],
+    launcher: &str,
+    announce: bool,
+) -> Result<(), String> {
     let base = sanitize_name_with_default(file_stem, "main");
     let object_dir = out_dir.join(".fe-native");
     fs::create_dir_all(object_dir.as_std_path())
@@ -1734,7 +1762,6 @@ pub(crate) fn write_native_executable_artifact(
     fs::write(runtime_path.as_std_path(), NATIVE_U256_RUNTIME_C)
         .map_err(|err| format!("Failed to write native runtime {runtime_path}: {err}"))?;
 
-    let launcher = native_main_launcher_c(main_abi);
     let launcher_path = object_dir.join("fe_native_main.c");
     fs::write(launcher_path.as_std_path(), launcher)
         .map_err(|err| format!("Failed to write native main launcher {launcher_path}: {err}"))?;
@@ -1774,6 +1801,35 @@ pub(crate) fn write_native_executable_artifact(
         println!("Wrote {executable_path}");
     }
     Ok(())
+}
+
+#[cfg(feature = "cranelift")]
+fn native_test_launcher_c(entry_symbol: &str) -> Result<String, String> {
+    if !is_c_identifier(entry_symbol) {
+        return Err(format!(
+            "native test entry symbol `{entry_symbol}` is not a valid C identifier"
+        ));
+    }
+    Ok(format!(
+        r#"
+extern void {entry_symbol}(void);
+
+int main(void) {{
+    {entry_symbol}();
+    return 0;
+}}
+"#
+    ))
+}
+
+#[cfg(feature = "cranelift")]
+fn is_c_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
 #[cfg(feature = "cranelift")]

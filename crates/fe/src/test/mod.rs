@@ -4,7 +4,7 @@
 //! executes them using revm.
 
 #[cfg(feature = "cranelift")]
-use crate::build::{native_executable_name, write_native_executable_artifact};
+use crate::build::{native_executable_name, write_native_test_executable_artifact};
 use crate::dependency_diagnostics::DependencyIssues;
 use crate::report::{
     PanicReportGuard, ReportStaging, copy_input_into_report, create_dir_all_utf8,
@@ -2739,6 +2739,12 @@ fn compile_and_run_native_test(
     if case.initial_balance.is_some() {
         return failure("native test backend does not support initial balances".to_string());
     }
+    if case.symbol_name.trim().is_empty() {
+        return failure(format!(
+            "missing native test entry symbol for `{}`",
+            case.display_name
+        ));
+    }
 
     let output_root = Utf8PathBuf::from("target/fe-native-test");
     if let Err(err) = create_dir_all_utf8(&output_root) {
@@ -2756,13 +2762,11 @@ fn compile_and_run_native_test(
         return failure(format!("failed to create native test case dir: {err}"));
     }
     let file_stem = sanitize_filename(&case.display_name);
-    if let Err(err) = write_native_executable_artifact(
+    if let Err(err) = write_native_test_executable_artifact(
         &out_dir,
-        None,
         &file_stem,
         &case.object.bytes,
-        case.object.main_abi,
-        false,
+        &case.symbol_name,
     ) {
         return failure(format!("failed to link native test executable: {err}"));
     }

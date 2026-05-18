@@ -2638,3 +2638,34 @@ fn native_fail() {
     assert!(fail_output.contains("native_fail"));
     assert!(fail_output.contains("native test exited with status"));
 }
+
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_fe_test_native_backend_runs_multiple_tests_from_one_object() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let file = temp.path().join("native_multi.fe");
+    std::fs::write(
+        &file,
+        r#"
+#[test]
+fn native_first() {
+    let value: u256 = 3
+    core::assert(value == 3)
+}
+
+#[test]
+fn native_second() {
+    let value: u256 = 5
+    core::assert(value == 5)
+}
+"#,
+    )
+    .expect("write native fixture");
+
+    let path = file.to_str().expect("utf8 fixture path");
+    let (output, exit_code) = run_fe_main(&["test", "--backend", "native", "-O", "0", path]);
+    assert_eq!(exit_code, 0, "native multi-test run failed:\n{output}");
+    assert!(output.contains("native_first"));
+    assert!(output.contains("native_second"));
+    assert!(output.contains("2 passed; 0 failed"));
+}
