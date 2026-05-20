@@ -4,7 +4,8 @@ use hir::{
         semantic::{
             GenericSubst, ImplEnv, ManualContractSection, RootSemanticInstanceError,
             SemanticInstance, SemanticInstanceKey, get_or_build_semantic_instance,
-            identity_semantic_instance_key, root_semantic_instance_key,
+            identity_semantic_instance_key, owner_effect_bindings, root_semantic_instance_key,
+            same_owner_effect_binding,
         },
         ty::{
             const_ty::ConstTyData,
@@ -27,8 +28,10 @@ use crate::{
         get_or_build_runtime_instance,
     },
     runtime::code_region::{code_region_symbol, runtime_code_region_for_manual_root},
-    runtime::lower::boundary::BoundaryMatcher,
-    runtime::lower::classify::{runtime_param_class, runtime_visible_binding_class},
+    runtime::lower::classify::{
+        RuntimeVisibleBindingPlan, runtime_effect_binding_plan, runtime_param_class,
+        runtime_visible_binding_class,
+    },
     runtime::lower::interface::runtime_visible_binding_plans,
     runtime::lower::type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
     runtime::root_effects::{EntryEffectContext, entry_effect_arg_plans},
@@ -39,11 +42,10 @@ use crate::{
     runtime::{
         AddressSpaceKind, ConstRegionId, ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm,
         DispatchDefault, EntryEffectArgPlan, InitArgsPlan, LayoutId, LayoutKey, RefKind, RefView,
-        ResolvedCodeRegion, RuntimeBoundarySpec, RuntimeClass, RuntimeCodeRegion,
-        RuntimeCodeRegionKey, RuntimeFunction, RuntimeFunctionOwner, RuntimeInlineHint,
-        RuntimeInputPlan, RuntimeLinkage, RuntimeObject, RuntimePackage, RuntimePackagePlan,
-        RuntimeParamPlan, RuntimeReturnPlan, RuntimeSection, RuntimeSectionName, RuntimeSectionRef,
-        RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
+        ResolvedCodeRegion, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeFunction,
+        RuntimeFunctionOwner, RuntimeInlineHint, RuntimeInputPlan, RuntimeLinkage, RuntimeObject,
+        RuntimePackage, RuntimePackagePlan, RuntimeReturnPlan, RuntimeSection, RuntimeSectionName,
+        RuntimeSectionRef, RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
         TargetRootProviderMaterialization,
     },
     verify::verify_runtime_package,
@@ -1584,6 +1586,14 @@ pub(crate) fn runtime_instance_for_semantic<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> RuntimeInstance<'db> {
+    runtime_instance_for_semantic_with_visible_param_overrides(db, semantic, |_| None)
+}
+
+pub(crate) fn runtime_instance_for_semantic_with_visible_param_overrides<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    mut override_class: impl FnMut(&RuntimeVisibleBindingPlan<'db>) -> Option<RuntimeClass<'db>>,
+) -> RuntimeInstance<'db> {
     let typed_body = semantic.key(db).typed_body(db);
     let owner = semantic.key(db).owner(db);
     if let BodyOwner::Func(func) = owner
@@ -1598,63 +1608,59 @@ pub(crate) fn runtime_instance_for_semantic<'db>(
     let params: Vec<_> = runtime_visible_binding_plans(db, semantic)
         .iter()
         .map(|entry| {
-            runtime_class_for_visible_param_plan(
-                db,
-                semantic,
-                typed_body,
-                env,
-                entry.binding,
-                &entry.plan,
-            )
+            override_class(entry).unwrap_or_else(|| {
+                runtime_class_for_visible_binding_entry(db, semantic, typed_body, owner, env, entry)
+            })
         })
         .collect();
     let key = RuntimeInstanceKey::new(db, RuntimeInstanceSource::Semantic(semantic), params);
     get_or_build_runtime_instance(db, key)
 }
 
-fn runtime_class_for_visible_param_plan<'db>(
+fn runtime_class_for_visible_binding_entry<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
     typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
+    owner: BodyOwner<'db>,
     env: RuntimeTypeEnv<'db>,
-    binding: hir::analysis::ty::ty_check::LocalBinding<'db>,
-    plan: &RuntimeParamPlan<'db>,
+    entry: &RuntimeVisibleBindingPlan<'db>,
 ) -> RuntimeClass<'db> {
-    match plan {
-        RuntimeParamPlan::Erased => {
-            panic!("erased runtime param plan leaked into visible binding list")
-        }
-        RuntimeParamPlan::PassActual => runtime_visible_binding_class(db, semantic, binding)
-            .map(|class| runtime_param_class(db, typed_body, binding, env, class))
+    if owner_effect_bindings(db, owner)
+        .into_iter()
+        .any(|binding| same_owner_effect_binding(binding, entry.binding))
+    {
+        return owner_effect_binding_class(db, semantic, entry.binding).unwrap_or_else(|| {
+            panic!(
+                "runtime-visible owner effect binding has no runtime class: {:?}",
+                entry
+            )
+        });
+    }
+    if matches!(entry.binding, LocalBinding::Local { .. }) {
+        return top_level_class_for_ty_in_env(db, env, entry.semantic_ty, AddressSpaceKind::Memory)
             .unwrap_or_else(|| {
                 panic!(
-                    "visible runtime param has no actual class: semantic={:?} binding={binding:?}",
-                    semantic.key(db),
+                    "runtime-visible recv arg binding has no top-level runtime class: {:?}",
+                    entry
                 )
-            }),
-        RuntimeParamPlan::ReadOnlyView { borrow, .. } => {
-            runtime_class_for_boundary_param(borrow).unwrap_or_else(|| {
-                panic!(
-                    "read-only view runtime param has no placeholder class: semantic={:?} binding={binding:?} borrow={borrow:?}",
-                    semantic.key(db),
-                )
-            })
-        }
-        RuntimeParamPlan::Boundary(boundary) => {
-            runtime_class_for_boundary_param(boundary).unwrap_or_else(|| {
-                panic!(
-                    "runtime boundary param has no placeholder class: semantic={:?} binding={binding:?} boundary={boundary:?}",
-                    semantic.key(db),
-                )
-            })
-        }
+            });
     }
+    runtime_visible_binding_class(db, semantic, entry.binding)
+        .map(|class| runtime_param_class(db, typed_body, entry.binding, env, class))
+        .unwrap_or_else(|| {
+            panic!(
+                "runtime-visible typed binding has no runtime class: {:?}",
+                entry
+            )
+        })
 }
 
-fn runtime_class_for_boundary_param<'db>(
-    boundary: &RuntimeBoundarySpec<'db>,
-) -> Option<RuntimeClass<'db>> {
-    BoundaryMatcher::placeholder_class(boundary)
+fn owner_effect_binding_class<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    binding: hir::analysis::ty::ty_check::LocalBinding<'db>,
+) -> Option<crate::runtime::RuntimeClass<'db>> {
+    runtime_effect_binding_plan(db, semantic, binding).map(|plan| plan.class)
 }
 
 fn synthetic_instance<'db>(
