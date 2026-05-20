@@ -2095,7 +2095,9 @@ impl<'db> Contract<'db> {
         let default_storage_address_space =
             resolve_lib_type_path(db, scope, "core::effect_ref::Storage")
                 .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
-        let effect_handle_cx = ContractFieldEffectHandleCx {
+        let default_code_address_space = resolve_lib_type_path(db, scope, "core::effect_ref::Code")
+            .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
+        let effect_handle_cx_base = ContractFieldEffectHandleCx {
             scope,
             assumptions,
             effect_handle,
@@ -2114,6 +2116,14 @@ impl<'db> Contract<'db> {
             .enumerate()
         {
             let lowered_ty = lower_opt_hir_ty(db, field.type_ref(), scope, assumptions);
+            let effect_handle_cx = ContractFieldEffectHandleCx {
+                fallback_space: if field.is_mut {
+                    default_storage_address_space
+                } else {
+                    default_code_address_space
+                },
+                ..effect_handle_cx_base
+            };
             let plan = effect_handle_cx.layout_plan(db, lowered_ty);
             let next_slot = next_slot_by_address_space
                 .entry(plan.address_space)
@@ -2502,6 +2512,7 @@ fn contract_provider_bindings_canonical<'db>(
 ) -> Vec<ProviderBinding<'db>> {
     let scope = contract.scope();
     let assumptions = PredicateListId::empty_list(db);
+    let is_init_site = matches!(site, EffectParamSite::ContractInit { .. });
     let mut providers = contract
         .field_layout(db)
         .values()
@@ -2510,7 +2521,12 @@ fn contract_provider_bindings_canonical<'db>(
         .map(|(idx, field)| ProviderBinding {
             provider_idx: idx as u32,
             provider_ty: field.target_ty,
-            is_mut: field.is_mut,
+            // Immutable contract fields (i.e. code-backed) are writable during `init`.
+            // They are materialized into memory during initialization and later embedded into code.
+            is_mut: field.is_mut
+                || (is_init_site
+                    && crate::analysis::ty::address_space_from_ty(db, scope, field.address_space)
+                        == Some(crate::analysis::ty::ProviderAddressSpace::Code)),
             source: ProviderSource::ContractField {
                 contract,
                 field_idx: field.index,
@@ -2530,7 +2546,14 @@ fn contract_provider_bindings_canonical<'db>(
                     db,
                     scope,
                     field.address_space,
-                ),
+                )
+                .map(|space| {
+                    if is_init_site && space == crate::analysis::ty::ProviderAddressSpace::Code {
+                        crate::analysis::ty::ProviderAddressSpace::Memory
+                    } else {
+                        space
+                    }
+                }),
                 target_ty: Some(field.target_ty),
                 transport: crate::analysis::ty::ProviderTransport::ByValue,
             },
