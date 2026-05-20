@@ -156,7 +156,7 @@ func private %encode_abi_payload(v0.i256) -> @layout_3 {
         return v2;
 }
 
-func private %encode_alloc(v0.i256) -> @layout_3 {
+func inline(always) private %encode_alloc(v0.i256) -> @layout_3 {
     block0:
         jump block1;
 

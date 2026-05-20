@@ -7461,7 +7461,7 @@ func private %impl_trait_u8__encode__g426c(v0.i8, v1.objref<@layout_1>) {
         return;
 }
 
-func private %core__lib__abi__encode_alloc__gac80_492c(v0.i256) -> @layout_21 {
+func inline(always) private %core__lib__abi__encode_alloc__gac80_492c(v0.i256) -> @layout_21 {
     block0:
         jump block1;
 
@@ -7486,7 +7486,7 @@ func private %core__lib__abi__encode_alloc__gac80_492c(v0.i256) -> @layout_21 {
         return v16;
 }
 
-func private %core__lib__abi__encode_alloc__gac80_c438(v0.i256) -> @layout_21 {
+func inline(always) private %core__lib__abi__encode_alloc__gac80_c438(v0.i256) -> @layout_21 {
     block0:
         jump block1;
 

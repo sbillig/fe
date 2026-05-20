@@ -452,6 +452,8 @@ impl Ctx for Evm {
     fn balance(self, _ addr: Address) -> u256 {
         ops::balance(addr.inner)
     }
+
+    #[inline(always)]
     fn value(self) -> u256 {
         ops::callvalue()
     }

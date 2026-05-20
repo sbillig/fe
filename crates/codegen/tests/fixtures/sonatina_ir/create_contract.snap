@@ -1515,7 +1515,7 @@ func private %encode_abi_payload(v0.@layout_1) -> @layout_1 {
         return v2;
 }
 
-func private %encode_alloc(v0.@layout_1) -> @layout_1 {
+func inline(always) private %encode_alloc(v0.@layout_1) -> @layout_1 {
     block0:
         jump block1;
 
