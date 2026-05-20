@@ -80,6 +80,41 @@ pub fn compute() -> u64 {
     );
 }
 
+#[test]
+fn native_ir_uses_typed_memory_ops_for_core_ptr_byte_access() {
+    let ir = with_top_mod_for_source(
+        "native_ptr_byte.fe",
+        r#"
+use core::ptr
+
+pub fn main() -> i32 {
+    let out = ptr::alloc_byte_slice(4)
+    ptr::write(out.ptr, 48)
+    let value = ptr::read(out.ptr)
+    if value == 48 { 0 } else { 1 }
+}
+"#,
+        fe_codegen::emit_module_sonatina_ir_native,
+    );
+
+    let ir_text = ir.expect("native pointer byte access should lower");
+    eprintln!("=== Native Ptr Byte IR ===\n{ir_text}");
+    assert!(
+        ir_text.contains("mload") && ir_text.contains(" i8"),
+        "expected native ptr::read<u8> to lower to an i8 memory load:\n{ir_text}"
+    );
+    assert!(
+        ir_text.contains("mstore") && ir_text.contains(" i8"),
+        "expected native ptr::write<u8> to lower to an i8 memory store:\n{ir_text}"
+    );
+    assert!(
+        !ir_text.contains(
+            "func private %ptr_read(v0.i256) -> i8 {\n    block0:\n        v2.i256 = mload v0 i256"
+        ),
+        "ptr::read<u8> should not lower through an i256 word mload:\n{ir_text}"
+    );
+}
+
 #[cfg(feature = "cranelift")]
 #[test]
 fn native_jit_executes_standalone_function() {

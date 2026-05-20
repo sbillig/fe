@@ -3764,6 +3764,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         space: AddressSpaceKind,
         scalar: &ScalarClass<'db>,
     ) -> Result<ValueId, LowerError> {
+        if self.module.is_native_target() && space == AddressSpaceKind::Memory {
+            let ty = scalar_ty(scalar);
+            return Ok(self
+                .fb
+                .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
+        }
         let word = self.load_word(addr, space)?;
         self.cast_scalar(word, scalar_ty(scalar))
     }
@@ -3775,11 +3781,23 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         class: &RuntimeClass<'db>,
         src: ValueId,
     ) -> Result<(), LowerError> {
-        let value = match class {
-            RuntimeClass::Scalar(scalar) => self.cast_scalar_with_signedness(
-                src,
-                scalar_word_ty(scalar),
-                scalar.is_signed_int(),
+        let (value, store_ty) = match class {
+            RuntimeClass::Scalar(scalar)
+                if self.module.is_native_target() && space == AddressSpaceKind::Memory =>
+            {
+                let ty = scalar_ty(scalar);
+                (
+                    self.cast_scalar_with_signedness(src, ty, scalar.is_signed_int())?,
+                    ty,
+                )
+            }
+            RuntimeClass::Scalar(scalar) => (
+                self.cast_scalar_with_signedness(
+                    src,
+                    scalar_word_ty(scalar),
+                    scalar.is_signed_int(),
+                )?,
+                Type::I256,
             ),
             RuntimeClass::Ref {
                 kind:
@@ -3791,18 +3809,20 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         ..
                     },
                 ..
-            } => self.coerce_value_to_ty(src, Type::I256),
-            RuntimeClass::RawAddr { .. } => self.coerce_value_to_ty(src, Type::I256),
-            RuntimeClass::AggregateValue { .. } | RuntimeClass::Ref { .. } => Err(
-                LowerError::Unsupported("aggregate/handle ptr stores require CopyInto".to_string()),
-            ),
-        }?;
+            } => (self.coerce_value_to_ty(src, Type::I256)?, Type::I256),
+            RuntimeClass::RawAddr { .. } => (self.coerce_value_to_ty(src, Type::I256)?, Type::I256),
+            RuntimeClass::AggregateValue { .. } | RuntimeClass::Ref { .. } => {
+                return Err(LowerError::Unsupported(
+                    "aggregate/handle ptr stores require CopyInto".to_string(),
+                ));
+            }
+        };
         match space {
             AddressSpaceKind::Memory => self.fb.insert_inst_no_result(Mstore::new(
                 self.module.inst_set(),
                 addr,
                 value,
-                Type::I256,
+                store_ty,
             )),
             AddressSpaceKind::Storage => {
                 self.fb

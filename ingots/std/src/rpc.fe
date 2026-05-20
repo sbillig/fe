@@ -1,15 +1,15 @@
-use core::ptr::MemorySlice
+use core::ptr
 
 extern {
     fn __fe_rpc_eth_block_number_u64() -> i64
-    fn __fe_rpc_eth_block_number(out: *u8, out_cap: usize) -> i64
+    fn __fe_rpc_eth_block_number(out: u64, out_cap: u64) -> i64
     fn __fe_rpc_eth_call(
-        to: *u8,
-        to_len: usize,
-        data: *u8,
-        data_len: usize,
-        out: *u8,
-        out_cap: usize,
+        to: u64,
+        to_len: u64,
+        data: u64,
+        data_len: u64,
+        out: u64,
+        out_cap: u64,
     ) -> i64
 }
 
@@ -25,8 +25,8 @@ pub struct RpcValue {
 
 pub trait EthereumRpc {
     fn block_number(mut self) -> RpcValue
-    fn block_number_hex(mut self, out: MemorySlice<u8>) -> RpcResponse
-    fn call(mut self, to: MemorySlice<u8>, data: MemorySlice<u8>, out: MemorySlice<u8>) -> RpcResponse
+    fn block_number_hex(mut self, out: ptr::MemorySlice<u8>) -> RpcResponse
+    fn call(mut self, to: ptr::MemorySlice<u8>, data: ptr::MemorySlice<u8>, out: ptr::MemorySlice<u8>) -> RpcResponse
 }
 
 pub struct HostRpc {
@@ -42,22 +42,26 @@ impl EthereumRpc for HostRpc {
         value_response(__fe_rpc_eth_block_number_u64())
     }
 
-    fn block_number_hex(mut self, out: MemorySlice<u8>) -> RpcResponse {
-        let status = __fe_rpc_eth_block_number(out.ptr, out.len as usize)
+    fn block_number_hex(mut self, out: ptr::MemorySlice<u8>) -> RpcResponse {
+        let status = __fe_rpc_eth_block_number(addr64(out.ptr), out.len.downcast_unchecked())
         response(status)
     }
 
-    fn call(mut self, to: MemorySlice<u8>, data: MemorySlice<u8>, out: MemorySlice<u8>) -> RpcResponse {
+    fn call(mut self, to: ptr::MemorySlice<u8>, data: ptr::MemorySlice<u8>, out: ptr::MemorySlice<u8>) -> RpcResponse {
         let status = __fe_rpc_eth_call(
-            to.ptr,
-            to.len as usize,
-            data.ptr,
-            data.len as usize,
-            out.ptr,
-            out.len as usize,
+            addr64(to.ptr),
+            to.len.downcast_unchecked(),
+            addr64(data.ptr),
+            data.len.downcast_unchecked(),
+            addr64(out.ptr),
+            out.len.downcast_unchecked(),
         )
         response(status)
     }
+}
+
+fn addr64<T>(_ ptr: *T) -> u64 {
+    ptr::addr(ptr).downcast_unchecked()
 }
 
 fn value_response(_ status: i64) -> RpcValue {

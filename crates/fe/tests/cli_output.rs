@@ -518,15 +518,26 @@ fn test_cli_build_native_executable_links_rpc_runtime() {
         &source,
         r#"
 use std::rpc::{EthereumRpc, host}
+use core::ptr
 
 pub fn main() -> i32 {
     let rpc = host()
-    let response = rpc.block_number()
+    let out = ptr::alloc_byte_slice(32)
+    let response = rpc.block_number_hex(out)
     if response.status != 0 {
         return 10
     }
-    if response.value != 1 {
+    if response.len != 3 {
         return 11
+    }
+    if ptr::read(out.ptr) != 48 {
+        return 12
+    }
+    if ptr::read(ptr::offset(out.ptr, 1)) != 120 {
+        return 13
+    }
+    if ptr::read(ptr::offset(out.ptr, 2)) != 49 {
+        return 14
     }
     0
 }
@@ -578,6 +589,63 @@ pub fn main() -> i32 {
         String::from_utf8_lossy(&run_output.stdout),
         String::from_utf8_lossy(&run_output.stderr)
     );
+}
+
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_build_native_executable_reads_and_writes_typed_pointers() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_typed_ptr.fe");
+    fs::write(
+        &source,
+        r#"
+use core::ptr
+
+pub fn main() -> i32 {
+    let byte_ptr = ptr::alloc<u8>()
+    ptr::write(byte_ptr, 41)
+    if ptr::read(byte_ptr) != 41 {
+        return 1
+    }
+
+    let wide_ptr = ptr::alloc<i64>()
+    ptr::write(wide_ptr, 0x12345678)
+    if ptr::read(wide_ptr) != 0x12345678 {
+        return 2
+    }
+
+    let word_ptr = ptr::alloc<u256>()
+    ptr::write(word_ptr, 7)
+    let word_value: i32 = ptr::read(word_ptr).downcast_unchecked()
+    if word_value != 7 {
+        return 3
+    }
+
+    0
+}
+"#,
+    )
+    .expect("write native source");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let source_str = source.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "--out-dir",
+        out_dir_str.as_str(),
+        source_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 0, "fe native build failed:\n{output}");
+
+    let executable = out_dir.join("native_typed_ptr");
+    assert!(executable.is_file(), "missing native executable:\n{output}");
+    let status = Command::new(&executable)
+        .status()
+        .expect("run native executable");
+    assert_eq!(status.code(), Some(0));
 }
 
 #[cfg(feature = "cranelift")]
