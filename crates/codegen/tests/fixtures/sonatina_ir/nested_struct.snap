@@ -77,7 +77,7 @@ func private %init(v0.objref<@layout_1>) {
         v3.*i8 = evm_malloc v1;
         v4.i256 = ptr_to_int v3 i256;
         call %codecopy v0 v4 v2 v1;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_7adf v4 v1;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_7adf_0 v4 v1;
         unreachable;
 }
 
@@ -224,7 +224,7 @@ func private %runtime(v0.objref<@layout_1>) {
         unreachable;
 
     block5:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_7adf_0 0.i256 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_7adf 0.i256 0.i256;
         unreachable;
 
     block6:

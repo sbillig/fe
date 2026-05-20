@@ -1,3 +1,4 @@
+use common::indexmap::IndexMap;
 use hir::semantic::{RecvArmAbiInfo, RecvArmView};
 use hir::{
     analysis::{
@@ -109,7 +110,10 @@ struct RuntimeGraphNode<'db> {
 }
 
 struct RuntimeGraph<'db> {
-    nodes: FxHashMap<RuntimeInstance<'db>, RuntimeGraphNode<'db>>,
+    // Insertion-ordered: keys are Salsa tracked IDs whose hash order varies
+    // across runs, which would make `_0`/`_1` suffix assignment for
+    // content-identical duplicates non-deterministic.
+    nodes: IndexMap<RuntimeInstance<'db>, RuntimeGraphNode<'db>>,
     object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
     code_region_roots: Vec<(RuntimeCodeRegion<'db>, RuntimeInstance<'db>)>,
 }
@@ -118,7 +122,7 @@ struct RuntimeGraphBuilder<'db> {
     db: &'db dyn MirDb,
     queue: Vec<RuntimeInstance<'db>>,
     queued: FxHashSet<RuntimeInstance<'db>>,
-    nodes: FxHashMap<RuntimeInstance<'db>, RuntimeGraphNode<'db>>,
+    nodes: IndexMap<RuntimeInstance<'db>, RuntimeGraphNode<'db>>,
     object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
     discovered_contract_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
     code_region_roots: Vec<(RuntimeCodeRegion<'db>, RuntimeInstance<'db>)>,
@@ -142,7 +146,7 @@ impl<'db> RuntimeGraphBuilder<'db> {
             db,
             queue: Vec::new(),
             queued: FxHashSet::default(),
-            nodes: FxHashMap::default(),
+            nodes: IndexMap::new(),
             object_specs,
             discovered_contract_specs: Vec::new(),
             code_region_roots: Vec::new(),

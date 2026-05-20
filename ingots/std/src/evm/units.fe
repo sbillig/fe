@@ -1,0 +1,25 @@
+/// Native ETH denomination units.
+///
+/// Mirrors Solidity's built-in `wei` / `gwei` / `ether` unit literals.
+/// Use the constants for raw scaling factors or the helper functions for
+/// the Solidity-style `ether(5)` / `gwei(100)` reading. Bare integer
+/// literals in Fe have no default type, so a method form (`5.ether()`)
+/// cannot infer; the function form drives inference through the
+/// parameter type.
+/// Number of wei in one wei.
+pub const WEI: u256 = 1
+
+/// Number of wei in one gwei.
+pub const GWEI: u256 = 1_000_000_000
+
+/// Number of wei in one ether.
+pub const ETHER: u256 = 1_000_000_000_000_000_000
+
+/// Convert a wei-denominated amount to wei.
+pub const fn wei(_ n: u256) -> u256 { n }
+
+/// Convert a gwei-denominated amount to wei.
+pub const fn gwei(_ n: u256) -> u256 { n * GWEI }
+
+/// Convert an ether-denominated amount to wei.
+pub const fn ether(_ n: u256) -> u256 { n * ETHER }

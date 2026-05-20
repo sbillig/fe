@@ -1,5 +1,5 @@
-use std::abi::DynString
-use std::evm::{Evm, encode_abi_payload, mem}
+use std::abi::{Bytes, DynString, bytes_from_words_prefix}
+use std::evm::{Evm, RawMem, encode_abi_payload, mem}
 
 msg DynamicPayloadMsg {
     #[selector = 0x01]
@@ -64,6 +64,18 @@ uses (evm: mut Evm)
     Bytes { data: data_ptr, len: payload_len, size: payload_size }
 }
 
+fn oversized_one_word_bytes() -> Bytes uses (mem: mut RawMem) {
+    let word: u256 = 0
+    bytes_from_words_prefix<33, 1>([word])
+}
+
+fn one_byte_two_word_prefix() -> Bytes uses (mem: mut RawMem) {
+    bytes_from_words_prefix<1, 2>([
+        0x3300000000000000000000000000000000000000000000000000000000000000,
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+    ])
+}
+
 #[test]
 fn test_abi_dynamic_payload_tuple_encoding() uses (evm: Evm) {
     let payload: (u256, Bytes) = (0xdeadbeef, Bytes::empty())
@@ -73,6 +85,25 @@ fn test_abi_dynamic_payload_tuple_encoding() uses (evm: Evm) {
     assert(evm.mload(ptr) == 0xdeadbeef)
     assert(evm.mload(ptr + 32) == 64)
     assert(evm.mload(ptr + 64) == 0)
+}
+
+#[test]
+fn test_bytes_from_words_prefix_uses_canonical_tail_size() uses (evm: mut Evm, mem: mut RawMem) {
+    let payload: (Bytes, u256, Bytes) = (
+        one_byte_two_word_prefix(),
+        0xabcdef,
+        one_byte_bytes(),
+    )
+    let (ptr, len) = encode_abi_payload(payload)
+
+    assert(len == 224)
+    assert(evm.mload(ptr) == 96)
+    assert(evm.mload(ptr + 32) == 0xabcdef)
+    assert(evm.mload(ptr + 64) == 160)
+    assert(evm.mload(ptr + 96) == 1)
+    assert(evm.mload(ptr + 128) == 0x3300000000000000000000000000000000000000000000000000000000000000)
+    assert(evm.mload(ptr + 160) == 1)
+    assert(evm.mload(ptr + 192) == 0x3300000000000000000000000000000000000000000000000000000000000000)
 }
 
 #[test]
@@ -108,4 +139,9 @@ fn test_error_dynamic_payload_tail_encoding() uses (evm: mut Evm) {
     assert(evm.mload(ptr + 64) == 128)
     assert(evm.mload(ptr + 96) == 0)
     assert(evm.mload(ptr + 128) == 0)
+}
+
+#[test(should_revert)]
+fn test_bytes_from_words_prefix_rejects_oversize_len() uses (mem: mut RawMem) {
+    let _b = oversized_one_word_bytes()
 }

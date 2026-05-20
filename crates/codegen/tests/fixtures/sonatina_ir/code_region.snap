@@ -57,8 +57,8 @@ func private %child_init(v0.objref<@layout_1>) {
         v2.i256 = sym_addr &__Child_runtime;
         v3.*i8 = evm_malloc v1;
         v4.i256 = ptr_to_int v3 i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_48e9 v0 v4 v2 v1;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_0 v4 v1;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_48e9_0 v0 v4 v2 v1;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_2 v4 v1;
         unreachable;
 }
 
@@ -142,14 +142,14 @@ func private %init(v0.objref<@layout_1>) {
         v2.i256 = sym_addr &__Child_init;
         v3.*i8 = evm_malloc v1;
         v4.i256 = ptr_to_int v3 i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_48e9_0 v0 v4 v2 v1;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_48e9 v0 v4 v2 v1;
         v9.@layout_2 = call %create2_raw v0 0.i256 v4 v1 4660.i256;
         v10.i256 = sym_size &__Foo_runtime;
         v11.i256 = sym_addr &__Foo_runtime;
         v12.*i8 = evm_malloc v10;
         v13.i256 = ptr_to_int v12 i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_48e9_0 v0 v13 v11 v10;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_2 v13 v10;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_48e9 v0 v13 v11 v10;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_0 v13 v10;
         unreachable;
 }
 

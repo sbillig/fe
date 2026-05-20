@@ -863,6 +863,21 @@ fn std_sol_compat_abi_type(
     }
     let name = adt_ref.name(db)?.data(db).to_string();
 
+    if name == "FixedBytes" {
+        let (_, args) = ty.decompose_ty_app(db);
+        let len_ty = args.first().copied().or_else(|| args.get(1).copied())?;
+        let len = fixed_bytes_len_to_string(db, len_ty)?;
+        return Some(format!("bytes{len}"));
+    }
+
+    if let Some(rest) = name.strip_prefix("Bytes") {
+        let len: u16 = rest.parse().ok()?;
+        if (1..=32).contains(&len) {
+            return Some(format!("bytes{len}"));
+        }
+        return None;
+    }
+
     // Match Uint{N} or Int{N} where N is a valid Solidity bit width (8..=256, multiple of 8)
     let (prefix, digits) = if let Some(rest) = name.strip_prefix("Uint") {
         ("uint", rest)
@@ -877,6 +892,19 @@ fn std_sol_compat_abi_type(
         Some(format!("{prefix}{bits}"))
     } else {
         None
+    }
+}
+
+fn fixed_bytes_len_to_string(db: &DriverDataBase, ty: TyId<'_>) -> Option<String> {
+    match ty.data(db) {
+        TyData::ConstTy(const_ty) => match const_ty.data(db) {
+            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => {
+                let len = value.data(db).to_string().parse::<u16>().ok()?;
+                (1..=32).contains(&len).then(|| len.to_string())
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -1166,6 +1194,69 @@ pub contract Foo {
 
         assert_eq!(function["name"], "foo");
         assert_eq!(function["inputs"][0]["type"], "uint256");
+    }
+
+    #[test]
+    fn sol_fixed_bytes_wrappers_emit_canonical_types() {
+        let code = r#"
+use std::abi::{FixedBytes, sol}
+
+msg FooMsg {
+    #[selector = sol("check(bytes4,bytes32)")]
+    Check { interface_id: FixedBytes<4>, root: FixedBytes<32> } -> bool,
+}
+
+pub contract Foo {
+    recv FooMsg {
+        Check { interface_id, root } -> bool {
+            interface_id.val == 0x01ffc9a7 && root.val != 0
+        }
+    }
+}
+"#;
+
+        let entries = abi_entries(code, "Foo");
+        let function = entries
+            .iter()
+            .find(|entry| entry["type"] == "function")
+            .expect("function entry");
+
+        assert_eq!(function["name"], "check");
+        assert_eq!(function["inputs"][0]["type"], "bytes4");
+        assert_eq!(function["inputs"][1]["type"], "bytes32");
+        assert_eq!(function["outputs"][0]["type"], "bool");
+    }
+
+    #[test]
+    fn sol_fixed_bytes_aliases_emit_canonical_types() {
+        let code = r#"
+use std::abi::{Bytes1, Bytes4, Bytes32, sol}
+
+msg FooMsg {
+    #[selector = sol("check(bytes1,bytes4,bytes32)")]
+    Check { prefix: Bytes1, interface_id: Bytes4, root: Bytes32 } -> bool,
+}
+
+pub contract Foo {
+    recv FooMsg {
+        Check { prefix, interface_id, root } -> bool {
+            prefix.val == 0xab && interface_id.val == 0x01ffc9a7 && root.val != 0
+        }
+    }
+}
+"#;
+
+        let entries = abi_entries(code, "Foo");
+        let function = entries
+            .iter()
+            .find(|entry| entry["type"] == "function")
+            .expect("function entry");
+
+        assert_eq!(function["name"], "check");
+        assert_eq!(function["inputs"][0]["type"], "bytes1");
+        assert_eq!(function["inputs"][1]["type"], "bytes4");
+        assert_eq!(function["inputs"][2]["type"], "bytes32");
+        assert_eq!(function["outputs"][0]["type"], "bool");
     }
 
     #[test]

@@ -28,6 +28,7 @@ rustc-hash.workspace = true
 semantic-indexing.workspace = true
 codegen = { path = "../codegen", package = "fe-codegen" }
 contract-harness = { path = "../contract-harness", package = "fe-contract-harness" }
+solc-runner = { path = "../solc-runner", package = "fe-solc-runner" }
 # fe-web for model, assets, and static site generation
 fe-web = { path = "../fe-web" }
 serde = { version = "1.0", features = ["derive"] }
@@ -38,7 +39,9 @@ walkdir = "2"
 similar = "2"
 colored = "2"
 hex = "0.4"
+tempfile = "3.23"
 toml = "0.8.8"
+ethers-core = "2"
 glob.workspace = true
 crossbeam-channel.workspace = true
 scip = "0.6.1"
@@ -50,5 +53,5 @@ axum = { version = "0.8", optional = true }
 [dev-dependencies]
 dir-test.workspace = true
 test-utils.workspace = true
-tempfile = "3.23"
 semantic-indexing.workspace = true
+sha2 = "0.10"
