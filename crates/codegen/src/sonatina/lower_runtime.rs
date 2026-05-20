@@ -1201,7 +1201,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 zero_for_type(&mut self.fb, self.module.ty_for_class(class)?)
             }
             RExpr::Builtin(builtin) => {
-                let value = self.lower_builtin(builtin)?;
+                let value = self.lower_builtin(builtin, dst)?;
                 self.coerce_to_dst(value, dst)?
             }
             RExpr::Unary { op, value } => {
@@ -1424,7 +1424,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         Ok(Lowered::Value(value))
     }
 
-    fn lower_builtin(&mut self, builtin: &RuntimeBuiltin<'db>) -> Result<ValueId, LowerError> {
+    fn lower_builtin(
+        &mut self,
+        builtin: &RuntimeBuiltin<'db>,
+        dst: Option<RLocalId>,
+    ) -> Result<ValueId, LowerError> {
         if self.module.is_native_target()
             && let Some(name) = match builtin {
                 RuntimeBuiltin::Mload { .. }
@@ -1432,7 +1436,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 | RuntimeBuiltin::AddMod { .. }
                 | RuntimeBuiltin::MulMod { .. }
                 | RuntimeBuiltin::IntrinsicArith { .. }
-                | RuntimeBuiltin::Saturating { .. } => None,
+                | RuntimeBuiltin::Saturating { .. }
+                | RuntimeBuiltin::Malloc { .. } => None,
                 RuntimeBuiltin::Mstore8 { .. } => Some("mstore8"),
                 RuntimeBuiltin::Mcopy { .. } => Some("mcopy"),
                 RuntimeBuiltin::Msize => Some("msize"),
@@ -1465,7 +1470,6 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 RuntimeBuiltin::CurrentCodeRegionLen => Some("current code region length"),
                 RuntimeBuiltin::CodeRegionOffset { .. } => Some("code region offset"),
                 RuntimeBuiltin::CodeRegionLen { .. } => Some("code region length"),
-                RuntimeBuiltin::Malloc { .. } => Some("malloc"),
                 RuntimeBuiltin::Call { .. } => Some("call"),
                 RuntimeBuiltin::StaticCall { .. } => Some("staticcall"),
                 RuntimeBuiltin::DelegateCall { .. } => Some("delegatecall"),
@@ -1488,10 +1492,15 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         Ok(match builtin {
             RuntimeBuiltin::Mload { addr } => {
                 let addr = self.local_value(*addr)?;
-                self.fb.insert_inst(
-                    Mload::new(self.module.inst_set(), addr, Type::I256),
-                    Type::I256,
-                )
+                let ty = if self.module.is_native_target() {
+                    dst.map(|dst| self.local_ty(dst))
+                        .transpose()?
+                        .unwrap_or(Type::I256)
+                } else {
+                    Type::I256
+                };
+                self.fb
+                    .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty)
             }
             RuntimeBuiltin::Mstore { addr, value } => {
                 let addr = self.local_value(*addr)?;
@@ -1712,8 +1721,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RuntimeBuiltin::Malloc { size } => {
                 let size = self.local_value(*size)?;
                 let ptr_ty = self.fb.ptr_type(Type::I8);
-                self.fb
-                    .insert_inst(EvmMalloc::new(self.module.inst_set(), size), ptr_ty)
+                if self.module.is_native_target() {
+                    self.call_native_malloc(size, ptr_ty)?
+                } else {
+                    self.fb
+                        .insert_inst(EvmMalloc::new(self.module.inst_set(), size), ptr_ty)
+                }
             }
             RuntimeBuiltin::Call {
                 gas,
@@ -4045,6 +4058,26 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
 
     fn cast_scalar(&mut self, value: ValueId, ty: Type) -> Result<ValueId, LowerError> {
         self.cast_scalar_with_signedness(value, ty, false)
+    }
+
+    fn call_native_malloc(&mut self, size: ValueId, ptr_ty: Type) -> Result<ValueId, LowerError> {
+        let size = self.cast_scalar(size, Type::I64)?;
+        let func_ref = self
+            .fb
+            .module_builder
+            .declare_function(Signature::new_single(
+                "malloc",
+                Linkage::External,
+                &[Type::I64],
+                ptr_ty,
+            ))
+            .map_err(|err| {
+                LowerError::Internal(format!("failed to declare native malloc: {err}"))
+            })?;
+        Ok(self.fb.insert_inst(
+            Call::new(self.module.inst_set(), func_ref, smallvec![size]),
+            ptr_ty,
+        ))
     }
 
     fn cast_scalar_with_signedness(

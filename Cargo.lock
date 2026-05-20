@@ -2440,6 +2440,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe-native-rpc-runtime"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "reqwest",
+ "serde_json",
+]
+
+[[package]]
 name = "fe-parser"
 version = "26.1.0"
 dependencies = [
@@ -5604,6 +5613,8 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

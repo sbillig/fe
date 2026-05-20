@@ -1,4 +1,6 @@
 #[cfg(feature = "cranelift")]
+use std::env;
+#[cfg(feature = "cranelift")]
 use std::process::Command;
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -1766,12 +1768,17 @@ fn write_native_executable_artifact_with_launcher(
     fs::write(launcher_path.as_std_path(), launcher)
         .map_err(|err| format!("Failed to write native main launcher {launcher_path}: {err}"))?;
 
+    let rpc_runtime_path = native_rpc_runtime_staticlib_path()?;
     let executable_name = native_executable_name(&base);
     let executable_path = out_dir.join(&executable_name);
-    let output = Command::new("cc")
+    let mut linker = Command::new("cc");
+    linker
         .arg(object_path.as_str())
         .arg(runtime_path.as_str())
         .arg(launcher_path.as_str())
+        .arg(rpc_runtime_path.as_str());
+    add_native_rpc_link_args(&mut linker);
+    let output = linker
         .arg("-o")
         .arg(executable_path.as_str())
         .output()
@@ -1801,6 +1808,76 @@ fn write_native_executable_artifact_with_launcher(
         println!("Wrote {executable_path}");
     }
     Ok(())
+}
+
+#[cfg(all(feature = "cranelift", target_os = "macos"))]
+fn add_native_rpc_link_args(linker: &mut Command) {
+    linker
+        .arg("-framework")
+        .arg("Security")
+        .arg("-framework")
+        .arg("CoreFoundation")
+        .arg("-framework")
+        .arg("SystemConfiguration");
+}
+
+#[cfg(all(feature = "cranelift", not(target_os = "macos")))]
+fn add_native_rpc_link_args(_linker: &mut Command) {}
+
+#[cfg(feature = "cranelift")]
+fn native_rpc_runtime_staticlib_path() -> Result<Utf8PathBuf, String> {
+    let manifest_dir = Utf8Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(Utf8Path::parent)
+        .ok_or_else(|| format!("Could not find workspace root from {manifest_dir}"))?;
+    let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let mut command = Command::new(cargo);
+    command
+        .current_dir(workspace_root.as_std_path())
+        .arg("build")
+        .arg("-p")
+        .arg("fe-native-rpc-runtime");
+
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        command.arg("--release");
+        "release"
+    };
+    let output = command
+        .output()
+        .map_err(|err| format!("Failed to build native RPC runtime: {err}"))?;
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "native RPC runtime build failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        ));
+    }
+
+    let target_dir = env::var("CARGO_TARGET_DIR")
+        .map(Utf8PathBuf::from)
+        .unwrap_or_else(|_| workspace_root.join("target"));
+    let staticlib_path = target_dir
+        .join(profile)
+        .join(native_rpc_runtime_staticlib_name());
+    if staticlib_path.exists() {
+        Ok(staticlib_path)
+    } else {
+        Err(format!(
+            "native RPC runtime build did not produce {staticlib_path}"
+        ))
+    }
+}
+
+#[cfg(feature = "cranelift")]
+fn native_rpc_runtime_staticlib_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "fe_native_rpc_runtime.lib"
+    } else {
+        "libfe_native_rpc_runtime.a"
+    }
 }
 
 #[cfg(feature = "cranelift")]

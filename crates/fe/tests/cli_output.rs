@@ -2,9 +2,11 @@ use dir_test::{Fixture, dir_test};
 use serde_json::Value;
 use std::{
     fs,
-    io::{IsTerminal, Write},
+    io::{IsTerminal, Read, Write},
+    net::TcpListener,
     path::Path,
     process::{Command, Stdio},
+    thread,
 };
 use tempfile::tempdir;
 use test_utils::{
@@ -505,6 +507,77 @@ pub fn main() -> i32 {
         .status()
         .expect("run native executable");
     assert_eq!(status.code(), Some(26));
+}
+
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_build_native_executable_links_rpc_runtime() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_rpc.fe");
+    fs::write(
+        &source,
+        r#"
+use std::rpc::{EthereumRpc, host}
+
+pub fn main() -> i32 {
+    let rpc = host()
+    let response = rpc.block_number()
+    if response.status != 0 {
+        return 10
+    }
+    if response.value != 1 {
+        return 11
+    }
+    0
+}
+"#,
+    )
+    .expect("write native source");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let source_str = source.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "--out-dir",
+        out_dir_str.as_str(),
+        source_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 0, "fe native build failed:\n{output}");
+
+    let executable = out_dir.join("native_rpc");
+    assert!(executable.is_file(), "missing native executable:\n{output}");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local RPC fixture");
+    let url = format!("http://{}", listener.local_addr().expect("local addr"));
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept RPC request");
+        let mut request = [0; 4096];
+        let n = stream.read(&mut request).expect("read RPC request");
+        let request = String::from_utf8_lossy(&request[..n]);
+        assert!(request.contains("\"method\":\"eth_blockNumber\""));
+        let body = r#"{"jsonrpc":"2.0","id":1,"result":"0x1"}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .expect("write RPC response");
+    });
+    let run_output = Command::new(&executable)
+        .env("FE_ETH_RPC_URL", url)
+        .output()
+        .expect("run native executable");
+    server.join().expect("RPC fixture thread");
+    assert!(
+        run_output.status.success(),
+        "native RPC executable failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
+        run_output.status,
+        String::from_utf8_lossy(&run_output.stdout),
+        String::from_utf8_lossy(&run_output.stderr)
+    );
 }
 
 #[cfg(feature = "cranelift")]

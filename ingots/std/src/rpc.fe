@@ -1,0 +1,83 @@
+use core::ptr::MemorySlice
+
+extern {
+    fn __fe_rpc_eth_block_number_u64() -> i64
+    fn __fe_rpc_eth_block_number(out: *u8, out_cap: usize) -> i64
+    fn __fe_rpc_eth_call(
+        to: *u8,
+        to_len: usize,
+        data: *u8,
+        data_len: usize,
+        out: *u8,
+        out_cap: usize,
+    ) -> i64
+}
+
+pub struct RpcResponse {
+    pub status: i64,
+    pub len: i64,
+}
+
+pub struct RpcValue {
+    pub status: i64,
+    pub value: i64,
+}
+
+pub trait EthereumRpc {
+    fn block_number(mut self) -> RpcValue
+    fn block_number_hex(mut self, out: MemorySlice<u8>) -> RpcResponse
+    fn call(mut self, to: MemorySlice<u8>, data: MemorySlice<u8>, out: MemorySlice<u8>) -> RpcResponse
+}
+
+pub struct HostRpc {
+    token: u8,
+}
+
+pub fn host() -> HostRpc {
+    HostRpc { token: 0 }
+}
+
+impl EthereumRpc for HostRpc {
+    fn block_number(mut self) -> RpcValue {
+        value_response(__fe_rpc_eth_block_number_u64())
+    }
+
+    fn block_number_hex(mut self, out: MemorySlice<u8>) -> RpcResponse {
+        let status = __fe_rpc_eth_block_number(out.ptr, out.len as usize)
+        response(status)
+    }
+
+    fn call(mut self, to: MemorySlice<u8>, data: MemorySlice<u8>, out: MemorySlice<u8>) -> RpcResponse {
+        let status = __fe_rpc_eth_call(
+            to.ptr,
+            to.len as usize,
+            data.ptr,
+            data.len as usize,
+            out.ptr,
+            out.len as usize,
+        )
+        response(status)
+    }
+}
+
+fn value_response(_ status: i64) -> RpcValue {
+    if status >= 0 {
+        RpcValue {
+            status: 0,
+            value: status,
+        }
+    } else {
+        RpcValue { status, value: 0 }
+    }
+}
+
+fn response(_ status: i64) -> RpcResponse {
+    if status >= 0 {
+        RpcResponse {
+            status: 0,
+            len: status,
+        }
+    } else {
+        RpcResponse { status, len: 0 }
+    }
+}
