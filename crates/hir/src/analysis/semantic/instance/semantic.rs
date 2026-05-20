@@ -7,8 +7,7 @@ use crate::{
         semantic::{
             CallSiteId, PlaceProvenance, SBlockId, SExpr, SStmtKind, STerminatorKind, SemanticBody,
             SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex, effect_param_site,
-            lower::BindingRoleMode,
-            lower::{lower_to_smir, lower_to_smir_with_call_sites},
+            lower::{BindingRoleMode, lower_to_smir, lower_to_smir_with_call_sites},
             verify_semantic_body,
         },
         ty::{
@@ -28,7 +27,7 @@ use crate::{
             },
             ty_check::{
                 BodyOwner, EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
-                LocalBinding, ResolvedEffectArg, SemanticExprLowering, TypedBody,
+                LocalBinding, ParamSite, ResolvedEffectArg, SemanticExprLowering, TypedBody,
             },
             ty_def::{BorrowKind, CapabilityKind, TyId, instantiate_adt_field_ty},
         },
@@ -79,7 +78,7 @@ pub struct SemanticInstance<'db> {
 pub struct SemanticEffectEnvInstantiationError<'db> {
     pub owner: BodyOwner<'db>,
     pub owner_scope: ScopeId<'db>,
-    pub offending_ty: crate::analysis::ty::ty_def::TyId<'db>,
+    pub offending_ty: TyId<'db>,
     pub param_idx: usize,
     pub args_len: usize,
 }
@@ -124,7 +123,7 @@ pub enum RootSemanticInstanceError<'db> {
     UnsupportedGenericParam {
         owner: BodyOwner<'db>,
         owner_scope: ScopeId<'db>,
-        offending_ty: crate::analysis::ty::ty_def::TyId<'db>,
+        offending_ty: TyId<'db>,
         param_idx: usize,
     },
     MissingRootProvider {
@@ -163,7 +162,7 @@ pub fn instantiated_effect_env<'db>(
     instance: SemanticInstance<'db>,
 ) -> Option<InstantiatedEffectEnv<'db>> {
     let (site, requirements, providers, resolutions, forwarded_witnesses, assumptions) =
-        instantiate_effect_env_data(db, instance).unwrap_or_else(|err| {
+        instantiate_effect_env_data_for_key(db, instance.key(db)).unwrap_or_else(|err| {
             panic!(
                 "failed to instantiate effect env for {:?}: owner_scope={:?} param_idx={} args_len={} offending_ty={}",
                 err.owner,
@@ -613,7 +612,13 @@ impl<'db> SemanticInstance<'db> {
         db: &'db dyn HirAnalysisDb,
         binding: LocalBinding<'db>,
     ) -> SemanticLocalRole<'db> {
-        classify_binding_role(db, self, binding)
+        classify_binding_role(
+            db,
+            self,
+            self.binding_ty(db, binding),
+            self.assumptions(db),
+            resolved_provider_binding_for_instance_effect(db, self, binding),
+        )
     }
 
     pub(crate) fn provisional_binding_role(
@@ -621,7 +626,7 @@ impl<'db> SemanticInstance<'db> {
         db: &'db dyn HirAnalysisDb,
         binding: LocalBinding<'db>,
     ) -> SemanticLocalRole<'db> {
-        classify_binding_role_from_ty(
+        classify_binding_role(
             db,
             self,
             self.provisional_binding_ty(db, binding),
@@ -663,7 +668,7 @@ impl<'db> SemanticInstance<'db> {
                 Some(provider_idx),
             ),
             LocalBinding::Param {
-                site: crate::analysis::ty::ty_check::ParamSite::EffectField(_),
+                site: ParamSite::EffectField(_),
                 idx,
                 ..
             } => effect_binding_ty_from_env(db, instantiated_effect_env(db, self), idx, None),
@@ -903,7 +908,7 @@ pub fn resolved_provider_binding_for_instance_effect<'db>(
             idx, provider_idx, ..
         } => (idx, Some(provider_idx)),
         LocalBinding::Param {
-            site: crate::analysis::ty::ty_check::ParamSite::EffectField(_),
+            site: ParamSite::EffectField(_),
             idx,
             ..
         } => (idx, None),
@@ -925,14 +930,14 @@ pub(crate) fn resolved_effect_binding_ty_for_instance_effect<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     binding: LocalBinding<'db>,
-) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
+) -> Option<TyId<'db>> {
     let env = instantiated_effect_env(db, instance)?;
     let (binding_idx, provider_idx) = match binding {
         LocalBinding::EffectParam {
             idx, provider_idx, ..
         } => (idx, Some(provider_idx)),
         LocalBinding::Param {
-            site: crate::analysis::ty::ty_check::ParamSite::EffectField(_),
+            site: ParamSite::EffectField(_),
             idx,
             ..
         } => (idx, None),
@@ -970,7 +975,7 @@ pub(crate) fn provisional_provider_binding_for_instance_effect<'db>(
             provisional_provider_binding_for_effect(db, key, site, idx as u32, provider_idx, is_mut)
         }),
         LocalBinding::Param {
-            site: crate::analysis::ty::ty_check::ParamSite::EffectField(effect_site),
+            site: ParamSite::EffectField(effect_site),
             idx,
             ..
         } => {
@@ -1156,12 +1161,9 @@ fn effect_binding_ty_from_env<'db>(
     env: Option<InstantiatedEffectEnv<'db>>,
     idx: usize,
     provider_idx: Option<u32>,
-) -> crate::analysis::ty::ty_def::TyId<'db> {
+) -> TyId<'db> {
     let Some(env) = env else {
-        return crate::analysis::ty::ty_def::TyId::invalid(
-            db,
-            crate::analysis::ty::ty_def::InvalidCause::Other,
-        );
+        return TyId::invalid(db, crate::analysis::ty::ty_def::InvalidCause::Other);
     };
     let requirement = env
         .requirements(db)
@@ -1188,12 +1190,7 @@ fn effect_binding_ty_from_env<'db>(
             .or_else(|| provider.map(|binding| binding.provider_ty)),
         None => None,
     }
-    .unwrap_or_else(|| {
-        crate::analysis::ty::ty_def::TyId::invalid(
-            db,
-            crate::analysis::ty::ty_def::InvalidCause::Other,
-        )
-    })
+    .unwrap_or_else(|| TyId::invalid(db, crate::analysis::ty::ty_def::InvalidCause::Other))
 }
 
 fn instantiated_resolved_binding<'db>(
@@ -1227,7 +1224,7 @@ fn requirement_provider_target_ty<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     requirement: &EffectRequirement<'db>,
-) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
+) -> Option<TyId<'db>> {
     let target_ty = requirement.key.binding_ty(db)?;
     Some(
         effect_handle_metadata(db, scope, assumptions, target_ty)
@@ -1241,7 +1238,7 @@ fn specialized_root_provider_target_ty<'db>(
     assumptions: PredicateListId<'db>,
     requirement: &EffectRequirement<'db>,
     root_provider: &ProviderBinding<'db>,
-) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
+) -> Option<TyId<'db>> {
     match requirement.key {
         EffectRequirementKey::Trait(_) => Some(root_provider.provider_ty),
         EffectRequirementKey::Type(_) | EffectRequirementKey::Other => {
@@ -1332,34 +1329,6 @@ fn collect_semantic_callees<'db>(
 fn classify_binding_role<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    binding: LocalBinding<'db>,
-) -> SemanticLocalRole<'db> {
-    classify_binding_role_with_provider(
-        db,
-        instance,
-        binding,
-        resolved_provider_binding_for_instance_effect(db, instance, binding),
-    )
-}
-
-fn classify_binding_role_with_provider<'db>(
-    db: &'db dyn HirAnalysisDb,
-    instance: SemanticInstance<'db>,
-    binding: LocalBinding<'db>,
-    provider: Option<ProviderBinding<'db>>,
-) -> SemanticLocalRole<'db> {
-    classify_binding_role_from_ty(
-        db,
-        instance,
-        instance.binding_ty(db, binding),
-        instance.assumptions(db),
-        provider,
-    )
-}
-
-fn classify_binding_role_from_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    instance: SemanticInstance<'db>,
     ty: TyId<'db>,
     assumptions: PredicateListId<'db>,
     provider: Option<ProviderBinding<'db>>,
@@ -1373,7 +1342,7 @@ fn classify_binding_role_from_ty<'db>(
     }
     if let Some(metadata) = effect_handle_metadata(db, scope, assumptions, ty) {
         return SemanticLocalRole::DirectCarrier {
-            provider: provider.clone(),
+            provider,
             target_ty: metadata.target_ty,
         };
     }
@@ -1393,25 +1362,11 @@ fn classify_binding_role_from_ty<'db>(
     }
 }
 
-pub fn validate_instantiated_effect_env<'db>(
-    db: &'db dyn HirAnalysisDb,
-    instance: SemanticInstance<'db>,
-) -> Result<(), SemanticEffectEnvInstantiationError<'db>> {
-    instantiate_effect_env_data_for_key(db, instance.key(db)).map(|_| ())
-}
-
 pub fn validate_instantiated_effect_env_key<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
 ) -> Result<(), SemanticEffectEnvInstantiationError<'db>> {
     instantiate_effect_env_data_for_key(db, key).map(|_| ())
-}
-
-fn instantiate_effect_env_data<'db>(
-    db: &'db dyn HirAnalysisDb,
-    instance: SemanticInstance<'db>,
-) -> Result<Option<InstantiatedEffectEnvData<'db>>, SemanticEffectEnvInstantiationError<'db>> {
-    instantiate_effect_env_data_for_key(db, instance.key(db))
 }
 
 fn instantiate_effect_env_data_for_key<'db>(
@@ -1537,7 +1492,7 @@ fn instantiated_effect_env_forwarded_witnesses<'db>(
 fn root_owner_generic_args<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
-) -> Result<Vec<crate::analysis::ty::ty_def::TyId<'db>>, RootSemanticInstanceError<'db>> {
+) -> Result<Vec<TyId<'db>>, RootSemanticInstanceError<'db>> {
     match owner {
         BodyOwner::Func(func) => root_func_generic_args(db, func),
         BodyOwner::Const(_)
@@ -1550,7 +1505,7 @@ fn root_owner_generic_args<'db>(
 fn owner_identity_generic_args<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
-) -> Vec<crate::analysis::ty::ty_def::TyId<'db>> {
+) -> Vec<TyId<'db>> {
     match owner {
         BodyOwner::Func(func) => CallableDef::Func(func).params(db).to_vec(),
         BodyOwner::Const(_)
@@ -1696,7 +1651,7 @@ fn root_provider_satisfies_effect_requirement<'db>(
 fn root_func_generic_args<'db>(
     db: &'db dyn HirAnalysisDb,
     func: crate::hir_def::Func<'db>,
-) -> Result<Vec<crate::analysis::ty::ty_def::TyId<'db>>, RootSemanticInstanceError<'db>> {
+) -> Result<Vec<TyId<'db>>, RootSemanticInstanceError<'db>> {
     let owner = BodyOwner::Func(func);
     let owner_scope = func.scope();
     let provider_param_idxs = place_effect_provider_param_index_map(db, func)
@@ -1842,8 +1797,8 @@ fn instantiate_provider_binding<'db>(
 fn instantiate_normalized_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
-    ty: crate::analysis::ty::ty_def::TyId<'db>,
-) -> Result<crate::analysis::ty::ty_def::TyId<'db>, SemanticEffectEnvInstantiationError<'db>> {
+    ty: TyId<'db>,
+) -> Result<TyId<'db>, SemanticEffectEnvInstantiationError<'db>> {
     let scope = key.owner(db).scope();
     let assumptions = semantic_instance_base_assumptions_for_key(db, key);
     let ty = instantiate_checked(db, key.owner(db), scope, ty, key.subst(db).generic_args(db))?;
@@ -1890,7 +1845,7 @@ fn instantiate_checked<'db, T>(
     owner: BodyOwner<'db>,
     owner_scope: ScopeId<'db>,
     value: T,
-    args: &[crate::analysis::ty::ty_def::TyId<'db>],
+    args: &[TyId<'db>],
 ) -> Result<T, SemanticEffectEnvInstantiationError<'db>>
 where
     T: crate::analysis::ty::fold::TyFoldable<'db>,
@@ -1908,16 +1863,12 @@ where
 struct CheckedInstantiateFolder<'db, 'a> {
     owner: BodyOwner<'db>,
     owner_scope: ScopeId<'db>,
-    args: &'a [crate::analysis::ty::ty_def::TyId<'db>],
+    args: &'a [TyId<'db>],
     error: Option<SemanticEffectEnvInstantiationError<'db>>,
 }
 
 impl<'db> crate::analysis::ty::fold::TyFolder<'db> for CheckedInstantiateFolder<'db, '_> {
-    fn fold_ty(
-        &mut self,
-        db: &'db dyn HirAnalysisDb,
-        ty: crate::analysis::ty::ty_def::TyId<'db>,
-    ) -> crate::analysis::ty::ty_def::TyId<'db> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         match ty.data(db) {
             crate::analysis::ty::ty_def::TyData::TyParam(param)
                 if param.owner == self.owner_scope && !param.is_effect() =>

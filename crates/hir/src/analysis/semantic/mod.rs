@@ -16,7 +16,7 @@ pub use instance::{
     get_or_build_semantic_instance, identity_semantic_instance_key, instantiate_typed_body,
     instantiate_with_generic_args, instantiated_effect_env,
     resolved_provider_binding_for_instance_effect, root_semantic_instance_key, typed_body_template,
-    validate_instantiated_effect_env, validate_instantiated_effect_env_key,
+    validate_instantiated_effect_env_key,
 };
 pub(crate) use instance::{
     provisional_provider_binding_for_instance_effect, provisional_provider_idx_for_requirement,
