@@ -1,0 +1,87 @@
+use core::ptr
+use std::bytes
+use std::hex
+use std::io::{Write, host as io_host, write, write_char, write_slice, writeln}
+use std::native::Args
+use std::rpc::{EthereumRpc, RpcResult, host as rpc_host}
+
+fn write_quantity(_ value: u256)
+uses (w: mut Write)
+{
+    let out = ptr::alloc_byte_slice(66)
+    let result = hex::write_quantity(value, out)
+    if result.status == 0 {
+        write_slice(bytes::take(out, result.len))
+        write_char(10)
+    } else {
+        writeln("format error")
+    }
+}
+
+fn write_rpc_error()
+uses (w: mut Write)
+{
+    writeln("rpc error")
+}
+
+fn print_quantity(_ result: RpcResult<u256>) -> i32
+uses (w: mut Write)
+{
+    match result {
+        RpcResult::Ok(value) => {
+            write_quantity(value)
+            0
+        }
+        RpcResult::Err(_) => {
+            write_rpc_error()
+            1
+        }
+    }
+}
+
+fn print_raw(_ result: RpcResult<usize>, _ out: ptr::MemorySlice<u8>) -> i32
+uses (w: mut Write)
+{
+    match result {
+        RpcResult::Ok(len) => {
+            write_slice(bytes::take(out, len))
+            write_char(10)
+            0
+        }
+        RpcResult::Err(_) => {
+            write_rpc_error()
+            1
+        }
+    }
+}
+
+fn usage() -> i32
+uses (w: mut Write)
+{
+    writeln("usage: eth_rpc block-number")
+    writeln("       eth_rpc chain-id")
+    writeln("       eth_rpc balance <address>")
+    writeln("       eth_rpc call <address> <calldata>")
+    2
+}
+
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    let args = Args::new(argc, argv)
+    let rpc = rpc_host()
+    with (Write = io_host()) {
+        if args.len() == 2 && args.get(1).eq_bytes("block-number") {
+            return print_quantity(rpc.block_number())
+        }
+        if args.len() == 2 && args.get(1).eq_bytes("chain-id") {
+            return print_quantity(rpc.chain_id())
+        }
+        if args.len() == 3 && args.get(1).eq_bytes("balance") {
+            return print_quantity(rpc.balance(address: args.get(2).as_bytes()))
+        }
+        if args.len() == 4 && args.get(1).eq_bytes("call") {
+            let out = ptr::alloc_byte_slice(4096)
+            return print_raw(rpc.call(to: args.get(2).as_bytes(), data: args.get(3).as_bytes(), out: out), out)
+        }
+        usage()
+    }
+}

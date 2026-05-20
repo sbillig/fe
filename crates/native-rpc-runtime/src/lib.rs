@@ -13,11 +13,12 @@ const ERR_OUTPUT_TOO_SMALL: i64 = -6;
 #[unsafe(no_mangle)]
 /// # Safety
 ///
-/// This function is called from generated native Fe code. It does not dereference
-/// caller-provided pointers.
-pub unsafe extern "C" fn __fe_rpc_eth_block_number_u64() -> i64 {
-    match post_rpc("eth_blockNumber", json!([])).and_then(|result| parse_quantity(&result)) {
-        Ok(value) => value,
+/// `out` must point to a writable buffer of at least `out_cap` bytes.
+pub unsafe extern "C" fn __fe_rpc_eth_block_number(out: *mut u8, out_cap: usize) -> i64 {
+    match post_rpc("eth_blockNumber", json!([]))
+        .and_then(|result| write_output(out, out_cap, &result))
+    {
+        Ok(len) => len,
         Err(status) => status,
     }
 }
@@ -26,8 +27,26 @@ pub unsafe extern "C" fn __fe_rpc_eth_block_number_u64() -> i64 {
 /// # Safety
 ///
 /// `out` must point to a writable buffer of at least `out_cap` bytes.
-pub unsafe extern "C" fn __fe_rpc_eth_block_number(out: *mut u8, out_cap: usize) -> i64 {
-    match post_rpc("eth_blockNumber", json!([]))
+pub unsafe extern "C" fn __fe_rpc_eth_chain_id(out: *mut u8, out_cap: usize) -> i64 {
+    match post_rpc("eth_chainId", json!([])).and_then(|result| write_output(out, out_cap, &result))
+    {
+        Ok(len) => len,
+        Err(status) => status,
+    }
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `address_ptr` must point to a readable UTF-8 buffer of `address_len` bytes.
+/// `out` must point to a writable buffer of at least `out_cap` bytes.
+pub unsafe extern "C" fn __fe_rpc_eth_get_balance(
+    address_ptr: *const u8,
+    address_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+) -> i64 {
+    match eth_get_balance(address_ptr, address_len)
         .and_then(|result| write_output(out, out_cap, &result))
     {
         Ok(len) => len,
@@ -55,6 +74,12 @@ pub unsafe extern "C" fn __fe_rpc_eth_call(
         Ok(len) => len,
         Err(status) => status,
     }
+}
+
+fn eth_get_balance(address_ptr: *const u8, address_len: usize) -> Result<String, i64> {
+    let address = input_str(address_ptr, address_len)?;
+    let _address: Address = address.parse().map_err(|_| ERR_INVALID_INPUT)?;
+    post_rpc("eth_getBalance", json!([address, "latest"]))
 }
 
 fn eth_call(
@@ -95,15 +120,6 @@ fn validate_hex_data(value: &str) -> Result<(), i64> {
     } else {
         Err(ERR_INVALID_INPUT)
     }
-}
-
-fn parse_quantity(value: &str) -> Result<i64, i64> {
-    let digits = value
-        .strip_prefix("0x")
-        .ok_or(ERR_INVALID_INPUT)?
-        .trim_start_matches('0');
-    let normalized = if digits.is_empty() { "0" } else { digits };
-    i64::from_str_radix(normalized, 16).map_err(|_| ERR_RPC)
 }
 
 fn post_rpc(method: &str, params: Value) -> Result<String, i64> {

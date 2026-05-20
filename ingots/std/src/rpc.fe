@@ -1,8 +1,16 @@
 use core::ptr
 
+use super::hex
+
 extern {
-    fn __fe_rpc_eth_block_number_u64() -> i64
     fn __fe_rpc_eth_block_number(out: u64, out_cap: u64) -> i64
+    fn __fe_rpc_eth_chain_id(out: u64, out_cap: u64) -> i64
+    fn __fe_rpc_eth_get_balance(
+        address: u64,
+        address_len: u64,
+        out: u64,
+        out_cap: u64,
+    ) -> i64
     fn __fe_rpc_eth_call(
         to: u64,
         to_len: u64,
@@ -13,20 +21,36 @@ extern {
     ) -> i64
 }
 
-pub struct RpcResponse {
-    pub status: i64,
-    pub len: i64,
+pub const ERR_INVALID_ARG: i64 = -1
+pub const ERR_MISSING_URL: i64 = -2
+pub const ERR_INVALID_INPUT: i64 = -3
+pub const ERR_REQUEST: i64 = -4
+pub const ERR_RPC: i64 = -5
+pub const ERR_OUTPUT_TOO_SMALL: i64 = -6
+
+pub enum RpcError {
+    InvalidArg,
+    MissingUrl,
+    InvalidInput,
+    Request,
+    Rpc,
+    OutputTooSmall,
+    Unknown,
 }
 
-pub struct RpcValue {
-    pub status: i64,
-    pub value: i64,
+pub enum RpcResult<T> {
+    Err(RpcError),
+    Ok(T),
 }
 
 pub trait EthereumRpc {
-    fn block_number(mut self) -> RpcValue
-    fn block_number_hex(mut self, out: ptr::MemorySlice<u8>) -> RpcResponse
-    fn call(mut self, to: ptr::MemorySlice<u8>, data: ptr::MemorySlice<u8>, out: ptr::MemorySlice<u8>) -> RpcResponse
+    fn block_number(mut self) -> RpcResult<u256>
+    fn chain_id(mut self) -> RpcResult<u256>
+    fn balance(mut self, address: ptr::MemorySlice<u8>) -> RpcResult<u256>
+    fn block_number_hex(mut self, out: ptr::MemorySlice<u8>) -> RpcResult<usize>
+    fn chain_id_hex(mut self, out: ptr::MemorySlice<u8>) -> RpcResult<usize>
+    fn balance_hex(mut self, address: ptr::MemorySlice<u8>, out: ptr::MemorySlice<u8>) -> RpcResult<usize>
+    fn call(mut self, to: ptr::MemorySlice<u8>, data: ptr::MemorySlice<u8>, out: ptr::MemorySlice<u8>) -> RpcResult<usize>
 }
 
 pub struct HostRpc {
@@ -38,25 +62,55 @@ pub fn host() -> HostRpc {
 }
 
 impl EthereumRpc for HostRpc {
-    fn block_number(mut self) -> RpcValue {
-        value_response(__fe_rpc_eth_block_number_u64())
+    fn block_number(mut self) -> RpcResult<u256> {
+        let out = ptr::alloc_byte_slice(80)
+        quantity_result(__fe_rpc_eth_block_number(addr64(out.ptr), out.len.downcast_unchecked()), out)
     }
 
-    fn block_number_hex(mut self, out: ptr::MemorySlice<u8>) -> RpcResponse {
-        let status = __fe_rpc_eth_block_number(addr64(out.ptr), out.len.downcast_unchecked())
-        response(status)
+    fn chain_id(mut self) -> RpcResult<u256> {
+        let out = ptr::alloc_byte_slice(80)
+        quantity_result(__fe_rpc_eth_chain_id(addr64(out.ptr), out.len.downcast_unchecked()), out)
     }
 
-    fn call(mut self, to: ptr::MemorySlice<u8>, data: ptr::MemorySlice<u8>, out: ptr::MemorySlice<u8>) -> RpcResponse {
-        let status = __fe_rpc_eth_call(
+    fn balance(mut self, address: ptr::MemorySlice<u8>) -> RpcResult<u256> {
+        let out = ptr::alloc_byte_slice(80)
+        quantity_result(
+            __fe_rpc_eth_get_balance(
+                addr64(address.ptr),
+                address.len.downcast_unchecked(),
+                addr64(out.ptr),
+                out.len.downcast_unchecked(),
+            ),
+            out,
+        )
+    }
+
+    fn block_number_hex(mut self, out: ptr::MemorySlice<u8>) -> RpcResult<usize> {
+        len_result(__fe_rpc_eth_block_number(addr64(out.ptr), out.len.downcast_unchecked()))
+    }
+
+    fn chain_id_hex(mut self, out: ptr::MemorySlice<u8>) -> RpcResult<usize> {
+        len_result(__fe_rpc_eth_chain_id(addr64(out.ptr), out.len.downcast_unchecked()))
+    }
+
+    fn balance_hex(mut self, address: ptr::MemorySlice<u8>, out: ptr::MemorySlice<u8>) -> RpcResult<usize> {
+        len_result(__fe_rpc_eth_get_balance(
+            addr64(address.ptr),
+            address.len.downcast_unchecked(),
+            addr64(out.ptr),
+            out.len.downcast_unchecked(),
+        ))
+    }
+
+    fn call(mut self, to: ptr::MemorySlice<u8>, data: ptr::MemorySlice<u8>, out: ptr::MemorySlice<u8>) -> RpcResult<usize> {
+        len_result(__fe_rpc_eth_call(
             addr64(to.ptr),
             to.len.downcast_unchecked(),
             addr64(data.ptr),
             data.len.downcast_unchecked(),
             addr64(out.ptr),
             out.len.downcast_unchecked(),
-        )
-        response(status)
+        ))
     }
 }
 
@@ -64,24 +118,52 @@ fn addr64<T>(_ ptr: *T) -> u64 {
     ptr::addr(ptr).downcast_unchecked()
 }
 
-fn value_response(_ status: i64) -> RpcValue {
+fn rpc_error(_ status: i64) -> RpcError {
+    if status == ERR_INVALID_ARG {
+        return RpcError::InvalidArg
+    }
+    if status == ERR_MISSING_URL {
+        return RpcError::MissingUrl
+    }
+    if status == ERR_INVALID_INPUT {
+        return RpcError::InvalidInput
+    }
+    if status == ERR_REQUEST {
+        return RpcError::Request
+    }
+    if status == ERR_RPC {
+        return RpcError::Rpc
+    }
+    if status == ERR_OUTPUT_TOO_SMALL {
+        return RpcError::OutputTooSmall
+    }
+    RpcError::Unknown
+}
+
+fn len_result(_ status: i64) -> RpcResult<usize> {
     if status >= 0 {
-        RpcValue {
-            status: 0,
-            value: status,
-        }
+        RpcResult::Ok(status.downcast_unchecked())
     } else {
-        RpcValue { status, value: 0 }
+        RpcResult::Err(rpc_error(status))
     }
 }
 
-fn response(_ status: i64) -> RpcResponse {
-    if status >= 0 {
-        RpcResponse {
-            status: 0,
-            len: status,
-        }
+fn quantity_result(_ status: i64, _ out: ptr::MemorySlice<u8>) -> RpcResult<u256> {
+    if status < 0 {
+        return RpcResult::Err(rpc_error(status))
+    }
+
+    let parsed = hex::parse_quantity(ptr::MemorySlice {
+        ptr: out.ptr,
+        len: status.downcast_unchecked(),
+    })
+    if parsed.status == 0 {
+        RpcResult::Ok(parsed.value)
     } else {
-        RpcResponse { status, len: 0 }
+        if parsed.status == hex::ERR_INVALID_INPUT {
+            RpcResult::Err(RpcError::InvalidInput)
+        } else {
+            RpcResult::Err(rpc_error(parsed.status))
+        }
     }
 }

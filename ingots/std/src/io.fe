@@ -1,4 +1,4 @@
-use core::AsBytes
+use core::{AsBytes, ptr}
 
 extern {
     fn putchar(c: i32) -> i32
@@ -83,6 +83,17 @@ uses (w: mut Write)
     let mut i: usize = 0
     while i < len && i < N {
         write_char(bytes[i] as i32)
+        i = i + 1
+    }
+}
+
+pub fn write_slice(_ bytes: ptr::MemorySlice<u8>)
+uses (w: mut Write)
+{
+    let len: usize = bytes.len.downcast_unchecked()
+    let mut i: usize = 0
+    while i < len {
+        write_char(ptr::read(ptr::offset(bytes.ptr, i as u256)) as i32)
         i = i + 1
     }
 }

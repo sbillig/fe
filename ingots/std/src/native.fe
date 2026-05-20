@@ -34,6 +34,13 @@ impl Args {
 }
 
 impl Arg {
+    pub fn as_bytes(self) -> ptr::MemorySlice<u8> {
+        ptr::MemorySlice {
+            ptr: self.ptr,
+            len: self.len() as u256,
+        }
+    }
+
     pub fn byte_at(self, _ index: usize) -> u8 {
         ptr::read(ptr::offset(self.ptr, index as u256))
     }

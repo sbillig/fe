@@ -1,5 +1,7 @@
 pub use abi::{self, *}
+pub use bytes
 pub use evm
+pub use hex
 pub use io
 pub use native
 pub use prelude

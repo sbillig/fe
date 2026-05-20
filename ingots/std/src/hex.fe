@@ -1,0 +1,91 @@
+use core::ptr
+
+use super::bytes::{ByteResult, err, ok, set}
+
+pub const ERR_INVALID_INPUT: i64 = -3
+pub const ERR_OUTPUT_TOO_SMALL: i64 = -6
+
+pub struct ParseResult {
+    pub status: i64,
+    pub value: u256,
+}
+
+pub fn parse_ok(_ value: u256) -> ParseResult {
+    ParseResult { status: 0, value }
+}
+
+pub fn parse_err(_ status: i64) -> ParseResult {
+    ParseResult { status, value: 0 }
+}
+
+pub fn hex_value(_ byte: u8) -> u8 {
+    if byte >= 48 && byte <= 57 {
+        return byte - 48
+    }
+    if byte >= 65 && byte <= 70 {
+        return byte - 55
+    }
+    if byte >= 97 && byte <= 102 {
+        return byte - 87
+    }
+    255
+}
+
+pub fn hex_digit(_ value: u8) -> u8 {
+    if value < 10 {
+        value + 48
+    } else {
+        value + 87
+    }
+}
+
+pub fn parse_quantity(_ input: ptr::MemorySlice<u8>) -> ParseResult {
+    let len: usize = input.len.downcast_unchecked()
+    if len < 3 || ptr::read(input.ptr) != 48 || ptr::read(ptr::offset(input.ptr, 1)) != 120 {
+        return parse_err(ERR_INVALID_INPUT)
+    }
+
+    let mut value: u256 = 0
+    let mut i: usize = 2
+    while i < len {
+        let digit = hex_value(ptr::read(ptr::offset(input.ptr, i as u256)))
+        if digit > 15 {
+            return parse_err(ERR_INVALID_INPUT)
+        }
+        value = value * 16 + digit as u256
+        i = i + 1
+    }
+    parse_ok(value)
+}
+
+pub fn write_quantity(_ value: u256, _ out: ptr::MemorySlice<u8>) -> ByteResult {
+    let cap: usize = out.len.downcast_unchecked()
+    if cap < 3 {
+        return err(ERR_OUTPUT_TOO_SMALL)
+    }
+
+    set(out, 0, 48)
+    set(out, 1, 120)
+    if value == 0 {
+        set(out, 2, 48)
+        return ok(3)
+    }
+
+    let mut started = false
+    let mut len: usize = 2
+    let mut i: usize = 0
+    while i < 64 {
+        let shift = ((63 - i) as u256) * 4
+        let nibble: u8 = ((value >> shift) & 15).downcast_unchecked()
+        if started || nibble != 0 {
+            if len >= cap {
+                return err(ERR_OUTPUT_TOO_SMALL)
+            }
+            set(out, len, hex_digit(nibble))
+            len = len + 1
+            started = true
+        }
+        i = i + 1
+    }
+    ok(len)
+}

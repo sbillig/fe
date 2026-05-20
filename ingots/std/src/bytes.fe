@@ -1,0 +1,74 @@
+use core::ptr
+
+pub const OK: i64 = 0
+pub const ERR_OUTPUT_TOO_SMALL: i64 = -6
+
+pub struct ByteResult {
+    pub status: i64,
+    pub len: usize,
+}
+
+pub fn ok(_ len: usize) -> ByteResult {
+    ByteResult { status: OK, len }
+}
+
+pub fn err(_ status: i64) -> ByteResult {
+    ByteResult { status, len: 0 }
+}
+
+pub fn take(_ slice: ptr::MemorySlice<u8>, _ len: usize) -> ptr::MemorySlice<u8> {
+    ptr::MemorySlice {
+        ptr: slice.ptr,
+        len: len as u256,
+    }
+}
+
+pub fn get(_ slice: ptr::MemorySlice<u8>, _ index: usize) -> u8 {
+    ptr::read(ptr::offset(slice.ptr, index as u256))
+}
+
+pub fn set(_ slice: ptr::MemorySlice<u8>, _ index: usize, _ value: u8) {
+    ptr::write(ptr::offset(slice.ptr, index as u256), value)
+}
+
+pub fn copy_array<const N: usize>(_ value: [u8; N], _ out: ptr::MemorySlice<u8>) -> ByteResult {
+    if (N as u256) > out.len {
+        return err(ERR_OUTPUT_TOO_SMALL)
+    }
+
+    let mut i: usize = 0
+    while i < N {
+        set(out, i, value[i])
+        i = i + 1
+    }
+    ok(N)
+}
+
+pub fn copy_from(_ src: ptr::MemorySlice<u8>, _ out: ptr::MemorySlice<u8>) -> ByteResult {
+    let len: usize = src.len.downcast_unchecked()
+    if len > out.len.downcast_unchecked() {
+        return err(ERR_OUTPUT_TOO_SMALL)
+    }
+
+    let mut i: usize = 0
+    while i < len {
+        set(out, i, get(src, i))
+        i = i + 1
+    }
+    ok(len)
+}
+
+pub fn eq_array<const N: usize>(_ slice: ptr::MemorySlice<u8>, _ expected: [u8; N]) -> bool {
+    if slice.len != N as u256 {
+        return false
+    }
+
+    let mut i: usize = 0
+    while i < N {
+        if get(slice, i) != expected[i] {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}

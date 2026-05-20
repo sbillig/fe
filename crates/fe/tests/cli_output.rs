@@ -517,27 +517,29 @@ fn test_cli_build_native_executable_links_rpc_runtime() {
     fs::write(
         &source,
         r#"
-use std::rpc::{EthereumRpc, host}
+use std::rpc::{EthereumRpc, RpcResult, host}
 use core::ptr
 
 pub fn main() -> i32 {
     let rpc = host()
     let out = ptr::alloc_byte_slice(32)
     let response = rpc.block_number_hex(out)
-    if response.status != 0 {
-        return 10
-    }
-    if response.len != 3 {
-        return 11
-    }
-    if ptr::read(out.ptr) != 48 {
-        return 12
-    }
-    if ptr::read(ptr::offset(out.ptr, 1)) != 120 {
-        return 13
-    }
-    if ptr::read(ptr::offset(out.ptr, 2)) != 49 {
-        return 14
+    match response {
+        RpcResult::Ok(len) => {
+            if len != 3 {
+                return 11
+            }
+            if ptr::read(out.ptr) != 48 {
+                return 12
+            }
+            if ptr::read(ptr::offset(out.ptr, 1)) != 120 {
+                return 13
+            }
+            if ptr::read(ptr::offset(out.ptr, 2)) != 49 {
+                return 14
+            }
+        }
+        RpcResult::Err(_) => return 10
     }
     0
 }
@@ -579,6 +581,137 @@ pub fn main() -> i32 {
     });
     let run_output = Command::new(&executable)
         .env("FE_ETH_RPC_URL", url)
+        .output()
+        .expect("run native executable");
+    server.join().expect("RPC fixture thread");
+    assert!(
+        run_output.status.success(),
+        "native RPC executable failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
+        run_output.status,
+        String::from_utf8_lossy(&run_output.stdout),
+        String::from_utf8_lossy(&run_output.stderr)
+    );
+}
+
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_build_native_executable_uses_ergonomic_rpc_methods() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_rpc_methods.fe");
+    fs::write(
+        &source,
+        r#"
+use core::ptr
+use std::bytes
+use std::native::Args
+use std::rpc::{EthereumRpc, RpcResult, host}
+
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    let args = Args::new(argc, argv)
+    if args.len() != 3 {
+        return 1
+    }
+    let rpc = host()
+    let address = args.get(1).as_bytes()
+    let data = args.get(2).as_bytes()
+
+    match rpc.block_number() {
+        RpcResult::Ok(value) => {
+            if value != 26 {
+                return 10
+            }
+        }
+        RpcResult::Err(_) => return 11
+    }
+
+    match rpc.chain_id() {
+        RpcResult::Ok(value) => {
+            if value != 1 {
+                return 12
+            }
+        }
+        RpcResult::Err(_) => return 13
+    }
+
+    match rpc.balance(address: address) {
+        RpcResult::Ok(value) => {
+            if value != 255 {
+                return 14
+            }
+        }
+        RpcResult::Err(_) => return 15
+    }
+
+    let out = ptr::alloc_byte_slice(16)
+    match rpc.call(to: address, data: data, out: out) {
+        RpcResult::Ok(len) => {
+            if len != 4 {
+                return 16
+            }
+            if bytes::get(out, 0) != 48 || bytes::get(out, 1) != 120 || bytes::get(out, 2) != 52 || bytes::get(out, 3) != 50 {
+                return 17
+            }
+        }
+        RpcResult::Err(_) => return 18
+    }
+
+    0
+}
+"#,
+    )
+    .expect("write native source");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let source_str = source.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "--out-dir",
+        out_dir_str.as_str(),
+        source_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 0, "fe native build failed:\n{output}");
+
+    let executable = out_dir.join("native_rpc_methods");
+    assert!(executable.is_file(), "missing native executable:\n{output}");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local RPC fixture");
+    let url = format!("http://{}", listener.local_addr().expect("local addr"));
+    let server = thread::spawn(move || {
+        for _ in 0..4 {
+            let (mut stream, _) = listener.accept().expect("accept RPC request");
+            let mut request = [0; 4096];
+            let n = stream.read(&mut request).expect("read RPC request");
+            let request = String::from_utf8_lossy(&request[..n]);
+            let result = if request.contains("\"method\":\"eth_blockNumber\"") {
+                "0x1a"
+            } else if request.contains("\"method\":\"eth_chainId\"") {
+                "0x1"
+            } else if request.contains("\"method\":\"eth_getBalance\"") {
+                assert!(request.contains("0x0000000000000000000000000000000000000000"));
+                "0xff"
+            } else if request.contains("\"method\":\"eth_call\"") {
+                assert!(request.contains("0x0000000000000000000000000000000000000000"));
+                assert!(request.contains("0x1234"));
+                "0x42"
+            } else {
+                panic!("unexpected RPC request: {request}");
+            };
+            let body = format!(r#"{{"jsonrpc":"2.0","id":1,"result":"{result}"}}"#);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write RPC response");
+        }
+    });
+    let run_output = Command::new(&executable)
+        .env("FE_ETH_RPC_URL", url)
+        .arg("0x0000000000000000000000000000000000000000")
+        .arg("0x1234")
         .output()
         .expect("run native executable");
     server.join().expect("RPC fixture thread");
