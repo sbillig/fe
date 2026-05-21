@@ -41,6 +41,7 @@ jobs:
     # Build & Test runs on all platforms
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
