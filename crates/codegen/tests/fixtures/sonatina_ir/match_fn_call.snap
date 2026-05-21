@@ -8,31 +8,7 @@ target = "evm-ethereum-osaka"
 type @layout_0 = {};
 type @layout_1 = {@layout_0};
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969(v0.i256) -> i256 {
-    block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
-        jump block1;
-
-    block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = evm_calldata_load v2;
-        return v3;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_0(v0.i256) -> i256 {
-    block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
-        jump block1;
-
-    block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = evm_calldata_load v2;
-        return v3;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_1(v0.i256) -> i256 {
+func private %calldataload(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -128,7 +104,7 @@ func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_3843
         jump block1;
 
     block1:
-        v2.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_1 0.i256;
+        v2.i256 = call %calldataload 0.i256;
         v4.i256 = shr 224.i256 v2;
         return v4;
 }
@@ -138,7 +114,7 @@ func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_5aed
         jump block1;
 
     block1:
-        v2.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969 0.i256;
+        v2.i256 = call %calldataload 0.i256;
         v4.i256 = shr 224.i256 v2;
         return v4;
 }
@@ -148,7 +124,7 @@ func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_69cb
         jump block1;
 
     block1:
-        v2.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_0 0.i256;
+        v2.i256 = call %calldataload 0.i256;
         v4.i256 = shr 224.i256 v2;
         return v4;
 }
