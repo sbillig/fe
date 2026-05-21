@@ -8,8 +8,8 @@ target = "evm-ethereum-osaka"
 type @layout_1 = {};
 type @layout_2 = {@layout_1};
 type @layout_0 = enum {
-    #A,
-    #B,
+    #variant_0,
+    #variant_1,
 };
 
 func private %f(v0.@layout_0, v1.objref<@layout_2>) {
@@ -34,7 +34,7 @@ func private %main(v0.objref<@layout_2>) {
         jump block1;
 
     block1:
-        v1.@layout_0 = enum.make @layout_0 #A;
+        v1.@layout_0 = enum.make @layout_0 #variant_0;
         call %f v1 v0;
         unreachable;
 }

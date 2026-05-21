@@ -2940,11 +2940,11 @@ mod tests {
                     layout.data(&db)
                 );
             };
-            assert_eq!(layout_data.source_ty, binding_ty);
             assert_eq!(
                 layout_data.fields.len(),
                 1,
-                "guarded_balances Mutex layout should expose the wrapped value field for arm {arm_idx}"
+                "guarded_balances Mutex layout should expose the wrapped value field for arm {arm_idx}; binding_ty={}",
+                binding_ty.pretty_print(&db),
             );
 
             assert!(

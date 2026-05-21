@@ -40,7 +40,7 @@ func private %main(v0.objref<@layout_2>) -> @layout_0 {
         jump block1;
 
     block1:
-        v2.@layout_0 = call %standalone_caller__caller__who_called__gcd5c_8e9e v0;
+        v2.@layout_0 = call %standalone_caller__caller__who_called__gcd5c_f6fe v0;
         return v2;
 }
 
@@ -54,21 +54,21 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %standalone_caller__caller__who_called__gcd5c_8e9e(v0.objref<@layout_2>) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v1.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5_0;
-        return v1;
-}
-
-func private %standalone_caller__caller__who_called__gcd5c_b6e7(v0.objref<@layout_2>) -> @layout_0 {
+func private %standalone_caller__caller__who_called__gcd5c_3a94(v0.objref<@layout_2>) -> @layout_0 {
     block0:
         jump block1;
 
     block1:
         v1.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5;
+        return v1;
+}
+
+func private %standalone_caller__caller__who_called__gcd5c_f6fe(v0.objref<@layout_2>) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5_0;
         return v1;
 }
 

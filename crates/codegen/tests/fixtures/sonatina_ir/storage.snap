@@ -8,8 +8,8 @@ target = "evm-ethereum-osaka"
 type @layout_0 = {};
 type @layout_1 = {@layout_0};
 type @layout_2 = enum {
-    #Ok,
-    #Insufficient,
+    #variant_0,
+    #variant_1,
 };
 
 func private %abi_encode(v0.i256, v1.objref<@layout_1>) {
@@ -393,7 +393,7 @@ func private %transfer_from_alice(v0.i256, v1.i256) -> @layout_2 {
         br v6 block2 block3;
 
     block2:
-        v7.@layout_2 = enum.make @layout_2 #Insufficient;
+        v7.@layout_2 = enum.make @layout_2 #variant_1;
         return v7;
 
     block3:
@@ -421,7 +421,7 @@ func private %transfer_from_alice(v0.i256, v1.i256) -> @layout_2 {
     block7:
         v26.i256 = add v1 1.i256;
         evm_sstore v26 v23;
-        v27.@layout_2 = enum.make @layout_2 #Ok;
+        v27.@layout_2 = enum.make @layout_2 #variant_0;
         return v27;
 }
 
@@ -439,7 +439,7 @@ func private %transfer_from_bob(v0.i256, v1.i256) -> @layout_2 {
         br v8 block2 block3;
 
     block2:
-        v9.@layout_2 = enum.make @layout_2 #Insufficient;
+        v9.@layout_2 = enum.make @layout_2 #variant_1;
         return v9;
 
     block3:
@@ -467,7 +467,7 @@ func private %transfer_from_bob(v0.i256, v1.i256) -> @layout_2 {
 
     block7:
         evm_sstore v1 v25;
-        v28.@layout_2 = enum.make @layout_2 #Ok;
+        v28.@layout_2 = enum.make @layout_2 #variant_0;
         return v28;
 }
 

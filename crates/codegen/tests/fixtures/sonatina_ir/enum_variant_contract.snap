@@ -8,8 +8,8 @@ target = "evm-ethereum-osaka"
 type @layout_0 = {};
 type @layout_1 = {@layout_0};
 type @layout_2 = enum {
-    #None,
-    #Some(i256),
+    #variant_0,
+    #variant_1(i256),
 };
 
 func private %abi_encode_u256(v0.i256, v1.objref<@layout_1>) {
@@ -160,7 +160,7 @@ func private %runtime(v0.objref<@layout_1>) {
 
     block2:
         v10.i256 = call %calldataload 4.i256;
-        v11.@layout_2 = enum.make @layout_2 #Some v10;
+        v11.@layout_2 = enum.make @layout_2 #variant_1 v10;
         v12.enumtag(@layout_2) = enum.tag v11;
         br_table v12 block21 (0.enumtag(@layout_2) block22) (1.enumtag(@layout_2) block23);
 
@@ -178,16 +178,16 @@ func private %runtime(v0.objref<@layout_1>) {
 
     block6:
         v24.@layout_2 = obj.load v1;
-        enum.assert_variant v24 #Some;
-        v25.i256 = enum.extract v24 #Some 0.i256;
+        enum.assert_variant v24 #variant_1;
+        v25.i256 = enum.extract v24 #variant_1 0.i256;
         jump block5;
 
     block7:
         jump block5;
 
     block8:
-        v26.@layout_2 = enum.make @layout_2 #None;
-        v27.@layout_2 = enum.make @layout_2 #None;
+        v26.@layout_2 = enum.make @layout_2 #variant_0;
+        v27.@layout_2 = enum.make @layout_2 #variant_0;
         v28.enumtag(@layout_2) = enum.tag v27;
         br_table v28 block25 (0.enumtag(@layout_2) block26) (1.enumtag(@layout_2) block27);
 
@@ -205,8 +205,8 @@ func private %runtime(v0.objref<@layout_1>) {
 
     block12:
         v38.@layout_2 = obj.load v2;
-        enum.assert_variant v38 #Some;
-        v39.i256 = enum.extract v38 #Some 0.i256;
+        enum.assert_variant v38 #variant_1;
+        v39.i256 = enum.extract v38 #variant_1 0.i256;
         jump block11;
 
     block13:
@@ -214,7 +214,7 @@ func private %runtime(v0.objref<@layout_1>) {
 
     block14:
         v40.i256 = call %calldataload 4.i256;
-        v41.@layout_2 = enum.make @layout_2 #Some v40;
+        v41.@layout_2 = enum.make @layout_2 #variant_1 v40;
         v42.enumtag(@layout_2) = enum.tag v41;
         br_table v42 (1.enumtag(@layout_2) block18) (0.enumtag(@layout_2) block19);
 
@@ -245,14 +245,14 @@ func private %runtime(v0.objref<@layout_1>) {
         unreachable;
 
     block22:
-        enum.set_tag v1 #None;
+        enum.set_tag v1 #variant_0;
         jump block20;
 
     block23:
-        enum.set_tag v1 #Some;
-        enum.assert_variant v11 #Some;
-        v15.objref<i256> = enum.proj v1 #Some 0.i256;
-        v16.i256 = enum.extract v11 #Some 0.i256;
+        enum.set_tag v1 #variant_1;
+        enum.assert_variant v11 #variant_1;
+        v15.objref<i256> = enum.proj v1 #variant_1 0.i256;
+        v16.i256 = enum.extract v11 #variant_1 0.i256;
         obj.store v15 v16;
         jump block20;
 
@@ -265,14 +265,14 @@ func private %runtime(v0.objref<@layout_1>) {
         unreachable;
 
     block26:
-        enum.set_tag v2 #None;
+        enum.set_tag v2 #variant_0;
         jump block24;
 
     block27:
-        enum.set_tag v2 #Some;
-        enum.assert_variant v27 #Some;
-        v29.objref<i256> = enum.proj v2 #Some 0.i256;
-        v30.i256 = enum.extract v27 #Some 0.i256;
+        enum.set_tag v2 #variant_1;
+        enum.assert_variant v27 #variant_1;
+        v29.objref<i256> = enum.proj v2 #variant_1 0.i256;
+        v30.i256 = enum.extract v27 #variant_1 0.i256;
         obj.store v29 v30;
         jump block24;
 }

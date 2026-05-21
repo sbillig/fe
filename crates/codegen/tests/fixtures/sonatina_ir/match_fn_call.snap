@@ -44,12 +44,12 @@ func private %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_1(v
         return v3;
 }
 
-func private %standalone_match_fn_call__match_fn_call__example__gcd5c_c018(v0.objref<@layout_1>) -> i256 {
+func private %standalone_match_fn_call__match_fn_call__example__gcd5c_946f(v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_4179 v0;
+        v2.i256 = call %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_3843 v0;
         v4.i1 = eq v2 305419896.i256;
         br v4 block3 block6;
 
@@ -74,12 +74,12 @@ func private %standalone_match_fn_call__match_fn_call__example__gcd5c_c018(v0.ob
         jump block5;
 }
 
-func private %standalone_match_fn_call__match_fn_call__example__gcd5c_cf48(v0.objref<@layout_1>) -> i256 {
+func private %standalone_match_fn_call__match_fn_call__example__gcd5c_f06f(v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_f4a3 v0;
+        v2.i256 = call %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_69cb v0;
         v4.i1 = eq v2 305419896.i256;
         br v4 block3 block6;
 
@@ -109,7 +109,7 @@ func private %main(v0.objref<@layout_1>) -> i256 {
         jump block1;
 
     block1:
-        v2.i256 = call %standalone_match_fn_call__match_fn_call__example__gcd5c_cf48 v0;
+        v2.i256 = call %standalone_match_fn_call__match_fn_call__example__gcd5c_f06f v0;
         return v2;
 }
 
@@ -123,7 +123,7 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_4179(v0.objref<@layout_1>) -> i256 {
+func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_3843(v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -133,7 +133,7 @@ func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_4179
         return v4;
 }
 
-func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_aed9(v0.objref<@layout_1>) -> i256 {
+func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_5aed(v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -143,7 +143,7 @@ func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_aed9
         return v4;
 }
 
-func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_f4a3(v0.objref<@layout_1>) -> i256 {
+func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_69cb(v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 

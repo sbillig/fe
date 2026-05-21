@@ -7,8 +7,6 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {};
 type @layout_1 = {@layout_0};
-type @layout_2 = {};
-type @layout_3 = {};
 
 func private %abi_encode(v0.i256, v1.objref<@layout_1>) {
     block0:
@@ -112,7 +110,7 @@ func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__g
         return v5;
 }
 
-func private %get_allowance(v0.i256, v1.objref<@layout_2>) -> i256 {
+func private %get_allowance(v0.i256, v1.objref<@layout_0>) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v0 i256;
@@ -124,7 +122,7 @@ func private %get_allowance(v0.i256, v1.objref<@layout_2>) -> i256 {
         return v4;
 }
 
-func private %get_balance(v0.i256, v1.objref<@layout_3>) -> i256 {
+func private %get_balance(v0.i256, v1.objref<@layout_0>) -> i256 {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v0 i256;
@@ -258,8 +256,8 @@ func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_c635(v0.i
 
 func private %runtime(v0.objref<@layout_1>) {
     block0:
-        v1.objref<@layout_3> = obj.alloc @layout_3;
-        v2.objref<@layout_2> = obj.alloc @layout_2;
+        v1.objref<@layout_0> = obj.alloc @layout_0;
+        v2.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
 
     block1:
@@ -272,8 +270,8 @@ func private %runtime(v0.objref<@layout_1>) {
 
     block2:
         v12.i256 = call %calldataload 4.i256;
-        v13.@layout_3 = obj.load v1;
-        v14.objref<@layout_3> = obj.alloc @layout_3;
+        v13.@layout_0 = obj.load v1;
+        v14.objref<@layout_0> = obj.alloc @layout_0;
         v15.i256 = call %get_balance v12 v14;
         call %abi_encode v15 v0;
         unreachable;
@@ -281,8 +279,8 @@ func private %runtime(v0.objref<@layout_1>) {
     block3:
         v17.i256 = call %calldataload 4.i256;
         v19.i256 = call %calldataload 36.i256;
-        v20.@layout_3 = obj.load v1;
-        v21.objref<@layout_3> = obj.alloc @layout_3;
+        v20.@layout_0 = obj.load v1;
+        v21.objref<@layout_0> = obj.alloc @layout_0;
         call %set_balance v17 v19 v21;
         call %abi_encode 0.i256 v0;
         unreachable;
@@ -291,16 +289,16 @@ func private %runtime(v0.objref<@layout_1>) {
         v24.i256 = call %calldataload 4.i256;
         v25.i256 = call %calldataload 36.i256;
         v27.i256 = call %calldataload 68.i256;
-        v28.@layout_3 = obj.load v1;
-        v29.objref<@layout_3> = obj.alloc @layout_3;
+        v28.@layout_0 = obj.load v1;
+        v29.objref<@layout_0> = obj.alloc @layout_0;
         v30.i256 = call %transfer v24 v25 v27 v29;
         call %abi_encode v30 v0;
         unreachable;
 
     block5:
         v32.i256 = call %calldataload 4.i256;
-        v33.@layout_2 = obj.load v2;
-        v34.objref<@layout_2> = obj.alloc @layout_2;
+        v33.@layout_0 = obj.load v2;
+        v34.objref<@layout_0> = obj.alloc @layout_0;
         v35.i256 = call %get_allowance v32 v34;
         call %abi_encode v35 v0;
         unreachable;
@@ -308,8 +306,8 @@ func private %runtime(v0.objref<@layout_1>) {
     block6:
         v37.i256 = call %calldataload 4.i256;
         v38.i256 = call %calldataload 36.i256;
-        v39.@layout_2 = obj.load v2;
-        v40.objref<@layout_2> = obj.alloc @layout_2;
+        v39.@layout_0 = obj.load v2;
+        v40.objref<@layout_0> = obj.alloc @layout_0;
         call %set_allowance v37 v38 v40;
         call %abi_encode 0.i256 v0;
         unreachable;
@@ -364,7 +362,7 @@ func inline(always) private %set__gcbe1(v0.i256, v1.i256) {
         return;
 }
 
-func private %set_allowance(v0.i256, v1.i256, v2.objref<@layout_2>) {
+func private %set_allowance(v0.i256, v1.i256, v2.objref<@layout_0>) {
     block0:
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
@@ -379,7 +377,7 @@ func private %set_allowance(v0.i256, v1.i256, v2.objref<@layout_2>) {
         return;
 }
 
-func private %set_balance(v0.i256, v1.i256, v2.objref<@layout_3>) {
+func private %set_balance(v0.i256, v1.i256, v2.objref<@layout_0>) {
     block0:
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
@@ -624,7 +622,7 @@ func private %std__lib__evm__word__impl_trait_u256_1f9e__to_word_1ead_0(v0.i256)
         return v0;
 }
 
-func private %transfer(v0.i256, v1.i256, v2.i256, v3.objref<@layout_3>) -> i256 {
+func private %transfer(v0.i256, v1.i256, v2.i256, v3.objref<@layout_0>) -> i256 {
     block0:
         v4.*i256 = alloca i256;
         v5.*i256 = alloca i256;

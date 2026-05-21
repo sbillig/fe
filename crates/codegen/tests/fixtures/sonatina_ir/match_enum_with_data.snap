@@ -6,8 +6,8 @@ input_file: crates/codegen/tests/fixtures/match_enum_with_data.fe
 target = "evm-ethereum-osaka"
 
 type @layout_0 = enum {
-    #None,
-    #Some(i64),
+    #variant_0,
+    #variant_1(i64),
 };
 
 func private %main() -> i64 {
@@ -37,7 +37,7 @@ func private %make_some(v0.i64) -> @layout_0 {
 
     block1:
         v2.i64 = mload v1 i64;
-        v3.@layout_0 = enum.make @layout_0 #Some v2;
+        v3.@layout_0 = enum.make @layout_0 #variant_1 v2;
         return v3;
 }
 
@@ -58,8 +58,8 @@ func private %match_option(v0.@layout_0) -> i64 {
 
     block3:
         v11.@layout_0 = obj.load v1;
-        enum.assert_variant v11 #Some;
-        v12.i64 = enum.extract v11 #Some 0.i256;
+        enum.assert_variant v11 #variant_1;
+        v12.i64 = enum.extract v11 #variant_1 0.i256;
         jump block2;
 
     block4:
@@ -72,14 +72,14 @@ func private %match_option(v0.@layout_0) -> i64 {
         unreachable;
 
     block7:
-        enum.set_tag v1 #None;
+        enum.set_tag v1 #variant_0;
         jump block5;
 
     block8:
-        enum.set_tag v1 #Some;
-        enum.assert_variant v0 #Some;
-        v6.objref<i64> = enum.proj v1 #Some 0.i256;
-        v7.i64 = enum.extract v0 #Some 0.i256;
+        enum.set_tag v1 #variant_1;
+        enum.assert_variant v0 #variant_1;
+        v6.objref<i64> = enum.proj v1 #variant_1 0.i256;
+        v7.i64 = enum.extract v0 #variant_1 0.i256;
         obj.store v6 v7;
         jump block5;
 }

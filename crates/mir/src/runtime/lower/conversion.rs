@@ -665,7 +665,6 @@ fn is_plain_word_scalar(scalar: &ScalarClass<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use driver::DriverDataBase;
-    use hir::analysis::ty::ty_def::TyId;
 
     use super::*;
     use crate::runtime::{LayoutKey, StructLayout};
@@ -684,7 +683,6 @@ mod tests {
         LayoutId::new(
             db,
             LayoutKey::Struct(StructLayout {
-                source_ty: TyId::unit(db),
                 fields: vec![word_class()].into(),
             }),
         )

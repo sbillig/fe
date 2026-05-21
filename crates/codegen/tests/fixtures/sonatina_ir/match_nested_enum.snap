@@ -6,12 +6,12 @@ input_file: crates/codegen/tests/fixtures/match_nested_enum.fe
 target = "evm-ethereum-osaka"
 
 type @layout_0 = enum {
-    #Unit,
-    #Value(i8),
+    #variant_0,
+    #variant_1(i8),
 };
 type @layout_1 = enum {
-    #First(@layout_0),
-    #Second(i8),
+    #variant_0(@layout_0),
+    #variant_1(i8),
 };
 
 func private %main() -> i8 {
@@ -19,9 +19,9 @@ func private %main() -> i8 {
         jump block1;
 
     block1:
-        v1.@layout_0 = enum.make @layout_0 #Value 7.i8;
-        v2.@layout_0 = enum.make @layout_0 #Value 7.i8;
-        v3.@layout_1 = enum.make @layout_1 #First v2;
+        v1.@layout_0 = enum.make @layout_0 #variant_1 7.i8;
+        v2.@layout_0 = enum.make @layout_0 #variant_1 7.i8;
+        v3.@layout_1 = enum.make @layout_1 #variant_0 v2;
         v4.i8 = call %match_nested_enum v3;
         return v4;
 }
@@ -52,23 +52,23 @@ func private %match_nested_enum(v0.@layout_1) -> i8 {
 
     block3:
         v18.@layout_1 = obj.load v1;
-        enum.assert_variant v18 #First;
-        v19.@layout_0 = enum.extract v18 #First 0.i256;
+        enum.assert_variant v18 #variant_0;
+        v19.@layout_0 = enum.extract v18 #variant_0 0.i256;
         v20.enumtag(@layout_0) = enum.tag v19;
         br_table v20 (0.enumtag(@layout_0) block5) (1.enumtag(@layout_0) block6);
 
     block4:
         v21.@layout_1 = obj.load v1;
-        enum.assert_variant v21 #Second;
-        v22.i8 = enum.extract v21 #Second 0.i256;
+        enum.assert_variant v21 #variant_1;
+        v22.i8 = enum.extract v21 #variant_1 0.i256;
         jump block2;
 
     block5:
         jump block2;
 
     block6:
-        enum.assert_variant v19 #Value;
-        v25.i8 = enum.extract v19 #Value 0.i256;
+        enum.assert_variant v19 #variant_1;
+        v25.i8 = enum.extract v19 #variant_1 0.i256;
         jump block2;
 
     block7:
@@ -78,18 +78,18 @@ func private %match_nested_enum(v0.@layout_1) -> i8 {
         unreachable;
 
     block9:
-        enum.set_tag v1 #First;
-        enum.assert_variant v0 #First;
-        v6.objref<@layout_0> = enum.proj v1 #First 0.i256;
-        v7.@layout_0 = enum.extract v0 #First 0.i256;
+        enum.set_tag v1 #variant_0;
+        enum.assert_variant v0 #variant_0;
+        v6.objref<@layout_0> = enum.proj v1 #variant_0 0.i256;
+        v7.@layout_0 = enum.extract v0 #variant_0 0.i256;
         v8.enumtag(@layout_0) = enum.tag v7;
         br_table v8 block12 (0.enumtag(@layout_0) block13) (1.enumtag(@layout_0) block14);
 
     block10:
-        enum.set_tag v1 #Second;
-        enum.assert_variant v0 #Second;
-        v13.objref<i8> = enum.proj v1 #Second 0.i256;
-        v14.i8 = enum.extract v0 #Second 0.i256;
+        enum.set_tag v1 #variant_1;
+        enum.assert_variant v0 #variant_1;
+        v13.objref<i8> = enum.proj v1 #variant_1 0.i256;
+        v14.i8 = enum.extract v0 #variant_1 0.i256;
         obj.store v13 v14;
         jump block7;
 
@@ -100,14 +100,14 @@ func private %match_nested_enum(v0.@layout_1) -> i8 {
         unreachable;
 
     block13:
-        enum.set_tag v6 #Unit;
+        enum.set_tag v6 #variant_0;
         jump block11;
 
     block14:
-        enum.set_tag v6 #Value;
-        enum.assert_variant v7 #Value;
-        v11.objref<i8> = enum.proj v6 #Value 0.i256;
-        v12.i8 = enum.extract v7 #Value 0.i256;
+        enum.set_tag v6 #variant_1;
+        enum.assert_variant v7 #variant_1;
+        v11.objref<i8> = enum.proj v6 #variant_1 0.i256;
+        v12.i8 = enum.extract v7 #variant_1 0.i256;
         obj.store v11 v12;
         jump block11;
 }
