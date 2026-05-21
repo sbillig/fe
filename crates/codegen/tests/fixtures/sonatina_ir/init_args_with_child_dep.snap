@@ -75,16 +75,6 @@ func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_7dbb(v0.objre
         return v4;
 }
 
-func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_7dbb_0(v0.objref<@layout_6>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        return v4;
-}
-
 func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_85b5(v0.objref<@layout_6>) -> i256 {
     block0:
         jump block1;
@@ -650,7 +640,7 @@ func private %encode__g7769(v0.@layout_2, v1.objref<@layout_6>) {
         jump block1;
 
     block1:
-        v11.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_7dbb_0 v1;
+        v11.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_7dbb v1;
         (v13.i256, v14.i1) = uaddo v11 64.i256;
         br v14 block2 block3;
 

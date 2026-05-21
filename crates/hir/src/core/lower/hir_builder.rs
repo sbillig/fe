@@ -185,6 +185,14 @@ where
         TraitRefId::new(db, Partial::Present(path))
     }
 
+    pub(super) fn core_abi_trait_ref(&self, name: &str) -> TraitRefId<'db> {
+        let db = self.db();
+        let path = PathId::from_ident(db, self.roots.core)
+            .push_str(db, "abi")
+            .push_str(db, name);
+        TraitRefId::new(db, Partial::Present(path))
+    }
+
     pub(super) fn type_param_with_trait_bound(
         &self,
         name: &str,
@@ -654,6 +662,16 @@ where
         self.path_expr(qualified.push_str(self.db(), assoc_name))
     }
 
+    pub(super) fn abi_field_head_size_expr(&mut self, ty: TypeId<'db>) -> ExprId {
+        let db = self.db();
+        let args = GenericArgListId::given1_type(db, ty);
+        let path = PathId::from_ident(db, self.roots.core)
+            .push_str(db, "abi")
+            .push_str_args(db, "abi_field_head_size", args);
+        let callee = self.path_expr(path);
+        self.call_expr(callee, vec![])
+    }
+
     pub(super) fn call_expr(&mut self, callee: ExprId, args: Vec<ExprId>) -> ExprId {
         self.call_expr_with_args(
             callee,
@@ -795,6 +813,61 @@ where
         let decode_callee = self.path_expr(decode_path);
         let d_expr = self.path_expr(PathId::from_str(db, "d"));
         let decode_call = self.call_expr(decode_callee, vec![d_expr]);
+
+        let bind_pat = self.push_pat(Pat::Path(
+            Partial::Present(PathId::from_ident(db, target_ident)),
+            false,
+        ));
+        self.emit_stmt(Stmt::Let(bind_pat, Some(ty), Some(decode_call)));
+    }
+
+    pub(super) fn decode_from_into(
+        &mut self,
+        target_ident: IdentId<'db>,
+        ty: TypeId<'db>,
+        input_ident: IdentId<'db>,
+        input_ty: TypeId<'db>,
+        base_ident: IdentId<'db>,
+        head_pos: ExprId,
+    ) {
+        let db = self.db();
+        let decode_args = GenericArgListId::given(
+            db,
+            vec![
+                GenericArg::Type(TypeGenericArg {
+                    ty: Partial::Present(self.sol_ty()),
+                }),
+                GenericArg::Type(TypeGenericArg {
+                    ty: Partial::Present(ty),
+                }),
+                GenericArg::Type(TypeGenericArg {
+                    ty: Partial::Present(input_ty),
+                }),
+            ],
+        );
+        let decode_path = PathId::from_ident(db, self.roots.core)
+            .push_str(db, "abi")
+            .push_str_args(db, "decode_field_from", decode_args);
+        let decode_callee = self.path_expr(decode_path);
+        let input_expr = self.ident_expr(input_ident);
+        let base_expr = self.ident_expr(base_ident);
+        let decode_call = self.call_expr_with_args(
+            decode_callee,
+            vec![
+                CallArg {
+                    label: None,
+                    expr: input_expr,
+                },
+                CallArg {
+                    label: Some(base_ident),
+                    expr: base_expr,
+                },
+                CallArg {
+                    label: Some(IdentId::new(db, "head_pos".to_string())),
+                    expr: head_pos,
+                },
+            ],
+        );
 
         let bind_pat = self.push_pat(Pat::Path(
             Partial::Present(PathId::from_ident(db, target_ident)),
