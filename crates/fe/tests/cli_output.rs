@@ -871,6 +871,20 @@ fn test_tree_output(fixture: Fixture<&str>) {
     snap_test!(output, snapshot_path.to_str().unwrap());
 }
 
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test",
+    glob: "*.fe",
+)]
+fn test_fe_test(fixture: Fixture<&str>) {
+    let (output, exit_code) = run_fe_main(&["test", "--jobs", "1", fixture.path()]);
+    assert_eq!(
+        exit_code,
+        0,
+        "fe test failed for {path}:\n{output}\n\nTo reproduce:\n  cargo run --bin fe -- test --jobs 1 {path}",
+        path = fixture.path(),
+    );
+}
+
 #[test]
 fn test_fe_test_rejects_oversized_balance_literal() {
     let temp = tempdir().expect("tempdir");
