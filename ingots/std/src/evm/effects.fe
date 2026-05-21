@@ -6,6 +6,7 @@ use core::abi::{
     AbiEncoder,
     AbiSize,
     AbiSpan,
+    ByteInput,
     Decode,
     Encode,
     encode_alloc,
@@ -67,6 +68,15 @@ impl<A: Abi> Decode<A> for Address {
     #[inline(always)]
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         let word = d.read_word()
+        if word >> 160 != 0 {
+            ops::revert(offset: 0, len: 0)
+        }
+        Address { inner: word }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        let word = input.word_at(pos)
         if word >> 160 != 0 {
             ops::revert(offset: 0, len: 0)
         }

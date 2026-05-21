@@ -170,6 +170,13 @@ pub trait AbiSpan<A: Abi>: AbiSize {
 
 pub trait Decode<A: Abi> {
     fn decode_payload<D: AbiDecoder<A>>(_: mut D) -> Self
+
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let mut d = A::decoder_with_base(input, pos)
+        Self::decode_payload(mut d)
+    }
 }
 
 pub trait Encode<A: Abi>: AbiSize {
@@ -255,6 +262,20 @@ pub fn decode_field<A: Abi, T, D>(_ d: mut D) -> T
     }
 
     T::decode_payload(d)
+}
+
+#[inline(always)]
+pub fn decode_field_from<A: Abi, T, I>(_ input: I, base: u256, head_pos: u256) -> T
+    where T: Decode<A> + AbiSize,
+          I: ByteInput,
+          A::Decoder<I>: AbiDecoder<A>
+{
+    if T::IS_DYNAMIC {
+        let tail_rel = input.word_at(head_pos)
+        return T::decode_from(input, base + tail_rel)
+    }
+
+    T::decode_from(input, head_pos)
 }
 
 fn decode_field_at<A: Abi, T, D>(d: mut D, pos: u256) -> T
@@ -1174,6 +1195,11 @@ impl<A: Abi> Decode<A> for u256 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         d.read_word()
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        input.word_at(pos)
+    }
 }
 
 impl<A: Abi> Encode<A> for u256 {
@@ -1242,6 +1268,14 @@ impl<A: Abi> Decode<A> for DynString {
             size: payload_size,
         }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let mut d = A::decoder_with_base(input, pos)
+        Self::decode_payload(mut d)
+    }
 }
 
 impl<A: Abi> Encode<A> for DynString {
@@ -1264,6 +1298,11 @@ impl<A: Abi> Decode<A> for bool {
     #[inline(always)]
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         A::decode_bool_word(d.read_word())
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        A::decode_bool_word(input.word_at(pos))
     }
 }
 
@@ -1291,6 +1330,11 @@ impl<A: Abi> Decode<A> for u8 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         A::decode_u8_word(d.read_word())
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        A::decode_u8_word(input.word_at(pos))
+    }
 }
 
 impl<A: Abi> Encode<A> for u8 {
@@ -1308,6 +1352,11 @@ impl<A: Abi> Encode<A> for u8 {
 impl<A: Abi> Decode<A> for u16 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         A::decode_u16_word(d.read_word())
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        A::decode_u16_word(input.word_at(pos))
     }
 }
 
@@ -1327,6 +1376,11 @@ impl<A: Abi> Decode<A> for u32 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         A::decode_u32_word(d.read_word())
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        A::decode_u32_word(input.word_at(pos))
+    }
 }
 
 impl<A: Abi> Encode<A> for u32 {
@@ -1344,6 +1398,11 @@ impl<A: Abi> Encode<A> for u32 {
 impl<A: Abi> Decode<A> for u64 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         A::decode_u64_word(d.read_word())
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        A::decode_u64_word(input.word_at(pos))
     }
 }
 
@@ -1363,6 +1422,11 @@ impl<A: Abi> Decode<A> for u128 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         A::decode_u128_word(d.read_word())
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        A::decode_u128_word(input.word_at(pos))
+    }
 }
 
 impl<A: Abi> Encode<A> for u128 {
@@ -1380,6 +1444,11 @@ impl<A: Abi> Encode<A> for u128 {
 impl<A: Abi> Decode<A> for i8 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         A::decode_i8_word(d.read_word())
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        A::decode_i8_word(input.word_at(pos))
     }
 }
 
@@ -1399,6 +1468,11 @@ impl<A: Abi> Decode<A> for i16 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         A::decode_i16_word(d.read_word())
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        A::decode_i16_word(input.word_at(pos))
+    }
 }
 
 impl<A: Abi> Encode<A> for i16 {
@@ -1416,6 +1490,11 @@ impl<A: Abi> Encode<A> for i16 {
 impl<A: Abi> Decode<A> for i32 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         A::decode_i32_word(d.read_word())
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        A::decode_i32_word(input.word_at(pos))
     }
 }
 
@@ -1435,6 +1514,11 @@ impl<A: Abi> Decode<A> for i64 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         A::decode_i64_word(d.read_word())
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        A::decode_i64_word(input.word_at(pos))
+    }
 }
 
 impl<A: Abi> Encode<A> for i64 {
@@ -1452,6 +1536,11 @@ impl<A: Abi> Encode<A> for i64 {
 impl<A: Abi> Decode<A> for i128 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         A::decode_i128_word(d.read_word())
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        A::decode_i128_word(input.word_at(pos))
     }
 }
 
@@ -1471,6 +1560,11 @@ impl<A: Abi> Decode<A> for i256 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         d.read_word().downcast_unchecked()
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        input.word_at(pos).downcast_unchecked()
+    }
 }
 
 impl<A: Abi> Encode<A> for i256 {
@@ -1488,6 +1582,11 @@ impl<A: Abi> Encode<A> for i256 {
 impl<A: Abi> Decode<A> for usize {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         d.read_word() as usize
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        input.word_at(pos) as usize
     }
 }
 
@@ -1507,6 +1606,11 @@ impl<A: Abi> Decode<A> for isize {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         d.read_word().downcast_unchecked()
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        input.word_at(pos).downcast_unchecked()
+    }
 }
 
 impl<A: Abi> Encode<A> for isize {
@@ -1523,6 +1627,11 @@ impl<A: Abi> Encode<A> for isize {
 
 impl<A: Abi> Decode<A> for () {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
+        ()
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_: I, _: u256) -> Self {
         ()
     }
 }
@@ -1551,6 +1660,14 @@ impl<A: Abi> Decode<A> for Bytes {
             len: data_len,
             size: payload_size,
         }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let mut d = A::decoder_with_base(input, pos)
+        Self::decode_payload(mut d)
     }
 }
 
@@ -1639,6 +1756,14 @@ impl<A: Abi, T> Decode<A> for DynArray<T>
             len: elem_count,
             size: payload_size,
         }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let mut d = A::decoder_with_base(input, pos)
+        Self::decode_payload(mut d)
     }
 }
 
@@ -2439,6 +2564,22 @@ impl<A: Abi, T, const N: usize> Decode<A> for [T; N]
         let mut i: usize = 1
         while i < N {
             out[i] = decode_field<A, T, D>(mut d)
+            i += 1
+        }
+        out
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let first = decode_field_from<A, T, I>(input, base: pos, head_pos: pos)
+        let mut out: [T; N] = [first; N]
+        let mut i: usize = 1
+        let mut head_pos = pos + abi_field_head_size<T>()
+        while i < N {
+            out[i] = decode_field_from<A, T, I>(input, base: pos, head_pos: head_pos)
+            head_pos += abi_field_head_size<T>()
             i += 1
         }
         out

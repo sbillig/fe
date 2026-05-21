@@ -2,12 +2,12 @@ use num_bigint::BigUint;
 use parser::ast::{self, AttrListOwner as _};
 use salsa::Accumulator as _;
 
-use super::{attr::named_attr_specs, hir_builder::HirBuilder};
+use super::{attr::named_attr_specs, hir_builder::BodyBuilder, hir_builder::HirBuilder};
 
 use crate::{
     HirDb, SelectorError, SelectorErrorKind,
     hir_def::{
-        ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, FieldDef,
+        ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, ExprId, FieldDef,
         FieldDefListId, FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName,
         IdentId, ImplTrait, IntegerId, LitKind, LogicalBinOp, Mod, Partial, Pat, PathId, PathKind,
         Stmt, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
@@ -621,6 +621,23 @@ pub(super) fn build_head_size_body_expr<'db, O: Clone + Into<crate::span::Desuga
     }
 }
 
+fn build_decode_head_pos_expr<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
+    body: &mut BodyBuilder<'_, 'db, O>,
+    base_ident: IdentId<'db>,
+    prior_fields: &[(IdentId<'db>, TypeId<'db>)],
+) -> ExprId {
+    let mut expr = body.ident_expr(base_ident);
+    for (_, ty) in prior_fields.iter().copied() {
+        let field_head_size = body.abi_field_head_size_expr(ty);
+        expr = body.push_expr(Expr::Bin(
+            expr,
+            field_head_size,
+            BinOp::Arith(ArithBinOp::Add),
+        ));
+    }
+    expr
+}
+
 fn lower_msg_variant_decode_trait_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
     variant: &ast::MsgVariant,
@@ -650,6 +667,32 @@ fn lower_msg_variant_decode_trait_impl<'db>(
             |body| {
                 for (name, ty) in fields.iter().copied() {
                     body.decode_into(name, ty, d_ty);
+                }
+                body.return_record_self(&field_names);
+            },
+        );
+
+        let byte_input_trait_ref = builder.core_abi_trait_ref("ByteInput");
+        let (i_generic_params, i_ty) =
+            builder.type_param_with_trait_bound("I", byte_input_trait_ref);
+
+        let input_ident = builder.ident("input");
+        let base_ident = builder.ident("base");
+        let params = builder.params([
+            builder.param_underscore_named(input_ident, i_ty),
+            builder.param_underscore_named(base_ident, builder.ty_ident(builder.ident("u256"))),
+        ]);
+
+        builder.func_generic_inline_always(
+            "decode_from",
+            i_generic_params,
+            params,
+            Some(builder.self_ty()),
+            FuncModifiers::new(Visibility::Private, false, false, false),
+            |body| {
+                for (idx, (name, ty)) in fields.iter().copied().enumerate() {
+                    let head_pos = build_decode_head_pos_expr(body, base_ident, &fields[..idx]);
+                    body.decode_from_into(name, ty, input_ident, i_ty, base_ident, head_pos);
                 }
                 body.return_record_self(&field_names);
             },
