@@ -41,3 +41,72 @@ contract MutableStorageField {
 
     init() {}
 }
+
+fn init_effect(v: u256) uses (x: mut u256) {
+    x = v
+}
+
+fn init_effect_forward(v: u256) uses (x: mut u256) {
+    init_effect(v: v)
+}
+
+fn init_arg(_ x: mut u256, v: u256) {
+    x = v
+}
+
+fn init_arg_forward(_ x: mut u256, v: u256) {
+    init_arg(x, v: v)
+}
+
+contract InitViaEffectHelper {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        init_effect(v: v)
+    }
+}
+
+contract InitViaWithHelper {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        with (x) {
+            init_effect(v: v)
+        }
+    }
+}
+
+contract InitViaForwardHelper {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        init_effect_forward(v: v)
+    }
+}
+
+contract InitViaMutArgHelper {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        init_arg(mut x, v: v)
+    }
+}
+
+contract InitViaMutArgForwardHelper {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        init_arg_forward(mut x, v: v)
+    }
+}
+
+contract InitViaBreakDrivenLoop {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        while true {
+            x = v
+            break
+        }
+    }
+}

@@ -2,9 +2,14 @@
 //!
 //! This module contains functions for checking contract init bodies,
 //! recv blocks, and recv arm bodies.
+use std::hash::Hash;
+
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::{EffectParamSite, LocalBinding, TypedBody, owner::BodyOwner};
+use super::{
+    EffectArg, EffectParamSite, LocalBinding, ParamSite, ResolvedEffectArg, TypedBody,
+    check_func_body, owner::BodyOwner,
+};
 
 use num_traits::ToPrimitive;
 
@@ -12,6 +17,7 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         name_resolution::{ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path},
+        place::{Place, PlaceBase},
         semantic::{SemConstScalar, SemConstValue, eval_body_owner_const},
         ty::{
             adt_def::AdtRef,
@@ -29,8 +35,8 @@ use crate::{
         },
     },
     hir_def::{
-        Body, Cond, Contract, Expr, ExprId, FieldParent, IdentId, ItemKind, Mod, Partial, PathId,
-        Stmt, Struct, scope_graph::ScopeId,
+        Body, CallableDef, Cond, Contract, Expr, ExprId, FieldParent, Func, IdentId, ItemKind,
+        LitKind, Mod, Partial, PathId, Stmt, Struct, scope_graph::ScopeId,
     },
     semantic::{EffectEnvView, FieldView, ProviderSource},
     span::{DynLazySpan, path::LazyPathSpan},
@@ -785,30 +791,42 @@ pub fn check_contract_recv_arm_body<'db>(
     )
 }
 
-#[derive(Debug, Clone, Default)]
-struct InitFieldState {
-    fields: FxHashSet<u32>,
+#[derive(Debug, Clone)]
+struct AssignmentState<K> {
+    assigned: FxHashSet<K>,
 }
 
-impl InitFieldState {
-    fn intersection(lhs: &Self, rhs: &Self) -> Self {
+impl<K> Default for AssignmentState<K> {
+    fn default() -> Self {
         Self {
-            fields: lhs.fields.intersection(&rhs.fields).copied().collect(),
+            assigned: FxHashSet::default(),
         }
     }
 }
 
-#[derive(Debug, Clone, Default)]
-struct InitFieldFlow {
-    normal: Option<InitFieldState>,
-    returns: Vec<InitFieldState>,
+impl<K: Copy + Eq + Hash> AssignmentState<K> {
+    fn intersection(lhs: &Self, rhs: &Self) -> Self {
+        Self {
+            assigned: lhs.assigned.intersection(&rhs.assigned).copied().collect(),
+        }
+    }
 }
 
-impl InitFieldFlow {
-    fn normal(state: InitFieldState) -> Self {
+#[derive(Debug, Clone)]
+struct AssignmentFlow<K> {
+    normal: Option<AssignmentState<K>>,
+    returns: Vec<AssignmentState<K>>,
+    breaks: Vec<AssignmentState<K>>,
+    continues: Vec<AssignmentState<K>>,
+}
+
+impl<K> AssignmentFlow<K> {
+    fn normal(state: AssignmentState<K>) -> Self {
         Self {
             normal: Some(state),
             returns: Vec::new(),
+            breaks: Vec::new(),
+            continues: Vec::new(),
         }
     }
 
@@ -816,51 +834,82 @@ impl InitFieldFlow {
         Self {
             normal: None,
             returns: Vec::new(),
+            breaks: Vec::new(),
+            continues: Vec::new(),
         }
     }
 
-    fn with_returns(mut self, returns: Vec<InitFieldState>) -> Self {
-        self.returns.extend(returns);
+    fn with_break(mut self, state: AssignmentState<K>) -> Self {
+        self.breaks.push(state);
+        self
+    }
+
+    fn with_continue(mut self, state: AssignmentState<K>) -> Self {
+        self.continues.push(state);
         self
     }
 }
 
-fn merge_normal_states(
-    states: impl IntoIterator<Item = Option<InitFieldState>>,
-) -> Option<InitFieldState> {
+fn merge_normal_states<K: Copy + Eq + Hash>(
+    states: impl IntoIterator<Item = Option<AssignmentState<K>>>,
+) -> Option<AssignmentState<K>> {
     states
         .into_iter()
         .flatten()
-        .reduce(|lhs, rhs| InitFieldState::intersection(&lhs, &rhs))
+        .reduce(|lhs, rhs| AssignmentState::intersection(&lhs, &rhs))
 }
 
-struct InitFieldAssignmentCheck<'a, 'db> {
+trait AssignmentDomain<'db> {
+    type Item: Copy + Eq + Hash;
+
+    fn direct_assignment(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        typed_body: &TypedBody<'db>,
+        lhs: ExprId,
+    ) -> Option<Self::Item>;
+
+    fn call_assignments(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        typed_body: &TypedBody<'db>,
+        call_expr: ExprId,
+        expr_data: &Expr<'db>,
+    ) -> Vec<Self::Item>;
+}
+
+struct DefiniteAssignmentAnalyzer<'a, 'db, D>
+where
+    D: AssignmentDomain<'db>,
+{
     db: &'db dyn HirAnalysisDb,
-    contract: Contract<'db>,
     body: Body<'db>,
     typed_body: &'a TypedBody<'db>,
-    required: FxHashSet<u32>,
+    domain: D,
 }
 
-impl<'a, 'db> InitFieldAssignmentCheck<'a, 'db> {
+impl<'a, 'db, D> DefiniteAssignmentAnalyzer<'a, 'db, D>
+where
+    D: AssignmentDomain<'db>,
+{
     fn new(
         db: &'db dyn HirAnalysisDb,
-        contract: Contract<'db>,
         body: Body<'db>,
         typed_body: &'a TypedBody<'db>,
-        required: FxHashSet<u32>,
+        domain: D,
     ) -> Self {
         Self {
             db,
-            contract,
             body,
             typed_body,
-            required,
+            domain,
         }
     }
 
-    fn successful_exit_states(&self) -> Vec<InitFieldState> {
-        let flow = self.analyze_expr(self.body.expr(self.db), InitFieldState::default());
+    fn successful_exit_states(&mut self) -> Vec<AssignmentState<D::Item>> {
+        let flow = self.analyze_expr(self.body.expr(self.db), AssignmentState::default());
         let mut exits = flow.returns;
         if let Some(normal) = flow.normal {
             exits.push(normal);
@@ -868,77 +917,145 @@ impl<'a, 'db> InitFieldAssignmentCheck<'a, 'db> {
         exits
     }
 
-    fn analyze_stmt(&self, stmt: Stmt<'db>, state: InitFieldState) -> InitFieldFlow {
+    fn successful_assignments(&mut self) -> FxHashSet<D::Item> {
+        let mut exits = self.successful_exit_states().into_iter();
+        let Some(first) = exits.next() else {
+            return FxHashSet::default();
+        };
+        exits
+            .fold(first, |lhs, rhs| AssignmentState::intersection(&lhs, &rhs))
+            .assigned
+    }
+
+    fn analyze_stmt(
+        &mut self,
+        stmt: Stmt<'db>,
+        state: AssignmentState<D::Item>,
+    ) -> AssignmentFlow<D::Item> {
         match stmt {
             Stmt::Let(_, _, Some(init)) => self.analyze_expr(init, state),
-            Stmt::Let(_, _, None) => InitFieldFlow::normal(state),
+            Stmt::Let(_, _, None) => AssignmentFlow::normal(state),
             Stmt::Expr(expr) => self.analyze_expr(expr, state),
             Stmt::Return(expr) => {
                 let flow = if let Some(expr) = expr {
                     self.analyze_expr(expr, state)
                 } else {
-                    InitFieldFlow::normal(state)
+                    AssignmentFlow::normal(state)
                 };
-                let returns = flow.normal.into_iter().collect();
-                InitFieldFlow::divergent().with_returns([flow.returns, returns].concat())
+                let mut returns = flow.returns;
+                returns.extend(flow.normal);
+                AssignmentFlow {
+                    normal: None,
+                    returns,
+                    breaks: flow.breaks,
+                    continues: flow.continues,
+                }
             }
             Stmt::While(cond, body) => {
                 let cond_flow = self.analyze_cond(cond, state);
                 let mut returns = cond_flow.returns;
-                if let Some(cond_state) = cond_flow.normal.clone() {
-                    returns.extend(self.analyze_expr(body, cond_state).returns);
+                let breaks = cond_flow.breaks;
+                let continues = cond_flow.continues;
+                let mut normal_exits = Vec::new();
+                if !self.cond_is_literal_bool(cond, true) {
+                    normal_exits.push(cond_flow.normal.clone());
                 }
-                InitFieldFlow {
-                    // The loop body may execute zero times, so only condition-side effects are
-                    // guaranteed after a normal loop exit.
-                    normal: cond_flow.normal,
+                if let Some(cond_state) = cond_flow.normal.clone() {
+                    let body_flow = self.analyze_expr(body, cond_state);
+                    returns.extend(body_flow.returns);
+                    normal_exits.extend(body_flow.breaks.into_iter().map(Some));
+                    // Body continuations target this loop and are consumed here.
+                }
+                AssignmentFlow {
+                    normal: merge_normal_states(normal_exits),
                     returns,
+                    breaks,
+                    continues,
                 }
             }
             Stmt::For(_, iter, body, _) => {
                 let iter_flow = self.analyze_expr(iter, state);
                 let mut returns = iter_flow.returns;
+                let breaks = iter_flow.breaks;
+                let continues = iter_flow.continues;
+                let mut normal_exits = vec![iter_flow.normal.clone()];
                 if let Some(iter_state) = iter_flow.normal.clone() {
-                    returns.extend(self.analyze_expr(body, iter_state).returns);
+                    let body_flow = self.analyze_expr(body, iter_state);
+                    returns.extend(body_flow.returns);
+                    normal_exits.extend(body_flow.breaks.into_iter().map(Some));
+                    // Body continuations target this loop and are consumed here.
                 }
-                InitFieldFlow {
-                    // A for loop may execute zero times, so body writes are not definite.
-                    normal: iter_flow.normal,
+                AssignmentFlow {
+                    normal: merge_normal_states(normal_exits),
                     returns,
+                    breaks,
+                    continues,
                 }
             }
-            Stmt::Break | Stmt::Continue => InitFieldFlow::divergent(),
+            Stmt::Break => AssignmentFlow::divergent().with_break(state),
+            Stmt::Continue => AssignmentFlow::divergent().with_continue(state),
         }
     }
 
-    fn analyze_cond(&self, cond: crate::hir_def::CondId, state: InitFieldState) -> InitFieldFlow {
+    fn analyze_cond(
+        &mut self,
+        cond: crate::hir_def::CondId,
+        state: AssignmentState<D::Item>,
+    ) -> AssignmentFlow<D::Item> {
         let Partial::Present(cond) = cond.data(self.db, self.body) else {
-            return InitFieldFlow::normal(state);
+            return AssignmentFlow::normal(state);
         };
         match cond {
             Cond::Expr(expr) | Cond::Let(_, expr) => self.analyze_expr(*expr, state),
             Cond::Bin(lhs, rhs, _) => {
                 let lhs_flow = self.analyze_cond(*lhs, state);
                 let mut returns = lhs_flow.returns;
+                let mut breaks = lhs_flow.breaks;
+                let mut continues = lhs_flow.continues;
                 let normal = lhs_flow.normal.and_then(|lhs_state| {
                     let rhs_flow = self.analyze_cond(*rhs, lhs_state.clone());
                     returns.extend(rhs_flow.returns);
+                    breaks.extend(rhs_flow.breaks);
+                    continues.extend(rhs_flow.continues);
                     // RHS of `&&`/`||` is short-circuited, so only writes that happen with and
                     // without RHS evaluation are definite after the condition.
                     merge_normal_states([Some(lhs_state), rhs_flow.normal])
                 });
-                InitFieldFlow { normal, returns }
+                AssignmentFlow {
+                    normal,
+                    returns,
+                    breaks,
+                    continues,
+                }
             }
         }
     }
 
-    fn analyze_expr(&self, expr: ExprId, state: InitFieldState) -> InitFieldFlow {
+    fn cond_is_literal_bool(&self, cond: crate::hir_def::CondId, value: bool) -> bool {
+        let Partial::Present(Cond::Expr(expr)) = cond.data(self.db, self.body) else {
+            return false;
+        };
+        self.expr_is_literal_bool(*expr, value)
+    }
+
+    fn expr_is_literal_bool(&self, expr: ExprId, value: bool) -> bool {
+        matches!(
+            expr.data(self.db, self.body),
+            Partial::Present(Expr::Lit(LitKind::Bool(flag))) if *flag == value
+        )
+    }
+
+    fn analyze_expr(
+        &mut self,
+        expr: ExprId,
+        state: AssignmentState<D::Item>,
+    ) -> AssignmentFlow<D::Item> {
         let Partial::Present(expr_data) = expr.data(self.db, self.body) else {
-            return InitFieldFlow::normal(state);
+            return AssignmentFlow::normal(state);
         };
 
         let flow = match expr_data {
-            Expr::Lit(_) | Expr::Path(_) => InitFieldFlow::normal(state),
+            Expr::Lit(_) | Expr::Path(_) => AssignmentFlow::normal(state),
             Expr::Block(stmts) => self.analyze_block(stmts, state),
             Expr::Tuple(elems) | Expr::Array(elems) => self.analyze_exprs(elems, state),
             Expr::ArrayRep(elem, _) | Expr::Un(elem, _) | Expr::Cast(elem, _) => {
@@ -949,13 +1066,21 @@ impl<'a, 'db> InitFieldAssignmentCheck<'a, 'db> {
                 let exprs = std::iter::once(*callee)
                     .chain(args.iter().map(|arg| arg.expr))
                     .collect::<Vec<_>>();
+                let mut flow = self.analyze_exprs(&exprs, state);
+                self.apply_call_assignments(expr, expr_data, &mut flow);
+                flow
+            }
+            Expr::Assert(args) => {
+                let exprs = args.iter().map(|arg| arg.expr).collect::<Vec<_>>();
                 self.analyze_exprs(&exprs, state)
             }
             Expr::MethodCall(receiver, _, _, args) => {
                 let exprs = std::iter::once(*receiver)
                     .chain(args.iter().map(|arg| arg.expr))
                     .collect::<Vec<_>>();
-                self.analyze_exprs(&exprs, state)
+                let mut flow = self.analyze_exprs(&exprs, state);
+                self.apply_call_assignments(expr, expr_data, &mut flow);
+                flow
             }
             Expr::RecordInit(_, fields) => {
                 let exprs = fields.iter().map(|field| field.expr).collect::<Vec<_>>();
@@ -965,22 +1090,35 @@ impl<'a, 'db> InitFieldAssignmentCheck<'a, 'db> {
             Expr::If(cond, then_expr, else_expr) => {
                 let cond_flow = self.analyze_cond(*cond, state);
                 let mut returns = cond_flow.returns;
+                let mut breaks = cond_flow.breaks;
+                let mut continues = cond_flow.continues;
                 let normal = cond_flow.normal.and_then(|cond_state| {
                     let then_flow = self.analyze_expr(*then_expr, cond_state.clone());
                     returns.extend(then_flow.returns);
+                    breaks.extend(then_flow.breaks);
+                    continues.extend(then_flow.continues);
                     let else_flow = if let Some(else_expr) = else_expr {
                         self.analyze_expr(*else_expr, cond_state)
                     } else {
-                        InitFieldFlow::normal(cond_state)
+                        AssignmentFlow::normal(cond_state)
                     };
                     returns.extend(else_flow.returns);
+                    breaks.extend(else_flow.breaks);
+                    continues.extend(else_flow.continues);
                     merge_normal_states([then_flow.normal, else_flow.normal])
                 });
-                InitFieldFlow { normal, returns }
+                AssignmentFlow {
+                    normal,
+                    returns,
+                    breaks,
+                    continues,
+                }
             }
             Expr::Match(scrutinee, arms) => {
                 let scrutinee_flow = self.analyze_expr(*scrutinee, state);
                 let mut returns = scrutinee_flow.returns;
+                let mut breaks = scrutinee_flow.breaks;
+                let mut continues = scrutinee_flow.continues;
                 let normal = scrutinee_flow.normal.and_then(|scrutinee_state| {
                     let Partial::Present(arms) = arms else {
                         return Some(scrutinee_state);
@@ -989,18 +1127,27 @@ impl<'a, 'db> InitFieldAssignmentCheck<'a, 'db> {
                     for arm in arms {
                         let arm_flow = self.analyze_expr(arm.body, scrutinee_state.clone());
                         returns.extend(arm_flow.returns);
+                        breaks.extend(arm_flow.breaks);
+                        continues.extend(arm_flow.continues);
                         normals.push(arm_flow.normal);
                     }
                     merge_normal_states(normals)
                 });
-                InitFieldFlow { normal, returns }
+                AssignmentFlow {
+                    normal,
+                    returns,
+                    breaks,
+                    continues,
+                }
             }
             Expr::Assign(lhs, rhs) => {
                 let mut flow = self.analyze_expr(*rhs, state);
                 if let Some(normal) = &mut flow.normal
-                    && let Some(field_idx) = self.assigned_contract_field(*lhs)
+                    && let Some(item) =
+                        self.domain
+                            .direct_assignment(self.db, self.body, self.typed_body, *lhs)
                 {
-                    normal.fields.insert(field_idx);
+                    normal.assigned.insert(item);
                 }
                 flow
             }
@@ -1016,9 +1163,11 @@ impl<'a, 'db> InitFieldAssignmentCheck<'a, 'db> {
         };
 
         if self.typed_body.expr_ty(self.db, expr).is_never(self.db) {
-            InitFieldFlow {
+            AssignmentFlow {
                 normal: None,
                 returns: flow.returns,
+                breaks: flow.breaks,
+                continues: flow.continues,
             }
         } else {
             flow
@@ -1026,12 +1175,14 @@ impl<'a, 'db> InitFieldAssignmentCheck<'a, 'db> {
     }
 
     fn analyze_block(
-        &self,
+        &mut self,
         stmts: &[crate::hir_def::StmtId],
-        state: InitFieldState,
-    ) -> InitFieldFlow {
+        state: AssignmentState<D::Item>,
+    ) -> AssignmentFlow<D::Item> {
         let mut current = Some(state);
         let mut returns = Vec::new();
+        let mut breaks = Vec::new();
+        let mut continues = Vec::new();
         for stmt in stmts {
             let Some(state) = current.take() else {
                 break;
@@ -1042,69 +1193,327 @@ impl<'a, 'db> InitFieldAssignmentCheck<'a, 'db> {
             };
             let flow = self.analyze_stmt(stmt_data.clone(), state);
             returns.extend(flow.returns);
+            breaks.extend(flow.breaks);
+            continues.extend(flow.continues);
             current = flow.normal;
         }
-        InitFieldFlow {
+        AssignmentFlow {
             normal: current,
             returns,
+            breaks,
+            continues,
         }
     }
 
-    fn analyze_expr_pair(&self, lhs: ExprId, rhs: ExprId, state: InitFieldState) -> InitFieldFlow {
+    fn analyze_expr_pair(
+        &mut self,
+        lhs: ExprId,
+        rhs: ExprId,
+        state: AssignmentState<D::Item>,
+    ) -> AssignmentFlow<D::Item> {
         let lhs_flow = self.analyze_expr(lhs, state);
         let mut returns = lhs_flow.returns;
+        let mut breaks = lhs_flow.breaks;
+        let mut continues = lhs_flow.continues;
         let normal = lhs_flow.normal.and_then(|lhs_state| {
             let rhs_flow = self.analyze_expr(rhs, lhs_state);
             returns.extend(rhs_flow.returns);
+            breaks.extend(rhs_flow.breaks);
+            continues.extend(rhs_flow.continues);
             rhs_flow.normal
         });
-        InitFieldFlow { normal, returns }
+        AssignmentFlow {
+            normal,
+            returns,
+            breaks,
+            continues,
+        }
     }
 
-    fn analyze_exprs(&self, exprs: &[ExprId], state: InitFieldState) -> InitFieldFlow {
+    fn analyze_exprs(
+        &mut self,
+        exprs: &[ExprId],
+        state: AssignmentState<D::Item>,
+    ) -> AssignmentFlow<D::Item> {
         let mut current = Some(state);
         let mut returns = Vec::new();
+        let mut breaks = Vec::new();
+        let mut continues = Vec::new();
         for expr in exprs {
             let Some(state) = current.take() else {
                 break;
             };
             let flow = self.analyze_expr(*expr, state);
             returns.extend(flow.returns);
+            breaks.extend(flow.breaks);
+            continues.extend(flow.continues);
             current = flow.normal;
         }
-        InitFieldFlow {
+        AssignmentFlow {
             normal: current,
             returns,
+            breaks,
+            continues,
         }
     }
 
-    fn assigned_contract_field(&self, lhs: ExprId) -> Option<u32> {
-        let place = self.typed_body.expr_place(lhs)?;
-        if !place.projections.is_empty() {
-            return None;
-        }
-        let crate::analysis::place::PlaceBase::Binding(binding) = place.base;
-        let LocalBinding::EffectParam { site, idx, .. } = binding else {
-            return None;
+    fn apply_call_assignments(
+        &mut self,
+        call_expr: ExprId,
+        expr_data: &Expr<'db>,
+        flow: &mut AssignmentFlow<D::Item>,
+    ) {
+        let Some(normal) = &mut flow.normal else {
+            return;
         };
-        if site
-            != (EffectParamSite::ContractInit {
-                contract: self.contract,
-            })
+        for item in
+            self.domain
+                .call_assignments(self.db, self.body, self.typed_body, call_expr, expr_data)
         {
-            return None;
+            normal.assigned.insert(item);
         }
-        let provider = EffectEnvView::new(site)
-            .resolved_binding(self.db, idx)
-            .map(|binding| binding.provider)?;
-        let ProviderSource::ContractField {
-            contract,
-            field_idx,
-        } = provider.source
-        else {
-            return None;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum FuncWriteRoot {
+    Param(usize),
+    Effect(usize),
+}
+
+#[derive(Default)]
+struct FuncWriteSummaryCx<'db> {
+    cache: FxHashMap<Func<'db>, FxHashSet<FuncWriteRoot>>,
+    in_progress: FxHashSet<Func<'db>>,
+}
+
+impl<'db> FuncWriteSummaryCx<'db> {
+    fn summarize_func(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        func: Func<'db>,
+    ) -> FxHashSet<FuncWriteRoot> {
+        if let Some(cached) = self.cache.get(&func) {
+            return cached.clone();
+        }
+
+        if !self.in_progress.insert(func) {
+            return FxHashSet::default();
+        }
+
+        let (_, typed_body) = check_func_body(db, func);
+        let roots = if let Some(body) = typed_body.body() {
+            DefiniteAssignmentAnalyzer::new(
+                db,
+                body,
+                typed_body,
+                FuncWriteDomain {
+                    func,
+                    summaries: self,
+                },
+            )
+            .successful_assignments()
+        } else {
+            FxHashSet::default()
         };
-        (contract == self.contract && self.required.contains(&field_idx)).then_some(field_idx)
+
+        self.in_progress.remove(&func);
+        self.cache.insert(func, roots.clone());
+        roots
+    }
+}
+
+struct FuncWriteDomain<'a, 'db> {
+    func: Func<'db>,
+    summaries: &'a mut FuncWriteSummaryCx<'db>,
+}
+
+impl<'db> AssignmentDomain<'db> for FuncWriteDomain<'_, 'db> {
+    type Item = FuncWriteRoot;
+
+    fn direct_assignment(
+        &mut self,
+        _db: &'db dyn HirAnalysisDb,
+        _body: Body<'db>,
+        typed_body: &TypedBody<'db>,
+        lhs: ExprId,
+    ) -> Option<Self::Item> {
+        let binding = typed_body
+            .expr_place(lhs)
+            .and_then(root_binding_from_place)?;
+        func_write_root_for_binding(self.func, binding)
+    }
+
+    fn call_assignments(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        _body: Body<'db>,
+        typed_body: &TypedBody<'db>,
+        call_expr: ExprId,
+        expr_data: &Expr<'db>,
+    ) -> Vec<Self::Item> {
+        call_assigned_root_bindings(db, typed_body, self.summaries, call_expr, expr_data)
+            .into_iter()
+            .filter_map(|binding| func_write_root_for_binding(self.func, binding))
+            .collect()
+    }
+}
+
+struct InitFieldDomain<'a, 'db> {
+    contract: Contract<'db>,
+    required: &'a FxHashSet<u32>,
+    summaries: &'a mut FuncWriteSummaryCx<'db>,
+}
+
+impl<'db> AssignmentDomain<'db> for InitFieldDomain<'_, 'db> {
+    type Item = u32;
+
+    fn direct_assignment(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        _body: Body<'db>,
+        typed_body: &TypedBody<'db>,
+        lhs: ExprId,
+    ) -> Option<Self::Item> {
+        let binding = typed_body
+            .expr_place(lhs)
+            .and_then(root_binding_from_place)?;
+        contract_field_for_binding(db, self.contract, self.required, binding)
+    }
+
+    fn call_assignments(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        _body: Body<'db>,
+        typed_body: &TypedBody<'db>,
+        call_expr: ExprId,
+        expr_data: &Expr<'db>,
+    ) -> Vec<Self::Item> {
+        call_assigned_root_bindings(db, typed_body, self.summaries, call_expr, expr_data)
+            .into_iter()
+            .filter_map(|binding| {
+                contract_field_for_binding(db, self.contract, self.required, binding)
+            })
+            .collect()
+    }
+}
+
+fn root_binding_from_place<'db>(place: &Place<'db>) -> Option<LocalBinding<'db>> {
+    if !place.projections.is_empty() {
+        return None;
+    }
+    let PlaceBase::Binding(binding) = place.base;
+    Some(binding)
+}
+
+fn func_write_root_for_binding<'db>(
+    func: Func<'db>,
+    binding: LocalBinding<'db>,
+) -> Option<FuncWriteRoot> {
+    match binding {
+        LocalBinding::Param {
+            site: ParamSite::Func(binding_func),
+            idx,
+            ..
+        } if binding_func == func => Some(FuncWriteRoot::Param(idx)),
+        LocalBinding::EffectParam {
+            site: EffectParamSite::Func(binding_func),
+            idx,
+            ..
+        } if binding_func == func => Some(FuncWriteRoot::Effect(idx)),
+        _ => None,
+    }
+}
+
+fn contract_field_for_binding<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    required: &FxHashSet<u32>,
+    binding: LocalBinding<'db>,
+) -> Option<u32> {
+    let LocalBinding::EffectParam { site, idx, .. } = binding else {
+        return None;
+    };
+    if site != (EffectParamSite::ContractInit { contract }) {
+        return None;
+    }
+    let provider = EffectEnvView::new(site)
+        .resolved_binding(db, idx)
+        .map(|binding| binding.provider)?;
+    let ProviderSource::ContractField {
+        contract: provider_contract,
+        field_idx,
+    } = provider.source
+    else {
+        return None;
+    };
+    (provider_contract == contract && required.contains(&field_idx)).then_some(field_idx)
+}
+
+fn call_assigned_root_bindings<'db>(
+    db: &'db dyn HirAnalysisDb,
+    typed_body: &TypedBody<'db>,
+    summaries: &mut FuncWriteSummaryCx<'db>,
+    call_expr: ExprId,
+    expr_data: &Expr<'db>,
+) -> Vec<LocalBinding<'db>> {
+    let Some(callable) = typed_body.callable_expr(call_expr) else {
+        return Vec::new();
+    };
+    let CallableDef::Func(func) = callable.callable_def() else {
+        return Vec::new();
+    };
+
+    summaries
+        .summarize_func(db, func)
+        .into_iter()
+        .filter_map(|root| caller_binding_for_callee_root(typed_body, call_expr, expr_data, root))
+        .collect()
+}
+
+fn caller_binding_for_callee_root<'db>(
+    typed_body: &TypedBody<'db>,
+    call_expr: ExprId,
+    expr_data: &Expr<'db>,
+    root: FuncWriteRoot,
+) -> Option<LocalBinding<'db>> {
+    match root {
+        FuncWriteRoot::Param(param_idx) => call_param_expr(expr_data, param_idx)
+            .and_then(|expr| typed_body.expr_place(expr))
+            .and_then(root_binding_from_place),
+        FuncWriteRoot::Effect(effect_idx) => typed_body
+            .call_effect_args(call_expr)?
+            .iter()
+            .find(|arg| arg.binding_idx as usize == effect_idx)
+            .and_then(|arg| effect_arg_root_binding(typed_body, arg)),
+    }
+}
+
+fn call_param_expr<'db>(expr_data: &Expr<'db>, param_idx: usize) -> Option<ExprId> {
+    match expr_data {
+        Expr::Call(_, args) => args.get(param_idx).map(|arg| arg.expr),
+        Expr::MethodCall(receiver, _, _, args) => {
+            if param_idx == 0 {
+                Some(*receiver)
+            } else {
+                args.get(param_idx - 1).map(|arg| arg.expr)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn effect_arg_root_binding<'db>(
+    typed_body: &TypedBody<'db>,
+    arg: &ResolvedEffectArg<'db>,
+) -> Option<LocalBinding<'db>> {
+    match &arg.arg {
+        EffectArg::Place(place) => root_binding_from_place(place),
+        EffectArg::Value(expr) => typed_body
+            .expr_place(*expr)
+            .and_then(root_binding_from_place),
+        EffectArg::Binding(binding) => Some(*binding),
+        EffectArg::Unknown => None,
     }
 }
 
@@ -1148,16 +1557,25 @@ pub fn check_contract_immutable_fields_initialized<'db>(
     let missing = if init.is_some() {
         let (_, typed_body) = check_contract_init_body(db, contract);
         if let Some(body) = typed_body.body() {
-            let exits =
-                InitFieldAssignmentCheck::new(db, contract, body, typed_body, required.clone())
-                    .successful_exit_states();
+            let mut summaries = FuncWriteSummaryCx::default();
+            let exits = DefiniteAssignmentAnalyzer::new(
+                db,
+                body,
+                typed_body,
+                InitFieldDomain {
+                    contract,
+                    required: &required,
+                    summaries: &mut summaries,
+                },
+            )
+            .successful_exit_states();
             if exits.is_empty() {
                 FxHashSet::default()
             } else {
                 required
                     .iter()
                     .copied()
-                    .filter(|field| !exits.iter().all(|state| state.fields.contains(field)))
+                    .filter(|field| !exits.iter().all(|state| state.assigned.contains(field)))
                     .collect()
             }
         } else {
