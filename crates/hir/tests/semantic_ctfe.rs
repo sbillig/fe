@@ -212,6 +212,10 @@ const fn high_word_string_roundtrip() -> u256 {
     (0x01000000434f4f4c as String<4>) as u256
 }
 
+const fn high_word_string_value() -> String<4> {
+    0x01000000434f4f4c as String<4>
+}
+
 const fn high_word_string_as_bytes() -> [u8; 4] {
     let s: String<4> = 0x01000000434f4f4c as String<4>
     intrinsic::__as_bytes(s)
@@ -431,6 +435,17 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
 
     let high_bytes = eval_bytes(&db, find_func(&db, top_mod, "high_word_string_as_bytes"));
     assert_eq!(high_bytes, vec![67, 79, 79, 76]);
+
+    let high_word_const = eval_body_owner_const(
+        &db,
+        BodyOwner::Func(find_func(&db, top_mod, "high_word_string_value")),
+        Vec::new(),
+    )
+    .expect("expected const evaluation success");
+    assert!(
+        fe_hir::analysis::semantic::sem_const_eq(&db, high_word_const, literal_4_const),
+        "CTFE string equality should ignore hidden high bytes outside String<N> capacity"
+    );
 }
 
 #[test]
