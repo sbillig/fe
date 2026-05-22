@@ -708,6 +708,7 @@ pub fn assert(_ b: own bool) {
 /// When `b` is false, reverts with the 4-byte selector `0x08c379a0`
 /// (keccak256("Error(string)")[..4]) followed by the ABI-encoded
 /// message, matching Solidity's `require(cond, "message")` / `revert("message")`.
+#[inline(always)]
 pub fn assert_msg(_ b: own bool, _ message: own Text) {
     if !b {
         // Error(string) has one ABI argument, so encode the full argument list.
