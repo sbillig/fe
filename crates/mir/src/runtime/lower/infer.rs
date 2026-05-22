@@ -140,16 +140,18 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
         for (idx, local) in cx.env.body().locals.iter().enumerate() {
             let local_id = SLocalId::from_u32(idx as u32);
             let mut carrier = carriers[idx].clone();
-            let root = if !local.facts.root_demand.needs_runtime_root()
-                || local_lowers_as_unrooted_read_value(
-                    cx.env.db(),
-                    cx.env.body(),
-                    local_id,
-                    local,
-                    &carrier,
-                    cx.env.scope(),
-                    cx.env.assumptions(),
-                ) {
+            let root = if !local.facts.root_demand.needs_runtime_root() {
+                RuntimeLocalRoot::None
+            } else if let Some(unrooted_carrier) = local_lowers_as_unrooted_read_value(
+                cx.env.db(),
+                cx.env.body(),
+                local_id,
+                local,
+                &carrier,
+                cx.env.scope(),
+                cx.env.assumptions(),
+            ) {
+                carrier = unrooted_carrier;
                 RuntimeLocalRoot::None
             } else {
                 infer_runtime_local_root(cx, local_id, &mut carrier)
@@ -668,6 +670,12 @@ fn local_direct_value_lowers_as_unrooted<'db>(
     db: &'db dyn MirDb,
     class: &RuntimeClass<'db>,
 ) -> bool {
+    if local.facts.origin.root_provider().is_some() {
+        return false;
+    }
+    if !runtime_class_contains_transport(db, class) {
+        return true;
+    }
     match local.source {
         Some(LocalBinding::Param {
             mode: FuncParamMode::View,
@@ -719,15 +727,39 @@ fn local_lowers_as_unrooted_read_value<'db>(
     carrier: &RuntimeCarrier<'db>,
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
-) -> bool {
-    if !local_lowers_as_direct_read_value(db, local, carrier, scope, assumptions) {
-        return false;
+) -> Option<RuntimeCarrier<'db>> {
+    let candidate = unrooted_read_value_candidate_carrier(db, local, carrier)?;
+    if !local_lowers_as_direct_read_value(db, local, &candidate, scope, assumptions) {
+        return None;
     }
     let demand = local.facts.root_demand;
     if !demand.permits_unrooted_value_projection_reads() {
-        return false;
+        return None;
     }
-    local_read_places_extractable_from_value(body, local_id)
+    local_read_places_extractable_from_value(body, local_id).then_some(candidate)
+}
+
+fn unrooted_read_value_candidate_carrier<'db>(
+    db: &'db dyn MirDb,
+    local: &NSLocal<'db>,
+    carrier: &RuntimeCarrier<'db>,
+) -> Option<RuntimeCarrier<'db>> {
+    let class = carrier_value_class_for_runtime(carrier)?;
+    if matches!(class, RuntimeClass::AggregateValue { .. }) {
+        return Some(RuntimeCarrier::Value(class));
+    }
+    if !matches!(local.facts.interface, SemanticLocalKind::DirectValue) {
+        return None;
+    }
+    let RuntimeClass::Ref {
+        kind: RefKind::Object,
+        ..
+    } = class
+    else {
+        return None;
+    };
+    let aggregate = actual_aggregate_class_from_runtime_source(&class)?;
+    (!runtime_class_contains_transport(db, &aggregate)).then_some(RuntimeCarrier::Value(aggregate))
 }
 
 fn runtime_provider_binding_id<'db>(

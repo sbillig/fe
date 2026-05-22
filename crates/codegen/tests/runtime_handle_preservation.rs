@@ -118,7 +118,9 @@ fn body_has_object_materialization(body: &RuntimeBody<'_>) -> bool {
         matches!(
             stmt,
             RStmt::Assign {
-                expr: RExpr::MaterializeToObject { .. } | RExpr::MaterializePlaceToObject { .. },
+                expr: RExpr::AllocObject { .. }
+                    | RExpr::MaterializeToObject { .. }
+                    | RExpr::MaterializePlaceToObject { .. },
                 ..
             }
         )
@@ -136,6 +138,50 @@ fn body_extracts_param_fields(body: &RuntimeBody<'_>, param: RLocalId, fields: &
                 } if *value == param && index == field
             )
         })
+    })
+}
+
+fn transported_local_from_param(body: &RuntimeBody<'_>, param: RLocalId) -> RLocalId {
+    runtime_body_stmts(body)
+        .find_map(|stmt| match stmt {
+            RStmt::Assign {
+                dst,
+                expr: RExpr::AddrOf { place },
+            } if matches!(
+                place.root,
+                PlaceRoot::Ptr { addr, .. } if addr == param && place.path.is_empty()
+            ) =>
+            {
+                Some(*dst)
+            }
+            RStmt::Assign {
+                dst,
+                expr: RExpr::RetagRef { value },
+            } if *value == param => Some(*dst),
+            RStmt::Assign {
+                dst,
+                expr: RExpr::Use(value),
+            } if *value == param => Some(*dst),
+            _ => None,
+        })
+        .unwrap_or(param)
+}
+
+fn body_preserves_handle_field(body: &RuntimeBody<'_>, param: RLocalId, field: u16) -> bool {
+    let transported = transported_local_from_param(body, param);
+    runtime_body_stmts(body).any(|stmt| match stmt {
+        RStmt::Assign {
+            expr: RExpr::AggregateMake { fields, .. },
+            ..
+        } => fields
+            .get(field as usize)
+            .is_some_and(|src| *src == transported),
+        RStmt::Store { dst, src } => {
+            *src == transported
+                && matches!(dst.root, PlaceRoot::Ref(_))
+                && matches!(dst.path.as_ref(), [PlaceElem::Field(stored)] if stored.0 == field)
+        }
+        _ => false,
     })
 }
 
@@ -178,95 +224,30 @@ fn transparent_wrapper_returns_preserve_handle_fields_in_rmir() {
                 })
                 .collect::<Vec<_>>();
             let take_u256 = package
-        .functions(&db)
-        .iter()
-        .copied()
-        .find(|function| {
-            if !function.symbol(&db).contains("take") {
-                return false;
-            }
-            let body = function.instance(&db).body(&db);
-            let [_, param] = body.signature.params.as_slice() else {
-                return false;
-            };
-            if !matches!(param.class, RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. }) {
-                return false;
-            }
-            let transported = body
-                .blocks
+                .functions(&db)
                 .iter()
-                .flat_map(|block| block.stmts.iter())
-                .find_map(|stmt| match stmt {
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::AddrOf { place },
-                    } if matches!(
-                        place.root,
-                        PlaceRoot::Ptr { addr, .. } if addr == param.local && place.path.is_empty()
-                    ) => Some(*dst),
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::RetagRef { value },
-                    } if *value == param.local => Some(*dst),
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::Use(value),
-                    } if *value == param.local => Some(*dst),
-                    RStmt::Assign { .. }
-                    | RStmt::EnumAssertVariant { .. }
-                    | RStmt::Store { .. }
-                    | RStmt::CopyInto { .. }
-                    | RStmt::EnumSetTag { .. }
-                    | RStmt::EnumWriteVariant { .. } => None,
+                .copied()
+                .find(|function| {
+                    if !function.symbol(&db).contains("take") {
+                        return false;
+                    }
+                    let body = function.instance(&db).body(&db);
+                    let [_, param] = body.signature.params.as_slice() else {
+                        return false;
+                    };
+                    matches!(
+                        param.class,
+                        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. }
+                    ) && body_preserves_handle_field(&body, param.local, 1)
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "generated take helper that preserves the incoming handle field\n\n{}",
+                        take_debug.join("\n\n")
+                    )
                 });
-            body.blocks.iter().flat_map(|block| block.stmts.iter()).any(|stmt| {
-                matches!(
-                    stmt,
-                    RStmt::Store { dst, src }
-                        if (matches!(transported, Some(local) if *src == local)
-                            || (transported.is_none() && *src == param.local))
-                            && matches!(dst.root, PlaceRoot::Ref(_))
-                            && matches!(dst.path.as_ref(), [PlaceElem::Field(field)] if field.0 == 1)
-                )
-            })
-        })
-        .unwrap_or_else(|| panic!(
-            "generated take helper that preserves the incoming handle field\n\n{}",
-            take_debug.join("\n\n")
-        ));
             let body = take_u256.instance(&db).body(&db);
             let seq_param = body.signature.params[1].local;
-            let transported = body
-                .blocks
-                .iter()
-                .flat_map(|block| block.stmts.iter())
-                .find_map(|stmt| match stmt {
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::AddrOf { place },
-                    } if matches!(
-                        place.root,
-                        PlaceRoot::Ptr { addr, .. } if addr == seq_param && place.path.is_empty()
-                    ) =>
-                    {
-                        Some(*dst)
-                    }
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::RetagRef { value },
-                    } if *value == seq_param => Some(*dst),
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::Use(value),
-                    } if *value == seq_param => Some(*dst),
-                    RStmt::Assign { .. }
-                    | RStmt::EnumAssertVariant { .. }
-                    | RStmt::Store { .. }
-                    | RStmt::CopyInto { .. }
-                    | RStmt::EnumSetTag { .. }
-                    | RStmt::EnumWriteVariant { .. } => None,
-                })
-                .unwrap_or(seq_param);
 
             assert!(
                 !body
@@ -283,17 +264,9 @@ fn transparent_wrapper_returns_preserve_handle_fields_in_rmir() {
                 "transparent wrapper returns should not materialize handle fields:\n{body:#?}"
             );
             assert!(
-        body.blocks.iter().flat_map(|block| block.stmts.iter()).any(|stmt| {
-            matches!(
-                stmt,
-                RStmt::Store { dst, src }
-                    if *src == transported
-                        && matches!(dst.root, PlaceRoot::Ref(_))
-                        && matches!(dst.path.as_ref(), [PlaceElem::Field(field)] if field.0 == 1)
-            )
-        }),
-        "transparent wrapper returns should store the incoming borrow transport directly into the wrapper field:\n{body:#?}"
-    );
+                body_preserves_handle_field(&body, seq_param, 1),
+                "transparent wrapper returns should carry the incoming borrow transport directly into the wrapper field:\n{body:#?}"
+            );
         }
     );
 }
@@ -699,9 +672,12 @@ fn entry() -> Inner {
     );
     let repack = sonatina_function_body(&output, "repack");
 
+    let repacks_full_payload =
+        contains_op_subsequence(repack, &["extract_value", "extract_value", "insert_value"])
+            || (repack.contains("obj.load") && repack.contains("obj.store"));
     assert!(
-        repack.contains("obj.load") && repack.contains("obj.store"),
-        "repack should preserve the full enum payload through object loads/stores:\n{repack}"
+        repacks_full_payload,
+        "repack should preserve the full enum payload while rebuilding the wrapper:\n{repack}"
     );
     assert!(
         !sonatina_ops(repack)
@@ -796,6 +772,100 @@ fn entry() -> u256 {
             assert!(
                 !body_has_object_materialization(&body),
                 "read-only mut own aggregate receiver should not materialize to an object:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn immutable_own_tuple_destructuring_field_reads_stay_unrooted() {
+    with_runtime_package!(
+        "immutable_own_tuple_destructuring_field_reads_stay_unrooted.fe",
+        r#"struct Pair {
+    left: u256,
+    right: u256,
+}
+
+fn sum_tuple(_ items: own (Pair, Pair)) -> u256 {
+    let (first, second) = items
+    first.left + second.right
+}
+
+fn entry() -> u256 {
+    sum_tuple((Pair { left: 1, right: 2 }, Pair { left: 3, right: 4 }))
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "sum_tuple");
+            let items = RLocalId::from_u32(0);
+
+            assert!(
+                matches!(
+                    body.signature.params[0].class,
+                    RuntimeClass::AggregateValue { .. }
+                ),
+                "owned tuple param should be passed as an aggregate value:\n{body:#?}"
+            );
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::None),
+                "field-read-only owned tuple param should not get a runtime root:\n{body:#?}"
+            );
+            assert!(
+                body_extracts_param_fields(&body, items, &[0, 1]),
+                "tuple destructuring should extract directly from the aggregate param:\n{body:#?}"
+            );
+            assert!(
+                !body_has_object_materialization(&body),
+                "tuple destructuring field reads should not materialize to an object:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn immutable_own_tuple_destructuring_call_args_stay_unrooted() {
+    with_runtime_package!(
+        "immutable_own_tuple_destructuring_call_args_stay_unrooted.fe",
+        r#"struct Pair {
+    left: u256,
+    right: u256,
+}
+
+fn consume(_ pair: own Pair) -> u256 {
+    pair.left + pair.right
+}
+
+fn sum_tuple(_ items: own (Pair, Pair)) -> u256 {
+    let (first, second) = items
+    consume(first) + consume(second)
+}
+
+fn entry() -> u256 {
+    sum_tuple((Pair { left: 1, right: 2 }, Pair { left: 3, right: 4 }))
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "sum_tuple");
+            let items = RLocalId::from_u32(0);
+
+            assert!(
+                matches!(
+                    body.signature.params[0].class,
+                    RuntimeClass::AggregateValue { .. }
+                ),
+                "owned tuple param should be passed as an aggregate value:\n{body:#?}"
+            );
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::None),
+                "owned tuple param should not get a runtime root for call-only destructured fields:\n{body:#?}"
+            );
+            assert!(
+                body_extracts_param_fields(&body, items, &[0, 1]),
+                "tuple destructuring call args should extract directly from the aggregate param:\n{body:#?}"
+            );
+            assert!(
+                !body_has_object_materialization(&body),
+                "tuple destructuring call args should not materialize to an object:\n{body:#?}"
             );
         }
     );

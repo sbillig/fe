@@ -107,13 +107,9 @@ func inline(always) private %at(v0.i256) -> @layout_0 {
     block1:
         v2.i256 = mload v1 i256;
         v3.i256 = mload v1 i256;
-        v4.objref<@layout_0> = obj.alloc @layout_0;
-        v6.objref<i256> = obj.proj v4 0.i256;
-        obj.store v6 v2;
-        v8.objref<i256> = obj.proj v4 1.i256;
-        obj.store v8 v3;
-        v9.@layout_0 = obj.load v4;
-        return v9;
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v2;
+        v8.@layout_0 = insert_value v6 1.i256 v3;
+        return v8;
 }
 
 func private %base(v0.objref<@layout_0>) -> i256 {
@@ -357,13 +353,9 @@ func private %encode_single_root_alloc(v0.i1) -> @layout_4 {
         obj.store v9 v10;
         v11.i256 = call %base v4;
         call %encode_single_root v0 v4;
-        v13.objref<@layout_4> = obj.alloc @layout_4;
-        v14.objref<i256> = obj.proj v13 0.i256;
-        obj.store v14 v11;
-        v15.objref<i256> = obj.proj v13 1.i256;
-        obj.store v15 v2;
-        v16.@layout_4 = obj.load v13;
-        return v16;
+        v14.@layout_4 = insert_value undef.@layout_4 0.i256 v11;
+        v15.@layout_4 = insert_value v14 1.i256 v2;
+        return v15;
 }
 
 func private %encode_to_ptr(v0.i1, v1.i256) {
