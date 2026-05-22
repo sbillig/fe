@@ -86,6 +86,7 @@ pub fn collect_referenced_code_regions<'db>(
                 | RExpr::AddrOf { .. }
                 | RExpr::Load { .. }
                 | RExpr::AggregateExtract { .. }
+                | RExpr::AggregateMake { .. }
                 | RExpr::Call { .. }
                 | RExpr::EnumMake { .. }
                 | RExpr::EnumTagOfValue { .. }

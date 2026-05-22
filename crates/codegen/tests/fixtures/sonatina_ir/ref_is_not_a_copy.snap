@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 455
 expression: output
 input_file: crates/codegen/tests/fixtures/ref_is_not_a_copy.fe
 ---
@@ -47,13 +46,9 @@ func inline(always) private %at(v0.i256) -> @layout_0 {
     block1:
         v2.i256 = mload v1 i256;
         v3.i256 = mload v1 i256;
-        v4.objref<@layout_0> = obj.alloc @layout_0;
-        v6.objref<i256> = obj.proj v4 0.i256;
-        obj.store v6 v2;
-        v8.objref<i256> = obj.proj v4 1.i256;
-        obj.store v8 v3;
-        v9.@layout_0 = obj.load v4;
-        return v9;
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v2;
+        v8.@layout_0 = insert_value v6 1.i256 v3;
+        return v8;
 }
 
 func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_170d(v0.objref<@layout_0>) -> i256 {
@@ -154,13 +149,9 @@ func inline(always) private %encode_calldata(v0.i32, v1.@layout_1) -> @layout_2 
         v22.i256 = extract_value v15 1.i256;
         obj.store v21 v22;
         call %encode__gce34 v1 v16;
-        v24.objref<@layout_2> = obj.alloc @layout_2;
-        v25.objref<i256> = obj.proj v24 0.i256;
-        obj.store v25 v8;
-        v26.objref<i256> = obj.proj v24 1.i256;
-        obj.store v26 v6;
-        v27.@layout_2 = obj.load v24;
-        return v27;
+        v25.@layout_2 = insert_value undef.@layout_2 0.i256 v8;
+        v26.@layout_2 = insert_value v25 1.i256 v6;
+        return v26;
 }
 
 func private %encode_field(v0.i256, v1.objref<@layout_0>, v2.i256) {
@@ -241,13 +232,9 @@ func private %live_view(v0.constref<@layout_3>) -> @layout_4 {
     block1:
         v3.constref<i256> = const.proj v0 0.i256;
         v5.constref<i256> = const.proj v0 1.i256;
-        v6.objref<@layout_4> = obj.alloc @layout_4;
-        v7.objref<constref<i256>> = obj.proj v6 0.i256;
-        obj.store v7 v3;
-        v8.objref<constref<i256>> = obj.proj v6 1.i256;
-        obj.store v8 v5;
-        v9.@layout_4 = obj.load v6;
-        return v9;
+        v7.@layout_4 = insert_value undef.@layout_4 0.i256 v3;
+        v8.@layout_4 = insert_value v7 1.i256 v5;
+        return v8;
 }
 
 func private %main() {
@@ -323,18 +310,9 @@ func private %revert_error(v0.@layout_1) {
 
     block1:
         v3.@layout_2 = call %encode_calldata 1313373041.i32 v0;
-        v4.objref<@layout_2> = obj.alloc @layout_2;
-        v6.objref<i256> = obj.proj v4 0.i256;
-        v7.i256 = extract_value v3 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v4 1.i256;
-        v10.i256 = extract_value v3 1.i256;
-        obj.store v9 v10;
-        v11.objref<i256> = obj.proj v4 0.i256;
-        v12.i256 = obj.load v11;
-        v13.objref<i256> = obj.proj v4 1.i256;
-        v14.i256 = obj.load v13;
-        evm_revert v12 v14;
+        v5.i256 = extract_value v3 0.i256;
+        v7.i256 = extract_value v3 1.i256;
+        evm_revert v5 v7;
 }
 
 func private %set_base(v0.objref<@layout_0>, v1.i256) {

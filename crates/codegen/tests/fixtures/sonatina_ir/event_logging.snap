@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 455
 expression: output
 input_file: crates/codegen/tests/fixtures/event_logging.fe
 ---
@@ -46,13 +45,9 @@ func inline(always) private %at(v0.i256) -> @layout_1 {
     block1:
         v2.i256 = mload v1 i256;
         v3.i256 = mload v1 i256;
-        v4.objref<@layout_1> = obj.alloc @layout_1;
-        v6.objref<i256> = obj.proj v4 0.i256;
-        obj.store v6 v2;
-        v8.objref<i256> = obj.proj v4 1.i256;
-        obj.store v8 v3;
-        v9.@layout_1 = obj.load v4;
-        return v9;
+        v6.@layout_1 = insert_value undef.@layout_1 0.i256 v2;
+        v8.@layout_1 = insert_value v6 1.i256 v3;
+        return v8;
 }
 
 func private %base(v0.objref<@layout_1>) -> i256 {
@@ -72,22 +67,13 @@ func private %emit(v0.@layout_2, v1.objref<@layout_4>) {
     block1:
         v4.i256 = extract_value v0 2.i256;
         v5.@layout_5 = call %encode_abi_payload v4;
-        v6.objref<@layout_5> = obj.alloc @layout_5;
-        v8.objref<i256> = obj.proj v6 0.i256;
-        v9.i256 = extract_value v5 0.i256;
-        obj.store v8 v9;
-        v11.objref<i256> = obj.proj v6 1.i256;
-        v12.i256 = extract_value v5 1.i256;
-        obj.store v11 v12;
-        v13.objref<i256> = obj.proj v6 0.i256;
-        v14.i256 = obj.load v13;
-        v15.objref<i256> = obj.proj v6 1.i256;
-        v16.i256 = obj.load v15;
-        v18.@layout_0 = extract_value v0 0.i256;
-        v19.i256 = call %as_topic v18;
-        v20.@layout_0 = extract_value v0 1.i256;
-        v21.i256 = call %as_topic v20;
-        call %log3 v1 v14 v16 -15402802100530019096323380498944738953123845089667699673314898783681816316945.i256 v19 v21;
+        v7.i256 = extract_value v5 0.i256;
+        v9.i256 = extract_value v5 1.i256;
+        v11.@layout_0 = extract_value v0 0.i256;
+        v12.i256 = call %as_topic v11;
+        v13.@layout_0 = extract_value v0 1.i256;
+        v14.i256 = call %as_topic v13;
+        call %log3 v1 v7 v9 -15402802100530019096323380498944738953123845089667699673314898783681816316945.i256 v12 v14;
         return;
 }
 
@@ -105,19 +91,10 @@ func private %emit_transfer(v0.objref<@layout_4>, v1.constref<@layout_0>, v2.con
         v10.objref<@layout_0> = obj.alloc @layout_0;
         obj.init.const v10 v2;
         v11.@layout_0 = obj.load v10;
-        v12.objref<@layout_2> = obj.alloc @layout_2;
-        v14.objref<@layout_0> = obj.proj v12 0.i256;
-        v15.objref<i256> = obj.proj v14 0.i256;
-        v16.i256 = extract_value v9 0.i256;
-        obj.store v15 v16;
-        v18.objref<@layout_0> = obj.proj v12 1.i256;
-        v19.objref<i256> = obj.proj v18 0.i256;
-        v20.i256 = extract_value v11 0.i256;
-        obj.store v19 v20;
-        v22.objref<i256> = obj.proj v12 2.i256;
-        obj.store v22 v7;
-        v23.@layout_2 = obj.load v12;
-        call %emit v23 v0;
+        v14.@layout_2 = insert_value undef.@layout_2 0.i256 v9;
+        v16.@layout_2 = insert_value v14 1.i256 v11;
+        v18.@layout_2 = insert_value v16 2.i256 v7;
+        call %emit v18 v0;
         return;
 }
 
@@ -155,13 +132,9 @@ func private %encode_alloc(v0.i256) -> @layout_5 {
         obj.store v9 v10;
         v11.i256 = call %base v4;
         call %encode v0 v4;
-        v13.objref<@layout_5> = obj.alloc @layout_5;
-        v14.objref<i256> = obj.proj v13 0.i256;
-        obj.store v14 v11;
-        v15.objref<i256> = obj.proj v13 1.i256;
-        obj.store v15 v2;
-        v16.@layout_5 = obj.load v13;
-        return v16;
+        v14.@layout_5 = insert_value undef.@layout_5 0.i256 v11;
+        v15.@layout_5 = insert_value v14 1.i256 v2;
+        return v15;
 }
 
 func private %encoder_new(v0.i256) -> @layout_1 {

@@ -889,12 +889,13 @@ impl<T0, T1, T2, T3, T4> AbiSize for (T0, T1, T2, T3, T4)
     #[arithmetic(unchecked)]
     #[inline(always)]
     fn payload_size(self) -> u256 {
+        let (v0, v1, v2, v3, v4) = self
         Self::HEAD_SIZE
-            + dynamic_payload_size(self.0)
-            + dynamic_payload_size(self.1)
-            + dynamic_payload_size(self.2)
-            + dynamic_payload_size(self.3)
-            + dynamic_payload_size(self.4)
+            + dynamic_payload_size(v0)
+            + dynamic_payload_size(v1)
+            + dynamic_payload_size(v2)
+            + dynamic_payload_size(v3)
+            + dynamic_payload_size(v4)
     }
 }
 
@@ -2199,12 +2200,13 @@ impl<A: Abi, T0, T1, T2, T3, T4> Encode<A> for (T0, T1, T2, T3, T4)
     #[arithmetic(unchecked)]
     #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+        let (v0, v1, v2, v3, v4) = self
         let mut tail = e.base() + Self::HEAD_SIZE
-        encode_field<A, T0, E>(self.0, mut e, mut tail)
-        encode_field<A, T1, E>(self.1, mut e, mut tail)
-        encode_field<A, T2, E>(self.2, mut e, mut tail)
-        encode_field<A, T3, E>(self.3, mut e, mut tail)
-        encode_field<A, T4, E>(self.4, mut e, mut tail)
+        encode_field<A, T0, E>(v0, mut e, mut tail)
+        encode_field<A, T1, E>(v1, mut e, mut tail)
+        encode_field<A, T2, E>(v2, mut e, mut tail)
+        encode_field<A, T3, E>(v3, mut e, mut tail)
+        encode_field<A, T4, E>(v4, mut e, mut tail)
     }
 
     #[arithmetic(unchecked)]

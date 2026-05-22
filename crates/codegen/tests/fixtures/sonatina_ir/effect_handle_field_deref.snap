@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 455
 expression: output
 input_file: crates/codegen/tests/fixtures/effect_handle_field_deref.fe
 ---
@@ -44,15 +43,11 @@ func private %__EffectHandleFieldDeref_recv_0_1(v0.i256, v1.objref<@layout_1>) -
 
     block1:
         v3.i256 = call %stor_ptr v0;
-        v5.objref<@layout_9> = obj.alloc @layout_9;
-        v7.objref<i256> = obj.proj v5 0.i256;
-        obj.store v7 v3;
-        v8.objref<i256> = obj.proj v5 1.i256;
-        obj.store v8 1.i256;
-        v9.@layout_9 = obj.load v5;
-        v10.i256 = call %extract_ptr v9;
-        v11.i256 = call %read_cell v10;
-        return v11;
+        v7.@layout_9 = insert_value undef.@layout_9 0.i256 v3;
+        v8.@layout_9 = insert_value v7 1.i256 1.i256;
+        v9.i256 = call %extract_ptr v8;
+        v10.i256 = call %read_cell v9;
+        return v10;
 }
 
 func private %__EffectHandleFieldDeref_recv_0_2(v0.i256, v1.i256) -> i256 {
@@ -60,16 +55,13 @@ func private %__EffectHandleFieldDeref_recv_0_2(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v3.objref<@layout_3> = obj.alloc @layout_3;
-        v5.objref<i256> = obj.proj v3 0.i256;
-        obj.store v5 v1;
-        v6.@layout_3 = obj.load v3;
-        v7.objref<@layout_3> = obj.alloc @layout_3;
-        v8.objref<i256> = obj.proj v7 0.i256;
-        v9.i256 = extract_value v6 0.i256;
-        obj.store v8 v9;
-        v11.i256 = call %bump v7 v0;
-        return v11;
+        v5.@layout_3 = insert_value undef.@layout_3 0.i256 v1;
+        v6.objref<@layout_3> = obj.alloc @layout_3;
+        v7.objref<i256> = obj.proj v6 0.i256;
+        v8.i256 = extract_value v5 0.i256;
+        obj.store v7 v8;
+        v10.i256 = call %bump v6 v0;
+        return v10;
 }
 
 func private %abi_field_size(v0.i256) -> i256 {
@@ -150,13 +142,9 @@ func inline(always) private %at(v0.i256) -> @layout_2 {
     block1:
         v2.i256 = mload v1 i256;
         v3.i256 = mload v1 i256;
-        v4.objref<@layout_2> = obj.alloc @layout_2;
-        v6.objref<i256> = obj.proj v4 0.i256;
-        obj.store v6 v2;
-        v8.objref<i256> = obj.proj v4 1.i256;
-        obj.store v8 v3;
-        v9.@layout_2 = obj.load v4;
-        return v9;
+        v6.@layout_2 = insert_value undef.@layout_2 0.i256 v2;
+        v8.@layout_2 = insert_value v6 1.i256 v3;
+        return v8;
 }
 
 func private %base(v0.objref<@layout_2>) -> i256 {
@@ -450,11 +438,8 @@ func inline(always) private %impl_trait_BumpMover__decode_from__gd20d(v0.@layout
         v4.i256 = mload v2 i256;
         v5.i256 = mload v2 i256;
         v6.i256 = call %core__lib__abi__decode_field_from__g5385_7f7d v0 v4 v5;
-        v7.objref<@layout_5> = obj.alloc @layout_5;
-        v9.objref<i256> = obj.proj v7 0.i256;
-        obj.store v9 v6;
-        v10.@layout_5 = obj.load v7;
-        return v10;
+        v9.@layout_5 = insert_value undef.@layout_5 0.i256 v6;
+        return v9;
 }
 
 func inline(always) private %impl_trait_ReadViaHolder__decode_from__gd20d(v0.@layout_4, v1.i256) -> @layout_6 {
@@ -467,11 +452,8 @@ func inline(always) private %impl_trait_ReadViaHolder__decode_from__gd20d(v0.@la
         v4.i256 = mload v2 i256;
         v5.i256 = mload v2 i256;
         v6.i256 = call %core__lib__abi__decode_field_from__g5385_27c8 v0 v4 v5;
-        v7.objref<@layout_6> = obj.alloc @layout_6;
-        v9.objref<i256> = obj.proj v7 0.i256;
-        obj.store v9 v6;
-        v10.@layout_6 = obj.load v7;
-        return v10;
+        v9.@layout_6 = insert_value undef.@layout_6 0.i256 v6;
+        return v9;
 }
 
 func inline(always) private %core__lib__abi__impl_trait_u256_85b6__decode_from__g72ab_a878(v0.@layout_4, v1.i256) -> i256 {
@@ -532,13 +514,9 @@ func inline(always) private %impl_trait_SeedSlot__decode_from__gd20d(v0.@layout_
 
     block3:
         v19.i256 = call %core__lib__abi__decode_field_from__g5385_54a8 v0 v7 v10;
-        v20.objref<@layout_7> = obj.alloc @layout_7;
-        v22.objref<i256> = obj.proj v20 0.i256;
-        obj.store v22 v6;
-        v24.objref<i256> = obj.proj v20 1.i256;
-        obj.store v24 v19;
-        v25.@layout_7 = obj.load v20;
-        return v25;
+        v22.@layout_7 = insert_value undef.@layout_7 0.i256 v6;
+        v24.@layout_7 = insert_value v22 1.i256 v19;
+        return v24;
 }
 
 func inline(always) private %decode_runtime_args__g5aad(v0.objref<@layout_1>) -> @layout_7 {
@@ -798,13 +776,9 @@ func private %encode_single_root_alloc(v0.i256) -> @layout_8 {
         obj.store v9 v10;
         v11.i256 = call %base v4;
         call %encode_single_root v0 v4;
-        v13.objref<@layout_8> = obj.alloc @layout_8;
-        v14.objref<i256> = obj.proj v13 0.i256;
-        obj.store v14 v11;
-        v15.objref<i256> = obj.proj v13 1.i256;
-        obj.store v15 v2;
-        v16.@layout_8 = obj.load v13;
-        return v16;
+        v14.@layout_8 = insert_value undef.@layout_8 0.i256 v11;
+        v15.@layout_8 = insert_value v14 1.i256 v2;
+        return v15;
 }
 
 func private %encode_to_ptr(v0.i256, v1.i256) {

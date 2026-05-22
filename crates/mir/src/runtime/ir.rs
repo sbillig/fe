@@ -1335,6 +1335,10 @@ pub enum RExpr<'db> {
         value: RValueId,
         index: u32,
     },
+    AggregateMake {
+        layout: LayoutId<'db>,
+        fields: Box<[RValueId]>,
+    },
     Call {
         callee: RuntimeInstance<'db>,
         args: Box<[RValueId]>,

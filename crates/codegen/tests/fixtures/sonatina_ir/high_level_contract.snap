@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 455
 expression: output
 input_file: crates/codegen/tests/fixtures/high_level_contract.fe
 ---
@@ -138,13 +137,9 @@ func inline(always) private %at(v0.i256) -> @layout_0 {
     block1:
         v2.i256 = mload v1 i256;
         v3.i256 = mload v1 i256;
-        v4.objref<@layout_0> = obj.alloc @layout_0;
-        v6.objref<i256> = obj.proj v4 0.i256;
-        obj.store v6 v2;
-        v8.objref<i256> = obj.proj v4 1.i256;
-        obj.store v8 v3;
-        v9.@layout_0 = obj.load v4;
-        return v9;
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v2;
+        v8.@layout_0 = insert_value v6 1.i256 v3;
+        return v8;
 }
 
 func private %base__g463e(v0.objref<@layout_3>) -> i256 {
@@ -428,11 +423,8 @@ func inline(always) private %impl_trait_Echo__decode_from__gd20d(v0.@layout_4, v
         v4.i256 = mload v2 i256;
         v5.i256 = mload v2 i256;
         v6.i256 = call %decode_field_from v0 v4 v5;
-        v7.objref<@layout_5> = obj.alloc @layout_5;
-        v9.objref<i256> = obj.proj v7 0.i256;
-        obj.store v9 v6;
-        v10.@layout_5 = obj.load v7;
-        return v10;
+        v9.@layout_5 = insert_value undef.@layout_5 0.i256 v6;
+        return v9;
 }
 
 func inline(always) private %impl_trait_Answer__decode_from__gd20d(v0.@layout_4, v1.i256) {
@@ -474,13 +466,9 @@ func private %decode_payload__g4770(v0.objref<@layout_3>) -> @layout_6 {
     block1:
         v2.i256 = call %decode_field v0;
         v3.i256 = call %decode_field v0;
-        v4.objref<@layout_6> = obj.alloc @layout_6;
-        v6.objref<i256> = obj.proj v4 0.i256;
-        obj.store v6 v2;
-        v8.objref<i256> = obj.proj v4 1.i256;
-        obj.store v8 v3;
-        v9.@layout_6 = obj.load v4;
-        return v9;
+        v6.@layout_6 = insert_value undef.@layout_6 0.i256 v2;
+        v8.@layout_6 = insert_value v6 1.i256 v3;
+        return v8;
 }
 
 func inline(always) private %decode_payload__g407e(v0.objref<@layout_3>) -> i256 {
@@ -758,13 +746,9 @@ func private %encode_single_root_alloc(v0.i256) -> @layout_6 {
         obj.store v9 v10;
         v11.i256 = call %impl_trait_SolEncoder__base v4;
         call %encode_single_root v0 v4;
-        v13.objref<@layout_6> = obj.alloc @layout_6;
-        v14.objref<i256> = obj.proj v13 0.i256;
-        obj.store v14 v11;
-        v15.objref<i256> = obj.proj v13 1.i256;
-        obj.store v15 v2;
-        v16.@layout_6 = obj.load v13;
-        return v16;
+        v14.@layout_6 = insert_value undef.@layout_6 0.i256 v11;
+        v15.@layout_6 = insert_value v14 1.i256 v2;
+        return v15;
 }
 
 func private %encode_to_ptr(v0.i256, v1.i256) {
@@ -995,18 +979,9 @@ func inline(always) private %impl_Cursor__new__g463e(v0.@layout_1) -> @layout_2 
         jump block1;
 
     block1:
-        v2.objref<@layout_2> = obj.alloc @layout_2;
-        v4.objref<@layout_1> = obj.proj v2 0.i256;
-        v5.objref<i256> = obj.proj v4 0.i256;
-        v6.i256 = extract_value v0 0.i256;
-        obj.store v5 v6;
-        v8.objref<i256> = obj.proj v4 1.i256;
-        v9.i256 = extract_value v0 1.i256;
-        obj.store v8 v9;
-        v10.objref<i256> = obj.proj v2 1.i256;
-        obj.store v10 0.i256;
-        v11.@layout_2 = obj.load v2;
-        return v11;
+        v4.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
+        v6.@layout_2 = insert_value v4 1.i256 0.i256;
+        return v6;
 }
 
 func inline(always) private %std__lib__evm__calldata__impl_CallData_8f43__new_bdf6() -> @layout_4 {
@@ -1039,23 +1014,9 @@ func inline(always) private %impl_SolDecoder__new__g463e(v0.@layout_1) -> @layou
 
     block1:
         v2.@layout_2 = call %impl_Cursor__new__g463e v0;
-        v4.objref<@layout_3> = obj.alloc @layout_3;
-        v5.objref<@layout_2> = obj.proj v4 0.i256;
-        v6.objref<@layout_1> = obj.proj v5 0.i256;
-        v7.@layout_1 = extract_value v2 0.i256;
-        v8.objref<i256> = obj.proj v6 0.i256;
-        v9.i256 = extract_value v7 0.i256;
-        obj.store v8 v9;
-        v11.objref<i256> = obj.proj v6 1.i256;
-        v12.i256 = extract_value v7 1.i256;
-        obj.store v11 v12;
-        v13.objref<i256> = obj.proj v5 1.i256;
-        v14.i256 = extract_value v2 1.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v4 1.i256;
-        obj.store v15 0.i256;
-        v16.@layout_3 = obj.load v4;
-        return v16;
+        v5.@layout_3 = insert_value undef.@layout_3 0.i256 v2;
+        v7.@layout_3 = insert_value v5 1.i256 0.i256;
+        return v7;
 }
 
 func private %core__lib__abi__trait_AbiSize__payload_size__ge513_9950(v0.i256) -> i256 {
