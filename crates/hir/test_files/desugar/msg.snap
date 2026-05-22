@@ -38,12 +38,12 @@ mod CounterMsg {
     impl core::abi::Decode<std::abi::Sol> for Increment {
 
         #[inline(always)]
-        fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
+        fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ __fe_msg_decode_decoder: mut D) -> Self {
             return Self {  }
         }
 
         #[inline(always)]
-        fn decode_from<I: core::abi::ByteInput>(_ input: I, _ base: u256) -> Self {
+        fn decode_from<I: core::abi::ByteInput>(_ __fe_msg_decode_input: I, _ __fe_msg_decode_base: u256) -> Self {
             return Self {  }
         }
     }
@@ -75,12 +75,12 @@ mod CounterMsg {
     impl core::abi::Decode<std::abi::Sol> for Get {
 
         #[inline(always)]
-        fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
+        fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ __fe_msg_decode_decoder: mut D) -> Self {
             return Self {  }
         }
 
         #[inline(always)]
-        fn decode_from<I: core::abi::ByteInput>(_ input: I, _ base: u256) -> Self {
+        fn decode_from<I: core::abi::ByteInput>(_ __fe_msg_decode_input: I, _ __fe_msg_decode_base: u256) -> Self {
             return Self {  }
         }
     }
@@ -120,14 +120,14 @@ mod CounterMsg {
     impl core::abi::Decode<std::abi::Sol> for Set {
 
         #[inline(always)]
-        fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
-            let val: u64 = core::abi::decode_field<std::abi::Sol, u64, D>(d)
+        fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ __fe_msg_decode_decoder: mut D) -> Self {
+            let val: u64 = core::abi::decode_field<std::abi::Sol, u64, D>(__fe_msg_decode_decoder)
             return Self { val: val }
         }
 
         #[inline(always)]
-        fn decode_from<I: core::abi::ByteInput>(_ input: I, _ base: u256) -> Self {
-            let val: u64 = core::abi::decode_field_from<std::abi::Sol, u64, I>(input, base: base, head_pos: base)
+        fn decode_from<I: core::abi::ByteInput>(_ __fe_msg_decode_input: I, _ __fe_msg_decode_base: u256) -> Self {
+            let val: u64 = core::abi::decode_field_from<std::abi::Sol, u64, I>(__fe_msg_decode_input, base: __fe_msg_decode_base, head_pos: __fe_msg_decode_base)
             return Self { val: val }
         }
     }
