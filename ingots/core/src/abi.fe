@@ -198,6 +198,7 @@ pub trait Encode<A: Abi>: AbiSize {
     const DIRECT_ENCODE: bool
 
     fn encode<E: AbiEncoder<A>>(own self, _: mut E)
+    /// Write this value's complete ABI payload at `ptr`.
     fn encode_to_ptr(own self, _ ptr: u256)
 }
 
@@ -319,76 +320,92 @@ pub fn encode_root<A: Abi, T, E>(_ value: own T, _ e: mut E)
 pub fn encode_single_root<A: Abi, T, E>(_ value: own T, _ e: mut E)
     where T: Encode<A> + AbiSize, E: AbiEncoder<A>
 {
-    let mut tail = e.base() + abi_single_root_head_size<T>()
-    encode_field<A, T, E>(value, mut e, mut tail)
+    let tail = abi_single_root_head_size<T>()
+    let _ = encode_field<A, T, E>(value, mut e, tail)
 }
 
 #[arithmetic(unchecked)]
-pub fn encode_field<A: Abi, T, E>(_ value: own T, _ e: mut E, _ tail: mut u256)
+pub fn encode_field<A: Abi, T, E>(_ value: own T, _ e: mut E, _ tail: u256) -> u256
     where T: Encode<A> + AbiSize, E: AbiEncoder<A>
 {
     if T::IS_DYNAMIC {
-        let parent_base = e.base()
-        let child_base = tail
+        let child_base = e.base() + tail
         let child_size = value.payload_size()
-        e.write_word(child_base - parent_base)
-        let parent_pos = e.pos()
+        e.write_word(tail)
 
-        e.set_base(child_base)
-        e.set_pos(child_base)
-        value.encode(mut e)
-        e.set_base(parent_base)
-        e.set_pos(parent_pos)
-        tail = child_base + child_size
-        return
+        value.encode_to_ptr(child_base)
+        return tail + child_size
     }
 
     if T::DIRECT_ENCODE {
         let at = e.pos()
         value.encode_to_ptr(at)
         e.set_pos(at + T::HEAD_SIZE)
-        return
+        return tail
     }
 
-    let _ = tail
     value.encode(mut e)
+    tail
 }
 
 #[arithmetic(unchecked)]
 #[inline(always)]
-fn encode_field_at<A: Abi, T, E>(_ value: own T, _ e: mut E, base: u256, head_pos: u256, _ tail: mut u256)
+fn encode_field_at<A: Abi, T, E>(_ value: own T, _ e: mut E, _ base: u256, _ head_pos: u256, _ tail: u256) -> u256
     where T: Encode<A> + AbiSize, E: AbiEncoder<A>
 {
     if T::IS_DYNAMIC {
-        let child_base = tail
+        let child_base = base + tail
         let child_size = value.payload_size()
-        e.write_word_at(at: head_pos, value: child_base - base)
+        e.write_word_at(at: head_pos, value: tail)
 
-        e.set_base(child_base)
-        e.set_pos(child_base)
-        value.encode(mut e)
-        e.set_base(base)
-        tail = child_base + child_size
-        return
+        value.encode_to_ptr(child_base)
+        return tail + child_size
     }
 
     if T::DIRECT_ENCODE {
         value.encode_to_ptr(head_pos)
-        return
+        return tail
     }
 
-    let _ = tail
     e.set_pos(head_pos)
     value.encode(mut e)
+    tail
+}
+
+#[arithmetic(unchecked)]
+#[inline(always)]
+pub fn encode_field_to_ptr_at<A: Abi, T>(_ value: own T, _ base: u256, _ head_pos: u256, _ tail: u256) -> u256
+    where T: Encode<A> + AbiSize
+{
+    if T::IS_DYNAMIC {
+        let child_base = base + tail
+        let child_size = value.payload_size()
+        A::store_word(ptr: head_pos, value: tail)
+        value.encode_to_ptr(child_base)
+        return tail + child_size
+    }
+
+    if T::DIRECT_ENCODE {
+        value.encode_to_ptr(head_pos)
+        return tail
+    }
+
+    let mut e = A::encoder_at(head_pos)
+    value.encode(mut e)
+    tail
 }
 
 pub fn encode_alloc<A: Abi, T>(_ value: own T) -> (u256, u256)
     where T: Encode<A> + AbiSize
 {
     let total = abi_payload_size(value)
-    let mut e = A::encoder_new(total)
-    let base = e.base()
-    value.encode(mut e)
+    let base = if total == 0 { 0 } else { A::alloc(total) }
+    if T::IS_DYNAMIC || T::DIRECT_ENCODE {
+        value.encode_to_ptr(base)
+    } else {
+        let mut e = A::encoder_at(base)
+        value.encode(mut e)
+    }
     (base, total)
 }
 
@@ -396,9 +413,16 @@ pub fn encode_single_root_alloc<A: Abi, T>(_ value: own T) -> (u256, u256)
     where T: Encode<A> + AbiSize
 {
     let total = abi_single_root_size(value)
-    let mut e = A::encoder_new(total)
-    let base = e.base()
-    encode_single_root<A, T, A::Encoder>(value, mut e)
+    let base = if total == 0 { 0 } else { A::alloc(total) }
+    if T::IS_DYNAMIC {
+        A::store_word(ptr: base, value: 32)
+        value.encode_to_ptr(base + 32)
+    } else if T::DIRECT_ENCODE {
+        value.encode_to_ptr(base)
+    } else {
+        let mut e = A::encoder_at(base)
+        value.encode(mut e)
+    }
     (base, total)
 }
 
@@ -1354,8 +1378,14 @@ impl<A: Abi, const N: usize> Encode<A> for String<N> {
         }
     }
 
-    fn encode_to_ptr(own self, _: u256) {
-        super::panic()
+    #[inline(always)]
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        let word = self.to_word()
+        let len = packed_string_len(word)
+        A::store_word(ptr: ptr, value: len)
+        if len != 0 {
+            A::store_word(ptr: ptr + 32, value: word << ((32 - len) * 8))
+        }
     }
 }
 
@@ -1405,8 +1435,13 @@ impl<A: Abi> Encode<A> for DynString {
         mcopy(dest: e.base(), addr: self.data, len: self.size)
     }
 
+    #[inline(always)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        super::panic()
+        if self.data == 0 {
+            A::store_word(ptr: ptr, value: self.len)
+            return
+        }
+        mcopy(dest: ptr, addr: self.data, len: self.size)
     }
 }
 
@@ -1808,8 +1843,13 @@ impl<A: Abi> Encode<A> for Bytes {
         mcopy(dest: e.base(), addr: self.data, len: self.size)
     }
 
+    #[inline(always)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        super::panic()
+        if self.data == 0 {
+            A::store_word(ptr: ptr, value: self.len)
+            return
+        }
+        mcopy(dest: ptr, addr: self.data, len: self.size)
     }
 }
 
@@ -1930,8 +1970,13 @@ impl<A: Abi, T> Encode<A> for DynArray<T>
         mcopy(dest: e.base(), addr: self.data, len: self.size)
     }
 
+    #[inline(always)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        super::panic()
+        if self.data == 0 {
+            A::store_word(ptr: ptr, value: self.len)
+            return
+        }
+        mcopy(dest: ptr, addr: self.data, len: self.size)
     }
 }
 
@@ -1970,13 +2015,15 @@ impl<A: Abi, T0> Encode<A> for (T0,)
     #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let base = e.base()
-        let mut tail = base + Self::HEAD_SIZE
-        encode_field_at<A, T0, E>(self.0, mut e, base, base, mut tail)
+        let mut tail = Self::HEAD_SIZE
+        tail = encode_field_at<A, T0, E>(self.0, mut e, base, base, tail)
         e.set_pos(base + Self::HEAD_SIZE)
     }
 
+    #[arithmetic(unchecked)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        self.0.encode_to_ptr(ptr)
+        let mut tail = Self::HEAD_SIZE
+        tail = encode_field_to_ptr_at<A, T0>(self.0, ptr, ptr, tail)
     }
 }
 
@@ -2018,17 +2065,19 @@ impl<A: Abi, T0, T1> Encode<A> for (T0, T1)
     #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let base = e.base()
-        let mut tail = base + Self::HEAD_SIZE
+        let mut tail = Self::HEAD_SIZE
         let head1 = base + abi_field_head_size<T0>()
-        encode_field_at<A, T0, E>(self.0, mut e, base, base, mut tail)
-        encode_field_at<A, T1, E>(self.1, mut e, base, head1, mut tail)
+        tail = encode_field_at<A, T0, E>(self.0, mut e, base, base, tail)
+        tail = encode_field_at<A, T1, E>(self.1, mut e, base, head1, tail)
         e.set_pos(base + Self::HEAD_SIZE)
     }
 
     #[arithmetic(unchecked)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        let mut tail = Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        tail = encode_field_to_ptr_at<A, T0>(self.0, ptr, ptr, tail)
+        tail = encode_field_to_ptr_at<A, T1>(self.1, ptr, head1, tail)
     }
 }
 
@@ -2077,21 +2126,23 @@ impl<A: Abi, T0, T1, T2> Encode<A> for (T0, T1, T2)
     #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let base = e.base()
-        let mut tail = base + Self::HEAD_SIZE
+        let mut tail = Self::HEAD_SIZE
         let head1 = base + abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
-        encode_field_at<A, T0, E>(self.0, mut e, base, base, mut tail)
-        encode_field_at<A, T1, E>(self.1, mut e, base, head1, mut tail)
-        encode_field_at<A, T2, E>(self.2, mut e, base, head2, mut tail)
+        tail = encode_field_at<A, T0, E>(self.0, mut e, base, base, tail)
+        tail = encode_field_at<A, T1, E>(self.1, mut e, base, head1, tail)
+        tail = encode_field_at<A, T2, E>(self.2, mut e, base, head2, tail)
         e.set_pos(base + Self::HEAD_SIZE)
     }
 
     #[arithmetic(unchecked)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
-        self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
+        let mut tail = Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        tail = encode_field_to_ptr_at<A, T0>(self.0, ptr, ptr, tail)
+        tail = encode_field_to_ptr_at<A, T1>(self.1, ptr, head1, tail)
+        tail = encode_field_to_ptr_at<A, T2>(self.2, ptr, head2, tail)
     }
 }
 
@@ -2151,25 +2202,27 @@ impl<A: Abi, T0, T1, T2, T3> Encode<A> for (T0, T1, T2, T3)
     #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let base = e.base()
-        let mut tail = base + Self::HEAD_SIZE
+        let mut tail = Self::HEAD_SIZE
         let head1 = base + abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
         let head3 = head2 + abi_field_head_size<T2>()
-        encode_field_at<A, T0, E>(self.0, mut e, base, base, mut tail)
-        encode_field_at<A, T1, E>(self.1, mut e, base, head1, mut tail)
-        encode_field_at<A, T2, E>(self.2, mut e, base, head2, mut tail)
-        encode_field_at<A, T3, E>(self.3, mut e, base, head3, mut tail)
+        tail = encode_field_at<A, T0, E>(self.0, mut e, base, base, tail)
+        tail = encode_field_at<A, T1, E>(self.1, mut e, base, head1, tail)
+        tail = encode_field_at<A, T2, E>(self.2, mut e, base, head2, tail)
+        tail = encode_field_at<A, T3, E>(self.3, mut e, base, head3, tail)
         e.set_pos(base + Self::HEAD_SIZE)
     }
 
     #[arithmetic(unchecked)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
-        self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
-        self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
+        let mut tail = Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        tail = encode_field_to_ptr_at<A, T0>(self.0, ptr, ptr, tail)
+        tail = encode_field_to_ptr_at<A, T1>(self.1, ptr, head1, tail)
+        tail = encode_field_to_ptr_at<A, T2>(self.2, ptr, head2, tail)
+        tail = encode_field_to_ptr_at<A, T3>(self.3, ptr, head3, tail)
     }
 }
 
@@ -2242,29 +2295,31 @@ impl<A: Abi, T0, T1, T2, T3, T4> Encode<A> for (T0, T1, T2, T3, T4)
     #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let base = e.base()
-        let mut tail = base + Self::HEAD_SIZE
+        let mut tail = Self::HEAD_SIZE
         let head1 = base + abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
         let head3 = head2 + abi_field_head_size<T2>()
         let head4 = head3 + abi_field_head_size<T3>()
-        encode_field_at<A, T0, E>(self.0, mut e, base, base, mut tail)
-        encode_field_at<A, T1, E>(self.1, mut e, base, head1, mut tail)
-        encode_field_at<A, T2, E>(self.2, mut e, base, head2, mut tail)
-        encode_field_at<A, T3, E>(self.3, mut e, base, head3, mut tail)
-        encode_field_at<A, T4, E>(self.4, mut e, base, head4, mut tail)
+        tail = encode_field_at<A, T0, E>(self.0, mut e, base, base, tail)
+        tail = encode_field_at<A, T1, E>(self.1, mut e, base, head1, tail)
+        tail = encode_field_at<A, T2, E>(self.2, mut e, base, head2, tail)
+        tail = encode_field_at<A, T3, E>(self.3, mut e, base, head3, tail)
+        tail = encode_field_at<A, T4, E>(self.4, mut e, base, head4, tail)
         e.set_pos(base + Self::HEAD_SIZE)
     }
 
     #[arithmetic(unchecked)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
-        self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
-        self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
-        self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
+        let mut tail = Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        tail = encode_field_to_ptr_at<A, T0>(self.0, ptr, ptr, tail)
+        tail = encode_field_to_ptr_at<A, T1>(self.1, ptr, head1, tail)
+        tail = encode_field_to_ptr_at<A, T2>(self.2, ptr, head2, tail)
+        tail = encode_field_to_ptr_at<A, T3>(self.3, ptr, head3, tail)
+        tail = encode_field_to_ptr_at<A, T4>(self.4, ptr, head4, tail)
     }
 }
 
@@ -2323,33 +2378,35 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5> Encode<A> for (T0, T1, T2, T3, T4, T5)
     #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let base = e.base()
-        let mut tail = base + Self::HEAD_SIZE
+        let mut tail = Self::HEAD_SIZE
         let head1 = base + abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
         let head3 = head2 + abi_field_head_size<T2>()
         let head4 = head3 + abi_field_head_size<T3>()
         let head5 = head4 + abi_field_head_size<T4>()
-        encode_field_at<A, T0, E>(self.0, mut e, base, base, mut tail)
-        encode_field_at<A, T1, E>(self.1, mut e, base, head1, mut tail)
-        encode_field_at<A, T2, E>(self.2, mut e, base, head2, mut tail)
-        encode_field_at<A, T3, E>(self.3, mut e, base, head3, mut tail)
-        encode_field_at<A, T4, E>(self.4, mut e, base, head4, mut tail)
-        encode_field_at<A, T5, E>(self.5, mut e, base, head5, mut tail)
+        tail = encode_field_at<A, T0, E>(self.0, mut e, base, base, tail)
+        tail = encode_field_at<A, T1, E>(self.1, mut e, base, head1, tail)
+        tail = encode_field_at<A, T2, E>(self.2, mut e, base, head2, tail)
+        tail = encode_field_at<A, T3, E>(self.3, mut e, base, head3, tail)
+        tail = encode_field_at<A, T4, E>(self.4, mut e, base, head4, tail)
+        tail = encode_field_at<A, T5, E>(self.5, mut e, base, head5, tail)
         e.set_pos(base + Self::HEAD_SIZE)
     }
 
     #[arithmetic(unchecked)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
-        self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
-        self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
-        self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
-        self.5
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
+        let mut tail = Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        tail = encode_field_to_ptr_at<A, T0>(self.0, ptr, ptr, tail)
+        tail = encode_field_to_ptr_at<A, T1>(self.1, ptr, head1, tail)
+        tail = encode_field_to_ptr_at<A, T2>(self.2, ptr, head2, tail)
+        tail = encode_field_to_ptr_at<A, T3>(self.3, ptr, head3, tail)
+        tail = encode_field_to_ptr_at<A, T4>(self.4, ptr, head4, tail)
+        tail = encode_field_to_ptr_at<A, T5>(self.5, ptr, head5, tail)
     }
 }
 
@@ -2413,37 +2470,39 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Encode<A> for (T0, T1, T2, T3, T4, T5, 
     #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let base = e.base()
-        let mut tail = base + Self::HEAD_SIZE
+        let mut tail = Self::HEAD_SIZE
         let head1 = base + abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
         let head3 = head2 + abi_field_head_size<T2>()
         let head4 = head3 + abi_field_head_size<T3>()
         let head5 = head4 + abi_field_head_size<T4>()
         let head6 = head5 + abi_field_head_size<T5>()
-        encode_field_at<A, T0, E>(self.0, mut e, base, base, mut tail)
-        encode_field_at<A, T1, E>(self.1, mut e, base, head1, mut tail)
-        encode_field_at<A, T2, E>(self.2, mut e, base, head2, mut tail)
-        encode_field_at<A, T3, E>(self.3, mut e, base, head3, mut tail)
-        encode_field_at<A, T4, E>(self.4, mut e, base, head4, mut tail)
-        encode_field_at<A, T5, E>(self.5, mut e, base, head5, mut tail)
-        encode_field_at<A, T6, E>(self.6, mut e, base, head6, mut tail)
+        tail = encode_field_at<A, T0, E>(self.0, mut e, base, base, tail)
+        tail = encode_field_at<A, T1, E>(self.1, mut e, base, head1, tail)
+        tail = encode_field_at<A, T2, E>(self.2, mut e, base, head2, tail)
+        tail = encode_field_at<A, T3, E>(self.3, mut e, base, head3, tail)
+        tail = encode_field_at<A, T4, E>(self.4, mut e, base, head4, tail)
+        tail = encode_field_at<A, T5, E>(self.5, mut e, base, head5, tail)
+        tail = encode_field_at<A, T6, E>(self.6, mut e, base, head6, tail)
         e.set_pos(base + Self::HEAD_SIZE)
     }
 
     #[arithmetic(unchecked)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
-        self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
-        self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
-        self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
-        self.5
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
-        self.6
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
+        let mut tail = Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        tail = encode_field_to_ptr_at<A, T0>(self.0, ptr, ptr, tail)
+        tail = encode_field_to_ptr_at<A, T1>(self.1, ptr, head1, tail)
+        tail = encode_field_to_ptr_at<A, T2>(self.2, ptr, head2, tail)
+        tail = encode_field_to_ptr_at<A, T3>(self.3, ptr, head3, tail)
+        tail = encode_field_to_ptr_at<A, T4>(self.4, ptr, head4, tail)
+        tail = encode_field_to_ptr_at<A, T5>(self.5, ptr, head5, tail)
+        tail = encode_field_to_ptr_at<A, T6>(self.6, ptr, head6, tail)
     }
 }
 
@@ -2512,7 +2571,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Encode<A> for (T0, T1, T2, T3, T4, 
     #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let base = e.base()
-        let mut tail = base + Self::HEAD_SIZE
+        let mut tail = Self::HEAD_SIZE
         let head1 = base + abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
         let head3 = head2 + abi_field_head_size<T2>()
@@ -2520,33 +2579,35 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Encode<A> for (T0, T1, T2, T3, T4, 
         let head5 = head4 + abi_field_head_size<T4>()
         let head6 = head5 + abi_field_head_size<T5>()
         let head7 = head6 + abi_field_head_size<T6>()
-        encode_field_at<A, T0, E>(self.0, mut e, base, base, mut tail)
-        encode_field_at<A, T1, E>(self.1, mut e, base, head1, mut tail)
-        encode_field_at<A, T2, E>(self.2, mut e, base, head2, mut tail)
-        encode_field_at<A, T3, E>(self.3, mut e, base, head3, mut tail)
-        encode_field_at<A, T4, E>(self.4, mut e, base, head4, mut tail)
-        encode_field_at<A, T5, E>(self.5, mut e, base, head5, mut tail)
-        encode_field_at<A, T6, E>(self.6, mut e, base, head6, mut tail)
-        encode_field_at<A, T7, E>(self.7, mut e, base, head7, mut tail)
+        tail = encode_field_at<A, T0, E>(self.0, mut e, base, base, tail)
+        tail = encode_field_at<A, T1, E>(self.1, mut e, base, head1, tail)
+        tail = encode_field_at<A, T2, E>(self.2, mut e, base, head2, tail)
+        tail = encode_field_at<A, T3, E>(self.3, mut e, base, head3, tail)
+        tail = encode_field_at<A, T4, E>(self.4, mut e, base, head4, tail)
+        tail = encode_field_at<A, T5, E>(self.5, mut e, base, head5, tail)
+        tail = encode_field_at<A, T6, E>(self.6, mut e, base, head6, tail)
+        tail = encode_field_at<A, T7, E>(self.7, mut e, base, head7, tail)
         e.set_pos(base + Self::HEAD_SIZE)
     }
 
     #[arithmetic(unchecked)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
-        self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
-        self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
-        self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
-        self.5
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
-        self.6
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
-        self.7
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE)
+        let mut tail = Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        tail = encode_field_to_ptr_at<A, T0>(self.0, ptr, ptr, tail)
+        tail = encode_field_to_ptr_at<A, T1>(self.1, ptr, head1, tail)
+        tail = encode_field_to_ptr_at<A, T2>(self.2, ptr, head2, tail)
+        tail = encode_field_to_ptr_at<A, T3>(self.3, ptr, head3, tail)
+        tail = encode_field_to_ptr_at<A, T4>(self.4, ptr, head4, tail)
+        tail = encode_field_to_ptr_at<A, T5>(self.5, ptr, head5, tail)
+        tail = encode_field_to_ptr_at<A, T6>(self.6, ptr, head6, tail)
+        tail = encode_field_to_ptr_at<A, T7>(self.7, ptr, head7, tail)
     }
 }
 
@@ -2620,7 +2681,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Encode<A> for (T0, T1, T2, T3, 
     #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let base = e.base()
-        let mut tail = base + Self::HEAD_SIZE
+        let mut tail = Self::HEAD_SIZE
         let head1 = base + abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
         let head3 = head2 + abi_field_head_size<T2>()
@@ -2629,36 +2690,38 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Encode<A> for (T0, T1, T2, T3, 
         let head6 = head5 + abi_field_head_size<T5>()
         let head7 = head6 + abi_field_head_size<T6>()
         let head8 = head7 + abi_field_head_size<T7>()
-        encode_field_at<A, T0, E>(self.0, mut e, base, base, mut tail)
-        encode_field_at<A, T1, E>(self.1, mut e, base, head1, mut tail)
-        encode_field_at<A, T2, E>(self.2, mut e, base, head2, mut tail)
-        encode_field_at<A, T3, E>(self.3, mut e, base, head3, mut tail)
-        encode_field_at<A, T4, E>(self.4, mut e, base, head4, mut tail)
-        encode_field_at<A, T5, E>(self.5, mut e, base, head5, mut tail)
-        encode_field_at<A, T6, E>(self.6, mut e, base, head6, mut tail)
-        encode_field_at<A, T7, E>(self.7, mut e, base, head7, mut tail)
-        encode_field_at<A, T8, E>(self.8, mut e, base, head8, mut tail)
+        tail = encode_field_at<A, T0, E>(self.0, mut e, base, base, tail)
+        tail = encode_field_at<A, T1, E>(self.1, mut e, base, head1, tail)
+        tail = encode_field_at<A, T2, E>(self.2, mut e, base, head2, tail)
+        tail = encode_field_at<A, T3, E>(self.3, mut e, base, head3, tail)
+        tail = encode_field_at<A, T4, E>(self.4, mut e, base, head4, tail)
+        tail = encode_field_at<A, T5, E>(self.5, mut e, base, head5, tail)
+        tail = encode_field_at<A, T6, E>(self.6, mut e, base, head6, tail)
+        tail = encode_field_at<A, T7, E>(self.7, mut e, base, head7, tail)
+        tail = encode_field_at<A, T8, E>(self.8, mut e, base, head8, tail)
         e.set_pos(base + Self::HEAD_SIZE)
     }
 
     #[arithmetic(unchecked)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
-        self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
-        self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
-        self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
-        self.5
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
-        self.6
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
-        self.7
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE)
-        self.8
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE)
+        let mut tail = Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        tail = encode_field_to_ptr_at<A, T0>(self.0, ptr, ptr, tail)
+        tail = encode_field_to_ptr_at<A, T1>(self.1, ptr, head1, tail)
+        tail = encode_field_to_ptr_at<A, T2>(self.2, ptr, head2, tail)
+        tail = encode_field_to_ptr_at<A, T3>(self.3, ptr, head3, tail)
+        tail = encode_field_to_ptr_at<A, T4>(self.4, ptr, head4, tail)
+        tail = encode_field_to_ptr_at<A, T5>(self.5, ptr, head5, tail)
+        tail = encode_field_to_ptr_at<A, T6>(self.6, ptr, head6, tail)
+        tail = encode_field_to_ptr_at<A, T7>(self.7, ptr, head7, tail)
+        tail = encode_field_to_ptr_at<A, T8>(self.8, ptr, head8, tail)
     }
 }
 
@@ -2739,7 +2802,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Encode<A>
     #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let base = e.base()
-        let mut tail = base + Self::HEAD_SIZE
+        let mut tail = Self::HEAD_SIZE
         let head1 = base + abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
         let head3 = head2 + abi_field_head_size<T2>()
@@ -2749,39 +2812,41 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Encode<A>
         let head7 = head6 + abi_field_head_size<T6>()
         let head8 = head7 + abi_field_head_size<T7>()
         let head9 = head8 + abi_field_head_size<T8>()
-        encode_field_at<A, T0, E>(self.0, mut e, base, base, mut tail)
-        encode_field_at<A, T1, E>(self.1, mut e, base, head1, mut tail)
-        encode_field_at<A, T2, E>(self.2, mut e, base, head2, mut tail)
-        encode_field_at<A, T3, E>(self.3, mut e, base, head3, mut tail)
-        encode_field_at<A, T4, E>(self.4, mut e, base, head4, mut tail)
-        encode_field_at<A, T5, E>(self.5, mut e, base, head5, mut tail)
-        encode_field_at<A, T6, E>(self.6, mut e, base, head6, mut tail)
-        encode_field_at<A, T7, E>(self.7, mut e, base, head7, mut tail)
-        encode_field_at<A, T8, E>(self.8, mut e, base, head8, mut tail)
-        encode_field_at<A, T9, E>(self.9, mut e, base, head9, mut tail)
+        tail = encode_field_at<A, T0, E>(self.0, mut e, base, base, tail)
+        tail = encode_field_at<A, T1, E>(self.1, mut e, base, head1, tail)
+        tail = encode_field_at<A, T2, E>(self.2, mut e, base, head2, tail)
+        tail = encode_field_at<A, T3, E>(self.3, mut e, base, head3, tail)
+        tail = encode_field_at<A, T4, E>(self.4, mut e, base, head4, tail)
+        tail = encode_field_at<A, T5, E>(self.5, mut e, base, head5, tail)
+        tail = encode_field_at<A, T6, E>(self.6, mut e, base, head6, tail)
+        tail = encode_field_at<A, T7, E>(self.7, mut e, base, head7, tail)
+        tail = encode_field_at<A, T8, E>(self.8, mut e, base, head8, tail)
+        tail = encode_field_at<A, T9, E>(self.9, mut e, base, head9, tail)
         e.set_pos(base + Self::HEAD_SIZE)
     }
 
     #[arithmetic(unchecked)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
-        self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
-        self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
-        self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
-        self.5
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
-        self.6
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
-        self.7
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE)
-        self.8
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE)
-        self.9
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE)
+        let mut tail = Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        let head9 = head8 + abi_field_head_size<T8>()
+        tail = encode_field_to_ptr_at<A, T0>(self.0, ptr, ptr, tail)
+        tail = encode_field_to_ptr_at<A, T1>(self.1, ptr, head1, tail)
+        tail = encode_field_to_ptr_at<A, T2>(self.2, ptr, head2, tail)
+        tail = encode_field_to_ptr_at<A, T3>(self.3, ptr, head3, tail)
+        tail = encode_field_to_ptr_at<A, T4>(self.4, ptr, head4, tail)
+        tail = encode_field_to_ptr_at<A, T5>(self.5, ptr, head5, tail)
+        tail = encode_field_to_ptr_at<A, T6>(self.6, ptr, head6, tail)
+        tail = encode_field_to_ptr_at<A, T7>(self.7, ptr, head7, tail)
+        tail = encode_field_to_ptr_at<A, T8>(self.8, ptr, head8, tail)
+        tail = encode_field_to_ptr_at<A, T9>(self.9, ptr, head9, tail)
     }
 }
 
@@ -2867,7 +2932,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Encode<A>
     #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let base = e.base()
-        let mut tail = base + Self::HEAD_SIZE
+        let mut tail = Self::HEAD_SIZE
         let head1 = base + abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
         let head3 = head2 + abi_field_head_size<T2>()
@@ -2878,42 +2943,44 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Encode<A>
         let head8 = head7 + abi_field_head_size<T7>()
         let head9 = head8 + abi_field_head_size<T8>()
         let head10 = head9 + abi_field_head_size<T9>()
-        encode_field_at<A, T0, E>(self.0, mut e, base, base, mut tail)
-        encode_field_at<A, T1, E>(self.1, mut e, base, head1, mut tail)
-        encode_field_at<A, T2, E>(self.2, mut e, base, head2, mut tail)
-        encode_field_at<A, T3, E>(self.3, mut e, base, head3, mut tail)
-        encode_field_at<A, T4, E>(self.4, mut e, base, head4, mut tail)
-        encode_field_at<A, T5, E>(self.5, mut e, base, head5, mut tail)
-        encode_field_at<A, T6, E>(self.6, mut e, base, head6, mut tail)
-        encode_field_at<A, T7, E>(self.7, mut e, base, head7, mut tail)
-        encode_field_at<A, T8, E>(self.8, mut e, base, head8, mut tail)
-        encode_field_at<A, T9, E>(self.9, mut e, base, head9, mut tail)
-        encode_field_at<A, T10, E>(self.10, mut e, base, head10, mut tail)
+        tail = encode_field_at<A, T0, E>(self.0, mut e, base, base, tail)
+        tail = encode_field_at<A, T1, E>(self.1, mut e, base, head1, tail)
+        tail = encode_field_at<A, T2, E>(self.2, mut e, base, head2, tail)
+        tail = encode_field_at<A, T3, E>(self.3, mut e, base, head3, tail)
+        tail = encode_field_at<A, T4, E>(self.4, mut e, base, head4, tail)
+        tail = encode_field_at<A, T5, E>(self.5, mut e, base, head5, tail)
+        tail = encode_field_at<A, T6, E>(self.6, mut e, base, head6, tail)
+        tail = encode_field_at<A, T7, E>(self.7, mut e, base, head7, tail)
+        tail = encode_field_at<A, T8, E>(self.8, mut e, base, head8, tail)
+        tail = encode_field_at<A, T9, E>(self.9, mut e, base, head9, tail)
+        tail = encode_field_at<A, T10, E>(self.10, mut e, base, head10, tail)
         e.set_pos(base + Self::HEAD_SIZE)
     }
 
     #[arithmetic(unchecked)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
-        self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
-        self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
-        self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
-        self.5
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
-        self.6
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
-        self.7
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE)
-        self.8
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE)
-        self.9
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE)
-        self.10
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE)
+        let mut tail = Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        let head9 = head8 + abi_field_head_size<T8>()
+        let head10 = head9 + abi_field_head_size<T9>()
+        tail = encode_field_to_ptr_at<A, T0>(self.0, ptr, ptr, tail)
+        tail = encode_field_to_ptr_at<A, T1>(self.1, ptr, head1, tail)
+        tail = encode_field_to_ptr_at<A, T2>(self.2, ptr, head2, tail)
+        tail = encode_field_to_ptr_at<A, T3>(self.3, ptr, head3, tail)
+        tail = encode_field_to_ptr_at<A, T4>(self.4, ptr, head4, tail)
+        tail = encode_field_to_ptr_at<A, T5>(self.5, ptr, head5, tail)
+        tail = encode_field_to_ptr_at<A, T6>(self.6, ptr, head6, tail)
+        tail = encode_field_to_ptr_at<A, T7>(self.7, ptr, head7, tail)
+        tail = encode_field_to_ptr_at<A, T8>(self.8, ptr, head8, tail)
+        tail = encode_field_to_ptr_at<A, T9>(self.9, ptr, head9, tail)
+        tail = encode_field_to_ptr_at<A, T10>(self.10, ptr, head10, tail)
     }
 }
 
@@ -3004,7 +3071,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Encode<A>
     #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let base = e.base()
-        let mut tail = base + Self::HEAD_SIZE
+        let mut tail = Self::HEAD_SIZE
         let head1 = base + abi_field_head_size<T0>()
         let head2 = head1 + abi_field_head_size<T1>()
         let head3 = head2 + abi_field_head_size<T2>()
@@ -3016,45 +3083,47 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Encode<A>
         let head9 = head8 + abi_field_head_size<T8>()
         let head10 = head9 + abi_field_head_size<T9>()
         let head11 = head10 + abi_field_head_size<T10>()
-        encode_field_at<A, T0, E>(self.0, mut e, base, base, mut tail)
-        encode_field_at<A, T1, E>(self.1, mut e, base, head1, mut tail)
-        encode_field_at<A, T2, E>(self.2, mut e, base, head2, mut tail)
-        encode_field_at<A, T3, E>(self.3, mut e, base, head3, mut tail)
-        encode_field_at<A, T4, E>(self.4, mut e, base, head4, mut tail)
-        encode_field_at<A, T5, E>(self.5, mut e, base, head5, mut tail)
-        encode_field_at<A, T6, E>(self.6, mut e, base, head6, mut tail)
-        encode_field_at<A, T7, E>(self.7, mut e, base, head7, mut tail)
-        encode_field_at<A, T8, E>(self.8, mut e, base, head8, mut tail)
-        encode_field_at<A, T9, E>(self.9, mut e, base, head9, mut tail)
-        encode_field_at<A, T10, E>(self.10, mut e, base, head10, mut tail)
-        encode_field_at<A, T11, E>(self.11, mut e, base, head11, mut tail)
+        tail = encode_field_at<A, T0, E>(self.0, mut e, base, base, tail)
+        tail = encode_field_at<A, T1, E>(self.1, mut e, base, head1, tail)
+        tail = encode_field_at<A, T2, E>(self.2, mut e, base, head2, tail)
+        tail = encode_field_at<A, T3, E>(self.3, mut e, base, head3, tail)
+        tail = encode_field_at<A, T4, E>(self.4, mut e, base, head4, tail)
+        tail = encode_field_at<A, T5, E>(self.5, mut e, base, head5, tail)
+        tail = encode_field_at<A, T6, E>(self.6, mut e, base, head6, tail)
+        tail = encode_field_at<A, T7, E>(self.7, mut e, base, head7, tail)
+        tail = encode_field_at<A, T8, E>(self.8, mut e, base, head8, tail)
+        tail = encode_field_at<A, T9, E>(self.9, mut e, base, head9, tail)
+        tail = encode_field_at<A, T10, E>(self.10, mut e, base, head10, tail)
+        tail = encode_field_at<A, T11, E>(self.11, mut e, base, head11, tail)
         e.set_pos(base + Self::HEAD_SIZE)
     }
 
     #[arithmetic(unchecked)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
-        self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
-        self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
-        self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
-        self.5
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
-        self.6
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
-        self.7
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE)
-        self.8
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE)
-        self.9
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE)
-        self.10
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE)
-        self.11
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE)
+        let mut tail = Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        let head9 = head8 + abi_field_head_size<T8>()
+        let head10 = head9 + abi_field_head_size<T9>()
+        let head11 = head10 + abi_field_head_size<T10>()
+        tail = encode_field_to_ptr_at<A, T0>(self.0, ptr, ptr, tail)
+        tail = encode_field_to_ptr_at<A, T1>(self.1, ptr, head1, tail)
+        tail = encode_field_to_ptr_at<A, T2>(self.2, ptr, head2, tail)
+        tail = encode_field_to_ptr_at<A, T3>(self.3, ptr, head3, tail)
+        tail = encode_field_to_ptr_at<A, T4>(self.4, ptr, head4, tail)
+        tail = encode_field_to_ptr_at<A, T5>(self.5, ptr, head5, tail)
+        tail = encode_field_to_ptr_at<A, T6>(self.6, ptr, head6, tail)
+        tail = encode_field_to_ptr_at<A, T7>(self.7, ptr, head7, tail)
+        tail = encode_field_to_ptr_at<A, T8>(self.8, ptr, head8, tail)
+        tail = encode_field_to_ptr_at<A, T9>(self.9, ptr, head9, tail)
+        tail = encode_field_to_ptr_at<A, T10>(self.10, ptr, head10, tail)
+        tail = encode_field_to_ptr_at<A, T11>(self.11, ptr, head11, tail)
     }
 }
 
@@ -3112,21 +3181,22 @@ impl<A: Abi, T, const N: usize> Encode<A> for [T; N]
     const DIRECT_ENCODE: bool = T::DIRECT_ENCODE
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        let mut tail = e.base() + Self::HEAD_SIZE
+        let mut tail = Self::HEAD_SIZE
         let mut i: usize = 0
         while i < N {
-            encode_field<A, T, E>(self[i], mut e, mut tail)
+            tail = encode_field<A, T, E>(self[i], mut e, tail)
             i += 1
         }
     }
 
     #[arithmetic(unchecked)]
     fn encode_to_ptr(own self, _ ptr: u256) {
+        let mut tail = Self::HEAD_SIZE
         let mut i: usize = 0
-        let mut at = ptr
+        let mut head_pos = ptr
         while i < N {
-            self[i].encode_to_ptr(at)
-            at += T::HEAD_SIZE
+            tail = encode_field_to_ptr_at<A, T>(self[i], ptr, head_pos, tail)
+            head_pos += abi_field_head_size<T>()
             i += 1
         }
     }

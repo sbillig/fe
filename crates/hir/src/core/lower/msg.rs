@@ -9,8 +9,8 @@ use crate::{
     hir_def::{
         ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, ExprId, FieldDef,
         FieldDefListId, FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName,
-        IdentId, ImplTrait, IntegerId, LitKind, LogicalBinOp, Mod, Partial, Pat, PathId, PathKind,
-        Stmt, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
+        IdentId, ImplTrait, IntegerId, LitKind, LogicalBinOp, Mod, Partial, PathId, PathKind,
+        Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
     },
     lower::FileLowerCtxt,
     span::{MsgDesugared, MsgDesugaredFocus},
@@ -258,37 +258,7 @@ fn lower_msg_variant_encode_impl<'db>(
                 None,
                 FuncModifiers::new(Visibility::Private, false, false, false),
                 |body| {
-                    let db = body.db();
-                    let self_expr = body.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
-                    let mut field_ptr_ident = ptr_ident;
-
-                    for (index, (field_name, field_ty)) in field_specs.iter().copied().enumerate() {
-                        let receiver = body.push_expr(Expr::Field(
-                            self_expr,
-                            Partial::Present(FieldIndex::Ident(field_name)),
-                        ));
-                        let field_ptr = body.ident_expr(field_ptr_ident);
-                        let call =
-                            body.method_call_expr(receiver, encode_to_ptr_ident, vec![field_ptr]);
-                        body.emit_expr_stmt(call);
-
-                        if index + 1 != field_specs.len() {
-                            let next_ptr_ident = IdentId::new(db, format!("__field_ptr{index}"));
-                            let current_ptr = body.ident_expr(field_ptr_ident);
-                            let field_size = build_head_size_body_expr(body, field_ty);
-                            let next_ptr = body.push_expr(Expr::Bin(
-                                current_ptr,
-                                field_size,
-                                BinOp::Arith(ArithBinOp::Add),
-                            ));
-                            let next_ptr_pat = body.push_pat(Pat::Path(
-                                Partial::Present(PathId::from_ident(db, next_ptr_ident)),
-                                false,
-                            ));
-                            body.emit_stmt(Stmt::Let(next_ptr_pat, None, Some(next_ptr)));
-                            field_ptr_ident = next_ptr_ident;
-                        }
-                    }
+                    body.encode_fields_to_ptr(&field_specs, ptr_ident);
                 },
             );
             impl_trait
@@ -579,45 +549,6 @@ fn build_head_size_expr<'db>(
             .unwrap_or_else(|| push_int_expr(body_ctxt, origin.clone(), 0)),
         TypeKind::Array(_, _) => abi_size_assoc_expr(body_ctxt, origin, ty, "HEAD_SIZE"),
         TypeKind::Ptr(_) | TypeKind::Never => push_int_expr(body_ctxt, origin, 0),
-    }
-}
-
-pub(super) fn build_head_size_body_expr<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
-    body: &mut super::hir_builder::BodyBuilder<'_, 'db, O>,
-    ty: TypeId<'db>,
-) -> crate::hir_def::ExprId {
-    let db = body.db();
-
-    match ty.data(db) {
-        TypeKind::Path(path) => path
-            .to_opt()
-            .map(|path| body.path_expr(path.push_str(db, "HEAD_SIZE")))
-            .unwrap_or_else(|| {
-                body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))))
-            }),
-        TypeKind::Tuple(tuple) => {
-            let mut expr = body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))));
-            for elem_ty in tuple.data(db).iter().copied() {
-                let elem_expr = elem_ty
-                    .to_opt()
-                    .map(|elem_ty| build_head_size_body_expr(body, elem_ty))
-                    .unwrap_or_else(|| {
-                        body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))))
-                    });
-                expr = body.push_expr(Expr::Bin(expr, elem_expr, BinOp::Arith(ArithBinOp::Add)));
-            }
-            expr
-        }
-        TypeKind::Mode(_, inner) => inner
-            .to_opt()
-            .map(|inner| build_head_size_body_expr(body, inner))
-            .unwrap_or_else(|| {
-                body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))))
-            }),
-        TypeKind::Array(_, _) => body.abi_size_assoc_expr(ty, "HEAD_SIZE"),
-        TypeKind::Ptr(_) | TypeKind::Never => {
-            body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))))
-        }
     }
 }
 

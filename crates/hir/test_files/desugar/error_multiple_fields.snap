@@ -28,16 +28,19 @@ impl core::abi::Encode<std::abi::Sol> for InsufficientBalance {
     const DIRECT_ENCODE: bool = true && <u256 as core::abi::Encode<std::abi::Sol> >::DIRECT_ENCODE && <u256 as core::abi::Encode<std::abi::Sol> >::DIRECT_ENCODE
 
     fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
-        let mut __tail = e.base() + <Self as core::abi::AbiSize>::HEAD_SIZE
+        let mut __tail = <Self as core::abi::AbiSize>::HEAD_SIZE
         let __field_0 = self.balance
-        core::abi::encode_field<std::abi::Sol, u256, E>(__field_0, e, mut __tail)
+        __tail = core::abi::encode_field<std::abi::Sol, u256, E>(__field_0, e, __tail)
         let __field_1 = self.required
-        core::abi::encode_field<std::abi::Sol, u256, E>(__field_1, e, mut __tail)
+        __tail = core::abi::encode_field<std::abi::Sol, u256, E>(__field_1, e, __tail)
     }
 
     fn encode_to_ptr(own self, _ ptr: u256) {
-        self.balance.encode_to_ptr(ptr)
-        let __field_ptr0 = ptr + u256::HEAD_SIZE
-        self.required.encode_to_ptr(__field_ptr0)
+        let mut __tail = <Self as core::abi::AbiSize>::HEAD_SIZE
+        let __field_0 = self.balance
+        __tail = core::abi::encode_field_to_ptr_at<std::abi::Sol, u256>(__field_0, ptr, ptr, __tail)
+        let __field_ptr0 = ptr + core::abi::abi_field_head_size<u256>()
+        let __field_1 = self.required
+        __tail = core::abi::encode_field_to_ptr_at<std::abi::Sol, u256>(__field_1, ptr, __field_ptr0, __tail)
     }
 }

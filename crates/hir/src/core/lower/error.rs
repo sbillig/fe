@@ -6,15 +6,15 @@ use super::{
     attr::{has_named_attr, lower_attrs_without_named, named_attr_specs},
     hir_builder::HirBuilder,
     msg::{
-        build_head_size_body_expr, create_direct_encode_assoc_const, create_head_size_assoc_const,
+        create_direct_encode_assoc_const, create_head_size_assoc_const,
         create_is_dynamic_assoc_const, create_payload_size_func,
     },
 };
 use crate::{
     hir_def::{
-        ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, FieldDef,
-        FieldDefListId, FieldIndex, FuncModifiers, GenericParamListId, IdentId, LitKind, Partial,
-        Pat, PathId, Stmt, Struct, TrackedItemVariant, TraitRefId, TypeId, TypeKind, Visibility,
+        AssocConstDef, AttrListId, Body, BodyKind, Expr, FieldDef, FieldDefListId, FuncModifiers,
+        GenericParamListId, IdentId, LitKind, Partial, PathId, Struct, TrackedItemVariant,
+        TraitRefId, TypeId, TypeKind, Visibility,
     },
     span::{ErrorDesugared, HirOrigin},
 };
@@ -488,37 +488,7 @@ fn lower_error_encode_impl<'db>(
                 None,
                 FuncModifiers::new(Visibility::Private, false, false, false),
                 |body| {
-                    let db = body.db();
-                    let self_expr = body.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
-                    let mut field_ptr_ident = ptr_ident;
-
-                    for (index, (field_name, field_ty)) in field_specs.iter().copied().enumerate() {
-                        let receiver = body.push_expr(Expr::Field(
-                            self_expr,
-                            Partial::Present(FieldIndex::Ident(field_name)),
-                        ));
-                        let field_ptr = body.ident_expr(field_ptr_ident);
-                        let call =
-                            body.method_call_expr(receiver, encode_to_ptr_ident, vec![field_ptr]);
-                        body.emit_expr_stmt(call);
-
-                        if index + 1 != field_specs.len() {
-                            let next_ptr_ident = IdentId::new(db, format!("__field_ptr{index}"));
-                            let current_ptr = body.ident_expr(field_ptr_ident);
-                            let field_size = build_head_size_body_expr(body, field_ty);
-                            let next_ptr = body.push_expr(Expr::Bin(
-                                current_ptr,
-                                field_size,
-                                BinOp::Arith(ArithBinOp::Add),
-                            ));
-                            let next_ptr_pat = body.push_pat(Pat::Path(
-                                Partial::Present(PathId::from_ident(db, next_ptr_ident)),
-                                false,
-                            ));
-                            body.emit_stmt(Stmt::Let(next_ptr_pat, None, Some(next_ptr)));
-                            field_ptr_ident = next_ptr_ident;
-                        }
-                    }
+                    body.encode_fields_to_ptr(&field_specs, ptr_ident);
                 },
             );
             impl_trait

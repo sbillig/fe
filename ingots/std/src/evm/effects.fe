@@ -604,8 +604,7 @@ where M: Encode<Sol>
     ops::mstore(addr: ptr, value: selector_word)
 
     let payload_ptr = ptr + selector_size
-    let mut encoder = Sol::encoder_at(payload_ptr)
-    message.encode(mut encoder)
+    message.encode_to_ptr(payload_ptr)
 
     (ptr, total_len)
 }
