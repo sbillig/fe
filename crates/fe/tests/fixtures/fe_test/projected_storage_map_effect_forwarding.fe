@@ -1,0 +1,105 @@
+use std::evm::{Evm, StorageMap}
+
+msg ProjectedMapMsg {
+    #[selector = 0x01]
+    SetPrimary { key: u256, value: u256 },
+    #[selector = 0x02]
+    SetSecondary { key: u256, value: u256 },
+    #[selector = 0x03]
+    GetPrimary { key: u256 } -> u256,
+    #[selector = 0x04]
+    GetSecondary { key: u256 } -> u256,
+}
+
+fn read_leaf(_ key: u256) -> u256
+    uses (map: StorageMap<u256, u256>)
+{
+    map.get(key: key)
+}
+
+fn read_nested(_ key: u256) -> u256
+    uses (map: StorageMap<u256, u256>)
+{
+    read_leaf(key)
+}
+
+fn write_leaf(_ key: u256, _ value: u256)
+    uses (map: mut StorageMap<u256, u256>)
+{
+    map.set(key: key, value: value)
+}
+
+fn write_nested(_ key: u256, _ value: u256)
+    uses (map: mut StorageMap<u256, u256>)
+{
+    write_leaf(key, value)
+}
+
+struct Store {
+    primary: StorageMap<u256, u256>,
+    secondary: StorageMap<u256, u256>,
+}
+
+pub contract ProjectedMapForwarding {
+    mut store: Store
+
+    recv ProjectedMapMsg {
+        SetPrimary { key, value } uses (mut store) {
+            with (mut store.primary) {
+                write_nested(key, value)
+            }
+        }
+
+        SetSecondary { key, value } uses (mut store) {
+            with (mut store.secondary) {
+                write_nested(key, value)
+            }
+        }
+
+        GetPrimary { key } -> u256 uses (store) {
+            with (store.primary) {
+                read_nested(key)
+            }
+        }
+
+        GetSecondary { key } -> u256 uses (store) {
+            with (store.secondary) {
+                read_nested(key)
+            }
+        }
+    }
+}
+
+#[test]
+fn test_projected_storage_map_effect_forwarding() uses (evm: mut Evm) {
+    let contract_addr = evm.create2<ProjectedMapForwarding>(value: 0, args: (), salt: 0)
+
+    evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: ProjectedMapMsg::SetPrimary { key: 1, value: 11 },
+    )
+    evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: ProjectedMapMsg::SetSecondary { key: 1, value: 99 },
+    )
+
+    let primary: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: ProjectedMapMsg::GetPrimary { key: 1 },
+    )
+    assert(primary == 11)
+
+    let secondary: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: ProjectedMapMsg::GetSecondary { key: 1 },
+    )
+    assert(secondary == 99)
+}

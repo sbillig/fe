@@ -2066,8 +2066,12 @@ impl<'db> TyChecker<'db> {
                     self.env.owner(),
                 )
             });
+        let target_ty = provider_target_ty.map(|ty| self.table.fold_ty(self.db, ty));
         let provider = self
             .existing_provider_binding_for_effect_arg(provided, arg)
+            .filter(|provider| {
+                target_ty.is_none_or(|target_ty| provider.effective_target_ty() == target_ty)
+            })
             .map(|provider| ProviderBinding {
                 provider_idx: slot.provider_idx,
                 ..provider
@@ -2081,7 +2085,6 @@ impl<'db> TyChecker<'db> {
                         provider_target_ty,
                     )
                     .unwrap_or_else(|| self.table.fold_ty(self.db, provided.ty));
-                let target_ty = provider_target_ty.map(|ty| self.table.fold_ty(self.db, ty));
                 let semantics = provider_semantics_for_specialized_call(
                     self.db,
                     self.env.scope(),
@@ -2118,6 +2121,9 @@ impl<'db> TyChecker<'db> {
     ) -> Option<ProviderBinding<'db>> {
         let binding = match arg {
             super::EffectArg::Place(place) => {
+                if !place.projections.is_empty() {
+                    return None;
+                }
                 let PlaceBase::Binding(binding) = place.base;
                 Some(binding)
             }
@@ -2145,6 +2151,14 @@ impl<'db> TyChecker<'db> {
         let owner = self.env.owner();
         let binding = match arg {
             super::EffectArg::Place(place) => {
+                if !place.projections.is_empty()
+                    && let EffectOrigin::With { value_expr } = provided.origin
+                {
+                    return Some(EffectProviderProvenance::Expr {
+                        owner,
+                        expr: value_expr,
+                    });
+                }
                 let PlaceBase::Binding(binding) = place.base;
                 Some(binding)
             }
