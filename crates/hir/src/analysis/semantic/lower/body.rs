@@ -466,6 +466,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 )
             }
             Expr::Bin(base, index, BinOp::Index) => {
+                if self.typed_body.semantic_expr_lowering(expr).is_some() {
+                    return self.lower_call_like_expr(expr, ty, Some(*base), &[*index]);
+                }
                 if let Some(place) = self.typed_body.expr_place(expr) {
                     let place = self.lower_place_data(place);
                     return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
