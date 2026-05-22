@@ -61,4 +61,13 @@ impl ByteInput for MemoryBytes {
             offset += 32
         }
     }
+
+    #[arithmetic(unchecked)]
+    fn copy_to_memory_unchecked_aligned(self, dest: u256, src_offset: u256, len: u256) {
+        let mut offset: u256 = 0
+        while offset < len {
+            mstore(addr: dest + offset, value: mload(self.base + src_offset + offset))
+            offset += 32
+        }
+    }
 }

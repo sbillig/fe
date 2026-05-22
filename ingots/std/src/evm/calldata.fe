@@ -72,4 +72,10 @@ impl ByteInput for CallData {
 
         calldatacopy(dest: dest, offset: self.base + src_offset, len: len)
     }
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn copy_to_memory_unchecked_aligned(self, dest: u256, src_offset: u256, len: u256) {
+        calldatacopy(dest: dest, offset: self.base + src_offset, len: len)
+    }
 }
