@@ -161,6 +161,9 @@ impl Abi for Sol {
 
     fn encoder_new(_ size: u256) -> Self::Encoder { SolEncoder::new(size) }
 
+    #[inline(always)]
+    fn encoder_at(_ base: u256) -> Self::Encoder { SolEncoder::at(base) }
+
     fn store_word(ptr: u256, value: u256) {
         mstore(addr: ptr, value: value)
     }
@@ -380,6 +383,11 @@ pub struct SolEncoder {
 impl SolEncoder {
     pub fn new(_ size: u256) -> Self {
         let base = if size == 0 { 0 } else { mem::alloc(size) }
+        SolEncoder::at(base)
+    }
+
+    #[inline(always)]
+    pub fn at(_ base: u256) -> Self {
         SolEncoder {
             base,
             pos: base,
