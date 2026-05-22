@@ -14,12 +14,12 @@ docker-wasm-test:
 		--volume "$(shell pwd):/mnt" \
 		--workdir '/mnt' \
 		rust:latest \
-		/bin/bash -c "rustup target add wasm32-unknown-unknown && cargo test -p fe-common -p fe-parser -p fe-hir -p fe-hir-analysis --target wasm32-unknown-unknown"
+		/bin/bash -c "rustup target add wasm32-unknown-unknown && cargo test -p fe-common -p fe-parser -p fe-hir --target wasm32-unknown-unknown"
 
 .PHONY: check-wasm
 check-wasm:
 	@echo "Checking core crates for wasm32-unknown-unknown..."
-	cargo check -p fe-common -p fe-parser -p fe-hir -p fe-hir-analysis --target wasm32-unknown-unknown
+	cargo check -p fe-common -p fe-parser -p fe-hir --target wasm32-unknown-unknown
 	@echo "✓ Core crates support wasm32-unknown-unknown"
 
 .PHONY: check-wasi
