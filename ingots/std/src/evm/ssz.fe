@@ -61,9 +61,18 @@ use super::ops
 #[inline(always)]
 pub fn hash_pair(left: u256, right: u256) -> u256 uses (mem: mut RawMem) {
     let ptr = mem::alloc(64)
-    mem.mstore(addr: ptr, value: left)
-    mem.mstore(addr: ptr + 32, value: right)
-    sha256_64_to(ptr, ptr)
+    hash_pair_with_scratch(left: left, right: right, scratch: ptr)
+}
+
+/// Hash two adjacent SSZ chunks using a caller-owned 64-byte scratch buffer.
+#[arithmetic(unchecked)]
+#[inline(always)]
+pub fn hash_pair_with_scratch(left: u256, right: u256, scratch: u256) -> u256
+uses (mem: mut RawMem)
+{
+    mem.mstore(addr: scratch, value: left)
+    mem.mstore(addr: scratch + 32, value: right)
+    sha256_64_to(scratch, scratch)
 }
 
 /// Pack a `uint64` SSZ basic value into a 32-byte chunk.
@@ -108,6 +117,7 @@ pub fn u64_chunk(_ value: u64) -> u256 {
 /// Note: the on-wire layout matches `u64_chunk` (LE in the top 8
 /// bytes of a word), wrapped with `len = 8` and `size = 64`.
 #[inline(always)]
+#[arithmetic(unchecked)]
 pub fn serialize_u64(_ value: u64) -> Bytes uses (mem: mut RawMem) {
     let out: u256 = mem::alloc(64)
     mem.mstore(addr: out, value: 8)
@@ -162,14 +172,26 @@ impl HashTreeRoot for ByteVector<48> {
     {
         assert(view.len == 48)
         let ptr = mem::alloc(64)
-        mem.mstore(addr: ptr, value: view.word_at(0))
-        // Word at offset 32 holds bytes 32..48 in its top 16 bytes
-        // followed by 16 bytes of slack. Mask the slack to zero by
-        // shifting the high 128 bits down and back up.
-        let tail = view.word_at(32)
-        mem.mstore(addr: ptr + 32, value: (tail >> 128) << 128)
-        sha256_64_to(ptr, ptr)
+        byte_vector_48_root_unchecked_with_scratch(view, scratch: ptr)
     }
+}
+
+/// Compute the SSZ root of a known-valid `ByteVector[48]` using caller-owned scratch.
+#[arithmetic(unchecked)]
+#[inline(always)]
+pub fn byte_vector_48_root_unchecked_with_scratch(
+    _ view: BytesView<MemoryInput>,
+    scratch: u256,
+) -> u256
+uses (mem: mut RawMem)
+{
+    mem.mstore(addr: scratch, value: view.word_at(0))
+    // Word at offset 32 holds bytes 32..48 in its top 16 bytes
+    // followed by 16 bytes of slack. Mask the slack to zero by
+    // shifting the high 128 bits down and back up.
+    let tail = view.word_at(32)
+    mem.mstore(addr: scratch + 32, value: (tail >> 128) << 128)
+    sha256_64_to(scratch, scratch)
 }
 
 /// `ByteVector[96]` — packs into three chunks (96 / 32 = 3), padded
@@ -197,18 +219,28 @@ impl HashTreeRoot for ByteVector<96> {
     uses (mem: mut RawMem)
     {
         assert(view.len == 96)
-        let base = view.input.base + view.start
         let ptr = mem::alloc(64)
-        let left = sha256_64_to(base, ptr)
-
-        mem.mstore(addr: ptr, value: view.word_at(64))
-        mem.mstore(addr: ptr + 32, value: 0)
-        let right = sha256_64_to(ptr, ptr)
-
-        mem.mstore(addr: ptr, value: left)
-        mem.mstore(addr: ptr + 32, value: right)
-        sha256_64_to(ptr, ptr)
+        byte_vector_96_root_unchecked_with_scratch(view, scratch: ptr)
     }
+}
+
+/// Compute the SSZ root of a known-valid `ByteVector[96]` using caller-owned scratch.
+#[arithmetic(unchecked)]
+#[inline(always)]
+pub fn byte_vector_96_root_unchecked_with_scratch(
+    _ view: BytesView<MemoryInput>,
+    scratch: u256,
+) -> u256
+uses (mem: mut RawMem)
+{
+    let base = view.input.base + view.start
+    let left = sha256_64_to(base, scratch)
+
+    mem.mstore(addr: scratch, value: view.word_at(64))
+    mem.mstore(addr: scratch + 32, value: 0)
+    let right = sha256_64_to(scratch, scratch)
+
+    hash_pair_with_scratch(left: left, right: right, scratch: scratch)
 }
 
 /// Merkleize a tuple of pre-computed chunk roots into a single SSZ
@@ -382,7 +414,15 @@ impl Merkleize for (
 /// contract uses it on `deposit_count` to finalize `get_deposit_root`.
 #[inline(always)]
 pub fn mix_in_length(root: u256, len: u64) -> u256 uses (mem: mut RawMem) {
-    hash_pair(left: root, right: u64_chunk(len))
+    let ptr = mem::alloc(64)
+    mix_in_length_with_scratch(root: root, len: len, scratch: ptr)
+}
+
+#[inline(always)]
+pub fn mix_in_length_with_scratch(root: u256, len: u64, scratch: u256) -> u256
+uses (mem: mut RawMem)
+{
+    hash_pair_with_scratch(left: root, right: u64_chunk(len), scratch: scratch)
 }
 
 // -----------------------------------------------------------------------------
@@ -398,37 +438,49 @@ pub fn mix_in_length(root: u256, len: u64) -> u256 uses (mem: mut RawMem) {
 fn merkleize4(_ a: u256, _ b: u256, _ c: u256, _ d: u256) -> u256
 uses (mem: mut RawMem)
 {
-    // ptr is a 64-byte scratch buffer reused across the three sha256
-    // calls: first to hash (a||b) → left, then (c||d) → right, then
-    // (left||right) → root. sha256_64_to writes its 32-byte digest at
-    // the same address it reads its 64-byte input from, so the buffer
-    // can be reset between rounds with two stores.
     let ptr = mem::alloc(64)
-    mem.mstore(addr: ptr, value: a)
-    mem.mstore(addr: ptr + 32, value: b)
-    let left = sha256_64_to(ptr, ptr)
-
-    mem.mstore(addr: ptr, value: c)
-    mem.mstore(addr: ptr + 32, value: d)
-    let right = sha256_64_to(ptr, ptr)
-
-    mem.mstore(addr: ptr, value: left)
-    mem.mstore(addr: ptr + 32, value: right)
-    sha256_64_to(ptr, ptr)
+    merkleize4_with_scratch(a, b, c, d, scratch: ptr)
 }
 
+/// Merkleize four SSZ chunks using a caller-owned 64-byte scratch buffer.
+#[arithmetic(unchecked)]
+#[inline(always)]
+pub fn merkleize4_with_scratch(_ a: u256, _ b: u256, _ c: u256, _ d: u256, scratch: u256) -> u256
+uses (mem: mut RawMem)
+{
+    // scratch is reused across the three sha256 calls: first to hash
+    // (a||b) -> left, then (c||d) -> right, then (left||right) -> root.
+    let left = hash_pair_with_scratch(left: a, right: b, scratch: scratch)
+    let right = hash_pair_with_scratch(left: c, right: d, scratch: scratch)
+    hash_pair_with_scratch(left: left, right: right, scratch: scratch)
+}
+
+#[inline(always)]
 fn merkleize8(
     _ a: u256, _ b: u256, _ c: u256, _ d: u256,
     _ e: u256, _ f: u256, _ g: u256, _ h: u256,
 ) -> u256
 uses (mem: mut RawMem)
 {
-    hash_pair(
-        left: merkleize4(a, b, c, d),
-        right: merkleize4(e, f, g, h),
-    )
+    let ptr = mem::alloc(64)
+    merkleize8_with_scratch(a, b, c, d, e, f, g, h, scratch: ptr)
 }
 
+#[arithmetic(unchecked)]
+#[inline(always)]
+fn merkleize8_with_scratch(
+    _ a: u256, _ b: u256, _ c: u256, _ d: u256,
+    _ e: u256, _ f: u256, _ g: u256, _ h: u256,
+    scratch: u256,
+) -> u256
+uses (mem: mut RawMem)
+{
+    let left = merkleize4_with_scratch(a, b, c, d, scratch: scratch)
+    let right = merkleize4_with_scratch(e, f, g, h, scratch: scratch)
+    hash_pair_with_scratch(left: left, right: right, scratch: scratch)
+}
+
+#[inline(always)]
 fn merkleize16(
     _ a: u256, _ b: u256, _ c: u256, _ d: u256,
     _ e: u256, _ f: u256, _ g: u256, _ h: u256,
@@ -437,10 +489,24 @@ fn merkleize16(
 ) -> u256
 uses (mem: mut RawMem)
 {
-    hash_pair(
-        left: merkleize8(a, b, c, d, e, f, g, h),
-        right: merkleize8(i, j, k, l, m, n, o, p),
-    )
+    let ptr = mem::alloc(64)
+    merkleize16_with_scratch(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, scratch: ptr)
+}
+
+#[arithmetic(unchecked)]
+#[inline(always)]
+fn merkleize16_with_scratch(
+    _ a: u256, _ b: u256, _ c: u256, _ d: u256,
+    _ e: u256, _ f: u256, _ g: u256, _ h: u256,
+    _ i: u256, _ j: u256, _ k: u256, _ l: u256,
+    _ m: u256, _ n: u256, _ o: u256, _ p: u256,
+    scratch: u256,
+) -> u256
+uses (mem: mut RawMem)
+{
+    let left = merkleize8_with_scratch(a, b, c, d, e, f, g, h, scratch: scratch)
+    let right = merkleize8_with_scratch(i, j, k, l, m, n, o, p, scratch: scratch)
+    hash_pair_with_scratch(left: left, right: right, scratch: scratch)
 }
 
 // Private form of `crypto::sha256` for callers that already own a

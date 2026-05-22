@@ -14,12 +14,12 @@ use std::evm::{
     assert_msg,
     ether,
     gwei,
+    mem,
     ssz,
     wei,
     Ctx,
     Evm,
     Log,
-    Merkleize,
     RawMem,
 }
 use std::abi::{
@@ -83,9 +83,11 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
     init()
     uses (mut store, mut mem)
     {
+        let scratch: u256 = mem::alloc(64)
         for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH - 1 {
             let cur: u256 = store.zero_hashes[height]
-            store.zero_hashes[height + 1] = ssz::hash_pair(left: cur, right: cur)
+            let next: u256 = ssz::hash_pair_with_scratch(left: cur, right: cur, scratch: scratch)
+            store.zero_hashes[height + 1] = next
         }
     }
 
@@ -107,7 +109,7 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
             // guarantees no information is lost.
             let amount_gwei: u64 = deposit_amount.downcast_truncate()
 
-            let mut node: u256 = compute_deposit_data_root(
+            let mut node: u256 = compute_deposit_data_root_unchecked(
                 pubkey: pubkey.view(),
                 withdrawal_credentials: withdrawal_credentials.view(),
                 signature: signature.view(),
@@ -130,16 +132,25 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
             )
 
             assert_msg(store.deposit_count < MAX_DEPOSIT_COUNT, "DepositContract: merkle tree full")
-            store.deposit_count += 1
+            store.deposit_count = next_deposit_count(count: store.deposit_count)
 
             let mut size: u256 = store.deposit_count
+            if size & 1 == 1 {
+                store.branch[0] = node
+                return
+            }
+            let scratch: u256 = mem::alloc(64)
             for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
                 if size & 1 == 1 {
                     store.branch[height] = node
                     return
                 }
-                node = ssz::hash_pair(left: store.branch[height], right: node)
-                size = size / 2
+                node = ssz::hash_pair_with_scratch(
+                    left: store.branch[height],
+                    right: node,
+                    scratch: scratch,
+                )
+                size = size >> 1
             }
             // Unreachable: the MAX_DEPOSIT_COUNT check above guarantees we exit
             // via the `size & 1 == 1` branch within DEPOSIT_CONTRACT_TREE_DEPTH iterations.
@@ -147,20 +158,33 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
         }
 
         GetDepositRoot -> u256 uses (store, mut mem) {
+            let scratch: u256 = mem::alloc(64)
             let mut node: u256 = 0
             let mut size: u256 = store.deposit_count
             for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
                 if size & 1 == 1 {
-                    node = ssz::hash_pair(left: store.branch[height], right: node)
+                    node = ssz::hash_pair_with_scratch(
+                        left: store.branch[height],
+                        right: node,
+                        scratch: scratch,
+                    )
                 } else {
-                    node = ssz::hash_pair(left: node, right: store.zero_hashes[height])
+                    node = ssz::hash_pair_with_scratch(
+                        left: node,
+                        right: store.zero_hashes[height],
+                        scratch: scratch,
+                    )
                 }
-                size = size / 2
+                size = size >> 1
             }
             // Finalize with SSZ mix-in-length over `deposit_count`.
             // MAX_DEPOSIT_COUNT = 2**32 - 1 means the truncating cast never
             // loses information.
-            ssz::mix_in_length(root: node, len: store.deposit_count.downcast_truncate())
+            ssz::mix_in_length_with_scratch(
+                root: node,
+                len: store.deposit_count.downcast_truncate(),
+                scratch: scratch,
+            )
         }
 
         GetDepositCount -> Bytes uses (store, mut mem) {
@@ -174,10 +198,10 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
     }
 }
 
-// Reconstruct the deposit-data SSZ root from its constituent parts. Exposed at
-// module level so tests can precompute a valid `deposit_data_root` to pass in.
+// Reconstruct the deposit-data SSZ root from already-validated parts. Exposed
+// at module level so tests can precompute a valid `deposit_data_root` to pass in.
 #[inline(always)]
-pub fn compute_deposit_data_root(
+pub fn compute_deposit_data_root_unchecked(
     pubkey: BytesView<MemoryInput>,
     withdrawal_credentials: BytesView<MemoryInput>,
     signature: BytesView<MemoryInput>,
@@ -185,13 +209,20 @@ pub fn compute_deposit_data_root(
 ) -> u256
 uses (mem: mut RawMem)
 {
-    assert(withdrawal_credentials.len == 32)
-    (
-        ssz::hash_tree_root<ssz::ByteVector<48>>(pubkey),
+    let scratch: u256 = mem::alloc(64)
+    ssz::merkleize4_with_scratch(
+        ssz::byte_vector_48_root_unchecked_with_scratch(pubkey, scratch: scratch),
         withdrawal_credentials.word_at(0),
         ssz::u64_chunk(amount_gwei),
-        ssz::hash_tree_root<ssz::ByteVector<96>>(signature),
-    ).merkleize()
+        ssz::byte_vector_96_root_unchecked_with_scratch(signature, scratch: scratch),
+        scratch: scratch,
+    )
+}
+
+#[arithmetic(unchecked)]
+#[inline(always)]
+fn next_deposit_count(count: u256) -> u256 {
+    count + 1
 }
 
 // Decode an 8-byte little-endian `Bytes` back into a `u64`. Used by tests to
@@ -306,7 +337,7 @@ fn test_deposit_rejects_non_gwei_amount() uses (evm: mut Evm, mem: mut RawMem) {
     let pk = pubkey_bytes(hi: P_HI, lo: P_LO)
     let wc = word_bytes(w: WC)
     let sig = signature_bytes(s0: S0, s1: S1, s2: S2)
-    let expected: u256 = compute_deposit_data_root(
+    let expected: u256 = compute_deposit_data_root_unchecked(
         pubkey: pk.view(),
         withdrawal_credentials: wc.view(),
         signature: sig.view(),
@@ -353,7 +384,7 @@ uses (evm: mut Evm, mem: mut RawMem)
     let pk = pubkey_bytes(hi: P_HI, lo: P_LO)
     let wc = word_bytes(w: WC)
     let sig = signature_bytes(s0: S0, s1: S1, s2: S2)
-    let expected_root: u256 = compute_deposit_data_root(
+    let expected_root: u256 = compute_deposit_data_root_unchecked(
         pubkey: pk.view(),
         withdrawal_credentials: wc.view(),
         signature: sig.view(),
@@ -429,7 +460,7 @@ fn test_two_deposits_advance_state() uses (evm: mut Evm, mem: mut RawMem) {
     let pk = pubkey_bytes(hi: P_HI, lo: P_LO)
     let wc = word_bytes(w: WC)
     let sig = signature_bytes(s0: S0, s1: S1, s2: S2)
-    let expected: u256 = compute_deposit_data_root(
+    let expected: u256 = compute_deposit_data_root_unchecked(
         pubkey: pk.view(),
         withdrawal_credentials: wc.view(),
         signature: sig.view(),

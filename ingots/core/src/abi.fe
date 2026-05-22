@@ -629,6 +629,7 @@ fn mem_word_store(value: u256) uses (slot: mut u256) {
     slot = value
 }
 
+#[arithmetic(unchecked)]
 #[inline(always)]
 fn mem_word_at(base: u256, offset: u256) -> u256 {
     let ptr: MemPtr<u256> = MemPtr::from_raw(base + offset)
