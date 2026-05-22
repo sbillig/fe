@@ -96,26 +96,6 @@ func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_8e95(v0.objre
         return v4;
 }
 
-func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_8e95_0(v0.objref<@layout_2>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        return v4;
-}
-
-func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_8e95_1(v0.objref<@layout_2>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        return v4;
-}
-
 func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_a403(v0.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
@@ -352,15 +332,18 @@ func inline(always) private %encode__g4887(v0.@layout_1, v1.objref<@layout_2>) {
         jump block1;
 
     block1:
-        v4.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_8e95_1 v1;
+        v4.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_8e95 v1;
         v6.i256 = add v4 64.i256;
         mstore v2 v6 i256;
-        v9.i256 = extract_value v0 0.i256;
-        v10.i256 = ptr_to_int v2 i256;
-        call %encode_field__g2e64 v9 v1 v10;
-        v13.@layout_0 = extract_value v0 1.i256;
-        v14.i256 = ptr_to_int v2 i256;
-        call %encode_field__gf6b4 v13 v1 v14;
+        v8.i256 = add v4 32.i256;
+        v11.i256 = extract_value v0 0.i256;
+        v12.i256 = ptr_to_int v2 i256;
+        call %encode_field_at__g2e64 v11 v1 v4 v4 v12;
+        v15.@layout_0 = extract_value v0 1.i256;
+        v16.i256 = ptr_to_int v2 i256;
+        call %encode_field_at__gf6b4 v15 v1 v4 v8 v16;
+        v18.i256 = add v4 64.i256;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_0d08_1 v1 v18;
         return;
 }
 
@@ -383,7 +366,7 @@ func private %impl_trait_Address__encode__g426c(v0.@layout_0, v1.objref<@layout_
         return;
 }
 
-func private %encode_field__g189a(v0.@layout_1, v1.objref<@layout_2>, v2.i256) {
+func private %encode_field(v0.@layout_1, v1.objref<@layout_2>, v2.i256) {
     block0:
         jump block1;
 
@@ -396,7 +379,7 @@ func private %encode_field__g189a(v0.@layout_1, v1.objref<@layout_2>, v2.i256) {
         v9.i256 = mload v2 i256;
         v10.i256 = sub v9 v5;
         call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_4363 v1 v10;
-        v12.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__pos_d646 v1;
+        v12.i256 = call %pos v1;
         v13.i256 = mload v2 i256;
         call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_base_80f4 v1 v13;
         v15.i256 = mload v2 i256;
@@ -416,7 +399,7 @@ func private %encode_field__g189a(v0.@layout_1, v1.objref<@layout_2>, v2.i256) {
         br 1.i1 block5 block6;
 
     block5:
-        v24.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__pos_d646 v1;
+        v24.i256 = call %pos v1;
         call %encode_to_ptr__g753b v0 v24;
         v28.i256 = add v24 64.i256;
         call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_516e v1 v28;
@@ -430,30 +413,34 @@ func private %encode_field__g189a(v0.@layout_1, v1.objref<@layout_2>, v2.i256) {
         return;
 }
 
-func private %encode_field__gf6b4(v0.@layout_0, v1.objref<@layout_2>, v2.i256) {
+func inline(always) private %encode_field_at__gf6b4(v0.@layout_0, v1.objref<@layout_2>, v2.i256, v3.i256, v4.i256) {
     block0:
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        mstore v5 v2 i256;
+        mstore v6 v3 i256;
         jump block1;
 
     block1:
         br 0.i1 block2 block3;
 
     block2:
-        v5.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_8e95 v1;
-        v8.i256 = call %core__lib__abi__trait_AbiSize__payload_size__g67a8_7cab v0;
-        v9.i256 = mload v2 i256;
-        v10.i256 = sub v9 v5;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_647a v1 v10;
-        v12.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__pos_08db v1;
-        v13.i256 = mload v2 i256;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_base_3ff5 v1 v13;
-        v15.i256 = mload v2 i256;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_0d08 v1 v15;
+        v10.i256 = call %core__lib__abi__trait_AbiSize__payload_size__g67a8_7cab v0;
+        v11.i256 = mload v6 i256;
+        v12.i256 = mload v5 i256;
+        v13.i256 = mload v4 i256;
+        v14.i256 = sub v13 v12;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_at_9d2f v1 v11 v14;
+        v17.i256 = mload v4 i256;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_base_3ff5 v1 v17;
+        v19.i256 = mload v4 i256;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_0d08 v1 v19;
         call %impl_trait_Address__encode__g426c v0 v1;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_base_3ff5 v1 v5;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_0d08 v1 v12;
-        v20.i256 = mload v2 i256;
-        v21.i256 = add v20 v8;
-        mstore v2 v21 i256;
+        v22.i256 = mload v5 i256;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_base_3ff5 v1 v22;
+        v24.i256 = mload v4 i256;
+        v25.i256 = add v24 v10;
+        mstore v4 v25 i256;
         return;
 
     block3:
@@ -463,44 +450,48 @@ func private %encode_field__gf6b4(v0.@layout_0, v1.objref<@layout_2>, v2.i256) {
         br 1.i1 block5 block6;
 
     block5:
-        v24.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__pos_08db v1;
-        call %std__lib__evm__effects__impl_trait_Address_ed76__encode_to_ptr__gf13e_8bc3 v0 v24;
-        v28.i256 = add v24 32.i256;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_0d08 v1 v28;
+        v27.i256 = mload v6 i256;
+        call %std__lib__evm__effects__impl_trait_Address_ed76__encode_to_ptr__gf13e_8bc3 v0 v27;
         return;
 
     block6:
         jump block7;
 
     block7:
+        v30.i256 = mload v6 i256;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_0d08 v1 v30;
         call %impl_trait_Address__encode__g426c v0 v1;
         return;
 }
 
-func private %encode_field__g2e64(v0.i256, v1.objref<@layout_2>, v2.i256) {
+func inline(always) private %encode_field_at__g2e64(v0.i256, v1.objref<@layout_2>, v2.i256, v3.i256, v4.i256) {
     block0:
+        v5.*i256 = alloca i256;
+        v6.*i256 = alloca i256;
+        mstore v5 v2 i256;
+        mstore v6 v3 i256;
         jump block1;
 
     block1:
         br 0.i1 block2 block3;
 
     block2:
-        v5.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_8e95_0 v1;
-        v8.i256 = call %core__lib__abi__trait_AbiSize__payload_size__ge513_7c20 v0;
-        v9.i256 = mload v2 i256;
-        v10.i256 = sub v9 v5;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_647a_0 v1 v10;
-        v12.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__pos_08db_0 v1;
-        v13.i256 = mload v2 i256;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_base_3ff5_0 v1 v13;
-        v15.i256 = mload v2 i256;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_0d08_0 v1 v15;
+        v10.i256 = call %core__lib__abi__trait_AbiSize__payload_size__ge513_7c20 v0;
+        v11.i256 = mload v6 i256;
+        v12.i256 = mload v5 i256;
+        v13.i256 = mload v4 i256;
+        v14.i256 = sub v13 v12;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_at_9d2f_0 v1 v11 v14;
+        v17.i256 = mload v4 i256;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_base_3ff5_0 v1 v17;
+        v19.i256 = mload v4 i256;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_0d08_0 v1 v19;
         call %impl_trait_u256__encode__g426c v0 v1;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_base_3ff5_0 v1 v5;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_0d08_0 v1 v12;
-        v20.i256 = mload v2 i256;
-        v21.i256 = add v20 v8;
-        mstore v2 v21 i256;
+        v22.i256 = mload v5 i256;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_base_3ff5_0 v1 v22;
+        v24.i256 = mload v4 i256;
+        v25.i256 = add v24 v10;
+        mstore v4 v25 i256;
         return;
 
     block3:
@@ -510,16 +501,16 @@ func private %encode_field__g2e64(v0.i256, v1.objref<@layout_2>, v2.i256) {
         br 1.i1 block5 block6;
 
     block5:
-        v24.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__pos_08db_0 v1;
-        call %core__lib__abi__impl_trait_u256_d99e__encode_to_ptr__gf13e_3ddf v0 v24;
-        v28.i256 = add v24 32.i256;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_0d08_0 v1 v28;
+        v27.i256 = mload v6 i256;
+        call %core__lib__abi__impl_trait_u256_d99e__encode_to_ptr__gf13e_3ddf v0 v27;
         return;
 
     block6:
         jump block7;
 
     block7:
+        v30.i256 = mload v6 i256;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_0d08_0 v1 v30;
         call %impl_trait_u256__encode__g426c v0 v1;
         return;
 }
@@ -534,7 +525,7 @@ func private %encode_single_root(v0.@layout_1, v1.objref<@layout_2>) {
         v6.i256 = add v4 64.i256;
         mstore v2 v6 i256;
         v7.i256 = ptr_to_int v2 i256;
-        call %encode_field__g189a v0 v1 v7;
+        call %encode_field v0 v1 v7;
         return;
 }
 
@@ -805,27 +796,7 @@ func inline(always) private %core__lib__abi__impl_trait____ccb6__payload_size__g
         return v10;
 }
 
-func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__pos_08db(v0.objref<@layout_2>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.objref<i256> = obj.proj v0 1.i256;
-        v4.i256 = obj.load v3;
-        return v4;
-}
-
-func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__pos_08db_0(v0.objref<@layout_2>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.objref<i256> = obj.proj v0 1.i256;
-        v4.i256 = obj.load v3;
-        return v4;
-}
-
-func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__pos_d646(v0.objref<@layout_2>) -> i256 {
+func private %pos(v0.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -914,6 +885,19 @@ func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_0d08_0(v0.
         return;
 }
 
+func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_0d08_1(v0.objref<@layout_2>, v1.i256) {
+    block0:
+        v2.*i256 = alloca i256;
+        mstore v2 v1 i256;
+        jump block1;
+
+    block1:
+        v3.i256 = mload v2 i256;
+        v6.objref<i256> = obj.proj v0 1.i256;
+        obj.store v6 v3;
+        return;
+}
+
 func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_516e(v0.objref<@layout_2>, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
@@ -989,40 +973,6 @@ func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_4363(v0
         return;
 }
 
-func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_647a(v0.objref<@layout_2>, v1.i256) {
-    block0:
-        v2.*i256 = alloca i256;
-        mstore v2 v1 i256;
-        jump block1;
-
-    block1:
-        v5.objref<i256> = obj.proj v0 1.i256;
-        v6.i256 = obj.load v5;
-        v7.i256 = mload v2 i256;
-        mstore v6 v7 i256;
-        v10.i256 = add v6 32.i256;
-        v11.objref<i256> = obj.proj v0 1.i256;
-        obj.store v11 v10;
-        return;
-}
-
-func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_647a_0(v0.objref<@layout_2>, v1.i256) {
-    block0:
-        v2.*i256 = alloca i256;
-        mstore v2 v1 i256;
-        jump block1;
-
-    block1:
-        v5.objref<i256> = obj.proj v0 1.i256;
-        v6.i256 = obj.load v5;
-        v7.i256 = mload v2 i256;
-        mstore v6 v7 i256;
-        v10.i256 = add v6 32.i256;
-        v11.objref<i256> = obj.proj v0 1.i256;
-        obj.store v11 v10;
-        return;
-}
-
 func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_a864(v0.objref<@layout_2>, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
@@ -1037,6 +987,36 @@ func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_a864(v0
         v10.i256 = add v6 32.i256;
         v11.objref<i256> = obj.proj v0 1.i256;
         obj.store v11 v10;
+        return;
+}
+
+func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_at_9d2f(v0.objref<@layout_2>, v1.i256, v2.i256) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v3 i256;
+        v6.i256 = mload v4 i256;
+        mstore v5 v6 i256;
+        return;
+}
+
+func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_at_9d2f_0(v0.objref<@layout_2>, v1.i256, v2.i256) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v3 i256;
+        v6.i256 = mload v4 i256;
+        mstore v5 v6 i256;
         return;
 }
 
