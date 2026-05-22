@@ -5,8 +5,8 @@ use hir::hir_def::TopLevelMod;
 use mir::runtime::{AddressSpaceKind, RefKind};
 use mir::{
     IntrinsicArithBinOp, Layout, LayoutId, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt,
-    RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeInstance, RuntimeLocalRoot,
-    build_runtime_package, build_test_runtime_package,
+    RuntimeBody, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeInstance, RuntimeLocalRoot,
+    RuntimePackage, build_runtime_package, build_test_runtime_package,
 };
 use url::Url;
 
@@ -93,6 +93,50 @@ macro_rules! with_test_runtime_package {
             build_test_runtime_package(&$db, top_mod, None).expect("runtime test package");
         $body
     }};
+}
+
+fn runtime_body_for_symbol<'db>(
+    db: &'db DriverDataBase,
+    package: RuntimePackage<'db>,
+    symbol: &str,
+) -> RuntimeBody<'db> {
+    let function = package
+        .functions(db)
+        .iter()
+        .copied()
+        .find(|function| function.symbol(db).contains(symbol))
+        .unwrap_or_else(|| panic!("missing runtime function `{symbol}`"));
+    function.instance(db).body(db)
+}
+
+fn runtime_body_stmts<'a, 'db>(body: &'a RuntimeBody<'db>) -> impl Iterator<Item = &'a RStmt<'db>> {
+    body.blocks.iter().flat_map(|block| block.stmts.iter())
+}
+
+fn body_has_object_materialization(body: &RuntimeBody<'_>) -> bool {
+    runtime_body_stmts(body).any(|stmt| {
+        matches!(
+            stmt,
+            RStmt::Assign {
+                expr: RExpr::MaterializeToObject { .. } | RExpr::MaterializePlaceToObject { .. },
+                ..
+            }
+        )
+    })
+}
+
+fn body_extracts_param_fields(body: &RuntimeBody<'_>, param: RLocalId, fields: &[u32]) -> bool {
+    fields.iter().all(|field| {
+        runtime_body_stmts(body).any(|stmt| {
+            matches!(
+                stmt,
+                RStmt::Assign {
+                    expr: RExpr::AggregateExtract { value, index },
+                    ..
+                } if *value == param && index == field
+            )
+        })
+    })
 }
 
 fn storage_pair_ref_layout<'db>(class: &RuntimeClass<'db>) -> Option<LayoutId<'db>> {
@@ -664,6 +708,150 @@ fn entry() -> Inner {
             .into_iter()
             .any(|op| op == "enum_tag" || op == "enum_tag_of"),
         "projected enum field payload should stay a full enum value, not an enum tag:\n{repack}"
+    );
+}
+
+#[test]
+fn immutable_own_aggregate_param_field_reads_stay_unrooted() {
+    with_runtime_package!(
+        "immutable_own_aggregate_param_field_reads_stay_unrooted.fe",
+        r#"struct Pair {
+    left: u256,
+    right: u256,
+}
+
+fn sum_pair(_ pair: own Pair) -> u256 {
+    pair.left + pair.right
+}
+
+fn entry() -> u256 {
+    sum_pair(Pair { left: 1, right: 2 })
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "sum_pair");
+            let pair = RLocalId::from_u32(0);
+
+            assert!(
+                matches!(
+                    body.signature.params[0].class,
+                    RuntimeClass::AggregateValue { .. }
+                ),
+                "owned aggregate param should be passed as an aggregate value:\n{body:#?}"
+            );
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::None),
+                "field-read-only owned aggregate param should not get a runtime root:\n{body:#?}"
+            );
+            assert!(
+                body_extracts_param_fields(&body, pair, &[0, 1]),
+                "field reads should extract directly from the aggregate param:\n{body:#?}"
+            );
+            assert!(
+                !body_has_object_materialization(&body),
+                "field-read-only owned aggregate param should not materialize to an object:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn read_only_mut_own_aggregate_receiver_field_reads_stay_unrooted() {
+    with_runtime_package!(
+        "read_only_mut_own_aggregate_receiver_field_reads_stay_unrooted.fe",
+        r#"struct Pair {
+    left: u256,
+    right: u256,
+}
+
+impl Pair {
+    fn sum(mut own self) -> u256 {
+        self.left + self.right
+    }
+}
+
+fn entry() -> u256 {
+    Pair { left: 1, right: 2 }.sum()
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "sum");
+            let receiver = RLocalId::from_u32(0);
+
+            assert!(
+                matches!(
+                    body.signature.params[0].class,
+                    RuntimeClass::AggregateValue { .. }
+                ),
+                "mut own receiver should still be passed as an aggregate value:\n{body:#?}"
+            );
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::None),
+                "read-only mut own aggregate receiver should not get a runtime root:\n{body:#?}"
+            );
+            assert!(
+                body_extracts_param_fields(&body, receiver, &[0, 1]),
+                "receiver field reads should extract directly from the aggregate param:\n{body:#?}"
+            );
+            assert!(
+                !body_has_object_materialization(&body),
+                "read-only mut own aggregate receiver should not materialize to an object:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn mutating_mut_own_aggregate_receiver_stays_rooted() {
+    with_runtime_package!(
+        "mutating_mut_own_aggregate_receiver_stays_rooted.fe",
+        r#"struct Pair {
+    left: u256,
+    right: u256,
+}
+
+impl Pair {
+    fn bump(mut own self) -> Pair {
+        self.left += 1
+        self
+    }
+}
+
+fn entry() -> Pair {
+    Pair { left: 1, right: 2 }.bump()
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "bump");
+            let receiver = RLocalId::from_u32(0);
+
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::Slot(_)),
+                "mutated mut own aggregate receiver should keep object-backed runtime storage:\n{body:#?}"
+            );
+            assert!(
+                runtime_body_stmts(&body).any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Assign {
+                            expr: RExpr::AddrOf { place },
+                            ..
+                        } if place.root == PlaceRoot::Slot(receiver)
+                                && matches!(place.path.as_ref(), [PlaceElem::Field(_)])
+                    )
+                }),
+                "field mutation should take the address of the rooted receiver field:\n{body:#?}"
+            );
+            assert!(
+                runtime_body_stmts(&body).any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Store { dst, .. } if matches!(dst.root, PlaceRoot::Ref(_))
+                    )
+                }),
+                "field mutation should store through the rooted receiver field ref:\n{body:#?}"
+            );
+        }
     );
 }
 
