@@ -157,6 +157,8 @@ impl Abi for Sol {
         SolDecoder::with_base(input, base)
     }
 
+    fn alloc(_ size: u256) -> u256 { mem::alloc(size) }
+
     fn encoder_new(_ size: u256) -> Self::Encoder { SolEncoder::new(size) }
 
     fn store_word(ptr: u256, value: u256) {
