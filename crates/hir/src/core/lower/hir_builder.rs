@@ -91,6 +91,10 @@ where
         IdentId::new(self.db(), name.to_string())
     }
 
+    pub(super) fn generated_ident(&self, name: &str) -> IdentId<'db> {
+        IdentId::new(self.db(), format!("__fe_{name}"))
+    }
+
     pub(super) fn roots(&self) -> LibRoots<'db> {
         self.roots
     }
@@ -790,6 +794,7 @@ where
         &mut self,
         target_ident: IdentId<'db>,
         ty: TypeId<'db>,
+        decoder_ident: IdentId<'db>,
         decoder_ty: TypeId<'db>,
     ) {
         let db = self.db();
@@ -811,8 +816,8 @@ where
             .push_str(db, "abi")
             .push_str_args(db, "decode_field", decode_args);
         let decode_callee = self.path_expr(decode_path);
-        let d_expr = self.path_expr(PathId::from_str(db, "d"));
-        let decode_call = self.call_expr(decode_callee, vec![d_expr]);
+        let decoder_expr = self.ident_expr(decoder_ident);
+        let decode_call = self.call_expr(decode_callee, vec![decoder_expr]);
 
         let bind_pat = self.push_pat(Pat::Path(
             Partial::Present(PathId::from_ident(db, target_ident)),
@@ -859,7 +864,7 @@ where
                     expr: input_expr,
                 },
                 CallArg {
-                    label: Some(base_ident),
+                    label: Some(IdentId::new(db, "base".to_string())),
                     expr: base_expr,
                 },
                 CallArg {

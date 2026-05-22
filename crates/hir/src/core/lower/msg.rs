@@ -655,7 +655,7 @@ fn lower_msg_variant_decode_trait_impl<'db>(
         let (d_generic_params, d_ty) =
             builder.type_param_with_trait_bound("D", abi_decoder_trait_ref);
 
-        let decoder_ident = builder.ident("d");
+        let decoder_ident = builder.generated_ident("msg_decode_decoder");
         let params = builder.params([builder.param_mut_underscore_named(decoder_ident, d_ty)]);
 
         builder.func_generic_inline_always(
@@ -666,7 +666,7 @@ fn lower_msg_variant_decode_trait_impl<'db>(
             FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
                 for (name, ty) in fields.iter().copied() {
-                    body.decode_into(name, ty, d_ty);
+                    body.decode_into(name, ty, decoder_ident, d_ty);
                 }
                 body.return_record_self(&field_names);
             },
@@ -676,8 +676,8 @@ fn lower_msg_variant_decode_trait_impl<'db>(
         let (i_generic_params, i_ty) =
             builder.type_param_with_trait_bound("I", byte_input_trait_ref);
 
-        let input_ident = builder.ident("input");
-        let base_ident = builder.ident("base");
+        let input_ident = builder.generated_ident("msg_decode_input");
+        let base_ident = builder.generated_ident("msg_decode_base");
         let params = builder.params([
             builder.param_underscore_named(input_ident, i_ty),
             builder.param_underscore_named(base_ident, builder.ty_ident(builder.ident("u256"))),
