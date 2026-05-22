@@ -131,6 +131,12 @@ pub trait Abi {
 
     fn alloc(_ size: u256) -> u256
     fn encoder_new(_ size: u256) -> Self::Encoder
+    fn encoder_at(_ base: u256) -> Self::Encoder {
+        let mut e = Self::encoder_new(0)
+        e.set_base(base)
+        e.set_pos(base)
+        e
+    }
     fn store_word(ptr: u256, value: u256)
 }
 
@@ -809,6 +815,8 @@ impl<T0> AbiSize for (T0,)
     const HEAD_SIZE: u256 = abi_field_head_size<T0>()
     const IS_DYNAMIC: bool = T0::IS_DYNAMIC
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn payload_size(self) -> u256 {
         Self::HEAD_SIZE + dynamic_payload_size(self.0)
     }
@@ -820,6 +828,8 @@ impl<T0, T1> AbiSize for (T0, T1)
     const HEAD_SIZE: u256 = abi_field_head_size<T0>() + abi_field_head_size<T1>()
     const IS_DYNAMIC: bool = T0::IS_DYNAMIC || T1::IS_DYNAMIC
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn payload_size(self) -> u256 {
         Self::HEAD_SIZE + dynamic_payload_size(self.0) + dynamic_payload_size(self.1)
     }
@@ -831,6 +841,8 @@ impl<T0, T1, T2> AbiSize for (T0, T1, T2)
     const HEAD_SIZE: u256 = abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>()
     const IS_DYNAMIC: bool = T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn payload_size(self) -> u256 {
         Self::HEAD_SIZE
             + dynamic_payload_size(self.0)
@@ -846,6 +858,8 @@ impl<T0, T1, T2, T3> AbiSize for (T0, T1, T2, T3)
         abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>()
     const IS_DYNAMIC: bool = T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn payload_size(self) -> u256 {
         Self::HEAD_SIZE
             + dynamic_payload_size(self.0)
@@ -867,6 +881,8 @@ impl<T0, T1, T2, T3, T4> AbiSize for (T0, T1, T2, T3, T4)
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn payload_size(self) -> u256 {
         Self::HEAD_SIZE
             + dynamic_payload_size(self.0)
@@ -890,6 +906,8 @@ impl<T0, T1, T2, T3, T4, T5> AbiSize for (T0, T1, T2, T3, T4, T5)
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn payload_size(self) -> u256 {
         Self::HEAD_SIZE
             + dynamic_payload_size(self.0)
@@ -915,6 +933,8 @@ impl<T0, T1, T2, T3, T4, T5, T6> AbiSize for (T0, T1, T2, T3, T4, T5, T6)
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn payload_size(self) -> u256 {
         Self::HEAD_SIZE
             + dynamic_payload_size(self.0)
@@ -942,6 +962,8 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn payload_size(self) -> u256 {
         Self::HEAD_SIZE
             + dynamic_payload_size(self.0)
@@ -971,6 +993,8 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> AbiSize for (T0, T1, T2, T3, T4, T5, T6
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn payload_size(self) -> u256 {
         Self::HEAD_SIZE
             + dynamic_payload_size(self.0)
@@ -1002,6 +1026,8 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> AbiSize for (T0, T1, T2, T3, T4, T5
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn payload_size(self) -> u256 {
         Self::HEAD_SIZE
             + dynamic_payload_size(self.0)
@@ -1035,6 +1061,8 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> AbiSize for (T0, T1, T2, T3, T
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn payload_size(self) -> u256 {
         Self::HEAD_SIZE
             + dynamic_payload_size(self.0)
@@ -1070,6 +1098,8 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> AbiSize for (T0, T1, T2, 
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC || T11::IS_DYNAMIC
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn payload_size(self) -> u256 {
         Self::HEAD_SIZE
             + dynamic_payload_size(self.0)
@@ -1903,6 +1933,8 @@ impl<A: Abi, T0> Encode<A> for (T0,)
 {
     const DIRECT_ENCODE: bool = T0::DIRECT_ENCODE
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let mut tail = e.base() + Self::HEAD_SIZE
         encode_field<A, T0, E>(self.0, mut e, mut tail)
@@ -1947,6 +1979,8 @@ impl<A: Abi, T0, T1> Encode<A> for (T0, T1)
 {
     const DIRECT_ENCODE: bool = T0::DIRECT_ENCODE && T1::DIRECT_ENCODE
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let mut tail = e.base() + Self::HEAD_SIZE
         encode_field<A, T0, E>(self.0, mut e, mut tail)
@@ -2001,6 +2035,8 @@ impl<A: Abi, T0, T1, T2> Encode<A> for (T0, T1, T2)
 {
     const DIRECT_ENCODE: bool = T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let mut tail = e.base() + Self::HEAD_SIZE
         encode_field<A, T0, E>(self.0, mut e, mut tail)
@@ -2069,6 +2105,8 @@ impl<A: Abi, T0, T1, T2, T3> Encode<A> for (T0, T1, T2, T3)
     const DIRECT_ENCODE: bool =
         T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let mut tail = e.base() + Self::HEAD_SIZE
         encode_field<A, T0, E>(self.0, mut e, mut tail)
@@ -2153,6 +2191,8 @@ impl<A: Abi, T0, T1, T2, T3, T4> Encode<A> for (T0, T1, T2, T3, T4)
     const DIRECT_ENCODE: bool =
         T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let mut tail = e.base() + Self::HEAD_SIZE
         encode_field<A, T0, E>(self.0, mut e, mut tail)
@@ -2226,6 +2266,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5> Encode<A> for (T0, T1, T2, T3, T4, T5)
     const DIRECT_ENCODE: bool =
         T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let mut tail = e.base() + Self::HEAD_SIZE
         encode_field<A, T0, E>(self.0, mut e, mut tail)
@@ -2307,6 +2349,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Encode<A> for (T0, T1, T2, T3, T4, T5, 
     const DIRECT_ENCODE: bool =
         T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let mut tail = e.base() + Self::HEAD_SIZE
         encode_field<A, T0, E>(self.0, mut e, mut tail)
@@ -2396,6 +2440,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Encode<A> for (T0, T1, T2, T3, T4, 
     const DIRECT_ENCODE: bool =
         T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE && T7::DIRECT_ENCODE
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let mut tail = e.base() + Self::HEAD_SIZE
         encode_field<A, T0, E>(self.0, mut e, mut tail)
@@ -2493,6 +2539,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Encode<A> for (T0, T1, T2, T3, 
     const DIRECT_ENCODE: bool =
         T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE && T7::DIRECT_ENCODE && T8::DIRECT_ENCODE
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let mut tail = e.base() + Self::HEAD_SIZE
         encode_field<A, T0, E>(self.0, mut e, mut tail)
@@ -2600,6 +2648,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Encode<A>
     const DIRECT_ENCODE: bool =
         T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE && T7::DIRECT_ENCODE && T8::DIRECT_ENCODE && T9::DIRECT_ENCODE
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let mut tail = e.base() + Self::HEAD_SIZE
         encode_field<A, T0, E>(self.0, mut e, mut tail)
@@ -2715,6 +2765,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Encode<A>
     const DIRECT_ENCODE: bool =
         T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE && T7::DIRECT_ENCODE && T8::DIRECT_ENCODE && T9::DIRECT_ENCODE && T10::DIRECT_ENCODE
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let mut tail = e.base() + Self::HEAD_SIZE
         encode_field<A, T0, E>(self.0, mut e, mut tail)
@@ -2838,6 +2890,8 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Encode<A>
     const DIRECT_ENCODE: bool =
         T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE && T7::DIRECT_ENCODE && T8::DIRECT_ENCODE && T9::DIRECT_ENCODE && T10::DIRECT_ENCODE && T11::DIRECT_ENCODE
 
+    #[arithmetic(unchecked)]
+    #[inline(always)]
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         let mut tail = e.base() + Self::HEAD_SIZE
         encode_field<A, T0, E>(self.0, mut e, mut tail)
