@@ -1,11 +1,17 @@
 let x
 
 let x = 1
+let y =
+    2
 let x: i32 = 1
 let mut x: i32 = 1
 
 x += 1 + 1
+x +=
+    2
 y <<= 1 >> 2
+y <<=
+    2
 
 let MyEnum::Foo(x, y) = e
 

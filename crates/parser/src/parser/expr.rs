@@ -31,6 +31,12 @@ pub fn parse_expr<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery
     parse_expr_with_min_bp(parser, 0, true, false, None)
 }
 
+pub(crate) fn parse_continuation_expr<S: TokenStream>(
+    parser: &mut Parser<S>,
+) -> Result<(), Recovery<ErrProof>> {
+    parse_continuation_expr_with_min_bp(parser, 0, true, false, None)
+}
+
 /// Parses a restricted expression form suitable for const-generic arguments and
 /// defaults inside `<...>` contexts.
 ///
@@ -187,6 +193,26 @@ fn parse_expr_with_min_bp<S: TokenStream>(
     }
 
     Ok(())
+}
+
+fn parse_continuation_expr_with_min_bp<S: TokenStream>(
+    parser: &mut Parser<S>,
+    min_bp: u8,
+    allow_struct_init: bool,
+    allow_let_expr: bool,
+    condition_state: Option<Rc<RefCell<ConditionParseState>>>,
+) -> Result<(), Recovery<ErrProof>> {
+    let nt = parser.set_newline_as_trivia(false);
+    parser.bump_continuation_newlines();
+    let result = parse_expr_with_min_bp(
+        parser,
+        min_bp,
+        allow_struct_init,
+        allow_let_expr,
+        condition_state,
+    );
+    parser.set_newline_as_trivia(nt);
+    result
 }
 
 fn parse_expr_atom<S: TokenStream>(
@@ -409,8 +435,7 @@ impl super::Parse for BinExprScope {
             reported = true;
         }
         bump_bin_op(parser);
-        parser.set_newline_as_trivia(false);
-        let r = parse_expr_with_min_bp(
+        let r = parse_continuation_expr_with_min_bp(
             parser,
             self.rbp,
             false,
@@ -443,8 +468,7 @@ impl super::Parse for AugAssignExprScope {
         let nt = parser.set_newline_as_trivia(true);
         let (_, rbp) = infix_binding_power(parser).unwrap();
         bump_aug_assign_op(parser);
-        parser.set_newline_as_trivia(false);
-        let r = parse_expr_with_min_bp(
+        let r = parse_continuation_expr_with_min_bp(
             parser,
             rbp,
             false,
@@ -464,8 +488,7 @@ impl super::Parse for AssignExprScope {
         let nt = parser.set_newline_as_trivia(true);
         let (_, rbp) = infix_binding_power(parser).unwrap();
         parser.bump_expected(SyntaxKind::Eq);
-        parser.set_newline_as_trivia(false);
-        let r = parse_expr_with_min_bp(
+        let r = parse_continuation_expr_with_min_bp(
             parser,
             rbp,
             true,

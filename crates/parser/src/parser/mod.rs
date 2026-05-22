@@ -119,6 +119,25 @@ impl<S: TokenStream> Parser<S> {
         std::mem::replace(&mut self.is_newline_trivia, is_trivia)
     }
 
+    pub fn bump_continuation_newlines(&mut self) {
+        if !self.has_continuation_newline() {
+            return;
+        }
+
+        let mut saw_newline = false;
+        loop {
+            match self.peek_raw().map(|tok| tok.syntax_kind()) {
+                Some(SyntaxKind::WhiteSpace) => self.bump_raw(),
+                Some(SyntaxKind::Newline) => {
+                    saw_newline = true;
+                    self.bump_raw();
+                }
+                Some(SyntaxKind::Comment) if saw_newline => self.bump_raw(),
+                _ => break,
+            }
+        }
+    }
+
     /// Finish the parsing and return the GreeNode.
     pub fn finish(self) -> (GreenNode, Vec<ParseError>) {
         debug_assert!(self.parents.is_empty());
@@ -621,6 +640,33 @@ impl<S: TokenStream> Parser<S> {
         } else {
             self.stream.peek().cloned()
         }
+    }
+
+    fn has_continuation_newline(&mut self) -> bool {
+        self.stream.set_bt_point();
+
+        let mut next_trivia_index = 0;
+        let mut has_newline = false;
+        loop {
+            let kind = if let Some(tok) = self.next_trivias.get(next_trivia_index) {
+                next_trivia_index += 1;
+                Some(tok.syntax_kind())
+            } else {
+                self.stream.next().map(|tok| tok.syntax_kind())
+            };
+
+            match kind {
+                Some(SyntaxKind::WhiteSpace) => {}
+                Some(SyntaxKind::Newline) => {
+                    has_newline = true;
+                    break;
+                }
+                _ => break,
+            }
+        }
+
+        self.stream.backtrack();
+        has_newline
     }
 
     /// Skip trivias (and newlines), then peek the next three tokens.
