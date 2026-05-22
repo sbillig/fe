@@ -7,7 +7,7 @@
 //!   * Call `deposit(...)` on both with matching value.
 //!   * Call `get_deposit_root()` / `get_deposit_count()` on both and assert
 //!     byte-for-byte equality.
-//!   * Record gas per call.
+//!   * Record bytecode size and gas per call.
 
 use std::path::PathBuf;
 
@@ -15,8 +15,8 @@ use contract_harness::{ExecutionOptions, HarnessError, RuntimeInstance, U256};
 use ethers_core::abi::{AbiParser, Token};
 use ethers_core::utils::keccak256;
 use fe::bench_support::{
-    PRIMARY_SOL_IDX, SOL_VARIANTS, SolGasRow, compile_fe_sonatina, compile_solidity_pipeline,
-    print_sol_gas_table, sol_variant_label,
+    PRIMARY_SOL_IDX, SOL_VARIANTS, SolGasRow, compile_fe_sonatina_bytecode,
+    compile_solidity_pipeline_bytecode, fmt_delta_pct, print_sol_gas_table, sol_variant_label,
 };
 use sha2::{Digest, Sha256};
 
@@ -168,7 +168,7 @@ fn assert_reverts_match(
 // Compile helpers
 // ---------------------------------------------------------------------------
 
-fn compile_fe_deposit_runtime() -> String {
+fn compile_fe_deposit_bytecode() -> codegen::SonatinaContractBytecode {
     // Use the Sonatina backend. The Yul backend currently has a spill-slot bug
     // in `encode_root` that inflates dynamic-bytes returns by one 32-byte word
     // and leaks a raw memory pointer; Sonatina lowers the same Fe source
@@ -182,18 +182,17 @@ fn compile_fe_deposit_runtime() -> String {
     let fe_source_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/fe_test/deposit_contract.fe");
     let fe_source = std::fs::read_to_string(&fe_source_path).expect("read fe source");
-    let bytes = compile_fe_sonatina(&fe_source, "DepositContract", "DepositContract")
-        .expect("fe -> sonatina compile");
-    hex::encode(&bytes)
+    compile_fe_sonatina_bytecode(&fe_source, "DepositContract", "DepositContract")
+        .expect("fe -> sonatina compile")
 }
 
-fn compile_sol_deposit_runtimes(solc_path: Option<&str>) -> Vec<String> {
+fn compile_sol_deposit_bytecodes(solc_path: Option<&str>) -> Vec<solc_runner::ContractBytecode> {
     let sol_source = std::fs::read_to_string(fixture_dir().join("OfficialDepositContract.sol"))
         .expect("read sol source");
     SOL_VARIANTS
         .iter()
         .map(|(pipeline, optimize)| {
-            compile_solidity_pipeline(
+            compile_solidity_pipeline_bytecode(
                 &sol_source,
                 "DepositContract",
                 *optimize,
@@ -269,6 +268,94 @@ fn vectors() -> Vec<Vector> {
 }
 
 // ---------------------------------------------------------------------------
+// Reporting helpers
+// ---------------------------------------------------------------------------
+
+struct SolSizeRow {
+    label: &'static str,
+    fe: usize,
+    sol_variants: [usize; 4],
+}
+
+impl SolSizeRow {
+    fn sol_best(&self) -> usize {
+        *self.sol_variants.iter().min().unwrap()
+    }
+}
+
+fn hex_byte_len(bytecode: &str) -> usize {
+    let bytecode = bytecode.strip_prefix("0x").unwrap_or(bytecode);
+    assert_eq!(bytecode.len() % 2, 0, "hex bytecode should be byte-aligned");
+    bytecode.len() / 2
+}
+
+fn print_bytecode_size_table(
+    fe_bytecode: &codegen::SonatinaContractBytecode,
+    sol_bytecodes: &[solc_runner::ContractBytecode],
+) {
+    assert_eq!(
+        sol_bytecodes.len(),
+        SOL_VARIANTS.len(),
+        "expected one Solidity bytecode artifact per variant"
+    );
+
+    let mut sol_init_sizes = [0usize; 4];
+    let mut sol_runtime_sizes = [0usize; 4];
+    for (idx, bytecode) in sol_bytecodes.iter().enumerate() {
+        sol_init_sizes[idx] = hex_byte_len(&bytecode.bytecode);
+        sol_runtime_sizes[idx] = hex_byte_len(&bytecode.runtime_bytecode);
+    }
+
+    let rows = [
+        SolSizeRow {
+            label: "init",
+            fe: fe_bytecode.deploy.len(),
+            sol_variants: sol_init_sizes,
+        },
+        SolSizeRow {
+            label: "runtime",
+            fe: fe_bytecode.runtime.len(),
+            sol_variants: sol_runtime_sizes,
+        },
+    ];
+    let variant_headers: Vec<&'static str> = SOL_VARIANTS
+        .iter()
+        .map(|(p, o)| sol_variant_label(*p, *o))
+        .collect();
+
+    println!("bytecode size (bytes)");
+    println!(
+        "{:<8} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10} {:>14}",
+        "artifact",
+        "fe bytes",
+        variant_headers[0],
+        variant_headers[1],
+        variant_headers[2],
+        variant_headers[3],
+        "smallest",
+        "fe vs smallest",
+    );
+    println!("{}", "-".repeat(8 + 1 + 10 * 6 + 1 + 14 + 6));
+    for row in rows {
+        let best = row.sol_best();
+        let delta_abs = row.fe as i64 - best as i64;
+        let delta_pct = fmt_delta_pct(row.fe as u64, best as u64);
+        println!(
+            "{:<8} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}   {:>+6} ({:>5})",
+            row.label,
+            row.fe,
+            row.sol_variants[0],
+            row.sol_variants[1],
+            row.sol_variants[2],
+            row.sol_variants[3],
+            best,
+            delta_abs,
+            delta_pct,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Test
 // ---------------------------------------------------------------------------
 
@@ -281,16 +368,17 @@ fn differential_deposit() {
     }
     let solc_path_str = solc_path.as_deref();
 
-    let fe_bytecode = compile_fe_deposit_runtime();
-    let sol_bytecodes = compile_sol_deposit_runtimes(solc_path_str);
+    let fe_bytecode = compile_fe_deposit_bytecode();
+    let sol_bytecodes = compile_sol_deposit_bytecodes(solc_path_str);
 
-    let mut fe = RuntimeInstance::deploy(&fe_bytecode).expect("deploy fe");
+    let fe_deploy_bytecode = hex::encode(&fe_bytecode.deploy);
+    let mut fe = RuntimeInstance::deploy(&fe_deploy_bytecode).expect("deploy fe");
     let mut sols: Vec<RuntimeInstance> = sol_bytecodes
         .iter()
         .enumerate()
         .map(|(i, bc)| {
             let (pipeline, optimize) = SOL_VARIANTS[i];
-            RuntimeInstance::deploy(bc).unwrap_or_else(|e| {
+            RuntimeInstance::deploy(&bc.bytecode).unwrap_or_else(|e| {
                 panic!("deploy {}: {e:?}", sol_variant_label(pipeline, optimize))
             })
         })
@@ -543,5 +631,7 @@ fn differential_deposit() {
         "Differential deposit — correctness OK across {} deposits.",
         gas_rows.len()
     );
+    print_bytecode_size_table(&fe_bytecode, &sol_bytecodes);
+    println!();
     print_sol_gas_table(&gas_rows, "call", 12);
 }

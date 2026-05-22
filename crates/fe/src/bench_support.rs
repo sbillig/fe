@@ -61,6 +61,18 @@ pub fn compile_solidity_pipeline(
     pipeline: SolidityPipeline,
     solc_path: Option<&str>,
 ) -> Result<String, String> {
+    compile_solidity_pipeline_bytecode(source, contract_name, optimize, pipeline, solc_path)
+        .map(|bc| bc.bytecode)
+}
+
+/// Compile Solidity source with an explicit pipeline and return deploy/runtime bytecode.
+pub fn compile_solidity_pipeline_bytecode(
+    source: &str,
+    contract_name: &str,
+    optimize: bool,
+    pipeline: SolidityPipeline,
+    solc_path: Option<&str>,
+) -> Result<solc_runner::ContractBytecode, String> {
     solc_runner::compile_solidity_with_pipeline(
         contract_name,
         source,
@@ -68,7 +80,6 @@ pub fn compile_solidity_pipeline(
         pipeline,
         solc_path,
     )
-    .map(|bc| bc.bytecode)
     .map_err(|e| {
         format!(
             "{} compile error: {}",
@@ -84,6 +95,15 @@ pub fn compile_fe_sonatina(
     name: &str,
     contract_name: &str,
 ) -> Result<Vec<u8>, String> {
+    compile_fe_sonatina_bytecode(fe_source, name, contract_name).map(|bc| bc.deploy)
+}
+
+/// Compile Fe source to deploy/runtime bytecode via Sonatina backend.
+pub fn compile_fe_sonatina_bytecode(
+    fe_source: &str,
+    name: &str,
+    contract_name: &str,
+) -> Result<codegen::SonatinaContractBytecode, String> {
     let contract_name_owned = contract_name.to_string();
     let name_owned = name.to_string();
     with_fe_ingot(fe_source, name, move |db, ingot| {
@@ -100,11 +120,9 @@ pub fn compile_fe_sonatina(
             Some(&contract_name_owned),
         )
         .map_err(|err| format!("fe/sonatina emit error for {name_owned}: {err}"))?;
-        map.remove(&contract_name_owned)
-            .map(|bc| bc.deploy)
-            .ok_or_else(|| {
-                format!("fe/sonatina: no bytecode emitted for contract `{contract_name_owned}`")
-            })
+        map.remove(&contract_name_owned).ok_or_else(|| {
+            format!("fe/sonatina: no bytecode emitted for contract `{contract_name_owned}`")
+        })
     })?
 }
 
