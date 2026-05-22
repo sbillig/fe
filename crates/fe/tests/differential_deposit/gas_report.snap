@@ -5,13 +5,13 @@ expression: report
 bytecode size
 path         fe-O2        sol     sol-IR    fe vs sol-IR
 ------------------------------------------------------------
-init          5136       4819       3082  +2054 (+66.6%)
-runtime       4972       4445       2844  +2128 (+74.8%)
+init          5225       4819       3082  +2143 (+69.5%)
+runtime       5046       4445       2844  +2202 (+77.4%)
 
 deployment gas
 path        fe-O2        sol     sol-IR      fe vs sol-IR
 -------------------------------------------------------------
-deploy    1823761    1738847    1379411  +444350 (+32.2%)
+deploy    1840126    1738847    1379411  +460715 (+33.4%)
 
 call gas
 path                            fe-O2        sol     sol-IR   fe vs sol-IR
@@ -21,13 +21,13 @@ supportsInterface(deposit)      21672      21641      21600    +72 (+0.3%)
 supportsInterface(unknown)      21659      21641      21600    +59 (+0.3%)
 get_deposit_root(empty)        107906     117558     109178  -1272 (-1.2%)
 get_deposit_count(empty)        23774      24510      24099   -325 (-1.3%)
-deposit#0                       82086      84626      81089   +997 (+1.2%)
+deposit#0                       81603      84626      81089   +514 (+0.6%)
 get_deposit_root(after#0)      107919     117570     109174  -1255 (-1.1%)
 get_deposit_count(after#0)      23774      24510      24099   -325 (-1.3%)
-deposit#1                       67528      70411      66629   +899 (+1.3%)
+deposit#1                       67045      70411      66629   +416 (+0.6%)
 get_deposit_root(after#1)      107919     117570     109174  -1255 (-1.1%)
 get_deposit_count(after#1)      23774      24510      24099   -325 (-1.3%)
-deposit#2                       47874      50414      46877   +997 (+2.1%)
+deposit#2                       47391      50414      46877   +514 (+1.1%)
 get_deposit_root(after#2)      107932     117582     109170  -1238 (-1.1%)
 get_deposit_count(after#2)      23774      24510      24099   -325 (-1.3%)
-TOTAL                          789235     838656     792487  -3252 (-0.4%)
+TOTAL                          787786     838656     792487  -4701 (-0.6%)

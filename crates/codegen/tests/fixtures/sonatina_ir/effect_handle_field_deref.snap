@@ -140,6 +140,24 @@ func private %std__lib__evm__effects__impl_trait_Evm_c913__abort_ffa6() {
         unreachable;
 }
 
+func inline(always) private %at(v0.i256) -> @layout_0 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i256 = mload v1 i256;
+        v4.objref<@layout_0> = obj.alloc @layout_0;
+        v6.objref<i256> = obj.proj v4 0.i256;
+        obj.store v6 v2;
+        v8.objref<i256> = obj.proj v4 1.i256;
+        obj.store v8 v3;
+        v9.@layout_0 = obj.load v4;
+        return v9;
+}
+
 func private %base(v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
@@ -1013,13 +1031,8 @@ func private %impl_SolEncoder__new(v0.i256) -> @layout_0 {
 
     block4:
         v8.i256 = phi (0.i256 block2) (v7 block3);
-        v9.objref<@layout_0> = obj.alloc @layout_0;
-        v10.objref<i256> = obj.proj v9 0.i256;
-        obj.store v10 v8;
-        v12.objref<i256> = obj.proj v9 1.i256;
-        obj.store v12 v8;
-        v13.@layout_0 = obj.load v9;
-        return v13;
+        v9.@layout_0 = call %at v8;
+        return v9;
 }
 
 func inline(always) private %std__lib__evm__calldata__impl_CallData_8f43__new_ac71() -> @layout_2 {
