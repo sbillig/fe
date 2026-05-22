@@ -1,11 +1,12 @@
 use common::InputDb;
 use driver::DriverDataBase;
-use fe_codegen::emit_module_sonatina_ir;
+use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_runtime_package_sonatina_ir_optimized};
 use hir::hir_def::TopLevelMod;
 use mir::runtime::{AddressSpaceKind, RefKind};
 use mir::{
-    Layout, LayoutId, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt, RuntimeCarrier, RuntimeClass,
-    RuntimeInstance, RuntimeLocalRoot, build_runtime_package, build_test_runtime_package,
+    IntrinsicArithBinOp, Layout, LayoutId, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt,
+    RuntimeBody, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeInstance, RuntimeLocalRoot,
+    RuntimePackage, build_runtime_package, build_test_runtime_package,
 };
 use url::Url;
 
@@ -20,6 +21,23 @@ fn sonatina_function_body<'a>(ir: &'a str, name: &str) -> &'a str {
         .or_else(|| tail.find("\n\nobject "))
         .unwrap_or(tail.len());
     &tail[..end]
+}
+
+fn sonatina_ops(body: &str) -> Vec<&str> {
+    body.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rhs = line.split_once(" = ")?.1;
+            rhs.split_whitespace().next()
+        })
+        .collect()
+}
+
+fn contains_op_subsequence(body: &str, expected: &[&str]) -> bool {
+    let mut ops = sonatina_ops(body).into_iter();
+    expected
+        .iter()
+        .all(|expected| ops.any(|op| op == *expected))
 }
 
 fn with_top_mod_for_source<T>(
@@ -75,6 +93,50 @@ macro_rules! with_test_runtime_package {
             build_test_runtime_package(&$db, top_mod, None).expect("runtime test package");
         $body
     }};
+}
+
+fn runtime_body_for_symbol<'db>(
+    db: &'db DriverDataBase,
+    package: RuntimePackage<'db>,
+    symbol: &str,
+) -> RuntimeBody<'db> {
+    let function = package
+        .functions(db)
+        .iter()
+        .copied()
+        .find(|function| function.symbol(db).contains(symbol))
+        .unwrap_or_else(|| panic!("missing runtime function `{symbol}`"));
+    function.instance(db).body(db)
+}
+
+fn runtime_body_stmts<'a, 'db>(body: &'a RuntimeBody<'db>) -> impl Iterator<Item = &'a RStmt<'db>> {
+    body.blocks.iter().flat_map(|block| block.stmts.iter())
+}
+
+fn body_has_object_materialization(body: &RuntimeBody<'_>) -> bool {
+    runtime_body_stmts(body).any(|stmt| {
+        matches!(
+            stmt,
+            RStmt::Assign {
+                expr: RExpr::MaterializeToObject { .. } | RExpr::MaterializePlaceToObject { .. },
+                ..
+            }
+        )
+    })
+}
+
+fn body_extracts_param_fields(body: &RuntimeBody<'_>, param: RLocalId, fields: &[u32]) -> bool {
+    fields.iter().all(|field| {
+        runtime_body_stmts(body).any(|stmt| {
+            matches!(
+                stmt,
+                RStmt::Assign {
+                    expr: RExpr::AggregateExtract { value, index },
+                    ..
+                } if *value == param && index == field
+            )
+        })
+    })
 }
 
 fn storage_pair_ref_layout<'db>(class: &RuntimeClass<'db>) -> Option<LayoutId<'db>> {
@@ -496,6 +558,51 @@ fn mem_ptr_from_raw_helpers_use_raw_addr_transport_in_rmir() {
 }
 
 #[test]
+fn object_backed_nested_const_handle_fields_load_carriers_before_const_projection() {
+    let output = sonatina_ir_for_source(
+        "object_backed_nested_const_handle_fields_load_carriers_before_const_projection.fe",
+        r#"struct Data {
+    x: u256,
+}
+
+struct View {
+    d: ref Data,
+}
+
+fn read(v: own View) -> u256 {
+    v.d.x
+}
+
+pub fn entry() -> u256 {
+    let data = Data { x: 1 }
+    let view = View { d: ref data }
+    read(view)
+}
+"#,
+    );
+    let read = sonatina_function_body(&output, "read");
+
+    assert!(
+        contains_op_subsequence(read, &["obj.proj", "obj.load", "const.proj", "const.load"]),
+        "object-backed aggregates may store nested const refs, but field access must load the handle carrier before projecting through the const ref:\n{read}"
+    );
+}
+
+#[test]
+fn storage_backed_nested_handle_fields_follow_carriers_before_projecting_children() {
+    let output = sonatina_ir_for_source(
+        "storage_backed_nested_handle_fields_follow_carriers_before_projecting_children.fe",
+        include_str!("fixtures/effect_handle_field_deref.fe").to_string(),
+    );
+    let bump = sonatina_function_body(&output, "bump");
+
+    assert!(
+        contains_op_subsequence(bump, &["obj.proj", "obj.load", "evm_sload"]),
+        "nested storage-backed handle field access should load/follow the carrier before loading children:\n{bump}"
+    );
+}
+
+#[test]
 fn storage_backed_nested_handle_field_borrows_use_storage_transport() {
     with_runtime_package!(
         "storage_backed_nested_handle_field_borrows_use_storage_transport.fe",
@@ -553,6 +660,196 @@ fn storage_backed_nested_handle_field_borrows_use_storage_transport() {
                     }
                 ),
                 "nested storage-backed field borrow should use storage transport, not object/memory transport:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn projected_enum_field_snapshots_preserve_full_enum_payloads() {
+    let output = sonatina_ir_for_source(
+        "projected_enum_field_snapshots_preserve_full_enum_payloads.fe",
+        r#"enum Flag {
+    A(u256),
+    B(u256),
+}
+
+impl Copy for Flag {}
+
+struct Inner {
+    flag: Flag,
+}
+
+struct Wrapper {
+    inner: Inner,
+}
+
+fn repack(wrapper: Wrapper) -> Inner {
+    let flag = wrapper.inner.flag
+    let copy = flag
+    Inner { flag: copy }
+}
+
+fn entry() -> Inner {
+    repack(Wrapper {
+        inner: Inner { flag: Flag::A(42) },
+    })
+}
+"#,
+    );
+    let repack = sonatina_function_body(&output, "repack");
+
+    assert!(
+        repack.contains("obj.load") && repack.contains("obj.store"),
+        "repack should preserve the full enum payload through object loads/stores:\n{repack}"
+    );
+    assert!(
+        !sonatina_ops(repack)
+            .into_iter()
+            .any(|op| op == "enum_tag" || op == "enum_tag_of"),
+        "projected enum field payload should stay a full enum value, not an enum tag:\n{repack}"
+    );
+}
+
+#[test]
+fn immutable_own_aggregate_param_field_reads_stay_unrooted() {
+    with_runtime_package!(
+        "immutable_own_aggregate_param_field_reads_stay_unrooted.fe",
+        r#"struct Pair {
+    left: u256,
+    right: u256,
+}
+
+fn sum_pair(_ pair: own Pair) -> u256 {
+    pair.left + pair.right
+}
+
+fn entry() -> u256 {
+    sum_pair(Pair { left: 1, right: 2 })
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "sum_pair");
+            let pair = RLocalId::from_u32(0);
+
+            assert!(
+                matches!(
+                    body.signature.params[0].class,
+                    RuntimeClass::AggregateValue { .. }
+                ),
+                "owned aggregate param should be passed as an aggregate value:\n{body:#?}"
+            );
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::None),
+                "field-read-only owned aggregate param should not get a runtime root:\n{body:#?}"
+            );
+            assert!(
+                body_extracts_param_fields(&body, pair, &[0, 1]),
+                "field reads should extract directly from the aggregate param:\n{body:#?}"
+            );
+            assert!(
+                !body_has_object_materialization(&body),
+                "field-read-only owned aggregate param should not materialize to an object:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn read_only_mut_own_aggregate_receiver_field_reads_stay_unrooted() {
+    with_runtime_package!(
+        "read_only_mut_own_aggregate_receiver_field_reads_stay_unrooted.fe",
+        r#"struct Pair {
+    left: u256,
+    right: u256,
+}
+
+impl Pair {
+    fn sum(mut own self) -> u256 {
+        self.left + self.right
+    }
+}
+
+fn entry() -> u256 {
+    Pair { left: 1, right: 2 }.sum()
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "sum");
+            let receiver = RLocalId::from_u32(0);
+
+            assert!(
+                matches!(
+                    body.signature.params[0].class,
+                    RuntimeClass::AggregateValue { .. }
+                ),
+                "mut own receiver should still be passed as an aggregate value:\n{body:#?}"
+            );
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::None),
+                "read-only mut own aggregate receiver should not get a runtime root:\n{body:#?}"
+            );
+            assert!(
+                body_extracts_param_fields(&body, receiver, &[0, 1]),
+                "receiver field reads should extract directly from the aggregate param:\n{body:#?}"
+            );
+            assert!(
+                !body_has_object_materialization(&body),
+                "read-only mut own aggregate receiver should not materialize to an object:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn mutating_mut_own_aggregate_receiver_stays_rooted() {
+    with_runtime_package!(
+        "mutating_mut_own_aggregate_receiver_stays_rooted.fe",
+        r#"struct Pair {
+    left: u256,
+    right: u256,
+}
+
+impl Pair {
+    fn bump(mut own self) -> Pair {
+        self.left += 1
+        self
+    }
+}
+
+fn entry() -> Pair {
+    Pair { left: 1, right: 2 }.bump()
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "bump");
+            let receiver = RLocalId::from_u32(0);
+
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::Slot(_)),
+                "mutated mut own aggregate receiver should keep object-backed runtime storage:\n{body:#?}"
+            );
+            assert!(
+                runtime_body_stmts(&body).any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Assign {
+                            expr: RExpr::AddrOf { place },
+                            ..
+                        } if place.root == PlaceRoot::Slot(receiver)
+                                && matches!(place.path.as_ref(), [PlaceElem::Field(_)])
+                    )
+                }),
+                "field mutation should take the address of the rooted receiver field:\n{body:#?}"
+            );
+            assert!(
+                runtime_body_stmts(&body).any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Store { dst, .. } if matches!(dst.root, PlaceRoot::Ref(_))
+                    )
+                }),
+                "field mutation should store through the rooted receiver field ref:\n{body:#?}"
             );
         }
     );
@@ -1354,6 +1651,28 @@ fn entry() -> u256 {
 }
 
 #[test]
+fn sonatina_enum_tag_matches_preserve_typed_tag_values() {
+    let _ = sonatina_ir_for_source(
+        "sonatina_enum_tag_matches_preserve_typed_tag_values.fe",
+        r#"enum Maybe {
+    None,
+    Some(u256),
+}
+
+pub fn code(x: Maybe) -> u256 {
+    match x {
+        Maybe::None => 0,
+        Maybe::Some(v) => v,
+    }
+}
+
+pub fn main() -> u256 {
+    code(Maybe::Some(1))
+}"#,
+    );
+}
+
+#[test]
 fn object_backed_scalar_field_borrows_lower_as_typed_refs() {
     with_runtime_package!(
         "object_backed_scalar_field_borrows_lower_as_typed_refs.fe",
@@ -1395,6 +1714,88 @@ fn object_backed_scalar_field_borrows_lower_as_typed_refs() {
                 saw_scalar_ref_borrow,
                 "expected at least one object-backed scalar field borrow to lower as RuntimeClass::Ref"
             );
+        }
+    );
+}
+
+#[test]
+fn checked_overflow_exprs_survive_into_rmir() {
+    with_runtime_package!(
+        "debug_checked_add_unused_local_rmir.fe",
+        r#"
+fn test_add_overflow_u8() {
+    let x: u8 = 255
+    let y: u8 = x + 1
+}
+"#,
+        |db, package| {
+            let func = package
+                .functions(&db)
+                .iter()
+                .copied()
+                .find(|function| function.symbol(&db).contains("test_add_overflow_u8"))
+                .expect("generated runtime function");
+            let body = func.instance(&db).body(&db);
+            assert!(
+                body.blocks
+                    .iter()
+                    .flat_map(|block| block.stmts.iter())
+                    .any(|stmt| {
+                        matches!(
+                            stmt,
+                            RStmt::Assign {
+                                expr: RExpr::Call { .. }
+                                    | RExpr::Builtin(RuntimeBuiltin::IntrinsicArith {
+                                        op: IntrinsicArithBinOp::Add,
+                                        checked: true,
+                                        ..
+                                    }),
+                                ..
+                            }
+                        )
+                    }),
+                "checked overflow expression should survive semantic const canonicalization and lower to executable rMIR arithmetic:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn unit_branch_mutations_do_not_use_erased_call_results() {
+    with_runtime_package!(
+        "unit_branch_mutations_do_not_use_erased_call_results.fe",
+        r#"
+#[test]
+fn unit_branch_add_assign() {
+    let mut x: usize = 0
+    if true {
+        x += 1
+    } else {
+        x += 1
+    }
+}
+"#,
+        |db, package| {
+            for function in package.functions(&db) {
+                let body = function.instance(&db).body(&db);
+                assert!(
+                    !body
+                        .blocks
+                        .iter()
+                        .flat_map(|block| block.stmts.iter())
+                        .any(|stmt| {
+                            matches!(
+                                stmt,
+                                RStmt::Assign {
+                                    expr: RExpr::Use(value),
+                                    ..
+                                } if body.value_class(*value).is_none()
+                            )
+                        }),
+                    "unit-valued mutation branches should not try to use erased call results:\n{}:\n{body:#?}",
+                    function.symbol(&db),
+                );
+            }
         }
     );
 }
@@ -1514,6 +1915,88 @@ fn use_returned_array() -> u8 {
                     Some(RuntimeClass::AggregateValue { .. })
                 )),
                 "by-value aggregate call results should stay visible aggregate values in callers, not object refs:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn by_value_array_return_materialization_structurally_copies_into_object_storage() {
+    with_runtime_package!(
+        "by_value_array_return_materialization_structurally_copies_into_object_storage.fe",
+        r#"
+fn return_array_after_projection(xs: [u256; 3]) -> [u256; 3] {
+    let ys = xs
+    let _ = ys[2]
+    ys
+}
+
+fn use_returned_array() -> u256 {
+    let mut xs: [u256; 3] = [1, 2, 3]
+    xs = return_array_after_projection(xs)
+    xs[0]
+}
+"#,
+        |db, package| {
+            let output = emit_runtime_package_sonatina_ir_optimized(
+                &db,
+                &package,
+                fe_codegen::EVM_LAYOUT,
+                OptLevel::O0,
+            )
+            .expect("Sonatina IR");
+            let body = sonatina_function_body(&output, "use_returned_array");
+
+            assert!(
+                body.contains("extract_value"),
+                "by-value aggregate materialization should structurally extract fields instead of whole-object obj.store:\n{body}"
+            );
+            assert!(
+                body.contains("obj.load"),
+                "object-backed aggregate copies should load leaf values from the source object before storing them:\n{body}"
+            );
+        }
+    );
+}
+
+#[test]
+fn fieldless_enum_fields_copy_into_object_storage_via_enum_ops() {
+    with_test_runtime_package!(
+        "fieldless_enum_fields_copy_into_object_storage_via_enum_ops.fe",
+        r#"
+enum E {
+    A,
+    B,
+}
+
+struct Pair {
+    xs: [u256; 3],
+    e: E,
+}
+
+fn build(flag: bool) -> Pair {
+    let xs: [u256; 3] = [1, 2, 3]
+    let e = if flag { E::A } else { E::B }
+    Pair { xs, e }
+}
+
+#[test]
+fn exercise() {
+    let pair = build(true)
+    assert(pair.xs[0] == 1)
+}
+"#,
+        |db, package| {
+            let output = emit_runtime_package_sonatina_ir_optimized(
+                &db,
+                &package,
+                fe_codegen::EVM_LAYOUT,
+                OptLevel::O0,
+            )
+            .expect("Sonatina IR");
+            assert!(
+                output.contains("enum.set_tag"),
+                "fieldless enum object copies should set the destination enum tag explicitly:\n{output}"
             );
         }
     );

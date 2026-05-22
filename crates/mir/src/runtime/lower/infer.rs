@@ -646,14 +646,13 @@ fn local_lowers_as_direct_read_value<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    if !matches!(
-        carrier_value_class_for_runtime(carrier),
-        Some(RuntimeClass::AggregateValue { .. })
-    ) {
+    let Some(class @ RuntimeClass::AggregateValue { .. }) =
+        carrier_value_class_for_runtime(carrier)
+    else {
         return false;
-    }
+    };
     match local.facts.interface {
-        SemanticLocalKind::DirectValue => local_is_read_only_view_param(local),
+        SemanticLocalKind::DirectValue => local_direct_value_lowers_as_unrooted(local, db, &class),
         SemanticLocalKind::PlaceCarrier => {
             local_is_read_only_view_param(local)
                 && place_carrier_lowers_as_direct_value(db, local, carrier, scope, assumptions)
@@ -661,6 +660,44 @@ fn local_lowers_as_direct_read_value<'db>(
         SemanticLocalKind::Erased
         | SemanticLocalKind::DirectCarrier
         | SemanticLocalKind::PlaceBoundValue => false,
+    }
+}
+
+fn local_direct_value_lowers_as_unrooted<'db>(
+    local: &NSLocal<'db>,
+    db: &'db dyn MirDb,
+    class: &RuntimeClass<'db>,
+) -> bool {
+    match local.source {
+        Some(LocalBinding::Param {
+            mode: FuncParamMode::View,
+            ..
+        }) => true,
+        Some(LocalBinding::Param {
+            mode: FuncParamMode::Own,
+            ..
+        }) => !runtime_class_contains_transport(db, class),
+        _ => false,
+    }
+}
+
+fn runtime_class_contains_transport<'db>(db: &'db dyn MirDb, class: &RuntimeClass<'db>) -> bool {
+    match class {
+        RuntimeClass::Scalar(_) => false,
+        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => true,
+        RuntimeClass::AggregateValue { layout } => match layout.data(db) {
+            Layout::Struct(layout) => layout
+                .fields
+                .iter()
+                .any(|field| runtime_class_contains_transport(db, field)),
+            Layout::Array(layout) => runtime_class_contains_transport(db, &layout.elem),
+            Layout::Enum(layout) => layout.variants.iter().any(|variant| {
+                variant
+                    .fields
+                    .iter()
+                    .any(|field| runtime_class_contains_transport(db, field))
+            }),
+        },
     }
 }
 
@@ -687,11 +724,7 @@ fn local_lowers_as_unrooted_read_value<'db>(
         return false;
     }
     let demand = local.facts.root_demand;
-    if demand.written_by_place
-        || demand.borrowed_or_addr_taken
-        || demand.mut_borrowed_or_addr_taken
-        || demand.passed_by_place
-    {
+    if !demand.permits_unrooted_value_projection_reads() {
         return false;
     }
     local_read_places_extractable_from_value(body, local_id)

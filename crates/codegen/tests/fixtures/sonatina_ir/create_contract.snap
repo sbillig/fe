@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 403
 expression: output
 input_file: crates/codegen/tests/fixtures/create_contract.fe
 ---
@@ -991,20 +990,13 @@ func private %dynamic_payload_size(v0.i256) -> i256 {
 
 func private %encode__g7769(v0.@layout_1, v1.objref<@layout_2>) {
     block0:
-        v2.objref<@layout_1> = obj.alloc @layout_1;
-        v3.*i256 = alloca i256;
-        v5.objref<i256> = obj.proj v2 0.i256;
-        v6.i256 = extract_value v0 0.i256;
-        obj.store v5 v6;
-        v8.objref<i256> = obj.proj v2 1.i256;
-        v9.i256 = extract_value v0 1.i256;
-        obj.store v8 v9;
+        v2.*i256 = alloca i256;
         jump block1;
 
     block1:
-        v11.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_0639_0 v1;
-        (v13.i256, v14.i1) = uaddo v11 64.i256;
-        br v14 block2 block3;
+        v4.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_0639_0 v1;
+        (v6.i256, v7.i1) = uaddo v4 64.i256;
+        br v7 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -1012,30 +1004,23 @@ func private %encode__g7769(v0.@layout_1, v1.objref<@layout_2>) {
         evm_revert 0.i256 36.i256;
 
     block3:
-        mstore v3 v13 i256;
-        v19.objref<i256> = obj.proj v2 0.i256;
-        v20.i256 = obj.load v19;
-        v22.i256 = ptr_to_int v3 i256;
-        call %encode_field__g2e64 v20 v1 v22;
-        v24.objref<i256> = obj.proj v2 1.i256;
-        v25.i256 = obj.load v24;
-        v26.i256 = ptr_to_int v3 i256;
-        call %encode_field__g2e64 v25 v1 v26;
+        mstore v2 v6 i256;
+        v14.i256 = extract_value v0 0.i256;
+        v16.i256 = ptr_to_int v2 i256;
+        call %encode_field__g2e64 v14 v1 v16;
+        v19.i256 = extract_value v0 1.i256;
+        v20.i256 = ptr_to_int v2 i256;
+        call %encode_field__g2e64 v19 v1 v20;
         return;
 }
 
 func private %impl_trait_Address__encode__g426c(v0.@layout_0, v1.objref<@layout_2>) {
     block0:
-        v2.objref<@layout_0> = obj.alloc @layout_0;
-        v4.objref<i256> = obj.proj v2 0.i256;
-        v5.i256 = extract_value v0 0.i256;
-        obj.store v4 v5;
         jump block1;
 
     block1:
-        v6.objref<i256> = obj.proj v2 0.i256;
-        v7.i256 = obj.load v6;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_2c07 v1 v7;
+        v4.i256 = extract_value v0 0.i256;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_2c07 v1 v4;
         return;
 }
 
@@ -1229,19 +1214,14 @@ func private %impl_trait_u256__encode_to_ptr__gf13e(v0.i256, v1.i256) {
 
 func private %impl_trait_Address__encode_to_ptr__gf13e(v0.@layout_0, v1.i256) {
     block0:
-        v2.objref<@layout_0> = obj.alloc @layout_0;
-        v3.*i256 = alloca i256;
-        v5.objref<i256> = obj.proj v2 0.i256;
-        v6.i256 = extract_value v0 0.i256;
-        obj.store v5 v6;
-        mstore v3 v1 i256;
+        v2.*i256 = alloca i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
-        v7.i256 = mload v3 i256;
-        v8.objref<i256> = obj.proj v2 0.i256;
-        v9.i256 = obj.load v8;
-        call %std__lib__abi__sol__impl_trait_Sol_1f5f__store_word_d9ea v7 v9;
+        v3.i256 = mload v2 i256;
+        v6.i256 = extract_value v0 0.i256;
+        call %std__lib__abi__sol__impl_trait_Sol_1f5f__store_word_d9ea v3 v6;
         return;
 }
 
