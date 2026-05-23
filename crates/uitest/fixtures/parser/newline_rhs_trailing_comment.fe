@@ -1,0 +1,7 @@
+fn f() {
+    let x = 1
+    let y = // missing value
+    if x > 0 {
+        y
+    }
+}

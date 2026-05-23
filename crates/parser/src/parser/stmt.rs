@@ -8,7 +8,7 @@ use super::{
     ErrProof, Parser, Recovery,
     attr::parse_attr_list,
     define_scope,
-    expr::{parse_condition_expr, parse_expr, parse_expr_no_struct},
+    expr::{parse_condition_expr, parse_continuation_expr, parse_expr, parse_expr_no_struct},
     expr_atom::BlockExprScope,
     pat::parse_pat,
     token_stream::TokenStream,
@@ -78,7 +78,7 @@ impl super::Parse for LetStmtScope {
         }
 
         if parser.bump_if(SyntaxKind::Eq) {
-            parse_expr(parser)?;
+            parse_continuation_expr(parser)?;
         }
         Ok(())
     }

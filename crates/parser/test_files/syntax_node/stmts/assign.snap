@@ -1,9 +1,9 @@
 ---
 source: crates/parser/tests/syntax_node.rs
 expression: node
-input_file: crates/parser/test_files/syntax_node/stmts/assign.fe
+input_file: test_files/syntax_node/stmts/assign.fe
 ---
-Root@0..21
+Root@0..50
   ExprStmt@0..5
     AssignExpr@0..5
       PathExpr@0..1
@@ -45,3 +45,36 @@ Root@0..21
         Path@18..21
           PathSegment@18..21
             Ident@18..21 "foo"
+  Newline@21..22 "\n"
+  ExprStmt@22..31
+    AssignExpr@22..31
+      PathExpr@22..23
+        Path@22..23
+          PathSegment@22..23
+            Ident@22..23 "x"
+      WhiteSpace@23..24 " "
+      Eq@24..25 "="
+      Newline@25..26 "\n"
+      WhiteSpace@26..30 "    "
+      LitExpr@30..31
+        Lit@30..31
+          Int@30..31 "2"
+  Newline@31..32 "\n"
+  ExprStmt@32..49
+    AssignExpr@32..49
+      FieldExpr@32..39
+        PathExpr@32..35
+          Path@32..35
+            PathSegment@32..35
+              Ident@32..35 "foo"
+        Dot@35..36 "."
+        Ident@36..39 "bar"
+      WhiteSpace@39..40 " "
+      Eq@40..41 "="
+      Newline@41..42 "\n"
+      WhiteSpace@42..46 "    "
+      PathExpr@46..49
+        Path@46..49
+          PathSegment@46..49
+            Ident@46..49 "baz"
+  Newline@49..50 "\n"

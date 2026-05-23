@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/parser.rs
+expression: diags
+input_file: fixtures/parser/newline_rhs_trailing_comment.fe
+---
+error[1-0001]: expected expression
+  ┌─ newline_rhs_trailing_comment.fe:3:12
+  │
+3 │     let y = // missing value
+  │            ^ expected expression
