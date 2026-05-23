@@ -12,6 +12,7 @@ ast_node! {
     | SK::UnExpr
     | SK::CastExpr
     | SK::CallExpr
+    | SK::MacroCallExpr
     | SK::MethodCallExpr
     | SK::PathExpr
     | SK::RecordInitExpr
@@ -39,6 +40,7 @@ impl Expr {
             SK::UnExpr => ExprKind::Un(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::CastExpr => ExprKind::Cast(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::CallExpr => ExprKind::Call(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::MacroCallExpr => ExprKind::MacroCall(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::MethodCallExpr => {
                 ExprKind::MethodCall(AstNode::cast(self.syntax().clone()).unwrap())
             }
@@ -160,6 +162,28 @@ impl CallExpr {
     }
 
     /// Returns the arguments of the call expression.
+    pub fn args(&self) -> Option<super::CallArgList> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// `name!(arg1, arg2, ..)`
+    pub struct MacroCallExpr,
+    SK::MacroCallExpr,
+}
+impl MacroCallExpr {
+    /// Returns the macro callee.
+    pub fn callee(&self) -> Option<Expr> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the `!` token.
+    pub fn bang(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Not)
+    }
+
+    /// Returns the arguments of the macro call expression.
     pub fn args(&self) -> Option<super::CallArgList> {
         support::child(self.syntax())
     }
@@ -478,6 +502,7 @@ pub enum ExprKind {
     Un(UnExpr),
     Cast(CastExpr),
     Call(CallExpr),
+    MacroCall(MacroCallExpr),
     MethodCall(MethodCallExpr),
     Path(PathExpr),
     RecordInit(RecordInitExpr),

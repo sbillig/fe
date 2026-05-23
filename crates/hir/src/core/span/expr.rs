@@ -41,6 +41,10 @@ impl<'db> LazyExprSpan<'db> {
         LazyCallExprSpan(self.0)
     }
 
+    pub fn into_macro_call_expr(self) -> LazyMacroCallExprSpan<'db> {
+        LazyMacroCallExprSpan(self.0)
+    }
+
     pub fn into_method_call_expr(self) -> LazyMethodCallExprSpan<'db> {
         LazyMethodCallExprSpan(self.0)
     }
@@ -124,6 +128,15 @@ define_lazy_span_node!(
 define_lazy_span_node!(
     LazyCallExprSpan,
     ast::CallExpr,
+    @node {
+        (callee, callee, LazyExprSpan),
+        (args, args, LazyCallArgListSpan),
+    }
+);
+
+define_lazy_span_node!(
+    LazyMacroCallExprSpan,
+    ast::MacroCallExpr,
     @node {
         (callee, callee, LazyExprSpan),
         (args, args, LazyCallArgListSpan),

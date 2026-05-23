@@ -1931,6 +1931,11 @@ pub(crate) fn invalid_cause_from_ctfe_error<'db>(
     };
     let expr = origin_expr_for_const_eval_diag(db, body, origin);
     match root_err {
+        CtfeError::AssertionFailed { message, .. } => InvalidCause::ConstEvalAssertionFailed {
+            body,
+            expr,
+            message: message.clone(),
+        },
         CtfeError::DivisionByZero { .. } => InvalidCause::ConstEvalDivisionByZero { body, expr },
         CtfeError::ArithmeticOverflow { .. } => {
             InvalidCause::ConstEvalArithmeticOverflow { body, expr }
@@ -1971,6 +1976,7 @@ fn root_ctfe_error<'a, 'db>(
             root_ctfe_error(db, callee.key(db).owner(db), source)
         }
         CtfeError::NotConstEvaluable { origin }
+        | CtfeError::AssertionFailed { origin, .. }
         | CtfeError::InvalidOperation { origin, .. }
         | CtfeError::InvalidBorrow { origin }
         | CtfeError::InvalidProviderUse { origin }

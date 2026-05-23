@@ -650,6 +650,7 @@ impl<'db> NormalizeCtxt<'db> {
                 cases: cases.clone(),
                 default: *default,
             },
+            STerminatorKind::Assert { message } => NSTerminatorKind::Assert { message: *message },
             STerminatorKind::Return(value) => {
                 NSTerminatorKind::Return(value.map(|value| self.normalize_operand(value, origin)))
             }

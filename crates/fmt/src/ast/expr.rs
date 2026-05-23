@@ -546,6 +546,44 @@ impl ToDoc for ast::CallExpr {
     }
 }
 
+impl ToDoc for ast::MacroCallExpr {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        if has_comment_tokens(self.syntax()) {
+            let indent = ctx.config.indent_width as isize;
+            return token_doc(
+                ctx,
+                self.syntax(),
+                indent,
+                |node| {
+                    if let Some(callee) = ast::Expr::cast(node.clone()) {
+                        return Some(TokenPiece::new(callee.to_doc(ctx)).no_nest());
+                    }
+                    ast::CallArgList::cast(node)
+                        .map(|args| TokenPiece::new(args.to_doc(ctx)).no_nest())
+                },
+                |token| match token.kind() {
+                    SyntaxKind::Not => Some(TokenPiece::new(alloc.text("!"))),
+                    _ => None,
+                },
+            );
+        }
+
+        let callee = match self.callee() {
+            Some(c) => c.to_doc(ctx),
+            None => return alloc.nil(),
+        };
+
+        let args_doc = self
+            .args()
+            .map(|args| args.to_doc(ctx))
+            .unwrap_or_else(|| alloc.text("()"));
+
+        callee.append(alloc.text("!")).append(args_doc)
+    }
+}
+
 /// Formats function call arguments with `fn_call_width` support.
 /// Uses `max_width_group` to break if args exceed `fn_call_width` when rendered flat.
 fn call_args<'a>(ctx: &'a RewriteContext<'a>, args: Vec<Doc<'a>>, indent: isize) -> Doc<'a> {

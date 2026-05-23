@@ -591,7 +591,7 @@ impl<'db> Borrowck<'db> {
         term: &super::ir::NSTerminator<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         match &term.kind {
-            NSTerminatorKind::Goto(_) => {}
+            NSTerminatorKind::Goto(_) | NSTerminatorKind::Assert { .. } => {}
             NSTerminatorKind::Branch { cond, .. }
             | NSTerminatorKind::MatchEnum { value: cond, .. }
             | NSTerminatorKind::Return(Some(cond)) => {
@@ -1012,7 +1012,7 @@ impl<'db> Borrowck<'db> {
                     out.push(*default);
                 }
             }
-            NSTerminatorKind::Return(_) => {}
+            NSTerminatorKind::Assert { .. } | NSTerminatorKind::Return(_) => {}
         }
         out
     }

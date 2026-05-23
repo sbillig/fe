@@ -7,4 +7,4 @@ pub use super::abi::{Bytes, Sol, Text, Vec}
 pub use super::abi::sol::sol
 
 // Common EVM types.
-pub use super::evm::{Evm, Address, Call, Ctx, StorageMap, Create, Log, Panic, assert, assert_msg, revert, revert_error}
+pub use super::evm::{Evm, Address, Call, Ctx, StorageMap, Create, Log, Panic, assert, revert, revert_error}

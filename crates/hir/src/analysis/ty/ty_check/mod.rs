@@ -2793,6 +2793,7 @@ impl<'db> TypedBody<'db> {
             Expr::Call(..) | Expr::MethodCall(..) => {
                 expr_ty.has_invalid(db) && self.semantic_expr_lowering(expr).is_none()
             }
+            Expr::Assert(_) => expr_ty.has_invalid(db),
             Expr::RecordInit(..) => {
                 expr_ty.has_invalid(db) && self.record_init_lowering(expr).is_none()
             }
@@ -3472,6 +3473,18 @@ impl<'db> TypedBody<'db> {
                     saw_non_param,
                     seen,
                 );
+                for arg in args {
+                    self.collect_explicit_return_param_sources_in_expr(
+                        db,
+                        body,
+                        arg.expr,
+                        out,
+                        saw_non_param,
+                        seen,
+                    );
+                }
+            }
+            Expr::Assert(args) => {
                 for arg in args {
                     self.collect_explicit_return_param_sources_in_expr(
                         db,

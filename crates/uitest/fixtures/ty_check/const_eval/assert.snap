@@ -1,0 +1,26 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_eval/assert.fe
+---
+error[3-0036]: assertion failed in const context
+   ┌─ assert.fe:15:5
+   │
+15 │     assert!(false)
+   │     ^^^^^^^^^^^^^^ `assert!` evaluated to `false`
+
+error[3-0036]: assertion failed in const context
+   ┌─ assert.fe:22:5
+   │
+22 │     assert!(false, "ctfe boom")
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `assert!` evaluated to `false`
+   │
+   = assertion message: ctfe boom
+
+error[3-0036]: assertion failed in const context
+   ┌─ assert.fe:29:5
+   │
+29 │     assert!(false, "nested boom")
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `assert!` evaluated to `false`
+   │
+   = assertion message: nested boom

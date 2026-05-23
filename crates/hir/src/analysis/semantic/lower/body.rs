@@ -570,6 +570,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 )
             }
             Expr::Call(_, args) => self.lower_call(expr, None, args),
+            Expr::Assert(args) => self.lower_assert(expr, args),
             Expr::MethodCall(receiver, _, _, args) => self.lower_call(expr, Some(*receiver), args),
             Expr::Assign(dst, src) => {
                 let src = self.lower_expr_operand(*src);
@@ -604,6 +605,40 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Expr::Match(scrutinee, arms) => self.lower_match_expr(expr, *scrutinee, arms),
             Expr::With(bindings, body) => self.lower_with_expr(bindings, *body),
         }
+    }
+
+    fn lower_assert(&mut self, expr: ExprId, args: &[crate::hir_def::CallArg<'db>]) -> SValueId {
+        let Some(cond_arg) = args.first() else {
+            return self.unit_value();
+        };
+        let message = if let Some(message_arg) = args.get(1) {
+            let Partial::Present(Expr::Lit(LitKind::String(message))) =
+                message_arg.expr.data(self.db, self.body)
+            else {
+                return self.unit_value();
+            };
+            Some(*message)
+        } else {
+            None
+        };
+
+        let success_bb = self.new_block();
+        let failure_bb = self.new_block();
+        let join_bb = self.new_block();
+        self.lower_expr_branch(cond_arg.expr, success_bb, failure_bb);
+
+        self.switch_to(success_bb);
+        self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
+
+        self.switch_to(failure_bb);
+        self.set_terminator(
+            self.current,
+            SemOrigin::Expr(expr),
+            STerminatorKind::Assert { message },
+        );
+
+        self.switch_to(join_bb);
+        self.unit_value()
     }
 
     fn lower_leaf_literal(&mut self, expr: ExprId, lit: &LitKind<'db>) -> SValueId {

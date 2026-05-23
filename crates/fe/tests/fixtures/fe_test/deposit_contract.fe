@@ -11,7 +11,6 @@
 
 use std::evm::{
     assert,
-    assert_msg,
     ether,
     gwei,
     ssz,
@@ -94,15 +93,15 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
         Deposit { pubkey, withdrawal_credentials, signature, deposit_data_root }
         uses (mut store, ctx, mut mem, mut log)
         {
-            assert_msg(pubkey.len == 48, "DepositContract: invalid pubkey length")
-            assert_msg(withdrawal_credentials.len == 32, "DepositContract: invalid withdrawal_credentials length")
-            assert_msg(signature.len == 96, "DepositContract: invalid signature length")
+            assert!(pubkey.len == 48, "DepositContract: invalid pubkey length")
+            assert!(withdrawal_credentials.len == 32, "DepositContract: invalid withdrawal_credentials length")
+            assert!(signature.len == 96, "DepositContract: invalid signature length")
 
             let value: u256 = ctx.value()
-            assert_msg(value >= ether(1), "DepositContract: deposit value too low")
-            assert_msg(value % gwei(1) == 0, "DepositContract: deposit value not multiple of gwei")
+            assert!(value >= ether(1), "DepositContract: deposit value too low")
+            assert!(value % gwei(1) == 0, "DepositContract: deposit value not multiple of gwei")
             let deposit_amount: u256 = value / gwei(1)
-            assert_msg(deposit_amount <= u64::MASK, "DepositContract: deposit value too high")
+            assert!(deposit_amount <= u64::MASK, "DepositContract: deposit value too high")
             // Truncating cast matches Solidity's `uint64(x)`. The assert above
             // guarantees no information is lost.
             let amount_gwei: u64 = deposit_amount.downcast_truncate()
@@ -113,7 +112,7 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
                 signature: signature.view(),
                 amount_gwei: amount_gwei,
             )
-            assert_msg(
+            assert!(
                 node == deposit_data_root.val,
                 "DepositContract: reconstructed DepositData does not match supplied deposit_data_root",
             )
@@ -129,7 +128,7 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
                 },
             )
 
-            assert_msg(store.deposit_count < MAX_DEPOSIT_COUNT, "DepositContract: merkle tree full")
+            assert!(store.deposit_count < MAX_DEPOSIT_COUNT, "DepositContract: merkle tree full")
             store.deposit_count += 1
 
             let mut size: u256 = store.deposit_count

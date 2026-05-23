@@ -1163,6 +1163,12 @@ pub enum InvalidCause<'db> {
         expr: ExprId,
     },
 
+    ConstEvalAssertionFailed {
+        body: Body<'db>,
+        expr: ExprId,
+        message: Option<String>,
+    },
+
     ConstEvalNonConstCall {
         body: Body<'db>,
         expr: ExprId,
@@ -1257,6 +1263,7 @@ impl InvalidCause<'_> {
 
             InvalidCause::InvalidConstTyExpr { body: _ } => "InvalidConstTyExpr".into(),
             InvalidCause::ConstEvalUnsupported { .. } => "ConstEvalUnsupported".into(),
+            InvalidCause::ConstEvalAssertionFailed { .. } => "ConstEvalAssertionFailed".into(),
             InvalidCause::ConstEvalNonConstCall { .. } => "ConstEvalNonConstCall".into(),
             InvalidCause::ConstEvalDivisionByZero { .. } => "ConstEvalDivisionByZero".into(),
             InvalidCause::ConstEvalArithmeticOverflow { .. } => {
