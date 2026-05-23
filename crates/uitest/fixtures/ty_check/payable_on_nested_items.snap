@@ -3,26 +3,26 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/payable_on_nested_items.fe
 ---
-error[13-0001]: `#[payable]` is only valid on `init` blocks and `recv` arms (found on field)
+error[12-0001]: unsupported `#[payable]` attribute on field
   ┌─ payable_on_nested_items.fe:2:5
   │
 2 │     #[payable]
-  │     ^^^^^^^^^^ move this attribute to an `init` block or `recv` arm
+  │     ^^^^^^^^^^ `#[payable]` is only supported on init blocks and recv arms
 
-error[13-0001]: `#[payable]` is only valid on `init` blocks and `recv` arms (found on variant)
+error[12-0001]: unsupported `#[payable]` attribute on variant
   ┌─ payable_on_nested_items.fe:7:5
   │
 7 │     #[payable]
-  │     ^^^^^^^^^^ move this attribute to an `init` block or `recv` arm
+  │     ^^^^^^^^^^ `#[payable]` is only supported on init blocks and recv arms
 
-error[13-0001]: `#[payable]` is only valid on `init` blocks and `recv` arms (found on fn)
+error[12-0001]: unsupported `#[payable]` attribute on fn `baz`
    ┌─ payable_on_nested_items.fe:12:5
    │
 12 │     #[payable]
-   │     ^^^^^^^^^^ move this attribute to an `init` block or `recv` arm
+   │     ^^^^^^^^^^ `#[payable]` is only supported on init blocks and recv arms
 
-error[13-0001]: `#[payable]` is only valid on `init` blocks and `recv` arms (found on fn)
+error[12-0001]: unsupported `#[payable]` attribute on fn `do_thing`
    ┌─ payable_on_nested_items.fe:19:5
    │
 19 │     #[payable]
-   │     ^^^^^^^^^^ move this attribute to an `init` block or `recv` arm
+   │     ^^^^^^^^^^ `#[payable]` is only supported on init blocks and recv arms

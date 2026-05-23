@@ -3,8 +3,8 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/payable_unknown_attr_on_recv_block.fe
 ---
-error[13-0004]: unknown attribute `#[payble]` on recv block
+error[12-0004]: unsupported `#[payble]` attribute on recv block
   ┌─ payable_unknown_attr_on_recv_block.fe:7:5
   │
 7 │     #[payble]
-  │     ^^^^^^^^^ remove this attribute; `recv` blocks do not support normal attributes
+  │     ^^^^^^^^^ expected no attributes

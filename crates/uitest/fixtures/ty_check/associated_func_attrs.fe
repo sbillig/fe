@@ -1,0 +1,23 @@
+struct Foo {}
+
+impl Foo {
+    #[inline()]
+    fn bad_inline_form(self) {}
+
+    #[inline]
+    #[inline(always)]
+    fn bad_inline_duplicate(self) {}
+
+    #[event]
+    fn bad_event_attr(self) {}
+}
+
+trait MyTrait {
+    #[inline()]
+    fn trait_bad_inline_form(self)
+}
+
+impl MyTrait for Foo {
+    #[inline()]
+    fn trait_bad_inline_form(self) {}
+}

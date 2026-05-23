@@ -32,8 +32,6 @@ pub struct ErrorDiagnostic {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ErrorDiagnosticKind {
-    ErrorAttrOnNonStruct { item_kind: &'static str },
-    InvalidErrorAttrForm,
     GenericErrorStruct,
     UnsupportedFieldType { ty: String },
     EventErrorAttrConflict,
@@ -41,26 +39,6 @@ pub enum ErrorDiagnosticKind {
 
 pub(super) fn is_error_struct(ast: &ast::Struct) -> bool {
     has_named_attr(ast.attr_list(), "error")
-}
-
-pub(super) fn report_error_attr_on_non_struct_item<'db>(
-    ctxt: &mut FileLowerCtxt<'db>,
-    attrs: Option<ast::AttrList>,
-    item_kind: &'static str,
-) {
-    let db = ctxt.db();
-    let file = ctxt.top_mod().file(db);
-
-    for attr in named_attr_specs(attrs, "error") {
-        ErrorDiagnostic {
-            kind: ErrorDiagnosticKind::ErrorAttrOnNonStruct { item_kind },
-            file,
-            primary_range: attr.range,
-            struct_name: None,
-            field_name: None,
-        }
-        .accumulate(db);
-    }
 }
 
 pub(super) fn report_event_error_attr_conflict<'db>(
@@ -98,23 +76,9 @@ pub(super) fn lower_error_struct<'db>(
     let struct_name_token = ast.name();
     let struct_name = struct_name_token.as_ref().map(|n| n.text().to_string());
 
-    // Strip #[error] attribute, validate it is bare
+    // Strip #[error] attribute.
     let stripped_error_attr = lower_attrs_without_named(builder.ctxt(), ast.attr_list(), "error");
     let attributes = stripped_error_attr.retained;
-    if let Some(attr) = stripped_error_attr
-        .removed
-        .iter()
-        .find(|attr| !attr.is_bare())
-    {
-        ErrorDiagnostic {
-            kind: ErrorDiagnosticKind::InvalidErrorAttrForm,
-            file,
-            primary_range: attr.range,
-            struct_name: struct_name.clone(),
-            field_name: None,
-        }
-        .accumulate(db);
-    }
 
     let vis = super::lower_visibility(&ast);
     let generic_params = GenericParamListId::lower_ast_opt(builder.ctxt(), ast.generic_params());

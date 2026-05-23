@@ -192,7 +192,7 @@ impl<'db> TyChecker<'db> {
         self.env.flush_pending_bindings();
 
         let body_ty = self.fresh_ty();
-        self.check_expr(*body, body_ty);
+        self.check_expr_with_discarded_result(*body, body_ty);
 
         self.env.leave_scope();
         self.env.leave_loop();
@@ -370,7 +370,8 @@ impl<'db> TyChecker<'db> {
         self.env.enter_loop(stmt);
         self.env.enter_scope(*body);
         self.env.flush_pending_bindings();
-        self.check_expr(*body, TyId::unit(self.db));
+        let body_ty = self.fresh_ty();
+        self.check_expr_with_discarded_result(*body, body_ty);
         self.env.leave_scope();
         self.env.clear_pending_bindings();
         self.env.leave_loop();

@@ -1,7 +1,6 @@
 use crate::analysis::{HirAnalysisDb, diagnostics::DiagnosticVoucher};
 use crate::{
-    ArithmeticAttrError, ErrorDiagnostic, EventError, InlineAttrError, LoopUnrollAttrError,
-    MustUseAttrError, ParserError, PayableError, SelectorError,
+    AttrMisuseError, ErrorDiagnostic, EventError, ParserError, SelectorError,
     hir_def::{ModuleTree, TopLevelMod},
     lower::{parse_file_impl, scope_graph_impl},
 };
@@ -131,80 +130,16 @@ impl ModuleAnalysisPass for ErrorLowerPass {
     }
 }
 
-/// Analysis pass that collects arithmetic attribute validation errors.
-pub struct ArithmeticAttrPass {}
+/// Analysis pass that collects generic attribute misuse diagnostics.
+pub struct AttrMisusePass {}
 
-impl ModuleAnalysisPass for ArithmeticAttrPass {
+impl ModuleAnalysisPass for AttrMisusePass {
     fn run_on_module<'db>(
         &mut self,
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher>> {
-        scope_graph_impl::accumulated::<ArithmeticAttrError>(db, top_mod)
-            .into_iter()
-            .map(|d| Box::new(d.clone()) as _)
-            .collect::<Vec<_>>()
-    }
-}
-
-/// Analysis pass that collects payable attribute validation errors.
-pub struct PayableAttrPass {}
-
-impl ModuleAnalysisPass for PayableAttrPass {
-    fn run_on_module<'db>(
-        &mut self,
-        db: &'db dyn HirAnalysisDb,
-        top_mod: TopLevelMod<'db>,
-    ) -> Vec<Box<dyn DiagnosticVoucher>> {
-        scope_graph_impl::accumulated::<PayableError>(db, top_mod)
-            .into_iter()
-            .map(|d| Box::new(d.clone()) as _)
-            .collect::<Vec<_>>()
-    }
-}
-
-/// Analysis pass that collects invalid `#[inline]` attributes from function lowering.
-pub struct InlineAttrPass {}
-
-impl ModuleAnalysisPass for InlineAttrPass {
-    fn run_on_module<'db>(
-        &mut self,
-        db: &'db dyn HirAnalysisDb,
-        top_mod: TopLevelMod<'db>,
-    ) -> Vec<Box<dyn DiagnosticVoucher>> {
-        scope_graph_impl::accumulated::<InlineAttrError>(db, top_mod)
-            .into_iter()
-            .map(|d| Box::new(d.clone()) as _)
-            .collect::<Vec<_>>()
-    }
-}
-
-/// Analysis pass that collects invalid `#[must_use]` attributes from item lowering.
-pub struct MustUseAttrPass {}
-
-impl ModuleAnalysisPass for MustUseAttrPass {
-    fn run_on_module<'db>(
-        &mut self,
-        db: &'db dyn HirAnalysisDb,
-        top_mod: TopLevelMod<'db>,
-    ) -> Vec<Box<dyn DiagnosticVoucher>> {
-        scope_graph_impl::accumulated::<MustUseAttrError>(db, top_mod)
-            .into_iter()
-            .map(|d| Box::new(d.clone()) as _)
-            .collect::<Vec<_>>()
-    }
-}
-
-/// Analysis pass that collects invalid loop unroll attributes from `for` lowering.
-pub struct LoopUnrollAttrPass {}
-
-impl ModuleAnalysisPass for LoopUnrollAttrPass {
-    fn run_on_module<'db>(
-        &mut self,
-        db: &'db dyn HirAnalysisDb,
-        top_mod: TopLevelMod<'db>,
-    ) -> Vec<Box<dyn DiagnosticVoucher>> {
-        scope_graph_impl::accumulated::<LoopUnrollAttrError>(db, top_mod)
+        scope_graph_impl::accumulated::<AttrMisuseError>(db, top_mod)
             .into_iter()
             .map(|d| Box::new(d.clone()) as _)
             .collect::<Vec<_>>()

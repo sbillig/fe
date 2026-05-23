@@ -2,9 +2,116 @@ use parser::{
     TextRange,
     ast::{self, prelude::*},
 };
+use salsa::Accumulator as _;
 
 use super::FileLowerCtxt;
 use crate::core::hir_def::{IdentId, LitKind, PathId, StringId, attr::*};
+
+#[salsa::accumulator]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AttrMisuseError {
+    pub kind: AttrMisuseErrorKind,
+    pub file: common::file::File,
+    pub primary_range: TextRange,
+    pub attr_name: String,
+    pub target: &'static str,
+    pub item_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AttrMisuseErrorKind {
+    UnsupportedTarget { supported_targets: &'static str },
+    InvalidForm { expected_form: &'static str },
+    Duplicate,
+    UnknownInRestrictedContext { expected_attrs: &'static str },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum AttrForm {
+    Bare,
+    SingleArg {
+        allow_bare: bool,
+        allowed_args: &'static [&'static str],
+    },
+}
+
+impl AttrForm {
+    fn accepts(self, attr: &AstAttrSpec) -> bool {
+        match self {
+            Self::Bare => attr.is_bare(),
+            Self::SingleArg {
+                allow_bare,
+                allowed_args,
+            } => {
+                if attr.is_bare() {
+                    return allow_bare;
+                }
+                if attr.value.is_some() || !attr.has_args || attr.args.len() != 1 {
+                    return false;
+                }
+                let arg = &attr.args[0];
+                arg.value.is_none()
+                    && arg
+                        .key
+                        .as_ref()
+                        .is_some_and(|key| allowed_args.contains(&key.as_str()))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum AttrSupport {
+    Supported,
+    Unsupported { supported_targets: &'static str },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct AttrRule {
+    pub name: &'static str,
+    pub form: AttrForm,
+    pub expected_form: &'static str,
+    pub singleton: bool,
+    pub support: AttrSupport,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct AttrTarget {
+    pub kind: &'static str,
+    pub name: Option<String>,
+}
+
+impl AttrRule {
+    pub(super) const fn supported(
+        name: &'static str,
+        form: AttrForm,
+        expected_form: &'static str,
+    ) -> Self {
+        Self {
+            name,
+            form,
+            expected_form,
+            singleton: true,
+            support: AttrSupport::Supported,
+        }
+    }
+
+    pub(super) const fn unsupported(name: &'static str, supported_targets: &'static str) -> Self {
+        Self {
+            name,
+            form: AttrForm::Bare,
+            expected_form: "",
+            singleton: true,
+            support: AttrSupport::Unsupported { supported_targets },
+        }
+    }
+}
+
+impl AttrTarget {
+    pub(super) fn new(kind: &'static str, name: Option<String>) -> Self {
+        Self { kind, name }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct AstAttrArgSpec {
@@ -65,6 +172,123 @@ pub(super) fn named_attr_specs(attrs: Option<ast::AttrList>, name: &str) -> Vec<
             ast::AttrKind::Normal(_) | ast::AttrKind::DocComment(_) => None,
         })
         .collect()
+}
+
+pub(super) fn validate_attr_rules<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    target: AttrTarget,
+    rules: &[AttrRule],
+) {
+    for rule in rules {
+        let specs = named_attr_specs(attrs.clone(), rule.name);
+        if specs.is_empty() {
+            continue;
+        }
+
+        match rule.support {
+            AttrSupport::Unsupported { supported_targets } => {
+                for spec in specs {
+                    report_attr_misuse(
+                        ctxt,
+                        spec.range,
+                        rule.name.to_string(),
+                        target.clone(),
+                        AttrMisuseErrorKind::UnsupportedTarget { supported_targets },
+                    );
+                }
+            }
+            AttrSupport::Supported => {
+                if let Some(spec) = specs.iter().find(|spec| !rule.form.accepts(spec)) {
+                    report_attr_misuse(
+                        ctxt,
+                        spec.range,
+                        rule.name.to_string(),
+                        target.clone(),
+                        AttrMisuseErrorKind::InvalidForm {
+                            expected_form: rule.expected_form,
+                        },
+                    );
+                }
+
+                if rule.singleton
+                    && let Some(spec) = specs.get(1)
+                {
+                    report_attr_misuse(
+                        ctxt,
+                        spec.range,
+                        rule.name.to_string(),
+                        target.clone(),
+                        AttrMisuseErrorKind::Duplicate,
+                    );
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn validate_unknown_attrs_in_restricted_context<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    target: AttrTarget,
+    allowed_names: &[&str],
+    expected_attrs: &'static str,
+) {
+    let Some(attrs) = attrs else { return };
+
+    for attr in attrs {
+        let ast::AttrKind::Normal(normal_attr) = attr.kind() else {
+            continue;
+        };
+        let attr_name = normal_attr
+            .path()
+            .map(|path| path.text().to_string())
+            .unwrap_or_default();
+        if allowed_names.contains(&attr_name.as_str()) {
+            continue;
+        }
+        report_attr_misuse(
+            ctxt,
+            attr.syntax().text_range(),
+            attr_name,
+            target.clone(),
+            AttrMisuseErrorKind::UnknownInRestrictedContext { expected_attrs },
+        );
+    }
+}
+
+pub(super) fn report_unsupported_attr<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    attr_name: &'static str,
+    target: AttrTarget,
+    supported_targets: &'static str,
+) {
+    validate_attr_rules(
+        ctxt,
+        attrs,
+        target,
+        &[AttrRule::unsupported(attr_name, supported_targets)],
+    );
+}
+
+fn report_attr_misuse<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    primary_range: TextRange,
+    attr_name: String,
+    target: AttrTarget,
+    kind: AttrMisuseErrorKind,
+) {
+    let db = ctxt.db();
+    AttrMisuseError {
+        kind,
+        file: ctxt.top_mod().file(db),
+        primary_range,
+        attr_name,
+        target: target.kind,
+        item_name: target.name,
+    }
+    .accumulate(db);
 }
 
 pub(super) fn lower_attrs_without_named<'db>(

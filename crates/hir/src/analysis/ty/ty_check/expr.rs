@@ -254,6 +254,32 @@ impl<'db> TyChecker<'db> {
     }
 
     pub(super) fn check_expr(&mut self, expr: ExprId, expected: TyId<'db>) -> ExprProp<'db> {
+        self.check_expr_with_result_context(expr, expected, false)
+    }
+
+    pub(super) fn check_expr_unknown(&mut self, expr: ExprId) -> ExprProp<'db> {
+        let t = self.fresh_ty();
+        self.check_expr(expr, t)
+    }
+
+    pub(super) fn check_expr_with_discarded_result(
+        &mut self,
+        expr: ExprId,
+        expected: TyId<'db>,
+    ) -> ExprProp<'db> {
+        let prop = self.check_expr_with_result_context(expr, expected, true);
+        if !self.expr_propagates_discarded_result(expr) {
+            self.check_unused_must_use(expr, prop.clone());
+        }
+        prop
+    }
+
+    fn check_expr_with_result_context(
+        &mut self,
+        expr: ExprId,
+        expected: TyId<'db>,
+        result_discarded: bool,
+    ) -> ExprProp<'db> {
         let Partial::Present(expr_data) = self.env.expr_data(expr) else {
             let typed = ExprProp::invalid(self.db);
             self.env.type_expr(expr, typed.clone());
@@ -268,7 +294,7 @@ impl<'db> TyChecker<'db> {
                 ExprProp::new(self.string_literal_ty(*string_id, expected), true)
             }
             Expr::Lit(lit) => ExprProp::new(self.lit_ty_for_expected(lit, expected), true),
-            Expr::Block(..) => self.check_block(expr, expr_data, expected),
+            Expr::Block(..) => self.check_block(expr, expr_data, expected, result_discarded),
             Expr::Un(..) => self.check_unary(expr, expr_data),
             Expr::Cast(inner, ty) => self.check_cast(expr, *inner, *ty),
             Expr::Bin(lhs, rhs, op) => self.check_binary(expr, *lhs, *rhs, *op),
@@ -281,11 +307,13 @@ impl<'db> TyChecker<'db> {
             Expr::Tuple(..) => self.check_tuple(expr, expr_data, expected),
             Expr::Array(..) => self.check_array(expr, expr_data, expected),
             Expr::ArrayRep(..) => self.check_array_rep(expr, expr_data, expected),
-            Expr::If(..) => self.check_if(expr, expr_data, expected),
-            Expr::Match(..) => self.check_match(expr, expr_data, expected),
+            Expr::If(..) => self.check_if(expr, expr_data, expected, result_discarded),
+            Expr::Match(..) => self.check_match(expr, expr_data, expected, result_discarded),
             Expr::Assign(..) => self.check_assign(expr, expr_data),
             Expr::AugAssign(..) => self.check_aug_assign(expr, expr_data),
-            Expr::With(bindings, body) => self.check_with(bindings, *body, expected),
+            Expr::With(bindings, body) => {
+                self.check_with(bindings, *body, expected, result_discarded)
+            }
         };
         self.env.leave_expr();
 
@@ -319,9 +347,11 @@ impl<'db> TyChecker<'db> {
         actual
     }
 
-    pub(super) fn check_expr_unknown(&mut self, expr: ExprId) -> ExprProp<'db> {
-        let t = self.fresh_ty();
-        self.check_expr(expr, t)
+    fn expr_propagates_discarded_result(&self, expr: ExprId) -> bool {
+        matches!(
+            self.env.expr_data(expr),
+            Partial::Present(Expr::Block(..) | Expr::If(..) | Expr::Match(..) | Expr::With(..))
+        )
     }
 
     fn lit_ty_for_expected(&mut self, lit: &LitKind<'db>, expected: TyId<'db>) -> TyId<'db> {
@@ -336,6 +366,7 @@ impl<'db> TyChecker<'db> {
         expr: ExprId,
         expr_data: &Expr<'db>,
         expected: TyId<'db>,
+        result_discarded: bool,
     ) -> ExprProp<'db> {
         let Expr::Block(stmts) = expr_data else {
             unreachable!()
@@ -350,7 +381,17 @@ impl<'db> TyChecker<'db> {
             }
 
             let last_stmt = stmts[stmts.len() - 1];
-            let res = if expected == TyId::unit(self.db) {
+            let res = if result_discarded {
+                let expected = if expected == TyId::unit(self.db) {
+                    self.fresh_ty()
+                } else {
+                    expected
+                };
+                ExprProp::new(
+                    self.check_discarded_stmt_with_expected(last_stmt, expected),
+                    true,
+                )
+            } else if expected == TyId::unit(self.db) {
                 self.check_discarded_stmt(last_stmt);
                 ExprProp::new(TyId::unit(self.db), true)
             } else {
@@ -368,16 +409,21 @@ impl<'db> TyChecker<'db> {
     }
 
     fn check_discarded_stmt(&mut self, stmt: StmtId) {
+        let ty = self.fresh_ty();
+        self.check_discarded_stmt_with_expected(stmt, ty);
+    }
+
+    fn check_discarded_stmt_with_expected(
+        &mut self,
+        stmt: StmtId,
+        expected: TyId<'db>,
+    ) -> TyId<'db> {
         match self.env.stmt_data(stmt) {
             Partial::Present(Stmt::Expr(expr)) => {
-                let prop = self.check_expr_unknown(*expr);
-                self.check_unused_must_use(*expr, prop);
+                self.check_expr_with_discarded_result(*expr, expected).ty
             }
-            Partial::Present(_) => {
-                let ty = self.fresh_ty();
-                self.check_stmt(stmt, ty);
-            }
-            Partial::Absent => {}
+            Partial::Present(_) => self.check_stmt(stmt, expected),
+            Partial::Absent => TyId::invalid(self.db, InvalidCause::ParseError),
         }
     }
 
@@ -1104,6 +1150,7 @@ impl<'db> TyChecker<'db> {
         bindings: &[WithBinding<'db>],
         body_expr: ExprId,
         expected: TyId<'db>,
+        result_discarded: bool,
     ) -> ExprProp<'db> {
         self.env.effect_env_mut().push_frame();
 
@@ -1169,7 +1216,11 @@ impl<'db> TyChecker<'db> {
             }
         }
 
-        let result = self.check_expr(body_expr, expected);
+        let result = if result_discarded {
+            self.check_expr_with_discarded_result(body_expr, expected)
+        } else {
+            self.check_expr(body_expr, expected)
+        };
         self.env.effect_env_mut().pop_frame();
         result
     }
@@ -3918,6 +3969,7 @@ impl<'db> TyChecker<'db> {
         _expr: ExprId,
         expr_data: &Expr<'db>,
         expected: TyId<'db>,
+        result_discarded: bool,
     ) -> ExprProp<'db> {
         let Expr::If(cond, then, else_) = expr_data else {
             unreachable!()
@@ -3933,11 +3985,15 @@ impl<'db> TyChecker<'db> {
             Some(else_) => {
                 self.env.enter_scope(*then);
                 self.env.flush_pending_bindings();
-                let then_prop = self.check_expr(*then, expected);
+                let then_prop = if result_discarded {
+                    self.check_expr_with_discarded_result(*then, expected)
+                } else {
+                    self.check_expr(*then, expected)
+                };
                 self.env.leave_scope();
                 self.env.clear_pending_bindings();
                 self.env.leave_scope();
-                let else_prop = self.check_expr_in_new_scope(*else_, expected);
+                let else_prop = self.check_expr_in_new_scope(*else_, expected, result_discarded);
                 let borrow_provider = self.merge_concrete_borrow_providers(
                     then.span(self.body()).into(),
                     then_prop.borrow_provider,
@@ -3958,7 +4014,7 @@ impl<'db> TyChecker<'db> {
                 // If there is no else branch, the if expression itself typed as `()`
                 self.env.enter_scope(*then);
                 self.env.flush_pending_bindings();
-                self.check_expr(*then, if_ty);
+                self.check_expr_with_discarded_result(*then, if_ty);
                 self.env.leave_scope();
                 self.env.clear_pending_bindings();
                 self.env.leave_scope();
@@ -3972,6 +4028,7 @@ impl<'db> TyChecker<'db> {
         expr: ExprId,
         expr_data: &Expr<'db>,
         expected: TyId<'db>,
+        result_discarded: bool,
     ) -> ExprProp<'db> {
         let Expr::Match(scrutinee, arms) = expr_data else {
             unreachable!()
@@ -4000,7 +4057,11 @@ impl<'db> TyChecker<'db> {
 
             self.env.enter_scope(arm.body);
             self.env.flush_pending_bindings();
-            let arm_prop = self.check_expr(arm.body, match_ty);
+            let arm_prop = if result_discarded {
+                self.check_expr_with_discarded_result(arm.body, match_ty)
+            } else {
+                self.check_expr(arm.body, match_ty)
+            };
             match_ty = arm_prop.ty;
             self.env.leave_scope();
 
@@ -4438,9 +4499,18 @@ impl<'db> TyChecker<'db> {
         AssignLhsStatus::Assignable
     }
 
-    fn check_expr_in_new_scope(&mut self, expr: ExprId, expected: TyId<'db>) -> ExprProp<'db> {
+    fn check_expr_in_new_scope(
+        &mut self,
+        expr: ExprId,
+        expected: TyId<'db>,
+        result_discarded: bool,
+    ) -> ExprProp<'db> {
         self.env.enter_scope(expr);
-        let ty = self.check_expr(expr, expected);
+        let ty = if result_discarded {
+            self.check_expr_with_discarded_result(expr, expected)
+        } else {
+            self.check_expr(expr, expected)
+        };
         self.env.leave_scope();
 
         ty

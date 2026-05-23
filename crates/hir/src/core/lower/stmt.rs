@@ -1,19 +1,10 @@
 use parser::ast::{self, AttrListOwner, prelude::*};
-use salsa::Accumulator as _;
 
 use super::body::BodyCtxt;
 use crate::{
-    hir_def::{AttrListId, Cond, Expr, LoopUnrollAttrErrorKind, Pat, TypeId, stmt::*},
+    hir_def::{AttrListId, Cond, Expr, Pat, TypeId, stmt::*},
     span::HirOrigin,
 };
-
-#[salsa::accumulator]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct LoopUnrollAttrError {
-    pub kind: LoopUnrollAttrErrorKind,
-    pub file: common::file::File,
-    pub primary_range: parser::TextRange,
-}
 
 impl<'db> Stmt<'db> {
     pub(super) fn push_to_body(ctxt: &mut BodyCtxt<'_, 'db>, ast: ast::Stmt) -> StmtId {
@@ -27,11 +18,7 @@ impl<'db> Stmt<'db> {
                 (Stmt::Let(pat, ty, init), HirOrigin::raw(&ast))
             }
             ast::StmtKind::For(for_) => {
-                super::payable::report_payable_attr_on_unsupported_item(
-                    ctxt.f_ctxt,
-                    for_.attr_list(),
-                    "for statement",
-                );
+                super::item::validate_for_loop_attrs(ctxt.f_ctxt, for_.attr_list());
                 let bind = Pat::lower_ast_opt(ctxt, for_.pat());
                 let iter = Expr::push_to_body_opt(ctxt, for_.iterable());
                 let body = Expr::push_to_body_opt(
@@ -87,32 +74,5 @@ fn lower_loop_unroll_hint<'db>(
     let lowered_attrs = AttrListId::lower_ast_opt(ctxt.f_ctxt, attrs.clone());
     let db = ctxt.f_ctxt.db();
 
-    match lowered_attrs.parse_loop_unroll_attr(db) {
-        Ok(hint) => hint,
-        Err(err) => {
-            let ranges = attrs
-                .into_iter()
-                .flatten()
-                .filter_map(|attr| {
-                    let ast::AttrKind::Normal(normal_attr) = attr.kind() else {
-                        return None;
-                    };
-                    normal_attr
-                        .is_named("unroll")
-                        .then_some(attr.syntax().text_range())
-                })
-                .collect::<Vec<_>>();
-
-            if let Some(primary_range) = ranges.get(err.attr_index) {
-                LoopUnrollAttrError {
-                    kind: err.kind,
-                    file: ctxt.f_ctxt.top_mod().file(db),
-                    primary_range: *primary_range,
-                }
-                .accumulate(db);
-            }
-
-            None
-        }
-    }
+    lowered_attrs.parse_loop_unroll_attr(db).unwrap_or_default()
 }
