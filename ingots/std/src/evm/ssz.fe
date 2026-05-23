@@ -512,9 +512,7 @@ uses (mem: mut RawMem)
 // Private form of `crypto::sha256` for callers that already own a
 // 64-byte scratch buffer and only need the digest as a stack value.
 // Reads 64 bytes from `offset`, writes the 32-byte digest at `out`,
-// then returns it loaded into a u256. Reverts on precompile failure
-// or short return (defensive — sha256 always returns 32 bytes on
-// real EVM, but we don't want to trust silent truncation).
+// then returns it loaded into a u256. Reverts on precompile failure.
 #[inline(always)]
 fn sha256_64_to(_ offset: u256, _ out: u256) -> u256 {
     let ok: u256 = ops::staticcall(
@@ -526,9 +524,6 @@ fn sha256_64_to(_ offset: u256, _ out: u256) -> u256 {
         ret_len: 32,
     )
     if ok == 0 {
-        ops::revert(offset: 0, len: 0)
-    }
-    if ops::returndatasize() < 32 {
         ops::revert(offset: 0, len: 0)
     }
     ops::mload(out)
