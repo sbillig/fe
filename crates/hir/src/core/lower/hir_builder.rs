@@ -568,6 +568,14 @@ where
     stmts: Vec<StmtId>,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct DecodeInputBindings<'db> {
+    pub(super) input_ident: IdentId<'db>,
+    pub(super) input_ty: TypeId<'db>,
+    pub(super) base_ident: IdentId<'db>,
+    pub(super) input_len_ident: Option<IdentId<'db>>,
+}
+
 impl<'ctxt, 'db, O> BodyBuilder<'ctxt, 'db, O>
 where
     O: Clone + Into<DesugaredOrigin>,
@@ -903,9 +911,7 @@ where
         &mut self,
         target_ident: IdentId<'db>,
         ty: TypeId<'db>,
-        input_ident: IdentId<'db>,
-        input_ty: TypeId<'db>,
-        base_ident: IdentId<'db>,
+        input: DecodeInputBindings<'db>,
         head_pos: ExprId,
     ) {
         let db = self.db();
@@ -919,39 +925,67 @@ where
                     ty: Partial::Present(ty),
                 }),
                 GenericArg::Type(TypeGenericArg {
-                    ty: Partial::Present(input_ty),
+                    ty: Partial::Present(input.input_ty),
                 }),
             ],
         );
+        let decode_func = if input.input_len_ident.is_some() {
+            "decode_field_from_with_input_len"
+        } else {
+            "decode_field_from"
+        };
         let decode_path = PathId::from_ident(db, self.roots.core)
             .push_str(db, "abi")
-            .push_str_args(db, "decode_field_from", decode_args);
+            .push_str_args(db, decode_func, decode_args);
         let decode_callee = self.path_expr(decode_path);
-        let input_expr = self.ident_expr(input_ident);
-        let base_expr = self.ident_expr(base_ident);
-        let decode_call = self.call_expr_with_args(
-            decode_callee,
-            vec![
-                CallArg {
-                    label: None,
-                    expr: input_expr,
-                },
-                CallArg {
-                    label: Some(IdentId::new(db, "base".to_string())),
-                    expr: base_expr,
-                },
-                CallArg {
-                    label: Some(IdentId::new(db, "head_pos".to_string())),
-                    expr: head_pos,
-                },
-            ],
-        );
+        let input_expr = self.ident_expr(input.input_ident);
+        let base_expr = self.ident_expr(input.base_ident);
+        let mut args = vec![
+            CallArg {
+                label: None,
+                expr: input_expr,
+            },
+            CallArg {
+                label: Some(IdentId::new(db, "base".to_string())),
+                expr: base_expr,
+            },
+            CallArg {
+                label: Some(IdentId::new(db, "head_pos".to_string())),
+                expr: head_pos,
+            },
+        ];
+        if let Some(input_len_ident) = input.input_len_ident {
+            args.push(CallArg {
+                label: Some(IdentId::new(db, "input_len".to_string())),
+                expr: self.ident_expr(input_len_ident),
+            });
+        }
+        let decode_call = self.call_expr_with_args(decode_callee, args);
 
         let bind_pat = self.push_pat(Pat::Path(
             Partial::Present(PathId::from_ident(db, target_ident)),
             false,
         ));
         self.emit_stmt(Stmt::Let(bind_pat, Some(ty), Some(decode_call)));
+    }
+
+    pub(super) fn bind_input_len(&mut self, target_ident: IdentId<'db>, input_ident: IdentId<'db>) {
+        let db = self.db();
+        let input_expr = self.ident_expr(input_ident);
+        let len_call =
+            self.method_call_expr(input_expr, IdentId::new(db, "len".to_string()), vec![]);
+        let bind_pat = self.push_pat(Pat::Path(
+            Partial::Present(PathId::from_ident(db, target_ident)),
+            false,
+        ));
+        let u256_ty = TypeId::new(
+            db,
+            TypeKind::Path(Partial::Present(PathId::from_ident(
+                db,
+                IdentId::new(db, "u256".to_string()),
+            ))),
+        );
+        self.emit_stmt(Stmt::Let(bind_pat, Some(u256_ty), Some(len_call)));
     }
 
     pub(super) fn return_record_self(&mut self, fields: &[IdentId<'db>]) {

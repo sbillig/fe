@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/error_unsupported_field_type.fe
 ---
@@ -12,9 +13,9 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ }
     │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:242:32
+    ┌─ src/abi.fe:248:32
     │
-242 │ pub fn dynamic_payload_size<T: AbiSize>(_ value: T) -> u256 {
+248 │ pub fn dynamic_payload_size<T: AbiSize>(_ value: T) -> u256 {
     │                                ------- required by this bound on `dynamic_payload_size`
 
 error[6-0003]: trait bound is not satisfied
@@ -26,9 +27,9 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ }
     │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `Encode<Sol>`
     │
-    ┌─ src/abi.fe:329:14
+    ┌─ src/abi.fe:349:14
     │
-329 │     where T: Encode<A> + AbiSize, E: AbiEncoder<A>
+349 │     where T: Encode<A> + AbiSize, E: AbiEncoder<A>
     │              --------- required by this bound on `encode_field`
 
 error[6-0003]: trait bound is not satisfied
@@ -40,9 +41,9 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ }
     │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:329:26
+    ┌─ src/abi.fe:349:26
     │
-329 │     where T: Encode<A> + AbiSize, E: AbiEncoder<A>
+349 │     where T: Encode<A> + AbiSize, E: AbiEncoder<A>
     │                          ------- required by this bound on `encode_field`
 
 error[6-0003]: trait bound is not satisfied
@@ -54,9 +55,9 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ }
     │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `Encode<Sol>`
     │
-    ┌─ src/abi.fe:378:14
+    ┌─ src/abi.fe:398:14
     │
-378 │     where T: Encode<A> + AbiSize
+398 │     where T: Encode<A> + AbiSize
     │              --------- required by this bound on `encode_field_to_ptr_at`
 
 error[6-0003]: trait bound is not satisfied
@@ -68,7 +69,7 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ }
     │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:378:26
+    ┌─ src/abi.fe:398:26
     │
-378 │     where T: Encode<A> + AbiSize
+398 │     where T: Encode<A> + AbiSize
     │                          ------- required by this bound on `encode_field_to_ptr_at`

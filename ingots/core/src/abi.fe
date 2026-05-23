@@ -192,6 +192,12 @@ pub trait Decode<A: Abi> {
         let mut d = A::decoder_with_base(input, pos)
         Self::decode_payload(mut d)
     }
+
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        Self::decode_from(input, pos)
+    }
 }
 
 pub trait Encode<A: Abi>: AbiSize {
@@ -289,6 +295,20 @@ pub fn decode_field_from<A: Abi, T, I>(_ input: I, base: u256, head_pos: u256) -
     if T::IS_DYNAMIC {
         let tail_rel = input.word_at(head_pos)
         return T::decode_from(input, base + tail_rel)
+    }
+
+    T::decode_from(input, head_pos)
+}
+
+#[inline(always)]
+pub fn decode_field_from_with_input_len<A: Abi, T, I>(_ input: I, base: u256, head_pos: u256, input_len: u256) -> T
+    where T: Decode<A> + AbiSize,
+          I: ByteInput,
+          A::Decoder<I>: AbiDecoder<A>
+{
+    if T::IS_DYNAMIC {
+        let tail_rel = input.word_at(head_pos)
+        return T::decode_from_with_input_len(input, base + tail_rel, input_len)
     }
 
     T::decode_from(input, head_pos)
@@ -457,6 +477,11 @@ fn round_up_words(_ len: u256) -> u256 {
 #[inline(always)]
 fn checked_dynamic_payload<A: Abi, I: ByteInput>(_ input: I, _ pos: u256) -> (u256, u256) {
     let input_len = input.len()
+    checked_dynamic_payload_with_input_len<A, I>(input, pos, input_len)
+}
+
+#[inline(always)]
+fn checked_dynamic_payload_with_input_len<A: Abi, I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> (u256, u256) {
     let len_end = pos + 32
     if len_end < pos || len_end > input_len {
         A::decode_error()
@@ -474,7 +499,12 @@ fn checked_dynamic_payload<A: Abi, I: ByteInput>(_ input: I, _ pos: u256) -> (u2
 
 #[inline(always)]
 fn copy_dynamic_payload_from<A: Abi, I: ByteInput>(_ input: I, _ pos: u256) -> (u256, u256, u256) {
-    let payload: (u256, u256) = checked_dynamic_payload<A, I>(input, pos)
+    let input_len = input.len()
+    copy_dynamic_payload_from_with_input_len<A, I>(input, pos, input_len)
+}
+
+fn copy_dynamic_payload_from_with_input_len<A: Abi, I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> (u256, u256, u256) {
+    let payload: (u256, u256) = checked_dynamic_payload_with_input_len<A, I>(input, pos, input_len)
     let data_len = payload.0
     let payload_size = payload.1
     let data_ptr = A::alloc(payload_size)
@@ -585,11 +615,7 @@ impl DynString {
     }
 
     pub fn as_bytes(self) -> Bytes {
-        Bytes {
-            data: self.data,
-            len: self.len,
-            size: self.size,
-        }
+        Bytes::from_abi_tail(data: self.data, len: self.len, size: self.size)
     }
 
     pub fn view(self) -> StringView<MemoryInput> {
@@ -623,11 +649,11 @@ pub struct Bytes {
 
 impl Bytes {
     pub fn empty() -> Self {
-        Bytes {
-            data: 0,
-            len: 0,
-            size: 32,
-        }
+        Bytes::from_abi_tail(data: 0, len: 0, size: 32)
+    }
+
+    pub fn from_abi_tail(data: u256, len: u256, size: u256) -> Self {
+        Bytes { data, len, size }
     }
 
     pub fn len(self) -> u256 {
@@ -1811,11 +1837,7 @@ impl<A: Abi> Decode<A> for Bytes {
 
         input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: payload_at, len: payload_size)
 
-        Bytes {
-            data: data_ptr,
-            len: data_len,
-            size: payload_size,
-        }
+        Bytes::from_abi_tail(data: data_ptr, len: data_len, size: payload_size)
     }
 
     #[inline(always)]
@@ -1824,12 +1846,26 @@ impl<A: Abi> Decode<A> for Bytes {
     {
         let payload: (u256, u256, u256) = copy_dynamic_payload_from<A, I>(input, pos)
 
-        Bytes {
-            data: payload.0,
-            len: payload.1,
-            size: payload.2,
-        }
+        Bytes::from_abi_tail(data: payload.0, len: payload.1, size: payload.2)
     }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let payload: (u256, u256, u256) = copy_dynamic_payload_from_with_input_len<A, I>(input, pos, input_len)
+
+        Bytes::from_abi_tail(data: payload.0, len: payload.1, size: payload.2)
+    }
+}
+
+#[inline(always)]
+fn encode_bytes_to_ptr<A: Abi>(_ bytes: Bytes, _ ptr: u256) {
+    if bytes.data == 0 {
+        A::store_word(ptr: ptr, value: bytes.len)
+        return
+    }
+    mcopy(dest: ptr, addr: bytes.data, len: bytes.size)
 }
 
 impl<A: Abi> Encode<A> for Bytes {
@@ -1845,11 +1881,7 @@ impl<A: Abi> Encode<A> for Bytes {
 
     #[inline(always)]
     fn encode_to_ptr(own self, _ ptr: u256) {
-        if self.data == 0 {
-            A::store_word(ptr: ptr, value: self.len)
-            return
-        }
-        mcopy(dest: ptr, addr: self.data, len: self.size)
+        encode_bytes_to_ptr<A>(self, ptr)
     }
 }
 

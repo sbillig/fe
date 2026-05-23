@@ -122,7 +122,7 @@ pub fn serialize_u64(_ value: u64) -> Bytes uses (mem: mut RawMem) {
     let out: u256 = mem::alloc(64)
     mem.mstore(addr: out, value: 8)
     mem.mstore(addr: out + 32, value: u64_chunk(value))
-    Bytes { data: out, len: 8, size: 64 }
+    Bytes::from_abi_tail(data: out, len: 8, size: 64)
 }
 
 /// Type-level tag for an SSZ `ByteVector[N]` (fixed-length byte
