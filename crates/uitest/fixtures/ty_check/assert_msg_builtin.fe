@@ -1,0 +1,16 @@
+fn wrong_arity() {
+    assert_msg(true)
+}
+
+fn non_literal_message() {
+    let message = "boom"
+    assert_msg(true, message)
+}
+
+fn wrong_condition_type() {
+    assert_msg(1, "boom")
+}
+
+fn qualified_std_path_is_not_builtin() {
+    std::evm::assert_msg(false, "boom")
+}

@@ -187,6 +187,12 @@ impl<'db> ConstFnChecker<'db, '_> {
                 args.iter().for_each(|arg| self.check_expr(arg.expr));
                 self.check_call_target(expr);
             }
+            Expr::AssertMsg(args) => {
+                args.iter().for_each(|arg| self.check_expr(arg.expr));
+                self.push(BodyDiag::ConstFnAssertMsgNotAllowed(
+                    expr.span(self.body).into(),
+                ));
+            }
             Expr::MethodCall(receiver, _name, _generic_args, args) => {
                 self.check_expr(*receiver);
                 args.iter().for_each(|arg| self.check_expr(arg.expr));

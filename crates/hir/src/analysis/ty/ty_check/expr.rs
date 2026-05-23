@@ -5,8 +5,9 @@ use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
-    ArithBinOp, BinOp, CallableDef, Cond, CondId, Expr, ExprId, FieldIndex, IdentId, IntegerId,
-    LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt, UnOp, VariantKind, WithBinding,
+    ArithBinOp, BinOp, CallArg as HirCallArg, CallableDef, Cond, CondId, Expr, ExprId, FieldIndex,
+    IdentId, IntegerId, LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt, UnOp, VariantKind,
+    WithBinding,
 };
 use crate::span::DynLazySpan;
 
@@ -272,6 +273,7 @@ impl<'db> TyChecker<'db> {
             Expr::Cast(inner, ty) => self.check_cast(expr, *inner, *ty),
             Expr::Bin(lhs, rhs, op) => self.check_binary(expr, *lhs, *rhs, *op),
             Expr::Call(..) => self.check_call(expr, expr_data),
+            Expr::AssertMsg(args) => self.check_assert_msg(expr, args),
             Expr::MethodCall(..) => self.check_method_call(expr, expr_data),
             Expr::Path(..) => self.check_path(expr, expr_data),
             Expr::RecordInit(..) => self.check_record_init(expr, expr_data, expected),
@@ -1184,6 +1186,36 @@ impl<'db> TyChecker<'db> {
             self.env.register_semantic_call(expr, callable);
         }
         ExprProp::new(normalized_ret_ty, true)
+    }
+
+    fn check_assert_msg(&mut self, expr: ExprId, args: &[HirCallArg<'db>]) -> ExprProp<'db> {
+        if args.len() != 2 {
+            for arg in args {
+                self.check_expr_unknown(arg.expr);
+            }
+            self.push_diag(BodyDiag::AssertMsgArgNumMismatch {
+                primary: expr.span(self.body()).into_call_expr().args().into(),
+                given: args.len(),
+                expected: 2,
+            });
+            return ExprProp::invalid(self.db);
+        }
+
+        self.check_expr(args[0].expr, TyId::bool(self.db));
+        let message = args[1].expr;
+        let Partial::Present(Expr::Lit(LitKind::String(string_id))) =
+            message.data(self.db, self.body())
+        else {
+            self.check_expr_unknown(message);
+            self.push_diag(BodyDiag::AssertMsgMessageMustBeStringLiteral {
+                primary: message.span(self.body()).into(),
+            });
+            return ExprProp::invalid(self.db);
+        };
+
+        let expected = self.string_literal_byte_array_ty(string_id.len_bytes(self.db));
+        self.check_expr(message, expected);
+        ExprProp::new(TyId::unit(self.db), true)
     }
 
     fn check_code_region_intrinsic(

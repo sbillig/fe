@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assert_msg_builtin.fe
+---
+error[2-0002]: `assert_msg` is not found
+   ┌─ assert_msg_builtin.fe:15:15
+   │
+15 │     std::evm::assert_msg(false, "boom")
+   │               ^^^^^^^^^^ `assert_msg` is not found
+
+error[8-0000]: type mismatch
+   ┌─ assert_msg_builtin.fe:11:16
+   │
+11 │     assert_msg(1, "boom")
+   │                ^ expected `bool`, but `{integer}` is given
+
+error[8-0082]: `assert_msg` argument number mismatch
+  ┌─ assert_msg_builtin.fe:2:15
+  │
+2 │     assert_msg(true)
+  │               ^^^^^^ expected 2 arguments, but 1 given
+
+error[8-0083]: `assert_msg` message must be a string literal
+  ┌─ assert_msg_builtin.fe:7:22
+  │
+7 │     assert_msg(true, message)
+  │                      ^^^^^^^ use a string literal for the revert message

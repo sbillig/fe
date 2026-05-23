@@ -15,6 +15,7 @@ use crate::{
             ty_def::{BorrowKind, TyId},
         },
     },
+    hir_def::StringId,
     projection::{IndexSource, Projection},
     semantic::ProviderBinding,
 };
@@ -475,6 +476,9 @@ pub enum NSTerminatorKind<'db> {
         enum_ty: TyId<'db>,
         cases: Box<[(VariantIndex, crate::analysis::semantic::SBlockId)]>,
         default: Option<crate::analysis::semantic::SBlockId>,
+    },
+    AssertMsg {
+        message: StringId<'db>,
     },
     Return(Option<NOperand>),
 }

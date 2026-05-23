@@ -1046,6 +1046,11 @@ impl<'db> CtfeMachine<'db> {
                         .find(|(variant, _)| *variant == tag)
                         .map_or_else(|| default.map_or(0, |bb| bb.index()), |(_, bb)| bb.index());
                 }
+                STerminatorKind::AssertMsg { .. } => {
+                    return Err(CtfeError::NotConstEvaluable {
+                        origin: term_origin,
+                    });
+                }
                 STerminatorKind::Return(Some(value)) => {
                     return self.read_operand(frame_idx, value, term_origin);
                 }

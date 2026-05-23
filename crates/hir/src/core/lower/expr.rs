@@ -61,7 +61,6 @@ impl<'db> Expr<'db> {
             }
 
             ast::ExprKind::Call(call) => {
-                let callee = Self::push_to_body_opt(ctxt, call.callee());
                 let args = call
                     .args()
                     .map(|args| {
@@ -70,7 +69,12 @@ impl<'db> Expr<'db> {
                             .collect()
                     })
                     .unwrap_or_default();
-                Self::Call(callee, args)
+                if is_assert_msg_builtin_call(&call) {
+                    Self::AssertMsg(args)
+                } else {
+                    let callee = Self::push_to_body_opt(ctxt, call.callee());
+                    Self::Call(callee, args)
+                }
             }
 
             ast::ExprKind::MethodCall(method_call) => {
@@ -234,6 +238,26 @@ impl<'db> Expr<'db> {
             ctxt.push_missing_expr()
         }
     }
+}
+
+fn is_assert_msg_builtin_call(call: &ast::CallExpr) -> bool {
+    let Some(ast::ExprKind::Path(callee)) = call.callee().map(|callee| callee.kind()) else {
+        return false;
+    };
+    let Some(path) = callee.path() else {
+        return false;
+    };
+    let mut segments = path.segments();
+    let Some(segment) = segments.next() else {
+        return false;
+    };
+    if segments.next().is_some() || segment.generic_args().is_some() {
+        return false;
+    }
+    let Some(ast::PathSegmentKind::Ident(ident)) = segment.kind() else {
+        return false;
+    };
+    ident.text() == "assert_msg"
 }
 
 impl Cond {

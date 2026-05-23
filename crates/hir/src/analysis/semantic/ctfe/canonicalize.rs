@@ -351,7 +351,7 @@ fn block_successors<'db>(term: &STerminatorKind<'db>) -> Vec<SBlockId> {
             }
             succs
         }
-        STerminatorKind::Return(None | Some(_)) => Vec::new(),
+        STerminatorKind::AssertMsg { .. } | STerminatorKind::Return(None | Some(_)) => Vec::new(),
     }
 }
 

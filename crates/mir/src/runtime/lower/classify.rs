@@ -2767,6 +2767,7 @@ mod tests {
                 NSTerminatorKind::Goto(_)
                 | NSTerminatorKind::Branch { .. }
                 | NSTerminatorKind::MatchEnum { .. }
+                | NSTerminatorKind::AssertMsg { .. }
                 | NSTerminatorKind::Return(None) => None,
             })
             .map(|local| {

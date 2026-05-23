@@ -523,6 +523,16 @@ pub enum BodyDiag<'db> {
         expected: usize,
     },
 
+    AssertMsgArgNumMismatch {
+        primary: DynLazySpan<'db>,
+        given: usize,
+        expected: usize,
+    },
+
+    AssertMsgMessageMustBeStringLiteral {
+        primary: DynLazySpan<'db>,
+    },
+
     CallArgLabelMismatch {
         primary: DynLazySpan<'db>,
         def_span: DynLazySpan<'db>,
@@ -667,6 +677,7 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         callee: CallableDef<'db>,
     },
+    ConstFnAssertMsgNotAllowed(DynLazySpan<'db>),
 }
 
 impl<'db> BodyDiag<'db> {
@@ -797,6 +808,8 @@ impl<'db> BodyDiag<'db> {
             Self::NotCallable(..) => 21,
             Self::CallGenericArgNumMismatch { .. } => 22,
             Self::CallArgNumMismatch { .. } => 23,
+            Self::AssertMsgArgNumMismatch { .. } => 82,
+            Self::AssertMsgMessageMustBeStringLiteral { .. } => 83,
             Self::CallArgLabelMismatch { .. } => 24,
             Self::AmbiguousInherentMethodCall { .. } => 25,
             Self::AmbiguousTrait { .. } => 26,
@@ -825,6 +838,7 @@ impl<'db> BodyDiag<'db> {
             Self::ConstFnWithNotAllowed(_) => 56,
             Self::ConstFnNonConstCall { .. } => 62,
             Self::ConstFnEffectfulCall { .. } => 63,
+            Self::ConstFnAssertMsgNotAllowed(_) => 84,
         }
     }
 }

@@ -21,7 +21,6 @@ use ingot::evm::intrinsic::{
     code_region_offset as intrinsic_code_region_offset,
 }
 use ingot::abi::Sol
-use ingot::abi::Text
 use ingot::abi::sol::{decode_input_at, decode_output}
 use super::calldata::CallData
 use super::contract_field_slot
@@ -700,20 +699,6 @@ impl Call for Evm {
 
 pub fn assert(_ b: own bool) {
     if !b { revert_error(Panic { code: 0x01 }) }
-}
-
-/// Assert with a Solidity-compatible `Error(string)` revert message.
-///
-/// When `b` is false, reverts with the 4-byte selector `0x08c379a0`
-/// (keccak256("Error(string)")[..4]) followed by the ABI-encoded
-/// message, matching Solidity's `require(cond, "message")` / `revert("message")`.
-#[inline(always)]
-pub fn assert_msg(_ b: own bool, _ message: own Text) {
-    if !b {
-        // Error(string) has one ABI argument, so encode the full argument list.
-        let (ptr, len) = encode_calldata(0x08c379a0, (message,))
-        ops::revert(offset: ptr, len: len)
-    }
 }
 
 /// Revert the current transaction with ABI-encoded data.

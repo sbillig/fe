@@ -87,6 +87,7 @@ impl<'db> RuntimeReturnSummary<'db> {
                 NSTerminatorKind::Goto(_)
                 | NSTerminatorKind::Branch { .. }
                 | NSTerminatorKind::MatchEnum { .. }
+                | NSTerminatorKind::AssertMsg { .. }
                 | NSTerminatorKind::Return(None) => None,
             })
             .collect::<Vec<_>>()

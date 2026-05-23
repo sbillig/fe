@@ -3489,6 +3489,34 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::AssertMsgArgNumMismatch {
+                primary,
+                given,
+                expected,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "`assert_msg` argument number mismatch".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!("expected {expected} arguments, but {given} given"),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::AssertMsgMessageMustBeStringLiteral { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "`assert_msg` message must be a string literal".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "use a string literal for the revert message".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::CallArgLabelMismatch {
                 primary,
                 def_span,
@@ -4181,6 +4209,14 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 )
             }
+
+            BodyDiag::ConstFnAssertMsgNotAllowed(primary) => primary_diag(
+                severity,
+                "`assert_msg` is not allowed in a `const fn`",
+                "`assert_msg` lowers to an EVM revert",
+                primary.resolve(db),
+                error_code,
+            ),
         }
     }
 }

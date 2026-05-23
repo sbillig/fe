@@ -76,8 +76,6 @@ fn dynamic_string_literal_marks_main_section_for_const_data() {
     let ir = with_top_mod_for_source(
         "dynamic_string_literal_marks_main_section_for_const_data.fe",
         r#"
-use std::evm::assert_msg
-
 pub fn main() {
     assert_msg(false, "boom")
 }

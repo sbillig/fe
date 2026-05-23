@@ -228,6 +228,7 @@ fn call_like_receiver_expr<'db>(expr_data: &Expr<'db>) -> Option<ExprId> {
         | Expr::Bin(receiver, ..)
         | Expr::AugAssign(receiver, ..) => Some(*receiver),
         Expr::Call(..)
+        | Expr::AssertMsg(..)
         | Expr::Lit(..)
         | Expr::Path(..)
         | Expr::Tuple(..)
@@ -797,6 +798,7 @@ impl<'db> SemanticInstance<'db> {
 
             match &block.terminator.kind {
                 STerminatorKind::Return(_) => return false,
+                STerminatorKind::AssertMsg { .. } => {}
                 STerminatorKind::Goto(next) => pending.push(*next),
                 STerminatorKind::Branch {
                     then_bb, else_bb, ..
