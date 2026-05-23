@@ -816,7 +816,8 @@ where
                         },
                         path,
                     ),
-                    TraitRefLowerError::Ignored => PathResError::parse_err(trait_path),
+                    TraitRefLowerError::UnsafeLocalBoundBlanketImpl
+                    | TraitRefLowerError::Ignored => PathResError::parse_err(trait_path),
                 };
                 return Err(err);
             }

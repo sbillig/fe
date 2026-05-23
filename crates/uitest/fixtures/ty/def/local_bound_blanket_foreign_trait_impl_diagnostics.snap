@@ -1,0 +1,23 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/local_bound_blanket_foreign_trait_impl_diagnostics.fe
+---
+error[5-0001]: conflicting trait implementations
+   ┌─ local_bound_blanket_foreign_trait_impl_diagnostics.fe:17:33
+   │
+17 │ impl<T: Marker> WrappingAdd for T {
+   │                                 ^ this trait implementation
+   ·
+23 │ impl WrappingAdd for W {
+   │                      - conflicts with this trait implementation
+
+error[5-0004]: external trait blanket impl is not anchored by a sealed local marker
+   ┌─ local_bound_blanket_foreign_trait_impl_diagnostics.fe:11:1
+   │
+11 │ ╭ impl<T: Copy> WrappingMul for T {
+12 │ │     fn wrapping_mul(self, _ other: T) -> Self {
+13 │ │         self
+14 │ │     }
+15 │ │ }
+   │ ╰─^ external trait blanket impl must be anchored by a sealed local marker trait implemented only for local types

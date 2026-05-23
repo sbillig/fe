@@ -3743,7 +3743,9 @@ impl<'db> SuperTraitRefView<'db> {
             Err(TraitRefLowerError::PathResError(_)) => Err(SuperTraitLowerError::PathResolution),
             Err(TraitRefLowerError::InvalidDomain(_)) => Err(SuperTraitLowerError::InvalidDomain),
             Err(TraitRefLowerError::Cycle) => Err(SuperTraitLowerError::Cycle),
-            Err(TraitRefLowerError::Ignored) => Err(SuperTraitLowerError::Ignored),
+            Err(TraitRefLowerError::UnsafeLocalBoundBlanketImpl | TraitRefLowerError::Ignored) => {
+                Err(SuperTraitLowerError::Ignored)
+            }
         }
     }
 
@@ -3763,6 +3765,7 @@ impl<'db> SuperTraitRefView<'db> {
                 TraitRefLowerError::PathResError(_)
                 | TraitRefLowerError::InvalidDomain(_)
                 | TraitRefLowerError::Cycle
+                | TraitRefLowerError::UnsafeLocalBoundBlanketImpl
                 | TraitRefLowerError::Ignored,
             ) => return None,
         };
@@ -3890,6 +3893,13 @@ pub(crate) enum ImplTraitLowerError<'db> {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TraitImplAdmissibility {
+    Admissible,
+    ExternalTraitForExternalType,
+    UnsafeLocalBoundBlanketImpl,
+}
+
 impl<'db> ImplTrait<'db> {
     /// Semantic self type of this impl-trait block.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
@@ -3946,7 +3956,7 @@ impl<'db> ImplTrait<'db> {
 
         // Conflict check
         let trait_ = implementor.skip_binder().trait_(db);
-        let env = ingot_trait_env(db, trait_.ingot(db));
+        let env = ingot_trait_env(db, self.top_mod(db).ingot(db));
         if let Some(impls) = env.impls.get(&trait_.def(db)) {
             for &cand_view in impls {
                 let cand_impl_trait = cand_view.skip_binder().hir_impl_trait(db);
@@ -4013,17 +4023,104 @@ impl<'db> ImplTrait<'db> {
 
         let trait_inst = lower_trait_ref(db, ty, trait_ref, self.scope(), assumptions, None)?;
 
-        // Preserve ingot check used when lowering impl traits: an impl is
-        // only valid if it lives in the same ingot as either its
-        // implementor type or the trait itself.
-        let impl_trait_ingot = self.top_mod(db).ingot(db);
-        if Some(impl_trait_ingot) != ty.ingot(db)
-            && impl_trait_ingot != trait_inst.def(db).ingot(db)
-        {
-            return Err(TraitRefLowerError::Ignored);
+        match self.trait_impl_admissibility(db, ty, trait_inst, assumptions) {
+            TraitImplAdmissibility::Admissible => {}
+            TraitImplAdmissibility::ExternalTraitForExternalType => {
+                return Err(TraitRefLowerError::Ignored);
+            }
+            TraitImplAdmissibility::UnsafeLocalBoundBlanketImpl => {
+                return Err(TraitRefLowerError::UnsafeLocalBoundBlanketImpl);
+            }
         }
 
         Ok(trait_inst)
+    }
+
+    fn trait_impl_admissibility(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        trait_inst: TraitInstId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> TraitImplAdmissibility {
+        let impl_trait_ingot = self.top_mod(db).ingot(db);
+        if Some(impl_trait_ingot) == ty.ingot(db)
+            || impl_trait_ingot == trait_inst.def(db).ingot(db)
+        {
+            return TraitImplAdmissibility::Admissible;
+        }
+
+        if !matches!(ty.data(db), TyData::TyParam(_)) {
+            return TraitImplAdmissibility::ExternalTraitForExternalType;
+        }
+
+        if assumptions.list(db).iter().any(|pred| {
+            pred.self_ty(db) == ty
+                && Self::is_sealed_local_marker_anchor(db, pred.def(db), impl_trait_ingot)
+        }) {
+            TraitImplAdmissibility::Admissible
+        } else {
+            TraitImplAdmissibility::UnsafeLocalBoundBlanketImpl
+        }
+    }
+
+    fn is_sealed_local_marker_anchor(
+        db: &'db dyn HirAnalysisDb,
+        marker: Trait<'db>,
+        impl_trait_ingot: common::ingot::Ingot<'db>,
+    ) -> bool {
+        if marker.ingot(db) != impl_trait_ingot
+            || marker.scope().data(db).vis.is_pub()
+            || !marker.original_params(db).is_empty()
+            || marker.methods(db).next().is_some()
+            || !marker.types(db).is_empty()
+            || !marker.consts(db).is_empty()
+            || marker.super_trait_bounds(db).next().is_some()
+        {
+            return false;
+        }
+
+        marker
+            .ingot(db)
+            .all_impl_traits(db)
+            .iter()
+            .copied()
+            .filter(|&impl_| Self::impl_trait_implements_marker(db, impl_, marker))
+            .all(|impl_| Self::impl_trait_targets_local_nominal_root(db, impl_, impl_trait_ingot))
+    }
+
+    fn impl_trait_implements_marker(
+        db: &'db dyn HirAnalysisDb,
+        impl_trait: ImplTrait<'db>,
+        marker: Trait<'db>,
+    ) -> bool {
+        let Some(trait_ref) = impl_trait.trait_ref(db).to_opt() else {
+            return false;
+        };
+        let assumptions = constraints_for(db, impl_trait.into());
+        lower_trait_ref(
+            db,
+            impl_trait.ty(db),
+            trait_ref,
+            impl_trait.scope(),
+            assumptions,
+            None,
+        )
+        .is_ok_and(|inst| inst.def(db) == marker)
+    }
+
+    fn impl_trait_targets_local_nominal_root(
+        db: &'db dyn HirAnalysisDb,
+        impl_trait: ImplTrait<'db>,
+        impl_trait_ingot: common::ingot::Ingot<'db>,
+    ) -> bool {
+        match impl_trait.ty(db).base_ty(db).data(db) {
+            TyData::TyBase(TyBase::Adt(adt)) => adt.ingot(db) == impl_trait_ingot,
+            TyData::TyBase(TyBase::Contract(contract)) => {
+                contract.top_mod(db).ingot(db) == impl_trait_ingot
+            }
+            _ => false,
+        }
     }
 
     /// Semantic generic parameter types for this `impl trait` block, in
@@ -4176,6 +4273,9 @@ impl<'db> ImplTrait<'db> {
                         }
                         TraitRefLowerError::Cycle => {
                             diags.push(TraitLowerDiag::CyclicTraitRef(self).into());
+                        }
+                        TraitRefLowerError::UnsafeLocalBoundBlanketImpl => {
+                            diags.push(TraitLowerDiag::UnsafeLocalBoundBlanketImpl(self).into());
                         }
                         TraitRefLowerError::Ignored => {
                             diags.push(TraitLowerDiag::ExternalTraitForExternalType(self).into());
