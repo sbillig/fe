@@ -1,0 +1,12 @@
+#[must_use()]
+fn invalid_form() {}
+
+#[must_use]
+#[must_use]
+fn duplicate() {}
+
+#[must_use = "reason"]
+struct InvalidValue {}
+
+#[must_use]
+type Alias = u256

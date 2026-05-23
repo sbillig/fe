@@ -906,6 +906,13 @@ impl<'db> CallableDef<'db> {
         }
     }
 
+    pub fn is_must_use(self, db: &'db dyn HirDb) -> bool {
+        match self {
+            Self::Func(func) => func.is_must_use(db),
+            Self::VariantCtor(..) => false,
+        }
+    }
+
     pub fn ingot(self, db: &'db dyn HirDb) -> common::ingot::Ingot<'db> {
         match self {
             Self::Func(func) => func.top_mod(db).ingot(db),

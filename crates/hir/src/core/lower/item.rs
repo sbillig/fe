@@ -6,8 +6,8 @@ use crate::{
     hir_def::{
         AttrListId, Body, BodyKind, CompBinOp, EffectParamListId, FuncParamListId,
         GenericParamListId, IdentId, InlineAttrErrorKind, KeywordAttrArgSpec, KeywordAttrSpec,
-        PathId, TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*,
-        parse_inline_attr_specs,
+        MustUseAttrErrorKind, PathId, TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId,
+        item::*, parse_inline_attr_specs, parse_must_use_attr_specs,
     },
     lower::msg::lower_msg_as_mod,
     span::HirOrigin,
@@ -52,6 +52,16 @@ pub struct InlineAttrError {
     pub func_name: Option<String>,
 }
 
+#[salsa::accumulator]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MustUseAttrError {
+    pub kind: MustUseAttrErrorKind,
+    pub file: common::file::File,
+    pub primary_range: parser::TextRange,
+    pub target: String,
+    pub item_name: Option<String>,
+}
+
 pub(crate) fn lower_module_items(ctxt: &mut FileLowerCtxt<'_>, items: ast::ItemList) {
     for item in items {
         ItemKind::lower_ast(ctxt, item);
@@ -69,6 +79,12 @@ impl<'db> ItemKind<'db> {
                 super::arithmetic::report_invalid_mod_arithmetic_attrs(ctxt, mod_.attr_list());
                 super::event::report_event_attr_on_non_struct_item(ctxt, mod_.attr_list(), "mod");
                 super::error::report_error_attr_on_non_struct_item(ctxt, mod_.attr_list(), "mod");
+                report_must_use_attr_on_unsupported_item(
+                    ctxt,
+                    mod_.attr_list(),
+                    "mod",
+                    mod_.name().map(|name| name.text().to_string()),
+                );
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     mod_.attr_list(),
@@ -80,6 +96,12 @@ impl<'db> ItemKind<'db> {
                 super::arithmetic::report_invalid_function_arithmetic_attrs(ctxt, &fn_);
                 super::event::report_event_attr_on_non_struct_item(ctxt, fn_.attr_list(), "fn");
                 super::error::report_error_attr_on_non_struct_item(ctxt, fn_.attr_list(), "fn");
+                validate_must_use_attr(
+                    ctxt,
+                    fn_.attr_list(),
+                    "fn",
+                    fn_.sig().name().map(|name| name.text().to_string()),
+                );
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     fn_.attr_list(),
@@ -92,6 +114,12 @@ impl<'db> ItemKind<'db> {
                     ctxt,
                     struct_.attr_list(),
                     "struct",
+                );
+                validate_must_use_attr(
+                    ctxt,
+                    struct_.attr_list(),
+                    "struct",
+                    struct_.name().map(|name| name.text().to_string()),
                 );
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
@@ -116,6 +144,12 @@ impl<'db> ItemKind<'db> {
                     contract.attr_list(),
                     "contract",
                 );
+                report_must_use_attr_on_unsupported_item(
+                    ctxt,
+                    contract.attr_list(),
+                    "contract",
+                    contract.name().map(|name| name.text().to_string()),
+                );
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     contract.attr_list(),
@@ -131,6 +165,12 @@ impl<'db> ItemKind<'db> {
                 );
                 super::event::report_event_attr_on_non_struct_item(ctxt, enum_.attr_list(), "enum");
                 super::error::report_error_attr_on_non_struct_item(ctxt, enum_.attr_list(), "enum");
+                validate_must_use_attr(
+                    ctxt,
+                    enum_.attr_list(),
+                    "enum",
+                    enum_.name().map(|name| name.text().to_string()),
+                );
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     enum_.attr_list(),
@@ -146,6 +186,12 @@ impl<'db> ItemKind<'db> {
                 );
                 super::event::report_event_attr_on_non_struct_item(ctxt, msg.attr_list(), "msg");
                 super::error::report_error_attr_on_non_struct_item(ctxt, msg.attr_list(), "msg");
+                report_must_use_attr_on_unsupported_item(
+                    ctxt,
+                    msg.attr_list(),
+                    "msg",
+                    msg.name().map(|name| name.text().to_string()),
+                );
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     msg.attr_list(),
@@ -169,6 +215,12 @@ impl<'db> ItemKind<'db> {
                     alias.attr_list(),
                     "type alias",
                 );
+                report_must_use_attr_on_unsupported_item(
+                    ctxt,
+                    alias.attr_list(),
+                    "type alias",
+                    alias.alias().map(|name| name.text().to_string()),
+                );
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     alias.attr_list(),
@@ -184,6 +236,7 @@ impl<'db> ItemKind<'db> {
                 );
                 super::event::report_event_attr_on_non_struct_item(ctxt, impl_.attr_list(), "impl");
                 super::error::report_error_attr_on_non_struct_item(ctxt, impl_.attr_list(), "impl");
+                report_must_use_attr_on_unsupported_item(ctxt, impl_.attr_list(), "impl", None);
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     impl_.attr_list(),
@@ -206,6 +259,12 @@ impl<'db> ItemKind<'db> {
                     ctxt,
                     trait_.attr_list(),
                     "trait",
+                );
+                report_must_use_attr_on_unsupported_item(
+                    ctxt,
+                    trait_.attr_list(),
+                    "trait",
+                    trait_.name().map(|name| name.text().to_string()),
                 );
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
@@ -230,6 +289,12 @@ impl<'db> ItemKind<'db> {
                     impl_trait.attr_list(),
                     "impl trait",
                 );
+                report_must_use_attr_on_unsupported_item(
+                    ctxt,
+                    impl_trait.attr_list(),
+                    "impl trait",
+                    None,
+                );
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     impl_trait.attr_list(),
@@ -252,6 +317,12 @@ impl<'db> ItemKind<'db> {
                     ctxt,
                     const_.attr_list(),
                     "const",
+                );
+                report_must_use_attr_on_unsupported_item(
+                    ctxt,
+                    const_.attr_list(),
+                    "const",
+                    const_.name().map(|name| name.text().to_string()),
                 );
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
@@ -276,6 +347,12 @@ impl<'db> ItemKind<'db> {
                     assert_.attr_list(),
                     "static assertion",
                 );
+                report_must_use_attr_on_unsupported_item(
+                    ctxt,
+                    assert_.attr_list(),
+                    "static assertion",
+                    None,
+                );
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     assert_.attr_list(),
@@ -291,6 +368,7 @@ impl<'db> ItemKind<'db> {
                 );
                 super::event::report_event_attr_on_non_struct_item(ctxt, use_.attr_list(), "use");
                 super::error::report_error_attr_on_non_struct_item(ctxt, use_.attr_list(), "use");
+                report_must_use_attr_on_unsupported_item(ctxt, use_.attr_list(), "use", None);
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     use_.attr_list(),
@@ -314,6 +392,7 @@ impl<'db> ItemKind<'db> {
                     extern_.attr_list(),
                     "extern",
                 );
+                report_must_use_attr_on_unsupported_item(ctxt, extern_.attr_list(), "extern", None);
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     extern_.attr_list(),
@@ -335,6 +414,12 @@ impl<'db> ItemKind<'db> {
                             ctxt,
                             fn_.attr_list(),
                             "extern fn",
+                        );
+                        validate_must_use_attr(
+                            ctxt,
+                            fn_.attr_list(),
+                            "extern fn",
+                            fn_.sig().name().map(|name| name.text().to_string()),
                         );
                         super::payable::report_payable_attr_on_unsupported_item(
                             ctxt,
@@ -440,24 +525,7 @@ fn validate_inline_attr<'db>(ctxt: &mut FileLowerCtxt<'db>, func: &ast::Func) {
     let db = ctxt.db();
     let file = ctxt.top_mod().file(db);
     let func_name = func.sig().name().map(|name| name.text().to_string());
-    let inline_attrs = named_attr_specs(func.attr_list(), "inline")
-        .into_iter()
-        .map(|attr| {
-            let spec = KeywordAttrSpec {
-                has_value: attr.value.is_some(),
-                has_args: attr.has_args,
-                args: attr
-                    .args
-                    .into_iter()
-                    .map(|arg| KeywordAttrArgSpec {
-                        key: arg.key,
-                        has_value: arg.value.is_some(),
-                    })
-                    .collect(),
-            };
-            (spec, attr.range)
-        })
-        .collect::<Vec<_>>();
+    let inline_attrs = attr_specs(func.attr_list(), "inline");
 
     let Err(err) = parse_inline_attr_specs(inline_attrs.iter().map(|(spec, _)| spec.clone()))
     else {
@@ -481,6 +549,90 @@ fn lower_inline_attr_error(
         file,
         primary_range,
         func_name,
+    }
+    .accumulate(db);
+}
+
+fn validate_must_use_attr<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    target: &str,
+    item_name: Option<String>,
+) {
+    let must_use_attrs = attr_specs(attrs, "must_use");
+    let Err(err) = parse_must_use_attr_specs(must_use_attrs.iter().map(|(spec, _)| spec.clone()))
+    else {
+        return;
+    };
+
+    if let Some((_, range)) = must_use_attrs.get(err.attr_index) {
+        lower_must_use_attr_error(
+            ctxt.db(),
+            ctxt.top_mod().file(ctxt.db()),
+            *range,
+            target,
+            item_name,
+            err.kind,
+        );
+    }
+}
+
+fn report_must_use_attr_on_unsupported_item<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    target: &str,
+    item_name: Option<String>,
+) {
+    for (_, range) in attr_specs(attrs, "must_use") {
+        lower_must_use_attr_error(
+            ctxt.db(),
+            ctxt.top_mod().file(ctxt.db()),
+            range,
+            target,
+            item_name.clone(),
+            MustUseAttrErrorKind::UnsupportedTarget,
+        );
+    }
+}
+
+fn attr_specs(
+    attrs: Option<ast::AttrList>,
+    name: &str,
+) -> Vec<(KeywordAttrSpec, parser::TextRange)> {
+    named_attr_specs(attrs, name)
+        .into_iter()
+        .map(|attr| {
+            let spec = KeywordAttrSpec {
+                has_value: attr.value.is_some(),
+                has_args: attr.has_args,
+                args: attr
+                    .args
+                    .into_iter()
+                    .map(|arg| KeywordAttrArgSpec {
+                        key: arg.key,
+                        has_value: arg.value.is_some(),
+                    })
+                    .collect(),
+            };
+            (spec, attr.range)
+        })
+        .collect()
+}
+
+fn lower_must_use_attr_error(
+    db: &dyn crate::HirDb,
+    file: common::file::File,
+    primary_range: parser::TextRange,
+    target: &str,
+    item_name: Option<String>,
+    kind: MustUseAttrErrorKind,
+) {
+    MustUseAttrError {
+        kind,
+        file,
+        primary_range,
+        target: target.to_string(),
+        item_name,
     }
     .accumulate(db);
 }

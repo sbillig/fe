@@ -23,7 +23,7 @@ use crate::{
 pub use arithmetic::{ArithmeticAttrError, ArithmeticAttrErrorKind};
 pub use error::{ErrorDiagnostic, ErrorDiagnosticKind};
 pub use event::{EventError, EventErrorKind};
-pub use item::{InlineAttrError, SelectorError, SelectorErrorKind};
+pub use item::{InlineAttrError, MustUseAttrError, SelectorError, SelectorErrorKind};
 pub use parse::parse_file_impl;
 pub use payable::{PayableError, PayableErrorKind};
 pub use stmt::LoopUnrollAttrError;

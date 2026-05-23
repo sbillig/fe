@@ -9,7 +9,7 @@ use crate::analysis::{
     ty::{
         diagnostics::{
             BodyDiag, CallConstraintDiagInfo, DefConflictError, FuncBodyDiag, ImplDiag,
-            TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+            MustUseSubject, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
@@ -742,6 +742,57 @@ impl DiagnosticVoucher for crate::InlineAttrError {
         };
 
         let error_code = GlobalErrorCode::new(DiagnosticPass::InlineAttr, code);
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message,
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                label,
+                Some(primary_span),
+            )],
+            notes,
+            error_code,
+        )
+    }
+}
+
+impl DiagnosticVoucher for crate::MustUseAttrError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::hir_def::MustUseAttrErrorKind;
+
+        let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
+        let target = if let Some(name) = &self.item_name {
+            format!("{} `{}`", self.target, name)
+        } else {
+            self.target.clone()
+        };
+
+        let (code, message, label, notes) = match self.kind {
+            MustUseAttrErrorKind::Duplicate => (
+                1,
+                format!("duplicate `#[must_use]` attribute on {target}"),
+                "remove the extra `#[must_use]` attribute".to_string(),
+                vec![
+                    "`fn`, `struct`, and `enum` items support at most one `#[must_use]` attribute"
+                        .to_string(),
+                ],
+            ),
+            MustUseAttrErrorKind::InvalidForm => (
+                2,
+                format!("invalid `#[must_use]` attribute on {target}"),
+                "expected `#[must_use]`".to_string(),
+                vec!["`#[must_use]` does not take arguments or a value".to_string()],
+            ),
+            MustUseAttrErrorKind::UnsupportedTarget => (
+                3,
+                format!("unsupported `#[must_use]` attribute on {target}"),
+                "`#[must_use]` is only supported on `fn`, `struct`, and `enum` items".to_string(),
+                vec![],
+            ),
+        };
+
+        let error_code = GlobalErrorCode::new(DiagnosticPass::MustUseAttr, code);
 
         CompleteDiagnostic::new(
             Severity::Error,
@@ -3836,6 +3887,39 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     message: "type annotation is needed".to_string(),
                     sub_diagnostics,
                     notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::UnusedMustUse { primary, subject } => {
+                let (subject_name, note) = match subject {
+                    MustUseSubject::Type(ty) => (
+                        format!("value of type `{}`", ty.pretty_print(db)),
+                        "this type is marked `#[must_use]`".to_string(),
+                    ),
+                    MustUseSubject::Function(CallableDef::Func(func)) => {
+                        let name = func
+                            .name(db)
+                            .to_opt()
+                            .map(|name| name.data(db).to_string())
+                            .unwrap_or_else(|| "<anonymous>".to_string());
+                        (
+                            format!("return value of function `{name}`"),
+                            "this function is marked `#[must_use]`".to_string(),
+                        )
+                    }
+                    MustUseSubject::Function(CallableDef::VariantCtor(_)) => unreachable!(),
+                };
+
+                CompleteDiagnostic {
+                    severity,
+                    message: format!("unused {subject_name}"),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: "use this value or explicitly discard it with `let _ = ...`"
+                            .to_string(),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![note],
                     error_code,
                 }
             }

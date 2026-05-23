@@ -689,6 +689,10 @@ impl<'db> Func<'db> {
         self.modifiers(db).is_const
     }
 
+    pub fn is_must_use(self, db: &'db dyn HirDb) -> bool {
+        self.attributes(db).is_must_use(db)
+    }
+
     fn inline_attr(self, db: &'db dyn HirDb) -> Option<InlineAttr> {
         self.attributes(db).inline_attr(db)
     }
@@ -812,6 +816,10 @@ impl<'db> Struct<'db> {
 
     pub fn hir_fields(self, db: &'db dyn HirDb) -> FieldDefListId<'db> {
         self.fields(db)
+    }
+
+    pub fn is_must_use(self, db: &'db dyn HirDb) -> bool {
+        self.attributes(db).is_must_use(db)
     }
 
     /// Returns the human readable string of the expected struct initializer.
@@ -989,6 +997,10 @@ impl<'db> Enum<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
+    }
+
+    pub fn is_must_use(self, db: &'db dyn HirDb) -> bool {
+        self.attributes(db).is_must_use(db)
     }
 }
 

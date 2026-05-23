@@ -1,0 +1,12 @@
+#[must_use]
+enum Token {
+    Value,
+}
+
+fn make_token() -> Token {
+    Token::Value
+}
+
+fn bad() {
+    make_token()
+}

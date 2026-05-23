@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/must_use_attr_unsupported.fe
+---
+error[17-0003]: unsupported `#[must_use]` attribute on const `VALUE`
+  ┌─ must_use_attr_unsupported.fe:1:1
+  │
+1 │ #[must_use]
+  │ ^^^^^^^^^^^ `#[must_use]` is only supported on `fn`, `struct`, and `enum` items
+
+error[17-0003]: unsupported `#[must_use]` attribute on contract `BadContract`
+  ┌─ must_use_attr_unsupported.fe:4:1
+  │
+4 │ #[must_use]
+  │ ^^^^^^^^^^^ `#[must_use]` is only supported on `fn`, `struct`, and `enum` items

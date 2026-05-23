@@ -6,7 +6,7 @@ use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
     ArithBinOp, BinOp, CallArg as HirCallArg, CallableDef, Cond, CondId, Expr, ExprId, FieldIndex,
-    IdentId, IntegerId, LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt, UnOp, VariantKind,
+    IdentId, IntegerId, LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt, StmtId, UnOp, VariantKind,
     WithBinding,
 };
 use crate::span::DynLazySpan;
@@ -31,7 +31,7 @@ use crate::analysis::ty::{
     corelib::{
         resolve_core_range_types, resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
     },
-    diagnostics::{BodyDiag, FuncBodyDiag},
+    diagnostics::{BodyDiag, FuncBodyDiag, MustUseSubject},
     effect_handle_metadata,
     effects::{
         BarrierReason, EffectBarrier, EffectKeyKind, EffectPatternKey, EffectQuery,
@@ -346,14 +346,12 @@ impl<'db> TyChecker<'db> {
         } else {
             self.env.enter_scope(expr);
             for &stmt in stmts[..stmts.len() - 1].iter() {
-                let ty = self.fresh_ty();
-                self.check_stmt(stmt, ty);
+                self.check_discarded_stmt(stmt);
             }
 
             let last_stmt = stmts[stmts.len() - 1];
             let res = if expected == TyId::unit(self.db) {
-                let ty = self.fresh_ty();
-                self.check_stmt(last_stmt, ty);
+                self.check_discarded_stmt(last_stmt);
                 ExprProp::new(TyId::unit(self.db), true)
             } else {
                 match self.env.stmt_data(last_stmt) {
@@ -366,6 +364,49 @@ impl<'db> TyChecker<'db> {
             };
             self.env.leave_scope();
             res
+        }
+    }
+
+    fn check_discarded_stmt(&mut self, stmt: StmtId) {
+        match self.env.stmt_data(stmt) {
+            Partial::Present(Stmt::Expr(expr)) => {
+                let prop = self.check_expr_unknown(*expr);
+                self.check_unused_must_use(*expr, prop);
+            }
+            Partial::Present(_) => {
+                let ty = self.fresh_ty();
+                self.check_stmt(stmt, ty);
+            }
+            Partial::Absent => {}
+        }
+    }
+
+    fn check_unused_must_use(&mut self, expr: ExprId, prop: ExprProp<'db>) {
+        if prop.ty.has_invalid(self.db) {
+            return;
+        }
+
+        if let Some(adt_ref) = prop.ty.adt_ref(self.db)
+            && adt_ref.is_must_use(self.db)
+        {
+            self.push_diag(BodyDiag::UnusedMustUse {
+                primary: expr.span(self.body()).into(),
+                subject: MustUseSubject::Type(prop.ty),
+            });
+            return;
+        }
+
+        let Partial::Present(expr_data) = self.env.expr_data(expr) else {
+            return;
+        };
+        if matches!(expr_data, Expr::Call(..) | Expr::MethodCall(..))
+            && let Some(callable) = self.env.callable_expr(expr)
+            && callable.callable_def().is_must_use(self.db)
+        {
+            self.push_diag(BodyDiag::UnusedMustUse {
+                primary: expr.span(self.body()).into(),
+                subject: MustUseSubject::Function(callable.callable_def()),
+            });
         }
     }
 

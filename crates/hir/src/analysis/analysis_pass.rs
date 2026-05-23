@@ -1,7 +1,7 @@
 use crate::analysis::{HirAnalysisDb, diagnostics::DiagnosticVoucher};
 use crate::{
     ArithmeticAttrError, ErrorDiagnostic, EventError, InlineAttrError, LoopUnrollAttrError,
-    ParserError, PayableError, SelectorError,
+    MustUseAttrError, ParserError, PayableError, SelectorError,
     hir_def::{ModuleTree, TopLevelMod},
     lower::{parse_file_impl, scope_graph_impl},
 };
@@ -173,6 +173,22 @@ impl ModuleAnalysisPass for InlineAttrPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher>> {
         scope_graph_impl::accumulated::<InlineAttrError>(db, top_mod)
+            .into_iter()
+            .map(|d| Box::new(d.clone()) as _)
+            .collect::<Vec<_>>()
+    }
+}
+
+/// Analysis pass that collects invalid `#[must_use]` attributes from item lowering.
+pub struct MustUseAttrPass {}
+
+impl ModuleAnalysisPass for MustUseAttrPass {
+    fn run_on_module<'db>(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        top_mod: TopLevelMod<'db>,
+    ) -> Vec<Box<dyn DiagnosticVoucher>> {
+        scope_graph_impl::accumulated::<MustUseAttrError>(db, top_mod)
             .into_iter()
             .map(|d| Box::new(d.clone()) as _)
             .collect::<Vec<_>>()

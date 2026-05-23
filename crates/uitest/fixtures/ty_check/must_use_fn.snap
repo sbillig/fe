@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/must_use_fn.fe
+---
+error[8-0082]: unused return value of function `compute`
+  ┌─ must_use_fn.fe:7:5
+  │
+7 │     compute()
+  │     ^^^^^^^^^ use this value or explicitly discard it with `let _ = ...`
+  │
+  = this function is marked `#[must_use]`

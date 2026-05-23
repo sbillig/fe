@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/must_use_result.fe
+---
+error[8-0082]: unused value of type `Result<bool, u256>`
+  ┌─ must_use_result.fe:8:5
+  │
+8 │     make_result()
+  │     ^^^^^^^^^^^^^ use this value or explicitly discard it with `let _ = ...`
+  │
+  = this type is marked `#[must_use]`
