@@ -34,9 +34,9 @@ fn test_borrow_destructure_paths() {
     s.total = s.a + s.b
 
     let borrowed_sum = sum_fields(ref s)
-    assert(borrowed_sum == 23)
-    assert(s.total == 23)
+    assert!(borrowed_sum == 23)
+    assert!(s.total == 23)
 
     let done = finalize(s)
-    assert(done == 23)
+    assert!(done == 23)
 }

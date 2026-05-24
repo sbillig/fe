@@ -1,12 +1,11 @@
 #![arithmetic(unchecked)]
 
-use std::evm::effects::assert
 
 #[test]
 fn top_level_inner_attr_wraps_u8_add() {
     let x: u8 = 255
     let y: u8 = x + 1
-    assert(y == 0)
+    assert!(y == 0)
 }
 
 #[arithmetic(checked)]

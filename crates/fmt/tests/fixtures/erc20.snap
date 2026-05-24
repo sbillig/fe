@@ -103,7 +103,7 @@ pub contract CoolCoin uses (ctx: mut Ctx, log: mut Log) {
         {
             let owner = ctx.caller()
             let current = store.allowances[(owner, spender)]
-            assert(
+            assert!(
                 current >= subtracted_value,
                 "decreased allowance below zero",
             )
@@ -116,11 +116,11 @@ pub contract CoolCoin uses (ctx: mut Ctx, log: mut Log) {
 fn transfer(from: Address, to: Address, amount: u256)
 uses (store: mut TokenStore, log: mut Log)
 {
-    assert(from != Address::zero(), "transfer from zero address")
-    assert(to != Address::zero(), "transfer to zero address")
+    assert!(from != Address::zero(), "transfer from zero address")
+    assert!(to != Address::zero(), "transfer to zero address")
 
     let from_balance = store.balances[from]
-    assert(from_balance >= amount, "transfer amount exceeds balance")
+    assert!(from_balance >= amount, "transfer amount exceeds balance")
 
     store.balances[from] = from_balance - amount
     store.balances[to] += amount
@@ -129,7 +129,7 @@ uses (store: mut TokenStore, log: mut Log)
 }
 
 fn mint(to: Address, amount: u256) uses (store: mut TokenStore, log: mut Log) {
-    assert(to != Address::zero(), "mint to zero address")
+    assert!(to != Address::zero(), "mint to zero address")
 
     store.total_supply += amount
     store.balances[to] += amount
@@ -140,10 +140,10 @@ fn mint(to: Address, amount: u256) uses (store: mut TokenStore, log: mut Log) {
 fn burn(from: Address, amount: u256)
 uses (store: mut TokenStore, log: mut Log)
 {
-    assert(from != Address::zero(), "burn from zero address")
+    assert!(from != Address::zero(), "burn from zero address")
 
     let from_balance = store.balances[from]
-    assert(from_balance >= amount, "burn amount exceeds balance")
+    assert!(from_balance >= amount, "burn amount exceeds balance")
 
     store.balances[from] = from_balance - amount
     store.total_supply -= amount
@@ -154,8 +154,8 @@ uses (store: mut TokenStore, log: mut Log)
 fn approve(owner: Address, spender: Address, amount: u256)
 uses (store: mut TokenStore, log: mut Log)
 {
-    assert(owner != Address::zero(), "approve from zero address")
-    assert(spender != Address::zero(), "approve to zero address")
+    assert!(owner != Address::zero(), "approve from zero address")
+    assert!(spender != Address::zero(), "approve to zero address")
 
     store.allowances[(owner, spender)] = amount
 
@@ -168,7 +168,7 @@ uses (store: mut TokenStore)
 {
     let current = store.allowances[(owner, spender)]
     // if current != u256::MAX { // TODO: define ::MAX constants
-    assert(current >= amount, "insufficient allowance")
+    assert!(current >= amount, "insufficient allowance")
     store.allowances[(owner, spender)] = current - amount
     // }
 }
@@ -189,7 +189,7 @@ impl AccessControl {
         self.roles[(role, account)]
     }
     pub fn require(self, role: u256) uses (ctx: Ctx) {
-        assert(
+        assert!(
             self.roles[(role, ctx.caller())],
             "access denied: missing role",
         )
@@ -265,11 +265,6 @@ struct ApprovalEvent {
     #[indexed]
     spender: Address,
     value: u256,
-}
-
-// stubs for missing std lib stuff
-extern {
-    fn assert(_: bool, _: String<31>)
 }
 
 pub struct Map<K, V> {}

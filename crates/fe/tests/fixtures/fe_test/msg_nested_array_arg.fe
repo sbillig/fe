@@ -1,5 +1,4 @@
 use std::evm::{Address, Call, Evm}
-use std::evm::effects::assert
 
 msg VerifierMsg {
     #[selector = 0x70000001]
@@ -49,5 +48,5 @@ fn test_msg_nested_array_arg() uses (evm: mut Evm) {
     let verifier = evm.create2<Verifier>(value: 0, args: (), salt: 1)
     let caller = evm.create2<Caller>(value: 0, args: (), salt: 2)
     let ok: bool = evm.call(addr: caller, gas: 500000, value: 0, message: CallerMsg::Check { target: verifier })
-    assert(ok)
+    assert!(ok)
 }

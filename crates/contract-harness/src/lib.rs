@@ -1395,7 +1395,7 @@ pub contract DecodeHarness {
 
         Read { value } -> u256 {
             let decoded = CallData::with_base(4).decode<u256>()
-            assert(decoded == value)
+            assert!(decoded == value)
             decoded
         }
 
@@ -1405,14 +1405,14 @@ pub contract DecodeHarness {
 
         Args { value } -> u256 uses (evm: mut Evm) {
             let decoded = evm.decode_args<u256>()
-            assert(decoded == value)
+            assert!(decoded == value)
             decoded
         }
 
         Tuple { a, flag } -> u256 uses (evm: mut Evm) {
             let decoded: (u64, bool) = evm.decode_args<(u64, bool)>()
-            assert(decoded.0 == a)
-            assert(decoded.1 == flag)
+            assert!(decoded.0 == a)
+            assert!(decoded.1 == flag)
             if flag {
                 a as u256
             } else {
@@ -1424,8 +1424,8 @@ pub contract DecodeHarness {
             let input = CallData::with_base(4)
             let decoded: u256 = decode_input(input)
             let decoded_at: u256 = decode_input_at(CallData::new(), 4)
-            assert(decoded == value)
-            assert(decoded_at == value)
+            assert!(decoded == value)
+            assert!(decoded_at == value)
             decoded
         }
 

@@ -62,7 +62,7 @@ pub contract BalanceMap {
 #[test]
 fn test_storage_map() uses (evm: mut Evm) {
     let contract_addr = evm.create2<BalanceMap>(value: 0, args: (), salt: 0)
-    assert(contract_addr.inner != 0)
+    assert!(contract_addr.inner != 0)
 
     let alice: u256 = 0x1111
     let bob: u256 = 0x2222
@@ -74,7 +74,7 @@ fn test_storage_map() uses (evm: mut Evm) {
         value: 0,
         message: MapMsg::BalanceOf { user: alice }
     )
-    assert(bal == 0)
+    assert!(bal == 0)
 
     // 2. setBalance(alice, 100)
     evm.call(
@@ -91,7 +91,7 @@ fn test_storage_map() uses (evm: mut Evm) {
         value: 0,
         message: MapMsg::BalanceOf { user: alice }
     )
-    assert(bal == 100)
+    assert!(bal == 100)
 
     // 4. setBalance(bob, 50)
     evm.call(
@@ -108,7 +108,7 @@ fn test_storage_map() uses (evm: mut Evm) {
         value: 0,
         message: MapMsg::Transfer { from: alice, to: bob, amount: 30 }
     )
-    assert(res == 0)
+    assert!(res == 0)
 
     // 6. balanceOf(alice) -> 70
     let bal: u256 = evm.call(
@@ -117,7 +117,7 @@ fn test_storage_map() uses (evm: mut Evm) {
         value: 0,
         message: MapMsg::BalanceOf { user: alice }
     )
-    assert(bal == 70)
+    assert!(bal == 70)
 
     // 7. balanceOf(bob) -> 80
     let bal: u256 = evm.call(
@@ -126,7 +126,7 @@ fn test_storage_map() uses (evm: mut Evm) {
         value: 0,
         message: MapMsg::BalanceOf { user: bob }
     )
-    assert(bal == 80)
+    assert!(bal == 80)
 
     // 8. transfer(alice, bob, 1000) -> 1 (fail)
     let res: u256 = evm.call(
@@ -135,7 +135,7 @@ fn test_storage_map() uses (evm: mut Evm) {
         value: 0,
         message: MapMsg::Transfer { from: alice, to: bob, amount: 1000 }
     )
-    assert(res == 1)
+    assert!(res == 1)
 
     // 9. balanceOf(alice) -> 70
     let bal: u256 = evm.call(
@@ -144,7 +144,7 @@ fn test_storage_map() uses (evm: mut Evm) {
         value: 0,
         message: MapMsg::BalanceOf { user: alice }
     )
-    assert(bal == 70)
+    assert!(bal == 70)
 
     // 10. setAllowance(alice, 999)
     evm.call(
@@ -161,7 +161,7 @@ fn test_storage_map() uses (evm: mut Evm) {
         value: 0,
         message: MapMsg::GetAllowance { user: alice }
     )
-    assert(allow == 999)
+    assert!(allow == 999)
 
     // 12. balanceOf(alice) -> 70 (maps independent)
     let bal: u256 = evm.call(
@@ -170,7 +170,7 @@ fn test_storage_map() uses (evm: mut Evm) {
         value: 0,
         message: MapMsg::BalanceOf { user: alice }
     )
-    assert(bal == 70)
+    assert!(bal == 70)
 
     // 13. getAllowance(bob) -> 0
     let allow: u256 = evm.call(
@@ -179,5 +179,5 @@ fn test_storage_map() uses (evm: mut Evm) {
         value: 0,
         message: MapMsg::GetAllowance { user: bob }
     )
-    assert(allow == 0)
+    assert!(allow == 0)
 }

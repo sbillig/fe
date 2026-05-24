@@ -1,5 +1,4 @@
 use core::num::IntDowncast
-use std::evm::effects::assert
 
 const MAX_DEPTH: usize = 32
 const QUINARY_ARITY: usize = 5
@@ -90,22 +89,22 @@ const QUINARY_FIRST_LEVEL_PROOF: ([[u256; QUINARY_SIBLINGS_PER_LEVEL]; MAX_DEPTH
 #[test]
 fn test_const_binary_imt_array_builders() {
     let (siblings, indices) = BINARY_PROOF
-    assert(BINARY_SLOTS[0] == 1)
-    assert(BINARY_SLOTS[3] == 4)
-    assert(siblings[0] == 4)
-    assert(siblings[1] == 12)
-    assert(indices[0] == 0)
-    assert(indices[1] == 1)
+    assert!(BINARY_SLOTS[0] == 1)
+    assert!(BINARY_SLOTS[3] == 4)
+    assert!(siblings[0] == 4)
+    assert!(siblings[1] == 12)
+    assert!(indices[0] == 0)
+    assert!(indices[1] == 1)
 }
 
 #[test]
 fn test_const_quinary_imt_array_builders() {
     let (siblings, indices) = QUINARY_FIRST_LEVEL_PROOF
-    assert(QUINARY_SLOTS[0] == 1)
-    assert(QUINARY_SLOTS[5] == 6)
-    assert(siblings[0][0] == 1)
-    assert(siblings[0][1] == 2)
-    assert(siblings[0][2] == 3)
-    assert(siblings[0][3] == 5)
-    assert(indices[0] == 3)
+    assert!(QUINARY_SLOTS[0] == 1)
+    assert!(QUINARY_SLOTS[5] == 6)
+    assert!(siblings[0][0] == 1)
+    assert!(siblings[0][1] == 2)
+    assert!(siblings[0][2] == 3)
+    assert!(siblings[0][3] == 5)
+    assert!(indices[0] == 3)
 }

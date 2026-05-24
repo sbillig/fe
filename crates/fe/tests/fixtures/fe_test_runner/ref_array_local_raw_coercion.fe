@@ -8,5 +8,5 @@ fn local_ref_array_lowering() {
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0,
     ]
-    assert(first(ref xs) == 0)
+    assert!(first(ref xs) == 0)
 }

@@ -16,13 +16,13 @@ pub struct DynamicPayloadError {
 pub contract DynamicPayloadReceiver {
     recv DynamicPayloadMsg {
         Check { first, marker, second } -> u256 {
-            assert(marker == 0xabcdef)
-            assert(first.len() == 33)
-            assert(first.byte_at(0) == 0x11)
-            assert(first.byte_at(31) == 0x11)
-            assert(first.byte_at(32) == 0x22)
-            assert(second.len() == 1)
-            assert(second.byte_at(0) == 0x33)
+            assert!(marker == 0xabcdef)
+            assert!(first.len() == 33)
+            assert!(first.byte_at(0) == 0x11)
+            assert!(first.byte_at(31) == 0x11)
+            assert!(first.byte_at(32) == 0x22)
+            assert!(second.len() == 1)
+            assert!(second.byte_at(0) == 0x33)
             first.len() + second.len()
         }
     }
@@ -81,10 +81,10 @@ fn test_abi_dynamic_payload_tuple_encoding() uses (evm: Evm) {
     let payload: (u256, Bytes) = (0xdeadbeef, Bytes::empty())
     let (ptr, len) = encode_abi_payload(payload)
 
-    assert(len == 96)
-    assert(evm.mload(ptr) == 0xdeadbeef)
-    assert(evm.mload(ptr + 32) == 64)
-    assert(evm.mload(ptr + 64) == 0)
+    assert!(len == 96)
+    assert!(evm.mload(ptr) == 0xdeadbeef)
+    assert!(evm.mload(ptr + 32) == 64)
+    assert!(evm.mload(ptr + 64) == 0)
 }
 
 #[test]
@@ -96,20 +96,20 @@ fn test_bytes_from_words_prefix_uses_canonical_tail_size() uses (evm: mut Evm, m
     )
     let (ptr, len) = encode_abi_payload(payload)
 
-    assert(len == 224)
-    assert(evm.mload(ptr) == 96)
-    assert(evm.mload(ptr + 32) == 0xabcdef)
-    assert(evm.mload(ptr + 64) == 160)
-    assert(evm.mload(ptr + 96) == 1)
-    assert(evm.mload(ptr + 128) == 0x3300000000000000000000000000000000000000000000000000000000000000)
-    assert(evm.mload(ptr + 160) == 1)
-    assert(evm.mload(ptr + 192) == 0x3300000000000000000000000000000000000000000000000000000000000000)
+    assert!(len == 224)
+    assert!(evm.mload(ptr) == 96)
+    assert!(evm.mload(ptr + 32) == 0xabcdef)
+    assert!(evm.mload(ptr + 64) == 160)
+    assert!(evm.mload(ptr + 96) == 1)
+    assert!(evm.mload(ptr + 128) == 0x3300000000000000000000000000000000000000000000000000000000000000)
+    assert!(evm.mload(ptr + 160) == 1)
+    assert!(evm.mload(ptr + 192) == 0x3300000000000000000000000000000000000000000000000000000000000000)
 }
 
 #[test]
 fn test_msg_dynamic_payload_tail_encoding() uses (evm: mut Evm) {
     let receiver = evm.create2<DynamicPayloadReceiver>(value: 0, args: (), salt: 0)
-    assert(receiver.inner != 0)
+    assert!(receiver.inner != 0)
 
     let result: u256 = evm.call(
         addr: receiver,
@@ -122,7 +122,7 @@ fn test_msg_dynamic_payload_tail_encoding() uses (evm: mut Evm) {
         },
     )
 
-    assert(result == 34)
+    assert!(result == 34)
 }
 
 #[test]
@@ -133,12 +133,12 @@ fn test_error_dynamic_payload_tail_encoding() uses (evm: mut Evm) {
         second: DynString::empty(),
     })
 
-    assert(len == 160)
-    assert(evm.mload(ptr) == 96)
-    assert(evm.mload(ptr + 32) == 0xabcdef)
-    assert(evm.mload(ptr + 64) == 128)
-    assert(evm.mload(ptr + 96) == 0)
-    assert(evm.mload(ptr + 128) == 0)
+    assert!(len == 160)
+    assert!(evm.mload(ptr) == 96)
+    assert!(evm.mload(ptr + 32) == 0xabcdef)
+    assert!(evm.mload(ptr + 64) == 128)
+    assert!(evm.mload(ptr + 96) == 0)
+    assert!(evm.mload(ptr + 128) == 0)
 }
 
 #[test(should_revert)]

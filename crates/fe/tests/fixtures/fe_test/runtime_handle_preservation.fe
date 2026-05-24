@@ -50,8 +50,8 @@ fn test_zst_target_effect_handles_keep_runtime_carriers() uses (evm: Evm) {
         stor_handle_raw()
     }
 
-    assert(mem == 0x121)
-    assert(storage == 7)
+    assert!(mem == 0x121)
+    assert!(storage == 7)
 }
 
 #[test]
@@ -59,13 +59,13 @@ fn test_explicit_root_provider_params_keep_runtime_carriers() uses (evm: mut Evm
     let generic_len = host_input_len(mut evm)
     let direct_len = evm.input().len()
 
-    assert(generic_len == direct_len)
-    assert(generic_len == 0)
+    assert!(generic_len == direct_len)
+    assert!(generic_len == 0)
 }
 
 #[test]
 fn test_label_disabled_concrete_evm_params_are_zero_width_roots() uses (evm: mut Evm) {
-    assert(check_runtime_value(mut evm, value: 1) == 1)
+    assert!(check_runtime_value(mut evm, value: 1) == 1)
 }
 
 struct Data {
@@ -85,7 +85,7 @@ fn test_object_backed_nested_ref_fields_are_readable() {
     let data = Data { x: 1 }
     let view = View { d: ref data }
 
-    assert(read_view(view) == 1)
+    assert!(read_view(view) == 1)
 }
 
 enum Flag {
@@ -116,8 +116,8 @@ fn test_projected_enum_field_snapshots_preserve_payloads() {
     })
 
     match inner.flag {
-        Flag::A(value) => assert(value == 42)
-        Flag::B(value) => assert(value == 0)
+        Flag::A(value) => assert!(value == 42)
+        Flag::B(value) => assert!(value == 0)
     }
 }
 
@@ -135,15 +135,15 @@ fn maybe_code(x: Maybe) -> u256 {
 
 #[test]
 fn test_enum_tag_matches_preserve_typed_payloads() {
-    assert(maybe_code(x: Maybe::None) == 0)
-    assert(maybe_code(x: Maybe::Some(1)) == 1)
+    assert!(maybe_code(x: Maybe::None) == 0)
+    assert!(maybe_code(x: Maybe::Some(1)) == 1)
 }
 
 #[test(should_revert)]
 fn test_checked_overflow_exprs_survive_unused_local_lowering() {
     let x: u8 = 255
     let y: u8 = x + 1
-    assert(y == 0)
+    assert!(y == 0)
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn test_unit_branch_mutations_do_not_use_erased_call_results() {
         x += 1
     }
 
-    assert(x == 1)
+    assert!(x == 1)
 }
 
 fn return_array_after_projection_u8(xs: [u8; 4]) -> [u8; 4] {
@@ -184,8 +184,8 @@ fn use_returned_array_u256() -> u256 {
 
 #[test]
 fn test_by_value_array_returns_remain_usable_after_projection() {
-    assert(use_returned_array_u8() == 4)
-    assert(use_returned_array_u256() == 4)
+    assert!(use_returned_array_u8() == 4)
+    assert!(use_returned_array_u256() == 4)
 }
 
 enum Fieldless {
@@ -207,9 +207,9 @@ fn build_enum_pair(flag: bool) -> EnumPair {
 #[test]
 fn test_fieldless_enum_fields_copy_into_object_storage() {
     let pair = build_enum_pair(flag: true)
-    assert(pair.xs[0] == 1)
+    assert!(pair.xs[0] == 1)
     match pair.e {
-        Fieldless::A => assert(true)
-        Fieldless::B => assert(false)
+        Fieldless::A => assert!(true)
+        Fieldless::B => assert!(false)
     }
 }

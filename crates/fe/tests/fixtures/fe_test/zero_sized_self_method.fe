@@ -9,5 +9,5 @@ impl Marker {
 #[test]
 fn test_zero_sized_self_method() {
     let marker = Marker {}
-    assert(marker.add1(41) == 42)
+    assert!(marker.add1(41) == 42)
 }

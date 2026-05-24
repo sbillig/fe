@@ -24,16 +24,16 @@ fn test_borrow_handle_forwarding() {
     }
 
     let b_ref: ref u256 = ref w.balance
-    assert(read_balance(b_ref) == 100)
+    assert!(read_balance(b_ref) == 100)
 
     {
         let n_handle: mut u8 = mut w.nonce
         bump_nonce(n_handle)
         n_handle += 2
     }
-    assert(w.nonce == 4)
+    assert!(w.nonce == 4)
 
     let (bal, nonce) = consume_wallet(w)
-    assert(bal == 100)
-    assert(nonce == 4)
+    assert!(bal == 100)
+    assert!(nonce == 4)
 }

@@ -128,7 +128,6 @@ version = "{version}"
 
 use std::abi::sol
 use std::evm::{Evm, Call}
-use std::evm::effects::assert
 
 // Messages define your contract's public interface.
 // Each variant becomes a callable function with a unique selector.
@@ -173,7 +172,7 @@ pub contract Counter {
 fn test_counter() uses (evm: mut Evm) {
     // Deploy the contract
     let addr = evm.create2<Counter>(value: 0, args: (), salt: 0)
-    assert(addr.inner != 0)
+    assert!(addr.inner != 0)
 
     // Initially the counter is 0
     let val: u256 = evm.call(
@@ -182,7 +181,7 @@ fn test_counter() uses (evm: mut Evm) {
         value: 0,
         message: CounterMsg::Get {}
     )
-    assert(val == 0)
+    assert!(val == 0)
 
     // Increment the counter
     evm.call(
@@ -199,7 +198,7 @@ fn test_counter() uses (evm: mut Evm) {
         value: 0,
         message: CounterMsg::Get {}
     )
-    assert(val == 1)
+    assert!(val == 1)
 }
 "#,
     )?;

@@ -1,4 +1,3 @@
-use std::evm::effects::assert
 
 fn rewrite(_ arr: [u256; 4], _ idx: usize, _ value: u256) -> [u256; 4] {
     let mut out: [u256; 4] = arr
@@ -20,19 +19,19 @@ fn test_mutable_array_local_writes() {
     let mut values: [u256; 4] = [10, 20, 30, 0]
     values[1] = 99
     values[3] = values[0] + values[1]
-    assert(values[0] == 10)
-    assert(values[1] == 99)
-    assert(values[2] == 30)
-    assert(values[3] == 109)
+    assert!(values[0] == 10)
+    assert!(values[1] == 99)
+    assert!(values[2] == 30)
+    assert!(values[3] == 109)
 }
 
 #[test]
 fn test_mutable_array_rewrite_helper() {
     let start: [u256; 4] = [2, 7, 1, 0]
     let updated: [u256; 4] = rewrite(start, 2, 8)
-    assert(updated[0] == 2)
-    assert(updated[1] == 7)
-    assert(updated[2] == 8)
-    assert(updated[3] == 17)
-    assert(sum(updated) == 34)
+    assert!(updated[0] == 2)
+    assert!(updated[1] == 7)
+    assert!(updated[2] == 8)
+    assert!(updated[3] == 17)
+    assert!(sum(updated) == 34)
 }

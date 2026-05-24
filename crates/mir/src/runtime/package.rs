@@ -2697,18 +2697,16 @@ mod tests {
         with_test_runtime_package(
             "filtered_test_package_excludes_unreferenced_contract_roots.fe",
             r#"
-use std::evm::assert
-
 pub contract Unused {}
 
 #[test]
 fn selected() {
-    assert(true)
+    assert!(true)
 }
 
 #[test]
 fn ignored() {
-    assert(true)
+    assert!(true)
 }
 "#,
             Some("selected"),
@@ -2725,7 +2723,7 @@ fn ignored() {
             "filtered_test_package_discovers_create2_contract_dependency.fe",
             r#"
 use std::abi::sol
-use std::evm::{Evm, assert}
+use std::evm::Evm
 
 pub msg ChildMsg {
     #[selector = sol("get()")]
@@ -2745,7 +2743,7 @@ pub contract Unused {}
 #[test]
 fn selected() uses (evm: mut Evm) {
     let addr = evm.create2<Child>(value: 0, args: (), salt: 1)
-    assert(addr.inner != 0)
+    assert!(addr.inner != 0)
 }
 "#,
             Some("selected"),

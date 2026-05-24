@@ -1,5 +1,4 @@
 use core::ops::Add
-use std::evm::effects::assert
 
 struct Counter {
     value: usize,
@@ -24,5 +23,5 @@ type CombinedWitness = [u8; COMBINED_VALUE]
 #[test]
 fn const_user_op_impl() {
     let _witness: CombinedWitness = [0; 6]
-    assert(COMBINED.value == 6)
+    assert!(COMBINED.value == 6)
 }

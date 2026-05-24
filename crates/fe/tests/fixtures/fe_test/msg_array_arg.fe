@@ -1,4 +1,3 @@
-use std::evm::effects::assert
 
 msg TestMsg {
     #[selector = 0x01000001]
@@ -23,5 +22,5 @@ fn test_msg_array_arg() uses (evm: mut Evm) {
         value: 0,
         message: TestMsg::Check { points: [0, 0, 0, 0, 0, 0, 0, 0] },
     )
-    assert(out == 0)
+    assert!(out == 0)
 }

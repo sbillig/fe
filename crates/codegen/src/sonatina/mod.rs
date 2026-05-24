@@ -958,8 +958,8 @@ fn f(x: u256) -> u256 {
 
 #[test]
 fn roundtrip() {
-    assert(f(0) == 1)
-    assert(f(1) == 2)
+    assert!(f(0) == 1)
+    assert!(f(1) == 2)
 }
 "#
                 .to_string(),

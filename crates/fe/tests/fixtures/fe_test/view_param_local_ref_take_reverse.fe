@@ -78,6 +78,6 @@ fn sum_first4(_ arr: [u256; 8]) -> u256 {
 #[test]
 fn test_view_param_local_ref_take_reverse() {
     let arr: [u256; 8] = [1, 2, 3, 4, 5, 6, 7, 8]
-    assert(sum_last4(arr) == 26)
-    assert(sum_first4(arr) == 10)
+    assert!(sum_last4(arr) == 26)
+    assert!(sum_first4(arr) == 10)
 }

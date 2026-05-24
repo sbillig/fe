@@ -69,5 +69,5 @@ impl Table {
 fn linear_probe_big_struct_roundtrip() {
     let mut table = Table::empty()
     table.set(17, 99)
-    assert(table.get(17) == 99)
+    assert!(table.get(17) == 99)
 }

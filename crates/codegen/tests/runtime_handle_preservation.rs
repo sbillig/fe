@@ -1245,7 +1245,7 @@ fn test_readonly_with_provider() {
         read() + read()
     }
 
-    assert(out == 14)
+    assert!(out == 14)
 }"#,
         |db, package| {
             let read = package

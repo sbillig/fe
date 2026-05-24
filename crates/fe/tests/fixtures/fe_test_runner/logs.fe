@@ -1,6 +1,5 @@
-use std::evm::assert
 
 #[test]
 fn test_basic() {
-    assert(true)
+    assert!(true)
 }

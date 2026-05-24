@@ -1,6 +1,5 @@
 use core::ops::{Add, Mul}
 use std::evm::crypto::{addmod, mulmod}
-use std::evm::effects::assert
 
 const FIELD_MODULUS: u256 = 17
 
@@ -55,6 +54,6 @@ static_assert(mixed_mul_wraps() == 14)
 
 #[test]
 fn test_const_generic_field_ops() {
-    assert(mixed_add_wraps() == 1)
-    assert(mixed_mul_wraps() == 14)
+    assert!(mixed_add_wraps() == 1)
+    assert!(mixed_mul_wraps() == 14)
 }

@@ -6,5 +6,5 @@ input_file: test_files/imports/std_import.fe
 note:
   ┌─ std_import.fe:1:1
   │
-1 │ use std::evm::{assert, revert}
-  │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ lib::evm::effects::assert | lib::evm::effects::revert
+1 │ use std::evm::revert
+  │ ^^^^^^^^^^^^^^^^^^^^ lib::evm::effects::revert

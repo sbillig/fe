@@ -1,11 +1,10 @@
-use std::evm::effects::assert
 
 #[test]
 fn assignment_rhs_can_start_on_next_line() {
     let mut x: u256 = 1
     x =
         2
-    assert(x == 2)
+    assert!(x == 2)
 }
 
 #[test]
@@ -13,7 +12,7 @@ fn augmented_assignment_rhs_can_start_on_next_line() {
     let mut x: u256 = 1
     x +=
         2
-    assert(x == 3)
+    assert!(x == 3)
 }
 
 #[test]
@@ -21,5 +20,5 @@ fn binary_rhs_can_start_on_next_line() {
     let x: u256 =
         1 +
             2
-    assert(x == 3)
+    assert!(x == 3)
 }

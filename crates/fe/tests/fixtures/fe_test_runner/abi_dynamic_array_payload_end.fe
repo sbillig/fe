@@ -21,6 +21,6 @@ fn test_dynamic_array_payload_end_uses_max_element_end() uses (raw: mut RawMem) 
     let input = MemoryBytes::new(base: ptr, len: 224)
     let decoded: Vec<Bytes> = input.decode()
 
-    assert(decoded.len() == 2)
-    assert(decoded.size == 224)
+    assert!(decoded.len() == 2)
+    assert!(decoded.size == 224)
 }

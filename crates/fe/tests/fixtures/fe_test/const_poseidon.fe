@@ -1,6 +1,5 @@
 use core::ops::{Add, Mul}
 use std::evm::crypto::{addmod, mulmod}
-use std::evm::effects::assert
 
 // BN254 scalar field modulus.
 const SNARK_SCALAR_FIELD: u256 = 21888242871839275222246405745257275088548364400416034343698204186575808495617
@@ -1123,16 +1122,16 @@ static_assert(hash5(1, 2, 3, 4, 5)
 
 #[test]
 fn test_const_poseidon_vectors() {
-    assert(
+    assert!(
         hash2(0, 0) == 0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864,
     )
-    assert(
+    assert!(
         hash2(1, 2) == 0x115cc0f5e7d690413df64c6b9662e9cf2a3617f2743245519e19607a4417189a,
     )
-    assert(
+    assert!(
         hash5(0, 0, 0, 0, 0) == 0x2066be41bebe6caf7e079360abe14fbf9118c62eabc42e2fe75e342b160a95bc,
     )
-    assert(
+    assert!(
         hash5(1, 2, 3, 4, 5) == 0x0dab9449e4a1398a15224c0b15a49d598b2174d305a316c918125f8feeb123c0,
     )
 }

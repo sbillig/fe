@@ -30,10 +30,10 @@ fn write_effects_and_sum() -> u256 uses (words: mut Words) {
 fn test_mut_array_fn_argument() {
     let start: Words = [2, 7, 1, 0]
     let updated: Words = rewrite(start, 2, 8)
-    assert(updated[0] == 2)
-    assert(updated[1] == 7)
-    assert(updated[2] == 8)
-    assert(updated[3] == 17)
+    assert!(updated[0] == 2)
+    assert!(updated[1] == 7)
+    assert!(updated[2] == 8)
+    assert!(updated[3] == 17)
 }
 
 #[test]
@@ -42,5 +42,5 @@ fn test_mut_array_effect_param() {
     let total = with (words) {
         write_effects_and_sum()
     }
-    assert(total == 120)
+    assert!(total == 120)
 }

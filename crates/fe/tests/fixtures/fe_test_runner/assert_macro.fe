@@ -39,7 +39,7 @@ fn test_assert_macro_payload_layout() uses (evm: mut Evm) {
     evm.mstore(addr: ptr, value: selector_word)
 
     let ok = evm.raw_call(addr: addr, gas: 100000, value: 0, args_offset: ptr, args_len: 4)
-    assert(!ok)
+    assert!(!ok)
 
     // Solidity `Error(string)` for "boom":
     //   selector(4) | offset = 0x20 (32) | len = 4 (32) | "boom" right-padded (32) = 100
@@ -47,11 +47,11 @@ fn test_assert_macro_payload_layout() uses (evm: mut Evm) {
     // (`len || bytes`) instead of the single-arg tuple `(message,)`
     // (`offset || len || bytes`).
     let ret = last_returndata()
-    assert(ret.len == 100)
-    assert(evm.mload(ret.base) >> 224 == 0x08c379a0)
-    assert(evm.mload(ret.base + 4) == 0x20)
-    assert(evm.mload(ret.base + 36) == 4)
-    assert(
+    assert!(ret.len == 100)
+    assert!(evm.mload(ret.base) >> 224 == 0x08c379a0)
+    assert!(evm.mload(ret.base + 4) == 0x20)
+    assert!(evm.mload(ret.base + 36) == 4)
+    assert!(
         evm.mload(ret.base + 68)
             == 0x626f6f6d00000000000000000000000000000000000000000000000000000000,
     )

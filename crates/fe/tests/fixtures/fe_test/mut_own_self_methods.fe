@@ -27,12 +27,12 @@ fn test_mut_own_self_methods() {
     }
 
     p.bump()
-    assert(p.version == 2)
+    assert!(p.version == 2)
 
     let p = p.retag(3)
-    assert(p.version == 5)
+    assert!(p.version == 5)
 
     let (version, size) = p.freeze()
-    assert(version == 5)
-    assert(size == 50)
+    assert!(version == 5)
+    assert!(size == 50)
 }

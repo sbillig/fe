@@ -708,8 +708,9 @@ impl Call for Evm {
     }
 }
 
+#[inline(always)]
 pub fn assert(_ b: own bool) {
-    if !b { revert_error(Panic { code: 0x01 }) }
+    assert!(b)
 }
 
 /// Revert the current transaction with ABI-encoded data.

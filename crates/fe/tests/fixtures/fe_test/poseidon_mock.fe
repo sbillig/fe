@@ -6,7 +6,6 @@
 /// Uses small values to avoid u256 overflow (no addmod/mulmod needed).
 /// NOT cryptographically meaningful — just structurally faithful.
 
-use std::evm::assert
 
 const N_ROUNDS: usize = 4
 
@@ -71,44 +70,44 @@ pub fn mock_hash(left: u256, right: u256) -> u256 {
 fn test_deterministic() {
     let a: u256 = mock_hash(left: 1, right: 2)
     let b: u256 = mock_hash(left: 1, right: 2)
-    assert(a == b)
+    assert!(a == b)
 }
 
 #[test]
 fn test_different_inputs() {
     let a: u256 = mock_hash(left: 1, right: 2)
     let b: u256 = mock_hash(left: 3, right: 4)
-    assert(a != b)
+    assert!(a != b)
 }
 
 #[test]
 fn test_zero_inputs() {
     let result: u256 = mock_hash(left: 0, right: 0)
-    assert(result > 0)
+    assert!(result > 0)
 }
 
 #[test]
 fn test_sigma_identity() {
     // sigma(0) = 0*0 + 0 = 0
-    assert(sigma(0) == 0)
+    assert!(sigma(0) == 0)
     // sigma(1) = 1*1 + 1 = 2
-    assert(sigma(1) == 2)
+    assert!(sigma(1) == 2)
 }
 
 #[test]
 fn test_mix_structure() {
     let input: [u256; 3] = [1, 0, 0]
     let output: [u256; 3] = mix(input)
-    assert(output[0] == 2)
-    assert(output[1] == 1)
-    assert(output[2] == 1)
+    assert!(output[0] == 2)
+    assert!(output[1] == 1)
+    assert!(output[2] == 1)
 }
 
 #[test]
 fn test_ark_applies_constants() {
     let state: [u256; 3] = [0, 0, 0]
     let result: [u256; 3] = ark(state, 0)
-    assert(result[0] == 11)
-    assert(result[1] == 13)
-    assert(result[2] == 17)
+    assert!(result[0] == 11)
+    assert!(result[1] == 13)
+    assert!(result[2] == 17)
 }

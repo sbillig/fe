@@ -1,4 +1,3 @@
-use std::evm::effects::assert
 
 /// Test array creation, indexing, iteration, and mutation
 #[test]
@@ -8,25 +7,25 @@ fn test_array_literal_sum() {
     for x in arr {
         sum += x
     }
-    assert(sum == 150)
+    assert!(sum == 150)
 }
 
 #[test]
 fn test_array_index() {
     let arr: [u256; 4] = [100, 200, 300, 400]
-    assert(arr[0] == 100)
-    assert(arr[1] == 200)
-    assert(arr[2] == 300)
-    assert(arr[3] == 400)
+    assert!(arr[0] == 100)
+    assert!(arr[1] == 200)
+    assert!(arr[2] == 300)
+    assert!(arr[3] == 400)
 }
 
 #[test]
 fn test_array_mut() {
     let mut arr: [u256; 3] = [1, 2, 3]
     arr[1] = 99
-    assert(arr[0] == 1)
-    assert(arr[1] == 99)
-    assert(arr[2] == 3)
+    assert!(arr[0] == 1)
+    assert!(arr[1] == 99)
+    assert!(arr[2] == 3)
 }
 
 #[test]
@@ -40,17 +39,17 @@ fn test_multiple_arrays() {
     for x in b {
         sum += x
     }
-    assert(sum == 66)
+    assert!(sum == 66)
 }
 
 #[test]
 fn test_u8_array_mut() {
     let mut arr: [u8; 4] = [1, 2, 3, 4]
     arr[1] = 9
-    assert(arr[0] == 1)
-    assert(arr[1] == 9)
-    assert(arr[2] == 3)
-    assert(arr[3] == 4)
+    assert!(arr[0] == 1)
+    assert!(arr[1] == 9)
+    assert!(arr[2] == 3)
+    assert!(arr[3] == 4)
 }
 
 #[test]
@@ -58,8 +57,8 @@ fn test_bool_array_mut() {
     let mut arr: [bool; 4] = [true, false, true, false]
     arr[1] = true
     arr[2] = false
-    assert(arr[0] == true)
-    assert(arr[1] == true)
-    assert(arr[2] == false)
-    assert(arr[3] == false)
+    assert!(arr[0] == true)
+    assert!(arr[1] == true)
+    assert!(arr[2] == false)
+    assert!(arr[3] == false)
 }
