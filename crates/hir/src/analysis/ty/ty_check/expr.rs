@@ -6,8 +6,8 @@ use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
     ArithBinOp, BinOp, CallArg as HirCallArg, CallableDef, Cond, CondId, Expr, ExprId, FieldIndex,
-    IdentId, IntegerId, LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt, StmtId, UnOp, VariantKind,
-    WithBinding,
+    IdentId, IntegerId, LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt, StmtId, UnOp,
+    VariantKind, WithBinding,
 };
 use crate::span::DynLazySpan;
 

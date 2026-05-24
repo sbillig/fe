@@ -14,10 +14,22 @@ impl Foo {
 
 trait MyTrait {
     #[inline()]
-    fn trait_bad_inline_form(self)
+    fn trait_bad_inline_form(self) {}
+
+    #[must_use]
+    type BadType
+
+    #[must_use]
+    const BAD_CONST: u256
 }
 
 impl MyTrait for Foo {
     #[inline()]
     fn trait_bad_inline_form(self) {}
+
+    #[must_use]
+    type BadType = u256
+
+    #[must_use]
+    const BAD_CONST: u256 = 1
 }

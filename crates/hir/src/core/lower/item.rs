@@ -659,11 +659,21 @@ impl<'db> Trait<'db> {
                         Func::lower_ast(ctxt, func);
                     }
                     ast::TraitItemKind::Type(t) => {
-                        report_payable_on_unsupported_target(ctxt, t.attr_list(), "type", None);
+                        validate_unsupported_item_attrs(
+                            ctxt,
+                            t.attr_list(),
+                            "type",
+                            t.name().map(|name| name.text().to_string()),
+                        );
                         types.push(AssocTyDecl::lower_ast(ctxt, t));
                     }
                     ast::TraitItemKind::Const(c) => {
-                        report_payable_on_unsupported_target(ctxt, c.attr_list(), "const", None);
+                        validate_unsupported_item_attrs(
+                            ctxt,
+                            c.attr_list(),
+                            "const",
+                            c.name().map(|name| name.text().to_string()),
+                        );
                         consts.push(AssocConstDecl::lower_ast(ctxt, c));
                     }
                 };
@@ -744,11 +754,21 @@ impl<'db> ImplTrait<'db> {
                         Func::lower_ast(ctxt, func);
                     }
                     ast::TraitItemKind::Type(t) => {
-                        report_payable_on_unsupported_target(ctxt, t.attr_list(), "type", None);
+                        validate_unsupported_item_attrs(
+                            ctxt,
+                            t.attr_list(),
+                            "type",
+                            t.name().map(|name| name.text().to_string()),
+                        );
                         types.push(AssocTyDef::lower_ast(ctxt, t));
                     }
                     ast::TraitItemKind::Const(c) => {
-                        report_payable_on_unsupported_target(ctxt, c.attr_list(), "const", None);
+                        validate_unsupported_item_attrs(
+                            ctxt,
+                            c.attr_list(),
+                            "const",
+                            c.name().map(|name| name.text().to_string()),
+                        );
                         consts.push(AssocConstDef::lower_ast(ctxt, c));
                     }
                 };

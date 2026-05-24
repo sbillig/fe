@@ -9,6 +9,30 @@ error[12-0001]: unsupported `#[event]` attribute on fn `bad_event_attr`
 11 │     #[event]
    │     ^^^^^^^^ `#[event]` is only supported on structs
 
+error[12-0001]: unsupported `#[must_use]` attribute on type `BadType`
+   ┌─ associated_func_attrs.fe:19:5
+   │
+19 │     #[must_use]
+   │     ^^^^^^^^^^^ `#[must_use]` is only supported on functions, structs, and enums
+
+error[12-0001]: unsupported `#[must_use]` attribute on const `BAD_CONST`
+   ┌─ associated_func_attrs.fe:22:5
+   │
+22 │     #[must_use]
+   │     ^^^^^^^^^^^ `#[must_use]` is only supported on functions, structs, and enums
+
+error[12-0001]: unsupported `#[must_use]` attribute on type `BadType`
+   ┌─ associated_func_attrs.fe:30:5
+   │
+30 │     #[must_use]
+   │     ^^^^^^^^^^^ `#[must_use]` is only supported on functions, structs, and enums
+
+error[12-0001]: unsupported `#[must_use]` attribute on const `BAD_CONST`
+   ┌─ associated_func_attrs.fe:33:5
+   │
+33 │     #[must_use]
+   │     ^^^^^^^^^^^ `#[must_use]` is only supported on functions, structs, and enums
+
 error[12-0002]: invalid `#[inline]` attribute form on fn `bad_inline_form`
   ┌─ associated_func_attrs.fe:4:5
   │
@@ -22,9 +46,9 @@ error[12-0002]: invalid `#[inline]` attribute form on fn `trait_bad_inline_form`
    │     ^^^^^^^^^^^ expected `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`
 
 error[12-0002]: invalid `#[inline]` attribute form on fn `trait_bad_inline_form`
-   ┌─ associated_func_attrs.fe:21:5
+   ┌─ associated_func_attrs.fe:27:5
    │
-21 │     #[inline()]
+27 │     #[inline()]
    │     ^^^^^^^^^^^ expected `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`
 
 error[12-0003]: duplicate `#[inline]` attribute on fn `bad_inline_duplicate`
