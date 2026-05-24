@@ -15,10 +15,11 @@ use contract_harness::{ExecutionOptions, HarnessError, RuntimeInstance, U256};
 use ethers_core::abi::{AbiParser, Token};
 use ethers_core::utils::keccak256;
 use fe::bench_support::{
-    PRIMARY_SOL_IDX, SOL_VARIANTS, SolGasRow, compile_fe_sonatina, compile_solidity_pipeline,
-    print_sol_gas_table, sol_variant_label,
+    FeSonatinaBytecode, SolidityPipeline, compile_fe_sonatina_bytecode,
+    compile_solidity_pipeline_bytecode, sol_variant_label,
 };
 use sha2::{Digest, Sha256};
+use test_utils::snap_test;
 
 /// Use a plain u128 for ETH amounts; 32 ether easily fits.
 type Wei = u128;
@@ -168,7 +169,7 @@ fn assert_reverts_match(
 // Compile helpers
 // ---------------------------------------------------------------------------
 
-fn compile_fe_deposit_runtime() -> String {
+fn compile_fe_deposit_bytecode() -> FeSonatinaBytecode {
     // Use the Sonatina backend. The Yul backend currently has a spill-slot bug
     // in `encode_root` that inflates dynamic-bytes returns by one 32-byte word
     // and leaks a raw memory pointer; Sonatina lowers the same Fe source
@@ -182,30 +183,63 @@ fn compile_fe_deposit_runtime() -> String {
     let fe_source_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/fe_test/deposit_contract.fe");
     let fe_source = std::fs::read_to_string(&fe_source_path).expect("read fe source");
-    let bytes = compile_fe_sonatina(&fe_source, "DepositContract", "DepositContract")
-        .expect("fe -> sonatina compile");
-    hex::encode(&bytes)
+    compile_fe_sonatina_bytecode(&fe_source, "DepositContract", "DepositContract")
+        .expect("fe -> sonatina compile")
 }
 
-fn compile_sol_deposit_runtimes(solc_path: Option<&str>) -> Vec<String> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SolVariant {
+    LegacyOpt,
+    ViaIrOpt,
+}
+
+impl SolVariant {
+    const ALL: [Self; 2] = [Self::LegacyOpt, Self::ViaIrOpt];
+
+    fn report_label(self) -> &'static str {
+        match self {
+            Self::LegacyOpt => "sol",
+            Self::ViaIrOpt => "sol-IR",
+        }
+    }
+
+    fn compile_label(self) -> &'static str {
+        let (pipeline, optimize) = self.compile_options();
+        sol_variant_label(pipeline, optimize)
+    }
+
+    fn compile_options(self) -> (SolidityPipeline, bool) {
+        match self {
+            Self::LegacyOpt => (SolidityPipeline::Legacy, true),
+            Self::ViaIrOpt => (SolidityPipeline::ViaIR, true),
+        }
+    }
+}
+
+struct SolBytecode {
+    variant: SolVariant,
+    bytecode: solc_runner::ContractBytecode,
+}
+
+fn compile_sol_deposit_bytecode(solc_path: Option<&str>) -> Vec<SolBytecode> {
     let sol_source = std::fs::read_to_string(fixture_dir().join("OfficialDepositContract.sol"))
         .expect("read sol source");
-    SOL_VARIANTS
+    SolVariant::ALL
         .iter()
-        .map(|(pipeline, optimize)| {
-            compile_solidity_pipeline(
+        .map(|variant| {
+            let (pipeline, optimize) = variant.compile_options();
+            let bytecode = compile_solidity_pipeline_bytecode(
                 &sol_source,
                 "DepositContract",
-                *optimize,
-                *pipeline,
+                optimize,
+                pipeline,
                 solc_path,
             )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} compile deposit: {e}",
-                    sol_variant_label(*pipeline, *optimize)
-                )
-            })
+            .unwrap_or_else(|e| panic!("{} compile deposit: {e}", variant.compile_label()));
+            SolBytecode {
+                variant: *variant,
+                bytecode,
+            }
         })
         .collect()
 }
@@ -219,6 +253,218 @@ struct Vector {
     withdrawal_credentials: [u8; 32],
     signature: [u8; 96],
     amount_wei: Wei,
+}
+
+#[derive(Clone, Copy, Default)]
+struct SolValues {
+    legacy_opt: u64,
+    via_ir_opt: u64,
+}
+
+impl SolValues {
+    fn get(self, variant: SolVariant) -> u64 {
+        match variant {
+            SolVariant::LegacyOpt => self.legacy_opt,
+            SolVariant::ViaIrOpt => self.via_ir_opt,
+        }
+    }
+
+    fn set(&mut self, variant: SolVariant, value: u64) {
+        match variant {
+            SolVariant::LegacyOpt => self.legacy_opt = value,
+            SolVariant::ViaIrOpt => self.via_ir_opt = value,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ReportRow {
+    label: String,
+    fe: u64,
+    sol: SolValues,
+}
+
+struct GasReport {
+    bytecode_rows: Vec<ReportRow>,
+    deploy_row: ReportRow,
+    call_rows: Vec<ReportRow>,
+}
+
+impl GasReport {
+    fn new(
+        fe_bytecode: &FeSonatinaBytecode,
+        sol_bytecodes: &[SolBytecode],
+        fe_deploy_gas: u64,
+        sol_deploy_gas: SolValues,
+    ) -> Self {
+        let mut init_sizes = SolValues::default();
+        let mut runtime_sizes = SolValues::default();
+        for sol in sol_bytecodes {
+            init_sizes.set(sol.variant, hex_len(&sol.bytecode.bytecode) as u64);
+            runtime_sizes.set(sol.variant, hex_len(&sol.bytecode.runtime_bytecode) as u64);
+        }
+
+        Self {
+            bytecode_rows: vec![
+                ReportRow {
+                    label: "init".into(),
+                    fe: fe_bytecode.deploy.len() as u64,
+                    sol: init_sizes,
+                },
+                ReportRow {
+                    label: "runtime".into(),
+                    fe: fe_bytecode.runtime.len() as u64,
+                    sol: runtime_sizes,
+                },
+            ],
+            deploy_row: ReportRow {
+                label: "deploy".into(),
+                fe: fe_deploy_gas,
+                sol: sol_deploy_gas,
+            },
+            call_rows: Vec::new(),
+        }
+    }
+
+    fn push_call(&mut self, label: impl Into<String>, fe: u64, sol: SolValues) {
+        self.call_rows.push(ReportRow {
+            label: label.into(),
+            fe,
+            sol,
+        });
+    }
+
+    fn render(&self) -> String {
+        let mut out = String::new();
+        out.push_str("bytecode size\n");
+        render_rows(&mut out, &self.bytecode_rows, "path", "fe-O2");
+        out.push('\n');
+        out.push_str("deployment gas\n");
+        render_rows(
+            &mut out,
+            std::slice::from_ref(&self.deploy_row),
+            "path",
+            "fe-O2",
+        );
+        out.push('\n');
+        out.push_str("call gas\n");
+        let mut call_rows = self.call_rows.clone();
+        let total_fe = call_rows.iter().map(|row| row.fe).sum();
+        let total_sol = call_rows
+            .iter()
+            .fold(SolValues::default(), |mut total, row| {
+                total.legacy_opt += row.sol.legacy_opt;
+                total.via_ir_opt += row.sol.via_ir_opt;
+                total
+            });
+        call_rows.push(ReportRow {
+            label: "TOTAL".into(),
+            fe: total_fe,
+            sol: total_sol,
+        });
+        render_rows(&mut out, &call_rows, "path", "fe-O2");
+        out
+    }
+}
+
+fn hex_len(hex: &str) -> usize {
+    assert_eq!(hex.len() % 2, 0, "bytecode hex length should be even");
+    hex.len() / 2
+}
+
+fn delta_pct(lhs: u64, rhs: u64) -> String {
+    if rhs == 0 {
+        return "-".into();
+    }
+    let pct = ((lhs as f64 - rhs as f64) / rhs as f64) * 100.0;
+    format!("{pct:+.1}%")
+}
+
+fn render_rows(out: &mut String, rows: &[ReportRow], label_header: &str, fe_header: &str) {
+    let label_width = rows
+        .iter()
+        .map(|row| row.label.len())
+        .chain(std::iter::once(label_header.len()))
+        .max()
+        .unwrap();
+    let delta_width = rows
+        .iter()
+        .map(|row| {
+            let sol_ir = row.sol.get(SolVariant::ViaIrOpt);
+            let delta_abs = row.fe as i64 - sol_ir as i64;
+            format!("{delta_abs:+} ({})", delta_pct(row.fe, sol_ir)).len()
+        })
+        .chain(std::iter::once("fe vs sol-IR".len()))
+        .max()
+        .unwrap();
+    out.push_str(&format!(
+        "{:<lw$} {:>10} {:>10} {:>10}  {:>dw$}\n",
+        label_header,
+        fe_header,
+        SolVariant::LegacyOpt.report_label(),
+        SolVariant::ViaIrOpt.report_label(),
+        "fe vs sol-IR",
+        lw = label_width,
+        dw = delta_width,
+    ));
+    out.push_str(&format!(
+        "{}\n",
+        "-".repeat(label_width + 1 + 10 * 3 + 2 + delta_width + 6)
+    ));
+    for row in rows {
+        let sol_ir = row.sol.get(SolVariant::ViaIrOpt);
+        let delta_abs = row.fe as i64 - sol_ir as i64;
+        let delta = format!("{delta_abs:+} ({})", delta_pct(row.fe, sol_ir));
+        out.push_str(&format!(
+            "{:<lw$} {:>10} {:>10} {:>10}  {:>dw$}\n",
+            row.label,
+            row.fe,
+            row.sol.get(SolVariant::LegacyOpt),
+            row.sol.get(SolVariant::ViaIrOpt),
+            delta,
+            lw = label_width,
+            dw = delta_width,
+        ));
+    }
+}
+
+struct SolRuntime {
+    variant: SolVariant,
+    instance: RuntimeInstance,
+}
+
+fn call_row(
+    label: &str,
+    fe: &mut RuntimeInstance,
+    sols: &mut [SolRuntime],
+    calldata: &[u8],
+    options: ExecutionOptions,
+) -> (Vec<u8>, Vec<u8>, u64, SolValues) {
+    let fe_res = fe
+        .call_raw(calldata, options)
+        .unwrap_or_else(|e| panic!("fe {label}: {e:?}"));
+    let mut sol_gas = SolValues::default();
+    let mut primary_return = Vec::new();
+    for sol in sols {
+        let variant_label = sol.variant.compile_label();
+        let res = sol
+            .instance
+            .call_raw(calldata, options)
+            .unwrap_or_else(|e| panic!("{variant_label} {label}: {e:?}"));
+        sol_gas.set(sol.variant, res.gas_used);
+        if sol.variant == SolVariant::LegacyOpt {
+            primary_return = res.return_data;
+        }
+    }
+
+    (fe_res.return_data, primary_return, fe_res.gas_used, sol_gas)
+}
+
+fn primary_sol_mut(sols: &mut [SolRuntime]) -> &mut RuntimeInstance {
+    sols.iter_mut()
+        .find(|sol| sol.variant == SolVariant::LegacyOpt)
+        .map(|sol| &mut sol.instance)
+        .expect("primary Solidity variant should be tested")
 }
 
 fn vectors() -> Vec<Vector> {
@@ -281,20 +527,28 @@ fn differential_deposit() {
     }
     let solc_path_str = solc_path.as_deref();
 
-    let fe_bytecode = compile_fe_deposit_runtime();
-    let sol_bytecodes = compile_sol_deposit_runtimes(solc_path_str);
+    let fe_bytecode = compile_fe_deposit_bytecode();
+    let sol_bytecodes = compile_sol_deposit_bytecode(solc_path_str);
+    let fe_deploy_bytecode = hex::encode(&fe_bytecode.deploy);
 
-    let mut fe = RuntimeInstance::deploy(&fe_bytecode).expect("deploy fe");
-    let mut sols: Vec<RuntimeInstance> = sol_bytecodes
+    let (mut fe, fe_deploy_gas) =
+        RuntimeInstance::deploy_tracked(&fe_deploy_bytecode).expect("deploy fe");
+    let mut sol_deploy_gas = SolValues::default();
+    let mut sols: Vec<SolRuntime> = sol_bytecodes
         .iter()
-        .enumerate()
-        .map(|(i, bc)| {
-            let (pipeline, optimize) = SOL_VARIANTS[i];
-            RuntimeInstance::deploy(bc).unwrap_or_else(|e| {
-                panic!("deploy {}: {e:?}", sol_variant_label(pipeline, optimize))
-            })
+        .map(|sol| {
+            RuntimeInstance::deploy_tracked(&sol.bytecode.bytecode)
+                .map(|(instance, gas)| {
+                    sol_deploy_gas.set(sol.variant, gas);
+                    SolRuntime {
+                        variant: sol.variant,
+                        instance,
+                    }
+                })
+                .unwrap_or_else(|e| panic!("deploy {}: {e:?}", sol.variant.compile_label()))
         })
         .collect();
+    let mut report = GasReport::new(&fe_bytecode, &sol_bytecodes, fe_deploy_gas, sol_deploy_gas);
 
     // Fund the default caller (Address::ZERO) so it can send ETH along with
     // each deposit call, including the "deposit value too high" revert case.
@@ -302,7 +556,7 @@ fn differential_deposit() {
     let funding = U256::from(u128::MAX / 2);
     fe.fund_account(caller, funding);
     for sol in &mut sols {
-        sol.fund_account(caller, funding);
+        sol.instance.fund_account(caller, funding);
     }
 
     // Both contracts expose the same Solidity-derived ABI, so one selector
@@ -323,17 +577,15 @@ fn differential_deposit() {
             supports_interface_calldata([0xff, 0xff, 0xff, 0xff]),
         ),
     ] {
-        let fe_support = fe
-            .call_raw(&cd, ExecutionOptions::default())
-            .unwrap_or_else(|e| panic!("fe supportsInterface({name}): {e:?}"));
-        let sol_support = sols[PRIMARY_SOL_IDX]
-            .call_raw(&cd, ExecutionOptions::default())
-            .unwrap_or_else(|e| panic!("sol supportsInterface({name}): {e:?}"));
+        let label = format!("supportsInterface({name})");
+        let (fe_return, sol_return, fe_gas, sol_gas) =
+            call_row(&label, &mut fe, &mut sols, &cd, ExecutionOptions::default());
         assert_eq!(
-            &fe_support.return_data[..],
-            &sol_support.return_data[..],
+            &fe_return[..],
+            &sol_return[..],
             "supportsInterface({name}) mismatch"
         );
+        report.push_call(label, fe_gas, sol_gas);
     }
 
     let one_eth: Wei = 1_000_000_000_000_000_000;
@@ -353,7 +605,7 @@ fn differential_deposit() {
     );
 
     {
-        let sol = &mut sols[PRIMARY_SOL_IDX];
+        let sol = primary_sol_mut(&mut sols);
         assert_reverts_match(
             "invalid pubkey length",
             &mut fe,
@@ -417,35 +669,38 @@ fn differential_deposit() {
             ),
             one_eth,
         );
-
-        // Sanity: initial roots must match.
-        let fe_root0 = fe
-            .call_raw(&get_root_selector, ExecutionOptions::default())
-            .expect("fe root 0");
-        let sol_root0 = sol
-            .call_raw(&get_root_selector, ExecutionOptions::default())
-            .expect("sol root 0");
-        assert_eq!(
-            &fe_root0.return_data[..],
-            &sol_root0.return_data[..],
-            "initial deposit root mismatch (empty tree)"
-        );
-
-        let fe_count0 = fe
-            .call_raw(&get_count_selector, ExecutionOptions::default())
-            .expect("fe count");
-        let sol_count0 = sol
-            .call_raw(&get_count_selector, ExecutionOptions::default())
-            .expect("sol count");
-        assert_eq!(
-            &fe_count0.return_data[..],
-            &sol_count0.return_data[..],
-            "empty: get_deposit_count return mismatch"
-        );
     }
 
-    // Table for reporting.
-    let mut gas_rows: Vec<SolGasRow> = Vec::new();
+    // Sanity: initial roots must match.
+    let (fe_root0, sol_root0, fe_gas, sol_gas) = call_row(
+        "get_deposit_root(empty)",
+        &mut fe,
+        &mut sols,
+        &get_root_selector,
+        ExecutionOptions::default(),
+    );
+    assert_eq!(
+        &fe_root0[..],
+        &sol_root0[..],
+        "initial deposit root mismatch (empty tree)"
+    );
+    report.push_call("get_deposit_root(empty)", fe_gas, sol_gas);
+
+    let (fe_count0, sol_count0, fe_gas, sol_gas) = call_row(
+        "get_deposit_count(empty)",
+        &mut fe,
+        &mut sols,
+        &get_count_selector,
+        ExecutionOptions::default(),
+    );
+    assert_eq!(
+        &fe_count0[..],
+        &sol_count0[..],
+        "empty: get_deposit_count return mismatch"
+    );
+    report.push_call("get_deposit_count(empty)", fe_gas, sol_gas);
+
+    let mut deposit_count = 0;
 
     for (i, v) in vectors().into_iter().enumerate() {
         let amount_gwei: u64 = (v.amount_wei / 1_000_000_000u128) as u64;
@@ -476,16 +731,16 @@ fn differential_deposit() {
         // Drive every Solidity variant in lock-step so each one accumulates the
         // same deposit history. Correctness is asserted against the primary
         // variant only; the others share its source so logs/state must agree.
-        let mut sol_gas = [0u64; 4];
-        for (idx, sol) in sols.iter_mut().enumerate() {
-            let (pipeline, optimize) = SOL_VARIANTS[idx];
-            let label = sol_variant_label(pipeline, optimize);
+        let mut sol_gas = SolValues::default();
+        for sol in &mut sols {
+            let label = sol.variant.compile_label();
             let res = sol
+                .instance
                 .call_raw_with_logs(&cd, opts)
                 .unwrap_or_else(|e| panic!("{label} deposit #{i}: {e:?}"));
-            sol_gas[idx] = res.result.gas_used;
+            sol_gas.set(sol.variant, res.result.gas_used);
 
-            if idx == PRIMARY_SOL_IDX {
+            if sol.variant == SolVariant::LegacyOpt {
                 assert_eq!(
                     fe_res.raw_logs.len(),
                     res.raw_logs.len(),
@@ -505,43 +760,49 @@ fn differential_deposit() {
             }
         }
 
-        gas_rows.push(SolGasRow {
-            label: format!("deposit#{i}"),
-            fe: fe_res.result.gas_used,
-            sol_variants: sol_gas,
-        });
+        report.push_call(format!("deposit#{i}"), fe_res.result.gas_used, sol_gas);
+        deposit_count += 1;
 
         // After each deposit, roots and counts must match between Fe and the
         // primary Solidity variant.
-        let sol = &mut sols[PRIMARY_SOL_IDX];
-        let fe_root = fe
-            .call_raw(&get_root_selector, ExecutionOptions::default())
-            .expect("fe root");
-        let sol_root = sol
-            .call_raw(&get_root_selector, ExecutionOptions::default())
-            .expect("sol root");
+        let root_label = format!("get_deposit_root(after#{i})");
+        let (fe_root, sol_root, fe_gas, sol_gas) = call_row(
+            &root_label,
+            &mut fe,
+            &mut sols,
+            &get_root_selector,
+            ExecutionOptions::default(),
+        );
         assert_eq!(
-            &fe_root.return_data[..],
-            &sol_root.return_data[..],
+            &fe_root[..],
+            &sol_root[..],
             "deposit #{i}: root mismatch after deposit"
         );
-        let fe_count = fe
-            .call_raw(&get_count_selector, ExecutionOptions::default())
-            .expect("fe count");
-        let sol_count = sol
-            .call_raw(&get_count_selector, ExecutionOptions::default())
-            .expect("sol count");
+        report.push_call(root_label, fe_gas, sol_gas);
+
+        let count_label = format!("get_deposit_count(after#{i})");
+        let (fe_count, sol_count, fe_gas, sol_gas) = call_row(
+            &count_label,
+            &mut fe,
+            &mut sols,
+            &get_count_selector,
+            ExecutionOptions::default(),
+        );
         assert_eq!(
-            &fe_count.return_data[..],
-            &sol_count.return_data[..],
+            &fe_count[..],
+            &sol_count[..],
             "after deposit #{i}: get_deposit_count return mismatch"
         );
+        report.push_call(count_label, fe_gas, sol_gas);
     }
 
-    println!();
+    let report = report.render();
     println!(
         "Differential deposit — correctness OK across {} deposits.",
-        gas_rows.len()
+        deposit_count
     );
-    print_sol_gas_table(&gas_rows, "call", 12);
+    println!();
+    println!("{report}");
+    let snapshot_path = fixture_dir().join("gas_report");
+    snap_test!(report, snapshot_path.to_str().unwrap());
 }
