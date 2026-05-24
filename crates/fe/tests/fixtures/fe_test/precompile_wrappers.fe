@@ -13,6 +13,7 @@ use std::evm::crypto::{
     bls12_pairing,
     ec_add,
     ecrecover,
+    ecrecover_raw,
     identity,
     kzg_point_evaluation,
     modexp,
@@ -21,6 +22,12 @@ use std::evm::crypto::{
     ripemd160,
     sha256,
 }
+
+const ECRECOVER_SIGNER: u256 = 0xfcad0b19bb29d4674531d6f115237e16afce377c
+const ECRECOVER_HASH: u256 = 0x0000000000000000000000000000000000000000000000000000000000000001
+const ECRECOVER_R: u256 = 0x51135217d5885b74d5ae8cd048417c9c166fa4caf45b3b5c9552eb1f5c2fff61
+const ECRECOVER_LOW_S: u256 = 0x0878b2f0cafb98fc3d0fbc7349118150d6972483bd2a4599df4313c251efbdf5
+const ECRECOVER_HIGH_S: u256 = 0xf7874d0f35046703c2f0438cb6ee7eade417b862f21e5aa1e08f4aca7e46834c
 
 fn expect_word(_ result: Result<PrecompileError, u256>) -> u256 {
     match result {
@@ -69,6 +76,22 @@ uses (evm: mut Evm)
     while offset < len {
         evm.mstore(addr: ptr + offset, value: 0)
         offset += 32
+    }
+}
+
+fn expect_recovery(_ result: Result<PrecompileError, Option<u256>>) -> u256 {
+    match result {
+        Result::Ok(recovered) => match recovered {
+            Option::Some(addr) => addr,
+            Option::None => {
+                assert(false)
+                0
+            },
+        },
+        Result::Err(_) => {
+            assert(false)
+            0
+        },
     }
 }
 
@@ -122,6 +145,28 @@ uses (evm: mut Evm)
 fn test_signature_precompiles_expose_invalid_signature()
 uses (evm: mut Evm)
 {
+    assert(
+        expect_recovery(ecrecover(
+            hash: ECRECOVER_HASH,
+            v: 27,
+            r: ECRECOVER_R,
+            s: ECRECOVER_LOW_S,
+        )) == ECRECOVER_SIGNER,
+    )
+    expect_no_recovery(ecrecover(
+        hash: ECRECOVER_HASH,
+        v: 28,
+        r: ECRECOVER_R,
+        s: ECRECOVER_HIGH_S,
+    ))
+    assert(
+        expect_recovery(ecrecover_raw(
+            hash: ECRECOVER_HASH,
+            v: 28,
+            r: ECRECOVER_R,
+            s: ECRECOVER_HIGH_S,
+        )) == ECRECOVER_SIGNER,
+    )
     expect_no_recovery(ecrecover(hash: 0, v: 0, r: 0, s: 0))
 
     let p256_input = mem::alloc(160)

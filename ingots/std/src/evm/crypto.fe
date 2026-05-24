@@ -47,6 +47,9 @@ pub const BLS12_FP_LEN: u256 = 64
 pub const BLS12_FP2_LEN: u256 = 128
 pub const P256VERIFY_INPUT_LEN: u256 = 160
 
+const SECP256K1_ORDER: u256 = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
+const SECP256K1_HALF_ORDER: u256 = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0
+
 pub struct PrecompileError {}
 
 impl Copy for PrecompileError {}
@@ -189,10 +192,36 @@ pub fn identity(offset: u256, len: u256) -> Result<PrecompileError, MemoryBytes>
 // Signature recovery
 // ---------------------------------------------------------------------------
 
+fn is_canonical_ecrecover_signature(v: u256, r: u256, s: u256) -> bool {
+    (v == 27 || v == 28)
+        && r > 0
+        && r < SECP256K1_ORDER
+        && s > 0
+        && s <= SECP256K1_HALF_ORDER
+}
+
 /// Recover signer address from a message hash and ECDSA signature (precompile 0x01).
 /// Returns `Ok(Some(addr))` on successful recovery, `Ok(None)` for invalid
-/// signatures, and `Err` if the precompile call itself fails.
+/// or non-canonical signatures, and `Err` if the precompile call itself fails.
 pub fn ecrecover(
+    hash: u256,
+    v: u256,
+    r: u256,
+    s: u256,
+) -> Result<PrecompileError, Option<u256>> {
+    if !is_canonical_ecrecover_signature(v: v, r: r, s: s) {
+        return Result::Ok(Option::None)
+    }
+
+    ecrecover_raw(hash: hash, v: v, r: r, s: s)
+}
+
+/// Recover signer address through the ECRecover precompile without canonical
+/// secp256k1 signature checks.
+///
+/// This matches Solidity's `ecrecover` builtin acceptance behavior while still
+/// returning `Ok(None)` instead of a zero address for failed recovery.
+pub fn ecrecover_raw(
     hash: u256,
     v: u256,
     r: u256,
