@@ -46,7 +46,7 @@
 /// in current consensus types. For wider containers, extend the trait
 /// or pre-merkleize sub-trees yourself. Variable-length lists are
 /// supported via `mix_in_length` on top of a fixed-arity merkleization.
-use core::abi::{Bytes, BytesView, MemoryInput}
+use core::abi::Bytes
 use super::effects::RawMem
 use super::mem
 use super::ops
@@ -122,25 +122,23 @@ pub fn serialize_u64(_ value: u64) -> Bytes uses (mem: mut RawMem) {
 /// add an `impl HashTreeRoot for ByteVector<X>` to support new sizes.
 pub struct ByteVector<const N: usize> {}
 
-/// Compute the SSZ hash-tree-root of a value given its in-memory view.
+/// Compute the SSZ hash-tree-root of a byte payload.
 ///
 /// Implementors decide how many chunks the value occupies and how to
-/// merkleize them. The view-based input avoids copying — callers
-/// pass an existing `BytesView` (typically from a calldata- or
-/// memory-backed `Bytes`).
+/// merkleize them.
 pub trait HashTreeRoot {
-    /// Compute the SSZ root for `view`.
-    fn hash_tree_root(_: BytesView<MemoryInput>) -> u256 uses (mem: mut RawMem)
+    /// Compute the SSZ root for `bytes`.
+    fn hash_tree_root(_: Bytes) -> u256 uses (mem: mut RawMem)
 }
 
 /// User-facing entry point for `HashTreeRoot`.
 ///
-/// Use as `ssz::hash_tree_root<ssz::ByteVector<48>>(view)`. The
-/// turbofish chooses the implementation; the view supplies the bytes.
-pub fn hash_tree_root<T>(_ view: BytesView<MemoryInput>) -> u256
+/// Use as `ssz::hash_tree_root<ssz::ByteVector<48>>(bytes)`. The
+/// turbofish chooses the implementation; the argument supplies the bytes.
+pub fn hash_tree_root<T>(_ bytes: Bytes) -> u256
 uses (mem: mut RawMem) where T: HashTreeRoot
 {
-    T::hash_tree_root(view)
+    T::hash_tree_root(bytes)
 }
 
 /// `ByteVector[48]` — packs into two chunks.
@@ -152,16 +150,16 @@ uses (mem: mut RawMem) where T: HashTreeRoot
 ///
 /// Used for BLS public keys.
 impl HashTreeRoot for ByteVector<48> {
-    fn hash_tree_root(_ view: BytesView<MemoryInput>) -> u256
+    fn hash_tree_root(_ bytes: Bytes) -> u256
     uses (mem: mut RawMem)
     {
-        assert!(view.len == 48)
+        assert!(bytes.len == 48)
         let ptr = mem::alloc(64)
-        mem.mstore(addr: ptr, value: view.word_at(0))
+        mem.mstore(addr: ptr, value: bytes.word_at(0))
         // Word at offset 32 holds bytes 32..48 in its top 16 bytes
         // followed by 16 bytes of slack. Mask the slack to zero by
         // shifting the high 128 bits down and back up.
-        let tail = view.word_at(32)
+        let tail = bytes.word_at(32)
         mem.mstore(addr: ptr + 32, value: (tail >> 128) << 128)
         sha256_64_to(ptr, ptr)
     }
@@ -187,15 +185,15 @@ impl HashTreeRoot for ByteVector<48> {
 ///
 /// Used for BLS signatures.
 impl HashTreeRoot for ByteVector<96> {
-    fn hash_tree_root(_ view: BytesView<MemoryInput>) -> u256
+    fn hash_tree_root(_ bytes: Bytes) -> u256
     uses (mem: mut RawMem)
     {
-        assert!(view.len == 96)
-        let base = view.input.base + view.start
+        assert!(bytes.len == 96)
+        let base = bytes.payload_ptr()
         let ptr = mem::alloc(64)
         let left = sha256_64_to(base, ptr)
 
-        mem.mstore(addr: ptr, value: view.word_at(64))
+        mem.mstore(addr: ptr, value: bytes.word_at(64))
         mem.mstore(addr: ptr + 32, value: 0)
         let right = sha256_64_to(ptr, ptr)
 

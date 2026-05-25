@@ -639,9 +639,14 @@ impl Bytes {
         self.len == 0
     }
 
+    #[arithmetic(unchecked)]
+    pub fn payload_ptr(self) -> u256 {
+        self.data + 32
+    }
+
     pub fn view(self) -> BytesView<MemoryInput> {
         let input = MemoryInput {
-            base: self.data + 32,
+            base: self.payload_ptr(),
             len: self.len,
         }
         BytesView {
@@ -651,16 +656,22 @@ impl Bytes {
         }
     }
 
+    #[arithmetic(unchecked)]
+    pub fn word_at(self, _ offset: u256) -> u256 {
+        mem_word_at(base: self.payload_ptr(), offset: offset)
+    }
+
+    #[arithmetic(unchecked)]
     pub fn byte_at(self, _ index: u256) -> u8 {
         if index >= self.len {
             super::panic()
         }
 
-        let input = MemoryInput {
-            base: self.data + 32,
-            len: self.len,
-        }
-        input.byte_at(index)
+        let word_offset = index - (index % 32)
+        let word = self.word_at(word_offset)
+        let idx = index - word_offset
+        let shift = (31 - idx) * 8
+        (word >> shift).downcast_truncate()
     }
 }
 
