@@ -10,7 +10,7 @@ use crate::{
             ty_def::{BorrowKind, TyId},
         },
     },
-    hir_def::{BinOp, ExprId, Func, StmtId, UnOp},
+    hir_def::{BinOp, ExprId, Func, StmtId, StringId, UnOp},
     projection::{IndexSource, Projection, ProjectionPath},
     semantic::ProviderBinding,
 };
@@ -463,6 +463,9 @@ pub enum STerminatorKind<'db> {
         enum_ty: TyId<'db>,
         cases: Box<[(VariantIndex, SBlockId)]>,
         default: Option<SBlockId>,
+    },
+    Assert {
+        message: Option<StringId<'db>>,
     },
     Return(Option<SOperand>),
 }

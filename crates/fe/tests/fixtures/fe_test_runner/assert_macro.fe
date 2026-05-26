@@ -2,13 +2,18 @@ use std::evm::{Address, Call, Create, Evm, RawMem, last_returndata}
 use std::evm::mem
 
 #[test(should_revert, selector = 0x08c379a0)]
-fn test_assert_msg_reverts() uses (evm: mut Evm) {
-    assert_msg(false, "boom")
+fn test_assert_macro_reverts() uses (evm: mut Evm) {
+    assert!(false, "boom")
 }
 
 #[test]
-fn test_assert_msg_passes() uses (evm: mut Evm) {
-    assert_msg(true, "should not revert")
+fn test_assert_macro_passes() uses (evm: mut Evm) {
+    assert!(true, "should not revert")
+}
+
+#[test(should_revert, panic = 0x01)]
+fn test_assert_without_message_reverts() uses (evm: mut Evm) {
+    assert!(false)
 }
 
 msg ReverterMsg {
@@ -19,13 +24,13 @@ msg ReverterMsg {
 pub contract Reverter {
     recv ReverterMsg {
         Trigger {} {
-            assert_msg(false, "boom")
+            assert!(false, "boom")
         }
     }
 }
 
 #[test]
-fn test_assert_msg_payload_layout() uses (evm: mut Evm) {
+fn test_assert_macro_payload_layout() uses (evm: mut Evm) {
     let addr = evm.create2<Reverter>(value: 0, args: (), salt: 0)
 
     // Build calldata containing only the ReverterMsg::Trigger selector.
@@ -34,19 +39,19 @@ fn test_assert_msg_payload_layout() uses (evm: mut Evm) {
     evm.mstore(addr: ptr, value: selector_word)
 
     let ok = evm.raw_call(addr: addr, gas: 100000, value: 0, args_offset: ptr, args_len: 4)
-    assert(!ok)
+    assert!(!ok)
 
     // Solidity `Error(string)` for "boom":
     //   selector(4) | offset = 0x20 (32) | len = 4 (32) | "boom" right-padded (32) = 100
-    // Catches the bug where assert_msg encodes the bare `Text` payload
+    // Catches the bug where assert! encodes the bare `Text` payload
     // (`len || bytes`) instead of the single-arg tuple `(message,)`
     // (`offset || len || bytes`).
     let ret = last_returndata()
-    assert(ret.len == 100)
-    assert(evm.mload(ret.base) >> 224 == 0x08c379a0)
-    assert(evm.mload(ret.base + 4) == 0x20)
-    assert(evm.mload(ret.base + 36) == 4)
-    assert(
+    assert!(ret.len == 100)
+    assert!(evm.mload(ret.base) >> 224 == 0x08c379a0)
+    assert!(evm.mload(ret.base + 4) == 0x20)
+    assert!(evm.mload(ret.base + 36) == 4)
+    assert!(
         evm.mload(ret.base + 68)
             == 0x626f6f6d00000000000000000000000000000000000000000000000000000000,
     )

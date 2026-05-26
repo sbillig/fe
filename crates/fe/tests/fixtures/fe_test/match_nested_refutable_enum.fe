@@ -12,7 +12,7 @@ fn classify(_ value: own Maybe) -> u8 {
 
 #[test]
 fn test_match_nested_refutable_enum() {
-    assert(classify(Maybe::Some(1)) == 10)
-    assert(classify(Maybe::Some(2)) == 20)
-    assert(classify(Maybe::None) == 20)
+    assert!(classify(Maybe::Some(1)) == 10)
+    assert!(classify(Maybe::Some(2)) == 20)
+    assert!(classify(Maybe::None) == 20)
 }

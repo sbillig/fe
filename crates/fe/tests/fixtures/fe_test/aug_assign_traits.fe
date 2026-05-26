@@ -1,4 +1,3 @@
-use std::evm::effects::assert
 use core::ops::{Add, AddAssign}
 
 struct OnlyAssign {
@@ -36,7 +35,7 @@ fn add_assign_without_add_trait() {
     let mut x = OnlyAssign { value: 1 }
     let y = OnlyAssign { value: 2 }
     x += y
-    assert(x.value == 4)
+    assert!(x.value == 4)
 }
 
 #[test]
@@ -44,9 +43,9 @@ fn aug_assign_prefers_add_assign_semantics() {
     let mut x = Divergent { value: 1 }
     let y = Divergent { value: 2 }
     x += y
-    assert(x.value == 7)
+    assert!(x.value == 7)
 
     let z = Divergent { value: 2 }
     let sum = x + z
-    assert(sum.value == 99)
+    assert!(sum.value == 99)
 }

@@ -42,8 +42,8 @@ fn test_known_selector_skips_fallback() uses (evm: mut Evm) {
     let addr = evm.create2<Counter>(value: 0, args: (), salt: 0)
     let result: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CounterMsg::Ping {})
     let count: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CounterMsg::Count {})
-    assert(result == 7)
-    assert(count == 0)
+    assert!(result == 7)
+    assert!(count == 0)
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn test_unknown_selector_hits_fallback() uses (evm: mut Evm) {
     )
 
     let count: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CounterMsg::Count {})
-    assert(count == 1)
+    assert!(count == 1)
 }
 
 #[test]
@@ -65,10 +65,10 @@ fn test_short_calldata_hits_fallback() uses (evm: mut Evm) {
     let addr = evm.create2<Counter>(value: 0, args: (), salt: 0)
     let ptr = mem::alloc(1)
     evm.mstore8(addr: ptr, value: 0xaa)
-    assert(raw_call(addr: addr, gas: 100000, value: 0, args_offset: ptr, args_len: 1))
+    assert!(raw_call(addr: addr, gas: 100000, value: 0, args_offset: ptr, args_len: 1))
 
     let count: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CounterMsg::Count {})
-    assert(count == 1)
+    assert!(count == 1)
 }
 
 #[test(balance = 1000000000)]
@@ -76,8 +76,8 @@ fn test_nonpayable_fallback_rejects_value() uses (evm: mut Evm) {
     let addr = evm.create2<Counter>(value: 0, args: (), salt: 0)
     let ptr = mem::alloc(1)
     evm.mstore8(addr: ptr, value: 0xaa)
-    assert(!raw_call(addr: addr, gas: 100000, value: 1, args_offset: ptr, args_len: 1))
+    assert!(!raw_call(addr: addr, gas: 100000, value: 1, args_offset: ptr, args_len: 1))
 
     let count: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CounterMsg::Count {})
-    assert(count == 0)
+    assert!(count == 0)
 }

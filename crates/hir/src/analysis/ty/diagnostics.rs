@@ -160,6 +160,10 @@ pub enum TyLowerDiag<'db> {
     InvalidConstTyExpr(DynLazySpan<'db>),
 
     ConstEvalUnsupported(DynLazySpan<'db>),
+    ConstEvalAssertionFailed {
+        span: DynLazySpan<'db>,
+        message: Option<String>,
+    },
     ConstEvalNonConstCall(DynLazySpan<'db>),
     ConstEvalDivisionByZero(DynLazySpan<'db>),
     ConstEvalArithmeticOverflow(DynLazySpan<'db>),
@@ -198,6 +202,7 @@ impl TyLowerDiag<'_> {
             Self::InvalidMutParamPrefixWithoutOwnType { .. } => 31,
             Self::InvalidConstTyExpr(_) => 15,
             Self::ConstEvalUnsupported(_) => 23,
+            Self::ConstEvalAssertionFailed { .. } => 36,
             Self::ConstEvalNonConstCall(_) => 24,
             Self::ConstEvalDivisionByZero(_) => 25,
             Self::ConstEvalArithmeticOverflow(_) => 34,
@@ -523,6 +528,15 @@ pub enum BodyDiag<'db> {
         expected: usize,
     },
 
+    AssertArgNumMismatch {
+        primary: DynLazySpan<'db>,
+        given: usize,
+    },
+
+    AssertMessageMustBeStringLiteral {
+        primary: DynLazySpan<'db>,
+    },
+
     CallArgLabelMismatch {
         primary: DynLazySpan<'db>,
         def_span: DynLazySpan<'db>,
@@ -797,6 +811,8 @@ impl<'db> BodyDiag<'db> {
             Self::NotCallable(..) => 21,
             Self::CallGenericArgNumMismatch { .. } => 22,
             Self::CallArgNumMismatch { .. } => 23,
+            Self::AssertArgNumMismatch { .. } => 82,
+            Self::AssertMessageMustBeStringLiteral { .. } => 83,
             Self::CallArgLabelMismatch { .. } => 24,
             Self::AmbiguousInherentMethodCall { .. } => 25,
             Self::AmbiguousTrait { .. } => 26,

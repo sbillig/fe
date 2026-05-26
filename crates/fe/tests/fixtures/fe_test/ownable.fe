@@ -76,34 +76,34 @@ pub contract NonOwnerCaller uses (call: mut Call) {
 fn test_ownable() uses (evm: mut Evm) {
     // Deploy — test runner becomes owner via ctx.caller() in init
     let ownable = evm.create2<Ownable>(value: 0, args: (), salt: 0)
-    assert(ownable.inner != 0)
+    assert!(ownable.inner != 0)
 
     // Owner can increment
     let res: u256 = evm.call(addr: ownable, gas: 100000, value: 0, message: OwnableMsg::ProtectedIncrement {})
-    assert(res == 1)
+    assert!(res == 1)
     let res: u256 = evm.call(addr: ownable, gas: 100000, value: 0, message: OwnableMsg::ProtectedIncrement {})
-    assert(res == 2)
+    assert!(res == 2)
 
     // Deploy a proxy (different address)
     let proxy = evm.create2<NonOwnerCaller>(value: 0, args: (), salt: 1)
-    assert(proxy.inner != 0)
+    assert!(proxy.inner != 0)
 
     // Non-owner rejected (returns 0)
     let res: u256 = evm.call(addr: proxy, gas: 200000, value: 0, message: ProxyMsg::TryIncrement { target: ownable })
-    assert(res == 0)
+    assert!(res == 0)
 
     // Count unchanged
     let count: u256 = evm.call(addr: ownable, gas: 100000, value: 0, message: OwnableMsg::GetCount {})
-    assert(count == 2)
+    assert!(count == 2)
 
     // Transfer ownership to proxy
     evm.call(addr: ownable, gas: 100000, value: 0, message: OwnableMsg::TransferOwnership { new_owner_inner: proxy.inner })
 
     // Test runner no longer owner
     let res: u256 = evm.call(addr: ownable, gas: 100000, value: 0, message: OwnableMsg::ProtectedIncrement {})
-    assert(res == 0)
+    assert!(res == 0)
 
     // Proxy is new owner
     let res: u256 = evm.call(addr: proxy, gas: 200000, value: 0, message: ProxyMsg::TryIncrement { target: ownable })
-    assert(res == 3)
+    assert!(res == 3)
 }

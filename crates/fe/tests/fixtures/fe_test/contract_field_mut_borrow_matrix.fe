@@ -116,13 +116,13 @@ pub contract C {
 #[test]
 fn test_contract_field_mut_borrow_matrix() uses (evm: mut Evm) {
     let c = evm.create2<C>(value: 0, args: (10, 20, 30), salt: 3)
-    assert(c.inner != 0)
+    assert!(c.inner != 0)
 
     let a = evm.call(addr: c, gas: 100000, value: 0, message: Msg::MutateA { by: 5 })
-    assert(a == 15)
+    assert!(a == 15)
 
     let b = evm.call(addr: c, gas: 100000, value: 0, message: Msg::MutateBForward { by: 4 })
-    assert(b == 24)
+    assert!(b == 24)
 
     let c0 = evm.call(
         addr: c,
@@ -134,7 +134,7 @@ fn test_contract_field_mut_borrow_matrix() uses (evm: mut Evm) {
             mul: 6,
         },
     )
-    assert(c0 == 42)
+    assert!(c0 == 42)
 
     let c1 = evm.call(
         addr: c,
@@ -146,11 +146,11 @@ fn test_contract_field_mut_borrow_matrix() uses (evm: mut Evm) {
             mul: 5,
         },
     )
-    assert(c1 == 45)
+    assert!(c1 == 45)
 
     let d = evm.call(addr: c, gas: 100000, value: 0, message: Msg::DoubleMutate {})
-    assert(d == 116)
+    assert!(d == 116)
 
     let snap = evm.call(addr: c, gas: 100000, value: 0, message: Msg::Snapshot {})
-    assert(snap == 44027045)
+    assert!(snap == 44027045)
 }

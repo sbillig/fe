@@ -173,6 +173,7 @@ fn verify_terminator<'db>(
         NSTerminatorKind::Return(Some(value)) => {
             verify_operand(db, instance, body, term.origin, *value)?;
         }
+        NSTerminatorKind::Assert { .. } => {}
         NSTerminatorKind::Return(None) => {}
     }
     Ok(())

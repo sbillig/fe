@@ -255,7 +255,9 @@ fn place_used_locals<'db>(
 fn terminator_used_locals(term: &NSTerminatorKind<'_>) -> NLocalUseList {
     let mut uses = NLocalUseList::new();
     match term {
-        NSTerminatorKind::Goto(_) | NSTerminatorKind::Return(None) => {}
+        NSTerminatorKind::Goto(_)
+        | NSTerminatorKind::Assert { .. }
+        | NSTerminatorKind::Return(None) => {}
         NSTerminatorKind::Branch { cond, .. }
         | NSTerminatorKind::MatchEnum { value: cond, .. }
         | NSTerminatorKind::Return(Some(cond)) => push_unique(&mut uses, cond.local),

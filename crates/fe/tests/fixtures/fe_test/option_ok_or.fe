@@ -36,14 +36,14 @@ impl Fn<(), Panic> for MakePanic {
 fn test_some_becomes_ok() {
     let opt: Option<u256> = Option::Some(42)
     let r: Result<MyError, u256> = opt.ok_or(MyError { code: 7 })
-    assert(r.unwrap() == 42)
+    assert!(r.unwrap() == 42)
 }
 
 #[test]
 fn test_none_becomes_err() {
     let opt: Option<u256> = Option::None
     let r: Result<MyError, u256> = opt.ok_or(MyError { code: 7 })
-    assert(r.unwrap_err().code == 7)
+    assert!(r.unwrap_err().code == 7)
 }
 
 #[test(should_revert, panic = 0x31)]
@@ -57,14 +57,14 @@ fn test_unwrap_after_ok_or_panic_emits_solidity_panic() uses (evm: mut Evm) {
 fn test_ok_or_else_some_becomes_ok() {
     let opt: Option<u256> = Option::Some(42)
     let r: Result<MyError, u256> = opt.ok_or_else(MakeMyError{})
-    assert(r.unwrap() == 42)
+    assert!(r.unwrap() == 42)
 }
 
 #[test]
 fn test_ok_or_else_none_calls_func() {
     let opt: Option<u256> = Option::None
     let r: Result<MyError, u256> = opt.ok_or_else(MakeMyError{})
-    assert(r.unwrap_err().code == 7)
+    assert!(r.unwrap_err().code == 7)
 }
 
 #[test(should_revert, panic = 0x31)]

@@ -58,6 +58,10 @@ pub enum CtfeError<'db> {
     NotConstEvaluable {
         origin: SemOrigin<'db>,
     },
+    AssertionFailed {
+        origin: SemOrigin<'db>,
+        message: Option<String>,
+    },
     InvalidOperation {
         origin: SemOrigin<'db>,
         message: String,
@@ -1045,6 +1049,12 @@ impl<'db> CtfeMachine<'db> {
                         .iter()
                         .find(|(variant, _)| *variant == tag)
                         .map_or_else(|| default.map_or(0, |bb| bb.index()), |(_, bb)| bb.index());
+                }
+                STerminatorKind::Assert { message } => {
+                    return Err(CtfeError::AssertionFailed {
+                        origin: term_origin,
+                        message: message.map(|message| message.data(self.db).to_string()),
+                    });
                 }
                 STerminatorKind::Return(Some(value)) => {
                     return self.read_operand(frame_idx, value, term_origin);

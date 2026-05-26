@@ -10,8 +10,6 @@
 // primitives.
 
 use std::evm::{
-    assert,
-    assert_msg,
     ether,
     gwei,
     ssz,
@@ -94,15 +92,15 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
         Deposit { pubkey, withdrawal_credentials, signature, deposit_data_root }
         uses (mut store, ctx, mut mem, mut log)
         {
-            assert_msg(pubkey.len == 48, "DepositContract: invalid pubkey length")
-            assert_msg(withdrawal_credentials.len == 32, "DepositContract: invalid withdrawal_credentials length")
-            assert_msg(signature.len == 96, "DepositContract: invalid signature length")
+            assert!(pubkey.len == 48, "DepositContract: invalid pubkey length")
+            assert!(withdrawal_credentials.len == 32, "DepositContract: invalid withdrawal_credentials length")
+            assert!(signature.len == 96, "DepositContract: invalid signature length")
 
             let value: u256 = ctx.value()
-            assert_msg(value >= ether(1), "DepositContract: deposit value too low")
-            assert_msg(value % gwei(1) == 0, "DepositContract: deposit value not multiple of gwei")
+            assert!(value >= ether(1), "DepositContract: deposit value too low")
+            assert!(value % gwei(1) == 0, "DepositContract: deposit value not multiple of gwei")
             let deposit_amount: u256 = value / gwei(1)
-            assert_msg(deposit_amount <= u64::MASK, "DepositContract: deposit value too high")
+            assert!(deposit_amount <= u64::MASK, "DepositContract: deposit value too high")
             // Truncating cast matches Solidity's `uint64(x)`. The assert above
             // guarantees no information is lost.
             let amount_gwei: u64 = deposit_amount.downcast_truncate()
@@ -113,7 +111,7 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
                 signature: signature.view(),
                 amount_gwei: amount_gwei,
             )
-            assert_msg(
+            assert!(
                 node == deposit_data_root.val,
                 "DepositContract: reconstructed DepositData does not match supplied deposit_data_root",
             )
@@ -129,7 +127,7 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
                 },
             )
 
-            assert_msg(store.deposit_count < MAX_DEPOSIT_COUNT, "DepositContract: merkle tree full")
+            assert!(store.deposit_count < MAX_DEPOSIT_COUNT, "DepositContract: merkle tree full")
             store.deposit_count += 1
 
             let mut size: u256 = store.deposit_count
@@ -143,7 +141,7 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
             }
             // Unreachable: the MAX_DEPOSIT_COUNT check above guarantees we exit
             // via the `size & 1 == 1` branch within DEPOSIT_CONTRACT_TREE_DEPTH iterations.
-            assert(false)
+            assert!(false)
         }
 
         GetDepositRoot -> u256 uses (store, mut mem) {
@@ -184,7 +182,7 @@ pub fn compute_deposit_data_root(
 ) -> u256
 uses (mem: mut RawMem)
 {
-    assert(withdrawal_credentials.len == 32)
+    assert!(withdrawal_credentials.len == 32)
     (
         ssz::hash_tree_root<ssz::ByteVector<48>>(pubkey),
         withdrawal_credentials.word_at(0),
@@ -196,7 +194,7 @@ uses (mem: mut RawMem)
 // Decode an 8-byte little-endian `Bytes` back into a `u64`. Used by tests to
 // check `GetDepositCount` results without depending on exact byte layout.
 fn le_bytes_to_u64(_ b: Bytes) -> u64 {
-    assert(b.len == 8)
+    assert!(b.len == 8)
     let mut v: u256 = 0
     let mut i: u256 = 0
     while i < 8 {
@@ -256,7 +254,7 @@ fn test_supports_interface() uses (evm: mut Evm) {
             interface_id: interface_id(id: 0x01ffc9a7),
         },
     )
-    assert(erc165)
+    assert!(erc165)
 
     let deposit: bool = evm.call(
         addr: c,
@@ -266,7 +264,7 @@ fn test_supports_interface() uses (evm: mut Evm) {
             interface_id: interface_id(id: 0x85640907),
         },
     )
-    assert(deposit)
+    assert!(deposit)
 
     let unknown: bool = evm.call(
         addr: c,
@@ -276,7 +274,7 @@ fn test_supports_interface() uses (evm: mut Evm) {
             interface_id: interface_id(id: 0xffffffff),
         },
     )
-    assert(unknown == false)
+    assert!(unknown == false)
 }
 
 // Try to make a deposit without sending any ETH — this must revert (value < 1 ETH).
@@ -338,7 +336,7 @@ uses (evm: mut Evm, mem: mut RawMem)
             value: 0,
             message: DepositMsg::GetDepositCount {},
         )
-    assert(le_bytes_to_u64(count0) == 0)
+    assert!(le_bytes_to_u64(count0) == 0)
     let root0: u256 = evm
         .call(
             addr: c,
@@ -378,7 +376,7 @@ uses (evm: mut Evm, mem: mut RawMem)
             value: 0,
             message: DepositMsg::GetDepositCount {},
         )
-    assert(le_bytes_to_u64(count1) == 1)
+    assert!(le_bytes_to_u64(count1) == 1)
 
     let root1: u256 = evm
         .call(
@@ -387,7 +385,7 @@ uses (evm: mut Evm, mem: mut RawMem)
             value: 0,
             message: DepositMsg::GetDepositRoot {},
         )
-    assert(root1 != root0)
+    assert!(root1 != root0)
 }
 
 // A caller whose claimed `deposit_data_root` doesn't match the reconstruction
@@ -480,9 +478,9 @@ fn test_two_deposits_advance_state() uses (evm: mut Evm, mem: mut RawMem) {
             message: DepositMsg::GetDepositCount {},
         )
 
-    assert(root0 != root1)
-    assert(root1 != root2)
-    assert(le_bytes_to_u64(count2) == 2)
+    assert!(root0 != root1)
+    assert!(root1 != root2)
+    assert!(le_bytes_to_u64(count2) == 2)
 }
 
 // Sanity check on the SSZ LE-u64 chunk helper, since all the hash inputs depend
@@ -491,12 +489,12 @@ fn test_two_deposits_advance_state() uses (evm: mut Evm, mem: mut RawMem) {
 fn test_u64_chunk_layout() {
     // 0x0102030405060708 → bytes in LE are 08 07 06 05 04 03 02 01, packed at
     // the top 8 bytes of the u256.
-    assert(
+    assert!(
         ssz::u64_chunk(0x0102030405060708)
             == 0x0807060504030201000000000000000000000000000000000000000000000000,
     )
-    assert(ssz::u64_chunk(0) == 0)
-    assert(
+    assert!(ssz::u64_chunk(0) == 0)
+    assert!(
         ssz::u64_chunk(1) == 0x0100000000000000000000000000000000000000000000000000000000000000,
     )
 }

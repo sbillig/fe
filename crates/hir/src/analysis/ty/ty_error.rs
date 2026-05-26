@@ -448,6 +448,16 @@ fn diag_from_invalid_cause<'db>(
             TyLowerDiag::ConstEvalUnsupported(expr.span(body).into()).into()
         }
 
+        InvalidCause::ConstEvalAssertionFailed {
+            body,
+            expr,
+            message,
+        } => TyLowerDiag::ConstEvalAssertionFailed {
+            span: expr.span(body).into(),
+            message,
+        }
+        .into(),
+
         InvalidCause::ConstEvalNonConstCall { body, expr } => {
             TyLowerDiag::ConstEvalNonConstCall(expr.span(body).into()).into()
         }

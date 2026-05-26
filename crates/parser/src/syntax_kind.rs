@@ -266,6 +266,8 @@ pub enum SyntaxKind {
     CastExpr,
     /// `foo(x, y)`
     CallExpr,
+    /// `foo!(x, y)`
+    MacroCallExpr,
     /// `(arg: 1, y)`
     CallArgList,
     /// `arg: 1`, `y`
@@ -691,6 +693,7 @@ impl SyntaxKind {
             SyntaxKind::UnExpr => "unary expression",
             SyntaxKind::CastExpr => "cast expression",
             SyntaxKind::CallExpr => "function call expression",
+            SyntaxKind::MacroCallExpr => "macro call expression",
             SyntaxKind::CallArg => "function call argument",
             SyntaxKind::MethodCallExpr => "method call expression",
             SyntaxKind::GenericArgList => "generic type argument list",

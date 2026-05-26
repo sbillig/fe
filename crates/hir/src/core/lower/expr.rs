@@ -61,7 +61,6 @@ impl<'db> Expr<'db> {
             }
 
             ast::ExprKind::Call(call) => {
-                let callee = Self::push_to_body_opt(ctxt, call.callee());
                 let args = call
                     .args()
                     .map(|args| {
@@ -70,7 +69,24 @@ impl<'db> Expr<'db> {
                             .collect()
                     })
                     .unwrap_or_default();
+                let callee = Self::push_to_body_opt(ctxt, call.callee());
                 Self::Call(callee, args)
+            }
+
+            ast::ExprKind::MacroCall(call) => {
+                let args = call
+                    .args()
+                    .map(|args| {
+                        args.into_iter()
+                            .map(|arg| CallArg::lower_ast(ctxt, arg))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if is_assert_macro_call(&call) {
+                    Self::Assert(args)
+                } else {
+                    return ctxt.push_invalid_expr(HirOrigin::raw(&ast));
+                }
             }
 
             ast::ExprKind::MethodCall(method_call) => {
@@ -234,6 +250,26 @@ impl<'db> Expr<'db> {
             ctxt.push_missing_expr()
         }
     }
+}
+
+fn is_assert_macro_call(call: &ast::MacroCallExpr) -> bool {
+    let Some(ast::ExprKind::Path(callee)) = call.callee().map(|callee| callee.kind()) else {
+        return false;
+    };
+    let Some(path) = callee.path() else {
+        return false;
+    };
+    let mut segments = path.segments();
+    let Some(segment) = segments.next() else {
+        return false;
+    };
+    if segments.next().is_some() || segment.generic_args().is_some() {
+        return false;
+    }
+    let Some(ast::PathSegmentKind::Ident(ident)) = segment.kind() else {
+        return false;
+    };
+    ident.text() == "assert"
 }
 
 impl Cond {

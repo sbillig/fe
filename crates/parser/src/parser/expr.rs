@@ -147,6 +147,11 @@ fn parse_expr_with_min_bp<S: TokenStream>(
                         }
                     }
 
+                    SyntaxKind::Not => {
+                        parser.parse_cp(MacroCallExprScope::default(), Some(checkpoint))?;
+                        continue;
+                    }
+
                     // `expr.method<T, i32>()`
                     SyntaxKind::Dot => {
                         if is_method_call(parser) {
@@ -288,12 +293,20 @@ fn postfix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<u8> {
     parser.set_newline_as_trivia(false);
     let power = match parser.current_kind() {
         Some(LBracket | LParen) => Some(147),
+        Some(Not) if is_macro_call(parser) => Some(147),
         Some(AsKw) => Some(146),
         _ => None,
     };
 
     parser.set_newline_as_trivia(is_trivia);
     power
+}
+
+fn is_macro_call<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    matches!(
+        parser.peek_n_non_trivia(2).as_slice(),
+        [SyntaxKind::Not, SyntaxKind::LParen]
+    )
 }
 
 /// Specifies how tightly does an infix operator bind to its left and right
@@ -535,6 +548,24 @@ impl super::Parse for CallExprScope {
         }
 
         if parser.find_and_pop(
+            SyntaxKind::LParen,
+            ExpectedKind::Syntax(SyntaxKind::CallArgList),
+        )? {
+            parser.parse(CallArgListScope::default())?;
+        }
+        Ok(())
+    }
+}
+
+define_scope! { MacroCallExprScope, MacroCallExpr }
+impl super::Parse for MacroCallExprScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.bump_expected(SyntaxKind::Not);
+        parser.set_newline_as_trivia(false);
+
+        if parser.find(
             SyntaxKind::LParen,
             ExpectedKind::Syntax(SyntaxKind::CallArgList),
         )? {

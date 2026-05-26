@@ -1,4 +1,3 @@
-use std::evm::assert
 
 extern {
     fn todo() -> !
@@ -26,5 +25,5 @@ fn trigger() {
 
 #[test]
 fn test_extern_never_assoc_return_compiles() {
-    assert(true)
+    assert!(true)
 }

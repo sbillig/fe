@@ -46,7 +46,7 @@ pub contract EnumContract {
 #[test]
 fn test_enum() uses (evm: mut Evm) {
     let contract_addr = evm.create2<EnumContract>(value: 0, args: (), salt: 0)
-    assert(contract_addr.inner != 0)
+    assert!(contract_addr.inner != 0)
 
     // Test make_some(42) - should return 42
     let res: u256 = evm.call(
@@ -55,7 +55,7 @@ fn test_enum() uses (evm: mut Evm) {
         value: 0,
         message: EnumMsg::MakeSome { value: 42 }
     )
-    assert(res == 42)
+    assert!(res == 42)
 
     // Test is_some_check(99) - should return 1 (true)
     let res: u256 = evm.call(
@@ -64,7 +64,7 @@ fn test_enum() uses (evm: mut Evm) {
         value: 0,
         message: EnumMsg::IsSomeCheck { value: 99 }
     )
-    assert(res == 1)
+    assert!(res == 1)
 
     // Test make_none() - should return 0
     let res: u256 = evm.call(
@@ -73,5 +73,5 @@ fn test_enum() uses (evm: mut Evm) {
         value: 0,
         message: EnumMsg::MakeNone {}
     )
-    assert(res == 0)
+    assert!(res == 0)
 }

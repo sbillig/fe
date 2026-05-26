@@ -2091,6 +2091,22 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::ConstEvalAssertionFailed { span, message } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "assertion failed in const context".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "`assert!` evaluated to `false`".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: message
+                    .as_ref()
+                    .map(|message| format!("assertion message: {message}"))
+                    .into_iter()
+                    .collect(),
+                error_code,
+            },
+
             Self::ConstEvalNonConstCall(span) => primary_diag(
                 Severity::Error,
                 "non-const function call in const context",
@@ -3485,6 +3501,33 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         span: def_span.resolve(db),
                     },
                 ],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::AssertArgNumMismatch {
+                primary,
+                given,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "`assert!` argument number mismatch".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!("expected 1 or 2 arguments, but {given} given"),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::AssertMessageMustBeStringLiteral { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "`assert!` message must be a string literal".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "use a string literal for the revert message".to_string(),
+                    span: primary.resolve(db),
+                }],
                 notes: vec![],
                 error_code,
             },

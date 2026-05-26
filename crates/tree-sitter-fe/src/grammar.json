@@ -3389,6 +3389,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "macro_call_expression"
+        },
+        {
+          "type": "SYMBOL",
           "name": "method_call_expression"
         },
         {
@@ -5116,6 +5120,35 @@
         ]
       }
     },
+    "macro_call_expression": {
+      "type": "PREC",
+      "value": 15,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "FIELD",
+            "name": "function",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_expression"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "!"
+          },
+          {
+            "type": "FIELD",
+            "name": "arguments",
+            "content": {
+              "type": "SYMBOL",
+              "name": "call_arg_list"
+            }
+          }
+        ]
+      }
+    },
     "instantiation_expression": {
       "type": "PREC",
       "value": 15,
@@ -5753,6 +5786,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "macro_call_expression"
+        },
+        {
+          "type": "SYMBOL",
           "name": "method_call_expression"
         },
         {
@@ -5969,6 +6006,10 @@
         {
           "type": "SYMBOL",
           "name": "call_expression"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "macro_call_expression"
         },
         {
           "type": "SYMBOL",
@@ -8112,5 +8153,6 @@
     "_pattern",
     "_item",
     "_statement"
-  ]
+  ],
+  "reserved": {}
 }

@@ -1,0 +1,37 @@
+const fn passes_plain() -> usize {
+    assert!(true)
+    1
+}
+
+const fn passes_message() -> usize {
+    assert!(true, "ok")
+    2
+}
+
+const PLAIN_OK: usize = passes_plain()
+type MessageOk = [u8; passes_message()]
+
+const fn fail_plain() -> usize {
+    assert!(false)
+    1
+}
+
+const PLAIN_BAD: usize = fail_plain()
+
+const fn fail_message() -> usize {
+    assert!(false, "ctfe boom")
+    1
+}
+
+const MESSAGE_BAD: usize = fail_message()
+
+const fn nested_fail() -> usize {
+    assert!(false, "nested boom")
+    1
+}
+
+const fn caller() -> usize {
+    nested_fail()
+}
+
+const NESTED_BAD: usize = caller()

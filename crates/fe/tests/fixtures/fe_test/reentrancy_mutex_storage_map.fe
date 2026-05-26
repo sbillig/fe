@@ -1,5 +1,4 @@
 use std::evm::{Address, Call, Create, Ctx, Evm, Mutex, StorageMap}
-use std::evm::effects::assert
 
 msg AMsg {
     #[selector = 1]
@@ -61,7 +60,7 @@ pub contract B {
                 message: AMsg::Callback { b: ctx.address(), user: user },
             )
             let post = guarded_balances.value.get(key: user)
-            assert(post == pre)
+            assert!(post == pre)
             guarded_balances.unlock()
             post
         }
@@ -105,8 +104,8 @@ pub contract B {
 fn test_reentrancy_guard_mutex_storage_map() uses (cr: mut Create, evm: mut Evm) {
     let a = cr.create2<A>(value: 0, args: (), salt: 11)
     let b = cr.create2<B>(value: 0, args: (), salt: 12)
-    assert(a.inner != 0)
-    assert(b.inner != 0)
+    assert!(a.inner != 0)
+    assert!(b.inner != 0)
 
     let user = Address { inner: 0x1111 }
     let gas = 200000
@@ -114,25 +113,25 @@ fn test_reentrancy_guard_mutex_storage_map() uses (cr: mut Create, evm: mut Evm)
 
     // lock state starts clear
     let initially_locked = evm.call(addr: b, gas, value, message: BMsg::IsLocked {})
-    assert(initially_locked == false)
+    assert!(initially_locked == false)
 
     // explicit lock/unlock path works and leaves mutex unlocked
     let saw_locked = evm.call(addr: b, gas, value, message: BMsg::LockAndCheck {})
-    assert(saw_locked == true)
+    assert!(saw_locked == true)
     let unlocked_again = evm.call(addr: b, gas, value, message: BMsg::IsLocked {})
-    assert(unlocked_again == false)
+    assert!(unlocked_again == false)
 
     let before = evm.call(addr: b, gas, value, message: BMsg::Get { user: user })
-    assert(before == 0)
+    assert!(before == 0)
 
     // Reentrant Protected call during Enter is blocked; only the post-Enter Protected increments.
     let started = evm.call(addr: a, gas, value, message: AMsg::Start { b: b, user: user })
-    assert(started == 1)
+    assert!(started == 1)
 
     let after = evm.call(addr: b, gas, value, message: BMsg::Get { user: user })
-    assert(after == 1)
+    assert!(after == 1)
 
     // A standalone Protected call increments again.
     let direct = evm.call(addr: b, gas, value, message: BMsg::Protected { user: user })
-    assert(direct == 2)
+    assert!(direct == 2)
 }

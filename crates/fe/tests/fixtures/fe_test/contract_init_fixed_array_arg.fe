@@ -1,4 +1,3 @@
-use std::evm::effects::assert
 
 msg ContractMsg {
     #[selector = 0x01]
@@ -27,5 +26,5 @@ pub contract C {
 fn test_contract_init_fixed_array_arg() uses (evm: mut Evm) {
     let c = evm.create2<C>(value: 0, args: ([1, 2, 3, 4],), salt: 0)
     let sum: u256 = evm.call(addr: c, gas: 100000, value: 0, message: ContractMsg::Sum {})
-    assert(sum == 10)
+    assert!(sum == 10)
 }

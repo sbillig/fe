@@ -1,6 +1,6 @@
 use core::effect_ref::EffectHandle
 
-use super::effects::{TStorPtr, assert}
+use super::effects::TStorPtr
 
 /// A storage-backed value guarded by a transient reentrancy lock.
 ///
@@ -26,7 +26,7 @@ impl<T, const LOCK_SLOT: u256> Mutex<T, LOCK_SLOT> {
         let mut lock = Self::lock_ptr()
         with (lock) {
             if lock_get() {
-                assert(false)
+                assert!(false)
             }
             lock_set(value: true)
             mut self.value

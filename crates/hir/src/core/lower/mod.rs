@@ -216,7 +216,7 @@ impl<'db> FileLowerCtxt<'db> {
         self.insert_synthetic_use(vec![core, prelude]);
 
         // For non-std ingots, additionally inject std::prelude::* which adds
-        // EVM/ABI items (Evm, Address, Call, Sol, assert, etc.) on top of
+        // EVM/ABI items (Evm, Address, Call, Sol, revert, etc.) on top of
         // core::prelude. If std lacks a prelude module (e.g. a user-defined
         // package aliased as "std"), the synthetic import fails silently and
         // we still have core::prelude as fallback.

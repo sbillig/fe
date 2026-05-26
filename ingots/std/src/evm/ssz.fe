@@ -47,7 +47,7 @@
 /// or pre-merkleize sub-trees yourself. Variable-length lists are
 /// supported via `mix_in_length` on top of a fixed-arity merkleization.
 use core::abi::{Bytes, BytesView, MemoryInput}
-use super::effects::{assert, RawMem}
+use super::effects::RawMem
 use super::mem
 use super::ops
 
@@ -155,7 +155,7 @@ impl HashTreeRoot for ByteVector<48> {
     fn hash_tree_root(_ view: BytesView<MemoryInput>) -> u256
     uses (mem: mut RawMem)
     {
-        assert(view.len == 48)
+        assert!(view.len == 48)
         let ptr = mem::alloc(64)
         mem.mstore(addr: ptr, value: view.word_at(0))
         // Word at offset 32 holds bytes 32..48 in its top 16 bytes
@@ -190,7 +190,7 @@ impl HashTreeRoot for ByteVector<96> {
     fn hash_tree_root(_ view: BytesView<MemoryInput>) -> u256
     uses (mem: mut RawMem)
     {
-        assert(view.len == 96)
+        assert!(view.len == 96)
         let base = view.input.base + view.start
         let ptr = mem::alloc(64)
         let left = sha256_64_to(base, ptr)

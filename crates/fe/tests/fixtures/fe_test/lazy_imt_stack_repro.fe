@@ -1,4 +1,3 @@
-use std::evm::effects::assert
 
 const MAX_DEPTH: usize = 32
 const MAX_DEPTH_PLUS_ONE: usize = 33
@@ -331,7 +330,7 @@ fn lazy_calculate_root(
 fn assert_lazy_merkle_proof_case(_ depth: usize, _ leaf_count: usize) {
     let mut tree = LazyIMTData::empty()
     let err = tree.init(depth)
-    assert(err.code() == LazyIMTError::None.code())
+    assert!(err.code() == LazyIMTError::None.code())
 
     let mut leaves: [u256; LAZY_TEST_MAX_DENSE_LEAVES] = [0; LAZY_TEST_MAX_DENSE_LEAVES]
     let mut insert_index: usize = 0
@@ -339,20 +338,20 @@ fn assert_lazy_merkle_proof_case(_ depth: usize, _ leaf_count: usize) {
         let leaf = ((insert_index + 1) * 17) as u256
         leaves[insert_index] = leaf
         let err = tree.insert(leaf)
-        assert(err.code() == LazyIMTError::None.code())
+        assert!(err.code() == LazyIMTError::None.code())
         insert_index += 1
     }
 
     let (root_at_depth, err) = tree.root_at_depth(depth)
-    assert(err.code() == LazyIMTError::None.code())
+    assert!(err.code() == LazyIMTError::None.code())
 
     let mut leaf_index: usize = 0
     while leaf_index < leaf_count {
         let (proof, err) = tree.merkle_proof_elements(leaf_index, depth)
-        assert(err.code() == LazyIMTError::None.code())
+        assert!(err.code() == LazyIMTError::None.code())
 
         let reconstructed = lazy_calculate_root(leaf_index, leaves[leaf_index], depth, proof)
-        assert(reconstructed == root_at_depth)
+        assert!(reconstructed == root_at_depth)
         leaf_index += 1
     }
 }

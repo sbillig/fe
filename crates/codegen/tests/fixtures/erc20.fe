@@ -1,4 +1,4 @@
-use std::evm::{Address, Ctx, StorageMap, assert}
+use std::evm::{Address, Ctx, StorageMap}
 use std::evm::effects::Log
 
 // roles
@@ -90,7 +90,7 @@ pub contract CoolCoin uses (ctx: mut Ctx, log: mut Log) {
         uses (ctx, mut store, mut log) {
             let owner = ctx.caller()
             let current = store.allowances.get((owner, spender))
-            assert(current >= subtracted_value)
+            assert!(current >= subtracted_value)
             approve(owner, spender, amount: current - subtracted_value)
             true
         }
@@ -100,11 +100,11 @@ pub contract CoolCoin uses (ctx: mut Ctx, log: mut Log) {
 fn transfer(from: Address, to: Address, amount: u256)
     uses (store: mut TokenStore, log: mut Log)
 {
-    assert(from != Address::zero())
-    assert(to != Address::zero())
+    assert!(from != Address::zero())
+    assert!(to != Address::zero())
 
     let from_balance = store.balances.get(from)
-    assert(from_balance >= amount)
+    assert!(from_balance >= amount)
 
     store.balances.set(key: from, value: from_balance - amount)
     store.balances.set(key: to, value: store.balances.get(to) + amount)
@@ -115,7 +115,7 @@ fn transfer(from: Address, to: Address, amount: u256)
 fn mint(to: Address, amount: u256)
     uses (store: mut TokenStore, log: mut Log)
 {
-    assert(to != Address::zero())
+    assert!(to != Address::zero())
 
     store.total_supply += amount
     store.balances.set(key: to, value: store.balances.get(to) + amount)
@@ -126,10 +126,10 @@ fn mint(to: Address, amount: u256)
 fn burn(from: Address, amount: u256)
     uses (store: mut TokenStore, log: mut Log)
 {
-    assert(from != Address::zero())
+    assert!(from != Address::zero())
 
     let from_balance = store.balances.get(from)
-    assert(from_balance >= amount)
+    assert!(from_balance >= amount)
 
     store.balances.set(key: from, value: from_balance - amount)
     store.total_supply -= amount
@@ -140,8 +140,8 @@ fn burn(from: Address, amount: u256)
 fn approve(owner: Address, spender: Address, amount: u256)
     uses (store: mut TokenStore, log: mut Log)
 {
-    assert(owner != Address::zero())
-    assert(spender != Address::zero())
+    assert!(owner != Address::zero())
+    assert!(spender != Address::zero())
 
     store.allowances.set(key: (owner, spender), value: amount)
 
@@ -154,7 +154,7 @@ fn spend_allowance(owner: Address, spender: Address, amount: u256)
 {
     let current = store.allowances.get((owner, spender))
     // if current != u256::MAX { // TODO: define ::MAX constants
-        assert(current >= amount)
+        assert!(current >= amount)
         store.allowances.set(key: (owner, spender), value: current - amount)
     // }
 }
@@ -175,7 +175,7 @@ impl AccessControl {
     }
 
     pub fn require(self, role: u256) uses (ctx: Ctx) {
-        assert(self.roles.get((role, ctx.caller())) == true)
+        assert!(self.roles.get((role, ctx.caller())) == true)
     }
 
     pub fn grant(mut self, role: u256, to: Address) {

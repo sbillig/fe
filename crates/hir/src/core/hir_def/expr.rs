@@ -16,6 +16,8 @@ pub enum Expr<'db> {
     Cast(ExprId, Partial<TypeId<'db>>),
     /// (callee, call args)
     Call(ExprId, Vec<CallArg<'db>>),
+    /// Compiler-owned `assert!(cond[, "message"])` builtin.
+    Assert(Vec<CallArg<'db>>),
     /// (receiver, method_name, generic args, call args)
     MethodCall(
         ExprId,

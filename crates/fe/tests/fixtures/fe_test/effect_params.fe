@@ -16,7 +16,7 @@ fn test_multiple_effect_params() {
     let total = with (x, y) {
         bump_multiple_effect_params()
     }
-    assert(total == 3)
+    assert!(total == 3)
 }
 
 #[test]
@@ -25,5 +25,5 @@ fn test_non_evm_effect_param() {
     let updated = with (value) {
         bump_non_evm_effect_param()
     }
-    assert(updated == 1)
+    assert!(updated == 1)
 }

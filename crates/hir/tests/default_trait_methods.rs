@@ -150,15 +150,13 @@ fn test_roots_keep_std_create2_as_a_body_backed_trait_call() {
     let file = db.new_stand_alone(
         Utf8PathBuf::from("test_roots_keep_std_create2_as_a_body_backed_trait_call.fe"),
         r#"
-use std::evm::effects::assert
-
 pub contract C {}
 
 #[test]
 fn test_large_by_value_array_args() uses (evm: mut Evm) {
     let c = evm.create2<C>(value: 0, args: (), salt: 0)
     let out: Address = c
-    assert(out.inner == c.inner)
+    assert!(out.inner == c.inner)
 }
 "#,
     );
@@ -340,8 +338,6 @@ fn large_by_value_array_args_test_root_keeps_body_backed_create2() {
     let file = db.new_stand_alone(
         Utf8PathBuf::from("large_by_value_array_args_test_root_keeps_body_backed_create2.fe"),
         r#"
-use std::evm::effects::assert
-
 msg BigArgsMsg {
     #[selector = 0x01020304]
     Run -> u256,
@@ -383,7 +379,7 @@ fn test_large_by_value_array_args() uses (evm: mut Evm) {
         value: 0,
         message: BigArgsMsg::Run {},
     )
-    assert(out == 1)
+    assert!(out == 1)
 }
 "#,
     );

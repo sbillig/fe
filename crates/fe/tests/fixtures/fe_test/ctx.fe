@@ -110,7 +110,7 @@ pub contract CtxBox uses (ctx: Ctx) {
 fn test_origin() uses (evm: mut Evm) {
     let addr = evm.create2<CtxBox>(value: 0, args: (), salt: 0)
     let origin: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CtxMsg::GetOrigin {})
-    assert(origin == origin)
+    assert!(origin == origin)
 }
 
 // Test: ctx.coinbase() returns a value (may be zero in test env)
@@ -119,7 +119,7 @@ fn test_coinbase() uses (evm: mut Evm) {
     let addr = evm.create2<CtxBox>(value: 0, args: (), salt: 0)
     let coinbase: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CtxMsg::GetCoinbase {})
     // coinbase may be zero in test environment, just verify the call succeeds
-    assert(coinbase == coinbase)
+    assert!(coinbase == coinbase)
 }
 
 // Test: ctx.timestamp() returns a non-zero value
@@ -127,7 +127,7 @@ fn test_coinbase() uses (evm: mut Evm) {
 fn test_timestamp() uses (evm: mut Evm) {
     let addr = evm.create2<CtxBox>(value: 0, args: (), salt: 0)
     let ts: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CtxMsg::GetTimestamp {})
-    assert(ts != 0)
+    assert!(ts != 0)
 }
 
 // Test: ctx.block_number() returns a value
@@ -135,7 +135,7 @@ fn test_timestamp() uses (evm: mut Evm) {
 fn test_block_number() uses (evm: mut Evm) {
     let addr = evm.create2<CtxBox>(value: 0, args: (), salt: 0)
     let num: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CtxMsg::GetBlockNumber {})
-    assert(num == num)
+    assert!(num == num)
 }
 
 // Test: ctx.prevrandao() returns a value
@@ -143,7 +143,7 @@ fn test_block_number() uses (evm: mut Evm) {
 fn test_prevrandao() uses (evm: mut Evm) {
     let addr = evm.create2<CtxBox>(value: 0, args: (), salt: 0)
     let rand: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CtxMsg::GetPrevrandao {})
-    assert(rand == rand)
+    assert!(rand == rand)
 }
 
 // Test: ctx.gaslimit() returns a non-zero value
@@ -151,7 +151,7 @@ fn test_prevrandao() uses (evm: mut Evm) {
 fn test_gaslimit() uses (evm: mut Evm) {
     let addr = evm.create2<CtxBox>(value: 0, args: (), salt: 0)
     let limit: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CtxMsg::GetGaslimit {})
-    assert(limit != 0)
+    assert!(limit != 0)
 }
 
 // Test: ctx.chainid() returns a non-zero value
@@ -159,7 +159,7 @@ fn test_gaslimit() uses (evm: mut Evm) {
 fn test_chainid() uses (evm: mut Evm) {
     let addr = evm.create2<CtxBox>(value: 0, args: (), salt: 0)
     let id: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CtxMsg::GetChainid {})
-    assert(id != 0)
+    assert!(id != 0)
 }
 
 // Test: ctx.basefee() returns a value
@@ -167,7 +167,7 @@ fn test_chainid() uses (evm: mut Evm) {
 fn test_basefee() uses (evm: mut Evm) {
     let addr = evm.create2<CtxBox>(value: 0, args: (), salt: 0)
     let fee: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CtxMsg::GetBasefee {})
-    assert(fee == fee)
+    assert!(fee == fee)
 }
 
 // Test: ctx.blockhash() returns a value for a given block
@@ -175,7 +175,7 @@ fn test_basefee() uses (evm: mut Evm) {
 fn test_blockhash() uses (evm: mut Evm) {
     let addr = evm.create2<CtxBox>(value: 0, args: (), salt: 0)
     let hash: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CtxMsg::GetBlockhash { block: 0 })
-    assert(hash == hash)
+    assert!(hash == hash)
 }
 
 // Test: ctx.address() returns the contract's own address
@@ -183,7 +183,7 @@ fn test_blockhash() uses (evm: mut Evm) {
 fn test_address() uses (evm: mut Evm) {
     let addr = evm.create2<CtxBox>(value: 0, args: (), salt: 0)
     let reported: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CtxMsg::GetAddress {})
-    assert(reported == addr.inner)
+    assert!(reported == addr.inner)
 }
 
 // Test: ctx.caller() returns the caller address
@@ -191,7 +191,7 @@ fn test_address() uses (evm: mut Evm) {
 fn test_caller() uses (evm: mut Evm) {
     let addr = evm.create2<CtxBox>(value: 0, args: (), salt: 0)
     let caller: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CtxMsg::GetCaller {})
-    assert(caller != 0)
+    assert!(caller != 0)
 }
 
 // Test: ctx.gas() returns remaining gas (non-zero)
@@ -199,5 +199,5 @@ fn test_caller() uses (evm: mut Evm) {
 fn test_gas() uses (evm: mut Evm) {
     let addr = evm.create2<CtxBox>(value: 0, args: (), salt: 0)
     let remaining: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CtxMsg::GetGas {})
-    assert(remaining != 0)
+    assert!(remaining != 0)
 }

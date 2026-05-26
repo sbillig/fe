@@ -16,5 +16,5 @@ fn fallible(ok: bool) -> Result<PlainError, u256> {
 fn test_unwrap_non_encodable() uses (evm: mut Evm) {
     let result = fallible(ok: true)
     let val = result.unwrap()
-    assert(val == 42)
+    assert!(val == 42)
 }

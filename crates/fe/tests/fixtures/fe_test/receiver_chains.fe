@@ -38,21 +38,21 @@ fn test_receiver_chains() {
         ver: 0,
     }
 
-    assert(p.health() == 3)
+    assert!(p.health() == 3)
 
     p.accrue(60)
-    assert(p.debt == 360)
-    assert(p.ver == 1)
-    assert(p.health() == 2)
+    assert!(p.debt == 360)
+    assert!(p.ver == 1)
+    assert!(p.health() == 2)
 
     let p = p.settle(100)
-    assert(p.debt == 260)
-    assert(p.ver == 2)
-    assert(p.health() == 3)
+    assert!(p.debt == 260)
+    assert!(p.ver == 2)
+    assert!(p.health() == 3)
 
     let p = p.settle(300)
-    assert(p.collateral == 940)
-    assert(p.debt == 0)
-    assert(p.ver == 3)
-    assert(p.health() == 9999)
+    assert!(p.collateral == 940)
+    assert!(p.debt == 0)
+    assert!(p.ver == 3)
+    assert!(p.health() == 9999)
 }

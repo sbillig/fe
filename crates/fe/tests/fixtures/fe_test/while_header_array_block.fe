@@ -1,4 +1,3 @@
-use std::evm::effects::assert
 
 fn count_until(_ limit: u256) -> u256 {
     let mut value: u256 = 0
@@ -17,7 +16,7 @@ fn count_until(_ limit: u256) -> u256 {
 
 #[test]
 fn test_while_header_array_block() {
-    assert(count_until(0) == 0)
-    assert(count_until(5) == 5)
-    assert(count_until(9) == 9)
+    assert!(count_until(0) == 0)
+    assert!(count_until(5) == 5)
+    assert!(count_until(9) == 9)
 }

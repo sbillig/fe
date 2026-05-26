@@ -93,7 +93,7 @@ fn test_projected_storage_map_effect_forwarding() uses (evm: mut Evm) {
         value: 0,
         message: ProjectedMapMsg::GetPrimary { key: 1 },
     )
-    assert(primary == 11)
+    assert!(primary == 11)
 
     let secondary: u256 = evm.call(
         addr: contract_addr,
@@ -101,5 +101,5 @@ fn test_projected_storage_map_effect_forwarding() uses (evm: mut Evm) {
         value: 0,
         message: ProjectedMapMsg::GetSecondary { key: 1 },
     )
-    assert(secondary == 99)
+    assert!(secondary == 99)
 }

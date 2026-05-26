@@ -1,5 +1,4 @@
 use core::num::IntWord
-use std::evm::effects::assert
 use std::evm::ops::{byte, signextend}
 
 extern {
@@ -67,51 +66,51 @@ const BOOL_NE: bool = __ne_bool(true, false)
 
 #[test]
 fn const_numeric_extern_intrinsics() {
-    assert(CHECKED_ADD == 15)
-    assert(CHECKED_NEG == 5)
-    assert(SATURATING_ADD == 255)
-    assert(SATURATING_SUB == 0)
-    assert(SATURATING_MUL == 127)
+    assert!(CHECKED_ADD == 15)
+    assert!(CHECKED_NEG == 5)
+    assert!(SATURATING_ADD == 255)
+    assert!(SATURATING_SUB == 0)
+    assert!(SATURATING_MUL == 127)
 
-    assert(WRAPPING_ADD == 1)
-    assert(WRAPPING_SUB == 255)
-    assert(WRAPPING_MUL == 0)
-    assert(WRAPPING_DIV_ZERO == 0)
-    assert(WRAPPING_REM_ZERO == 0)
-    assert(WRAPPING_POW == 0)
-    assert(WRAPPING_SHL == 0)
-    assert(WRAPPING_SIGNED_SHR == -1)
-    assert(WRAPPING_SIGNED_SHR_255 == -1)
-    assert(WRAPPING_SIGNED_SHR_300 == -1)
-    assert(WRAPPING_NEG == -128)
-    assert(BIT_NOT == 255)
-    assert(BIT_AND == 0b1000)
-    assert(BIT_OR == 0b1110)
-    assert(BIT_XOR == 0b0110)
-    assert(LT_SIGNED)
-    assert(GE_UNSIGNED)
+    assert!(WRAPPING_ADD == 1)
+    assert!(WRAPPING_SUB == 255)
+    assert!(WRAPPING_MUL == 0)
+    assert!(WRAPPING_DIV_ZERO == 0)
+    assert!(WRAPPING_REM_ZERO == 0)
+    assert!(WRAPPING_POW == 0)
+    assert!(WRAPPING_SHL == 0)
+    assert!(WRAPPING_SIGNED_SHR == -1)
+    assert!(WRAPPING_SIGNED_SHR_255 == -1)
+    assert!(WRAPPING_SIGNED_SHR_300 == -1)
+    assert!(WRAPPING_NEG == -128)
+    assert!(BIT_NOT == 255)
+    assert!(BIT_AND == 0b1000)
+    assert!(BIT_OR == 0b1110)
+    assert!(BIT_XOR == 0b0110)
+    assert!(LT_SIGNED)
+    assert!(GE_UNSIGNED)
 
-    assert(BOOL_NOT)
-    assert(!BOOL_AND)
-    assert(BOOL_OR)
-    assert(BOOL_XOR)
-    assert(BOOL_EQ)
-    assert(BOOL_NE)
+    assert!(BOOL_NOT)
+    assert!(!BOOL_AND)
+    assert!(BOOL_OR)
+    assert!(BOOL_XOR)
+    assert!(BOOL_EQ)
+    assert!(BOOL_NE)
 
     let true_word: u256 = true as u256
     let false_word: u256 = false as u256
     let true_i32: i32 = true as i32
     let false_u8: u8 = false as u8
-    assert(true_word == 1)
-    assert(false_word == 0)
-    assert(true_i32 == 1)
-    assert(false_u8 == 0)
+    assert!(true_word == 1)
+    assert!(false_word == 0)
+    assert!(true_i32 == 1)
+    assert!(false_u8 == 0)
 
     let word: u256 = 0x1234567890abcdef0000000000000000000000000000000000000000000000ff
-    assert(byte(pos: 0, value: word) == 0x12)
-    assert(byte(pos: 1, value: word) == 0x34)
-    assert(byte(pos: 31, value: word) == 0xff)
-    assert(byte(pos: 32, value: word) == 0)
-    assert(signextend(byte: 0, value: 0x7f) == 0x7f)
-    assert(signextend(byte: 0, value: 0xff) == 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+    assert!(byte(pos: 0, value: word) == 0x12)
+    assert!(byte(pos: 1, value: word) == 0x34)
+    assert!(byte(pos: 31, value: word) == 0xff)
+    assert!(byte(pos: 32, value: word) == 0)
+    assert!(signextend(byte: 0, value: 0x7f) == 0x7f)
+    assert!(signextend(byte: 0, value: 0xff) == 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
 }

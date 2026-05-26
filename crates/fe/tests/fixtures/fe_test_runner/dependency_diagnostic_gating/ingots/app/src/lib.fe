@@ -1,6 +1,5 @@
-use std::evm::assert
 
 #[test]
 fn dependency_errors_block_codegen() {
-    assert(true)
+    assert!(true)
 }

@@ -56,7 +56,7 @@ fn test_revert_with_u256() uses (evm: mut Evm) {
 fn test_unwrap_ok() uses (evm: mut Evm) {
     let result = fallible_operation(ok: true)
     let val = result.unwrap()
-    assert(val == 42)
+    assert!(val == 42)
 }
 
 #[test(should_revert)]
@@ -79,7 +79,7 @@ fn fallible_with_u256_error(ok: bool) -> Result<u256, u256> {
 fn test_unwrap_primitive_ok() uses (evm: mut Evm) {
     let result = fallible_with_u256_error(ok: true)
     let val = result.unwrap()
-    assert(val == 1)
+    assert!(val == 1)
 }
 
 #[test(should_revert)]
@@ -147,7 +147,7 @@ fn fallible_with_struct_error(ok: bool) -> Result<Outer, u256> {
 fn test_unwrap_struct_ok() uses (evm: mut Evm) {
     let result = fallible_with_struct_error(ok: true)
     let val = result.unwrap()
-    assert(val == 1)
+    assert!(val == 1)
 }
 
 #[test(should_revert)]

@@ -19,7 +19,7 @@ fn test_with_block_custom_effect() {
         read()
     }
 
-    assert(out == 1)
+    assert!(out == 1)
 }
 
 #[test]
@@ -29,5 +29,5 @@ fn test_with_temp_block_custom_effect() {
         read()
     }
 
-    assert(out == 1)
+    assert!(out == 1)
 }

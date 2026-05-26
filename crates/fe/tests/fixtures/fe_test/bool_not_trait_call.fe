@@ -1,5 +1,4 @@
 use core::ops::Not
-use std::evm::effects::assert
 
 #[test]
 fn bool_not_trait_call() {
@@ -9,6 +8,6 @@ fn bool_not_trait_call() {
     let not_t = t.not()
     let not_f = f.not()
 
-    assert(not_t == false)
-    assert(not_f == true)
+    assert!(not_t == false)
+    assert!(not_f == true)
 }

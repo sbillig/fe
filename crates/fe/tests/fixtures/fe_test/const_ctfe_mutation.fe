@@ -1,4 +1,3 @@
-use std::evm::effects::assert
 
 enum Maybe {
     Some(usize),
@@ -97,23 +96,23 @@ const DIAGONAL_MATRIX_COW_SCORE: usize = diagonal_matrix_cow_score()
 
 #[test]
 fn test_const_ctfe_mutation_and_control_flow() {
-    assert(MUTATED_FIELDS == 7)
-    assert(WHILE_SUM == 8)
-    assert(WHILE_LET_PAYLOAD == 5)
-    assert(MATCH_PAYLOAD == 10)
+    assert!(MUTATED_FIELDS == 7)
+    assert!(WHILE_SUM == 8)
+    assert!(WHILE_LET_PAYLOAD == 5)
+    assert!(MATCH_PAYLOAD == 10)
 }
 
 #[test]
 fn test_const_ctfe_array_index_writes() {
-    assert(REWRITTEN_VALUES[0] == 1)
-    assert(REWRITTEN_VALUES[1] == 2)
-    assert(REWRITTEN_VALUES[2] == 9)
-    assert(REWRITTEN_VALUES[3] == 12)
+    assert!(REWRITTEN_VALUES[0] == 1)
+    assert!(REWRITTEN_VALUES[1] == 2)
+    assert!(REWRITTEN_VALUES[2] == 9)
+    assert!(REWRITTEN_VALUES[3] == 12)
 }
 
 #[test]
 fn test_const_ctfe_aggregate_copy_on_write() {
-    assert(REPEATED_INNER_ARRAY_COW_SCORE == 11)
-    assert(COPIED_LOCAL_ARRAY_COW_SCORE == 19)
-    assert(DIAGONAL_MATRIX_COW_SCORE == 10)
+    assert!(REPEATED_INNER_ARRAY_COW_SCORE == 11)
+    assert!(COPIED_LOCAL_ARRAY_COW_SCORE == 19)
+    assert!(DIAGONAL_MATRIX_COW_SCORE == 10)
 }

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, mem::size_of};
 
 use cranelift_entity::EntityRef;
 use hir::analysis::{
@@ -1345,6 +1345,82 @@ impl<'db> RmirEmitter<'db> {
         let ctor_elems = aggregate_ctor_elems_for_layout(self.db, layout, 3);
         self.lower_aggregate_values(bb, dst, ty, layout, &ctor_elems, &[ptr, len, size]);
         dst
+    }
+
+    fn lower_assert_terminator(
+        &mut self,
+        bb: RBlockId,
+        message: Option<hir::hir_def::StringId<'db>>,
+    ) -> RTerminator<'db> {
+        let payload = if let Some(message) = message {
+            solidity_error_string_payload(message.data(self.db).as_bytes())
+        } else {
+            solidity_panic_payload(0x01)
+        };
+        let payload_len = self.alloc_u256_const(bb, payload.len());
+        let allocated_len = self.alloc_u256_const(bb, payload.len().next_multiple_of(32));
+
+        let ptr = self.alloc_runtime_temp(
+            TyId::u256(self.db),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: ptr,
+                expr: RExpr::Builtin(crate::runtime::RuntimeBuiltin::Malloc {
+                    size: allocated_len,
+                }),
+            },
+        );
+
+        for (idx, chunk) in payload.chunks(32).enumerate() {
+            let addr = if idx == 0 {
+                ptr
+            } else {
+                let addr = self.alloc_runtime_temp(
+                    TyId::u256(self.db),
+                    RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
+                );
+                let offset = self.alloc_u256_const(bb, idx * 32);
+                self.push_stmt(
+                    bb,
+                    RStmt::Assign {
+                        dst: addr,
+                        expr: RExpr::Binary {
+                            op: BinOp::Arith(ArithBinOp::Add),
+                            lhs: ptr,
+                            rhs: offset,
+                        },
+                    },
+                );
+                addr
+            };
+            let word = self.alloc_runtime_temp(
+                TyId::u256(self.db),
+                RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: word,
+                    expr: RExpr::ConstScalar(ConstScalar::Int {
+                        bits: 256,
+                        signed: false,
+                        words: padded_word_bytes(chunk),
+                    }),
+                },
+            );
+            self.push_ignored_builtin(
+                bb,
+                crate::runtime::RuntimeBuiltin::Mstore { addr, value: word },
+            );
+        }
+
+        RTerminator::Revert {
+            offset: ptr,
+            len: payload_len,
+        }
     }
 
     fn alloc_u256_const(&mut self, bb: RBlockId, value: usize) -> RLocalId {
@@ -3862,6 +3938,7 @@ impl<'db> RmirEmitter<'db> {
                     default: default.map(|block| self.runtime_block(block)),
                 }
             }
+            NSTerminatorKind::Assert { message } => self.lower_assert_terminator(bb, *message),
             NSTerminatorKind::Return(value) => {
                 let ret_class = self.ret_class.clone();
                 RTerminator::Return(match ret_class {
@@ -5083,6 +5160,30 @@ fn word_scalar_class<'db>() -> ScalarClass<'db> {
         },
         role: ScalarRole::Plain,
     }
+}
+
+fn solidity_error_string_payload(bytes: &[u8]) -> Vec<u8> {
+    let padded_len = bytes.len().next_multiple_of(32);
+    let mut payload = Vec::with_capacity(4 + 64 + padded_len);
+    payload.extend([0x08, 0xc3, 0x79, 0xa0]);
+    push_abi_word_usize(&mut payload, 32);
+    push_abi_word_usize(&mut payload, bytes.len());
+    payload.extend(bytes);
+    payload.resize(4 + 64 + padded_len, 0);
+    payload
+}
+
+fn solidity_panic_payload(code: usize) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(36);
+    payload.extend([0x4e, 0x48, 0x7b, 0x71]);
+    push_abi_word_usize(&mut payload, code);
+    payload
+}
+
+fn push_abi_word_usize(out: &mut Vec<u8>, value: usize) {
+    let mut word = [0; 32];
+    word[32 - size_of::<usize>()..].copy_from_slice(&value.to_be_bytes());
+    out.extend(word);
 }
 
 fn padded_word_bytes(bytes: &[u8]) -> Vec<u8> {

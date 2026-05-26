@@ -1,4 +1,3 @@
-use std::evm::effects::assert
 
 const WORDS: [u256; 4] = [11, 22, 33, 44]
 
@@ -24,7 +23,7 @@ pub contract CodeArrayStore {
 #[test]
 fn test_code_backed_array_storage_copy() uses (evm: mut Evm) {
     let contract_addr = evm.create2<CodeArrayStore>(value: 0, args: (), salt: 0)
-    assert(contract_addr.inner != 0)
+    assert!(contract_addr.inner != 0)
 
     let sum: u256 = evm.call(
         addr: contract_addr,
@@ -32,5 +31,5 @@ fn test_code_backed_array_storage_copy() uses (evm: mut Evm) {
         value: 0,
         message: CodeArrayMsg::Sum {}
     )
-    assert(sum == 110)
+    assert!(sum == 110)
 }

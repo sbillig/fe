@@ -1,5 +1,4 @@
 use std::evm::{Address, Call, Create, Ctx, Evm, Mutex}
-use std::evm::effects::assert
 
 msg AMsg {
     #[selector = 1]
@@ -57,7 +56,7 @@ pub contract B {
                 message: AMsg::Callback { b: ctx.address() },
             )
             let post = guard.value
-            assert(post == pre)
+            assert!(post == pre)
             guard.unlock()
             post
         }
@@ -89,17 +88,17 @@ pub contract B {
 fn test_reentrancy_guard_mutex() uses (cr: mut Create, ca: mut Call, evm: mut Evm) {
     let a = cr.create2<A>(value: 0, args: (), salt: 1)
     let b = cr.create2<B>(value: 0, args: (), salt: 2)
-    assert(a.inner != 0)
-    assert(b.inner != 0)
+    assert!(a.inner != 0)
+    assert!(b.inner != 0)
     let gas = 100000
     let value = 0
 
     let x = evm.call(addr: b, gas, value, message: BMsg::Get {})
-    assert(x == 0)
+    assert!(x == 0)
 
     let y = evm.call(addr: a, gas, value, message: AMsg::Start { b: b })
-    assert(y == 1)
+    assert!(y == 1)
 
     let z = evm.call(addr: b, gas, value, message: BMsg::Protected {})
-    assert(z == 2)
+    assert!(z == 2)
 }

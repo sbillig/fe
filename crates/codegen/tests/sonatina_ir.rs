@@ -72,6 +72,24 @@ pub fn new_empty() -> Empty {
 }
 
 #[test]
+fn assert_macro_message_lowers_to_direct_revert_payload() {
+    let ir = with_top_mod_for_source(
+        "assert_macro_message_lowers_to_direct_revert_payload.fe",
+        r#"
+pub fn main() {
+    assert!(false, "boom")
+}
+"#,
+        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit"),
+    );
+
+    assert!(
+        ir.contains("evm_revert") && ir.contains("100.i256"),
+        "`assert!` with a message should lower to direct Solidity Error(string) revert data:\n{ir}"
+    );
+}
+
+#[test]
 fn sonatina_function_names_disambiguate_module_conflicts() {
     let ir = with_top_mod_for_source(
         "sonatina_function_names_disambiguate_module_conflicts.fe",

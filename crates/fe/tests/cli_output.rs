@@ -303,12 +303,12 @@ pub contract Test {
         Check { key, next, initialized } uses (store) {
             let mut cursor = key
             while cursor > next {
-                assert(!with (store.map) {
+                assert!(!with (store.map) {
                     nested(cursor)
                 })
                 cursor = cursor - 1
             }
-            assert(with (store.map) {
+            assert!(with (store.map) {
                 nested(next)
             } == initialized)
         }

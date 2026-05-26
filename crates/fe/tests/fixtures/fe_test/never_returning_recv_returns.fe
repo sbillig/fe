@@ -1,4 +1,4 @@
-use std::evm::{Evm, assert}
+use std::evm::Evm
 
 msg AbortMsg {
     #[selector = 0x01]
@@ -28,7 +28,7 @@ fn test_never_returning_recv_bytes()
 uses (evm: mut Evm)
 {
     let aborter = evm.create2<Aborter>(value: 0, args: (), salt: 0)
-    assert(aborter.inner != 0)
+    assert!(aborter.inner != 0)
 
     let returned: Bytes = evm.call(
         addr: aborter,
@@ -36,7 +36,7 @@ uses (evm: mut Evm)
         value: 0,
         message: AbortMsg::GetBytes {},
     )
-    assert(returned.len() == 0)
+    assert!(returned.len() == 0)
 }
 
 #[test(should_revert)]
@@ -44,7 +44,7 @@ fn test_never_returning_recv_scalar()
 uses (evm: mut Evm)
 {
     let aborter = evm.create2<Aborter>(value: 0, args: (), salt: 1)
-    assert(aborter.inner != 0)
+    assert!(aborter.inner != 0)
 
     let returned: u256 = evm.call(
         addr: aborter,
@@ -52,5 +52,5 @@ uses (evm: mut Evm)
         value: 0,
         message: AbortMsg::GetScalar {},
     )
-    assert(returned == 0)
+    assert!(returned == 0)
 }

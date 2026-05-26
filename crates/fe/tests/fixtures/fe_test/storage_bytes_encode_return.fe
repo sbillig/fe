@@ -1,4 +1,4 @@
-use std::evm::{Address, Call, Create, Evm, RawMem, StorageBytes, assert, decode_returndata, last_returndata, mem}
+use std::evm::{Address, Call, Create, Evm, RawMem, StorageBytes, decode_returndata, last_returndata, mem}
 
 type Blobs = StorageBytes<u256, 0, 1>
 
@@ -52,7 +52,7 @@ uses (evm: mut Evm)
 {
     let ptr = mem::alloc(4)
     evm.mstore(addr: ptr, value: (0x02 as u256) << 224)
-    assert(evm.raw_call(addr: addr, gas: 1000000, value: 0, args_offset: ptr, args_len: 4))
+    assert!(evm.raw_call(addr: addr, gas: 1000000, value: 0, args_offset: ptr, args_len: 4))
 
     let returned: Bytes = decode_returndata(last_returndata())
     returned
@@ -63,7 +63,7 @@ fn test_storage_bytes_encode_return_multi_word()
 uses (evm: mut Evm)
 {
     let blob = evm.create2<Blob>(value: 0, args: (), salt: 0)
-    assert(blob.inner != 0)
+    assert!(blob.inner != 0)
 
     evm.call(
         addr: blob,
@@ -73,10 +73,10 @@ uses (evm: mut Evm)
     )
 
     let returned = raw_get(addr: blob)
-    assert(returned.len() == 65)
-    assert(returned.byte_at(0) == 0x11)
-    assert(returned.byte_at(31) == 0x11)
-    assert(returned.byte_at(32) == 0x22)
-    assert(returned.byte_at(63) == 0x22)
-    assert(returned.byte_at(64) == 0x33)
+    assert!(returned.len() == 65)
+    assert!(returned.byte_at(0) == 0x11)
+    assert!(returned.byte_at(31) == 0x11)
+    assert!(returned.byte_at(32) == 0x22)
+    assert!(returned.byte_at(63) == 0x22)
+    assert!(returned.byte_at(64) == 0x33)
 }

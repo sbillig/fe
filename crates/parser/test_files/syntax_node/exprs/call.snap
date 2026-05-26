@@ -1,9 +1,9 @@
 ---
 source: crates/parser/tests/syntax_node.rs
 expression: node
-input_file: crates/parser/test_files/syntax_node/exprs/call.fe
+input_file: test_files/syntax_node/exprs/call.fe
 ---
-Root@0..290
+Root@0..324
   CallExpr@0..5
     PathExpr@0..3
       Path@0..3
@@ -270,43 +270,79 @@ Root@0..290
               Ident@186..187 "x"
       RParen@187..188 ")"
   Newline@188..190 "\n\n"
-  Comment@190..264 "// Ths should be pars ..."
-  Newline@264..265 "\n"
-  ParenExpr@265..289
-    LParen@265..266 "("
-    CallExpr@266..288
-      PathExpr@266..284
-        Path@266..284
-          PathSegment@266..284
-            Ident@266..269 "foo"
-            WhiteSpace@269..270 " "
-            GenericArgList@270..284
-              Lt@270..271 "<"
-              WhiteSpace@271..272 " "
-              TypeGenericArg@272..275
-                PathType@272..275
-                  Path@272..275
-                    PathSegment@272..275
-                      Ident@272..275 "i32"
-              Comma@275..276 ","
-              WhiteSpace@276..277 " "
-              TypeGenericArg@277..282
-                TupleType@277..282
-                  LParen@277..278 "("
-                  PathType@278..281
-                    Path@278..281
-                      PathSegment@278..281
-                        Ident@278..281 "u32"
-                  RParen@281..282 ")"
-              WhiteSpace@282..283 " "
-              Gt@283..284 ">"
-      WhiteSpace@284..285 " "
-      CallArgList@285..288
-        LParen@285..286 "("
-        CallArg@286..287
-          LitExpr@286..287
-            Lit@286..287
-              Int@286..287 "1"
-        RParen@287..288 ")"
-    RParen@288..289 ")"
-  Newline@289..290 "\n"
+  MacroCallExpr@190..200
+    PathExpr@190..196
+      Path@190..196
+        PathSegment@190..196
+          Ident@190..196 "assert"
+    Not@196..197 "!"
+    CallArgList@197..200
+      LParen@197..198 "("
+      CallArg@198..199
+        PathExpr@198..199
+          Path@198..199
+            PathSegment@198..199
+              Ident@198..199 "x"
+      RParen@199..200 ")"
+  Newline@200..201 "\n"
+  MacroCallExpr@201..222
+    PathExpr@201..207
+      Path@201..207
+        PathSegment@201..207
+          Ident@201..207 "assert"
+    Not@207..208 "!"
+    CallArgList@208..222
+      LParen@208..209 "("
+      CallArg@209..210
+        PathExpr@209..210
+          Path@209..210
+            PathSegment@209..210
+              Ident@209..210 "x"
+      Comma@210..211 ","
+      WhiteSpace@211..212 " "
+      CallArg@212..221
+        LitExpr@212..221
+          Lit@212..221
+            String@212..221 "\"message\""
+      RParen@221..222 ")"
+  Newline@222..224 "\n\n"
+  Comment@224..298 "// Ths should be pars ..."
+  Newline@298..299 "\n"
+  ParenExpr@299..323
+    LParen@299..300 "("
+    CallExpr@300..322
+      PathExpr@300..318
+        Path@300..318
+          PathSegment@300..318
+            Ident@300..303 "foo"
+            WhiteSpace@303..304 " "
+            GenericArgList@304..318
+              Lt@304..305 "<"
+              WhiteSpace@305..306 " "
+              TypeGenericArg@306..309
+                PathType@306..309
+                  Path@306..309
+                    PathSegment@306..309
+                      Ident@306..309 "i32"
+              Comma@309..310 ","
+              WhiteSpace@310..311 " "
+              TypeGenericArg@311..316
+                TupleType@311..316
+                  LParen@311..312 "("
+                  PathType@312..315
+                    Path@312..315
+                      PathSegment@312..315
+                        Ident@312..315 "u32"
+                  RParen@315..316 ")"
+              WhiteSpace@316..317 " "
+              Gt@317..318 ">"
+      WhiteSpace@318..319 " "
+      CallArgList@319..322
+        LParen@319..320 "("
+        CallArg@320..321
+          LitExpr@320..321
+            Lit@320..321
+              Int@320..321 "1"
+        RParen@321..322 ")"
+    RParen@322..323 ")"
+  Newline@323..324 "\n"

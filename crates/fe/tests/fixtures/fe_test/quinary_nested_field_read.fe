@@ -14,5 +14,5 @@ impl Data {
 #[test]
 fn test_read_nested_field_directly() {
     let data = Data::empty()
-    assert(data.values[0][0] == 0)
+    assert!(data.values[0][0] == 0)
 }

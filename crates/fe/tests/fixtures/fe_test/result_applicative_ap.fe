@@ -30,7 +30,7 @@ fn test_result_ap_codegen() {
     let f: Result<AddError, AddRight> = a.map(MakeAdder {})
     let out: Result<AddError, u256> = f.ap(Ok(22))
     match out {
-        Result::Ok(value) => assert(value == 42)
-        Result::Err(_) => assert(false)
+        Result::Ok(value) => assert!(value == 42)
+        Result::Err(_) => assert!(false)
     }
 }

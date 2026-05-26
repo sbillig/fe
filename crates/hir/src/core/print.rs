@@ -642,6 +642,15 @@ impl<'db> Expr<'db> {
                 )
             }
 
+            Expr::Assert(args) => {
+                let args_str = args
+                    .iter()
+                    .map(|arg| arg.pretty_print(db, body, indent))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("assert!({args_str})")
+            }
+
             Expr::MethodCall(receiver, method, generic_args, args) => {
                 let receiver_expr =
                     unwrap_partial_ref(receiver.data(db, body), "MethodCall::receiver");

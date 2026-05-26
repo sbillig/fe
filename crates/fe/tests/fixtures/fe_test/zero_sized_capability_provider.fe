@@ -41,5 +41,5 @@ fn test_zero_sized_capability_providers_are_zero_width() {
         }
     }
 
-    assert(total == 42)
+    assert!(total == 42)
 }

@@ -82,25 +82,25 @@ pub contract C {
 #[test]
 fn test_effect_handle_field_deref() uses (evm: mut Evm) {
     let c = evm.create2<C>(value: 0, args: (), salt: 34)
-    assert(c.inner != 0)
+    assert!(c.inner != 0)
 
     let seeded = evm.call(addr: c, gas: 100000, value: 0, message: Msg::SeedSlot {
         slot: 17,
         value: 123,
     })
-    assert(seeded == 123)
+    assert!(seeded == 123)
 
     let read = evm.call(addr: c, gas: 100000, value: 0, message: Msg::ReadViaHolder {
         slot: 17,
     })
-    assert(read == 123)
+    assert!(read == 123)
 
     let first = evm.call(addr: c, gas: 100000, value: 0, message: Msg::BumpMover { by: 7 })
-    assert(first == 7)
+    assert!(first == 7)
 
     let second = evm.call(addr: c, gas: 100000, value: 0, message: Msg::BumpMover { by: 5 })
-    assert(second == 12)
+    assert!(second == 12)
 
     let snap = evm.call(addr: c, gas: 100000, value: 0, message: Msg::SnapshotCell {})
-    assert(snap == 12)
+    assert!(snap == 12)
 }
