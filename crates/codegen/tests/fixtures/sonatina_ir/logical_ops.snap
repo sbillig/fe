@@ -51,13 +51,9 @@ func private %logical_ops() -> @layout_0 {
     block1:
         v1.i1 = call %logical_or -1.i8;
         v2.i1 = call %logical_and -1.i8;
-        v3.objref<@layout_0> = obj.alloc @layout_0;
-        v5.objref<i1> = obj.proj v3 0.i256;
-        obj.store v5 v1;
-        v7.objref<i1> = obj.proj v3 1.i256;
-        obj.store v7 v2;
-        v8.@layout_0 = obj.load v3;
-        return v8;
+        v5.@layout_0 = insert_value undef.@layout_0 0.i256 v1;
+        v7.@layout_0 = insert_value v5 1.i256 v2;
+        return v7;
 }
 
 func private %logical_or(v0.i8) -> i1 {

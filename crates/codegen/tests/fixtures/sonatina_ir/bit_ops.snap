@@ -29,19 +29,12 @@ func private %bit_ops(v0.i256, v1.i256) -> @layout_0 {
         v15.i256 = shl 8.i256 v13;
         v16.i256 = mload v2 i256;
         v18.i256 = shr 2.i256 v16;
-        v19.objref<@layout_0> = obj.alloc @layout_0;
-        v21.objref<i256> = obj.proj v19 0.i256;
-        obj.store v21 v6;
-        v23.objref<i256> = obj.proj v19 1.i256;
-        obj.store v23 v9;
-        v24.objref<i256> = obj.proj v19 2.i256;
-        obj.store v24 v12;
-        v26.objref<i256> = obj.proj v19 3.i256;
-        obj.store v26 v15;
-        v28.objref<i256> = obj.proj v19 4.i256;
-        obj.store v28 v18;
-        v29.@layout_0 = obj.load v19;
-        return v29;
+        v21.@layout_0 = insert_value undef.@layout_0 0.i256 v6;
+        v23.@layout_0 = insert_value v21 1.i256 v9;
+        v24.@layout_0 = insert_value v23 2.i256 v12;
+        v26.@layout_0 = insert_value v24 3.i256 v15;
+        v28.@layout_0 = insert_value v26 4.i256 v18;
+        return v28;
 }
 
 func private %main() -> i256 {
