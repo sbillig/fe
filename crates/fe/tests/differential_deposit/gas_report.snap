@@ -5,20 +5,20 @@ expression: report
 bytecode size
 path         fe-O2        sol     sol-IR    fe vs sol-IR
 ------------------------------------------------------------
-init          4993       4819       3082  +1911 (+62.0%)
-runtime       4829       4445       2844  +1985 (+69.8%)
+init          4985       4819       3082  +1903 (+61.7%)
+runtime       4821       4445       2844  +1977 (+69.5%)
 
 deployment gas
 path        fe-O2        sol     sol-IR      fe vs sol-IR
 -------------------------------------------------------------
-deploy    1792376    1738847    1379411  +412965 (+29.9%)
+deploy    1790646    1738847    1379411  +411235 (+29.8%)
 
 call gas
 path                            fe-O2        sol     sol-IR   fe vs sol-IR
 ------------------------------------------------------------------------------
-supportsInterface(erc165)       21663      21603      21600    +63 (+0.3%)
-supportsInterface(deposit)      21691      21641      21600    +91 (+0.4%)
-supportsInterface(unknown)      21678      21641      21600    +78 (+0.4%)
+supportsInterface(erc165)       21641      21603      21600    +41 (+0.2%)
+supportsInterface(deposit)      21669      21641      21600    +69 (+0.3%)
+supportsInterface(unknown)      21656      21641      21600    +56 (+0.3%)
 get_deposit_root(empty)        107925     117558     109178  -1253 (-1.1%)
 get_deposit_count(empty)        23793      24510      24099   -306 (-1.3%)
 deposit#0                       81539      84626      81089   +450 (+0.6%)
@@ -30,4 +30,4 @@ get_deposit_count(after#1)      23793      24510      24099   -306 (-1.3%)
 deposit#2                       47327      50414      46877   +450 (+1.0%)
 get_deposit_root(after#2)      107951     117582     109170  -1219 (-1.1%)
 get_deposit_count(after#2)      23793      24510      24099   -306 (-1.3%)
-TOTAL                          787804     838656     792487  -4683 (-0.6%)
+TOTAL                          787738     838656     792487  -4749 (-0.6%)

@@ -226,23 +226,34 @@ func inline(always) private %decode_from(v0.@layout_1, v1.i256) {
         return;
 }
 
+func inline(always) private %decode_from_checked_head(v0.@layout_1, v1.i256, v2.i256) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        call %decode_from v0 v7;
+        return;
+}
+
 func inline(always) private %decode_runtime_args(v0.objref<@layout_3>) {
     block0:
         v1.*i256 = alloca i256;
         v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
         jump block1;
 
     block1:
-        v5.@layout_1 = call %input;
-        v7.i256 = call %len v5;
-        mstore v1 v7 i256;
-        v8.i256 = mload v1 i256;
-        mstore v2 v8 i256;
-        v9.i256 = mload v2 i256;
-        v10.i1 = gt 4.i256 v9;
-        br v10 block2 block3;
+        v4.@layout_1 = call %input;
+        v6.i256 = call %len v4;
+        mstore v1 v6 i256;
+        mstore v2 4.i256 i256;
+        br 0.i1 block2 block5;
 
     block2:
         call %abort;
@@ -252,35 +263,16 @@ func inline(always) private %decode_runtime_args(v0.objref<@layout_3>) {
         jump block4;
 
     block4:
-        br 1.i1 block5 block6;
-
-    block5:
-        mstore v3 4.i256 i256;
-        br 0.i1 block8 block11;
-
-    block6:
-        jump block7;
-
-    block7:
-        call %decode_from v5 4.i256;
+        v11.i256 = mload v1 i256;
+        call %decode_from_checked_head v4 4.i256 v11;
         return;
 
-    block8:
-        call %abort;
-        unreachable;
-
-    block9:
-        jump block10;
-
-    block10:
-        jump block7;
-
-    block11:
-        v17.i256 = mload v1 i256;
-        mstore v4 v17 i256;
-        v19.i256 = mload v4 i256;
-        v20.i1 = gt 4.i256 v19;
-        br v20 block8 block9;
+    block5:
+        v13.i256 = mload v1 i256;
+        mstore v3 v13 i256;
+        v15.i256 = mload v3 i256;
+        v16.i1 = gt 4.i256 v15;
+        br v16 block2 block3;
 }
 
 func private %encode(v0.i256, v1.objref<@layout_0>) {

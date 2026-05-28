@@ -181,6 +181,11 @@ pub trait AbiSize {
 
 pub trait AbiSpan<A: Abi>: AbiSize {
     fn payload_end<I: ByteInput>(_: I, base: u256, pos: u256) -> u256
+
+    fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
+        let _ = input_len
+        Self::payload_end(input, base: base, pos: pos)
+    }
 }
 
 pub trait Decode<A: Abi> {
@@ -191,6 +196,14 @@ pub trait Decode<A: Abi> {
     {
         let mut d = A::decoder_with_base(input, pos)
         Self::decode_payload(mut d)
+    }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let _ = input_len
+        Self::decode_from(input, pos)
     }
 
     fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
@@ -226,6 +239,34 @@ pub const fn abi_payload_head_size<T: AbiSize>() -> u256 {
 
 pub const fn abi_single_root_head_size<T: AbiSize>() -> u256 {
     abi_field_head_size<T>()
+}
+
+#[inline(always)]
+pub fn checked_frame_end<A: Abi>(_ pos: u256, _ head_size: u256, _ input_len: u256) -> u256 {
+    let end = pos + head_size
+    if end < pos || end > input_len {
+        A::decode_error()
+    }
+    end
+}
+
+#[inline(always)]
+pub fn checked_tail<A: Abi>(_ base: u256, _ tail_rel: u256) -> u256 {
+    let tail_at = base + tail_rel
+    if tail_at < base {
+        A::decode_error()
+    }
+    tail_at
+}
+
+#[inline(always)]
+pub fn decode_frame_from<A: Abi, T, I>(_ input: I, _ pos: u256, _ input_len: u256) -> T
+    where T: Decode<A> + AbiSize,
+          I: ByteInput,
+          A::Decoder<I>: AbiDecoder<A>
+{
+    checked_frame_end<A>(pos, T::HEAD_SIZE, input_len)
+    T::decode_from_checked_head(input, pos, input_len)
 }
 
 pub fn abi_payload_size<T: AbiSize>(_ value: T) -> u256 {
@@ -300,17 +341,27 @@ pub fn decode_field_from<A: Abi, T, I>(_ input: I, base: u256, head_pos: u256) -
 }
 
 #[inline(always)]
-pub fn decode_field_from_with_input_len<A: Abi, T, I>(_ input: I, base: u256, head_pos: u256, input_len: u256) -> T
+pub fn decode_field_from_checked_head<A: Abi, T, I>(_ input: I, base: u256, head_pos: u256, input_len: u256) -> T
     where T: Decode<A> + AbiSize,
           I: ByteInput,
           A::Decoder<I>: AbiDecoder<A>
 {
     if T::IS_DYNAMIC {
         let tail_rel = input.word_at(head_pos)
-        return T::decode_from_with_input_len(input, base + tail_rel, input_len)
+        let tail_at = checked_tail<A>(base, tail_rel)
+        return T::decode_from_with_input_len(input, tail_at, input_len)
     }
 
     T::decode_from(input, head_pos)
+}
+
+#[inline(always)]
+pub fn decode_field_from_with_input_len<A: Abi, T, I>(_ input: I, base: u256, head_pos: u256, input_len: u256) -> T
+    where T: Decode<A> + AbiSize,
+          I: ByteInput,
+          A::Decoder<I>: AbiDecoder<A>
+{
+    decode_field_from_checked_head<A, T, I>(input, base: base, head_pos: head_pos, input_len: input_len)
 }
 
 fn decode_field_at<A: Abi, T, D>(d: mut D, pos: u256) -> T
@@ -443,11 +494,37 @@ pub fn abi_field_end<A: Abi, T, I>(_ input: I, base: u256, pos: u256) -> u256
     T::payload_end(input, base: base, pos: pos)
 }
 
+pub fn abi_field_end_with_input_len<A: Abi, T, I>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256
+    where T: AbiSpan<A> + AbiSize,
+          I: ByteInput
+{
+    if T::IS_DYNAMIC {
+        let tail_rel = input.word_at(pos)
+        let tail_at = checked_tail<A>(base, tail_rel)
+        checked_frame_end<A>(tail_at, T::HEAD_SIZE, input_len)
+        return T::payload_end_with_input_len(input, base: tail_at, pos: tail_at, input_len: input_len)
+    }
+
+    T::payload_end_with_input_len(input, base: base, pos: pos, input_len: input_len)
+}
+
 fn round_up_words(_ len: u256) -> u256 {
     if len == 0 {
         return 0
     }
     (((len - 1) / 32) + 1) * 32
+}
+
+#[inline(always)]
+fn checked_dynamic_payload_after_head<A: Abi, I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> (u256, u256) {
+    let data_len = input.word_at(pos)
+    let payload_size = 32 + round_up_words(data_len)
+    let payload_end = pos + payload_size
+    if payload_end < pos || payload_end > input_len {
+        A::decode_error()
+    }
+
+    (data_len, payload_size)
 }
 
 #[inline(always)]
@@ -463,14 +540,7 @@ fn checked_dynamic_payload_with_input_len<A: Abi, I: ByteInput>(_ input: I, _ po
         A::decode_error()
     }
 
-    let data_len = input.word_at(pos)
-    let payload_size = 32 + round_up_words(data_len)
-    let payload_end = pos + payload_size
-    if payload_end < pos || payload_end > input_len {
-        A::decode_error()
-    }
-
-    (data_len, payload_size)
+    checked_dynamic_payload_after_head<A, I>(input, pos, input_len)
 }
 
 #[inline(always)]
@@ -500,6 +570,22 @@ fn packed_string_len(_ word: u256) -> u256 {
         value = value >> 8
     }
     len
+}
+
+fn decode_string_payload_after_head<A: Abi, I: ByteInput, const N: usize>(_ input: I, _ pos: u256, _ data_len: u256) -> String<N> {
+    let data_start = pos + 32
+    if data_len > 32 || data_len > (N as u256) {
+        A::decode_error()
+    }
+
+    let packed = if data_len == 0 {
+        0
+    } else {
+        let shift = if data_len >= 32 { 0 } else { (32 - data_len) * 8 }
+        input.word_at(data_start) >> shift
+    }
+
+    packed as String<N>
 }
 
 pub struct BytesView<I> {
@@ -1219,22 +1305,40 @@ impl<A: Abi> AbiSpan<A> for u256 {
 
 impl<A: Abi, const N: usize> AbiSpan<A> for String<N> {
     fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
-        let data_len = input.word_at(pos)
-        pos + 32 + round_up_words(data_len)
+        let input_len = input.len()
+        Self::payload_end_with_input_len(input, base: base, pos: pos, input_len: input_len)
+    }
+
+    fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
+        let _ = base
+        let payload = checked_dynamic_payload_with_input_len<A, I>(input, pos, input_len)
+        pos + payload.1
     }
 }
 
 impl<A: Abi> AbiSpan<A> for Bytes {
     fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
-        let data_len = input.word_at(pos)
-        pos + 32 + round_up_words(data_len)
+        let input_len = input.len()
+        Self::payload_end_with_input_len(input, base: base, pos: pos, input_len: input_len)
+    }
+
+    fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
+        let _ = base
+        let payload = checked_dynamic_payload_with_input_len<A, I>(input, pos, input_len)
+        pos + payload.1
     }
 }
 
 impl<A: Abi> AbiSpan<A> for DynString {
     fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
-        let data_len = input.word_at(pos)
-        pos + 32 + round_up_words(data_len)
+        let input_len = input.len()
+        Self::payload_end_with_input_len(input, base: base, pos: pos, input_len: input_len)
+    }
+
+    fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
+        let _ = base
+        let payload = checked_dynamic_payload_with_input_len<A, I>(input, pos, input_len)
+        pos + payload.1
     }
 }
 
@@ -1355,21 +1459,33 @@ impl<A: Abi> Encode<A> for u256 {
 impl<A: Abi, const N: usize> Decode<A> for String<N> {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         let payload_at = d.pos()
-        let data_len = d.read_word()
-        let data_start = payload_at + 32
+        let input = d.input()
+        let payload = checked_dynamic_payload_with_input_len<A, D::Input>(input, payload_at, input.len())
+        decode_string_payload_after_head<A, D::Input, N>(input, payload_at, payload.0)
+    }
 
-        if data_len > 32 || data_len > (N as u256) {
-            A::decode_error()
-        }
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let input_len = input.len()
+        Self::decode_from_with_input_len(input, pos, input_len)
+    }
 
-        let packed = if data_len == 0 {
-            0
-        } else {
-            let shift = if data_len >= 32 { 0 } else { (32 - data_len) * 8 }
-            d.peek_word(data_start) >> shift
-        }
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let payload = checked_dynamic_payload_after_head<A, I>(input, pos, input_len)
+        decode_string_payload_after_head<A, I, N>(input, pos, payload.0)
+    }
 
-        packed as String<N>
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let payload = checked_dynamic_payload_with_input_len<A, I>(input, pos, input_len)
+        decode_string_payload_after_head<A, I, N>(input, pos, payload.0)
     }
 }
 
@@ -1394,21 +1510,16 @@ impl<A: Abi, const N: usize> Encode<A> for String<N> {
 impl<A: Abi> Decode<A> for DynString {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         let payload_at = d.pos()
-        let data_len = d.read_word()
-        let payload_size = 32 + round_up_words(data_len)
-        let payload_end = payload_at + payload_size
         let input = d.input()
-        if payload_end < payload_at || payload_end > input.len() {
-            A::decode_error()
-        }
-        let data_ptr = d.alloc(payload_size)
+        let payload: (u256, u256) = checked_dynamic_payload_with_input_len<A, D::Input>(input, payload_at, input.len())
+        let data_ptr = d.alloc(payload.1)
 
-        input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: payload_at, len: payload_size)
+        input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: payload_at, len: payload.1)
 
         DynString {
             data: data_ptr,
-            len: data_len,
-            size: payload_size,
+            len: payload.0,
+            size: payload.1,
         }
     }
 
@@ -1417,6 +1528,35 @@ impl<A: Abi> Decode<A> for DynString {
         where A::Decoder<I>: AbiDecoder<A>
     {
         let payload: (u256, u256, u256) = copy_dynamic_payload_from<A, I>(input, pos)
+
+        DynString {
+            data: payload.0,
+            len: payload.1,
+            size: payload.2,
+        }
+    }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let payload: (u256, u256) = checked_dynamic_payload_after_head<A, I>(input, pos, input_len)
+        let data_ptr = A::alloc(payload.1)
+
+        input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: pos, len: payload.1)
+
+        DynString {
+            data: data_ptr,
+            len: payload.0,
+            size: payload.1,
+        }
+    }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let payload: (u256, u256, u256) = copy_dynamic_payload_from_with_input_len<A, I>(input, pos, input_len)
 
         DynString {
             data: payload.0,
@@ -1797,18 +1937,13 @@ impl<A: Abi> Encode<A> for () {
 impl<A: Abi> Decode<A> for Bytes {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         let payload_at = d.pos()
-        let data_len = d.read_word()
-        let payload_size = 32 + round_up_words(data_len)
-        let payload_end = payload_at + payload_size
         let input = d.input()
-        if payload_end < payload_at || payload_end > input.len() {
-            A::decode_error()
-        }
-        let data_ptr = d.alloc(payload_size)
+        let payload: (u256, u256) = checked_dynamic_payload_with_input_len<A, D::Input>(input, payload_at, input.len())
+        let data_ptr = d.alloc(payload.1)
 
-        input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: payload_at, len: payload_size)
+        input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: payload_at, len: payload.1)
 
-        Bytes::from_abi_tail(data: data_ptr, len: data_len, size: payload_size)
+        Bytes::from_abi_tail(data: data_ptr, len: payload.0, size: payload.1)
     }
 
     #[inline(always)]
@@ -1818,6 +1953,18 @@ impl<A: Abi> Decode<A> for Bytes {
         let payload: (u256, u256, u256) = copy_dynamic_payload_from<A, I>(input, pos)
 
         Bytes::from_abi_tail(data: payload.0, len: payload.1, size: payload.2)
+    }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let payload: (u256, u256) = checked_dynamic_payload_after_head<A, I>(input, pos, input_len)
+        let data_ptr = A::alloc(payload.1)
+
+        input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: pos, len: payload.1)
+
+        Bytes::from_abi_tail(data: data_ptr, len: payload.0, size: payload.1)
     }
 
     #[inline(always)]
@@ -1846,7 +1993,7 @@ impl<A: Abi> Encode<A> for Bytes {
     }
 }
 
-fn dyn_array_payload_end_scan<A: Abi, T, I>(_ input: I, elems_base: u256, head_end: u256, elem_count: u256) -> u256
+fn dyn_array_payload_end_scan_with_input_len<A: Abi, T, I>(_ input: I, elems_base: u256, head_end: u256, elem_count: u256, input_len: u256) -> u256
     where T: AbiSpan<A> + AbiSize,
           I: ByteInput
 {
@@ -1854,27 +2001,32 @@ fn dyn_array_payload_end_scan<A: Abi, T, I>(_ input: I, elems_base: u256, head_e
     let mut end = head_end
     let mut i: u256 = 0
     while i < elem_count {
-        end = max_u256(a: end, b: abi_field_end<A, T, I>(input, base: elems_base, pos: head_pos))
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T, I>(input, base: elems_base, pos: head_pos, input_len: input_len))
         head_pos += abi_field_head_size<T>()
         i += 1
     }
     end
 }
 
-fn dyn_array_payload_end<A: Abi, T, I>(_ input: I, tail_at: u256, elem_count: u256) -> u256
+fn dyn_array_payload_end_with_input_len<A: Abi, T, I>(_ input: I, tail_at: u256, elem_count: u256, input_len: u256) -> u256
     where T: AbiSpan<A> + AbiSize,
           I: ByteInput
 {
     let elems_base = tail_at + 32
     let head_size = elem_count * abi_field_head_size<T>()
+    if elems_base < tail_at || (abi_field_head_size<T>() != 0 && head_size / abi_field_head_size<T>() != elem_count) {
+        A::decode_error()
+    }
+
     let head_end = elems_base + head_size
+    if head_end < elems_base || head_end > input_len {
+        A::decode_error()
+    }
 
     if elem_count == 0 || !T::IS_DYNAMIC {
         return head_end
     }
 
-    // Fast path: prove that each tail starts after the head and after the
-    // previous element ends. Non-canonical layouts fall back to a max scan.
     let mut prev_offset = head_size
     let mut prev_end = head_end
     let mut i: u256 = 0
@@ -1882,16 +2034,16 @@ fn dyn_array_payload_end<A: Abi, T, I>(_ input: I, tail_at: u256, elem_count: u2
         let head_pos = elems_base + (i * abi_field_head_size<T>())
         let offset = input.word_at(head_pos)
         if offset < prev_offset || offset % 32 != 0 {
-            return dyn_array_payload_end_scan<A, T, I>(input, elems_base: elems_base, head_end: head_end, elem_count: elem_count)
+            return dyn_array_payload_end_scan_with_input_len<A, T, I>(input, elems_base: elems_base, head_end: head_end, elem_count: elem_count, input_len: input_len)
         }
 
         let tail_at = elems_base + offset
         if tail_at < elems_base || prev_end > tail_at {
-            return dyn_array_payload_end_scan<A, T, I>(input, elems_base: elems_base, head_end: head_end, elem_count: elem_count)
+            return dyn_array_payload_end_scan_with_input_len<A, T, I>(input, elems_base: elems_base, head_end: head_end, elem_count: elem_count, input_len: input_len)
         }
 
         prev_offset = offset
-        prev_end = abi_field_end<A, T, I>(input, base: elems_base, pos: head_pos)
+        prev_end = abi_field_end_with_input_len<A, T, I>(input, base: elems_base, pos: head_pos, input_len: input_len)
         i += 1
     }
 
@@ -1903,12 +2055,11 @@ impl<A: Abi, T> Decode<A> for DynArray<T>
 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         let payload_at = d.pos()
-        let elem_count = d.read_word()
         let input = d.input()
-        let payload_end = dyn_array_payload_end<A, T, D::Input>(input, tail_at: payload_at, elem_count: elem_count)
-        if payload_end < payload_at || payload_end > input.len() {
-            A::decode_error()
-        }
+        let input_len = input.len()
+        checked_frame_end<A>(payload_at, Self::HEAD_SIZE, input_len)
+        let elem_count = input.word_at(payload_at)
+        let payload_end = dyn_array_payload_end_with_input_len<A, T, D::Input>(input, tail_at: payload_at, elem_count: elem_count, input_len: input_len)
         let payload_size = payload_end - payload_at
         let data_ptr = d.alloc(payload_size)
 
@@ -1926,16 +2077,15 @@ impl<A: Abi, T> Decode<A> for DynArray<T>
         where A::Decoder<I>: AbiDecoder<A>
     {
         let input_len = input.len()
-        let len_end = pos + 32
-        if len_end < pos || len_end > input_len {
-            A::decode_error()
-        }
+        decode_frame_from<A, Self, I>(input, pos, input_len)
+    }
 
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
         let elem_count = input.word_at(pos)
-        let payload_end = dyn_array_payload_end<A, T, I>(input, tail_at: pos, elem_count: elem_count)
-        if payload_end < pos || payload_end > input_len {
-            A::decode_error()
-        }
+        let payload_end = dyn_array_payload_end_with_input_len<A, T, I>(input, tail_at: pos, elem_count: elem_count, input_len: input_len)
 
         let payload_size = payload_end - pos
         let data_ptr = A::alloc(payload_size)
@@ -1947,6 +2097,13 @@ impl<A: Abi, T> Decode<A> for DynArray<T>
             len: elem_count,
             size: payload_size,
         }
+    }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        decode_frame_from<A, Self, I>(input, pos, input_len)
     }
 }
 
@@ -1972,8 +2129,15 @@ impl<A: Abi, T> AbiSpan<A> for DynArray<T>
     where T: AbiSpan<A> + AbiSize
 {
     fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let input_len = input.len()
+        Self::payload_end_with_input_len(input, base: base, pos: pos, input_len: input_len)
+    }
+
+    fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
+        let _ = base
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
         let elem_count = input.word_at(pos)
-        dyn_array_payload_end<A, T, I>(input, tail_at: pos, elem_count: elem_count)
+        dyn_array_payload_end_with_input_len<A, T, I>(input, tail_at: pos, elem_count: elem_count, input_len: input_len)
     }
 }
 
@@ -1991,6 +2155,22 @@ impl<A: Abi, T0> Decode<A> for (T0,)
     {
         let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: pos)
         (v0,)
+    }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let v0: T0 = decode_field_from_checked_head<A, T0, I>(input, base: pos, head_pos: pos, input_len: input_len)
+        (v0,)
+    }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        Self::decode_from_checked_head(input, pos, input_len)
     }
 }
 
@@ -2019,6 +2199,12 @@ impl<A: Abi, T0> AbiSpan<A> for (T0,)
     fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
         abi_field_end<A, T0, I>(input, base: pos, pos: pos)
     }
+
+    fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
+        let _ = base
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        abi_field_end_with_input_len<A, T0, I>(input, base: pos, pos: pos, input_len: input_len)
+    }
 }
 
 impl<A: Abi, T0, T1> Decode<A> for (T0, T1)
@@ -2039,6 +2225,25 @@ impl<A: Abi, T0, T1> Decode<A> for (T0, T1)
         head_pos += abi_field_head_size<T0>()
         let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: head_pos)
         (v0, v1)
+    }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let mut head_pos = pos
+        let v0: T0 = decode_field_from_checked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T0>()
+        let v1: T1 = decode_field_from_checked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        (v0, v1)
+    }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        Self::decode_from_checked_head(input, pos, input_len)
     }
 }
 
@@ -2075,6 +2280,15 @@ impl<A: Abi, T0, T1> AbiSpan<A> for (T0, T1)
         end = max_u256(a: end, b: abi_field_end<A, T1, I>(input, base: pos, pos: pos + abi_field_head_size<T0>()))
         end
     }
+
+    fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
+        let _ = base
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        let mut end = pos + abi_field_head_size<T0>() + abi_field_head_size<T1>()
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T0, I>(input, base: pos, pos: pos, input_len: input_len))
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T1, I>(input, base: pos, pos: pos + abi_field_head_size<T0>(), input_len: input_len))
+        end
+    }
 }
 
 impl<A: Abi, T0, T1, T2> Decode<A> for (T0, T1, T2)
@@ -2098,6 +2312,27 @@ impl<A: Abi, T0, T1, T2> Decode<A> for (T0, T1, T2)
         head_pos += abi_field_head_size<T1>()
         let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: head_pos)
         (v0, v1, v2)
+    }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let mut head_pos = pos
+        let v0: T0 = decode_field_from_checked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T0>()
+        let v1: T1 = decode_field_from_checked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T1>()
+        let v2: T2 = decode_field_from_checked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        (v0, v1, v2)
+    }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        Self::decode_from_checked_head(input, pos, input_len)
     }
 }
 
@@ -2142,6 +2377,18 @@ impl<A: Abi, T0, T1, T2> AbiSpan<A> for (T0, T1, T2)
         end = max_u256(a: end, b: abi_field_end<A, T2, I>(input, base: pos, pos: field2))
         end
     }
+
+    fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
+        let _ = base
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        let field1 = pos + abi_field_head_size<T0>()
+        let field2 = field1 + abi_field_head_size<T1>()
+        let mut end = field2 + abi_field_head_size<T2>()
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T0, I>(input, base: pos, pos: pos, input_len: input_len))
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T1, I>(input, base: pos, pos: field1, input_len: input_len))
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T2, I>(input, base: pos, pos: field2, input_len: input_len))
+        end
+    }
 }
 
 impl<A: Abi, T0, T1, T2, T3> Decode<A> for (T0, T1, T2, T3)
@@ -2168,6 +2415,29 @@ impl<A: Abi, T0, T1, T2, T3> Decode<A> for (T0, T1, T2, T3)
         head_pos += abi_field_head_size<T2>()
         let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: head_pos)
         (v0, v1, v2, v3)
+    }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let mut head_pos = pos
+        let v0: T0 = decode_field_from_checked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T0>()
+        let v1: T1 = decode_field_from_checked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T1>()
+        let v2: T2 = decode_field_from_checked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T2>()
+        let v3: T3 = decode_field_from_checked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        (v0, v1, v2, v3)
+    }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        Self::decode_from_checked_head(input, pos, input_len)
     }
 }
 
@@ -2223,6 +2493,20 @@ impl<A: Abi, T0, T1, T2, T3> AbiSpan<A> for (T0, T1, T2, T3)
         end = max_u256(a: end, b: abi_field_end<A, T3, I>(input, base: pos, pos: field3))
         end
     }
+
+    fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
+        let _ = base
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        let field1 = pos + abi_field_head_size<T0>()
+        let field2 = field1 + abi_field_head_size<T1>()
+        let field3 = field2 + abi_field_head_size<T2>()
+        let mut end = field3 + abi_field_head_size<T3>()
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T0, I>(input, base: pos, pos: pos, input_len: input_len))
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T1, I>(input, base: pos, pos: field1, input_len: input_len))
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T2, I>(input, base: pos, pos: field2, input_len: input_len))
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T3, I>(input, base: pos, pos: field3, input_len: input_len))
+        end
+    }
 }
 
 impl<A: Abi, T0, T1, T2, T3, T4> Decode<A> for (T0, T1, T2, T3, T4)
@@ -2258,6 +2542,31 @@ impl<A: Abi, T0, T1, T2, T3, T4> Decode<A> for (T0, T1, T2, T3, T4)
         head_pos += abi_field_head_size<T3>()
         let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: head_pos)
         (v0, v1, v2, v3, v4)
+    }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let mut head_pos = pos
+        let v0: T0 = decode_field_from_checked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T0>()
+        let v1: T1 = decode_field_from_checked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T1>()
+        let v2: T2 = decode_field_from_checked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T2>()
+        let v3: T3 = decode_field_from_checked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T3>()
+        let v4: T4 = decode_field_from_checked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        (v0, v1, v2, v3, v4)
+    }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        Self::decode_from_checked_head(input, pos, input_len)
     }
 }
 
@@ -2338,6 +2647,33 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5> Decode<A> for (T0, T1, T2, T3, T4, T5)
         head_pos += abi_field_head_size<T4>()
         let v5: T5 = decode_field_from<A, T5, I>(input, base: pos, head_pos: head_pos)
         (v0, v1, v2, v3, v4, v5)
+    }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let mut head_pos = pos
+        let v0: T0 = decode_field_from_checked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T0>()
+        let v1: T1 = decode_field_from_checked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T1>()
+        let v2: T2 = decode_field_from_checked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T2>()
+        let v3: T3 = decode_field_from_checked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T3>()
+        let v4: T4 = decode_field_from_checked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T4>()
+        let v5: T5 = decode_field_from_checked_head<A, T5, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        (v0, v1, v2, v3, v4, v5)
+    }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        Self::decode_from_checked_head(input, pos, input_len)
     }
 }
 
@@ -2427,6 +2763,35 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Decode<A> for (T0, T1, T2, T3, T4, T5, 
         head_pos += abi_field_head_size<T5>()
         let v6: T6 = decode_field_from<A, T6, I>(input, base: pos, head_pos: head_pos)
         (v0, v1, v2, v3, v4, v5, v6)
+    }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let mut head_pos = pos
+        let v0: T0 = decode_field_from_checked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T0>()
+        let v1: T1 = decode_field_from_checked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T1>()
+        let v2: T2 = decode_field_from_checked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T2>()
+        let v3: T3 = decode_field_from_checked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T3>()
+        let v4: T4 = decode_field_from_checked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T4>()
+        let v5: T5 = decode_field_from_checked_head<A, T5, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T5>()
+        let v6: T6 = decode_field_from_checked_head<A, T6, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        (v0, v1, v2, v3, v4, v5, v6)
+    }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        Self::decode_from_checked_head(input, pos, input_len)
     }
 }
 
@@ -2525,6 +2890,37 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Decode<A> for (T0, T1, T2, T3, T4, 
         head_pos += abi_field_head_size<T6>()
         let v7: T7 = decode_field_from<A, T7, I>(input, base: pos, head_pos: head_pos)
         (v0, v1, v2, v3, v4, v5, v6, v7)
+    }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let mut head_pos = pos
+        let v0: T0 = decode_field_from_checked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T0>()
+        let v1: T1 = decode_field_from_checked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T1>()
+        let v2: T2 = decode_field_from_checked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T2>()
+        let v3: T3 = decode_field_from_checked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T3>()
+        let v4: T4 = decode_field_from_checked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T4>()
+        let v5: T5 = decode_field_from_checked_head<A, T5, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T5>()
+        let v6: T6 = decode_field_from_checked_head<A, T6, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T6>()
+        let v7: T7 = decode_field_from_checked_head<A, T7, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        (v0, v1, v2, v3, v4, v5, v6, v7)
+    }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        Self::decode_from_checked_head(input, pos, input_len)
     }
 }
 
@@ -2632,6 +3028,39 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Decode<A> for (T0, T1, T2, T3, 
         head_pos += abi_field_head_size<T7>()
         let v8: T8 = decode_field_from<A, T8, I>(input, base: pos, head_pos: head_pos)
         (v0, v1, v2, v3, v4, v5, v6, v7, v8)
+    }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let mut head_pos = pos
+        let v0: T0 = decode_field_from_checked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T0>()
+        let v1: T1 = decode_field_from_checked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T1>()
+        let v2: T2 = decode_field_from_checked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T2>()
+        let v3: T3 = decode_field_from_checked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T3>()
+        let v4: T4 = decode_field_from_checked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T4>()
+        let v5: T5 = decode_field_from_checked_head<A, T5, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T5>()
+        let v6: T6 = decode_field_from_checked_head<A, T6, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T6>()
+        let v7: T7 = decode_field_from_checked_head<A, T7, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T7>()
+        let v8: T8 = decode_field_from_checked_head<A, T8, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        (v0, v1, v2, v3, v4, v5, v6, v7, v8)
+    }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        Self::decode_from_checked_head(input, pos, input_len)
     }
 }
 
@@ -2749,6 +3178,41 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Decode<A>
         head_pos += abi_field_head_size<T8>()
         let v9: T9 = decode_field_from<A, T9, I>(input, base: pos, head_pos: head_pos)
         (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9)
+    }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let mut head_pos = pos
+        let v0: T0 = decode_field_from_checked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T0>()
+        let v1: T1 = decode_field_from_checked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T1>()
+        let v2: T2 = decode_field_from_checked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T2>()
+        let v3: T3 = decode_field_from_checked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T3>()
+        let v4: T4 = decode_field_from_checked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T4>()
+        let v5: T5 = decode_field_from_checked_head<A, T5, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T5>()
+        let v6: T6 = decode_field_from_checked_head<A, T6, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T6>()
+        let v7: T7 = decode_field_from_checked_head<A, T7, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T7>()
+        let v8: T8 = decode_field_from_checked_head<A, T8, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T8>()
+        let v9: T9 = decode_field_from_checked_head<A, T9, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9)
+    }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        Self::decode_from_checked_head(input, pos, input_len)
     }
 }
 
@@ -2876,6 +3340,43 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Decode<A>
         head_pos += abi_field_head_size<T9>()
         let v10: T10 = decode_field_from<A, T10, I>(input, base: pos, head_pos: head_pos)
         (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10)
+    }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let mut head_pos = pos
+        let v0: T0 = decode_field_from_checked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T0>()
+        let v1: T1 = decode_field_from_checked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T1>()
+        let v2: T2 = decode_field_from_checked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T2>()
+        let v3: T3 = decode_field_from_checked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T3>()
+        let v4: T4 = decode_field_from_checked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T4>()
+        let v5: T5 = decode_field_from_checked_head<A, T5, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T5>()
+        let v6: T6 = decode_field_from_checked_head<A, T6, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T6>()
+        let v7: T7 = decode_field_from_checked_head<A, T7, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T7>()
+        let v8: T8 = decode_field_from_checked_head<A, T8, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T8>()
+        let v9: T9 = decode_field_from_checked_head<A, T9, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T9>()
+        let v10: T10 = decode_field_from_checked_head<A, T10, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10)
+    }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        Self::decode_from_checked_head(input, pos, input_len)
     }
 }
 
@@ -3013,6 +3514,45 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Decode<A>
         let v11: T11 = decode_field_from<A, T11, I>(input, base: pos, head_pos: head_pos)
         (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11)
     }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let mut head_pos = pos
+        let v0: T0 = decode_field_from_checked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T0>()
+        let v1: T1 = decode_field_from_checked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T1>()
+        let v2: T2 = decode_field_from_checked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T2>()
+        let v3: T3 = decode_field_from_checked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T3>()
+        let v4: T4 = decode_field_from_checked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T4>()
+        let v5: T5 = decode_field_from_checked_head<A, T5, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T5>()
+        let v6: T6 = decode_field_from_checked_head<A, T6, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T6>()
+        let v7: T7 = decode_field_from_checked_head<A, T7, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T7>()
+        let v8: T8 = decode_field_from_checked_head<A, T8, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T8>()
+        let v9: T9 = decode_field_from_checked_head<A, T9, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T9>()
+        let v10: T10 = decode_field_from_checked_head<A, T10, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        head_pos += abi_field_head_size<T10>()
+        let v11: T11 = decode_field_from_checked_head<A, T11, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11)
+    }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        Self::decode_from_checked_head(input, pos, input_len)
+    }
 }
 
 impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Encode<A>
@@ -3120,6 +3660,30 @@ impl<A: Abi, T, const N: usize> Decode<A> for [T; N]
         }
         out
     }
+
+    #[inline(always)]
+    fn decode_from_checked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        let first = decode_field_from_checked_head<A, T, I>(input, base: pos, head_pos: pos, input_len: input_len)
+        let mut out: [T; N] = [first; N]
+        let mut i: usize = 1
+        let mut head_pos = pos + abi_field_head_size<T>()
+        while i < N {
+            out[i] = decode_field_from_checked_head<A, T, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+            head_pos += abi_field_head_size<T>()
+            i += 1
+        }
+        out
+    }
+
+    #[inline(always)]
+    fn decode_from_with_input_len<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
+        where A::Decoder<I>: AbiDecoder<A>
+    {
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        Self::decode_from_checked_head(input, pos, input_len)
+    }
 }
 
 impl<A: Abi, T, const N: usize> AbiSpan<A> for [T; N]
@@ -3132,6 +3696,20 @@ impl<A: Abi, T, const N: usize> AbiSpan<A> for [T; N]
         let mut i: usize = 0
         while i < N {
             end = max_u256(a: end, b: abi_field_end<A, T, I>(input, base: pos, pos: head_pos))
+            head_pos += abi_field_head_size<T>()
+            i += 1
+        }
+        max_u256(a: end, b: head_pos)
+    }
+
+    fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
+        let _ = base
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        let mut head_pos = pos
+        let mut end = pos
+        let mut i: usize = 0
+        while i < N {
+            end = max_u256(a: end, b: abi_field_end_with_input_len<A, T, I>(input, base: pos, pos: head_pos, input_len: input_len))
             head_pos += abi_field_head_size<T>()
             i += 1
         }

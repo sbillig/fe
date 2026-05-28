@@ -58,18 +58,12 @@ pub fn decode_runtime_args<H, A, T>(_ host: mut H) -> T
     let input = host.input()
     let base = A::SELECTOR_SIZE
     let len = input.len()
-    if base > len {
+    let end = base + T::HEAD_SIZE
+    if end < base || end > len {
         host.abort()
     }
 
-    if !T::IS_DYNAMIC {
-        let end = base + T::HEAD_SIZE
-        if end < base || end > len {
-            host.abort()
-        }
-    }
-
-    T::decode_from(input, base)
+    T::decode_from_checked_head(input, base, len)
 }
 
 /// Target configuration used by compiler-generated contract entrypoints.

@@ -1,4 +1,4 @@
-use core::abi::{ByteInput, Decode}
+use core::abi::{AbiSize, ByteInput, Decode}
 use core::Copy
 use core::num::IntDowncast
 use ingot::abi::Sol
@@ -27,7 +27,7 @@ impl CallData {
     }
 
     /// Decode Solidity ABI data from this calldata view.
-    pub fn decode<T>(self) -> T where T: Decode<Sol> {
+    pub fn decode<T>(self) -> T where T: Decode<Sol> + AbiSize {
         decode_input(self)
     }
 }
