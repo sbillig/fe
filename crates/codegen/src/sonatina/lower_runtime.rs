@@ -4548,6 +4548,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.emit_empty_revert(out_of_bounds)?;
                 Ok(Lowered::Value(index))
             }
+            IndexSource::Any => Err(LowerError::Internal(
+                "analysis wildcard index reached Sonatina lowering".to_string(),
+            )),
         }
     }
 

@@ -2137,6 +2137,12 @@ impl<'db> CtfeMachine<'db> {
                     CtfePathElem::Index(self.index_from_value(frame_idx, index, origin)?)
                 }
                 Projection::Index(IndexSource::Constant(index)) => CtfePathElem::Index(*index),
+                Projection::Index(IndexSource::Any) => {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "analysis wildcard index is not valid in CTFE".into(),
+                    });
+                }
                 Projection::Deref | Projection::Discriminant => {
                     return Err(CtfeError::InvalidOperation {
                         origin,

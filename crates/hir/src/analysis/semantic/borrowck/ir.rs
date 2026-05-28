@@ -509,11 +509,89 @@ pub struct BorrowTransform<'db> {
 
 pub type BorrowSummary<'db> = Vec<BorrowTransform<'db>>;
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PointerProvenanceItem<'db> {
+    pub output: NSProjectionPath<'db>,
+    pub targets: Vec<PointerSummaryTarget<'db>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum PointerAddressSpaces {
+    One(ProviderAddressSpace),
+    Any,
+}
+
+impl PointerAddressSpaces {
+    pub fn one(address_space: ProviderAddressSpace) -> Self {
+        Self::One(address_space)
+    }
+
+    pub fn spaces(self) -> Vec<ProviderAddressSpace> {
+        match self {
+            Self::One(space) => vec![space],
+            Self::Any => vec![
+                ProviderAddressSpace::Memory,
+                ProviderAddressSpace::Storage,
+                ProviderAddressSpace::Transient,
+                ProviderAddressSpace::Calldata,
+            ],
+        }
+    }
+
+    pub fn join(&mut self, other: Self) -> bool {
+        match (*self, other) {
+            (Self::Any, _) | (_, Self::Any) => {
+                let changed = *self != Self::Any;
+                *self = Self::Any;
+                changed
+            }
+            (Self::One(lhs), Self::One(rhs)) if lhs == rhs => false,
+            (Self::One(_), Self::One(_)) => {
+                *self = Self::Any;
+                true
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum FreshAllocSite<'db> {
+    Direct(SemOrigin<'db>),
+    Call {
+        call: SemOrigin<'db>,
+        callee: SemOrigin<'db>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PointerSummaryTarget<'db> {
+    Input {
+        input: BorrowInputRef,
+        proj: NSProjectionPath<'db>,
+    },
+    FreshAllocation {
+        site: FreshAllocSite<'db>,
+        address_space: ProviderAddressSpace,
+    },
+    Unknown {
+        address_spaces: PointerAddressSpaces,
+    },
+}
+
+pub type PointerProvenanceSummary<'db> = Vec<PointerProvenanceItem<'db>>;
+
 #[salsa::interned]
 #[derive(Debug)]
 pub struct BorrowSummaryId<'db> {
     #[return_ref]
     pub items: Vec<BorrowTransform<'db>>,
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct PointerProvenanceSummaryId<'db> {
+    #[return_ref]
+    pub items: Vec<PointerProvenanceItem<'db>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -563,6 +641,12 @@ pub struct NormalizedSemanticBodyId<'db> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SemanticBorrowSummaryResult<'db> {
     Ok(Option<BorrowSummaryId<'db>>),
+    Err(BorrowDiagnosticId<'db>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SemanticPointerProvenanceSummaryResult<'db> {
+    Ok(Option<PointerProvenanceSummaryId<'db>>),
     Err(BorrowDiagnosticId<'db>),
 }
 

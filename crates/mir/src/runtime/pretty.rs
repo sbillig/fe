@@ -1026,6 +1026,7 @@ fn format_index_source(index: IndexSource<RLocalId>) -> String {
     match index {
         IndexSource::Constant(value) => value.to_string(),
         IndexSource::Dynamic(local) => format_local_id(local),
+        IndexSource::Any => "*".to_string(),
     }
 }
 

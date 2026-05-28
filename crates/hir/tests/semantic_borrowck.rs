@@ -6,10 +6,12 @@ use fe_hir::{
     analysis::{
         semantic::{
             BorrowInputRef, BorrowTransform, NBorrowRoot, NExpr, NLocalOrigin, NSPlaceRoot,
-            NSStmtKind, NormalizedBindingLowering, ReadMode, SStmtKind, SemanticBorrowDiagKind,
-            SemanticInstance, SemanticLocalKind, check_semantic_borrows, check_semantic_noesc,
-            collect_semantic_borrow_diagnostic_vouchers, get_or_build_semantic_instance,
-            identity_semantic_instance_key, normalize_semantic_body, semantic_borrow_summary,
+            NSStmtKind, NormalizedBindingLowering, PointerSummaryTarget, ReadMode, SStmtKind,
+            SemanticBorrowDiagKind, SemanticInstance, SemanticLocalKind, check_semantic_borrows,
+            check_semantic_noesc, collect_semantic_borrow_diagnostic_vouchers,
+            get_or_build_semantic_instance, identity_semantic_instance_key,
+            normalize_semantic_body, semantic_borrow_summary, semantic_pointer_provenance_summary,
+            verify_normalized_semantic_body,
         },
         ty::{
             ProviderAddressSpace,
@@ -29,6 +31,21 @@ fn borrow_diags(src: &str) -> String {
         &db,
         &collect_semantic_borrow_diagnostic_vouchers(&db, top_mod),
     )
+}
+
+fn assert_mut_borrow_conflict(src: &str) {
+    let diags = borrow_diags(src);
+    assert!(diags.contains("borrow conflict"), "{diags:?}");
+    assert!(diags.contains("cannot mutably borrow"), "{diags:?}");
+}
+
+fn assert_no_borrow_conflict(src: &str) {
+    let diags = borrow_diags(src);
+    assert!(!diags.contains("borrow conflict"), "{diags:?}");
+    assert!(
+        !diags.contains("internal borrow checking error"),
+        "{diags:?}"
+    );
 }
 
 fn contract_init_instance<'db>(
@@ -216,6 +233,61 @@ fn normalized_func_body<'db>(
     normalize_semantic_body(db, instance).expect("normalized body")
 }
 
+fn func_instance<'db>(
+    db: &'db HirAnalysisTestDb,
+    top_mod: fe_hir::hir_def::TopLevelMod<'db>,
+    func_name: &str,
+) -> SemanticInstance<'db> {
+    top_mod
+        .all_items(db)
+        .iter()
+        .find_map(|item| match item {
+            ItemKind::Func(func)
+                if func
+                    .name(db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(db) == func_name) =>
+            {
+                Some(get_or_build_semantic_instance(
+                    db,
+                    identity_semantic_instance_key(db, BodyOwner::Func(*func)),
+                ))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing function `{func_name}`"))
+}
+
+fn with_borrow_summary(
+    src: &str,
+    func_name: &str,
+    f: impl for<'db> FnOnce(Vec<BorrowTransform<'db>>),
+) {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("semantic_borrowck.fe".into(), src);
+    let (top_mod, _) = db.top_mod(file);
+    let instance = func_instance(&db, top_mod, func_name);
+    let summary = semantic_borrow_summary(&db, instance)
+        .expect("borrow summary")
+        .expect("borrow-returning function should produce a summary");
+    f(summary);
+}
+
+fn with_pointer_summary(
+    src: &str,
+    func_name: &str,
+    f: impl for<'db> FnOnce(Vec<fe_hir::analysis::semantic::PointerProvenanceItem<'db>>),
+) {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("semantic_borrowck.fe".into(), src);
+    let (top_mod, _) = db.top_mod(file);
+    let instance = func_instance(&db, top_mod, func_name);
+    let summary = semantic_pointer_provenance_summary(&db, instance)
+        .expect("pointer provenance summary")
+        .expect("pointer-bearing return should produce a summary");
+    f(summary);
+}
+
 #[test]
 fn branch_return_borrow_summary_flows_through_empty_entry_blocks() {
     let mut db = HirAnalysisTestDb::default();
@@ -271,6 +343,1240 @@ impl Ledger {
             && transform.proj.iter().cloned().collect::<Vec<_>>() == vec![Projection::Field(0)]
     }));
     check_semantic_borrows(&db, instance).expect("borrowck should accept branch-returned borrow");
+}
+
+#[test]
+fn pointer_returned_borrow_uses_matching_pointer_param() {
+    with_borrow_summary(
+        r#"
+fn second(_ a: *u256, b: *u256) -> mut u256 {
+    let q = b
+    mut *q
+}
+"#,
+        "second",
+        |summary| {
+            assert_eq!(
+                summary,
+                vec![BorrowTransform {
+                    input: BorrowInputRef::Param(1),
+                    proj: ProjectionPath::from_projection(Projection::Deref),
+                }]
+            );
+        },
+    );
+}
+
+#[test]
+fn pointer_local_copy_conflicts_with_original_pointer_borrow() {
+    let diags = borrow_diags(
+        r#"
+fn bad(p: *u256) {
+    let q = p
+    let a = mut *q
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags:?}");
+    assert!(diags.contains("cannot mutably borrow"), "{diags:?}");
+}
+
+#[test]
+fn pointer_field_aggregate_conflicts_with_original_pointer_borrow() {
+    let diags = borrow_diags(
+        r#"
+struct Holder {
+    ptr: *u256,
+}
+
+fn bad(p: *u256) {
+    let h = Holder { ptr: p }
+    let a = mut *h.ptr
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags:?}");
+    assert!(diags.contains("cannot mutably borrow"), "{diags:?}");
+}
+
+#[test]
+fn pointer_returned_borrow_uses_matching_aggregate_param() {
+    with_borrow_summary(
+        r#"
+struct Holder {
+    ptr: *u256,
+}
+
+fn pick(_ a: *u256, h: Holder) -> mut u256 {
+    mut *h.ptr
+}
+"#,
+        "pick",
+        |summary| {
+            let mut expected = ProjectionPath::from_projection(Projection::Field(0));
+            expected.push(Projection::Deref);
+            assert_eq!(
+                summary,
+                vec![BorrowTransform {
+                    input: BorrowInputRef::Param(1),
+                    proj: expected,
+                }]
+            );
+        },
+    );
+}
+
+#[test]
+fn call_summary_deref_transform_uses_caller_pointer_provenance() {
+    let diags = borrow_diags(
+        r#"
+struct Holder {
+    ptr: *u256,
+}
+
+fn pick(h: Holder) -> mut u256 {
+    mut *h.ptr
+}
+
+fn bad(p: *u256) {
+    let h = Holder { ptr: p }
+    let a = pick(h)
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags:?}");
+    assert!(diags.contains("cannot mutably borrow"), "{diags:?}");
+}
+
+#[test]
+fn mem_array_from_raw_parts_preserves_pointer_provenance() {
+    let diags = borrow_diags(
+        r#"
+fn bad(p: *u256, len: u256) {
+    let a = core::ptr::MemArray<u256>::from_raw_parts(ptr: p, len: len)
+    let x = mut *p
+    a[0] = 1
+    x = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags:?}");
+    assert!(diags.contains("cannot mutably borrow"), "{diags:?}");
+}
+
+#[test]
+fn mem_array_returned_borrow_uses_matching_array_param() {
+    with_borrow_summary(
+        r#"
+fn second_array(
+    _ a: core::ptr::MemArray<u256>,
+    b: core::ptr::MemArray<u256>,
+) -> mut u256 {
+    mut *b.ptr
+}
+"#,
+        "second_array",
+        |summary| {
+            let mut expected = ProjectionPath::from_projection(Projection::Field(0));
+            expected.push(Projection::Deref);
+            assert_eq!(
+                summary,
+                vec![BorrowTransform {
+                    input: BorrowInputRef::Param(1),
+                    proj: expected,
+                }]
+            );
+        },
+    );
+}
+
+#[test]
+fn pointer_array_returned_borrow_uses_wildcard_index() {
+    with_borrow_summary(
+        r#"
+fn elem(array: *[u256; 64], i: usize) -> mut u256 {
+    mut (*array)[i]
+}
+"#,
+        "elem",
+        |summary| {
+            let mut expected = ProjectionPath::from_projection(Projection::Deref);
+            expected.push(Projection::Index(IndexSource::Any));
+            assert_eq!(
+                summary,
+                vec![BorrowTransform {
+                    input: BorrowInputRef::Param(0),
+                    proj: expected,
+                }]
+            );
+        },
+    );
+}
+
+#[test]
+fn pointer_array_returned_borrow_conflicts_with_constant_element() {
+    assert_mut_borrow_conflict(
+        r#"
+fn elem(array: *[u256; 64], i: usize) -> mut u256 {
+    mut (*array)[i]
+}
+
+fn bad(array: *[u256; 64], i: usize) {
+    let a = elem(array, i)
+    let b = mut (*array)[0]
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn store_through_pointer_conflicts_with_active_pointee_borrow() {
+    assert_mut_borrow_conflict(
+        r#"
+fn bad(p: *u256) {
+    let a = mut *p
+    *p = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn store_through_active_borrow_handle_is_allowed() {
+    assert_no_borrow_conflict(
+        r#"
+fn ok(p: *u256) {
+    let a = mut *p
+    a = 1
+}
+"#,
+    );
+}
+
+#[test]
+fn normalized_verifier_rejects_analysis_only_any_index() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+fn write(array: *[u256; 2]) {
+    (*array)[0] = 1
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let instance = func_instance(&db, top_mod, "write");
+    let mut normalized = normalize_semantic_body(&db, instance).expect("normalized body");
+    let mut replaced = false;
+    'blocks: for block in &mut normalized.blocks {
+        for stmt in &mut block.stmts {
+            let NSStmtKind::Store { dst, .. } = &mut stmt.kind else {
+                continue;
+            };
+            let mut path = ProjectionPath::new();
+            for projection in dst.path.iter() {
+                if !replaced && matches!(projection, Projection::Index(_)) {
+                    path.push(Projection::Index(IndexSource::Any));
+                    replaced = true;
+                } else {
+                    path.push(projection.clone());
+                }
+            }
+            dst.path = path;
+            if replaced {
+                break 'blocks;
+            }
+        }
+    }
+    assert!(replaced, "fixture did not contain an indexed store");
+    let err = verify_normalized_semantic_body(&db, instance, &normalized)
+        .expect_err("verifier should reject wildcard runtime indices");
+    assert!(
+        format!("{err:#?}").contains("analysis-only wildcard index"),
+        "{err:#?}"
+    );
+}
+
+#[test]
+fn scalar_store_conflicts_with_active_local_borrow() {
+    assert_mut_borrow_conflict(
+        r#"
+fn bad() {
+    let mut x: u256 = 0
+    let a = mut x
+    x = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn core_pointer_offset_preserves_pointee_provenance() {
+    with_borrow_summary(
+        r#"
+fn borrow_at(p: *u256, i: usize) -> mut u256 {
+    let q = core::ptr::offset<u256>(p, i as u256)
+    mut *q
+}
+"#,
+        "borrow_at",
+        |summary| {
+            assert_eq!(
+                summary,
+                vec![BorrowTransform {
+                    input: BorrowInputRef::Param(0),
+                    proj: ProjectionPath::from_projection(Projection::Deref),
+                }]
+            );
+        },
+    );
+}
+
+#[test]
+fn core_pointer_cast_preserves_pointee_provenance() {
+    with_borrow_summary(
+        r#"
+fn borrow_cast(p: *u256) -> mut u8 {
+    let q = core::ptr::cast<u256, u8>(p)
+    mut *q
+}
+"#,
+        "borrow_cast",
+        |summary| {
+            assert_eq!(
+                summary,
+                vec![BorrowTransform {
+                    input: BorrowInputRef::Param(0),
+                    proj: ProjectionPath::from_projection(Projection::Deref),
+                }]
+            );
+        },
+    );
+}
+
+#[test]
+fn pointer_field_store_updates_pointer_provenance() {
+    let diags = borrow_diags(
+        r#"
+struct Holder {
+    ptr: *u256,
+}
+
+fn bad(p: *u256, q: *u256) {
+    let mut h = Holder { ptr: q }
+    h.ptr = p
+    let a = mut *h.ptr
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags:?}");
+    assert!(diags.contains("cannot mutably borrow"), "{diags:?}");
+}
+
+#[test]
+fn pointer_aggregate_overwrite_clears_stale_pointer_provenance() {
+    let diags = borrow_diags(
+        r#"
+struct Holder {
+    ptr: *u256,
+}
+
+fn ok(p: *u256, q: *u256) {
+    let mut h = Holder { ptr: p }
+    h = Holder { ptr: q }
+    let a = mut *h.ptr
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+    assert!(!diags.contains("borrow conflict"), "{diags:?}");
+    assert!(
+        !diags.contains("internal borrow checking error"),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn pointer_returning_aggregate_call_preserves_field_provenance() {
+    let diags = borrow_diags(
+        r#"
+struct Holder {
+    ptr: *u256,
+}
+
+fn wrap(p: *u256) -> Holder {
+    Holder { ptr: p }
+}
+
+fn bad(p: *u256) {
+    let h = wrap(p)
+    let a = mut *h.ptr
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags:?}");
+    assert!(diags.contains("cannot mutably borrow"), "{diags:?}");
+}
+
+#[test]
+fn pointer_pointee_read_from_view_param_is_not_move_from_param() {
+    let diags = borrow_diags(
+        r#"
+fn read(p: *u256) -> u256 {
+    *p
+}
+"#,
+    );
+    assert!(!diags.contains("move conflict"), "{diags:?}");
+    assert!(
+        !diags.contains("internal borrow checking error"),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn fresh_pointer_return_does_not_alias_input_pointer() {
+    let diags = borrow_diags(
+        r#"
+fn fresh(_ p: *u256) -> *u256 {
+    core::ptr::alloc<u256>()
+}
+
+fn ok(p: *u256) {
+    let q = fresh(p)
+    let a = mut *q
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+    assert!(!diags.contains("borrow conflict"), "{diags:?}");
+    assert!(
+        !diags.contains("internal borrow checking error"),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn unknown_raw_address_conflicts_with_input_pointer() {
+    assert_mut_borrow_conflict(
+        r#"
+fn bad(p: *u256, addr: u256) {
+    let q = core::ptr::from_addr<u256>(addr)
+    let a = mut *q
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn branching_pointer_return_summary_conflicts_with_each_input() {
+    assert_mut_borrow_conflict(
+        r#"
+fn pick(cond: bool, p: *u256, q: *u256) -> *u256 {
+    if cond {
+        p
+    } else {
+        q
+    }
+}
+
+fn bad(cond: bool, p: *u256, q: *u256) {
+    let r = pick(cond, p, q)
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+    assert_mut_borrow_conflict(
+        r#"
+fn pick(cond: bool, p: *u256, q: *u256) -> *u256 {
+    if cond {
+        p
+    } else {
+        q
+    }
+}
+
+fn bad(cond: bool, p: *u256, q: *u256) {
+    let r = pick(cond, p, q)
+    let a = mut *r
+    let b = mut *q
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn branching_pointer_aggregate_return_summary_conflicts_with_each_input() {
+    assert_mut_borrow_conflict(
+        r#"
+struct Holder {
+    ptr: *u256,
+}
+
+fn wrap(cond: bool, p: *u256, q: *u256) -> Holder {
+    if cond {
+        Holder { ptr: p }
+    } else {
+        Holder { ptr: q }
+    }
+}
+
+fn bad(cond: bool, p: *u256, q: *u256) {
+    let h = wrap(cond, p, q)
+    let a = mut *h.ptr
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+    assert_mut_borrow_conflict(
+        r#"
+struct Holder {
+    ptr: *u256,
+}
+
+fn wrap(cond: bool, p: *u256, q: *u256) -> Holder {
+    if cond {
+        Holder { ptr: p }
+    } else {
+        Holder { ptr: q }
+    }
+}
+
+fn bad(cond: bool, p: *u256, q: *u256) {
+    let h = wrap(cond, p, q)
+    let a = mut *h.ptr
+    let b = mut *q
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn branching_mem_array_return_summary_conflicts_with_each_input() {
+    assert_mut_borrow_conflict(
+        r#"
+fn pick(
+    cond: bool,
+    a: core::ptr::MemArray<u256>,
+    b: core::ptr::MemArray<u256>,
+) -> core::ptr::MemArray<u256> {
+    if cond {
+        a
+    } else {
+        b
+    }
+}
+
+fn bad(
+    cond: bool,
+    a: core::ptr::MemArray<u256>,
+    b: core::ptr::MemArray<u256>,
+) {
+    let r = pick(cond, a, b)
+    let x = mut *r.ptr
+    let y = mut *a.ptr
+    y = 1
+    x = 2
+}
+"#,
+    );
+    assert_mut_borrow_conflict(
+        r#"
+fn pick(
+    cond: bool,
+    a: core::ptr::MemArray<u256>,
+    b: core::ptr::MemArray<u256>,
+) -> core::ptr::MemArray<u256> {
+    if cond {
+        a
+    } else {
+        b
+    }
+}
+
+fn bad(
+    cond: bool,
+    a: core::ptr::MemArray<u256>,
+    b: core::ptr::MemArray<u256>,
+) {
+    let r = pick(cond, a, b)
+    let x = mut *r.ptr
+    let y = mut *b.ptr
+    y = 1
+    x = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn pointer_array_literal_propagates_element_provenance() {
+    assert_mut_borrow_conflict(
+        r#"
+fn bad(p: *u256, q: *u256) {
+    let arr = [p, q]
+    let r = arr[0]
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn pointer_array_repeat_propagates_element_provenance() {
+    assert_mut_borrow_conflict(
+        r#"
+fn bad(p: *u256) {
+    let arr = [p; 2]
+    let r = arr[1]
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn dynamic_pointer_array_write_weakly_updates_possible_slots() {
+    assert_mut_borrow_conflict(
+        r#"
+fn bad(p: *u256, q: *u256, i: usize) {
+    let mut arr = [q, q]
+    arr[i] = p
+    let r = arr[0]
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn dynamic_pointer_array_read_joins_possible_slots() {
+    assert_mut_borrow_conflict(
+        r#"
+fn bad(p: *u256, q: *u256, i: usize) {
+    let arr = [p, q]
+    let r = arr[i]
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn pointer_return_summary_dynamic_pointer_slot_is_unknown() {
+    assert_mut_borrow_conflict(
+        r#"
+fn pick(arr: [*u256; 2], i: usize) -> *u256 {
+    arr[i]
+}
+
+fn bad(p: *u256, q: *u256, i: usize) {
+    let arr = [p, q]
+    let r = pick(arr, i)
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn pointer_slot_reassignment_does_not_clear_pointee_facts() {
+    assert_mut_borrow_conflict(
+        r#"
+fn bad(pp: * *u256, p: *u256, other: * *u256) {
+    let mut pp_local = pp
+    let q = pp_local
+    *pp_local = p
+    pp_local = other
+
+    let r = *q
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn unknown_memory_pointer_conflicts_with_memory_provider_root() {
+    assert_mut_borrow_conflict(
+        r#"
+struct Store {
+    value: u256,
+}
+
+fn bad(addr: u256) uses (store: mut Store) {
+    let p = core::ptr::from_addr<Store>(addr)
+    let a = mut *p
+    let b = mut store
+    b.value = 1
+    a.value = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn fresh_allocation_pointer_slots_default_to_unknown() {
+    assert_mut_borrow_conflict(
+        r#"
+fn bad(p: *u256) {
+    let pp = core::ptr::alloc<*u256>()
+    let r = *pp
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn dynamic_index_reassignment_keeps_weak_pointer_facts() {
+    assert_mut_borrow_conflict(
+        r#"
+fn bad(p: *u256, q: *u256, i: usize, j: usize) {
+    let mut arr = [q, q]
+    let mut k = i
+    arr[k] = p
+    k = j
+    arr[k] = q
+    let r = arr[i]
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn may_target_pointer_store_keeps_unwritten_left_slot_targets() {
+    assert_mut_borrow_conflict(
+        r#"
+fn bad(pp1: * *u256, pp2: * *u256, p: *u256, q: *u256, choose: bool) {
+    *pp1 = p
+    let mut pp = pp1
+    if choose {
+        pp = pp2
+    }
+    *pp = q
+    let r = *pp1
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn may_target_pointer_store_keeps_unwritten_right_slot_targets() {
+    assert_mut_borrow_conflict(
+        r#"
+fn bad(pp1: * *u256, pp2: * *u256, p: *u256, q: *u256, choose: bool) {
+    *pp2 = p
+    let mut pp = pp1
+    if choose {
+        pp = pp2
+    }
+    *pp = q
+    let r = *pp2
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn unknown_pointer_store_does_not_shadow_default_targets() {
+    assert_mut_borrow_conflict(
+        r#"
+fn bad(p: *u256, q: *u256, addr: u256) {
+    let pp = core::ptr::alloc<*u256>()
+    let unknown = core::ptr::from_addr<*u256>(addr)
+    *unknown = q
+    let r = *pp
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn multiple_unknown_pointer_stores_accumulate_targets() {
+    assert_mut_borrow_conflict(
+        r#"
+fn bad(p: *u256, q: *u256, addr1: u256, addr2: u256, addr3: u256) {
+    let unknown1 = core::ptr::from_addr<*u256>(addr1)
+    *unknown1 = p
+    let unknown2 = core::ptr::from_addr<*u256>(addr2)
+    *unknown2 = q
+    let unknown3 = core::ptr::from_addr<*u256>(addr3)
+    let r = *unknown3
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn dynamic_pointer_read_keeps_default_targets_for_uncovered_slots() {
+    assert_mut_borrow_conflict(
+        r#"
+fn bad(pp: *[*u256; 2], p: *u256, i: usize) {
+    let old = (*pp)[1]
+    let a = mut *old
+    (*pp)[0] = p
+    let r = (*pp)[i]
+    let b = mut *r
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn pointer_summary_read_keeps_default_targets_for_uncovered_slots() {
+    assert_mut_borrow_conflict(
+        r#"
+fn pick(pp: *[*u256; 2], i: usize) -> *u256 {
+    (*pp)[i]
+}
+
+fn bad(pp: *[*u256; 2], p: *u256, i: usize) {
+    let old = (*pp)[1]
+    let a = mut *old
+    (*pp)[0] = p
+    let r = pick(pp, i)
+    let b = mut *r
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn unrelated_constant_pointer_slots_do_not_conflict() {
+    assert_no_borrow_conflict(
+        r#"
+fn ok(p: *u256, q: *u256) {
+    let a = mut *q
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+    assert_no_borrow_conflict(
+        r#"
+fn ok(p: *u256, q: *u256) {
+    let arr = [q, q]
+    let r = arr[0]
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+    assert_no_borrow_conflict(
+        r#"
+fn ok(p: *u256, q: *u256) {
+    let arr = [p, q]
+    let r = arr[1]
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+    assert_no_borrow_conflict(
+        r#"
+fn ok(p: *u256, q: *u256) {
+    let arr = [q; 64]
+    let r = arr[63]
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+    assert_no_borrow_conflict(
+        r#"
+fn ok(p: *u256, q: *u256) {
+    let arr = [
+        q, q, q, q, q, q, q, q,
+        q, q, q, q, q, q, q, q,
+        q, q, q, q, q, q, q, q,
+        q, q, q, q, q, q, q, q,
+        q,
+    ]
+    let r = arr[32]
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+    assert_no_borrow_conflict(
+        r#"
+fn ok(p: *u256, q: *u256) {
+    let mut arr = [q; 64]
+    arr[0] = p
+    let r = arr[0]
+    let a = mut *r
+    let b = mut *q
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn returned_pointer_aggregate_from_unrelated_input_does_not_conflict() {
+    assert_no_borrow_conflict(
+        r#"
+struct Holder {
+    ptr: *u256,
+}
+
+fn wrap(q: *u256) -> Holder {
+    Holder { ptr: q }
+}
+
+fn ok(p: *u256, q: *u256) {
+    let h = wrap(q)
+    let a = mut *h.ptr
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn branching_pointer_summary_records_each_input_target() {
+    with_pointer_summary(
+        r#"
+fn pick(cond: bool, p: *u256, q: *u256) -> *u256 {
+    if cond {
+        p
+    } else {
+        q
+    }
+}
+"#,
+        "pick",
+        |summary| {
+            assert_eq!(summary.len(), 1, "unexpected summary: {summary:#?}");
+            let item = &summary[0];
+            assert!(
+                item.output.is_empty(),
+                "unexpected output: {:?}",
+                item.output
+            );
+            assert_eq!(
+                item.targets,
+                vec![
+                    PointerSummaryTarget::Input {
+                        input: BorrowInputRef::Param(1),
+                        proj: ProjectionPath::from_projection(Projection::Deref),
+                    },
+                    PointerSummaryTarget::Input {
+                        input: BorrowInputRef::Param(2),
+                        proj: ProjectionPath::from_projection(Projection::Deref),
+                    },
+                ]
+            );
+        },
+    );
+}
+
+#[test]
+fn local_pointer_array_summary_keeps_constant_slot_precision() {
+    with_pointer_summary(
+        r#"
+fn pick(_ p: *u256, q: *u256) -> *u256 {
+    let arr = [q, q]
+    arr[0]
+}
+"#,
+        "pick",
+        |summary| {
+            assert_eq!(summary.len(), 1, "unexpected summary: {summary:#?}");
+            assert_eq!(
+                summary[0].targets,
+                vec![PointerSummaryTarget::Input {
+                    input: BorrowInputRef::Param(1),
+                    proj: ProjectionPath::from_projection(Projection::Deref),
+                }]
+            );
+        },
+    );
+}
+
+#[test]
+fn local_pointer_array_borrow_summary_keeps_constant_slot_precision() {
+    with_borrow_summary(
+        r#"
+fn pick(_ p: *u256, q: *u256) -> mut u256 {
+    let arr = [q, q]
+    let r = arr[0]
+    mut *r
+}
+"#,
+        "pick",
+        |summary| {
+            assert_eq!(
+                summary,
+                vec![BorrowTransform {
+                    input: BorrowInputRef::Param(1),
+                    proj: ProjectionPath::from_projection(Projection::Deref),
+                }]
+            );
+        },
+    );
+}
+
+#[test]
+fn pointer_to_array_of_pointers_summary_preserves_wildcard_pointee() {
+    with_pointer_summary(
+        r#"
+fn pick(pp: *[*u256; 64], i: usize) -> *u256 {
+    (*pp)[i]
+}
+"#,
+        "pick",
+        |summary| {
+            assert_eq!(summary.len(), 1, "unexpected summary: {summary:#?}");
+            let mut expected = ProjectionPath::from_projection(Projection::Deref);
+            expected.push(Projection::Index(IndexSource::Any));
+            expected.push(Projection::Deref);
+            assert_eq!(
+                summary[0].targets,
+                vec![PointerSummaryTarget::Input {
+                    input: BorrowInputRef::Param(0),
+                    proj: expected,
+                }]
+            );
+        },
+    );
+}
+
+#[test]
+fn pointer_to_large_pointer_array_caller_keeps_element_precision() {
+    assert_no_borrow_conflict(
+        r#"
+fn pick(pp: *[*u256; 64], i: usize) -> *u256 {
+    (*pp)[i]
+}
+
+fn ok(p: *u256, q: *u256, i: usize) {
+    let pp = core::ptr::alloc<[*u256; 64]>()
+    *pp = [q; 64]
+    let r = pick(pp, i)
+    let a = mut *r
+    let b = mut *p
+    b = 1
+    a = 2
+}
+"#,
+    );
+}
+
+#[test]
+fn enum_pointer_payloads_participate_in_pointer_summaries() {
+    with_pointer_summary(
+        r#"
+enum E {
+    A(*u256),
+    B,
+}
+
+fn wrap(p: *u256) -> E {
+    E::A(p)
+}
+"#,
+        "wrap",
+        |summary| {
+            assert_eq!(summary.len(), 1, "unexpected summary: {summary:#?}");
+            assert!(matches!(
+                summary[0].output.iter().next(),
+                Some(Projection::VariantField { variant, field_idx, .. })
+                    if variant.0 == 0 && *field_idx == 0
+            ));
+            assert_eq!(
+                summary[0].targets,
+                vec![PointerSummaryTarget::Input {
+                    input: BorrowInputRef::Param(0),
+                    proj: ProjectionPath::from_projection(Projection::Deref),
+                }]
+            );
+        },
+    );
+}
+
+#[test]
+fn enum_pointer_payload_extraction_preserves_provenance() {
+    assert_mut_borrow_conflict(
+        r#"
+enum E {
+    A(*u256),
+    B,
+}
+
+fn bad(p: *u256) {
+    let e = E::A(p)
+    match e {
+        E::A(r) => {
+            let a = mut *r
+            let b = mut *p
+            b = 1
+            a = 2
+        }
+        E::B => {}
+    }
+}
+"#,
+    );
+}
+
+#[test]
+fn returning_pointer_bearing_provider_value_is_rejected() {
+    let diags = borrow_diags(
+        r#"
+struct Holder {
+    ptr: *u256,
+}
+
+fn bad() -> Holder uses (holder: Holder) {
+    holder
+}
+"#,
+    );
+    assert!(diags.contains("invalid return borrow"), "{diags:?}");
+    assert!(
+        diags.contains("cannot return a pointer derived from an effect parameter"),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn pointer_bearing_capability_return_summary_tracks_exposed_pointer_value() {
+    with_pointer_summary(
+        r#"
+struct Holder {
+    ptr: *u256,
+}
+
+impl Holder {
+    fn ptr_slot(mut self) -> mut *u256 {
+        mut self.ptr
+    }
+}
+"#,
+        "ptr_slot",
+        |summary| {
+            assert_eq!(summary.len(), 1, "unexpected summary: {summary:#?}");
+            let mut expected = ProjectionPath::from_projection(Projection::Field(0));
+            expected.push(Projection::Deref);
+            assert_eq!(
+                summary[0].targets,
+                vec![PointerSummaryTarget::Input {
+                    input: BorrowInputRef::Param(0),
+                    proj: expected,
+                }]
+            );
+        },
+    );
+}
+
+#[test]
+fn mem_array_ptr_field_update_does_not_keep_stale_carrier_target() {
+    assert_no_borrow_conflict(
+        r#"
+fn ok(p: *u256, q: *u256, len: u256) {
+    let mut a = core::ptr::MemArray<u256>::from_raw_parts(ptr: p, len: len)
+    a.ptr = q
+    let x = mut *a.ptr
+    let y = mut *p
+    y = 1
+    x = 2
+}
+"#,
+    );
 }
 
 #[test]

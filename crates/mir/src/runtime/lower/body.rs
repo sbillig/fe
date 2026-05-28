@@ -2175,6 +2175,7 @@ impl<'db> RmirEmitter<'db> {
                 }
                 Projection::Deref
                 | Projection::Index(IndexSource::Dynamic(_))
+                | Projection::Index(IndexSource::Any)
                 | Projection::Discriminant => return false,
             };
             let extracted_class = match &step {
@@ -4421,6 +4422,9 @@ impl<'db> RmirEmitter<'db> {
                 Projection::Index(IndexSource::Constant(index)) => {
                     projected.push(PlaceElem::Index(IndexSource::Constant(*index)));
                     current = project_index_class(self.db, current);
+                }
+                Projection::Index(IndexSource::Any) => {
+                    panic!("analysis wildcard index reached runtime place lowering: {place:?}");
                 }
                 Projection::Discriminant => {
                     panic!("discriminant projections are not valid runtime places: {place:?}");

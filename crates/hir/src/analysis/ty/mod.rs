@@ -103,6 +103,8 @@ pub fn ty_is_copy<'db>(
     ty: TyId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
+    let ty = normalize::normalize_ty(db, ty, scope, assumptions);
+
     // Borrow/view handles (`mut`/`ref`/`view`) are always copyable, even without an explicit
     // `Copy` impl.
     if ty.as_capability(db).is_some() {
@@ -110,7 +112,7 @@ pub fn ty_is_copy<'db>(
     }
 
     // Built-in primitives are always `Copy`, independent of trait solving.
-    if ty == TyId::unit(db) || ty.is_bool(db) || ty.is_integral(db) {
+    if ty == TyId::unit(db) || ty.is_bool(db) || ty.is_integral(db) || ty.as_ptr(db).is_some() {
         return true;
     }
 

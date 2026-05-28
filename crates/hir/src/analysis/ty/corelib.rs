@@ -162,6 +162,42 @@ pub enum RuntimeBuiltinFuncKind {
     IntrinsicKeccak256,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum PointerProvenanceFuncKind {
+    FreshMemory,
+    UnknownMemory,
+    InputPointee,
+    InputArrayElem,
+    MemArrayCarrier,
+}
+
+#[salsa::tracked]
+pub fn pointer_provenance_func_kind<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> Option<PointerProvenanceFuncKind> {
+    let kind = func.top_mod(db).ingot(db).kind(db);
+    let path = runtime_builtin_func_path(db, func)?;
+    Some(match (kind, path.as_slice()) {
+        (IngotKind::Core, ["ptr", "alloc_raw" | "alloc" | "alloc_bytes" | "alloc_array"]) => {
+            PointerProvenanceFuncKind::FreshMemory
+        }
+        (IngotKind::Core, ["ptr", "from_addr" | "null"]) => {
+            PointerProvenanceFuncKind::UnknownMemory
+        }
+        (
+            IngotKind::Core,
+            [
+                "ptr",
+                "cast" | "as_bytes" | "offset" | "offset_bytes" | "elem",
+            ],
+        ) => PointerProvenanceFuncKind::InputPointee,
+        (IngotKind::Core, ["ptr", "array_elem"]) => PointerProvenanceFuncKind::InputArrayElem,
+        (IngotKind::Core, ["ptr", "mem_array_elem"]) => PointerProvenanceFuncKind::MemArrayCarrier,
+        _ => return None,
+    })
+}
+
 #[salsa::tracked]
 pub fn runtime_builtin_func_kind<'db>(
     db: &'db dyn HirAnalysisDb,
