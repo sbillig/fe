@@ -483,51 +483,6 @@ func inline(always) private %core__lib__abi__impl_trait_u256_85b6__decode_from__
         return v5;
 }
 
-func inline(always) private %decode_from_checked_head__ge273(v0.@layout_2, v1.i256, v2.i256) -> @layout_4 {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        v8.@layout_4 = call %impl_trait_ReadViaHolder__decode_from__gd20d v0 v7;
-        return v8;
-}
-
-func inline(always) private %decode_from_checked_head__g1d15(v0.@layout_2, v1.i256, v2.i256) -> @layout_5 {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        v8.@layout_5 = call %impl_trait_SeedSlot__decode_from__gd20d v0 v7;
-        return v8;
-}
-
-func inline(always) private %decode_from_checked_head__gdaee(v0.@layout_2, v1.i256, v2.i256) -> @layout_3 {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        v8.@layout_3 = call %impl_trait_BumpMover__decode_from__gd20d v0 v7;
-        return v8;
-}
-
 func inline(always) private %core__lib__abi__impl_trait_u256_85b6__decode_from__g72ab_f0a9(v0.@layout_2, v1.i256) -> i256 {
     block0:
         v2.*i256 = alloca i256;
@@ -583,6 +538,51 @@ func inline(always) private %impl_trait_SeedSlot__decode_from__gd20d(v0.@layout_
         return v25;
 }
 
+func inline(always) private %decode_from_prechecked_head__gdaee(v0.@layout_2, v1.i256, v2.i256) -> @layout_3 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        v8.@layout_3 = call %impl_trait_BumpMover__decode_from__gd20d v0 v7;
+        return v8;
+}
+
+func inline(always) private %decode_from_prechecked_head__ge273(v0.@layout_2, v1.i256, v2.i256) -> @layout_4 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        v8.@layout_4 = call %impl_trait_ReadViaHolder__decode_from__gd20d v0 v7;
+        return v8;
+}
+
+func inline(always) private %decode_from_prechecked_head__g1d15(v0.@layout_2, v1.i256, v2.i256) -> @layout_5 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        v8.@layout_5 = call %impl_trait_SeedSlot__decode_from__gd20d v0 v7;
+        return v8;
+}
+
 func inline(always) private %decode_runtime_args__g5aad(v0.objref<@layout_7>) -> @layout_5 {
     block0:
         v1.*i256 = alloca i256;
@@ -606,7 +606,7 @@ func inline(always) private %decode_runtime_args__g5aad(v0.objref<@layout_7>) ->
 
     block4:
         v12.i256 = mload v1 i256;
-        v13.@layout_5 = call %decode_from_checked_head__g1d15 v4 4.i256 v12;
+        v13.@layout_5 = call %decode_from_prechecked_head__g1d15 v4 4.i256 v12;
         return v13;
 
     block5:
@@ -640,7 +640,7 @@ func inline(always) private %decode_runtime_args__g01e9(v0.objref<@layout_7>) ->
 
     block4:
         v12.i256 = mload v1 i256;
-        v13.@layout_4 = call %decode_from_checked_head__ge273 v4 4.i256 v12;
+        v13.@layout_4 = call %decode_from_prechecked_head__ge273 v4 4.i256 v12;
         return v13;
 
     block5:
@@ -674,7 +674,7 @@ func inline(always) private %decode_runtime_args__g0392(v0.objref<@layout_7>) ->
 
     block4:
         v12.i256 = mload v1 i256;
-        v13.@layout_3 = call %decode_from_checked_head__gdaee v4 4.i256 v12;
+        v13.@layout_3 = call %decode_from_prechecked_head__gdaee v4 4.i256 v12;
         return v13;
 
     block5:

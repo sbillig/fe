@@ -3090,216 +3090,6 @@ func inline(always) private %impl_trait_TransferFrom__decode_from__gd20d(v0.@lay
         return v42;
 }
 
-func inline(always) private %decode_from_checked_head__g76d6(v0.@layout_5, v1.i256, v2.i256) -> @layout_8 {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        v8.@layout_8 = call %impl_trait_Mint__decode_from__gd20d v0 v7;
-        return v8;
-}
-
-func inline(always) private %decode_from_checked_head__g051e(v0.@layout_5, v1.i256, v2.i256) {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        call %impl_trait_TotalSupply__decode_from__gd20d v0 v7;
-        return;
-}
-
-func inline(always) private %decode_from_checked_head__g6690(v0.@layout_5, v1.i256, v2.i256) -> @layout_13 {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        v8.@layout_13 = call %impl_trait_TransferFrom__decode_from__gd20d v0 v7;
-        return v8;
-}
-
-func inline(always) private %decode_from_checked_head__g7ea0(v0.@layout_5, v1.i256, v2.i256) -> @layout_11 {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        v8.@layout_11 = call %impl_trait_BalanceOf__decode_from__gd20d v0 v7;
-        return v8;
-}
-
-func inline(always) private %decode_from_checked_head__g4997(v0.@layout_5, v1.i256, v2.i256) {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        call %impl_trait_Decimals__decode_from__gd20d v0 v7;
-        return;
-}
-
-func inline(always) private %decode_from_checked_head__g205f(v0.@layout_5, v1.i256, v2.i256) -> @layout_14 {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        v8.@layout_14 = call %impl_trait_Transfer__decode_from__gd20d v0 v7;
-        return v8;
-}
-
-func inline(always) private %decode_from_checked_head__gbd88(v0.@layout_5, v1.i256, v2.i256) {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        call %impl_trait_Name__decode_from__gd20d v0 v7;
-        return;
-}
-
-func inline(always) private %decode_from_checked_head__g7d8c(v0.@layout_5, v1.i256, v2.i256) -> @layout_12 {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        v8.@layout_12 = call %impl_trait_IncreaseAllowance__decode_from__gd20d v0 v7;
-        return v8;
-}
-
-func inline(always) private %decode_from_checked_head__g5470(v0.@layout_5, v1.i256, v2.i256) -> @layout_6 {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        v8.@layout_6 = call %impl_trait_Allowance__decode_from__gd20d v0 v7;
-        return v8;
-}
-
-func inline(always) private %decode_from_checked_head__g691a(v0.@layout_5, v1.i256, v2.i256) {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        call %impl_trait_Symbol__decode_from__gd20d v0 v7;
-        return;
-}
-
-func inline(always) private %decode_from_checked_head__g41f8(v0.@layout_5, v1.i256, v2.i256) -> @layout_9 {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        v8.@layout_9 = call %impl_trait_Burn__decode_from__gd20d v0 v7;
-        return v8;
-}
-
-func inline(always) private %decode_from_checked_head__gad59(v0.@layout_5, v1.i256, v2.i256) -> @layout_10 {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        v8.@layout_10 = call %impl_trait_BurnFrom__decode_from__gd20d v0 v7;
-        return v8;
-}
-
-func inline(always) private %decode_from_checked_head__gab8c(v0.@layout_5, v1.i256, v2.i256) -> @layout_7 {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        v8.@layout_7 = call %impl_trait_Approve__decode_from__gd20d v0 v7;
-        return v8;
-}
-
-func inline(always) private %decode_from_checked_head__g383e(v0.@layout_5, v1.i256, v2.i256) -> @layout_15 {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        v8.@layout_15 = call %impl_trait_DecreaseAllowance__decode_from__gd20d v0 v7;
-        return v8;
-}
-
 func inline(always) private %impl_trait_Transfer__decode_from__gd20d(v0.@layout_5, v1.i256) -> @layout_14 {
     block0:
         v2.*i256 = alloca i256;
@@ -3432,6 +3222,216 @@ func inline(always) private %std__lib__evm__effects__impl_trait_Address_9c1b__de
         return v14;
 }
 
+func inline(always) private %decode_from_prechecked_head__gbd88(v0.@layout_5, v1.i256, v2.i256) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        call %impl_trait_Name__decode_from__gd20d v0 v7;
+        return;
+}
+
+func inline(always) private %decode_from_prechecked_head__g76d6(v0.@layout_5, v1.i256, v2.i256) -> @layout_8 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        v8.@layout_8 = call %impl_trait_Mint__decode_from__gd20d v0 v7;
+        return v8;
+}
+
+func inline(always) private %decode_from_prechecked_head__g41f8(v0.@layout_5, v1.i256, v2.i256) -> @layout_9 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        v8.@layout_9 = call %impl_trait_Burn__decode_from__gd20d v0 v7;
+        return v8;
+}
+
+func inline(always) private %decode_from_prechecked_head__g205f(v0.@layout_5, v1.i256, v2.i256) -> @layout_14 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        v8.@layout_14 = call %impl_trait_Transfer__decode_from__gd20d v0 v7;
+        return v8;
+}
+
+func inline(always) private %decode_from_prechecked_head__g5470(v0.@layout_5, v1.i256, v2.i256) -> @layout_6 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        v8.@layout_6 = call %impl_trait_Allowance__decode_from__gd20d v0 v7;
+        return v8;
+}
+
+func inline(always) private %decode_from_prechecked_head__g6690(v0.@layout_5, v1.i256, v2.i256) -> @layout_13 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        v8.@layout_13 = call %impl_trait_TransferFrom__decode_from__gd20d v0 v7;
+        return v8;
+}
+
+func inline(always) private %decode_from_prechecked_head__g7ea0(v0.@layout_5, v1.i256, v2.i256) -> @layout_11 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        v8.@layout_11 = call %impl_trait_BalanceOf__decode_from__gd20d v0 v7;
+        return v8;
+}
+
+func inline(always) private %decode_from_prechecked_head__g691a(v0.@layout_5, v1.i256, v2.i256) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        call %impl_trait_Symbol__decode_from__gd20d v0 v7;
+        return;
+}
+
+func inline(always) private %decode_from_prechecked_head__g7d8c(v0.@layout_5, v1.i256, v2.i256) -> @layout_12 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        v8.@layout_12 = call %impl_trait_IncreaseAllowance__decode_from__gd20d v0 v7;
+        return v8;
+}
+
+func inline(always) private %decode_from_prechecked_head__gab8c(v0.@layout_5, v1.i256, v2.i256) -> @layout_7 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        v8.@layout_7 = call %impl_trait_Approve__decode_from__gd20d v0 v7;
+        return v8;
+}
+
+func inline(always) private %decode_from_prechecked_head__g4997(v0.@layout_5, v1.i256, v2.i256) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        call %impl_trait_Decimals__decode_from__gd20d v0 v7;
+        return;
+}
+
+func inline(always) private %decode_from_prechecked_head__gad59(v0.@layout_5, v1.i256, v2.i256) -> @layout_10 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        v8.@layout_10 = call %impl_trait_BurnFrom__decode_from__gd20d v0 v7;
+        return v8;
+}
+
+func inline(always) private %decode_from_prechecked_head__g051e(v0.@layout_5, v1.i256, v2.i256) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        call %impl_trait_TotalSupply__decode_from__gd20d v0 v7;
+        return;
+}
+
+func inline(always) private %decode_from_prechecked_head__g383e(v0.@layout_5, v1.i256, v2.i256) -> @layout_15 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        v8.@layout_15 = call %impl_trait_DecreaseAllowance__decode_from__gd20d v0 v7;
+        return v8;
+}
+
 func inline(always) private %impl_trait_Address__decode_payload__g407e(v0.objref<@layout_4>) -> @layout_0 {
     block0:
         jump block1;
@@ -3507,7 +3507,7 @@ func inline(always) private %decode_runtime_args__g5a0b(v0.objref<@layout_18>) {
 
     block4:
         v11.i256 = mload v1 i256;
-        call %decode_from_checked_head__g4997 v4 4.i256 v11;
+        call %decode_from_prechecked_head__g4997 v4 4.i256 v11;
         return;
 
     block5:
@@ -3541,7 +3541,7 @@ func inline(always) private %decode_runtime_args__g6a7c(v0.objref<@layout_18>) -
 
     block4:
         v12.i256 = mload v1 i256;
-        v13.@layout_15 = call %decode_from_checked_head__g383e v4 4.i256 v12;
+        v13.@layout_15 = call %decode_from_prechecked_head__g383e v4 4.i256 v12;
         return v13;
 
     block5:
@@ -3575,7 +3575,7 @@ func inline(always) private %decode_runtime_args__g7a2c(v0.objref<@layout_18>) -
 
     block4:
         v12.i256 = mload v1 i256;
-        v13.@layout_7 = call %decode_from_checked_head__gab8c v4 4.i256 v12;
+        v13.@layout_7 = call %decode_from_prechecked_head__gab8c v4 4.i256 v12;
         return v13;
 
     block5:
@@ -3609,7 +3609,7 @@ func inline(always) private %decode_runtime_args__g295c(v0.objref<@layout_18>) {
 
     block4:
         v11.i256 = mload v1 i256;
-        call %decode_from_checked_head__g691a v4 4.i256 v11;
+        call %decode_from_prechecked_head__g691a v4 4.i256 v11;
         return;
 
     block5:
@@ -3643,7 +3643,7 @@ func inline(always) private %decode_runtime_args__gce7d(v0.objref<@layout_18>) {
 
     block4:
         v11.i256 = mload v1 i256;
-        call %decode_from_checked_head__g051e v4 4.i256 v11;
+        call %decode_from_prechecked_head__g051e v4 4.i256 v11;
         return;
 
     block5:
@@ -3677,7 +3677,7 @@ func inline(always) private %decode_runtime_args__g2273(v0.objref<@layout_18>) -
 
     block4:
         v12.i256 = mload v1 i256;
-        v13.@layout_8 = call %decode_from_checked_head__g76d6 v4 4.i256 v12;
+        v13.@layout_8 = call %decode_from_prechecked_head__g76d6 v4 4.i256 v12;
         return v13;
 
     block5:
@@ -3711,7 +3711,7 @@ func inline(always) private %decode_runtime_args__g4e54(v0.objref<@layout_18>) -
 
     block4:
         v12.i256 = mload v1 i256;
-        v13.@layout_13 = call %decode_from_checked_head__g6690 v4 4.i256 v12;
+        v13.@layout_13 = call %decode_from_prechecked_head__g6690 v4 4.i256 v12;
         return v13;
 
     block5:
@@ -3745,7 +3745,7 @@ func inline(always) private %decode_runtime_args__g698d(v0.objref<@layout_18>) -
 
     block4:
         v12.i256 = mload v1 i256;
-        v13.@layout_12 = call %decode_from_checked_head__g7d8c v4 4.i256 v12;
+        v13.@layout_12 = call %decode_from_prechecked_head__g7d8c v4 4.i256 v12;
         return v13;
 
     block5:
@@ -3779,7 +3779,7 @@ func inline(always) private %decode_runtime_args__gc772(v0.objref<@layout_18>) -
 
     block4:
         v12.i256 = mload v1 i256;
-        v13.@layout_6 = call %decode_from_checked_head__g5470 v4 4.i256 v12;
+        v13.@layout_6 = call %decode_from_prechecked_head__g5470 v4 4.i256 v12;
         return v13;
 
     block5:
@@ -3813,7 +3813,7 @@ func inline(always) private %decode_runtime_args__g953d(v0.objref<@layout_18>) -
 
     block4:
         v12.i256 = mload v1 i256;
-        v13.@layout_11 = call %decode_from_checked_head__g7ea0 v4 4.i256 v12;
+        v13.@layout_11 = call %decode_from_prechecked_head__g7ea0 v4 4.i256 v12;
         return v13;
 
     block5:
@@ -3847,7 +3847,7 @@ func inline(always) private %decode_runtime_args__g216b(v0.objref<@layout_18>) -
 
     block4:
         v12.i256 = mload v1 i256;
-        v13.@layout_10 = call %decode_from_checked_head__gad59 v4 4.i256 v12;
+        v13.@layout_10 = call %decode_from_prechecked_head__gad59 v4 4.i256 v12;
         return v13;
 
     block5:
@@ -3881,7 +3881,7 @@ func inline(always) private %decode_runtime_args__gf629(v0.objref<@layout_18>) -
 
     block4:
         v12.i256 = mload v1 i256;
-        v13.@layout_9 = call %decode_from_checked_head__g41f8 v4 4.i256 v12;
+        v13.@layout_9 = call %decode_from_prechecked_head__g41f8 v4 4.i256 v12;
         return v13;
 
     block5:
@@ -3915,7 +3915,7 @@ func inline(always) private %decode_runtime_args__gce2e(v0.objref<@layout_18>) {
 
     block4:
         v11.i256 = mload v1 i256;
-        call %decode_from_checked_head__gbd88 v4 4.i256 v11;
+        call %decode_from_prechecked_head__gbd88 v4 4.i256 v11;
         return;
 
     block5:
@@ -3949,7 +3949,7 @@ func inline(always) private %decode_runtime_args__ge035(v0.objref<@layout_18>) -
 
     block4:
         v12.i256 = mload v1 i256;
-        v13.@layout_14 = call %decode_from_checked_head__g205f v4 4.i256 v12;
+        v13.@layout_14 = call %decode_from_prechecked_head__g205f v4 4.i256 v12;
         return v13;
 
     block5:

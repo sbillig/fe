@@ -215,7 +215,7 @@ func inline(always) private %decode_from(v0.@layout_1, v1.i256) {
         return;
 }
 
-func inline(always) private %decode_from_checked_head(v0.@layout_1, v1.i256, v2.i256) {
+func inline(always) private %decode_from_prechecked_head(v0.@layout_1, v1.i256, v2.i256) {
     block0:
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
@@ -253,7 +253,7 @@ func inline(always) private %decode_runtime_args(v0.objref<@layout_3>) {
 
     block4:
         v11.i256 = mload v1 i256;
-        call %decode_from_checked_head v4 4.i256 v11;
+        call %decode_from_prechecked_head v4 4.i256 v11;
         return;
 
     block5:

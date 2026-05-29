@@ -14,7 +14,7 @@ use core::abi::{
     StringView,
     abi_single_root_head_size,
     checked_frame_end,
-    decode_field_from_checked_head,
+    decode_field_from_prechecked_head,
     decode_frame_from,
 }
 use core::{AsBytes, keccak}
@@ -229,7 +229,7 @@ pub fn decode_output_at<T, I>(_ input: own I, _ base: u256) -> T
 {
     let input_len = input.len()
     checked_frame_end<Sol>(base, abi_single_root_head_size<T>(), input_len)
-    decode_field_from_checked_head<Sol, T, I>(input, base: base, head_pos: base, input_len: input_len)
+    decode_field_from_prechecked_head<Sol, T, I>(input, base: base, head_pos: base, input_len: input_len)
 }
 
 /// Decode a Solidity ABI `bytes` payload view from `input` at byte 0.

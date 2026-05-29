@@ -466,7 +466,22 @@ func inline(always) private %decode_from__g72ab(v0.@layout_4, v1.i256) -> i256 {
         return v5;
 }
 
-func inline(always) private %decode_from_checked_head__g2f3f(v0.@layout_4, v1.i256, v2.i256) {
+func inline(always) private %decode_from_prechecked_head__g2d0f(v0.@layout_4, v1.i256, v2.i256) {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
+        jump block1;
+
+    block1:
+        v5.i256 = mload v4 i256;
+        v7.i256 = mload v3 i256;
+        call %impl_trait_GetX__decode_from__gd20d v0 v7;
+        return;
+}
+
+func inline(always) private %decode_from_prechecked_head__g2f3f(v0.@layout_4, v1.i256, v2.i256) {
     block0:
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
@@ -481,7 +496,7 @@ func inline(always) private %decode_from_checked_head__g2f3f(v0.@layout_4, v1.i2
         return;
 }
 
-func inline(always) private %decode_from_checked_head__g6fcf(v0.@layout_4, v1.i256, v2.i256) -> @layout_5 {
+func inline(always) private %decode_from_prechecked_head__g6fcf(v0.@layout_4, v1.i256, v2.i256) -> @layout_5 {
     block0:
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
@@ -494,21 +509,6 @@ func inline(always) private %decode_from_checked_head__g6fcf(v0.@layout_4, v1.i2
         v7.i256 = mload v3 i256;
         v8.@layout_5 = call %impl_trait_Echo__decode_from__gd20d v0 v7;
         return v8;
-}
-
-func inline(always) private %decode_from_checked_head__g2d0f(v0.@layout_4, v1.i256, v2.i256) {
-    block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
-        jump block1;
-
-    block1:
-        v5.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        call %impl_trait_GetX__decode_from__gd20d v0 v7;
-        return;
 }
 
 func private %decode_payload__g4770(v0.objref<@layout_3>) -> @layout_6 {
@@ -559,7 +559,7 @@ func inline(always) private %decode_runtime_args__g9e33(v0.objref<@layout_8>) ->
 
     block4:
         v12.i256 = mload v1 i256;
-        v13.@layout_5 = call %decode_from_checked_head__g6fcf v4 4.i256 v12;
+        v13.@layout_5 = call %decode_from_prechecked_head__g6fcf v4 4.i256 v12;
         return v13;
 
     block5:
@@ -593,7 +593,7 @@ func inline(always) private %decode_runtime_args__gf173(v0.objref<@layout_8>) {
 
     block4:
         v11.i256 = mload v1 i256;
-        call %decode_from_checked_head__g2d0f v4 4.i256 v11;
+        call %decode_from_prechecked_head__g2d0f v4 4.i256 v11;
         return;
 
     block5:
@@ -627,7 +627,7 @@ func inline(always) private %decode_runtime_args__g235a(v0.objref<@layout_8>) {
 
     block4:
         v11.i256 = mload v1 i256;
-        call %decode_from_checked_head__g2f3f v4 4.i256 v11;
+        call %decode_from_prechecked_head__g2f3f v4 4.i256 v11;
         return;
 
     block5:

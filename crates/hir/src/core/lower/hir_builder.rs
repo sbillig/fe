@@ -857,7 +857,7 @@ where
             ],
         );
         let decode_func = if input.input_len_ident.is_some() {
-            "decode_field_from_with_input_len"
+            "decode_field_from_prechecked_head"
         } else {
             "decode_field_from"
         };

@@ -63,7 +63,7 @@ pub fn decode_runtime_args<H, A, T>(_ host: mut H) -> T
         host.abort()
     }
 
-    T::decode_from_checked_head(input, base, len)
+    T::decode_from_prechecked_head(input, base, len)
 }
 
 /// Target configuration used by compiler-generated contract entrypoints.
