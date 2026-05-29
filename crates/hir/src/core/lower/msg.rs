@@ -641,35 +641,17 @@ fn build_decode_head_pos_expr<'db, O: Clone + Into<crate::span::DesugaredOrigin>
     expr
 }
 
-fn ty_uses_cached_decode_input_len<'db>(db: &'db dyn HirDb, ty: TypeId<'db>) -> bool {
-    match ty.data(db) {
-        TypeKind::Path(Partial::Present(path)) => path
-            .ident(db)
-            .to_opt()
-            .map(|ident| {
-                matches!(
-                    ident.data(db).as_str(),
-                    "Bytes" | "DynString" | "Text" | "Vec"
-                )
-            })
-            .unwrap_or_default(),
-        TypeKind::Path(Partial::Absent) => false,
-        TypeKind::Tuple(tuple) => tuple
-            .data(db)
-            .iter()
-            .copied()
-            .filter_map(Partial::to_opt)
-            .any(|elem| ty_uses_cached_decode_input_len(db, elem)),
-        TypeKind::Mode(_, inner) => inner
-            .to_opt()
-            .map(|inner| ty_uses_cached_decode_input_len(db, inner))
-            .unwrap_or_default(),
-        TypeKind::Array(elem, _) => elem
-            .to_opt()
-            .map(|elem| ty_uses_cached_decode_input_len(db, elem))
-            .unwrap_or_default(),
-        TypeKind::Ptr(_) | TypeKind::Never => false,
+fn emit_msg_decode_from_fields<'db>(
+    body: &mut BodyBuilder<'_, 'db, MsgDesugared>,
+    fields: &[(IdentId<'db>, TypeId<'db>)],
+    field_names: &[IdentId<'db>],
+    decode_input: DecodeInputBindings<'db>,
+) {
+    for (idx, (name, ty)) in fields.iter().copied().enumerate() {
+        let head_pos = build_decode_head_pos_expr(body, decode_input.base_ident, &fields[..idx]);
+        body.decode_from_into(name, ty, decode_input, head_pos);
     }
+    body.return_record_self(field_names);
 }
 
 fn lower_msg_variant_decode_trait_impl<'db>(
@@ -712,17 +694,11 @@ fn lower_msg_variant_decode_trait_impl<'db>(
 
         let input_ident = builder.generated_ident("msg_decode_input");
         let base_ident = builder.generated_ident("msg_decode_base");
-        let input_len_ident = if fields
-            .iter()
-            .any(|(_, ty)| ty_uses_cached_decode_input_len(db, *ty))
-        {
-            Some(builder.generated_ident("msg_decode_input_len"))
-        } else {
-            None
-        };
+        let input_len_ident = builder.generated_ident("msg_decode_input_len");
+        let u256_ty = builder.ty_ident(builder.ident("u256"));
         let params = builder.params([
             builder.param_underscore_named(input_ident, i_ty),
-            builder.param_underscore_named(base_ident, builder.ty_ident(builder.ident("u256"))),
+            builder.param_underscore_named(base_ident, u256_ty),
         ]);
         let decode_input = DecodeInputBindings {
             input_ident,
@@ -738,14 +714,10 @@ fn lower_msg_variant_decode_trait_impl<'db>(
             Some(builder.self_ty()),
             FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
-                if let Some(input_len_ident) = input_len_ident {
+                if !fields.is_empty() {
                     body.bind_input_len(input_len_ident, input_ident);
                 }
-                for (idx, (name, ty)) in fields.iter().copied().enumerate() {
-                    let head_pos = build_decode_head_pos_expr(body, base_ident, &fields[..idx]);
-                    body.decode_from_into(name, ty, decode_input, head_pos);
-                }
-                body.return_record_self(&field_names);
+                emit_msg_decode_from_fields(body, &fields, &field_names, decode_input);
             },
         );
     })

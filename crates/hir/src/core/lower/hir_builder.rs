@@ -573,7 +573,7 @@ pub(super) struct DecodeInputBindings<'db> {
     pub(super) input_ident: IdentId<'db>,
     pub(super) input_ty: TypeId<'db>,
     pub(super) base_ident: IdentId<'db>,
-    pub(super) input_len_ident: Option<IdentId<'db>>,
+    pub(super) input_len_ident: IdentId<'db>,
 }
 
 impl<'ctxt, 'db, O> BodyBuilder<'ctxt, 'db, O>
@@ -856,18 +856,13 @@ where
                 }),
             ],
         );
-        let decode_func = if input.input_len_ident.is_some() {
-            "decode_field_from_prechecked_head"
-        } else {
-            "decode_field_from"
-        };
         let decode_path = PathId::from_ident(db, self.roots.core)
             .push_str(db, "abi")
-            .push_str_args(db, decode_func, decode_args);
+            .push_str_args(db, "decode_msg_field_from", decode_args);
         let decode_callee = self.path_expr(decode_path);
         let input_expr = self.ident_expr(input.input_ident);
         let base_expr = self.ident_expr(input.base_ident);
-        let mut args = vec![
+        let args = vec![
             CallArg {
                 label: None,
                 expr: input_expr,
@@ -880,13 +875,11 @@ where
                 label: Some(IdentId::new(db, "head_pos".to_string())),
                 expr: head_pos,
             },
-        ];
-        if let Some(input_len_ident) = input.input_len_ident {
-            args.push(CallArg {
+            CallArg {
                 label: Some(IdentId::new(db, "input_len".to_string())),
-                expr: self.ident_expr(input_len_ident),
-            });
-        }
+                expr: self.ident_expr(input.input_len_ident),
+            },
+        ];
         let decode_call = self.call_expr_with_args(decode_callee, args);
 
         let bind_pat = self.push_pat(Pat::Path(

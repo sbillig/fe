@@ -127,7 +127,8 @@ mod CounterMsg {
 
         #[inline(always)]
         fn decode_from<I: core::abi::ByteInput>(_ __fe_msg_decode_input: I, _ __fe_msg_decode_base: u256) -> Self {
-            let val: u64 = core::abi::decode_field_from<std::abi::Sol, u64, I>(__fe_msg_decode_input, base: __fe_msg_decode_base, head_pos: __fe_msg_decode_base)
+            let __fe_msg_decode_input_len: u256 = __fe_msg_decode_input.len()
+            let val: u64 = core::abi::decode_msg_field_from<std::abi::Sol, u64, I>(__fe_msg_decode_input, base: __fe_msg_decode_base, head_pos: __fe_msg_decode_base, input_len: __fe_msg_decode_input_len)
             return Self { val: val }
         }
     }

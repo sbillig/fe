@@ -188,7 +188,7 @@ pub trait AbiSpan<A: Abi>: AbiSize {
     }
 }
 
-pub trait Decode<A: Abi> {
+pub trait Decode<A: Abi>: AbiSize {
     fn decode_payload<D: AbiDecoder<A>>(_: mut D) -> Self
 
     /// Decode from a raw ABI payload position. Callers that use this path are
@@ -219,6 +219,7 @@ pub trait Decode<A: Abi> {
     fn decode_from_bounded<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
+        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
         Self::decode_from(input, pos)
     }
 }
@@ -348,6 +349,20 @@ pub fn decode_field_from<A: Abi, T, I>(_ input: I, base: u256, head_pos: u256) -
     }
 
     T::decode_from(input, head_pos)
+}
+
+#[inline(always)]
+pub fn decode_msg_field_from<A: Abi, T, I>(_ input: I, base: u256, head_pos: u256, input_len: u256) -> T
+    where T: Decode<A> + AbiSize,
+          I: ByteInput,
+          A::Decoder<I>: AbiDecoder<A>
+{
+    if T::IS_DYNAMIC {
+        return decode_field_from_prechecked_head<A, T, I>(input, base: base, head_pos: head_pos, input_len: input_len)
+    }
+
+    let _ = input_len
+    decode_field_from<A, T, I>(input, base: base, head_pos: head_pos)
 }
 
 /// Decode a field whose head word lies inside an already-checked parent frame.
