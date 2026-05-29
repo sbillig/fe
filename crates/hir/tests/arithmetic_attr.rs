@@ -17,9 +17,8 @@ fn bad() {}"#,
     assert!(
         diags.iter().any(|diag| {
             let diag = diag.to_complete(&db);
-            diag.error_code.pass == DiagnosticPass::ArithmeticAttr
-                && diag.error_code.local_code == 2
+            diag.error_code.pass == DiagnosticPass::AttrMisuse && diag.error_code.local_code == 2
         }),
-        "expected invalid arithmetic attribute diagnostic from test-db analysis pipeline"
+        "expected invalid attribute diagnostic from test-db analysis pipeline"
     );
 }

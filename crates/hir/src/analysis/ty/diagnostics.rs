@@ -237,6 +237,12 @@ pub struct StaticAssertComparisonValues {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub enum MustUseSubject<'db> {
+    Type(TyId<'db>),
+    Function(CallableDef<'db>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum BodyDiag<'db> {
     TypeMismatch {
         span: DynLazySpan<'db>,
@@ -576,6 +582,10 @@ pub enum BodyDiag<'db> {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
     },
+    UnusedMustUse {
+        primary: DynLazySpan<'db>,
+        subject: MustUseSubject<'db>,
+    },
 
     NonExhaustiveMatch {
         primary: DynLazySpan<'db>,
@@ -820,6 +830,7 @@ impl<'db> BodyDiag<'db> {
             Self::InvisibleAmbiguousTrait { .. } => 28,
             Self::NotValue { .. } => 30,
             Self::TypeAnnotationNeeded { .. } => 31,
+            Self::UnusedMustUse { .. } => 82,
             Self::DuplicatedBinding { .. } => 32,
             Self::NotAMethod { .. } => 33,
             Self::NonExhaustiveMatch { .. } => 34,

@@ -1,0 +1,9 @@
+use core::result::Result::{self, Ok}
+
+fn make_result() -> Result<bool, u256> {
+    Ok(1)
+}
+
+fn bad() {
+    make_result()
+}

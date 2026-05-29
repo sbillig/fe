@@ -1,0 +1,237 @@
+use core::option::Option
+use core::result::Result
+use std::evm::{Address, Call, Evm, RawMem, assert, mem}
+use std::evm::crypto::{
+    PrecompileError,
+    blake2f,
+    bls12_g1_add,
+    bls12_g1_msm,
+    bls12_g2_add,
+    bls12_g2_msm,
+    bls12_map_fp_to_g1,
+    bls12_map_fp2_to_g2,
+    bls12_pairing,
+    ec_add,
+    ecrecover,
+    ecrecover_raw,
+    identity,
+    kzg_point_evaluation,
+    modexp,
+    modexp_raw,
+    p256_verify,
+    ripemd160,
+    sha256,
+}
+
+const ECRECOVER_SIGNER: u256 = 0xfcad0b19bb29d4674531d6f115237e16afce377c
+const ECRECOVER_HASH: u256 = 0x0000000000000000000000000000000000000000000000000000000000000001
+const ECRECOVER_R: u256 = 0x51135217d5885b74d5ae8cd048417c9c166fa4caf45b3b5c9552eb1f5c2fff61
+const ECRECOVER_LOW_S: u256 = 0x0878b2f0cafb98fc3d0fbc7349118150d6972483bd2a4599df4313c251efbdf5
+const ECRECOVER_HIGH_S: u256 = 0xf7874d0f35046703c2f0438cb6ee7eade417b862f21e5aa1e08f4aca7e46834c
+
+fn expect_word(_ result: Result<PrecompileError, u256>) -> u256 {
+    match result {
+        Result::Ok(value) => value,
+        Result::Err(_) => {
+            assert(false)
+            0
+        }
+    }
+}
+
+fn expect_bool(_ result: Result<PrecompileError, bool>) -> bool {
+    match result {
+        Result::Ok(value) => value,
+        Result::Err(_) => {
+            assert(false)
+            false
+        }
+    }
+}
+
+fn expect_bytes(_ result: Result<PrecompileError, std::evm::MemoryBytes>) -> std::evm::MemoryBytes {
+    match result {
+        Result::Ok(value) => value,
+        Result::Err(_) => {
+            assert(false)
+            std::evm::MemoryBytes::new(base: 0, len: 0)
+        }
+    }
+}
+
+fn expect_pair(_ result: Result<PrecompileError, (u256, u256)>) -> (u256, u256) {
+    match result {
+        Result::Ok(value) => value,
+        Result::Err(_) => {
+            assert(false)
+            (0, 0)
+        }
+    }
+}
+
+fn zero_memory(ptr: u256, len: u256)
+uses (evm: mut Evm)
+{
+    let mut offset: u256 = 0
+    while offset < len {
+        evm.mstore(addr: ptr + offset, value: 0)
+        offset += 32
+    }
+}
+
+fn expect_recovery(_ result: Result<PrecompileError, Option<u256>>) -> u256 {
+    match result {
+        Result::Ok(recovered) => match recovered {
+            Option::Some(addr) => addr,
+            Option::None => {
+                assert(false)
+                0
+            },
+        },
+        Result::Err(_) => {
+            assert(false)
+            0
+        },
+    }
+}
+
+fn expect_no_recovery(_ result: Result<PrecompileError, Option<u256>>) {
+    match result {
+        Result::Ok(recovered) => match recovered {
+            Option::Some(_) => assert(false),
+            Option::None => (),
+        },
+        Result::Err(_) => assert(false),
+    }
+}
+
+fn compile_all_precompile_wrappers(_ ptr: u256) {
+    let _ = bls12_g1_add(offset: ptr)
+    let _ = bls12_g1_msm(offset: ptr, len: 160)
+    let _ = bls12_g2_add(offset: ptr)
+    let _ = bls12_g2_msm(offset: ptr, len: 288)
+    let _ = bls12_pairing(offset: ptr, len: 384)
+    let _ = bls12_map_fp_to_g1(offset: ptr)
+    let _ = bls12_map_fp2_to_g2(offset: ptr)
+}
+
+#[test]
+fn test_hash_and_copy_precompiles_return_results()
+uses (evm: mut Evm)
+{
+    let ptr = mem::alloc(64)
+    evm.mstore(
+        addr: ptr,
+        value: 0x1111111111111111111111111111111111111111111111111111111111111111,
+    )
+    evm.mstore(
+        addr: ptr + 32,
+        value: 0x2222222222222222222222222222222222222222222222222222222222222222,
+    )
+
+    let sha = expect_word(sha256(offset: ptr, len: 0))
+    assert(sha == 0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)
+
+    let ripemd = expect_word(ripemd160(offset: ptr, len: 0))
+    assert(ripemd == 0x9c1185a5c5e9fc54612808977ee8f548b2258d31)
+
+    let copied = expect_bytes(identity(offset: ptr, len: 64))
+    assert(copied.len == 64)
+    assert(evm.mload(copied.base) == evm.mload(ptr))
+    assert(evm.mload(copied.base + 32) == evm.mload(ptr + 32))
+}
+
+#[test]
+fn test_signature_precompiles_expose_invalid_signature()
+uses (evm: mut Evm)
+{
+    assert(
+        expect_recovery(ecrecover(
+            hash: ECRECOVER_HASH,
+            v: 27,
+            r: ECRECOVER_R,
+            s: ECRECOVER_LOW_S,
+        )) == ECRECOVER_SIGNER,
+    )
+    expect_no_recovery(ecrecover(
+        hash: ECRECOVER_HASH,
+        v: 28,
+        r: ECRECOVER_R,
+        s: ECRECOVER_HIGH_S,
+    ))
+    assert(
+        expect_recovery(ecrecover_raw(
+            hash: ECRECOVER_HASH,
+            v: 28,
+            r: ECRECOVER_R,
+            s: ECRECOVER_HIGH_S,
+        )) == ECRECOVER_SIGNER,
+    )
+    expect_no_recovery(ecrecover(hash: 0, v: 0, r: 0, s: 0))
+
+    let p256_input = mem::alloc(160)
+    zero_memory(ptr: p256_input, len: 160)
+    assert(!expect_bool(p256_verify(offset: p256_input)))
+}
+
+#[test]
+fn test_math_and_ec_precompiles_return_results()
+uses (evm: mut Evm)
+{
+    assert(expect_word(modexp(base: 2, exp: 5, modulus: 13)) == 6)
+
+    let raw = mem::alloc(192)
+    evm.mstore(addr: raw, value: 32)
+    evm.mstore(addr: raw + 32, value: 32)
+    evm.mstore(addr: raw + 64, value: 32)
+    evm.mstore(addr: raw + 96, value: 2)
+    evm.mstore(addr: raw + 128, value: 5)
+    evm.mstore(addr: raw + 160, value: 13)
+    let raw_out = expect_bytes(modexp_raw(offset: raw, len: 192, ret_len: 32))
+    assert(evm.mload(raw_out.base) == 6)
+
+    let sum = expect_pair(ec_add(ax: 0, ay: 0, bx: 0, by: 0))
+    assert(sum.0 == 0)
+    assert(sum.1 == 0)
+
+    match ec_add(ax: 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001, ay: 0, bx: 0, by: 0) {
+        Result::Ok(_) => assert(false),
+        Result::Err(_) => (),
+    }
+}
+
+#[test]
+fn test_raw_staticcall_copies_to_output_buffer()
+uses (evm: mut Evm)
+{
+    let ptr = mem::alloc(64)
+    zero_memory(ptr: ptr, len: 64)
+    let out = mem::alloc(64)
+    assert(evm.raw_staticcall(
+        addr: Address { inner: 4 },
+        gas: 1000000,
+        args_offset: ptr,
+        args_len: 64,
+        ret_offset: out,
+        ret_len: 64,
+    ))
+    assert(evm.mload(out) == 0)
+    assert(evm.mload(out + 32) == 0)
+}
+
+#[test]
+fn test_new_fixed_buffer_wrappers_do_not_bubble_failure()
+uses (evm: mut Evm)
+{
+    let ptr = mem::alloc(224)
+    zero_memory(ptr: ptr, len: 224)
+
+    match blake2f(offset: ptr) {
+        Result::Ok(_) => (),
+        Result::Err(_) => (),
+    }
+
+    let _ = kzg_point_evaluation(offset: ptr)
+
+    let _ = ptr
+}

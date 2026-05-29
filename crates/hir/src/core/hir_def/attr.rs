@@ -48,6 +48,13 @@ pub enum LoopUnrollAttrErrorKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum MustUseAttrErrorKind {
+    Duplicate,
+    InvalidForm,
+    UnsupportedTarget,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum InlineAttr {
     Hint(InlineHint),
     Error(InlineAttrErrorKind),
@@ -95,6 +102,12 @@ pub(crate) struct InlineAttrParseError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LoopUnrollAttrParseError {
     pub kind: LoopUnrollAttrErrorKind,
+    pub attr_index: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MustUseAttrParseError {
+    pub kind: MustUseAttrErrorKind,
     pub attr_index: usize,
 }
 
@@ -147,6 +160,29 @@ pub(crate) fn parse_loop_unroll_attr_specs(
     }
 
     Ok(unroll_hint)
+}
+
+pub(crate) fn parse_must_use_attr_specs(
+    attrs: impl IntoIterator<Item = KeywordAttrSpec>,
+) -> Result<bool, MustUseAttrParseError> {
+    let mut has_must_use = false;
+
+    for (attr_index, attr) in attrs.into_iter().enumerate() {
+        parse_marker_attr_spec(&attr)
+            .map_err(|()| MustUseAttrErrorKind::InvalidForm)
+            .map_err(|kind| MustUseAttrParseError { kind, attr_index })?;
+
+        if has_must_use {
+            return Err(MustUseAttrParseError {
+                kind: MustUseAttrErrorKind::Duplicate,
+                attr_index,
+            });
+        }
+
+        has_must_use = true;
+    }
+
+    Ok(has_must_use)
 }
 
 pub(crate) fn parse_manual_contract_root_attr_specs<'db>(
@@ -351,6 +387,25 @@ impl<'db> AttrListId<'db> {
             Ok(None) => None,
             Err(err) => Some(LoopUnrollAttr::Error(err.kind)),
         }
+    }
+
+    pub fn is_must_use(self, db: &'db dyn HirDb) -> bool {
+        parse_must_use_attr_specs(self.data(db).iter().filter_map(|attr| {
+            let Attr::Normal(normal_attr) = attr else {
+                return None;
+            };
+            if normal_attr
+                .path
+                .to_opt()
+                .and_then(|path| path.as_ident(db))
+                .is_none_or(|ident| ident.data(db) != "must_use")
+            {
+                return None;
+            }
+
+            Some(normal_attr.keyword_attr_spec(db))
+        }))
+        .unwrap_or(false)
     }
 
     pub fn manual_contract_root_attr(

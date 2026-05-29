@@ -1,0 +1,17 @@
+use core::result::Result
+
+struct UnitError {}
+
+impl Copy for UnitError {}
+
+fn fail() -> Result<UnitError, u256> {
+    Result::Err(UnitError {})
+}
+
+#[test]
+fn test_unit_struct_result_err_payload_lowers() {
+    match fail() {
+        Result::Ok(_) => assert(false),
+        Result::Err(_) => (),
+    }
+}

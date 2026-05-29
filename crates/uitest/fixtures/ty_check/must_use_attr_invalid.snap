@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/must_use_attr_invalid.fe
+---
+error[12-0001]: unsupported `#[must_use]` attribute on type alias `Alias`
+   ┌─ must_use_attr_invalid.fe:11:1
+   │
+11 │ #[must_use]
+   │ ^^^^^^^^^^^ `#[must_use]` is only supported on functions, structs, and enums
+
+error[12-0002]: invalid `#[must_use]` attribute form on fn `invalid_form`
+  ┌─ must_use_attr_invalid.fe:1:1
+  │
+1 │ #[must_use()]
+  │ ^^^^^^^^^^^^^ expected `#[must_use]`
+
+error[12-0002]: invalid `#[must_use]` attribute form on struct `InvalidValue`
+  ┌─ must_use_attr_invalid.fe:8:1
+  │
+8 │ #[must_use = "reason"]
+  │ ^^^^^^^^^^^^^^^^^^^^^^ expected `#[must_use]`
+
+error[12-0003]: duplicate `#[must_use]` attribute on fn `duplicate`
+  ┌─ must_use_attr_invalid.fe:5:1
+  │
+5 │ #[must_use]
+  │ ^^^^^^^^^^^ remove the extra `#[must_use]` attribute

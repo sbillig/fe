@@ -635,7 +635,7 @@ async fn scenario_format_during_generic_struct_keystroke_sequence(
     }
 }
 
-/// Regression test: ArithmeticAttrPass was absent from initialize_analysis_pass().
+/// Regression test: AttrMisusePass was absent from initialize_analysis_pass().
 /// That caused invalid arithmetic attributes to surface in CLI diagnostics while
 /// silently disappearing from the language server.
 async fn scenario_arithmetic_attr_reports_errors(client: &mut MockLspClient, uri: &Url) {
@@ -651,7 +651,7 @@ fn bad() {}"#,
     assert!(
         found,
         "expected error 12-0002 (invalid arithmetic attribute form) — \
-         ArithmeticAttrPass must be registered in initialize_analysis_pass(); \
+         AttrMisusePass must be registered in initialize_analysis_pass(); \
          got: {:?}",
         client.diagnostics_for_uri(uri),
     );
@@ -688,11 +688,11 @@ pub contract Broken {
     );
 }
 
-/// Regression test: PayableAttrPass was absent from initialize_analysis_pass().
+/// Regression test: AttrMisusePass was absent from initialize_analysis_pass().
 /// Invalid `#[payable]` usages must be reported by the LSP, not just by `fe check`.
 async fn scenario_payable_attr_reports_errors(client: &mut MockLspClient, uri: &Url) {
     client.clear_diagnostics();
-    // `#[payable(foo)]` is invalid — the attribute takes no arguments (error 13-0002).
+    // `#[payable(foo)]` is invalid — the attribute takes no arguments (error 12-0002).
     client.did_change(
         uri,
         850,
@@ -708,11 +708,11 @@ pub contract BadPayable {
 }"#,
     );
 
-    let found = client.wait_for_diagnostic_code(uri, "13-0002").await;
+    let found = client.wait_for_diagnostic_code(uri, "12-0002").await;
     assert!(
         found,
-        "expected error 13-0002 (invalid #[payable] form) — \
-         PayableAttrPass must be registered in initialize_analysis_pass(); \
+        "expected error 12-0002 (invalid #[payable] form) — \
+         AttrMisusePass must be registered in initialize_analysis_pass(); \
          got: {:?}",
         client.diagnostics_for_uri(uri),
     );

@@ -9,9 +9,9 @@ error[6-0003]: trait bound is not satisfied
 24 │     r.map(ToWrap{}).map(StillNeedsU256{}).unwrap()
    │                     ^^^ `StillNeedsU256` doesn't implement `Fn<Wrap, u256>`
    │
-   ┌─ src/result.fe:62:22
+   ┌─ src/result.fe:63:22
    │
-62 │     pub fn map<U, F: Fn<T, U>>(own self, _ func: F) -> Result<E, U> {
+63 │     pub fn map<U, F: Fn<T, U>>(own self, _ func: F) -> Result<E, U> {
    │                      -------- required by this bound on `map`
 
 error[6-0003]: trait bound is not satisfied

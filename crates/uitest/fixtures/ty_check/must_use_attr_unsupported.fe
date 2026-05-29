@@ -1,0 +1,9 @@
+#[must_use]
+const VALUE: u256 = 1
+
+#[must_use]
+contract BadContract {}
+
+mod bad_mod {
+    #![must_use]
+}

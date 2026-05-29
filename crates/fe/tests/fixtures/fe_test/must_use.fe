@@ -1,0 +1,46 @@
+use core::result::Result::{self, Ok}
+
+#[must_use]
+enum Token {
+    Value,
+}
+
+fn make_result() -> Result<bool, u256> {
+    Ok(7)
+}
+
+fn make_token() -> Token {
+    Token::Value
+}
+
+#[must_use]
+fn compute() -> u256 {
+    5
+}
+
+fn consume_result(_ value: own Result<bool, u256>) -> u256 {
+    1
+}
+
+#[test]
+fn must_use_values_can_be_used() {
+    let value: u256 = make_result().unwrap()
+    assert(value == 7)
+
+    match make_token() {
+        Token::Value => assert(true)
+    }
+
+    let computed: u256 = compute()
+    assert(computed == 5)
+
+    let consumed: u256 = consume_result(make_result())
+    assert(consumed == 1)
+}
+
+#[test]
+fn must_use_values_can_be_explicitly_discarded() {
+    let _ = make_result()
+    let _ = make_token()
+    let _ = compute()
+}

@@ -193,6 +193,13 @@ impl<'db> AdtRef<'db> {
             .unwrap_or_else(DynLazySpan::invalid)
     }
 
+    pub fn is_must_use(self, db: &'db dyn HirAnalysisDb) -> bool {
+        match self {
+            AdtRef::Enum(enum_) => enum_.is_must_use(db),
+            AdtRef::Struct(struct_) => struct_.is_must_use(db),
+        }
+    }
+
     /// Returns the semantic ADT definition for this reference.
     /// Thin wrapper over the tracked `lower_adt` query for ergonomic use at call sites.
     pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {

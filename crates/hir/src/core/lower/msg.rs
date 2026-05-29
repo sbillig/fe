@@ -663,7 +663,12 @@ fn lower_msg_variant_struct<'db>(
     variant: &ast::MsgVariant,
 ) -> Struct<'db> {
     let name = IdentId::lower_token_partial(builder.ctxt(), variant.name());
-    super::payable::report_payable_attr_on_msg_variant(builder.ctxt(), variant.attr_list());
+    super::item::report_payable_on_unsupported_target(
+        builder.ctxt(),
+        variant.attr_list(),
+        "msg variant",
+        variant.name().map(|name| name.text().to_string()),
+    );
     let attributes = filter_msg_variant_attrs(builder.ctxt(), variant.attr_list());
     let fields = lower_msg_variant_fields(builder.ctxt(), variant.params());
     builder.pub_struct(name, attributes, fields)
@@ -680,10 +685,11 @@ fn lower_msg_variant_fields<'db>(
             let fields = params
                 .into_iter()
                 .map(|field| {
-                    super::payable::report_payable_attr_on_unsupported_item(
+                    super::item::report_payable_on_unsupported_target(
                         ctxt,
                         field.attr_list(),
                         "field",
+                        None,
                     );
                     let attributes = AttrListId::lower_ast_opt(ctxt, field.attr_list());
                     let name = IdentId::lower_token_partial(ctxt, field.name());

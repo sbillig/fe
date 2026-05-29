@@ -53,8 +53,8 @@ impl<'db> ContractRecvArm<'db> {
         let body = body_ctxt.build(body_ast.as_ref(), body_expr, BodyKind::FuncBody);
         let ret_ty = ast.ret_ty().map(|ty| TypeId::lower_ast(ctxt, ty));
         let effects = lower_uses_clause_opt(ctxt, ast.uses_clause());
-        super::payable::report_unknown_attrs_on_contract_entry(ctxt, ast.attr_list(), "recv arm");
-        let attributes = super::payable::lower_contract_entry_attrs_opt(ctxt, ast.attr_list());
+        let attributes =
+            super::payable::lower_contract_entry_attrs_opt(ctxt, ast.attr_list(), "recv arm");
 
         ContractRecvArm {
             pat,
@@ -86,15 +86,18 @@ impl<'db> Contract<'db> {
         let recvs = {
             let mut data = Vec::new();
             for (recv_idx, r) in ast.recvs().enumerate() {
-                super::payable::report_payable_attr_on_unsupported_item(
+                super::item::report_payable_on_unsupported_target(
                     ctxt,
                     r.attr_list(),
                     "recv block",
+                    None,
                 );
-                super::payable::report_unknown_attrs_on_contract_entry(
+                super::attr::validate_unknown_attrs_in_restricted_context(
                     ctxt,
                     r.attr_list(),
-                    "recv block",
+                    super::attr::AttrTarget::new("recv block", None),
+                    &["payable"],
+                    "no attributes",
                 );
                 let msg_path = r.path().map(|p| crate::hir_def::PathId::lower_ast(ctxt, p));
                 let arms = r
@@ -144,7 +147,7 @@ fn lower_contract_field_def<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     ast: ast::RecordFieldDef,
 ) -> FieldDef<'db> {
-    super::payable::report_payable_attr_on_unsupported_item(ctxt, ast.attr_list(), "field");
+    super::item::report_payable_on_unsupported_target(ctxt, ast.attr_list(), "field", None);
     let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
     let name = IdentId::lower_token_partial(ctxt, ast.name());
     let type_ref = TypeId::lower_ast_partial(ctxt, ast.ty());
@@ -159,12 +162,8 @@ fn lower_contract_init<'db>(
 ) -> ContractInit<'db> {
     let db = ctxt.db();
 
-    super::payable::report_unknown_attrs_on_contract_entry(
-        ctxt,
-        init_ast.attr_list(),
-        "init block",
-    );
-    let attributes = super::payable::lower_contract_entry_attrs_opt(ctxt, init_ast.attr_list());
+    let attributes =
+        super::payable::lower_contract_entry_attrs_opt(ctxt, init_ast.attr_list(), "init block");
     let id = ctxt.joined_id(TrackedItemVariant::ContractInit);
     let params = init_ast
         .params()

@@ -378,6 +378,29 @@ pub trait Call {
         ) != 0
     }
 
+    /// Low-level `STATICCALL` opcode with explicit input and output buffers.
+    ///
+    /// Returns `true` on success and `false` on failure. Any returndata beyond
+    /// the requested output buffer remains available via `last_returndata()`.
+    fn raw_staticcall(
+        mut self,
+        addr: own Address,
+        gas: u256,
+        args_offset: u256,
+        args_len: u256,
+        ret_offset: u256,
+        ret_len: u256,
+    ) -> bool {
+        ops::staticcall(
+            gas: gas,
+            addr: addr.inner,
+            args_offset: args_offset,
+            args_len: args_len,
+            ret_offset: ret_offset,
+            ret_len: ret_len,
+        ) != 0
+    }
+
     fn call<M>(mut self, addr: own Address, gas: u256, value: u256, message: own M) -> M::Return
     where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
 

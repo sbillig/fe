@@ -1,0 +1,58 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/associated_func_attrs.fe
+---
+error[12-0001]: unsupported `#[event]` attribute on fn `bad_event_attr`
+   ┌─ associated_func_attrs.fe:11:5
+   │
+11 │     #[event]
+   │     ^^^^^^^^ `#[event]` is only supported on structs
+
+error[12-0001]: unsupported `#[must_use]` attribute on type `BadType`
+   ┌─ associated_func_attrs.fe:19:5
+   │
+19 │     #[must_use]
+   │     ^^^^^^^^^^^ `#[must_use]` is only supported on functions, structs, and enums
+
+error[12-0001]: unsupported `#[must_use]` attribute on const `BAD_CONST`
+   ┌─ associated_func_attrs.fe:22:5
+   │
+22 │     #[must_use]
+   │     ^^^^^^^^^^^ `#[must_use]` is only supported on functions, structs, and enums
+
+error[12-0001]: unsupported `#[must_use]` attribute on type `BadType`
+   ┌─ associated_func_attrs.fe:30:5
+   │
+30 │     #[must_use]
+   │     ^^^^^^^^^^^ `#[must_use]` is only supported on functions, structs, and enums
+
+error[12-0001]: unsupported `#[must_use]` attribute on const `BAD_CONST`
+   ┌─ associated_func_attrs.fe:33:5
+   │
+33 │     #[must_use]
+   │     ^^^^^^^^^^^ `#[must_use]` is only supported on functions, structs, and enums
+
+error[12-0002]: invalid `#[inline]` attribute form on fn `bad_inline_form`
+  ┌─ associated_func_attrs.fe:4:5
+  │
+4 │     #[inline()]
+  │     ^^^^^^^^^^^ expected `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`
+
+error[12-0002]: invalid `#[inline]` attribute form on fn `trait_bad_inline_form`
+   ┌─ associated_func_attrs.fe:16:5
+   │
+16 │     #[inline()]
+   │     ^^^^^^^^^^^ expected `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`
+
+error[12-0002]: invalid `#[inline]` attribute form on fn `trait_bad_inline_form`
+   ┌─ associated_func_attrs.fe:27:5
+   │
+27 │     #[inline()]
+   │     ^^^^^^^^^^^ expected `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`
+
+error[12-0003]: duplicate `#[inline]` attribute on fn `bad_inline_duplicate`
+  ┌─ associated_func_attrs.fe:8:5
+  │
+8 │     #[inline(always)]
+  │     ^^^^^^^^^^^^^^^^^ remove the extra `#[inline]` attribute

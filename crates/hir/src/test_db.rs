@@ -10,8 +10,8 @@ use std::ops::Range;
 
 use crate::analysis::{
     analysis_pass::{
-        AnalysisPassManager, ArithmeticAttrPass, ErrorLowerPass, EventLowerPass, InlineAttrPass,
-        LoopUnrollAttrPass, MsgLowerPass, ParsingPass, PayableAttrPass,
+        AnalysisPassManager, AttrMisusePass, ErrorLowerPass, EventLowerPass, MsgLowerPass,
+        ParsingPass,
     },
     diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
     name_resolution::ImportAnalysisPass,
@@ -365,13 +365,10 @@ impl Default for HirPropertyFormatter<'_> {
 pub fn initialize_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
     pass_manager.add_module_pass("Parsing", Box::new(ParsingPass {}));
-    pass_manager.add_module_pass("ArithmeticAttr", Box::new(ArithmeticAttrPass {}));
-    pass_manager.add_module_pass("PayableAttr", Box::new(PayableAttrPass {}));
+    pass_manager.add_module_pass("AttrMisuse", Box::new(AttrMisusePass {}));
     pass_manager.add_module_pass("MsgLower", Box::new(MsgLowerPass {}));
     pass_manager.add_module_pass("EventLower", Box::new(EventLowerPass {}));
     pass_manager.add_module_pass("ErrorLower", Box::new(ErrorLowerPass {}));
-    pass_manager.add_module_pass("InlineAttr", Box::new(InlineAttrPass {}));
-    pass_manager.add_module_pass("LoopUnrollAttr", Box::new(LoopUnrollAttrPass {}));
     pass_manager.add_module_pass("MsgSelector", Box::new(MsgSelectorAnalysisPass {}));
     pass_manager.add_module_pass("DefConflict", Box::new(DefConflictAnalysisPass {}));
     pass_manager.add_module_pass("Import", Box::new(ImportAnalysisPass {}));

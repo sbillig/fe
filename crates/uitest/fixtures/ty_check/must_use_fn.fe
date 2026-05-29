@@ -1,0 +1,8 @@
+#[must_use]
+fn compute() -> u256 {
+    1
+}
+
+fn bad() {
+    compute()
+}

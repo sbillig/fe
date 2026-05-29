@@ -20,17 +20,14 @@ use crate::{
     },
     span::HirOrigin,
 };
-pub use arithmetic::{ArithmeticAttrError, ArithmeticAttrErrorKind};
+pub use attr::{AttrMisuseError, AttrMisuseErrorKind};
 pub use error::{ErrorDiagnostic, ErrorDiagnosticKind};
 pub use event::{EventError, EventErrorKind};
-pub use item::{InlineAttrError, SelectorError, SelectorErrorKind};
+pub use item::{SelectorError, SelectorErrorKind};
 pub use parse::parse_file_impl;
-pub use payable::{PayableError, PayableErrorKind};
-pub use stmt::LoopUnrollAttrError;
 
 pub(crate) mod parse;
 
-mod arithmetic;
 mod attr;
 mod body;
 mod contract;
@@ -138,12 +135,7 @@ pub(crate) fn scope_graph_impl<'db>(
     ctxt.insert_synthetic_prelude_use();
 
     if let Some(items) = ast.items() {
-        arithmetic::report_invalid_top_mod_arithmetic_attrs(&mut ctxt, items.inner_attr_list());
-        payable::report_payable_attr_on_unsupported_item(
-            &mut ctxt,
-            items.inner_attr_list(),
-            "module",
-        );
+        item::validate_module_inner_attrs(&mut ctxt, items.inner_attr_list());
         lower_module_items(&mut ctxt, items);
     }
     ctxt.leave_item_scope(top_mod);

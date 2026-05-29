@@ -1863,10 +1863,8 @@ impl<'db> RmirEmitter<'db> {
         let stored =
             stored_class_for_ty_in_context(self.db, field_ty, self.env.scope, self.env.assumptions);
         if self.class_is_runtime_zst(&stored) {
-            return (
-                self.alloc_runtime_temp(field_ty, RuntimeCarrier::Erased),
-                stored,
-            );
+            let value = self.lower_zst_value_placeholder(bb, field_ty, stored.clone());
+            return (value, stored);
         }
         let value = match boundary_spec_for_ty_in_env(
             self.db,
@@ -1901,14 +1899,29 @@ impl<'db> RmirEmitter<'db> {
         let stored =
             stored_class_for_ty_in_context(self.db, field_ty, self.env.scope, self.env.assumptions);
         if self.class_is_runtime_zst(&stored) {
-            return (
-                self.alloc_runtime_temp(field_ty, RuntimeCarrier::Erased),
-                stored,
-            );
+            let value = self.lower_zst_value_placeholder(bb, field_ty, stored.clone());
+            return (value, stored);
         }
         let value = self.lower_sem_const_as_value(bb, field, field_ty);
         let class = self.value_class(value).cloned().unwrap_or(stored);
         (value, class)
+    }
+
+    fn lower_zst_value_placeholder(
+        &mut self,
+        bb: RBlockId,
+        ty: TyId<'db>,
+        class: RuntimeClass<'db>,
+    ) -> RLocalId {
+        let value = self.alloc_runtime_temp(ty, RuntimeCarrier::Value(class.clone()));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: value,
+                expr: RExpr::Placeholder { class },
+            },
+        );
+        value
     }
 
     fn lower_enum_values(

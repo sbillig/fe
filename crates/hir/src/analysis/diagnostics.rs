@@ -9,7 +9,7 @@ use crate::analysis::{
     ty::{
         diagnostics::{
             BodyDiag, CallConstraintDiagInfo, DefConflictError, FuncBodyDiag, ImplDiag,
-            TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+            MustUseSubject, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
@@ -416,82 +416,36 @@ impl DiagnosticVoucher for ParserError {
     }
 }
 
-impl DiagnosticVoucher for crate::ArithmeticAttrError {
+impl DiagnosticVoucher for crate::AttrMisuseError {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         let span = Span::new(self.file, self.primary_range, SpanKind::Original);
-        let (local_code, message, label, notes) = match &self.kind {
-            crate::ArithmeticAttrErrorKind::ArithmeticAttrOnUnsupportedItem { item_kind } => (
-                1,
-                format!(
-                    "`#[arithmetic(...)]` is only valid on functions and modules (found on {item_kind})"
-                ),
-                "move this attribute to a function or module item".to_string(),
-                vec![
-                    "ingot and workspace arithmetic configuration is not implemented in this slice"
-                        .to_string(),
-                ],
-            ),
-            crate::ArithmeticAttrErrorKind::InvalidArithmeticAttrForm => (
-                2,
-                "invalid `#[arithmetic]` attribute form".to_string(),
-                "expected `#[arithmetic(checked)]` or `#[arithmetic(unchecked)]`".to_string(),
-                vec![],
-            ),
+        let target = if let Some(name) = &self.item_name {
+            format!("{} `{}`", self.target, name)
+        } else {
+            self.target.to_string()
         };
-
-        CompleteDiagnostic::new(
-            Severity::Error,
-            message,
-            vec![SubDiagnostic::new(LabelStyle::Primary, label, Some(span))],
-            notes,
-            GlobalErrorCode::new(DiagnosticPass::ArithmeticAttr, local_code),
-        )
-    }
-}
-
-impl DiagnosticVoucher for crate::PayableError {
-    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        let span = Span::new(self.file, self.primary_range, SpanKind::Original);
+        let attr = format!("#[{}]", self.attr_name);
         let (local_code, message, label) = match &self.kind {
-            crate::PayableErrorKind::PayableAttrOnUnsupportedItem { item_kind } => (
+            crate::AttrMisuseErrorKind::UnsupportedTarget { supported_targets } => (
                 1,
-                format!(
-                    "`#[payable]` is only valid on `init` blocks and `recv` arms (found on {item_kind})"
-                ),
-                "move this attribute to an `init` block or `recv` arm".to_string(),
+                format!("unsupported `{attr}` attribute on {target}"),
+                format!("`{attr}` is only supported on {supported_targets}"),
             ),
-            crate::PayableErrorKind::PayableAttrOnMsgVariant => (
-                3,
-                "`#[payable]` must be placed on the corresponding `recv` arm, not the `msg` variant"
-                    .to_string(),
-                "move this attribute to the matching `recv` arm".to_string(),
-            ),
-            crate::PayableErrorKind::InvalidPayableAttrForm => (
+            crate::AttrMisuseErrorKind::InvalidForm { expected_form } => (
                 2,
-                "invalid `#[payable]` attribute form".to_string(),
-                "expected `#[payable]` with no arguments".to_string(),
+                format!("invalid `{attr}` attribute form on {target}"),
+                format!("expected {expected_form}"),
             ),
-            crate::PayableErrorKind::UnknownAttrOnContractEntry {
-                attr_name,
-                entry_kind,
-            } => {
-                if *entry_kind == "recv block" {
-                    (
-                        4,
-                        format!("unknown attribute `#[{attr_name}]` on recv block"),
-                        "remove this attribute; `recv` blocks do not support normal attributes"
-                            .to_string(),
-                    )
-                } else {
-                    (
-                        4,
-                        format!(
-                            "unknown attribute `#[{attr_name}]` on {entry_kind} (only `#[payable]` is allowed)"
-                        ),
-                        "remove this attribute or use `#[payable]`".to_string(),
-                    )
-                }
-            }
+            crate::AttrMisuseErrorKind::Duplicate => (
+                3,
+                format!("duplicate `{attr}` attribute on {target}"),
+                format!("remove the extra `{attr}` attribute"),
+            ),
+            crate::AttrMisuseErrorKind::UnknownInRestrictedContext { expected_attrs } => (
+                4,
+                format!("unsupported `{attr}` attribute on {target}"),
+                format!("expected {expected_attrs}"),
+            ),
         };
 
         CompleteDiagnostic::new(
@@ -499,7 +453,7 @@ impl DiagnosticVoucher for crate::PayableError {
             message,
             vec![SubDiagnostic::new(LabelStyle::Primary, label, Some(span))],
             vec![],
-            GlobalErrorCode::new(DiagnosticPass::PayableAttr, local_code),
+            GlobalErrorCode::new(DiagnosticPass::AttrMisuse, local_code),
         )
     }
 }
@@ -597,35 +551,11 @@ impl DiagnosticVoucher for crate::EventError {
         let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
 
         let (code, message, label, notes) = match &self.kind {
-            EventErrorKind::EventAttrOnNonStruct { item_kind } => (
-                1,
-                format!("`#[event]` is only valid on structs (found on {item_kind})"),
-                "`#[event]` must be placed on a `struct` item".to_string(),
-                vec!["move `#[event]` to a struct declaration".to_string()],
-            ),
-            EventErrorKind::InvalidEventAttrForm => (
-                2,
-                "invalid `#[event]` attribute form".to_string(),
-                "expected `#[event]` without arguments".to_string(),
-                vec!["remove arguments and use `#[event]`".to_string()],
-            ),
             EventErrorKind::GenericEventStruct => (
                 3,
                 "`#[event]` structs must be non-generic".to_string(),
                 "generics are not supported on `#[event]` structs".to_string(),
                 vec!["remove generic parameters from the event struct".to_string()],
-            ),
-            EventErrorKind::IndexedAttrOutsideEventStruct => (
-                4,
-                "`#[indexed]` is only valid within `#[event]` structs".to_string(),
-                "move `#[indexed]` inside a `#[event]` struct".to_string(),
-                vec!["mark the struct with `#[event]` or remove `#[indexed]`".to_string()],
-            ),
-            EventErrorKind::InvalidIndexedAttrForm => (
-                5,
-                "invalid `#[indexed]` attribute form".to_string(),
-                "expected `#[indexed]` without arguments".to_string(),
-                vec!["remove arguments and use `#[indexed]`".to_string()],
             ),
             EventErrorKind::TooManyIndexedFields { indexed_count } => (
                 6,
@@ -664,18 +594,6 @@ impl DiagnosticVoucher for crate::ErrorDiagnostic {
         let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
 
         let (code, message, label, notes) = match &self.kind {
-            ErrorDiagnosticKind::ErrorAttrOnNonStruct { item_kind } => (
-                1,
-                format!("`#[error]` is only valid on structs (found on {item_kind})"),
-                "`#[error]` must be placed on a `struct` item".to_string(),
-                vec!["move `#[error]` to a struct declaration".to_string()],
-            ),
-            ErrorDiagnosticKind::InvalidErrorAttrForm => (
-                2,
-                "invalid `#[error]` attribute form".to_string(),
-                "expected `#[error]` without arguments".to_string(),
-                vec!["remove arguments and use `#[error]`".to_string()],
-            ),
             ErrorDiagnosticKind::GenericErrorStruct => (
                 3,
                 "`#[error]` structs must be non-generic".to_string(),
@@ -697,91 +615,6 @@ impl DiagnosticVoucher for crate::ErrorDiagnostic {
         };
 
         let error_code = GlobalErrorCode::new(DiagnosticPass::ErrorLower, code);
-
-        CompleteDiagnostic::new(
-            Severity::Error,
-            message,
-            vec![SubDiagnostic::new(
-                LabelStyle::Primary,
-                label,
-                Some(primary_span),
-            )],
-            notes,
-            error_code,
-        )
-    }
-}
-
-impl DiagnosticVoucher for crate::InlineAttrError {
-    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        use crate::hir_def::InlineAttrErrorKind;
-
-        let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
-        let func_name = self.func_name.as_deref().unwrap_or("<anonymous>");
-
-        let (code, message, label, notes) = match self.kind {
-            InlineAttrErrorKind::Duplicate => (
-                1,
-                format!("duplicate `#[inline]` attribute on function `{func_name}`"),
-                "remove the extra `#[inline]` attribute".to_string(),
-                vec![
-                    "functions support at most one inline hint".to_string(),
-                    "use one of `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`"
-                        .to_string(),
-                ],
-            ),
-            InlineAttrErrorKind::InvalidForm => (
-                2,
-                format!("invalid `#[inline]` attribute on function `{func_name}`"),
-                "expected `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`".to_string(),
-                vec![
-                    "supported inline hints are `#[inline]`, `#[inline(always)]`, and `#[inline(never)]`"
-                        .to_string(),
-                ],
-            ),
-        };
-
-        let error_code = GlobalErrorCode::new(DiagnosticPass::InlineAttr, code);
-
-        CompleteDiagnostic::new(
-            Severity::Error,
-            message,
-            vec![SubDiagnostic::new(
-                LabelStyle::Primary,
-                label,
-                Some(primary_span),
-            )],
-            notes,
-            error_code,
-        )
-    }
-}
-
-impl DiagnosticVoucher for crate::LoopUnrollAttrError {
-    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        use crate::hir_def::LoopUnrollAttrErrorKind;
-
-        let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
-
-        let (code, message, label, notes) = match self.kind {
-            LoopUnrollAttrErrorKind::Duplicate => (
-                1,
-                "duplicate loop unroll attribute on `for` loop".to_string(),
-                "remove the extra loop unroll attribute".to_string(),
-                vec!["use at most one of `#[unroll]` or `#[unroll(never)]`".to_string()],
-            ),
-            LoopUnrollAttrErrorKind::InvalidForm => (
-                2,
-                "invalid loop unroll attribute on `for` loop".to_string(),
-                "expected `#[unroll]` or `#[unroll(never)]`".to_string(),
-                vec![
-                    "supported loop unroll hints are `#[unroll]` and `#[unroll(never)]`"
-                        .to_string(),
-                ],
-            ),
-        };
-
-        let error_code = GlobalErrorCode::new(DiagnosticPass::LoopUnrollAttr, code);
 
         CompleteDiagnostic::new(
             Severity::Error,
@@ -3836,6 +3669,39 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     message: "type annotation is needed".to_string(),
                     sub_diagnostics,
                     notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::UnusedMustUse { primary, subject } => {
+                let (subject_name, note) = match subject {
+                    MustUseSubject::Type(ty) => (
+                        format!("value of type `{}`", ty.pretty_print(db)),
+                        "this type is marked `#[must_use]`".to_string(),
+                    ),
+                    MustUseSubject::Function(CallableDef::Func(func)) => {
+                        let name = func
+                            .name(db)
+                            .to_opt()
+                            .map(|name| name.data(db).to_string())
+                            .unwrap_or_else(|| "<anonymous>".to_string());
+                        (
+                            format!("return value of function `{name}`"),
+                            "this function is marked `#[must_use]`".to_string(),
+                        )
+                    }
+                    MustUseSubject::Function(CallableDef::VariantCtor(_)) => unreachable!(),
+                };
+
+                CompleteDiagnostic {
+                    severity,
+                    message: format!("unused {subject_name}"),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: "use this value or explicitly discard it with `let _ = ...`"
+                            .to_string(),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![note],
                     error_code,
                 }
             }

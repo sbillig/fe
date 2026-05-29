@@ -1,0 +1,37 @@
+use core::result::Result::{self, Ok}
+
+fn make_result() -> Result<u256, bool> {
+    Ok(true)
+}
+
+fn bad_if(cond: bool) {
+    if cond {
+        make_result()
+    }
+}
+
+fn bad_if_else(cond: bool) {
+    if cond {
+        make_result()
+    } else {
+        make_result()
+    }
+}
+
+fn bad_match(cond: bool) {
+    match cond {
+        true => {
+            make_result()
+        }
+
+        false => {
+            make_result()
+        }
+    }
+}
+
+fn bad_while(cond: bool) {
+    while cond {
+        make_result()
+    }
+}

@@ -3,32 +3,32 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/payable_on_unsupported_items.fe
 ---
-error[13-0001]: `#[payable]` is only valid on `init` blocks and `recv` arms (found on fn)
+error[12-0001]: unsupported `#[payable]` attribute on fn `foo`
   ┌─ payable_on_unsupported_items.fe:1:1
   │
 1 │ #[payable]
-  │ ^^^^^^^^^^ move this attribute to an `init` block or `recv` arm
+  │ ^^^^^^^^^^ `#[payable]` is only supported on init blocks and recv arms
 
-error[13-0001]: `#[payable]` is only valid on `init` blocks and `recv` arms (found on struct)
+error[12-0001]: unsupported `#[payable]` attribute on struct `Bar`
   ┌─ payable_on_unsupported_items.fe:4:1
   │
 4 │ #[payable]
-  │ ^^^^^^^^^^ move this attribute to an `init` block or `recv` arm
+  │ ^^^^^^^^^^ `#[payable]` is only supported on init blocks and recv arms
 
-error[13-0001]: `#[payable]` is only valid on `init` blocks and `recv` arms (found on enum)
+error[12-0001]: unsupported `#[payable]` attribute on enum `Baz`
   ┌─ payable_on_unsupported_items.fe:7:1
   │
 7 │ #[payable]
-  │ ^^^^^^^^^^ move this attribute to an `init` block or `recv` arm
+  │ ^^^^^^^^^^ `#[payable]` is only supported on init blocks and recv arms
 
-error[13-0001]: `#[payable]` is only valid on `init` blocks and `recv` arms (found on const)
+error[12-0001]: unsupported `#[payable]` attribute on const `X`
    ┌─ payable_on_unsupported_items.fe:10:1
    │
 10 │ #[payable]
-   │ ^^^^^^^^^^ move this attribute to an `init` block or `recv` arm
+   │ ^^^^^^^^^^ `#[payable]` is only supported on init blocks and recv arms
 
-error[13-0001]: `#[payable]` is only valid on `init` blocks and `recv` arms (found on extern fn)
+error[12-0001]: unsupported `#[payable]` attribute on extern fn `ext`
    ┌─ payable_on_unsupported_items.fe:14:5
    │
 14 │     #[payable]
-   │     ^^^^^^^^^^ move this attribute to an `init` block or `recv` arm
+   │     ^^^^^^^^^^ `#[payable]` is only supported on init blocks and recv arms

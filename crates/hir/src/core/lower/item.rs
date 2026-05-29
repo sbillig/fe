@@ -1,13 +1,14 @@
 use parser::ast::{self, WhereClauseOwner as _, prelude::*};
-use salsa::Accumulator as _;
 
-use super::{FileLowerCtxt, attr::named_attr_specs};
+use super::{
+    FileLowerCtxt,
+    attr::{AttrForm, AttrRule, AttrTarget, report_unsupported_attr, validate_attr_rules},
+};
 use crate::{
     hir_def::{
         AttrListId, Body, BodyKind, CompBinOp, EffectParamListId, FuncParamListId,
-        GenericParamListId, IdentId, InlineAttrErrorKind, KeywordAttrArgSpec, KeywordAttrSpec,
-        PathId, TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*,
-        parse_inline_attr_specs,
+        GenericParamListId, IdentId, PathId, TraitRefId, TupleTypeId, TypeBound, TypeId,
+        WhereClauseId, item::*,
     },
     lower::msg::lower_msg_as_mod,
     span::HirOrigin,
@@ -43,18 +44,201 @@ pub enum SelectorErrorKind {
     },
 }
 
-#[salsa::accumulator]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct InlineAttrError {
-    pub kind: InlineAttrErrorKind,
-    pub file: common::file::File,
-    pub primary_range: parser::TextRange,
-    pub func_name: Option<String>,
-}
-
 pub(crate) fn lower_module_items(ctxt: &mut FileLowerCtxt<'_>, items: ast::ItemList) {
     for item in items {
         ItemKind::lower_ast(ctxt, item);
+    }
+}
+
+const ARITHMETIC_FORM: AttrForm = AttrForm::SingleArg {
+    allow_bare: false,
+    allowed_args: &["checked", "unchecked"],
+};
+const INLINE_FORM: AttrForm = AttrForm::SingleArg {
+    allow_bare: true,
+    allowed_args: &["always", "never"],
+};
+const UNROLL_FORM: AttrForm = AttrForm::SingleArg {
+    allow_bare: true,
+    allowed_args: &["never"],
+};
+const BARE_FORM: AttrForm = AttrForm::Bare;
+
+const ARITHMETIC_EXPECTED: &str = "`#[arithmetic(checked)]` or `#[arithmetic(unchecked)]`";
+const INLINE_EXPECTED: &str = "`#[inline]`, `#[inline(always)]`, or `#[inline(never)]`";
+const MUST_USE_EXPECTED: &str = "`#[must_use]`";
+
+const ARITHMETIC_TARGETS: &str = "functions and modules";
+const EVENT_TARGETS: &str = "structs";
+const ERROR_TARGETS: &str = "structs";
+const MUST_USE_TARGETS: &str = "functions, structs, and enums";
+const PAYABLE_TARGETS: &str = "init blocks and recv arms";
+const INDEXED_TARGETS: &str = "event fields";
+
+fn target(kind: &'static str, name: Option<String>) -> AttrTarget {
+    AttrTarget::new(kind, name)
+}
+
+fn validate_mod_attrs<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    name: Option<String>,
+) {
+    validate_attr_rules(
+        ctxt,
+        attrs,
+        target("mod", name),
+        &[
+            AttrRule::supported("arithmetic", ARITHMETIC_FORM, ARITHMETIC_EXPECTED),
+            AttrRule::unsupported("event", EVENT_TARGETS),
+            AttrRule::unsupported("error", ERROR_TARGETS),
+            AttrRule::unsupported("must_use", MUST_USE_TARGETS),
+            AttrRule::unsupported("payable", PAYABLE_TARGETS),
+        ],
+    );
+}
+
+pub(super) fn validate_module_inner_attrs<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+) {
+    validate_attr_rules(
+        ctxt,
+        attrs,
+        target("module", None),
+        &[
+            AttrRule::supported("arithmetic", ARITHMETIC_FORM, ARITHMETIC_EXPECTED),
+            AttrRule::unsupported("must_use", MUST_USE_TARGETS),
+            AttrRule::unsupported("payable", PAYABLE_TARGETS),
+        ],
+    );
+}
+
+fn validate_func_attrs<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    kind: &'static str,
+    name: Option<String>,
+    arithmetic_supported: bool,
+) {
+    let arithmetic = if arithmetic_supported {
+        AttrRule::supported("arithmetic", ARITHMETIC_FORM, ARITHMETIC_EXPECTED)
+    } else {
+        AttrRule::unsupported("arithmetic", ARITHMETIC_TARGETS)
+    };
+    validate_attr_rules(
+        ctxt,
+        attrs,
+        target(kind, name),
+        &[
+            arithmetic,
+            AttrRule::supported("inline", INLINE_FORM, INLINE_EXPECTED),
+            AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
+            AttrRule::unsupported("event", EVENT_TARGETS),
+            AttrRule::unsupported("error", ERROR_TARGETS),
+            AttrRule::unsupported("payable", PAYABLE_TARGETS),
+        ],
+    );
+}
+
+fn validate_struct_attrs<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    name: Option<String>,
+) {
+    validate_attr_rules(
+        ctxt,
+        attrs,
+        target("struct", name),
+        &[
+            AttrRule::unsupported("arithmetic", ARITHMETIC_TARGETS),
+            AttrRule::supported("event", BARE_FORM, "`#[event]`"),
+            AttrRule::supported("error", BARE_FORM, "`#[error]`"),
+            AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
+            AttrRule::unsupported("payable", PAYABLE_TARGETS),
+        ],
+    );
+}
+
+fn validate_enum_attrs<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    name: Option<String>,
+) {
+    validate_attr_rules(
+        ctxt,
+        attrs,
+        target("enum", name),
+        &[
+            AttrRule::unsupported("arithmetic", ARITHMETIC_TARGETS),
+            AttrRule::unsupported("event", EVENT_TARGETS),
+            AttrRule::unsupported("error", ERROR_TARGETS),
+            AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
+            AttrRule::unsupported("payable", PAYABLE_TARGETS),
+        ],
+    );
+}
+
+fn validate_unsupported_item_attrs<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    kind: &'static str,
+    name: Option<String>,
+) {
+    validate_attr_rules(
+        ctxt,
+        attrs,
+        target(kind, name),
+        &[
+            AttrRule::unsupported("arithmetic", ARITHMETIC_TARGETS),
+            AttrRule::unsupported("event", EVENT_TARGETS),
+            AttrRule::unsupported("error", ERROR_TARGETS),
+            AttrRule::unsupported("must_use", MUST_USE_TARGETS),
+            AttrRule::unsupported("payable", PAYABLE_TARGETS),
+        ],
+    );
+}
+
+pub(super) fn validate_for_loop_attrs<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+) {
+    validate_attr_rules(
+        ctxt,
+        attrs,
+        target("for loop", None),
+        &[
+            AttrRule::supported("unroll", UNROLL_FORM, "`#[unroll]` or `#[unroll(never)]`"),
+            AttrRule::unsupported("payable", PAYABLE_TARGETS),
+        ],
+    );
+}
+
+pub(super) fn report_payable_on_unsupported_target<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    kind: &'static str,
+    name: Option<String>,
+) {
+    report_unsupported_attr(ctxt, attrs, "payable", target(kind, name), PAYABLE_TARGETS);
+}
+
+fn report_indexed_attrs_outside_event_struct<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    ast: &ast::Struct,
+) {
+    let Some(fields) = ast.fields() else { return };
+    for field in fields {
+        report_unsupported_attr(
+            ctxt,
+            field.attr_list(),
+            "indexed",
+            target(
+                "struct field",
+                field.name().map(|name| name.text().to_string()),
+            ),
+            INDEXED_TARGETS,
+        );
     }
 }
 
@@ -66,280 +250,115 @@ impl<'db> ItemKind<'db> {
 
         match kind {
             ast::ItemKind::Mod(mod_) => {
-                super::arithmetic::report_invalid_mod_arithmetic_attrs(ctxt, mod_.attr_list());
-                super::event::report_event_attr_on_non_struct_item(ctxt, mod_.attr_list(), "mod");
-                super::error::report_error_attr_on_non_struct_item(ctxt, mod_.attr_list(), "mod");
-                super::payable::report_payable_attr_on_unsupported_item(
+                validate_mod_attrs(
                     ctxt,
                     mod_.attr_list(),
-                    "mod",
+                    mod_.name().map(|n| n.text().to_string()),
                 );
                 Mod::lower_ast(ctxt, mod_);
             }
             ast::ItemKind::Func(fn_) => {
-                super::arithmetic::report_invalid_function_arithmetic_attrs(ctxt, &fn_);
-                super::event::report_event_attr_on_non_struct_item(ctxt, fn_.attr_list(), "fn");
-                super::error::report_error_attr_on_non_struct_item(ctxt, fn_.attr_list(), "fn");
-                super::payable::report_payable_attr_on_unsupported_item(
+                validate_func_attrs(
                     ctxt,
                     fn_.attr_list(),
                     "fn",
+                    fn_.sig().name().map(|name| name.text().to_string()),
+                    true,
                 );
                 Func::lower_ast(ctxt, fn_);
             }
             ast::ItemKind::Struct(struct_) => {
-                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                validate_struct_attrs(
                     ctxt,
                     struct_.attr_list(),
-                    "struct",
-                );
-                super::payable::report_payable_attr_on_unsupported_item(
-                    ctxt,
-                    struct_.attr_list(),
-                    "struct",
+                    struct_.name().map(|name| name.text().to_string()),
                 );
                 Struct::lower_ast(ctxt, struct_);
             }
             ast::ItemKind::Contract(contract) => {
-                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                validate_unsupported_item_attrs(
                     ctxt,
                     contract.attr_list(),
                     "contract",
-                );
-                super::event::report_event_attr_on_non_struct_item(
-                    ctxt,
-                    contract.attr_list(),
-                    "contract",
-                );
-                super::error::report_error_attr_on_non_struct_item(
-                    ctxt,
-                    contract.attr_list(),
-                    "contract",
-                );
-                super::payable::report_payable_attr_on_unsupported_item(
-                    ctxt,
-                    contract.attr_list(),
-                    "contract",
+                    contract.name().map(|name| name.text().to_string()),
                 );
                 Contract::lower_ast(ctxt, contract);
             }
             ast::ItemKind::Enum(enum_) => {
-                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                validate_enum_attrs(
                     ctxt,
                     enum_.attr_list(),
-                    "enum",
-                );
-                super::event::report_event_attr_on_non_struct_item(ctxt, enum_.attr_list(), "enum");
-                super::error::report_error_attr_on_non_struct_item(ctxt, enum_.attr_list(), "enum");
-                super::payable::report_payable_attr_on_unsupported_item(
-                    ctxt,
-                    enum_.attr_list(),
-                    "enum",
+                    enum_.name().map(|name| name.text().to_string()),
                 );
                 Enum::lower_ast(ctxt, enum_);
             }
             ast::ItemKind::Msg(msg) => {
-                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                validate_unsupported_item_attrs(
                     ctxt,
                     msg.attr_list(),
                     "msg",
-                );
-                super::event::report_event_attr_on_non_struct_item(ctxt, msg.attr_list(), "msg");
-                super::error::report_error_attr_on_non_struct_item(ctxt, msg.attr_list(), "msg");
-                super::payable::report_payable_attr_on_unsupported_item(
-                    ctxt,
-                    msg.attr_list(),
-                    "msg",
+                    msg.name().map(|name| name.text().to_string()),
                 );
                 lower_msg_as_mod(ctxt, msg);
             }
             ast::ItemKind::TypeAlias(alias) => {
-                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                validate_unsupported_item_attrs(
                     ctxt,
                     alias.attr_list(),
                     "type alias",
-                );
-                super::event::report_event_attr_on_non_struct_item(
-                    ctxt,
-                    alias.attr_list(),
-                    "type alias",
-                );
-                super::error::report_error_attr_on_non_struct_item(
-                    ctxt,
-                    alias.attr_list(),
-                    "type alias",
-                );
-                super::payable::report_payable_attr_on_unsupported_item(
-                    ctxt,
-                    alias.attr_list(),
-                    "type alias",
+                    alias.alias().map(|name| name.text().to_string()),
                 );
                 TypeAlias::lower_ast(ctxt, alias);
             }
             ast::ItemKind::Impl(impl_) => {
-                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
-                    ctxt,
-                    impl_.attr_list(),
-                    "impl",
-                );
-                super::event::report_event_attr_on_non_struct_item(ctxt, impl_.attr_list(), "impl");
-                super::error::report_error_attr_on_non_struct_item(ctxt, impl_.attr_list(), "impl");
-                super::payable::report_payable_attr_on_unsupported_item(
-                    ctxt,
-                    impl_.attr_list(),
-                    "impl",
-                );
+                validate_unsupported_item_attrs(ctxt, impl_.attr_list(), "impl", None);
                 Impl::lower_ast(ctxt, impl_);
             }
             ast::ItemKind::Trait(trait_) => {
-                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                validate_unsupported_item_attrs(
                     ctxt,
                     trait_.attr_list(),
                     "trait",
-                );
-                super::event::report_event_attr_on_non_struct_item(
-                    ctxt,
-                    trait_.attr_list(),
-                    "trait",
-                );
-                super::error::report_error_attr_on_non_struct_item(
-                    ctxt,
-                    trait_.attr_list(),
-                    "trait",
-                );
-                super::payable::report_payable_attr_on_unsupported_item(
-                    ctxt,
-                    trait_.attr_list(),
-                    "trait",
+                    trait_.name().map(|name| name.text().to_string()),
                 );
                 Trait::lower_ast(ctxt, trait_);
             }
             ast::ItemKind::ImplTrait(impl_trait) => {
-                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
-                    ctxt,
-                    impl_trait.attr_list(),
-                    "impl trait",
-                );
-                super::event::report_event_attr_on_non_struct_item(
-                    ctxt,
-                    impl_trait.attr_list(),
-                    "impl trait",
-                );
-                super::error::report_error_attr_on_non_struct_item(
-                    ctxt,
-                    impl_trait.attr_list(),
-                    "impl trait",
-                );
-                super::payable::report_payable_attr_on_unsupported_item(
-                    ctxt,
-                    impl_trait.attr_list(),
-                    "impl trait",
-                );
+                validate_unsupported_item_attrs(ctxt, impl_trait.attr_list(), "impl trait", None);
                 ImplTrait::lower_ast(ctxt, impl_trait);
             }
             ast::ItemKind::Const(const_) => {
-                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                validate_unsupported_item_attrs(
                     ctxt,
                     const_.attr_list(),
                     "const",
-                );
-                super::event::report_event_attr_on_non_struct_item(
-                    ctxt,
-                    const_.attr_list(),
-                    "const",
-                );
-                super::error::report_error_attr_on_non_struct_item(
-                    ctxt,
-                    const_.attr_list(),
-                    "const",
-                );
-                super::payable::report_payable_attr_on_unsupported_item(
-                    ctxt,
-                    const_.attr_list(),
-                    "const",
+                    const_.name().map(|name| name.text().to_string()),
                 );
                 Const::lower_ast(ctxt, const_);
             }
             ast::ItemKind::StaticAssert(assert_) => {
-                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                validate_unsupported_item_attrs(
                     ctxt,
                     assert_.attr_list(),
                     "static assertion",
-                );
-                super::event::report_event_attr_on_non_struct_item(
-                    ctxt,
-                    assert_.attr_list(),
-                    "static assertion",
-                );
-                super::error::report_error_attr_on_non_struct_item(
-                    ctxt,
-                    assert_.attr_list(),
-                    "static assertion",
-                );
-                super::payable::report_payable_attr_on_unsupported_item(
-                    ctxt,
-                    assert_.attr_list(),
-                    "static assertion",
+                    None,
                 );
                 StaticAssert::lower_ast(ctxt, assert_);
             }
             ast::ItemKind::Use(use_) => {
-                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
-                    ctxt,
-                    use_.attr_list(),
-                    "use",
-                );
-                super::event::report_event_attr_on_non_struct_item(ctxt, use_.attr_list(), "use");
-                super::error::report_error_attr_on_non_struct_item(ctxt, use_.attr_list(), "use");
-                super::payable::report_payable_attr_on_unsupported_item(
-                    ctxt,
-                    use_.attr_list(),
-                    "use",
-                );
+                validate_unsupported_item_attrs(ctxt, use_.attr_list(), "use", None);
                 Use::lower_ast(ctxt, use_);
             }
             ast::ItemKind::Extern(extern_) => {
-                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
-                    ctxt,
-                    extern_.attr_list(),
-                    "extern",
-                );
-                super::event::report_event_attr_on_non_struct_item(
-                    ctxt,
-                    extern_.attr_list(),
-                    "extern",
-                );
-                super::error::report_error_attr_on_non_struct_item(
-                    ctxt,
-                    extern_.attr_list(),
-                    "extern",
-                );
-                super::payable::report_payable_attr_on_unsupported_item(
-                    ctxt,
-                    extern_.attr_list(),
-                    "extern",
-                );
+                validate_unsupported_item_attrs(ctxt, extern_.attr_list(), "extern", None);
                 if let Some(extern_block) = extern_.extern_block() {
                     for fn_ in extern_block {
-                        super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                        validate_func_attrs(
                             ctxt,
                             fn_.attr_list(),
                             "extern fn",
-                        );
-                        super::event::report_event_attr_on_non_struct_item(
-                            ctxt,
-                            fn_.attr_list(),
-                            "extern fn",
-                        );
-                        super::error::report_error_attr_on_non_struct_item(
-                            ctxt,
-                            fn_.attr_list(),
-                            "extern fn",
-                        );
-                        super::payable::report_payable_attr_on_unsupported_item(
-                            ctxt,
-                            fn_.attr_list(),
-                            "extern fn",
+                            fn_.sig().name().map(|name| name.text().to_string()),
+                            false,
                         );
                         Func::lower_ast_extern(ctxt, fn_);
                     }
@@ -357,15 +376,7 @@ impl<'db> Mod<'db> {
 
         ctxt.insert_synthetic_prelude_use();
 
-        super::arithmetic::report_invalid_mod_arithmetic_attrs(
-            ctxt,
-            ast.items().and_then(|items| items.inner_attr_list()),
-        );
-        super::payable::report_payable_attr_on_unsupported_item(
-            ctxt,
-            ast.items().and_then(|items| items.inner_attr_list()),
-            "module",
-        );
+        validate_module_inner_attrs(ctxt, ast.items().and_then(|items| items.inner_attr_list()));
         let attributes = AttrListId::lower_ast_merged(
             ctxt,
             ast.attr_list(),
@@ -397,7 +408,6 @@ impl<'db> Func<'db> {
         let id = ctxt.joined_id(TrackedItemVariant::Func(name));
         ctxt.enter_item_scope(id, false);
 
-        validate_inline_attr(ctxt, &ast);
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, sig.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, sig.where_clause());
@@ -436,55 +446,6 @@ impl<'db> Func<'db> {
     }
 }
 
-fn validate_inline_attr<'db>(ctxt: &mut FileLowerCtxt<'db>, func: &ast::Func) {
-    let db = ctxt.db();
-    let file = ctxt.top_mod().file(db);
-    let func_name = func.sig().name().map(|name| name.text().to_string());
-    let inline_attrs = named_attr_specs(func.attr_list(), "inline")
-        .into_iter()
-        .map(|attr| {
-            let spec = KeywordAttrSpec {
-                has_value: attr.value.is_some(),
-                has_args: attr.has_args,
-                args: attr
-                    .args
-                    .into_iter()
-                    .map(|arg| KeywordAttrArgSpec {
-                        key: arg.key,
-                        has_value: arg.value.is_some(),
-                    })
-                    .collect(),
-            };
-            (spec, attr.range)
-        })
-        .collect::<Vec<_>>();
-
-    let Err(err) = parse_inline_attr_specs(inline_attrs.iter().map(|(spec, _)| spec.clone()))
-    else {
-        return;
-    };
-
-    if let Some((_, range)) = inline_attrs.get(err.attr_index) {
-        lower_inline_attr_error(db, file, *range, func_name, err.kind);
-    }
-}
-
-fn lower_inline_attr_error(
-    db: &dyn crate::HirDb,
-    file: common::file::File,
-    primary_range: parser::TextRange,
-    func_name: Option<String>,
-    kind: InlineAttrErrorKind,
-) {
-    InlineAttrError {
-        kind,
-        file,
-        primary_range,
-        func_name,
-    }
-    .accumulate(db);
-}
-
 impl<'db> Struct<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Struct) -> Self {
         let is_event_struct = super::event::is_event_struct(&ast);
@@ -497,11 +458,11 @@ impl<'db> Struct<'db> {
             return super::event::lower_event_struct(ctxt, ast);
         }
         if is_error_struct {
-            super::event::report_indexed_attrs_outside_event_struct(ctxt, &ast);
+            report_indexed_attrs_outside_event_struct(ctxt, &ast);
             return super::error::lower_error_struct(ctxt, ast);
         }
 
-        super::event::report_indexed_attrs_outside_event_struct(ctxt, &ast);
+        report_indexed_attrs_outside_event_struct(ctxt, &ast);
 
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let id = ctxt.joined_id(TrackedItemVariant::Struct(name));
@@ -636,10 +597,12 @@ impl<'db> Impl<'db> {
 
         if let Some(item_list) = ast.item_list() {
             for impl_item in item_list {
-                super::payable::report_payable_attr_on_unsupported_item(
+                validate_func_attrs(
                     ctxt,
                     impl_item.attr_list(),
                     "fn",
+                    impl_item.sig().name().map(|name| name.text().to_string()),
+                    true,
                 );
                 Func::lower_ast(ctxt, impl_item);
             }
@@ -686,26 +649,30 @@ impl<'db> Trait<'db> {
             for impl_item in item_list {
                 match impl_item.kind() {
                     ast::TraitItemKind::Func(func) => {
-                        super::payable::report_payable_attr_on_unsupported_item(
+                        validate_func_attrs(
                             ctxt,
                             func.attr_list(),
                             "fn",
+                            func.sig().name().map(|name| name.text().to_string()),
+                            true,
                         );
                         Func::lower_ast(ctxt, func);
                     }
                     ast::TraitItemKind::Type(t) => {
-                        super::payable::report_payable_attr_on_unsupported_item(
+                        validate_unsupported_item_attrs(
                             ctxt,
                             t.attr_list(),
                             "type",
+                            t.name().map(|name| name.text().to_string()),
                         );
                         types.push(AssocTyDecl::lower_ast(ctxt, t));
                     }
                     ast::TraitItemKind::Const(c) => {
-                        super::payable::report_payable_attr_on_unsupported_item(
+                        validate_unsupported_item_attrs(
                             ctxt,
                             c.attr_list(),
                             "const",
+                            c.name().map(|name| name.text().to_string()),
                         );
                         consts.push(AssocConstDecl::lower_ast(ctxt, c));
                     }
@@ -777,26 +744,30 @@ impl<'db> ImplTrait<'db> {
             for impl_item in item_list {
                 match impl_item.kind() {
                     ast::TraitItemKind::Func(func) => {
-                        super::payable::report_payable_attr_on_unsupported_item(
+                        validate_func_attrs(
                             ctxt,
                             func.attr_list(),
                             "fn",
+                            func.sig().name().map(|name| name.text().to_string()),
+                            true,
                         );
                         Func::lower_ast(ctxt, func);
                     }
                     ast::TraitItemKind::Type(t) => {
-                        super::payable::report_payable_attr_on_unsupported_item(
+                        validate_unsupported_item_attrs(
                             ctxt,
                             t.attr_list(),
                             "type",
+                            t.name().map(|name| name.text().to_string()),
                         );
                         types.push(AssocTyDef::lower_ast(ctxt, t));
                     }
                     ast::TraitItemKind::Const(c) => {
-                        super::payable::report_payable_attr_on_unsupported_item(
+                        validate_unsupported_item_attrs(
                             ctxt,
                             c.attr_list(),
                             "const",
+                            c.name().map(|name| name.text().to_string()),
                         );
                         consts.push(AssocConstDef::lower_ast(ctxt, c));
                     }
@@ -978,7 +949,7 @@ impl<'db> FieldDefListId<'db> {
 
 impl<'db> FieldDef<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::RecordFieldDef) -> Self {
-        super::payable::report_payable_attr_on_unsupported_item(ctxt, ast.attr_list(), "field");
+        report_payable_on_unsupported_target(ctxt, ast.attr_list(), "field", None);
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let type_ref = TypeId::lower_ast_partial(ctxt, ast.ty());
@@ -1005,7 +976,7 @@ impl<'db> VariantDefListId<'db> {
 
 impl<'db> VariantDef<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::VariantDef) -> Self {
-        super::payable::report_payable_attr_on_unsupported_item(ctxt, ast.attr_list(), "variant");
+        report_payable_on_unsupported_target(ctxt, ast.attr_list(), "variant", None);
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let kind = match ast.kind() {

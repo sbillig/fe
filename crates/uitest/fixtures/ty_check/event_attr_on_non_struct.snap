@@ -3,10 +3,8 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/event_attr_on_non_struct.fe
 ---
-error[10-0001]: `#[event]` is only valid on structs (found on fn)
+error[12-0001]: unsupported `#[event]` attribute on fn `foo`
   ┌─ event_attr_on_non_struct.fe:1:1
   │
 1 │ #[event]
-  │ ^^^^^^^^ `#[event]` must be placed on a `struct` item
-  │
-  = move `#[event]` to a struct declaration
+  │ ^^^^^^^^ `#[event]` is only supported on structs

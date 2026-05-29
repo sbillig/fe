@@ -3,7 +3,10 @@ use salsa::Accumulator as _;
 
 use super::{
     FileLowerCtxt,
-    attr::{has_named_attr, lower_attrs_without_named, named_attr_specs},
+    attr::{
+        AttrForm, AttrRule, AttrTarget, has_named_attr, lower_attrs_without_named,
+        validate_attr_rules,
+    },
     hir_builder::HirBuilder,
 };
 use crate::{
@@ -30,60 +33,13 @@ pub struct EventError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EventErrorKind {
-    EventAttrOnNonStruct { item_kind: &'static str },
-    InvalidEventAttrForm,
     GenericEventStruct,
-    IndexedAttrOutsideEventStruct,
-    InvalidIndexedAttrForm,
     TooManyIndexedFields { indexed_count: usize },
     UnsupportedFieldType { ty: String },
 }
 
 pub(super) fn is_event_struct(ast: &ast::Struct) -> bool {
     has_named_attr(ast.attr_list(), "event")
-}
-
-pub(super) fn report_event_attr_on_non_struct_item<'db>(
-    ctxt: &mut FileLowerCtxt<'db>,
-    attrs: Option<ast::AttrList>,
-    item_kind: &'static str,
-) {
-    let db = ctxt.db();
-    let file = ctxt.top_mod().file(db);
-
-    for attr in named_attr_specs(attrs, "event") {
-        EventError {
-            kind: EventErrorKind::EventAttrOnNonStruct { item_kind },
-            file,
-            primary_range: attr.range,
-            struct_name: None,
-            field_name: None,
-        }
-        .accumulate(db);
-    }
-}
-
-pub(super) fn report_indexed_attrs_outside_event_struct<'db>(
-    ctxt: &mut FileLowerCtxt<'db>,
-    ast: &ast::Struct,
-) {
-    let db = ctxt.db();
-    let file = ctxt.top_mod().file(db);
-    let struct_name = ast.name().map(|n| n.text().to_string());
-
-    let Some(fields) = ast.fields() else { return };
-    for field in fields {
-        for attr in named_attr_specs(field.attr_list(), "indexed") {
-            EventError {
-                kind: EventErrorKind::IndexedAttrOutsideEventStruct,
-                file,
-                primary_range: attr.range,
-                struct_name: struct_name.clone(),
-                field_name: field.name().map(|n| n.text().to_string()),
-            }
-            .accumulate(db);
-        }
-    }
 }
 
 pub(super) fn lower_event_struct<'db>(
@@ -103,20 +59,6 @@ pub(super) fn lower_event_struct<'db>(
 
     let stripped_event_attr = lower_attrs_without_named(builder.ctxt(), ast.attr_list(), "event");
     let attributes = stripped_event_attr.retained;
-    if let Some(attr) = stripped_event_attr
-        .removed
-        .iter()
-        .find(|attr| !attr.is_bare())
-    {
-        EventError {
-            kind: EventErrorKind::InvalidEventAttrForm,
-            file,
-            primary_range: attr.range,
-            struct_name: struct_name.clone(),
-            field_name: None,
-        }
-        .accumulate(db);
-    }
 
     let vis = super::lower_visibility(&ast);
     let generic_params = GenericParamListId::lower_ast_opt(builder.ctxt(), ast.generic_params());
@@ -253,6 +195,19 @@ fn parse_event_fields<'db>(
     };
 
     for field in fields {
+        validate_attr_rules(
+            ctxt,
+            field.attr_list(),
+            AttrTarget::new(
+                "event field",
+                field.name().map(|name| name.text().to_string()),
+            ),
+            &[AttrRule::supported(
+                "indexed",
+                AttrForm::Bare,
+                "`#[indexed]`",
+            )],
+        );
         let stripped_indexed_attr = lower_attrs_without_named(ctxt, field.attr_list(), "indexed");
         let attrs = stripped_indexed_attr.retained;
         let indexed_range = stripped_indexed_attr.removed.first().map(|attr| attr.range);
@@ -263,19 +218,12 @@ fn parse_event_fields<'db>(
                 indexed_ranges.push(r);
             }
         }
-        if let Some(attr) = stripped_indexed_attr
+        if stripped_indexed_attr
             .removed
             .iter()
-            .find(|attr| !attr.is_bare())
+            .any(|attr| !attr.is_bare())
+            || stripped_indexed_attr.removed.len() > 1
         {
-            EventError {
-                kind: EventErrorKind::InvalidIndexedAttrForm,
-                file,
-                primary_range: attr.range,
-                struct_name: struct_name.map(|s| s.to_string()),
-                field_name: field.name().map(|n| n.text().to_string()),
-            }
-            .accumulate(db);
             is_valid = false;
         }
 

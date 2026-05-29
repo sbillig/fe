@@ -1,0 +1,52 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/must_use_control_flow_discard.fe
+---
+error[8-0082]: unused value of type `Result<u256, bool>`
+  ┌─ must_use_control_flow_discard.fe:9:9
+  │
+9 │         make_result()
+  │         ^^^^^^^^^^^^^ use this value or explicitly discard it with `let _ = ...`
+  │
+  = this type is marked `#[must_use]`
+
+error[8-0082]: unused value of type `Result<u256, bool>`
+   ┌─ must_use_control_flow_discard.fe:15:9
+   │
+15 │         make_result()
+   │         ^^^^^^^^^^^^^ use this value or explicitly discard it with `let _ = ...`
+   │
+   = this type is marked `#[must_use]`
+
+error[8-0082]: unused value of type `Result<u256, bool>`
+   ┌─ must_use_control_flow_discard.fe:17:9
+   │
+17 │         make_result()
+   │         ^^^^^^^^^^^^^ use this value or explicitly discard it with `let _ = ...`
+   │
+   = this type is marked `#[must_use]`
+
+error[8-0082]: unused value of type `Result<u256, bool>`
+   ┌─ must_use_control_flow_discard.fe:24:13
+   │
+24 │             make_result()
+   │             ^^^^^^^^^^^^^ use this value or explicitly discard it with `let _ = ...`
+   │
+   = this type is marked `#[must_use]`
+
+error[8-0082]: unused value of type `Result<u256, bool>`
+   ┌─ must_use_control_flow_discard.fe:28:13
+   │
+28 │             make_result()
+   │             ^^^^^^^^^^^^^ use this value or explicitly discard it with `let _ = ...`
+   │
+   = this type is marked `#[must_use]`
+
+error[8-0082]: unused value of type `Result<u256, bool>`
+   ┌─ must_use_control_flow_discard.fe:35:9
+   │
+35 │         make_result()
+   │         ^^^^^^^^^^^^^ use this value or explicitly discard it with `let _ = ...`
+   │
+   = this type is marked `#[must_use]`
