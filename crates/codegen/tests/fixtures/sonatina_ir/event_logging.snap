@@ -58,7 +58,7 @@ func private %base(v0.objref<@layout_1>) -> i256 {
         return v4;
 }
 
-func private %emit(v0.@layout_2) {
+func inline(always) private %emit(v0.@layout_2) {
     block0:
         jump block1;
 

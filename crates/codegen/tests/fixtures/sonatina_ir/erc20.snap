@@ -7019,7 +7019,7 @@ func private %emit__g9cd0(v0.@layout_20) {
         return;
 }
 
-func private %impl_trait_ApprovalEvent__emit__gcd5c(v0.@layout_20) {
+func inline(always) private %impl_trait_ApprovalEvent__emit__gcd5c(v0.@layout_20) {
     block0:
         jump block1;
 
@@ -7036,7 +7036,7 @@ func private %impl_trait_ApprovalEvent__emit__gcd5c(v0.@layout_20) {
         return;
 }
 
-func private %impl_trait_TransferEvent__emit__gcd5c(v0.@layout_19) {
+func inline(always) private %impl_trait_TransferEvent__emit__gcd5c(v0.@layout_19) {
     block0:
         jump block1;
 

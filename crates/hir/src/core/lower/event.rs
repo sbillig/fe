@@ -458,7 +458,7 @@ fn lower_emit_method<'db>(
     let params = builder.params([self_param, log_param]);
     let modifiers = FuncModifiers::new(Visibility::Private, false, false, false);
 
-    builder.func_with_body(
+    builder.func_with_body_inline_always(
         emit_ident,
         generic_params,
         params,
@@ -484,9 +484,14 @@ fn lower_emit_method<'db>(
                     }
                     body.push_expr(Expr::Tuple(elems))
                 };
+                let encode_fn = if data_fields.len() == 1 {
+                    "encode_abi_payload"
+                } else {
+                    "encode_event_payload"
+                };
                 let encode_path = PathId::from_ident(db, roots.std)
                     .push_str(db, "evm")
-                    .push_str(db, "encode_abi_payload");
+                    .push_str(db, encode_fn);
                 let encode_expr = body.path_expr(encode_path);
                 let finish_call = body.call_expr(encode_expr, vec![payload_expr]);
                 let data_ptr_pat = body.push_pat(Pat::Path(

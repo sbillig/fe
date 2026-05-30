@@ -9,6 +9,7 @@ use core::abi::{
     ByteInput,
     Decode,
     Encode,
+    EventAbiEncode,
     encode_alloc,
     encode_single_root_alloc,
 }
@@ -94,6 +95,10 @@ impl<A: Abi> Encode<A> for Address {
     fn encode_to_ptr(own self, _ ptr: u256) {
         A::store_word(ptr: ptr, value: self.inner)
     }
+}
+
+impl<A: Abi> EventAbiEncode<A> for Address {
+    const DIRECT_EVENT_ENCODE: bool = true
 }
 
 impl<A: Abi> AbiSpan<A> for Address {
@@ -360,6 +365,20 @@ fn copy_words(dest: u256, src: u256, len: u256) {
 pub fn encode_abi_payload<T>(_ value: own T) -> (u256, u256)
     where T: Encode<Sol> + AbiSize
 {
+    encode_alloc<Sol, T>(value)
+}
+
+#[inline(always)]
+pub fn encode_event_payload<T>(_ value: own T) -> (u256, u256)
+    where T: EventAbiEncode<Sol>
+{
+    if T::DIRECT_EVENT_ENCODE {
+        let total = value.event_payload_size()
+        let base = mem::alloc(total)
+        value.encode_event_to_ptr(base)
+        return (base, total)
+    }
+
     encode_alloc<Sol, T>(value)
 }
 
