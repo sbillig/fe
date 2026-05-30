@@ -456,28 +456,6 @@ where
         })
     }
 
-    pub(super) fn func_with_body(
-        &mut self,
-        name: IdentId<'db>,
-        generic_params: GenericParamListId<'db>,
-        params: FuncParamListId<'db>,
-        ret_ty: Option<TypeId<'db>>,
-        modifiers: FuncModifiers,
-        build_body: impl FnOnce(&mut BodyBuilder<'_, 'db, O>),
-    ) -> Func<'db> {
-        self.func_with_body_spec(
-            FuncBodySpec {
-                name,
-                attrs: self.empty_attrs(),
-                generic_params,
-                params,
-                ret_ty,
-                modifiers,
-            },
-            build_body,
-        )
-    }
-
     pub(super) fn func_with_body_inline_always(
         &mut self,
         name: IdentId<'db>,
@@ -535,25 +513,6 @@ where
                     this.origin(),
                 )
             },
-        )
-    }
-
-    pub(super) fn func_generic(
-        &mut self,
-        name: &str,
-        generic_params: GenericParamListId<'db>,
-        params: FuncParamListId<'db>,
-        ret_ty: Option<TypeId<'db>>,
-        modifiers: FuncModifiers,
-        build_body: impl FnOnce(&mut BodyBuilder<'_, 'db, O>),
-    ) -> Func<'db> {
-        self.func_with_body(
-            self.ident(name),
-            generic_params,
-            params,
-            ret_ty,
-            modifiers,
-            build_body,
         )
     }
 

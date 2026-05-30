@@ -103,7 +103,7 @@ func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_85b5(v0.objre
         return v4;
 }
 
-func private %contract_init_abi_Child() {
+func inline(always) private %contract_init_abi_Child() {
     block0:
         v0.objref<@layout_2> = obj.alloc @layout_2;
         v1.objref<@layout_4> = obj.alloc @layout_4;
@@ -169,7 +169,7 @@ func private %contract_init_abi_Child() {
         return;
 }
 
-func private %contract_init_abi_Parent() {
+func inline(always) private %contract_init_abi_Parent() {
     block0:
         v0.objref<@layout_2> = obj.alloc @layout_2;
         v1.objref<@layout_4> = obj.alloc @layout_4;

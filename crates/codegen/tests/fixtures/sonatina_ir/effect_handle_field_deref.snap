@@ -415,7 +415,7 @@ func inline(always) private %core__lib__abi__checked_tail__gf13e_c189(v0.i256, v
         br v14 block2 block3;
 }
 
-func private %contract_init_abi_EffectHandleFieldDeref() {
+func inline(always) private %contract_init_abi_EffectHandleFieldDeref() {
     block0:
         jump block1;
 
@@ -445,7 +445,7 @@ func private %contract_init_root_EffectHandleFieldDeref() {
         evm_return 0.i256 v3;
 }
 
-func private %contract_recv_abi_EffectHandleFieldDeref_1() {
+func inline(always) private %contract_recv_abi_EffectHandleFieldDeref_1() {
     block0:
         jump block1;
 
@@ -470,7 +470,7 @@ func private %contract_recv_abi_EffectHandleFieldDeref_1() {
         evm_return v12 v13;
 }
 
-func private %contract_recv_abi_EffectHandleFieldDeref_2() {
+func inline(always) private %contract_recv_abi_EffectHandleFieldDeref_2() {
     block0:
         jump block1;
 
@@ -494,7 +494,7 @@ func private %contract_recv_abi_EffectHandleFieldDeref_2() {
         evm_return v10 v12;
 }
 
-func private %contract_recv_abi_EffectHandleFieldDeref_3() {
+func inline(always) private %contract_recv_abi_EffectHandleFieldDeref_3() {
     block0:
         jump block1;
 

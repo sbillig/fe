@@ -175,7 +175,7 @@ pub(super) fn create_payload_size_func<'db, O: Clone + Into<crate::span::Desugar
     }]);
     let ret_ty = builder.ty_ident(builder.ident("u256"));
     let roots = builder.roots();
-    builder.func_with_body(
+    builder.func_with_body_inline_always(
         payload_size_ident,
         builder.empty_generic_params(),
         params,
@@ -237,7 +237,7 @@ fn lower_msg_variant_encode_impl<'db>(
                 builder.param_mut_underscore_named(encoder_ident, e_ty),
             ]);
 
-            builder.func_generic(
+            builder.func_generic_inline_always(
                 "encode",
                 e_generic_params,
                 params,
@@ -254,7 +254,7 @@ fn lower_msg_variant_encode_impl<'db>(
             let params = builder.params([builder.param_own_self(), ptr_param]);
             let encode_to_ptr_ident = builder.ident("encode_to_ptr");
 
-            builder.func_with_body(
+            builder.func_with_body_inline_always(
                 encode_to_ptr_ident,
                 builder.empty_generic_params(),
                 params,

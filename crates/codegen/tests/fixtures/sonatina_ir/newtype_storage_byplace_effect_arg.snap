@@ -136,7 +136,7 @@ func private %bump(v0.i256) {
         return;
 }
 
-func private %contract_init_abi_NewtypeByPlaceEffectArg() {
+func inline(always) private %contract_init_abi_NewtypeByPlaceEffectArg() {
     block0:
         jump block1;
 
@@ -166,7 +166,7 @@ func private %contract_init_root_NewtypeByPlaceEffectArg() {
         evm_return 0.i256 v3;
 }
 
-func private %contract_recv_abi_NewtypeByPlaceEffectArg_1() {
+func inline(always) private %contract_recv_abi_NewtypeByPlaceEffectArg_1() {
     block0:
         jump block1;
 

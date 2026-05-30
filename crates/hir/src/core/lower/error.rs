@@ -427,7 +427,7 @@ fn lower_error_encode_impl<'db>(
                 builder.param_mut_underscore_named(encoder_ident, e_ty),
             ]);
 
-            builder.func_generic(
+            builder.func_generic_inline_always(
                 "encode",
                 e_generic_params,
                 params,
@@ -445,7 +445,7 @@ fn lower_error_encode_impl<'db>(
             let params = builder.params([builder.param_own_self(), ptr_param]);
             let encode_to_ptr_ident = builder.ident("encode_to_ptr");
 
-            builder.func_with_body(
+            builder.func_with_body_inline_always(
                 encode_to_ptr_ident,
                 builder.empty_generic_params(),
                 params,

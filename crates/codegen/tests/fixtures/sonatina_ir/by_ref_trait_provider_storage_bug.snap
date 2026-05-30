@@ -116,7 +116,7 @@ func private %base(v0.objref<@layout_0>) -> i256 {
         return v4;
 }
 
-func private %contract_init_abi_ByRefTraitProviderStorageBug() {
+func inline(always) private %contract_init_abi_ByRefTraitProviderStorageBug() {
     block0:
         jump block1;
 
@@ -146,7 +146,7 @@ func private %contract_init_root_ByRefTraitProviderStorageBug() {
         evm_return 0.i256 v3;
 }
 
-func private %contract_recv_abi_ByRefTraitProviderStorageBug_1() {
+func inline(always) private %contract_recv_abi_ByRefTraitProviderStorageBug_1() {
     block0:
         jump block1;
 
