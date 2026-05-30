@@ -55,9 +55,9 @@ use super::{
     call_input::{CompiledCallInputPlan, compile_call_input_plan_for_semantic},
     classify::{
         BodyEnv, BodyStaticFacts, ContractMetadataBuiltin, GenericNumericIntrinsicKind,
-        InferClassCache, RuntimeBodyCx, actual_aggregate_class_from_runtime_source,
-        contract_metadata_builtin, generic_numeric_intrinsic_kind, nonself_backing_value_place,
-        resolve_runtime_call_key, semantic_return_ty, snapshot_source_place,
+        InferClassCache, RuntimeBodyCx, contract_metadata_builtin, generic_numeric_intrinsic_kind,
+        nonself_backing_value_place, resolve_runtime_call_key, semantic_return_ty,
+        snapshot_source_place,
     },
     consts::{
         aggregate_const_ref_class, aggregate_const_ref_region, const_scalar_for_class,
@@ -4409,7 +4409,7 @@ impl<'db> RmirEmitter<'db> {
             && let Some(place) = self.try_lower_place(bb, &place)
         {
             let class = self.project_place_class(&place);
-            let actual = actual_aggregate_class_from_runtime_source(&class)?;
+            let actual = class.aggregate_value_class()?;
             let value = self.alloc_runtime_temp(
                 self.locals[local.index()].semantic_ty,
                 RuntimeCarrier::Value(class.clone()),
@@ -4425,7 +4425,7 @@ impl<'db> RmirEmitter<'db> {
         }
         let value = self.read_semantic_value(bb, local);
         let class = self.value_class(value).cloned()?;
-        let actual = actual_aggregate_class_from_runtime_source(&class)?;
+        let actual = class.aggregate_value_class()?;
         Some(self.coerce_value_if_needed(bb, value, &actual))
     }
 
