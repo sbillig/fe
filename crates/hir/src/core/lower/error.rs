@@ -2,7 +2,7 @@ use parser::ast::{self, prelude::*};
 use salsa::Accumulator as _;
 
 use super::{
-    FileLowerCtxt,
+    AbiFieldContext, AbiFieldDiagnostic, FileLowerCtxt,
     attr::{has_named_attr, lower_attrs_without_named, named_attr_specs},
     hir_builder::HirBuilder,
     msg::{
@@ -33,7 +33,6 @@ pub struct ErrorDiagnostic {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ErrorDiagnosticKind {
     GenericErrorStruct,
-    UnsupportedFieldType { ty: String },
     EventErrorAttrConflict,
 }
 
@@ -222,10 +221,9 @@ fn parse_error_fields<'db>(
         };
 
         let TypeKind::Path(Partial::Present(path)) = ty.data(db) else {
-            ErrorDiagnostic {
-                kind: ErrorDiagnosticKind::UnsupportedFieldType {
-                    ty: ty.pretty_print(db),
-                },
+            AbiFieldDiagnostic {
+                context: AbiFieldContext::Error,
+                ty: ty.pretty_print(db),
                 file,
                 primary_range: field
                     .ty()

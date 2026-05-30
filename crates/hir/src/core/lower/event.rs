@@ -2,7 +2,7 @@ use parser::ast::{self, prelude::*};
 use salsa::Accumulator as _;
 
 use super::{
-    FileLowerCtxt,
+    AbiFieldContext, AbiFieldDiagnostic, FileLowerCtxt,
     attr::{
         AttrForm, AttrRule, AttrTarget, has_named_attr, lower_attrs_without_named,
         validate_attr_rules,
@@ -35,7 +35,6 @@ pub struct EventError {
 pub enum EventErrorKind {
     GenericEventStruct,
     TooManyIndexedFields { indexed_count: usize },
-    UnsupportedFieldType { ty: String },
 }
 
 pub(super) fn is_event_struct(ast: &ast::Struct) -> bool {
@@ -245,10 +244,9 @@ fn parse_event_fields<'db>(
         // in the TOPIC0 computation. Non-path types (tuples, etc.) are not
         // supported as event fields.
         let TypeKind::Path(Partial::Present(path)) = ty.data(db) else {
-            EventError {
-                kind: EventErrorKind::UnsupportedFieldType {
-                    ty: ty.pretty_print(db),
-                },
+            AbiFieldDiagnostic {
+                context: AbiFieldContext::Event,
+                ty: ty.pretty_print(db),
                 file,
                 primary_range: field
                     .ty()
