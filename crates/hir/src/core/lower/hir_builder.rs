@@ -168,6 +168,10 @@ where
         self.ty_path(PathId::from_ident(self.db(), ident))
     }
 
+    pub(super) fn ty_ptr(&self, pointee: TypeId<'db>) -> TypeId<'db> {
+        TypeId::new(self.db(), TypeKind::Ptr(Partial::Present(pointee)))
+    }
+
     pub(super) fn sol_ty(&self) -> TypeId<'db> {
         let path = self.path_from_root(self.roots.std, &["abi", "Sol"]);
         self.ty_path(path)
@@ -698,6 +702,15 @@ where
             GenericArgListId::none(self.db()),
             args,
         ))
+    }
+
+    pub(super) fn ptr_offset_bytes_expr(&mut self, ptr: ExprId, offset: ExprId) -> ExprId {
+        let db = self.db();
+        let path = PathId::from_ident(db, self.roots.core)
+            .push_str(db, "ptr")
+            .push_str(db, "offset_bytes");
+        let callee = self.path_expr(path);
+        self.call_expr(callee, vec![ptr, offset])
     }
 
     pub(super) fn encode_fields(

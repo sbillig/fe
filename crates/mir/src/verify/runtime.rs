@@ -703,6 +703,11 @@ fn verify_builtin<'db>(
                 target: None,
             }))
         }
+        RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
+            verify_address_operand(body, *ptr, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *offset)?;
+            Ok(Some(runtime_value_class(body, *ptr)?.clone()))
+        }
         RuntimeBuiltin::Call {
             gas,
             addr,

@@ -7,17 +7,13 @@ struct Holder {
     data: *Data,
 }
 
-fn pointer_casts_and_offsets(raw: u256, data: *Data, bytes: *u8) -> u256 {
-    let typed_from_raw: *Data = raw as *Data
-    let raw_again: u256 = typed_from_raw as u256
-    let bytes_from_typed: *u8 = typed_from_raw as *u8
-    let typed_again: *Data = bytes_from_typed as *Data
+fn pointer_casts_and_offsets(data: *Data, bytes: *u8) -> u256 {
+    let bytes_from_typed: *u8 = core::ptr::as_bytes(data)
+    let typed_again: *Data = core::ptr::cast<u8, Data>(bytes_from_typed)
     let next: *Data = core::ptr::offset_bytes(typed_again, 32)
-    let prev: *Data = core::ptr::from_addr(core::ptr::addr(next) - 32)
-    let distance: u256 = core::ptr::addr(next) - core::ptr::addr(typed_again)
-    let raw_bytes: *u8 = core::ptr::null<u8>()
+    let input_data: *Data = core::ptr::cast<u8, Data>(bytes)
 
-    raw_again + distance + core::ptr::addr(prev) + core::ptr::addr(data) + core::ptr::addr(bytes) + core::ptr::addr(raw_bytes)
+    typed_again.value + next.other + input_data.value
 }
 
 fn pointer_field_access(data: *Data) -> u256 {

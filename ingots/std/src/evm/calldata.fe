@@ -1,9 +1,14 @@
 use core::abi::{ByteInput, Decode}
 use core::Copy
 use core::num::IntDowncast
+use core::ptr
 use ingot::abi::Sol
 use ingot::abi::sol::{decode_input}
 use ingot::evm::ops::{calldataload, calldatacopy, calldatasize, revert}
+
+fn revert_empty() -> ! {
+    revert(offset: ptr::alloc_bytes(0), len: 0)
+}
 
 /// A view over the current EVM calldata.
 ///
@@ -59,15 +64,15 @@ impl ByteInput for CallData {
         (word >> shift).downcast_truncate()
     }
 
-    fn copy_to_memory(self, dest: u256, src_offset: u256, len: u256) {
+    fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
         if len % 32 != 0 {
-            revert(offset: 0, len: 0)
+            revert_empty()
         }
 
         let input_len = self.len()
         let end = src_offset + len
         if end < src_offset || end > input_len {
-            revert(offset: 0, len: 0)
+            revert_empty()
         }
 
         calldatacopy(dest: dest, offset: self.base + src_offset, len: len)

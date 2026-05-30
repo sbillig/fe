@@ -187,7 +187,7 @@ impl HashTreeRoot for ByteVector<96> {
     uses (mem: mut RawMem)
     {
         assert!(view.len == 96)
-        let base = view.input.base + view.start
+        let base = ptr::offset_bytes(view.input.base, view.start)
         let scratch = alloc_pair(0, 0)
         let offset = pair_offset(scratch)
         let left = sha256_64_to(base, offset)
@@ -436,8 +436,8 @@ fn write_pair(_ scratch: *ChunkPair, _ left: u256, _ right: u256) {
     scratch[1] = right
 }
 
-fn pair_offset(_ scratch: *ChunkPair) -> u256 {
-    ptr::addr(ptr::as_bytes(scratch))
+fn pair_offset(_ scratch: *ChunkPair) -> *u8 {
+    ptr::as_bytes(scratch)
 }
 
 fn hash_pair_buffer(_ scratch: *ChunkPair) -> u256 {
@@ -451,7 +451,7 @@ fn hash_pair_buffer(_ scratch: *ChunkPair) -> u256 {
 // then returns it loaded into a u256. Reverts on precompile failure
 // or short return (defensive — sha256 always returns 32 bytes on
 // real EVM, but we don't want to trust silent truncation).
-fn sha256_64_to(_ offset: u256, _ out: u256) -> u256 {
+fn sha256_64_to(_ offset: *u8, _ out: *u8) -> u256 {
     let ok: u256 = ops::staticcall(
         gas: ops::gas(),
         addr: 2,
@@ -461,10 +461,10 @@ fn sha256_64_to(_ offset: u256, _ out: u256) -> u256 {
         ret_len: 32,
     )
     if ok == 0 {
-        ops::revert(offset: 0, len: 0)
+        ops::revert(offset: ptr::alloc_bytes(0), len: 0)
     }
     if ops::returndatasize() < 32 {
-        ops::revert(offset: 0, len: 0)
+        ops::revert(offset: ptr::alloc_bytes(0), len: 0)
     }
     ops::mload(out)
 }

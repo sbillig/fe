@@ -17,13 +17,40 @@ func private %abi_encode_u256(v0.i256) {
         jump block1;
 
     block1:
-        v3.i256 = mload v1 i256;
-        call %mstore 0.i256 v3;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_44fe 0.i256 32.i256;
+        v3.i256 = call %core__lib__ptr__alloc_bytes_1249 32.i256;
+        v4.i256 = mload v1 i256;
+        call %mstore v3 v4;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_fc66 v3 32.i256;
         unreachable;
 }
 
-func private %alloc(v0.i256) -> i256 {
+func private %core__lib__ptr__alloc_bytes_1249(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
+
+func private %core__lib__ptr__alloc_bytes_3a9c(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
+
+func private %core__lib__ptr__alloc_bytes_3a9c_0(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -52,17 +79,14 @@ func private %codecopy(v0.i256, v1.i256, v2.i256) {
     block0:
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        mstore v3 v0 i256;
-        mstore v4 v1 i256;
-        mstore v5 v2 i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
         jump block1;
 
     block1:
         v6.i256 = mload v3 i256;
         v7.i256 = mload v4 i256;
-        v8.i256 = mload v5 i256;
-        evm_code_copy v6 v7 v8;
+        evm_code_copy v0 v6 v7;
         return;
 }
 
@@ -73,9 +97,9 @@ func private %init() {
     block1:
         v0.i256 = sym_size &__EnumContract_runtime;
         v1.i256 = sym_addr &__EnumContract_runtime;
-        v2.i256 = call %alloc v0;
+        v2.i256 = call %core__lib__ptr__alloc_bytes_3a9c_0 v0;
         call %codecopy v2 v1 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461_0 v2 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_9c22_0 v2 v0;
         unreachable;
 }
 
@@ -100,58 +124,46 @@ func private %manual_contract_runtime_root_EnumContract() {
 func private %mstore(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        mstore v0 v4 i256;
         return;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_9c22(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v4;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461_0(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_9c22_0(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v4;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_44fe(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_fc66(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v4;
 }
 
 func private %runtime() {
@@ -230,12 +242,13 @@ func private %runtime() {
         jump block16;
 
     block16:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461 0.i256 0.i256;
+        v40.i256 = call %core__lib__ptr__alloc_bytes_3a9c 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_9c22 v40 0.i256;
         unreachable;
 
     block17:
-        v40.i256 = phi (1.i256 block18) (0.i256 block19);
-        call %abi_encode_u256 v40;
+        v41.i256 = phi (1.i256 block18) (0.i256 block19);
+        call %abi_encode_u256 v41;
         unreachable;
 
     block18:

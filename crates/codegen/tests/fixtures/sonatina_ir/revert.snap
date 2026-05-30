@@ -1,18 +1,44 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 403
 expression: output
 input_file: crates/codegen/tests/fixtures/revert.fe
 ---
 target = "evm-ethereum-osaka"
+
+func private %core__lib__ptr__alloc_bytes_4ba4(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
+
+func private %core__lib__ptr__alloc_bytes_4ba4_0(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
 
 func private %standalone_revert__revert__fail__gcd5c_ac8c() {
     block0:
         jump block1;
 
     block1:
-        call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_f3cd 0.i256 42.i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_8f03 0.i256 32.i256;
+        v1.i256 = call %core__lib__ptr__alloc_bytes_4ba4 32.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_40b1 v1 42.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_73ad v1 32.i256;
         unreachable;
 }
 
@@ -21,8 +47,9 @@ func private %standalone_revert__revert__fail__gcd5c_cdbf() {
         jump block1;
 
     block1:
-        call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_f3cd_0 0.i256 42.i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_8f03_0 0.i256 32.i256;
+        v1.i256 = call %core__lib__ptr__alloc_bytes_4ba4_0 32.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_40b1_0 v1 42.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_73ad_0 v1 32.i256;
         unreachable;
 }
 
@@ -44,62 +71,50 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_f3cd(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_40b1(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        mstore v0 v4 i256;
         return;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_f3cd_0(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_40b1_0(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        mstore v0 v4 i256;
         return;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__revert_8f03(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__revert_73ad(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_revert v4 v5;
+        evm_revert v0 v4;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__revert_8f03_0(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__revert_73ad_0(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_revert v4 v5;
+        evm_revert v0 v4;
 }
 
 

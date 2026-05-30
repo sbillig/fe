@@ -642,7 +642,7 @@ impl<'db> TyChecker<'db> {
             return true;
         }
 
-        if self.is_pointer_word_cast(from_leaf, to_leaf) {
+        if self.is_pointer_cast(from_leaf, to_leaf) {
             return true;
         }
 
@@ -654,9 +654,8 @@ impl<'db> TyChecker<'db> {
             || (self.is_plain_u256(from) && to.is_string(self.db))
     }
 
-    fn is_pointer_word_cast(&self, from: TyId<'db>, to: TyId<'db>) -> bool {
-        from.as_ptr(self.db).is_some() && (to.as_ptr(self.db).is_some() || self.is_plain_u256(to))
-            || self.is_plain_u256(from) && to.as_ptr(self.db).is_some()
+    fn is_pointer_cast(&self, from: TyId<'db>, to: TyId<'db>) -> bool {
+        from.as_ptr(self.db).is_some() && to.as_ptr(self.db).is_some()
     }
 
     fn is_plain_u256(&self, ty: TyId<'db>) -> bool {

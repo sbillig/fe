@@ -12,5 +12,5 @@ impl<A: Abi> Encode<A> for Error {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {}
 
-    fn encode_to_ptr(own self, _ ptr: u256) {}
+    fn encode_to_ptr(own self, _ ptr: *u8) {}
 }

@@ -1,9 +1,10 @@
-use std::evm::{Evm, RawMem, RawOps, RawStorage, StorageMap, StorPtr, mem}
+use core::ptr
+use std::evm::{Evm, RawMem, RawOps, RawStorage, StorageMap, StorPtr}
 
 fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
-    let ptr: u256 = 0
-    ops.mstore(addr: ptr, value: value)
-    ops.return_data(offset: ptr, len: 32)
+    let data = ptr::alloc_bytes(32)
+    ops.mstore(addr: data, value: value)
+    ops.return_data(offset: data, len: 32)
 }
 
 // Two separate StorageMaps - balances and allowances
@@ -48,7 +49,7 @@ fn transfer(from: u256, to: u256, amount: u256) -> u256
 fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    let dest = mem::alloc(len)
+    let dest = ptr::alloc_bytes(len)
     evm.codecopy(dest: dest, offset: offset, len: len)
     evm.return_data(offset: dest, len: len)
 }
@@ -100,7 +101,7 @@ fn runtime() uses (evm: mut Evm) {
                 }
                 abi_encode(value: 0)
             }
-            _ => evm.return_data(offset: 0, len: 0)
+            _ => evm.return_data(offset: ptr::alloc_bytes(0), len: 0)
         }
     }
 }

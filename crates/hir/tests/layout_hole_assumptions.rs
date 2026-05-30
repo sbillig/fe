@@ -1730,6 +1730,7 @@ struct Ptr<T> {
 impl<T> EffectHandle for Ptr<T> {
     type Target = Payload<T>
     type AddressSpace = core::effect_ref::Storage
+    type Raw = u256
 
     fn from_raw(_ raw: u256) -> Self {
         Self { raw }
@@ -1799,6 +1800,7 @@ struct Wrapper<const LEFT: u256 = _, const RIGHT: u256 = _> {
 impl<const LEFT: u256, const RIGHT: u256> EffectHandle for Wrapper<LEFT, RIGHT> {
     type Target = Pair<RIGHT, LEFT>
     type AddressSpace = core::effect_ref::Storage
+    type Raw = u256
 
     fn from_raw(_ raw: u256) -> Self {
         Self { raw }
@@ -1879,6 +1881,7 @@ struct Wrapper<const ROOT: u256 = _> {
 impl<const ROOT: u256> EffectHandle for Wrapper<ROOT> {
     type Target = u256
     type AddressSpace = core::effect_ref::Storage
+    type Raw = u256
 
     fn from_raw(_ raw: u256) -> Self {
         Self { raw }

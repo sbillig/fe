@@ -7,13 +7,13 @@ note:
    ┌─ contract_recv_variants.fe:11:5
    │
 11 │     Deposit { amount: u64 } -> u64,
-   │     ^^^^^^^ () | Deposit | fn decode_field<Sol, u64, D> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64, E> | mut D | mut E | u256 | u64
+   │     ^^^^^^^ () | *<u8> | Deposit | fn decode_field<Sol, u64, D> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64, E> | mut D | mut E | u256 | u64
 
 note:
    ┌─ contract_recv_variants.fe:13:5
    │
 13 │     Withdraw { amount: u64 } -> bool,
-   │     ^^^^^^^^ () | Withdraw | fn decode_field<Sol, u64, D> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64, E> | mut D | mut E | u256 | u64
+   │     ^^^^^^^^ () | *<u8> | Withdraw | fn decode_field<Sol, u64, D> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64, E> | mut D | mut E | u256 | u64
 
 note:
    ┌─ contract_recv_variants.fe:33:82
@@ -87,10 +87,10 @@ note:
    │                           ^ mut E
 
 note:
-   ┌─ contract_recv_variants.fe:39:49
+   ┌─ contract_recv_variants.fe:39:48
    │
-39 │           fn encode_to_ptr(own self, _ ptr: u256) {
-   │ ╭─────────────────────────────────────────────────^
+39 │           fn encode_to_ptr(own self, _ ptr: *u8) {
+   │ ╭────────────────────────────────────────────────^
 40 │ │             core::panic()
 41 │ │         }
    │ ╰─────────^ ()
@@ -231,10 +231,10 @@ note:
    │                         ^ mut E
 
 note:
-   ┌─ contract_recv_variants.fe:74:49
+   ┌─ contract_recv_variants.fe:74:48
    │
-74 │           fn encode_to_ptr(own self, _ ptr: u256) {
-   │ ╭─────────────────────────────────────────────────^
+74 │           fn encode_to_ptr(own self, _ ptr: *u8) {
+   │ ╭────────────────────────────────────────────────^
 75 │ │             core::panic()
 76 │ │         }
    │ ╰─────────^ ()
@@ -344,10 +344,10 @@ note:
     │                    ^ mut E
 
 note:
-    ┌─ contract_recv_variants.fe:112:45
+    ┌─ contract_recv_variants.fe:112:44
     │
-112 │       fn encode_to_ptr(own self, _ ptr: u256) {
-    │ ╭─────────────────────────────────────────────^
+112 │       fn encode_to_ptr(own self, _ ptr: *u8) {
+    │ ╭────────────────────────────────────────────^
 113 │ │         core::panic()
 114 │ │     }
     │ ╰─────^ ()

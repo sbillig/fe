@@ -1,16 +1,18 @@
-use std::evm::{Evm, mem}
+use core::ptr
+use std::evm::Evm
 
 #[contract_init(Child)]
 pub fn child_init() uses (evm: mut Evm) {
     let len = evm.code_region_len(child_runtime)
     let offset = evm.code_region_offset(child_runtime)
-    let dest = mem::alloc(len)
+    let dest = ptr::alloc_bytes(len)
     evm.codecopy(dest: dest, offset: offset, len: len)
     evm.return_data(offset: dest, len: len)
 }
 
 #[contract_runtime(Child)]
 pub fn child_runtime() uses (evm: mut Evm) {
-    evm.mstore(addr: 0, value: 0xbeef)
-    evm.return_data(offset: 0, len: 32)
+    let data = ptr::alloc_bytes(32)
+    evm.mstore(addr: data, value: 0xbeef)
+    evm.return_data(offset: data, len: 32)
 }

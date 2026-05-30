@@ -768,6 +768,11 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
         RuntimeBuiltin::CodeRegionOffset { region } => format!("code_region_offset {:?}", region),
         RuntimeBuiltin::CodeRegionLen { region } => format!("code_region_len {:?}", region),
         RuntimeBuiltin::Malloc { size } => format!("malloc {}", format_local_id(*size)),
+        RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => format!(
+            "ptr_offset_bytes {}, {}",
+            format_local_id(*ptr),
+            format_local_id(*offset)
+        ),
         RuntimeBuiltin::Call {
             gas,
             addr,

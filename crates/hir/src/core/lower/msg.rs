@@ -246,7 +246,8 @@ fn lower_msg_variant_encode_impl<'db>(
             );
 
             let ptr_ident = builder.ident("ptr");
-            let ptr_ty = builder.ty_ident(builder.ident("u256"));
+            let u8_ty = builder.ty_ident(builder.ident("u8"));
+            let ptr_ty = builder.ty_ptr(u8_ty);
             let ptr_param = builder.param_underscore_named(ptr_ident, ptr_ty);
             let params = builder.params([builder.param_own_self(), ptr_param]);
             let encode_to_ptr_ident = builder.ident("encode_to_ptr");
@@ -276,11 +277,7 @@ fn lower_msg_variant_encode_impl<'db>(
                             let next_ptr_ident = IdentId::new(db, format!("__field_ptr{index}"));
                             let current_ptr = body.ident_expr(field_ptr_ident);
                             let field_size = build_head_size_body_expr(body, field_ty);
-                            let next_ptr = body.push_expr(Expr::Bin(
-                                current_ptr,
-                                field_size,
-                                BinOp::Arith(ArithBinOp::Add),
-                            ));
+                            let next_ptr = body.ptr_offset_bytes_expr(current_ptr, field_size);
                             let next_ptr_pat = body.push_pat(Pat::Path(
                                 Partial::Present(PathId::from_ident(db, next_ptr_ident)),
                                 false,

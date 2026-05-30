@@ -1,3 +1,5 @@
+use core::ptr
+
 fn read_x() -> u256 uses (x: u256) {
     x
 }
@@ -7,7 +9,7 @@ fn bump_x() uses (x: mut u256) {
 }
 
 fn test_mem_ptr() uses (mem: std::evm::RawMem) {
-    let p: std::evm::MemPtr<u256> = mem.mem_ptr(0)
+    let p: std::evm::MemPtr<u256> = mem.mem_ptr(ptr::alloc<u256>())
     with (p) {
         let _v = read_x()
         bump_x()

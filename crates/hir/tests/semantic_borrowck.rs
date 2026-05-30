@@ -783,8 +783,12 @@ fn ok(p: *u256) {
 fn unknown_raw_address_conflicts_with_input_pointer() {
     assert_mut_borrow_conflict(
         r#"
-fn bad(p: *u256, addr: u256) {
-    let q = core::ptr::from_addr<u256>(addr)
+extern {
+    fn unknown_ptr<T>() -> *T
+}
+
+fn bad(p: *u256) {
+    let q = unknown_ptr<u256>()
     let a = mut *q
     let b = mut *p
     b = 1
@@ -1053,12 +1057,16 @@ fn bad(pp: * *u256, p: *u256, other: * *u256) {
 fn unknown_memory_pointer_conflicts_with_memory_provider_root() {
     assert_mut_borrow_conflict(
         r#"
+extern {
+    fn unknown_ptr<T>() -> *T
+}
+
 struct Store {
     value: u256,
 }
 
-fn bad(addr: u256) uses (store: mut Store) {
-    let p = core::ptr::from_addr<Store>(addr)
+fn bad() uses (store: mut Store) {
+    let p = unknown_ptr<Store>()
     let a = mut *p
     let b = mut store
     b.value = 1
@@ -1150,9 +1158,13 @@ fn bad(pp1: * *u256, pp2: * *u256, p: *u256, q: *u256, choose: bool) {
 fn unknown_pointer_store_does_not_shadow_default_targets() {
     assert_mut_borrow_conflict(
         r#"
-fn bad(p: *u256, q: *u256, addr: u256) {
+extern {
+    fn unknown_ptr<T>() -> *T
+}
+
+fn bad(p: *u256, q: *u256) {
     let pp = core::ptr::alloc<*u256>()
-    let unknown = core::ptr::from_addr<*u256>(addr)
+    let unknown = unknown_ptr<*u256>()
     *unknown = q
     let r = *pp
     let a = mut *r
@@ -1168,12 +1180,16 @@ fn bad(p: *u256, q: *u256, addr: u256) {
 fn multiple_unknown_pointer_stores_accumulate_targets() {
     assert_mut_borrow_conflict(
         r#"
-fn bad(p: *u256, q: *u256, addr1: u256, addr2: u256, addr3: u256) {
-    let unknown1 = core::ptr::from_addr<*u256>(addr1)
+extern {
+    fn unknown_ptr<T>() -> *T
+}
+
+fn bad(p: *u256, q: *u256) {
+    let unknown1 = unknown_ptr<*u256>()
     *unknown1 = p
-    let unknown2 = core::ptr::from_addr<*u256>(addr2)
+    let unknown2 = unknown_ptr<*u256>()
     *unknown2 = q
-    let unknown3 = core::ptr::from_addr<*u256>(addr3)
+    let unknown3 = unknown_ptr<*u256>()
     let r = *unknown3
     let a = mut *r
     let b = mut *p
@@ -2128,15 +2144,13 @@ pub fn cast_u8_usize_cmp(indices: [u8; 8], i: usize, j: usize) -> u8 {
 fn raw_mem_allocate_does_not_report_move_conflict() {
     let diags = borrow_diags(
         r#"
+use core::ptr
 use std::evm::RawMem
 
-fn allocate(bytes: u256) -> u256 uses (mem: mut RawMem) {
-    let mut ptr = mem.mload(0x40)
-    if ptr == 0 {
-        ptr = 0x60
-    }
-    mem.mstore(0x40, ptr + bytes)
-    ptr
+fn allocate(bytes: u256) -> *u8 uses (mem: mut RawMem) {
+    let out = ptr::alloc_bytes(32)
+    mem.mstore(out, bytes)
+    out
 }
 "#,
     );

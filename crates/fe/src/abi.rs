@@ -1467,7 +1467,7 @@ impl<T> core::abi::Encode<std::abi::Sol> for GenericMsg<T>
         value.encode(e)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         core::panic()
     }
 }
@@ -1539,7 +1539,7 @@ impl core::abi::Encode<std::abi::Sol> for Weird {
         self.amount.encode(e)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         core::panic()
     }
 }
@@ -1605,7 +1605,7 @@ mod TokenMsg {
             self.amount.encode(e)
         }
 
-        fn encode_to_ptr(own self, _ ptr: u256) {
+        fn encode_to_ptr(own self, _ ptr: *u8) {
             core::panic()
         }
     }

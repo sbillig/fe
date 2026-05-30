@@ -45,8 +45,6 @@ fn test_first_class_memory_pointers() {
     let bytes = array.as_bytes()
     assert(array.len == 2)
     assert(bytes.len == 64)
-    assert(core::ptr::addr(bytes.ptr) == core::ptr::addr(array.ptr))
-    assert(core::ptr::addr(array.ptr_at(1)) - core::ptr::addr(array.ptr) == 32)
     assert(array[0] + array[1] == 21)
 
     let zeroed = core::ptr::MemArray<u256>::new_zeroed(2)
@@ -64,6 +62,5 @@ fn test_first_class_memory_pointers() {
     let pair_words = core::ptr::cast<u8, u256>(pair_bytes)
     assert(pair[0] == 13)
     assert(pair[1] == 21)
-    assert(core::ptr::addr(pair_bytes) == core::ptr::addr(pair_words))
     assert(*pair_words + *core::ptr::offset(pair_words, 1) == 34)
 }

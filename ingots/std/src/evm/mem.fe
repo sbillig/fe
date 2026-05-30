@@ -1,6 +1,0 @@
-use core::ptr
-
-/// Dynamic memory allocation in EVM linear memory.
-pub fn alloc(_ size: u256) -> u256 {
-    ptr::alloc_raw(size) as u256
-}

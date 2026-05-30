@@ -95,10 +95,10 @@ note:
    │                      ^ mut E
 
 note:
-   ┌─ contract_recv_generic_variant.fe:28:45
+   ┌─ contract_recv_generic_variant.fe:28:44
    │
-28 │       fn encode_to_ptr(own self, _ ptr: u256) {
-   │ ╭─────────────────────────────────────────────^
+28 │       fn encode_to_ptr(own self, _ ptr: *u8) {
+   │ ╭────────────────────────────────────────────^
 29 │ │         core::panic()
 30 │ │     }
    │ ╰─────^ ()

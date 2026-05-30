@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/alloc.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %alloc(v0.i256) -> i256 {
+func private %alloc_bytes(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -23,7 +23,7 @@ func private %bump_const() -> i256 {
         jump block1;
 
     block1:
-        v1.i256 = call %alloc 64.i256;
+        v1.i256 = call %alloc_bytes 64.i256;
         return v1;
 }
 

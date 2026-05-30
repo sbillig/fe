@@ -1195,6 +1195,10 @@ pub enum RuntimeBuiltin<'db> {
     Malloc {
         size: RValueId,
     },
+    PtrOffsetBytes {
+        ptr: RValueId,
+        offset: RValueId,
+    },
     Call {
         gas: RValueId,
         addr: RValueId,

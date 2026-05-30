@@ -101,6 +101,7 @@ pub fn lib_func_matches<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>, path: 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum RuntimeBuiltinFuncKind {
     Malloc,
+    PtrOffsetBytes,
     Mload,
     Mstore,
     Mstore8,
@@ -179,21 +180,9 @@ pub fn pointer_provenance_func_kind<'db>(
     let kind = func.top_mod(db).ingot(db).kind(db);
     let path = runtime_builtin_func_path(db, func)?;
     Some(match (kind, path.as_slice()) {
-        (IngotKind::Core, ["ptr", "alloc_raw" | "alloc" | "alloc_bytes" | "alloc_array"]) => {
-            PointerProvenanceFuncKind::FreshMemory
-        }
-        (IngotKind::Core, ["ptr", "from_addr" | "null"]) => {
-            PointerProvenanceFuncKind::UnknownMemory
-        }
-        (
-            IngotKind::Core,
-            [
-                "ptr",
-                "cast" | "as_bytes" | "offset" | "offset_bytes" | "elem",
-            ],
-        ) => PointerProvenanceFuncKind::InputPointee,
+        (IngotKind::Core, ["ptr", "alloc_raw"]) => PointerProvenanceFuncKind::FreshMemory,
+        (IngotKind::Core, ["ptr", "offset_bytes"]) => PointerProvenanceFuncKind::InputPointee,
         (IngotKind::Core, ["ptr", "array_elem"]) => PointerProvenanceFuncKind::InputArrayElem,
-        (IngotKind::Core, ["ptr", "mem_array_elem"]) => PointerProvenanceFuncKind::MemArrayCarrier,
         _ => return None,
     })
 }
@@ -207,6 +196,7 @@ pub fn runtime_builtin_func_kind<'db>(
     let path = runtime_builtin_func_path(db, func)?;
     Some(match (kind, path.as_slice()) {
         (IngotKind::Core, ["ptr", "alloc_raw"]) => RuntimeBuiltinFuncKind::Malloc,
+        (IngotKind::Core, ["ptr", "offset_bytes"]) => RuntimeBuiltinFuncKind::PtrOffsetBytes,
         (IngotKind::Std, ["evm", "ops", "mload"]) => RuntimeBuiltinFuncKind::Mload,
         (IngotKind::Std, ["evm", "ops", "mstore"]) => RuntimeBuiltinFuncKind::Mstore,
         (IngotKind::Core, ["ptr", "zero_mem"]) => RuntimeBuiltinFuncKind::ZeroMem,

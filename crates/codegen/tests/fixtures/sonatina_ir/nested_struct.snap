@@ -18,13 +18,40 @@ func private %abi_encode(v0.i256) {
         jump block1;
 
     block1:
-        v3.i256 = mload v1 i256;
-        call %mstore 0.i256 v3;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_8d10 0.i256 32.i256;
+        v3.i256 = call %core__lib__ptr__alloc_bytes_a530 32.i256;
+        v4.i256 = mload v1 i256;
+        call %mstore v3 v4;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_829f v3 32.i256;
         unreachable;
 }
 
-func private %alloc(v0.i256) -> i256 {
+func private %core__lib__ptr__alloc_bytes_274d(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
+
+func private %core__lib__ptr__alloc_bytes_274d_0(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
+
+func private %core__lib__ptr__alloc_bytes_a530(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -53,17 +80,14 @@ func private %codecopy(v0.i256, v1.i256, v2.i256) {
     block0:
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        mstore v3 v0 i256;
-        mstore v4 v1 i256;
-        mstore v5 v2 i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
         jump block1;
 
     block1:
         v6.i256 = mload v3 i256;
         v7.i256 = mload v4 i256;
-        v8.i256 = mload v5 i256;
-        evm_code_copy v6 v7 v8;
+        evm_code_copy v0 v6 v7;
         return;
 }
 
@@ -85,9 +109,9 @@ func private %init() {
     block1:
         v0.i256 = sym_size &__NestedStruct_runtime;
         v1.i256 = sym_addr &__NestedStruct_runtime;
-        v2.i256 = call %alloc v0;
+        v2.i256 = call %core__lib__ptr__alloc_bytes_274d_0 v0;
         call %codecopy v2 v1 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_7adf_0 v2 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_ff5c_0 v2 v0;
         unreachable;
 }
 
@@ -140,15 +164,12 @@ func private %mem_read(v0.i256) -> i256 {
 func private %mstore(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        mstore v0 v4 i256;
         return;
 }
 
@@ -161,46 +182,37 @@ func private %read_inner(v0.i256) -> i256 {
         return v2;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_7adf(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_829f(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v4;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_7adf_0(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_ff5c(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v4;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_8d10(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_ff5c_0(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v4;
 }
 
 func private %runtime() {
@@ -232,16 +244,17 @@ func private %runtime() {
         unreachable;
 
     block5:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_7adf 0.i256 0.i256;
+        v15.i256 = call %core__lib__ptr__alloc_bytes_274d 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_ff5c v15 0.i256;
         unreachable;
 
     block6:
-        v17.i1 = eq v4 3513050253.i256;
-        br v17 block3 block7;
+        v18.i1 = eq v4 3513050253.i256;
+        br v18 block3 block7;
 
     block7:
-        v20.i1 = eq v4 2154770637.i256;
-        br v20 block4 block8;
+        v21.i1 = eq v4 2154770637.i256;
+        br v21 block4 block8;
 
     block8:
         jump block5;

@@ -267,6 +267,19 @@ fn expr_requires_runtime_eval_when_erased(expr: &NExpr<'_>) -> bool {
     }
 }
 
+fn place_path_starts_with_pointee_projection<'db>(
+    path: &hir::analysis::semantic::borrowck::NSProjectionPath<'db>,
+) -> bool {
+    matches!(
+        path.iter().next(),
+        Some(
+            Projection::Field(_)
+                | Projection::VariantField { .. }
+                | Projection::Index(IndexSource::Constant(_) | IndexSource::Dynamic(_))
+        )
+    )
+}
+
 fn collect_const_ref_regions<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
@@ -2042,7 +2055,11 @@ impl<'db> RmirEmitter<'db> {
         {
             return;
         }
-        let mut place = self.semantic_place(bb, base);
+        let mut place = if let Some(place) = self.projected_pointer_value_place(base) {
+            place
+        } else {
+            self.semantic_place(bb, base)
+        };
         place.path = vec![elem].into_boxed_slice();
         let projected = self.project_place_class(&place);
         let target = self
@@ -3380,6 +3397,22 @@ impl<'db> RmirEmitter<'db> {
                     }),
                 )
             }
+            RuntimeBuiltinFuncKind::PtrOffsetBytes => {
+                let [ptr, offset] = args else { return None };
+                let RuntimeClass::RawAddr { space, target } = self.value_class(*ptr)? else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::PtrOffsetBytes {
+                        ptr: *ptr,
+                        offset: *offset,
+                    },
+                    Some(RuntimeClass::RawAddr {
+                        space: *space,
+                        target: *target,
+                    }),
+                )
+            }
             RuntimeBuiltinFuncKind::Mload => {
                 let [addr] = args else { return None };
                 builtin(
@@ -4351,10 +4384,24 @@ impl<'db> RmirEmitter<'db> {
 
     fn try_lower_place(&mut self, bb: RBlockId, place: &NSPlace<'db>) -> Option<RuntimePlace<'db>> {
         let mut runtime_place = match place.root {
-            NSPlaceRoot::CarrierDerefLocal(local) => self.try_semantic_place(bb, local)?,
+            NSPlaceRoot::CarrierDerefLocal(local) => {
+                if place_path_starts_with_pointee_projection(&place.path)
+                    && let Some(place) = self.projected_pointer_value_place(local)
+                {
+                    place
+                } else {
+                    self.try_semantic_place(bb, local)?
+                }
+            }
             NSPlaceRoot::Root(root) => match self.semantic_body.root(root)? {
                 NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local } => {
-                    self.try_semantic_place(bb, *local)?
+                    if place_path_starts_with_pointee_projection(&place.path)
+                        && let Some(place) = self.projected_pointer_value_place(*local)
+                    {
+                        place
+                    } else {
+                        self.try_semantic_place(bb, *local)?
+                    }
                 }
                 NBorrowRoot::Provider { binding } => RuntimePlace {
                     root: self.provider_place_root(binding)?,
@@ -4631,6 +4678,26 @@ impl<'db> RmirEmitter<'db> {
             }),
             RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => None,
             RuntimeClass::RawAddr { target: None, .. } => None,
+        }
+    }
+
+    fn projected_pointer_value_place(&self, local: SLocalId) -> Option<RuntimePlace<'db>> {
+        match self.local_class(local).cloned()? {
+            RuntimeClass::RawAddr {
+                target: Some(layout),
+                space,
+            } => Some(RuntimePlace {
+                root: PlaceRoot::Ptr {
+                    addr: self.runtime_value(local),
+                    space,
+                    class: RuntimeClass::AggregateValue { layout },
+                },
+                path: Box::default(),
+            }),
+            class => {
+                let target = self.pointer_pointee_class_for_local(local, &class)?;
+                self.place_from_direct_value_transport(local, &target)
+            }
         }
     }
 

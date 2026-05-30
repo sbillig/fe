@@ -1,10 +1,15 @@
 use core::abi::{Abi, AbiDecoder, AbiEncoder, AbiSize, AbiSpan, Decode, Encode}
 use core::num::IntDowncast
+use core::ptr
 use ingot::evm::{TopicValue, ops::revert}
 
 use super::types::SolCompat
 
 const FULL_WORD_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+fn revert_empty() -> ! {
+    revert(offset: ptr::alloc_bytes(0), len: 0)
+}
 
 fn canonical_unsigned_word(word: u256, bits: u256) -> u256 {
     // Canonical Solidity ABI encoding for an unsigned integer of width `bits`
@@ -15,7 +20,7 @@ fn canonical_unsigned_word(word: u256, bits: u256) -> u256 {
     if word >> bits == 0 {
         return word
     }
-    revert(offset: 0, len: 0)
+    revert_empty()
 }
 
 fn canonical_custom_signed_word(word: u256, bits: u256) -> u256 {
@@ -25,7 +30,7 @@ fn canonical_custom_signed_word(word: u256, bits: u256) -> u256 {
         if word == 0 {
             return 0
         }
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     let sign = (word >> (bits - 1)) & 1
@@ -33,13 +38,13 @@ fn canonical_custom_signed_word(word: u256, bits: u256) -> u256 {
         if word >> bits == 0 {
             return word
         }
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     if word >> bits == (FULL_WORD_MASK >> bits) {
         return word
     }
-    revert(offset: 0, len: 0)
+    revert_empty()
 }
 
 fn decode_uint_u32(word: u256, bits: u256) -> u32 {
@@ -527,7 +532,7 @@ impl<A: Abi> Encode<A> for Uint24 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint40 {
@@ -535,7 +540,7 @@ impl<A: Abi> Encode<A> for Uint40 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint48 {
@@ -543,7 +548,7 @@ impl<A: Abi> Encode<A> for Uint48 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint56 {
@@ -551,7 +556,7 @@ impl<A: Abi> Encode<A> for Uint56 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint72 {
@@ -559,7 +564,7 @@ impl<A: Abi> Encode<A> for Uint72 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint80 {
@@ -567,7 +572,7 @@ impl<A: Abi> Encode<A> for Uint80 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint88 {
@@ -575,7 +580,7 @@ impl<A: Abi> Encode<A> for Uint88 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint96 {
@@ -583,7 +588,7 @@ impl<A: Abi> Encode<A> for Uint96 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint104 {
@@ -591,7 +596,7 @@ impl<A: Abi> Encode<A> for Uint104 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint112 {
@@ -599,7 +604,7 @@ impl<A: Abi> Encode<A> for Uint112 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint120 {
@@ -607,7 +612,7 @@ impl<A: Abi> Encode<A> for Uint120 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint136 {
@@ -615,7 +620,7 @@ impl<A: Abi> Encode<A> for Uint136 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint144 {
@@ -623,7 +628,7 @@ impl<A: Abi> Encode<A> for Uint144 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint152 {
@@ -631,7 +636,7 @@ impl<A: Abi> Encode<A> for Uint152 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint160 {
@@ -639,7 +644,7 @@ impl<A: Abi> Encode<A> for Uint160 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint168 {
@@ -647,7 +652,7 @@ impl<A: Abi> Encode<A> for Uint168 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint176 {
@@ -655,7 +660,7 @@ impl<A: Abi> Encode<A> for Uint176 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint184 {
@@ -663,7 +668,7 @@ impl<A: Abi> Encode<A> for Uint184 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint192 {
@@ -671,7 +676,7 @@ impl<A: Abi> Encode<A> for Uint192 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint200 {
@@ -679,7 +684,7 @@ impl<A: Abi> Encode<A> for Uint200 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint208 {
@@ -687,7 +692,7 @@ impl<A: Abi> Encode<A> for Uint208 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint216 {
@@ -695,7 +700,7 @@ impl<A: Abi> Encode<A> for Uint216 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint224 {
@@ -703,7 +708,7 @@ impl<A: Abi> Encode<A> for Uint224 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint232 {
@@ -711,7 +716,7 @@ impl<A: Abi> Encode<A> for Uint232 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint240 {
@@ -719,7 +724,7 @@ impl<A: Abi> Encode<A> for Uint240 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Uint248 {
@@ -727,7 +732,7 @@ impl<A: Abi> Encode<A> for Uint248 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int24 {
@@ -735,7 +740,7 @@ impl<A: Abi> Encode<A> for Int24 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int40 {
@@ -743,7 +748,7 @@ impl<A: Abi> Encode<A> for Int40 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int48 {
@@ -751,7 +756,7 @@ impl<A: Abi> Encode<A> for Int48 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int56 {
@@ -759,7 +764,7 @@ impl<A: Abi> Encode<A> for Int56 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int72 {
@@ -767,7 +772,7 @@ impl<A: Abi> Encode<A> for Int72 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int80 {
@@ -775,7 +780,7 @@ impl<A: Abi> Encode<A> for Int80 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int88 {
@@ -783,7 +788,7 @@ impl<A: Abi> Encode<A> for Int88 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int96 {
@@ -791,7 +796,7 @@ impl<A: Abi> Encode<A> for Int96 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int104 {
@@ -799,7 +804,7 @@ impl<A: Abi> Encode<A> for Int104 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int112 {
@@ -807,7 +812,7 @@ impl<A: Abi> Encode<A> for Int112 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int120 {
@@ -815,7 +820,7 @@ impl<A: Abi> Encode<A> for Int120 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int136 {
@@ -823,7 +828,7 @@ impl<A: Abi> Encode<A> for Int136 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int144 {
@@ -831,7 +836,7 @@ impl<A: Abi> Encode<A> for Int144 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int152 {
@@ -839,7 +844,7 @@ impl<A: Abi> Encode<A> for Int152 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int160 {
@@ -847,7 +852,7 @@ impl<A: Abi> Encode<A> for Int160 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int168 {
@@ -855,7 +860,7 @@ impl<A: Abi> Encode<A> for Int168 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int176 {
@@ -863,7 +868,7 @@ impl<A: Abi> Encode<A> for Int176 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int184 {
@@ -871,7 +876,7 @@ impl<A: Abi> Encode<A> for Int184 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int192 {
@@ -879,7 +884,7 @@ impl<A: Abi> Encode<A> for Int192 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int200 {
@@ -887,7 +892,7 @@ impl<A: Abi> Encode<A> for Int200 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int208 {
@@ -895,7 +900,7 @@ impl<A: Abi> Encode<A> for Int208 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int216 {
@@ -903,7 +908,7 @@ impl<A: Abi> Encode<A> for Int216 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int224 {
@@ -911,7 +916,7 @@ impl<A: Abi> Encode<A> for Int224 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int232 {
@@ -919,7 +924,7 @@ impl<A: Abi> Encode<A> for Int232 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int240 {
@@ -927,7 +932,7 @@ impl<A: Abi> Encode<A> for Int240 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl<A: Abi> Encode<A> for Int248 {
@@ -935,7 +940,7 @@ impl<A: Abi> Encode<A> for Int248 {
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
 
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode_to_ptr(own self, _ ptr: *u8) { A::store_word(ptr: ptr, value: self.canonical_word()) }
 }
 
 impl Copy for Uint24 {}

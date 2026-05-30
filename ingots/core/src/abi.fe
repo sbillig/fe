@@ -1,11 +1,11 @@
 use ingot::Copy
-use ingot::EffectHandle
 use ingot::MemPtr
 use ingot::num::{IntDowncast, WordValue}
+use ingot::ptr
 
 // EVM Cancun+ (EIP-5656) memory copy. Used to speed up ABI payload copying.
 extern {
-    fn mcopy(dest: u256, addr: u256, len: u256)
+    fn mcopy(dest: *u8, addr: *u8, len: u256)
 }
 
 /// Errors returned by ABI decoding/encoding helpers.
@@ -32,7 +32,7 @@ pub trait ByteInput: Copy {
     /// Copy `len` bytes starting at `src_offset` into linear memory at `dest`.
     ///
     /// Callers currently rely on `len` being a whole number of words.
-    fn copy_to_memory(self, dest: u256, src_offset: u256, len: u256)
+    fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256)
 }
 
 /// First-word prefix used for fast dispatch.
@@ -121,8 +121,8 @@ pub trait Abi {
     fn decoder_new<I: ByteInput>(_: own I) -> Self::Decoder<I>
     fn decoder_with_base<I: ByteInput>(_: own I, _ base: u256) -> Self::Decoder<I>
 
-    fn encoder_new(_ size: u256) -> Self::Encoder
-    fn store_word(ptr: u256, value: u256)
+    fn encoder_new(_ root: *u8) -> Self::Encoder
+    fn store_word(ptr: *u8, value: u256)
 }
 
 /// ABI decoder with cursor state and an allocation hook.
@@ -139,7 +139,7 @@ pub trait AbiDecoder<A: Abi> {
     fn read_word(mut self) -> u256
     fn peek_word(self, _ at: u256) -> u256
 
-    fn alloc(mut self, _ size: u256) -> u256
+    fn alloc(mut self, _ size: u256) -> *u8
 }
 
 /// ABI encoder with cursor state over a fixed output buffer.
@@ -152,6 +152,7 @@ pub trait AbiEncoder<A: Abi> {
     fn write_u8(mut self, _ v: u8)
     fn write_word(mut self, _ v: u256)
     fn write_word_at(mut self, at: u256, value: u256)
+    fn ptr_at(self, at: u256) -> *u8
 }
 
 /// ABI payload layout metadata and exact runtime payload size.
@@ -176,7 +177,7 @@ pub trait Encode<A: Abi>: AbiSize {
     const DIRECT_ENCODE: bool
 
     fn encode<E: AbiEncoder<A>>(own self, _: mut E)
-    fn encode_to_ptr(own self, _ ptr: u256)
+    fn encode_to_ptr(own self, _ ptr: *u8)
 }
 
 pub fn decode_or_revert<A: Abi, T, D>(d: mut D) -> T
@@ -271,7 +272,7 @@ pub fn encode_root<A: Abi, T, E>(_ value: own T, _ e: mut E)
 {
     if T::DIRECT_ENCODE {
         let at = e.pos()
-        value.encode_to_ptr(at)
+        value.encode_to_ptr(e.ptr_at(at))
         e.set_pos(at + <T as AbiSize>::HEAD_SIZE)
         return
     }
@@ -308,7 +309,7 @@ pub fn encode_field<A: Abi, T, E>(_ value: own T, _ e: mut E, _ tail: u256) -> u
 
     if T::DIRECT_ENCODE {
         let at = e.pos()
-        value.encode_to_ptr(at)
+        value.encode_to_ptr(e.ptr_at(at))
         e.set_pos(at + <T as AbiSize>::HEAD_SIZE)
         return tail
     }
@@ -317,22 +318,22 @@ pub fn encode_field<A: Abi, T, E>(_ value: own T, _ e: mut E, _ tail: u256) -> u
     tail
 }
 
-pub fn encode_alloc<A: Abi, T>(_ value: own T) -> (u256, u256)
+pub fn encode_alloc<A: Abi, T>(_ value: own T) -> (*u8, u256)
     where T: Encode<A> + AbiSize
 {
     let total = abi_payload_size(value)
-    let mut e = A::encoder_new(total)
-    let base = e.base()
+    let base = ptr::alloc_bytes(total)
+    let mut e = A::encoder_new(base)
     value.encode(mut e)
     (base, total)
 }
 
-pub fn encode_single_root_alloc<A: Abi, T>(_ value: own T) -> (u256, u256)
+pub fn encode_single_root_alloc<A: Abi, T>(_ value: own T) -> (*u8, u256)
     where T: Encode<A> + AbiSize
 {
     let total = abi_single_root_size(value)
-    let mut e = A::encoder_new(total)
-    let base = e.base()
+    let base = ptr::alloc_bytes(total)
+    let mut e = A::encoder_new(base)
     encode_single_root<A, T, A::Encoder>(value, mut e)
     (base, total)
 }
@@ -343,6 +344,10 @@ fn max_u256(a: u256, b: u256) -> u256 {
     } else {
         b
     }
+}
+
+fn ptr_offset(_ ptr: *u8, _ offset: u256) -> *u8 {
+    ptr::offset_bytes(ptr, offset)
 }
 
 pub fn abi_field_end<A: Abi, T, I>(_ input: I, base: u256, pos: u256) -> u256
@@ -442,7 +447,7 @@ impl<I> StringView<I>
 /// `data` points at the ABI tail payload: the length word followed by packed
 /// UTF-8 bytes padded to a whole word count.
 pub struct DynString {
-    pub data: u256,
+    pub data: *u8,
     pub len: u256,
     pub size: u256,
 }
@@ -450,7 +455,7 @@ pub struct DynString {
 impl DynString {
     pub fn empty() -> Self {
         DynString {
-            data: 0,
+            data: ptr::alloc_bytes(0),
             len: 0,
             size: 32,
         }
@@ -484,7 +489,7 @@ impl DynString {
         }
 
         let input = MemoryInput {
-            base: self.data + 32,
+            base: ptr::offset_bytes(self.data, 32),
             len: self.len,
         }
         input.byte_at(index)
@@ -496,7 +501,7 @@ impl DynString {
 /// `data` points at the ABI tail payload: the length word followed by packed
 /// bytes data padded to a whole word count.
 pub struct Bytes {
-    pub data: u256,
+    pub data: *u8,
     pub len: u256,
     pub size: u256,
 }
@@ -504,7 +509,7 @@ pub struct Bytes {
 impl Bytes {
     pub fn empty() -> Self {
         Bytes {
-            data: 0,
+            data: ptr::alloc_bytes(0),
             len: 0,
             size: 32,
         }
@@ -520,7 +525,7 @@ impl Bytes {
 
     pub fn view(self) -> BytesView<MemoryInput> {
         let input = MemoryInput {
-            base: self.data + 32,
+            base: ptr::offset_bytes(self.data, 32),
             len: self.len,
         }
         BytesView {
@@ -536,7 +541,7 @@ impl Bytes {
         }
 
         let input = MemoryInput {
-            base: self.data + 32,
+            base: ptr::offset_bytes(self.data, 32),
             len: self.len,
         }
         input.byte_at(index)
@@ -544,7 +549,7 @@ impl Bytes {
 }
 
 pub struct MemoryInput {
-    pub base: u256,
+    pub base: *u8,
     pub len: u256,
 }
 
@@ -556,9 +561,10 @@ fn mem_word_load() -> u256
     slot
 }
 
-fn mem_word_at(base: u256, offset: u256) -> u256 {
-    let ptr: MemPtr<u256> = MemPtr::from_raw(base + offset)
-    with (ptr) {
+fn mem_word_at(base: *u8, offset: u256) -> u256 {
+    let word_ptr = ptr::cast<u8, u256>(ptr::offset_bytes(base, offset))
+    let mem_ptr = MemPtr::from_ptr(word_ptr)
+    with (mem_ptr) {
         mem_word_load()
     }
 }
@@ -582,7 +588,7 @@ impl ByteInput for MemoryInput {
         (word >> shift).downcast_truncate()
     }
 
-    fn copy_to_memory(self, dest: u256, src_offset: u256, len: u256) {
+    fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
         if len % 32 != 0 {
             super::panic()
         }
@@ -592,7 +598,7 @@ impl ByteInput for MemoryInput {
             super::panic()
         }
 
-        mcopy(dest: dest, addr: self.base + src_offset, len: len)
+        mcopy(dest: dest, addr: ptr::offset_bytes(self.base, src_offset), len: len)
     }
 }
 
@@ -601,7 +607,7 @@ impl ByteInput for MemoryInput {
 /// `data` points at the ABI payload for the array: the length word followed by the
 /// tuple-encoded element heads/tails.
 pub struct DynArray<T> {
-    pub data: u256,
+    pub data: *u8,
     pub len: u256,
     pub size: u256,
 }
@@ -609,7 +615,7 @@ pub struct DynArray<T> {
 impl<T> DynArray<T> {
     pub fn empty() -> Self {
         DynArray {
-            data: 0,
+            data: ptr::alloc_bytes(0),
             len: 0,
             size: 32,
         }
@@ -1178,7 +1184,7 @@ impl<A: Abi> Encode<A> for u256 {
         e.write_word(self)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self)
     }
 }
@@ -1217,7 +1223,7 @@ impl<A: Abi, const N: usize> Encode<A> for String<N> {
         }
     }
 
-    fn encode_to_ptr(own self, _: u256) {
+    fn encode_to_ptr(own self, _: *u8) {
         super::panic()
     }
 }
@@ -1243,14 +1249,14 @@ impl<A: Abi> Encode<A> for DynString {
     const DIRECT_ENCODE: bool = false
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        if self.data == 0 {
+        if self.len == 0 && self.size == 32 {
             e.write_word(self.len)
             return
         }
-        mcopy(dest: e.base(), addr: self.data, len: self.size)
+        mcopy(dest: e.ptr_at(at: e.base()), addr: self.data, len: self.size)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         super::panic()
     }
 }
@@ -1273,7 +1279,7 @@ impl<A: Abi> Encode<A> for bool {
         }
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         if self {
             A::store_word(ptr: ptr, value: 1)
         } else {
@@ -1295,7 +1301,7 @@ impl<A: Abi> Encode<A> for u8 {
         e.write_word(self as u256)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self as u256)
     }
 }
@@ -1313,7 +1319,7 @@ impl<A: Abi> Encode<A> for u16 {
         e.write_word(self as u256)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self as u256)
     }
 }
@@ -1331,7 +1337,7 @@ impl<A: Abi> Encode<A> for u32 {
         e.write_word(self as u256)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self as u256)
     }
 }
@@ -1349,7 +1355,7 @@ impl<A: Abi> Encode<A> for u64 {
         e.write_word(self as u256)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self as u256)
     }
 }
@@ -1367,7 +1373,7 @@ impl<A: Abi> Encode<A> for u128 {
         e.write_word(self as u256)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self as u256)
     }
 }
@@ -1385,7 +1391,7 @@ impl<A: Abi> Encode<A> for i8 {
         e.write_word(self.downcast_unchecked())
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self.downcast_unchecked())
     }
 }
@@ -1403,7 +1409,7 @@ impl<A: Abi> Encode<A> for i16 {
         e.write_word(self.downcast_unchecked())
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self.downcast_unchecked())
     }
 }
@@ -1421,7 +1427,7 @@ impl<A: Abi> Encode<A> for i32 {
         e.write_word(self.downcast_unchecked())
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self.downcast_unchecked())
     }
 }
@@ -1439,7 +1445,7 @@ impl<A: Abi> Encode<A> for i64 {
         e.write_word(self.downcast_unchecked())
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self.downcast_unchecked())
     }
 }
@@ -1457,7 +1463,7 @@ impl<A: Abi> Encode<A> for i128 {
         e.write_word(self.downcast_unchecked())
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self.downcast_unchecked())
     }
 }
@@ -1475,7 +1481,7 @@ impl<A: Abi> Encode<A> for i256 {
         e.write_word(self.downcast_unchecked())
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self.downcast_unchecked())
     }
 }
@@ -1493,7 +1499,7 @@ impl<A: Abi> Encode<A> for usize {
         e.write_word(self as u256)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self as u256)
     }
 }
@@ -1511,7 +1517,7 @@ impl<A: Abi> Encode<A> for isize {
         e.write_word(self.downcast_unchecked())
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self.downcast_unchecked())
     }
 }
@@ -1528,7 +1534,7 @@ impl<A: Abi> Encode<A> for () {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
     }
 }
 
@@ -1553,14 +1559,14 @@ impl<A: Abi> Encode<A> for Bytes {
     const DIRECT_ENCODE: bool = false
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        if self.data == 0 {
+        if self.len == 0 && self.size == 32 {
             e.write_word(self.len)
             return
         }
-        mcopy(dest: e.base(), addr: self.data, len: self.size)
+        mcopy(dest: e.ptr_at(at: e.base()), addr: self.data, len: self.size)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         super::panic()
     }
 }
@@ -1643,14 +1649,14 @@ impl<A: Abi, T> Encode<A> for DynArray<T>
     const DIRECT_ENCODE: bool = false
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        if self.data == 0 {
+        if self.len == 0 && self.size == 32 {
             e.write_word(self.len)
             return
         }
-        mcopy(dest: e.base(), addr: self.data, len: self.size)
+        mcopy(dest: e.ptr_at(at: e.base()), addr: self.data, len: self.size)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         super::panic()
     }
 }
@@ -1683,7 +1689,7 @@ impl<A: Abi, T0> Encode<A> for (T0,)
         tail = encode_field<A, T0, E>(self.0, mut e, tail)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         self.0.encode_to_ptr(ptr)
     }
 }
@@ -1718,9 +1724,9 @@ impl<A: Abi, T0, T1> Encode<A> for (T0, T1)
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        self.1.encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE))
     }
 }
 
@@ -1760,11 +1766,11 @@ impl<A: Abi, T0, T1, T2> Encode<A> for (T0, T1, T2)
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        self.1.encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE))
         self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE))
     }
 }
 
@@ -1814,13 +1820,13 @@ impl<A: Abi, T0, T1, T2, T3> Encode<A> for (T0, T1, T2, T3)
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        self.1.encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE))
         self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE))
         self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE))
     }
 }
 
@@ -1882,15 +1888,15 @@ impl<A: Abi, T0, T1, T2, T3, T4> Encode<A> for (T0, T1, T2, T3, T4)
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        self.1.encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE))
         self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE))
         self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE))
         self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE))
     }
 }
 
@@ -1937,17 +1943,17 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5> Encode<A> for (T0, T1, T2, T3, T4, T5)
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        self.1.encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE))
         self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE))
         self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE))
         self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE))
         self.5
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE))
     }
 }
 
@@ -1998,19 +2004,19 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Encode<A> for (T0, T1, T2, T3, T4, T5, 
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        self.1.encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE))
         self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE))
         self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE))
         self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE))
         self.5
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE))
         self.6
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE))
     }
 }
 
@@ -2065,21 +2071,21 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Encode<A> for (T0, T1, T2, T3, T4, 
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        self.1.encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE))
         self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE))
         self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE))
         self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE))
         self.5
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE))
         self.6
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE))
         self.7
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE))
     }
 }
 
@@ -2138,23 +2144,23 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Encode<A> for (T0, T1, T2, T3, 
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        self.1.encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE))
         self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE))
         self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE))
         self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE))
         self.5
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE))
         self.6
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE))
         self.7
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE))
         self.8
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE))
     }
 }
 
@@ -2219,25 +2225,25 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Encode<A>
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        self.1.encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE))
         self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE))
         self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE))
         self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE))
         self.5
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE))
         self.6
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE))
         self.7
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE))
         self.8
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE))
         self.9
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE))
     }
 }
 
@@ -2306,27 +2312,27 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Encode<A>
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        self.1.encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE))
         self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE))
         self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE))
         self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE))
         self.5
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE))
         self.6
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE))
         self.7
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE))
         self.8
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE))
         self.9
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE))
         self.10
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE))
     }
 }
 
@@ -2399,29 +2405,29 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Encode<A>
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         self.0.encode_to_ptr(ptr)
-        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        self.1.encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE))
         self.2
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE))
         self.3
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE))
         self.4
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE))
         self.5
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE))
         self.6
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE))
         self.7
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE))
         self.8
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE))
         self.9
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE))
         self.10
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE))
         self.11
-            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE)
+            .encode_to_ptr(ptr_offset(ptr, T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE))
     }
 }
 
@@ -2472,12 +2478,12 @@ impl<A: Abi, T, const N: usize> Encode<A> for [T; N]
     }
 
     #[arithmetic(unchecked)]
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         let mut i: usize = 0
         let mut at = ptr
         while i < N {
             self[i].encode_to_ptr(at)
-            at += <T as AbiSize>::HEAD_SIZE
+            at = ptr::offset_bytes(at, <T as AbiSize>::HEAD_SIZE)
             i += 1
         }
     }

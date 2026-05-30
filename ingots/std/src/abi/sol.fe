@@ -18,12 +18,16 @@ use core::abi::{
 }
 use core::{AsBytes, keccak}
 use core::num::IntDowncast
-use ingot::evm::mem
+use core::ptr
 use ingot::evm::ops::{mstore, mstore8, revert}
 
 pub struct Sol {}
 
 const FULL_WORD_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+fn revert_empty() -> ! {
+    revert(offset: ptr::alloc_bytes(0), len: 0)
+}
 
 fn canonical_signed_word(word: u256, mask: u256, sign_bit: u256) -> u256 {
     let value = word & mask
@@ -32,14 +36,14 @@ fn canonical_signed_word(word: u256, mask: u256, sign_bit: u256) -> u256 {
         if canonical == word {
             return canonical
         }
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     if value == word {
         return value
     }
 
-    revert(offset: 0, len: 0)
+    revert_empty()
 }
 
 /// Compute the 4-byte Solidity selector for a signature string.
@@ -74,42 +78,42 @@ impl Abi for Sol {
             return true
         }
 
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     fn decode_u8_word(_ word: u256) -> u8 {
         if let Option::Some(value) = word.downcast() {
             return value
         }
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     fn decode_u16_word(_ word: u256) -> u16 {
         if let Option::Some(value) = word.downcast() {
             return value
         }
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     fn decode_u32_word(_ word: u256) -> u32 {
         if let Option::Some(value) = word.downcast() {
             return value
         }
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     fn decode_u64_word(_ word: u256) -> u64 {
         if let Option::Some(value) = word.downcast() {
             return value
         }
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     fn decode_u128_word(_ word: u256) -> u128 {
         if let Option::Some(value) = word.downcast() {
             return value
         }
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     fn decode_i8_word(_ word: u256) -> i8 {
@@ -146,7 +150,7 @@ impl Abi for Sol {
     }
 
     fn decode_error() -> ! {
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     fn decoder_new<I: ByteInput>(_ input: own I) -> Self::Decoder<I> {
@@ -157,9 +161,9 @@ impl Abi for Sol {
         SolDecoder::with_base(input, base)
     }
 
-    fn encoder_new(_ size: u256) -> Self::Encoder { SolEncoder::new(size) }
+    fn encoder_new(_ root: *u8) -> Self::Encoder { SolEncoder::new(root) }
 
-    fn store_word(ptr: u256, value: u256) {
+    fn store_word(ptr: *u8, value: u256) {
         mstore(addr: ptr, value: value)
     }
 }
@@ -204,7 +208,7 @@ pub fn decode_input_at<T, I>(_ input: own I, _ base: u256) -> T
     where T: Decode<Sol>, I: ByteInput
 {
     if base > input.len() {
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     let mut d = SolDecoder<I>::with_base(input, base)
@@ -226,7 +230,7 @@ pub fn decode_output_at<T, I>(_ input: own I, _ base: u256) -> T
     where T: Decode<Sol> + AbiSize, I: ByteInput
 {
     if base > input.len() {
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     let mut d = SolDecoder<I>::with_base(input, base)
@@ -252,39 +256,39 @@ pub fn decode_bytes_view_at<I>(_ input: own I, base: u256, head_pos: u256) -> By
 {
     let input_len = input.len()
     if base > input_len {
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     let head_at = base + head_pos
     if head_at < base {
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     let head_end = head_at + 32
     if head_end < head_at || head_end > input_len {
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     let tail_rel = input.word_at(head_at)
     let tail_at = base + tail_rel
     if tail_at < base {
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     let tail_len_end = tail_at + 32
     if tail_len_end < tail_at || tail_len_end > input_len {
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     let data_len = input.word_at(tail_at)
     let data_start = tail_at + 32
     if data_start < tail_at {
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     let data_end = data_start + data_len
     if data_end < data_start || data_end > input_len {
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     BytesView { input, start: data_start, len: data_len }
@@ -336,7 +340,7 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         let len = self.cur.input.len()
         let new_pos = self.cur.pos + 1
         if new_pos < self.cur.pos || new_pos > len {
-            revert(offset: 0, len: 0)
+            revert_empty()
         }
         let b = self.cur.input.byte_at(self.cur.pos)
         self.cur.pos = new_pos
@@ -348,7 +352,7 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         let len = self.cur.input.len()
         let new_pos = self.cur.pos + 32
         if new_pos < self.cur.pos || new_pos > len {
-            revert(offset: 0, len: 0)
+            revert_empty()
         }
         let w = self.cur.input.word_at(self.cur.pos)
         self.cur.pos = new_pos
@@ -360,27 +364,28 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         let len = self.cur.input.len()
         let end = at + 32
         if end < at || end > len {
-            revert(offset: 0, len: 0)
+            revert_empty()
         }
         self.cur.input.word_at(at)
     }
 
-    fn alloc(mut self, _ size: u256) -> u256 {
-        mem::alloc(size)
+    fn alloc(mut self, _ size: u256) -> *u8 {
+        ptr::alloc_bytes(size)
     }
 }
 
 pub struct SolEncoder {
+    pub root: *u8,
     pub base: u256,
     pub pos: u256,
 }
 
 impl SolEncoder {
-    pub fn new(_ size: u256) -> Self {
-        let base = if size == 0 { 0 } else { mem::alloc(size) }
+    pub fn new(_ root: *u8) -> Self {
         SolEncoder {
-            base,
-            pos: base,
+            root,
+            base: 0,
+            pos: 0,
         }
     }
 }
@@ -404,18 +409,22 @@ impl AbiEncoder<Sol> for SolEncoder {
 
     #[arithmetic(unchecked)]
     fn write_u8(mut self, _ v: u8) {
-        mstore8(addr: self.pos, value: v)
+        mstore8(addr: self.ptr_at(at: self.pos), value: v)
         self.pos = self.pos + 1
     }
 
     #[arithmetic(unchecked)]
     fn write_word(mut self, _ v: u256) {
         let p = self.pos
-        mstore(addr: p, value: v)
+        mstore(addr: self.ptr_at(at: p), value: v)
         self.pos = p + 32
     }
 
     fn write_word_at(mut self, at: u256, value: u256) {
-        mstore(addr: at, value: value)
+        mstore(addr: self.ptr_at(at), value: value)
+    }
+
+    fn ptr_at(self, at: u256) -> *u8 {
+        ptr::offset_bytes(self.root, at)
     }
 }

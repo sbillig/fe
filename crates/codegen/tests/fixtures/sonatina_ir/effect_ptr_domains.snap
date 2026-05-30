@@ -9,6 +9,17 @@ type @layout_0 = {i256, i256};
 
 global private const @layout_0 $const_region_0 = {10, 20};
 
+func private %alloc() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.*i8 = evm_malloc 64.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        v3.i256 = call %cast v2;
+        return v3;
+}
+
 func private %bump__gb2d8(v0.objref<@layout_0>) {
     block0:
         jump block1;
@@ -92,18 +103,23 @@ func private %bump__gaab0(v0.i256) {
         return;
 }
 
-func private %impl_trait_StorPtr__from_raw__gb2d8(v0.i256) -> i256 {
+func private %cast(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        return v2;
+        return v0;
 }
 
-func private %impl_trait_MemPtr__from_raw__gb2d8(v0.i256) -> i256 {
+func private %from_ptr(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %from_raw(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -125,14 +141,11 @@ func private %main_root() {
 
 func private %mem_ptr(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = call %impl_trait_MemPtr__from_raw__gb2d8 v2;
-        return v3;
+        v2.i256 = call %from_ptr v0;
+        return v2;
 }
 
 func private %stor_ptr(v0.i256) -> i256 {
@@ -143,7 +156,7 @@ func private %stor_ptr(v0.i256) -> i256 {
 
     block1:
         v2.i256 = mload v1 i256;
-        v3.i256 = call %impl_trait_StorPtr__from_raw__gb2d8 v2;
+        v3.i256 = call %from_raw v2;
         return v3;
 }
 
@@ -152,7 +165,8 @@ func private %test_effect_ptr_domains() {
         jump block1;
 
     block1:
-        v1.i256 = call %mem_ptr 256.i256;
+        v0.i256 = call %alloc;
+        v1.i256 = call %mem_ptr v0;
         call %bump__gaab0 v1;
         v4.i256 = call %stor_ptr 0.i256;
         call %bump__gc323 v4;

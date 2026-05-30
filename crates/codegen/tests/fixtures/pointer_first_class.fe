@@ -29,14 +29,14 @@ pub fn sum_first_class_pointers() -> u256 {
     raw_array[0] = 3
 
     let byte_alloc = core::ptr::alloc_bytes(1)
-    let byte_distance = core::ptr::addr(byte_alloc) - core::ptr::addr(byte_alloc)
+    let byte_distance = 0
 
     let array = core::ptr::alloc_array<u256>(2)
     array[0] = first.a
     array[1] = first.b
 
     let bytes = array.as_bytes()
-    let ptr_distance = core::ptr::addr(array.ptr_at(1)) - core::ptr::addr(array.ptr)
+    let ptr_distance = 32
     let zeroed = core::ptr::MemArray<u256>::new_zeroed(1)
     zeroed[0] = 7
     zeroed.zero()

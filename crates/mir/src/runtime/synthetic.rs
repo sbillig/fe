@@ -1557,11 +1557,12 @@ mod tests {
             file_url.clone(),
             Some(
                 r#"
+use core::ptr
 use std::evm::RawMem
 
 #[test]
 fn test_raw_mem_root() uses (mem: mut RawMem) {
-    mem.mstore(addr: 0x80, value: 1)
+    mem.mstore(addr: ptr::alloc_bytes(32), value: 1)
 }
 "#
                 .to_string(),

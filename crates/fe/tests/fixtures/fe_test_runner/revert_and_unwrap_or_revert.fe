@@ -1,3 +1,5 @@
+use core::ptr
+
 enum MyError {
     NotAllowed,
     OutOfBounds,
@@ -24,7 +26,7 @@ impl<A: Abi> Encode<A> for MyError {
         e.write_word(self.to_int())
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self.to_int())
     }
 }
@@ -106,7 +108,7 @@ impl<A: Abi> Encode<A> for Inner {
         e.write_word(self.code)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         A::store_word(ptr: ptr, value: self.code)
     }
 }
@@ -129,9 +131,9 @@ impl<A: Abi> Encode<A> for Outer {
         e.write_word(self.extra)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         self.inner.encode_to_ptr(ptr)
-        A::store_word(ptr: ptr + 32, value: self.extra)
+        A::store_word(ptr: ptr::offset_bytes(ptr, 32), value: self.extra)
     }
 }
 

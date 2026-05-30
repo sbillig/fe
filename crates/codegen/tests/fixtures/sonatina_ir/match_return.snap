@@ -10,6 +10,19 @@ type @layout_0 = enum {
     #B,
 };
 
+func private %alloc_bytes(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
+
 func private %f(v0.@layout_0) {
     block0:
         jump block1;
@@ -19,11 +32,13 @@ func private %f(v0.@layout_0) {
         br_table v2 (0.enumtag(@layout_0) block2) (1.enumtag(@layout_0) block3);
 
     block2:
-        call %return_data 0.i256 0.i256;
+        v6.i256 = call %alloc_bytes 0.i256;
+        call %return_data v6 0.i256;
         unreachable;
 
     block3:
-        call %return_data 0.i256 0.i256;
+        v7.i256 = call %alloc_bytes 0.i256;
+        call %return_data v7 0.i256;
         unreachable;
 }
 
@@ -49,15 +64,12 @@ func private %main_root() {
 func private %return_data(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v4;
 }
 
 

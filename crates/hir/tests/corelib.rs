@@ -83,11 +83,11 @@ fn solver_proves_encode_for_fixed_bool_arrays() {
     let mut db = DriverDataBase::default();
     let url = Url::parse("file:///encode_fixed_bool_array_goal.fe").unwrap();
     let src = r#"
-use core::abi::Encode
+use core::{abi::Encode, ptr}
 use std::abi::Sol
 
 pub fn root(values: [bool; 5]) {
-    values.encode_to_ptr(0)
+    values.encode_to_ptr(ptr::alloc_bytes(160))
 }
 "#;
 

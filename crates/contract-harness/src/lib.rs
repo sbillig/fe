@@ -1501,6 +1501,7 @@ pub contract CanonicalHarness {
         let source = r#"
 use std::abi::sol
 use std::abi::sol::{decode_bytes_view, decode_bytes_view_at, decode_string_view}
+use core::ptr
 use std::evm::{CallData, Evm}
 
 const BYTES_LEN_SELECTOR: u32 = sol("bytesLen(bytes)")
@@ -1519,30 +1520,34 @@ fn runtime() uses (evm: mut Evm) {
 
     if sel == BYTES_LEN_SELECTOR {
         let view = decode_bytes_view(CallData::with_base(4))
-        evm.mstore(addr: 0, value: view.len())
-        evm.return_data(offset: 0, len: 32)
+        let out = ptr::alloc_bytes(32)
+        evm.mstore(addr: out, value: view.len())
+        evm.return_data(offset: out, len: 32)
     }
 
     if sel == SECOND_BYTES_LEN_SELECTOR {
         let view = decode_bytes_view_at(CallData::with_base(4), base: 0, head_pos: 32)
-        evm.mstore(addr: 0, value: view.len())
-        evm.return_data(offset: 0, len: 32)
+        let out = ptr::alloc_bytes(32)
+        evm.mstore(addr: out, value: view.len())
+        evm.return_data(offset: out, len: 32)
     }
 
     if sel == STRING_FIRST_SELECTOR {
         let view = decode_string_view(CallData::with_base(4))
         let first: u256 = if view.is_empty() { 0 } else { view.byte_at(0) as u256 }
-        evm.mstore(addr: 0, value: first)
-        evm.return_data(offset: 0, len: 32)
+        let out = ptr::alloc_bytes(32)
+        evm.mstore(addr: out, value: first)
+        evm.return_data(offset: out, len: 32)
     }
 
     if sel == STRING_LEN_SELECTOR {
         let view = decode_string_view(CallData::with_base(4))
-        evm.mstore(addr: 0, value: view.len())
-        evm.return_data(offset: 0, len: 32)
+        let out = ptr::alloc_bytes(32)
+        evm.mstore(addr: out, value: view.len())
+        evm.return_data(offset: out, len: 32)
     }
 
-    evm.revert(offset: 0, len: 0)
+    evm.revert(offset: ptr::alloc_bytes(0), len: 0)
 }
 "#;
 
@@ -1560,6 +1565,7 @@ fn runtime() uses (evm: mut Evm) {
         let source = r#"
 use std::abi::sol
 use std::abi::sol::{decode_bytes_view, decode_bytes_view_at}
+use core::ptr
 use std::evm::{CallData, Evm, StorageBytes, emit_bytes_event_view}
 
 const SET_SELECTOR: u32 = sol("set(bytes)")
@@ -1583,7 +1589,7 @@ fn runtime() uses (evm: mut Evm) {
     if sel == SET_SELECTOR {
         let view = decode_bytes_view(CallData::with_base(4))
         blobs.store_view(key: 0, view: view)
-        evm.return_data(offset: 0, len: 0)
+        evm.return_data(offset: ptr::alloc_bytes(0), len: 0)
     }
 
     if sel == GET_SELECTOR {
@@ -1592,16 +1598,16 @@ fn runtime() uses (evm: mut Evm) {
 
     if sel == CLEAR_SELECTOR {
         blobs.clear(key: 0)
-        evm.return_data(offset: 0, len: 0)
+        evm.return_data(offset: ptr::alloc_bytes(0), len: 0)
     }
 
     if sel == EMIT_SELECTOR {
         let view = decode_bytes_view_at(CallData::new(), base: 4, head_pos: 0)
         emit_bytes_event_view(topic0: TOPIC0, view: view)
-        evm.return_data(offset: 0, len: 0)
+        evm.return_data(offset: ptr::alloc_bytes(0), len: 0)
     }
 
-    evm.revert(offset: 0, len: 0)
+    evm.revert(offset: ptr::alloc_bytes(0), len: 0)
 }
 "#;
 
@@ -1689,6 +1695,7 @@ pub contract RawStaticTarget {
     fn raw_static_caller_contract_source() -> &'static str {
         r#"
 use std::abi::sol
+use core::ptr
 use std::evm::{Evm, Address, Ctx, RawMem, staticcall_decode}
 
 const WORD_SELECTOR: u32 = sol("word()")
@@ -1705,12 +1712,14 @@ msg RawStaticCallerMsg {
 pub contract RawStaticCaller {
     recv RawStaticCallerMsg {
         CallWord { target } -> u256 uses (evm: mut Evm) {
-            evm.mstore(addr: 0, value: (WORD_SELECTOR as u256) << 224)
-            staticcall_decode(addr: target, gas: evm.gas(), args_offset: 0, args_len: 4)
+            let args = ptr::alloc_bytes(32)
+            evm.mstore(addr: args, value: (WORD_SELECTOR as u256) << 224)
+            staticcall_decode(addr: target, gas: evm.gas(), args_offset: args, args_len: 4)
         }
         CallFlag { target } -> bool uses (evm: mut Evm) {
-            evm.mstore(addr: 0, value: (FLAG_SELECTOR as u256) << 224)
-            staticcall_decode(addr: target, gas: evm.gas(), args_offset: 0, args_len: 4)
+            let args = ptr::alloc_bytes(32)
+            evm.mstore(addr: args, value: (FLAG_SELECTOR as u256) << 224)
+            staticcall_decode(addr: target, gas: evm.gas(), args_offset: args, args_len: 4)
         }
     }
 }
@@ -1731,6 +1740,7 @@ pub contract RawStaticCaller {
     fn bad_bool_target_contract_source() -> &'static str {
         r#"
 use std::abi::sol
+use core::ptr
 use std::evm::Evm
 
 const FLAG_SELECTOR: u32 = sol("flag()")
@@ -1743,11 +1753,12 @@ fn init() uses (evm: mut Evm) {
 #[contract_runtime(BadBoolTarget)]
 fn runtime() uses (evm: mut Evm) {
     if evm.selector() == FLAG_SELECTOR {
-        evm.mstore(addr: 0, value: 2)
-        evm.return_data(offset: 0, len: 32)
+        let out = ptr::alloc_bytes(32)
+        evm.mstore(addr: out, value: 2)
+        evm.return_data(offset: out, len: 32)
     }
 
-    evm.revert(offset: 0, len: 0)
+    evm.revert(offset: ptr::alloc_bytes(0), len: 0)
 }
 "#
     }

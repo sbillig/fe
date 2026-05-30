@@ -632,9 +632,9 @@ impl core::abi::Encode<std::abi::Sol> for Weird {
         self.amount.encode(e)
     }
 
-    fn encode_to_ptr(own self, _ ptr: u256) {
+    fn encode_to_ptr(own self, _ ptr: *u8) {
         std::abi::Sol::store_word(ptr: ptr, value: if self.flag { 1 } else { 0 })
-        std::abi::Sol::store_word(ptr: ptr + 32, value: self.amount as u256)
+        std::abi::Sol::store_word(ptr: core::ptr::offset_bytes(ptr, 32), value: self.amount as u256)
     }
 }
 

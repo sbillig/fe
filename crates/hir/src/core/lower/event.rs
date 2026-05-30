@@ -520,7 +520,13 @@ fn lower_emit_method<'db>(
             let self_expr = body.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
 
             let (data_ptr, data_len) = if data_fields.is_empty() {
-                (int_lit(body, 0), int_lit(body, 0))
+                let ptr_alloc = PathId::from_ident(db, roots.core)
+                    .push_str(db, "ptr")
+                    .push_str(db, "alloc_bytes");
+                let alloc_expr = body.path_expr(ptr_alloc);
+                let zero_len = int_lit(body, 0);
+                let ptr = body.call_expr(alloc_expr, vec![zero_len]);
+                (ptr, int_lit(body, 0))
             } else {
                 let payload_expr = if data_fields.len() == 1 {
                     self_field_expr(body, self_expr, data_fields[0].0)

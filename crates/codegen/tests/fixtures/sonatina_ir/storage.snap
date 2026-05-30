@@ -17,13 +17,40 @@ func private %abi_encode(v0.i256) {
         jump block1;
 
     block1:
-        v3.i256 = mload v1 i256;
-        call %mstore 0.i256 v3;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_2541 0.i256 32.i256;
+        v3.i256 = call %core__lib__ptr__alloc_bytes_a9dc 32.i256;
+        v4.i256 = mload v1 i256;
+        call %mstore v3 v4;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cebf v3 32.i256;
         unreachable;
 }
 
-func private %alloc(v0.i256) -> i256 {
+func private %core__lib__ptr__alloc_bytes_9964(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
+
+func private %core__lib__ptr__alloc_bytes_9964_0(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
+
+func private %core__lib__ptr__alloc_bytes_a9dc(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -80,17 +107,14 @@ func private %codecopy(v0.i256, v1.i256, v2.i256) {
     block0:
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        mstore v3 v0 i256;
-        mstore v4 v1 i256;
-        mstore v5 v2 i256;
+        mstore v3 v1 i256;
+        mstore v4 v2 i256;
         jump block1;
 
     block1:
         v6.i256 = mload v3 i256;
         v7.i256 = mload v4 i256;
-        v8.i256 = mload v5 i256;
-        evm_code_copy v6 v7 v8;
+        evm_code_copy v0 v6 v7;
         return;
 }
 
@@ -186,9 +210,9 @@ func private %init() {
     block1:
         v0.i256 = sym_size &__Coin_runtime;
         v1.i256 = sym_addr &__Coin_runtime;
-        v2.i256 = call %alloc v0;
+        v2.i256 = call %core__lib__ptr__alloc_bytes_9964_0 v0;
         call %codecopy v2 v1 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e8fc_0 v2 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e67f_0 v2 v0;
         unreachable;
 }
 
@@ -213,58 +237,46 @@ func private %manual_contract_runtime_root_Coin() {
 func private %mstore(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        mstore v0 v4 i256;
         return;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_2541(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cebf(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v4;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e8fc(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e67f(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v4;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e8fc_0(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e67f_0(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
+        mstore v2 v1 i256;
         jump block1;
 
     block1:
         v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v4;
 }
 
 func private %runtime() {
@@ -303,52 +315,53 @@ func private %runtime() {
         unreachable;
 
     block6:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e8fc 0.i256 0.i256;
+        v22.i256 = call %core__lib__ptr__alloc_bytes_9964 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e67f v22 0.i256;
         unreachable;
 
     block7:
-        v24.i1 = eq v6 1818602213.i256;
-        br v24 block3 block8;
+        v25.i1 = eq v6 1818602213.i256;
+        br v25 block3 block8;
 
     block8:
-        v27.i1 = eq v6 217554442.i256;
-        br v27 block4 block9;
+        v28.i1 = eq v6 217554442.i256;
+        br v28 block4 block9;
 
     block9:
-        v30.i1 = eq v6 960555502.i256;
-        br v30 block5 block10;
+        v31.i1 = eq v6 960555502.i256;
+        br v31 block5 block10;
 
     block10:
         jump block6;
 
     block11:
-        v31.i256 = phi (v35 block12) (v39 block13);
-        call %abi_encode v31;
+        v32.i256 = phi (v36 block12) (v40 block13);
+        call %abi_encode v32;
         unreachable;
 
     block12:
-        v35.i256 = call %credit_alice v12 v1 v3;
+        v36.i256 = call %credit_alice v12 v1 v3;
         jump block11;
 
     block13:
-        v39.i256 = call %credit_bob v12 v1 v3;
+        v40.i256 = call %credit_bob v12 v1 v3;
         jump block11;
 
     block14:
         jump block13;
 
     block15:
-        v40.@layout_0 = phi (v44 block16) (v47 block17);
-        v41.i256 = call %transfer_result_code v40;
-        call %abi_encode v41;
+        v41.@layout_0 = phi (v45 block16) (v48 block17);
+        v42.i256 = call %transfer_result_code v41;
+        call %abi_encode v42;
         unreachable;
 
     block16:
-        v44.@layout_0 = call %transfer_from_alice v18 v1;
+        v45.@layout_0 = call %transfer_from_alice v18 v1;
         jump block15;
 
     block17:
-        v47.@layout_0 = call %transfer_from_bob v18 v1;
+        v48.@layout_0 = call %transfer_from_bob v18 v1;
         jump block15;
 
     block18:

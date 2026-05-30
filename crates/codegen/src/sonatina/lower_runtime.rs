@@ -1652,6 +1652,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.fb
                     .insert_inst(EvmMalloc::new(self.module.inst_set(), size), ptr_ty)
             }
+            RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
+                let ptr = self.local_value(*ptr)?;
+                let ptr = self.coerce_value_to_ty(ptr, Type::I256)?;
+                let offset = self.local_value(*offset)?;
+                let offset = self.cast_scalar(offset, Type::I256)?;
+                self.fb
+                    .insert_inst(Add::new(self.module.inst_set(), ptr, offset), Type::I256)
+            }
             RuntimeBuiltin::Call {
                 gas,
                 addr,

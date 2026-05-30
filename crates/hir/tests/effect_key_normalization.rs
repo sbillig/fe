@@ -566,6 +566,7 @@ impl<T> Logger for Ptr<T> {
 impl<T> EffectHandle for Ptr<T> {
     type Target = T
     type AddressSpace = core::effect_ref::Memory
+    type Raw = u256
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -775,6 +776,7 @@ struct Ptr<T> {
 impl<T> EffectHandle for Ptr<T> {
     type Target = T
     type AddressSpace = core::effect_ref::Memory
+    type Raw = u256
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -1803,6 +1805,7 @@ struct Ptr<T> {
 impl<T> EffectHandle for Ptr<T> {
     type Target = T
     type AddressSpace = core::effect_ref::Memory
+    type Raw = u256
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -2044,6 +2047,7 @@ struct Ptr<T> {
 impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
     type AddressSpace = core::effect_ref::Memory
+    type Raw = u256
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -2112,6 +2116,7 @@ struct Ptr<T> {
 impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
     type AddressSpace = core::effect_ref::Memory
+    type Raw = u256
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -2174,6 +2179,7 @@ struct Ptr<T> {
 impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
     type AddressSpace = core::effect_ref::Memory
+    type Raw = u256
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -2237,6 +2243,7 @@ where
 {
     type Target = Storage<T::Assoc>
     type AddressSpace = core::effect_ref::Memory
+    type Raw = u256
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -2307,6 +2314,7 @@ where
 {
     type Target = Storage<T::Assoc>
     type AddressSpace = core::effect_ref::Memory
+    type Raw = u256
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -3688,6 +3696,7 @@ struct Ptr<T> {
 impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
     type AddressSpace = core::effect_ref::Memory
+    type Raw = u256
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -5519,6 +5528,7 @@ fn local_effect_handle_calls_preserve_concrete_provider_spaces() {
     let file = db.new_stand_alone(
         Utf8PathBuf::from("local_effect_handle_provider_spaces.fe"),
         r#"
+use core::ptr
 use std::evm::{MemPtr, RawMem, RawStorage, StorPtr}
 
 struct Foo {
@@ -5534,7 +5544,7 @@ fn bump_stor() uses (foo: mut Foo) {
 }
 
 fn test_spaces() uses (st: mut RawStorage, mem: mut RawMem) {
-    let mp: MemPtr<Foo> = mem.mem_ptr(0x100)
+    let mp: MemPtr<Foo> = mem.mem_ptr(ptr::alloc<Foo>())
     with (mp) {
         bump_mem()
     }

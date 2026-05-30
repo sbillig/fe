@@ -5,14 +5,22 @@
 /// (RawMem, RawOps, Ctx traits) instead.
 
 use super::ops
-use super::mem
+use core::ptr
+
+fn empty_ptr() -> *u8 {
+    ptr::alloc_bytes(0)
+}
+
+fn offset(_ base: *u8, _ bytes: u256) -> *u8 {
+    ptr::offset_bytes(base, bytes)
+}
 
 /// Assert that a precompile STATICCALL succeeded and returned the expected
 /// number of bytes. Reverts if the call failed or returndata is too short
 /// (e.g., calling a non-existent precompile address on a non-standard chain).
 fn assert_precompile_ok(_ ok: u256, _ expected_ret_len: u256) {
-    if ok == 0 { ops::revert(offset: 0, len: 0) }
-    if ops::returndatasize() < expected_ret_len { ops::revert(offset: 0, len: 0) }
+    if ok == 0 { ops::revert(offset: empty_ptr(), len: 0) }
+    if ops::returndatasize() < expected_ret_len { ops::revert(offset: empty_ptr(), len: 0) }
 }
 
 // ---------------------------------------------------------------------------
@@ -34,13 +42,13 @@ pub const fn mulmod(_ a: u256, _ b: u256, _ m: u256) -> u256 {
 // ---------------------------------------------------------------------------
 
 /// Keccak256 hash of a memory region.
-pub fn keccak256(_ offset: u256, _ len: u256) -> u256 {
+pub fn keccak256(_ offset: *u8, _ len: u256) -> u256 {
     ops::keccak256(offset, len)
 }
 
 /// SHA256 hash of a memory region (precompile 0x02).
-pub fn sha256(_ offset: u256, _ len: u256) -> u256 {
-    let out: u256 = mem::alloc(32)
+pub fn sha256(_ offset: *u8, _ len: u256) -> u256 {
+    let out = ptr::alloc_bytes(32)
     let ok: u256 = ops::staticcall(
         gas: ops::gas(),
         addr: 2,
@@ -61,11 +69,11 @@ pub fn sha256(_ offset: u256, _ len: u256) -> u256 {
 /// Returns the recovered address as a u256 (lower 160 bits).
 /// Reverts if recovery fails (invalid signature).
 pub fn ecrecover(_ hash: u256, _ v: u256, _ r: u256, _ s: u256) -> u256 {
-    let ptr: u256 = mem::alloc(128)
+    let ptr = ptr::alloc_bytes(128)
     ops::mstore(addr: ptr, value: hash)
-    ops::mstore(addr: ptr + 32, value: v)
-    ops::mstore(addr: ptr + 64, value: r)
-    ops::mstore(addr: ptr + 96, value: s)
+    ops::mstore(addr: offset(ptr, 32), value: v)
+    ops::mstore(addr: offset(ptr, 64), value: r)
+    ops::mstore(addr: offset(ptr, 96), value: s)
     let ok: u256 = ops::staticcall(
         gas: ops::gas(),
         addr: 1,
@@ -84,11 +92,11 @@ pub fn ecrecover(_ hash: u256, _ v: u256, _ r: u256, _ s: u256) -> u256 {
 
 /// EC point addition on BN254 (precompile 0x06).
 pub fn ec_add(_ ax: u256, _ ay: u256, _ bx: u256, _ by: u256) -> (u256, u256) {
-    let ptr: u256 = mem::alloc(128)
+    let ptr = ptr::alloc_bytes(128)
     ops::mstore(addr: ptr, value: ax)
-    ops::mstore(addr: ptr + 32, value: ay)
-    ops::mstore(addr: ptr + 64, value: bx)
-    ops::mstore(addr: ptr + 96, value: by)
+    ops::mstore(addr: offset(ptr, 32), value: ay)
+    ops::mstore(addr: offset(ptr, 64), value: bx)
+    ops::mstore(addr: offset(ptr, 96), value: by)
     let ok: u256 = ops::staticcall(
         gas: ops::gas(),
         addr: 6,
@@ -98,15 +106,15 @@ pub fn ec_add(_ ax: u256, _ ay: u256, _ bx: u256, _ by: u256) -> (u256, u256) {
         ret_len: 64,
     )
     assert_precompile_ok(ok, 64)
-    (ops::mload(ptr), ops::mload(ptr + 32))
+    (ops::mload(ptr), ops::mload(offset(ptr, 32)))
 }
 
 /// EC scalar multiplication on BN254 (precompile 0x07).
 pub fn ec_mul(_ px: u256, _ py: u256, _ s: u256) -> (u256, u256) {
-    let ptr: u256 = mem::alloc(96)
+    let ptr = ptr::alloc_bytes(96)
     ops::mstore(addr: ptr, value: px)
-    ops::mstore(addr: ptr + 32, value: py)
-    ops::mstore(addr: ptr + 64, value: s)
+    ops::mstore(addr: offset(ptr, 32), value: py)
+    ops::mstore(addr: offset(ptr, 64), value: s)
     let ok: u256 = ops::staticcall(
         gas: ops::gas(),
         addr: 7,
@@ -116,7 +124,7 @@ pub fn ec_mul(_ px: u256, _ py: u256, _ s: u256) -> (u256, u256) {
         ret_len: 64,
     )
     assert_precompile_ok(ok, 64)
-    (ops::mload(ptr), ops::mload(ptr + 32))
+    (ops::mload(ptr), ops::mload(offset(ptr, 32)))
 }
 
 /// EC pairing check on a pre-built memory buffer (precompile 0x08).
@@ -129,8 +137,8 @@ pub fn ec_mul(_ px: u256, _ py: u256, _ s: u256) -> (u256, u256) {
 /// `e(a1, b1) * e(a2, b2) * ... * e(aN, bN) == 1`
 ///
 /// Use effects (RawMem) to build the buffer, then pass it here.
-pub fn ec_pairing(_ offset: u256, _ len: u256) -> bool {
-    let out: u256 = mem::alloc(32)
+pub fn ec_pairing(_ offset: *u8, _ len: u256) -> bool {
+    let out = ptr::alloc_bytes(32)
     let ok: u256 = ops::staticcall(
         gas: ops::gas(),
         addr: 8,
@@ -146,13 +154,13 @@ pub fn ec_pairing(_ offset: u256, _ len: u256) -> bool {
 /// Modular exponentiation (precompile 0x05).
 /// Computes `base^exp % modulus` for u256-sized inputs.
 pub fn modexp(_ base: u256, _ exp: u256, _ modulus: u256) -> u256 {
-    let ptr: u256 = mem::alloc(192)
+    let ptr = ptr::alloc_bytes(192)
     ops::mstore(addr: ptr, value: 32)
-    ops::mstore(addr: ptr + 32, value: 32)
-    ops::mstore(addr: ptr + 64, value: 32)
-    ops::mstore(addr: ptr + 96, value: base)
-    ops::mstore(addr: ptr + 128, value: exp)
-    ops::mstore(addr: ptr + 160, value: modulus)
+    ops::mstore(addr: offset(ptr, 32), value: 32)
+    ops::mstore(addr: offset(ptr, 64), value: 32)
+    ops::mstore(addr: offset(ptr, 96), value: base)
+    ops::mstore(addr: offset(ptr, 128), value: exp)
+    ops::mstore(addr: offset(ptr, 160), value: modulus)
     let ok: u256 = ops::staticcall(
         gas: ops::gas(),
         addr: 5,
