@@ -76,8 +76,7 @@ pub(super) fn lower_error_struct<'db>(
     let struct_name = struct_name_token.as_ref().map(|n| n.text().to_string());
 
     // Strip #[error] attribute.
-    let stripped_error_attr = lower_attrs_without_named(builder.ctxt(), ast.attr_list(), "error");
-    let attributes = stripped_error_attr.retained;
+    let attributes = lower_attrs_without_named(builder.ctxt(), ast.attr_list(), "error");
 
     let vis = super::lower_visibility(&ast);
     let generic_params = GenericParamListId::lower_ast_opt(builder.ctxt(), ast.generic_params());
@@ -213,7 +212,7 @@ fn parse_error_fields<'db>(
         let ty_ref = TypeId::lower_ast_partial(ctxt, field.ty());
         let vis = super::lower_field_visibility(&field);
 
-        hir_fields.push(FieldDef::new(attrs, name_ident, ty_ref, vis));
+        hir_fields.push(FieldDef::new(attrs, name_ident, ty_ref, vis, false));
 
         let (Some(name_ident), Some(ty)) = (name_ident.to_opt(), ty_ref.to_opt()) else {
             is_valid = false;
