@@ -239,7 +239,7 @@ func inline(always) private %checked_tail(v0.i256, v1.i256) -> i256 {
         br v14 block2 block3;
 }
 
-func private %contract_init_abi_EchoContract() {
+func inline(always) private %contract_init_abi_EchoContract() {
     block0:
         v0.objref<@layout_1> = obj.alloc @layout_1;
         v1.objref<@layout_3> = obj.alloc @layout_3;
@@ -317,7 +317,7 @@ func private %contract_init_root_EchoContract() {
         evm_return 0.i256 v3;
 }
 
-func private %contract_recv_abi_EchoContract_1() {
+func inline(always) private %contract_recv_abi_EchoContract_1() {
     block0:
         jump block1;
 
@@ -340,7 +340,7 @@ func private %contract_recv_abi_EchoContract_1() {
         evm_return v9 v11;
 }
 
-func private %contract_recv_abi_EchoContract_2() {
+func inline(always) private %contract_recv_abi_EchoContract_2() {
     block0:
         jump block1;
 
@@ -364,7 +364,7 @@ func private %contract_recv_abi_EchoContract_2() {
         evm_return v10 v12;
 }
 
-func private %contract_recv_abi_EchoContract_3() {
+func inline(always) private %contract_recv_abi_EchoContract_3() {
     block0:
         jump block1;
 

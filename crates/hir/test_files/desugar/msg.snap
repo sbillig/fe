@@ -22,6 +22,7 @@ mod CounterMsg {
         const HEAD_SIZE: u256 = 0
         const IS_DYNAMIC: bool = false
 
+        #[inline(always)]
         fn payload_size(self) -> u256 {
             return <Self as core::abi::AbiSize>::HEAD_SIZE
         }
@@ -30,8 +31,10 @@ mod CounterMsg {
     impl core::abi::Encode<std::abi::Sol> for Increment {
         const DIRECT_ENCODE: bool = true
 
+        #[inline(always)]
         fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {}
 
+        #[inline(always)]
         fn encode_to_ptr(own self, _ ptr: u256) {}
     }
 
@@ -59,6 +62,7 @@ mod CounterMsg {
         const HEAD_SIZE: u256 = 0
         const IS_DYNAMIC: bool = false
 
+        #[inline(always)]
         fn payload_size(self) -> u256 {
             return <Self as core::abi::AbiSize>::HEAD_SIZE
         }
@@ -67,8 +71,10 @@ mod CounterMsg {
     impl core::abi::Encode<std::abi::Sol> for Get {
         const DIRECT_ENCODE: bool = true
 
+        #[inline(always)]
         fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {}
 
+        #[inline(always)]
         fn encode_to_ptr(own self, _ ptr: u256) {}
     }
 
@@ -98,6 +104,7 @@ mod CounterMsg {
         const HEAD_SIZE: u256 = 0 + u64::HEAD_SIZE
         const IS_DYNAMIC: bool = false || u64::IS_DYNAMIC
 
+        #[inline(always)]
         fn payload_size(self) -> u256 {
             return <Self as core::abi::AbiSize>::HEAD_SIZE + core::abi::dynamic_payload_size(self.val)
         }
@@ -106,12 +113,14 @@ mod CounterMsg {
     impl core::abi::Encode<std::abi::Sol> for Set {
         const DIRECT_ENCODE: bool = true && <u64 as core::abi::Encode<std::abi::Sol> >::DIRECT_ENCODE
 
+        #[inline(always)]
         fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
             let mut __tail = e.base() + <Self as core::abi::AbiSize>::HEAD_SIZE
             let __field_0 = self.val
             core::abi::encode_field<std::abi::Sol, u64, E>(__field_0, e, mut __tail)
         }
 
+        #[inline(always)]
         fn encode_to_ptr(own self, _ ptr: u256) {
             self.val.encode_to_ptr(ptr)
         }

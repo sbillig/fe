@@ -231,6 +231,24 @@ pub trait Encode<A: Abi>: AbiSize {
     fn encode_to_ptr(own self, _ ptr: u256)
 }
 
+pub trait EventAbiEncode<A: Abi>: Encode<A> {
+    const DIRECT_EVENT_ENCODE: bool
+
+    fn event_payload_size(self) -> u256 {
+        self.payload_size()
+    }
+
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        if Self::DIRECT_EVENT_ENCODE {
+            self.encode_to_ptr(ptr)
+            return
+        }
+
+        let mut e = A::encoder_at(ptr)
+        self.encode(mut e)
+    }
+}
+
 pub fn decode_or_revert<A: Abi, T, D>(d: mut D) -> T
     where T: Decode<A>, D: AbiDecoder<A>
 {
@@ -471,6 +489,30 @@ fn encode_field_at<A: Abi, T, E>(_ value: own T, _ e: mut E, base: u256, head_po
     let _ = tail
     e.set_pos(head_pos)
     value.encode(mut e)
+}
+
+#[arithmetic(unchecked)]
+#[inline(always)]
+fn encode_event_field_at<A: Abi, T>(_ value: own T, _ base: u256, head_pos: u256, tail: u256) -> u256
+    where T: Encode<A> + AbiSize
+{
+    if T::IS_DYNAMIC {
+        let child_base = tail
+        let child_size = value.payload_size()
+        A::store_word(ptr: head_pos, value: child_base - base)
+        let mut e = A::encoder_at(child_base)
+        value.encode(mut e)
+        return child_base + child_size
+    }
+
+    if T::DIRECT_ENCODE {
+        value.encode_to_ptr(head_pos)
+        return tail
+    }
+
+    let mut e = A::encoder_at(head_pos)
+    value.encode(mut e)
+    tail
 }
 
 #[inline(always)]
@@ -2020,6 +2062,92 @@ impl<A: Abi> Encode<A> for Bytes {
     }
 }
 
+impl<A: Abi> EventAbiEncode<A> for u256 {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi, const N: usize> EventAbiEncode<A> for String<N> {
+    const DIRECT_EVENT_ENCODE: bool = false
+}
+
+impl<A: Abi> EventAbiEncode<A> for DynString {
+    const DIRECT_EVENT_ENCODE: bool = false
+}
+
+impl<A: Abi> EventAbiEncode<A> for bool {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi> EventAbiEncode<A> for u8 {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi> EventAbiEncode<A> for u16 {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi> EventAbiEncode<A> for u32 {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi> EventAbiEncode<A> for u64 {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi> EventAbiEncode<A> for u128 {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi> EventAbiEncode<A> for i8 {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi> EventAbiEncode<A> for i16 {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi> EventAbiEncode<A> for i32 {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi> EventAbiEncode<A> for i64 {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi> EventAbiEncode<A> for i128 {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi> EventAbiEncode<A> for i256 {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi> EventAbiEncode<A> for usize {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi> EventAbiEncode<A> for isize {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi> EventAbiEncode<A> for () {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl<A: Abi> EventAbiEncode<A> for Bytes {
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        if self.data == 0 {
+            A::store_word(ptr: ptr, value: self.len)
+            return
+        }
+
+        mcopy(dest: ptr, addr: self.data, len: self.size)
+    }
+}
+
 fn dyn_array_payload_end_scan_with_input_len<A: Abi, T, I>(_ input: I, elems_base: u256, head_end: u256, elem_count: u256, input_len: u256) -> u256
     where T: AbiSpan<A> + AbiSize,
           I: ByteInput
@@ -2150,6 +2278,12 @@ impl<A: Abi, T> Encode<A> for DynArray<T>
     fn encode_to_ptr(own self, _ ptr: u256) {
         super::panic()
     }
+}
+
+impl<A: Abi, T> EventAbiEncode<A> for DynArray<T>
+    where T: AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = false
 }
 
 impl<A: Abi, T> AbiSpan<A> for DynArray<T>
@@ -2634,6 +2768,106 @@ impl<A: Abi, T0, T1, T2, T3, T4> Encode<A> for (T0, T1, T2, T3, T4)
             .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
         self.4
             .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
+    }
+}
+
+impl<A: Abi, T0> EventAbiEncode<A> for (T0,)
+    where T0: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0,) = self
+        let mut tail = ptr + Self::HEAD_SIZE
+        tail = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail)
+    }
+}
+
+impl<A: Abi, T0, T1> EventAbiEncode<A> for (T0, T1)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0, v1) = self
+        let mut tail = ptr + Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        tail = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail)
+        tail = encode_event_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
+    }
+}
+
+impl<A: Abi, T0, T1, T2> EventAbiEncode<A> for (T0, T1, T2)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0, v1, v2) = self
+        let mut tail = ptr + Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        tail = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail)
+        tail = encode_event_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
+        tail = encode_event_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
+    }
+}
+
+impl<A: Abi, T0, T1, T2, T3> EventAbiEncode<A> for (T0, T1, T2, T3)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0, v1, v2, v3) = self
+        let mut tail = ptr + Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        tail = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail)
+        tail = encode_event_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
+        tail = encode_event_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
+        tail = encode_event_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
+    }
+}
+
+impl<A: Abi, T0, T1, T2, T3, T4> EventAbiEncode<A> for (T0, T1, T2, T3, T4)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0, v1, v2, v3, v4) = self
+        let tail0 = ptr + Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let tail1 = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail: tail0)
+        let tail2 = encode_event_field_at<A, T1>(v1, ptr, head_pos: head1, tail: tail1)
+        let tail3 = encode_event_field_at<A, T2>(v2, ptr, head_pos: head2, tail: tail2)
+        let tail4 = encode_event_field_at<A, T3>(v3, ptr, head_pos: head3, tail: tail3)
+        encode_event_field_at<A, T4>(v4, ptr, head_pos: head4, tail: tail4)
     }
 }
 
@@ -3658,6 +3892,272 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Encode<A>
     }
 }
 
+impl<A: Abi, T0, T1, T2, T3, T4, T5> EventAbiEncode<A> for (T0, T1, T2, T3, T4, T5)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0, v1, v2, v3, v4, v5) = self
+        let mut tail = ptr + Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        tail = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail)
+        tail = encode_event_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
+        tail = encode_event_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
+        tail = encode_event_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
+        tail = encode_event_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
+        tail = encode_event_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
+    }
+}
+
+impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> EventAbiEncode<A> for (T0, T1, T2, T3, T4, T5, T6)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0, v1, v2, v3, v4, v5, v6) = self
+        let mut tail = ptr + Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        tail = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail)
+        tail = encode_event_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
+        tail = encode_event_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
+        tail = encode_event_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
+        tail = encode_event_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
+        tail = encode_event_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
+        tail = encode_event_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
+    }
+}
+
+impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> EventAbiEncode<A> for (T0, T1, T2, T3, T4, T5, T6, T7)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0, v1, v2, v3, v4, v5, v6, v7) = self
+        let mut tail = ptr + Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        tail = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail)
+        tail = encode_event_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
+        tail = encode_event_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
+        tail = encode_event_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
+        tail = encode_event_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
+        tail = encode_event_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
+        tail = encode_event_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
+        tail = encode_event_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
+    }
+}
+
+impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> EventAbiEncode<A> for (T0, T1, T2, T3, T4, T5, T6, T7, T8)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0, v1, v2, v3, v4, v5, v6, v7, v8) = self
+        let mut tail = ptr + Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        tail = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail)
+        tail = encode_event_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
+        tail = encode_event_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
+        tail = encode_event_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
+        tail = encode_event_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
+        tail = encode_event_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
+        tail = encode_event_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
+        tail = encode_event_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
+        tail = encode_event_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
+    }
+}
+
+impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> EventAbiEncode<A> for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize,
+          T9: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9) = self
+        let mut tail = ptr + Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        let head9 = head8 + abi_field_head_size<T8>()
+        tail = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail)
+        tail = encode_event_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
+        tail = encode_event_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
+        tail = encode_event_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
+        tail = encode_event_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
+        tail = encode_event_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
+        tail = encode_event_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
+        tail = encode_event_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
+        tail = encode_event_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
+        tail = encode_event_field_at<A, T9>(v9, ptr, head_pos: head9, tail)
+    }
+}
+
+impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> EventAbiEncode<A> for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize,
+          T9: Encode<A> + AbiSize,
+          T10: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10) = self
+        let mut tail = ptr + Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        let head9 = head8 + abi_field_head_size<T8>()
+        let head10 = head9 + abi_field_head_size<T9>()
+        tail = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail)
+        tail = encode_event_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
+        tail = encode_event_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
+        tail = encode_event_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
+        tail = encode_event_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
+        tail = encode_event_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
+        tail = encode_event_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
+        tail = encode_event_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
+        tail = encode_event_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
+        tail = encode_event_field_at<A, T9>(v9, ptr, head_pos: head9, tail)
+        tail = encode_event_field_at<A, T10>(v10, ptr, head_pos: head10, tail)
+    }
+}
+
+impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> EventAbiEncode<A> for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize,
+          T9: Encode<A> + AbiSize,
+          T10: Encode<A> + AbiSize,
+          T11: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11) = self
+        let mut tail = ptr + Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        let head9 = head8 + abi_field_head_size<T8>()
+        let head10 = head9 + abi_field_head_size<T9>()
+        let head11 = head10 + abi_field_head_size<T10>()
+        tail = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail)
+        tail = encode_event_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
+        tail = encode_event_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
+        tail = encode_event_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
+        tail = encode_event_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
+        tail = encode_event_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
+        tail = encode_event_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
+        tail = encode_event_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
+        tail = encode_event_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
+        tail = encode_event_field_at<A, T9>(v9, ptr, head_pos: head9, tail)
+        tail = encode_event_field_at<A, T10>(v10, ptr, head_pos: head10, tail)
+        tail = encode_event_field_at<A, T11>(v11, ptr, head_pos: head11, tail)
+    }
+}
+
 impl<A: Abi, T, const N: usize> Decode<A> for [T; N]
     where T: Decode<A> + AbiSize + Copy
 {
@@ -3768,4 +4268,10 @@ impl<A: Abi, T, const N: usize> Encode<A> for [T; N]
             i += 1
         }
     }
+}
+
+impl<A: Abi, T, const N: usize> EventAbiEncode<A> for [T; N]
+    where T: Encode<A> + AbiSize + Copy
+{
+    const DIRECT_EVENT_ENCODE: bool = !T::IS_DYNAMIC && T::DIRECT_ENCODE
 }

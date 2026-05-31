@@ -343,7 +343,7 @@ func inline(always) private %core__lib__abi__checked_tail__gf13e_4919(v0.i256, v
         br v14 block2 block3;
 }
 
-func private %contract_init_abi_Child() {
+func inline(always) private %contract_init_abi_Child() {
     block0:
         v0.objref<@layout_3> = obj.alloc @layout_3;
         v1.objref<@layout_5> = obj.alloc @layout_5;
@@ -409,7 +409,7 @@ func private %contract_init_abi_Child() {
         return;
 }
 
-func private %contract_init_abi_Factory() {
+func inline(always) private %contract_init_abi_Factory() {
     block0:
         jump block1;
 
@@ -450,7 +450,7 @@ func private %contract_init_root_Factory() {
         evm_return 0.i256 v3;
 }
 
-func private %contract_recv_abi_Factory_1() {
+func inline(always) private %contract_recv_abi_Factory_1() {
     block0:
         jump block1;
 
@@ -475,7 +475,7 @@ func private %contract_recv_abi_Factory_1() {
         evm_return v12 v13;
 }
 
-func private %contract_recv_abi_Factory_2() {
+func inline(always) private %contract_recv_abi_Factory_2() {
     block0:
         jump block1;
 

@@ -106,7 +106,7 @@ func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_a403(v0.objre
         return v4;
 }
 
-func private %contract_init_abi_TupleReturnContract() {
+func inline(always) private %contract_init_abi_TupleReturnContract() {
     block0:
         jump block1;
 
@@ -135,7 +135,7 @@ func private %contract_init_root_TupleReturnContract() {
         evm_return 0.i256 v3;
 }
 
-func private %contract_recv_abi_TupleReturnContract_1() {
+func inline(always) private %contract_recv_abi_TupleReturnContract_1() {
     block0:
         jump block1;
 

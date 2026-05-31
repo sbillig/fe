@@ -10,6 +10,7 @@ use core::abi::{
     Decode,
     DynString,
     Encode,
+    EventAbiEncode,
 }
 use core::num::IntDowncast
 use ingot::evm::Address
@@ -198,6 +199,10 @@ impl<A: Abi, const N: usize> Encode<A> for FixedBytes<N> {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.word()) }
 
     fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.word()) }
+}
+
+impl<A: Abi, const N: usize> EventAbiEncode<A> for FixedBytes<N> {
+    const DIRECT_EVENT_ENCODE: bool = true
 }
 
 /// Solidity ABI `bytes1`.
