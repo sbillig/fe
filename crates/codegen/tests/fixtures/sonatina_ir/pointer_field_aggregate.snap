@@ -47,13 +47,10 @@ func private %standalone_pointer_field_aggregate__pointer_field_aggregate__bump_
 
 func private %from_raw(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        return v2;
+        return v0;
 }
 
 func private %main_root() {
@@ -67,14 +64,11 @@ func private %main_root() {
 
 func private %mem_ptr(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = call %from_raw v2;
-        return v3;
+        v2.i256 = call %from_raw v0;
+        return v2;
 }
 
 func private %pointer_field_aggregate() {
