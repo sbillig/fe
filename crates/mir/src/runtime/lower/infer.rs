@@ -648,9 +648,15 @@ fn local_lowers_as_direct_read_value<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    let Some(class @ RuntimeClass::AggregateValue { .. }) = carrier.value_class().cloned() else {
+    let Some(class) = carrier.value_class().cloned() else {
         return false;
     };
+    if !matches!(
+        class,
+        RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. }
+    ) {
+        return false;
+    }
     match local.facts.interface {
         SemanticLocalKind::DirectValue => local_direct_value_lowers_as_unrooted(local, db, &class),
         SemanticLocalKind::PlaceCarrier => {
@@ -719,7 +725,10 @@ fn unrooted_read_value_candidate_carrier<'db>(
     carrier: &RuntimeCarrier<'db>,
 ) -> Option<RuntimeCarrier<'db>> {
     let class = carrier.value_class().cloned()?;
-    if matches!(class, RuntimeClass::AggregateValue { .. }) {
+    if matches!(
+        class,
+        RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. }
+    ) {
         return Some(RuntimeCarrier::Value(class));
     }
     if !matches!(local.facts.interface, SemanticLocalKind::DirectValue) {
