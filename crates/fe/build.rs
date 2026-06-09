@@ -1,4 +1,7 @@
-use std::{env, process::Command};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
 fn main() {
     println!("cargo:rerun-if-changed=tests/fixtures");
@@ -12,34 +15,33 @@ fn main() {
         return;
     }
 
-    let Some(hash) = git_output(&["rev-parse", "--short", "HEAD"]) else {
+    let Some(repo) = git_repo() else {
         return;
     };
 
-    emit_git_rerun_paths();
+    let Ok(head_id) = repo.head_id() else {
+        return;
+    };
+
+    emit_git_rerun_paths(&repo);
+    let hash = head_id.shorten_or_id();
     println!("cargo:rustc-env=FE_GIT_HASH={hash}");
 }
 
-fn emit_git_rerun_paths() {
-    for path in [
-        git_output(&["rev-parse", "--git-path", "HEAD"]),
-        git_output(&["symbolic-ref", "-q", "HEAD"])
-            .and_then(|branch| git_output(&["rev-parse", "--git-path", branch.as_str()])),
-        git_output(&["rev-parse", "--git-path", "packed-refs"]),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        println!("cargo:rerun-if-changed={path}");
+fn git_repo() -> Option<gix::Repository> {
+    let manifest_dir = env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from)?;
+    gix::discover(manifest_dir).ok()
+}
+
+fn emit_git_rerun_paths(repo: &gix::Repository) {
+    emit_rerun_path(repo.git_dir().join("HEAD"));
+    emit_rerun_path(repo.common_dir().join("packed-refs"));
+
+    if let Ok(Some(head_ref)) = repo.head_ref() {
+        emit_rerun_path(repo.common_dir().join(head_ref.name().to_path()));
     }
 }
 
-fn git_output(args: &[&str]) -> Option<String> {
-    let output = Command::new("git").args(args).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let output = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!output.is_empty()).then_some(output)
+fn emit_rerun_path(path: impl AsRef<Path>) {
+    println!("cargo:rerun-if-changed={}", path.as_ref().display());
 }
