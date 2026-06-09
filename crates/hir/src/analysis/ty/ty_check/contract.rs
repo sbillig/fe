@@ -4,6 +4,7 @@
 //! recv blocks, and recv arm bodies.
 use std::hash::Hash;
 
+use num_bigint::BigUint;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{
@@ -35,8 +36,9 @@ use crate::{
         },
     },
     hir_def::{
-        Body, CallableDef, Cond, Contract, Expr, ExprId, FieldParent, Func, IdentId, ItemKind,
-        LitKind, Mod, Partial, PathId, Stmt, Struct, scope_graph::ScopeId,
+        ArithBinOp, BinOp, Body, CallableDef, CompBinOp, Cond, Contract, Expr, ExprId, FieldParent,
+        Func, IdentId, ItemKind, LitKind, LogicalBinOp, Mod, Partial, PatId, PathId, Stmt, Struct,
+        scope_graph::ScopeId,
     },
     semantic::{EffectEnvView, FieldView, ProviderSource},
     span::{DynLazySpan, path::LazyPathSpan},
@@ -794,12 +796,14 @@ pub fn check_contract_recv_arm_body<'db>(
 #[derive(Debug, Clone)]
 struct AssignmentState<K> {
     assigned: FxHashSet<K>,
+    values: FxHashMap<ValueFactBinding, ValueFact>,
 }
 
 impl<K> Default for AssignmentState<K> {
     fn default() -> Self {
         Self {
             assigned: FxHashSet::default(),
+            values: FxHashMap::default(),
         }
     }
 }
@@ -808,8 +812,27 @@ impl<K: Copy + Eq + Hash> AssignmentState<K> {
     fn intersection(lhs: &Self, rhs: &Self) -> Self {
         Self {
             assigned: lhs.assigned.intersection(&rhs.assigned).copied().collect(),
+            values: lhs
+                .values
+                .iter()
+                .filter(|(binding, value)| rhs.values.get(binding) == Some(*value))
+                .map(|(binding, value)| (*binding, value.clone()))
+                .collect(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ValueFactBinding {
+    Local(PatId),
+    Param(usize),
+    Effect(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ValueFact {
+    Bool(bool),
+    Int(BigUint),
 }
 
 #[derive(Debug, Clone)]
@@ -933,7 +956,13 @@ where
         state: AssignmentState<D::Item>,
     ) -> AssignmentFlow<D::Item> {
         match stmt {
-            Stmt::Let(_, _, Some(init)) => self.analyze_expr(init, state),
+            Stmt::Let(pat, _, Some(init)) => {
+                let mut flow = self.analyze_expr(init, state);
+                if let Some(normal) = &mut flow.normal {
+                    self.apply_let_value_fact(pat, init, normal);
+                }
+                flow
+            }
             Stmt::Let(_, _, None) => AssignmentFlow::normal(state),
             Stmt::Expr(expr) => self.analyze_expr(expr, state),
             Stmt::Return(expr) => {
@@ -952,19 +981,33 @@ where
                 }
             }
             Stmt::While(cond, body) => {
+                let initial_truth = self.cond_value(cond, &state);
                 let cond_flow = self.analyze_cond(cond, state);
                 let mut returns = cond_flow.returns;
-                let breaks = cond_flow.breaks;
-                let continues = cond_flow.continues;
+                let mut breaks = cond_flow.breaks;
+                let mut continues = cond_flow.continues;
                 let mut normal_exits = Vec::new();
-                if !self.cond_is_literal_bool(cond, true) {
+                if initial_truth != Some(true) {
                     normal_exits.push(cond_flow.normal.clone());
                 }
-                if let Some(cond_state) = cond_flow.normal.clone() {
+                if initial_truth != Some(false)
+                    && let Some(cond_state) = cond_flow.normal.clone()
+                {
                     let body_flow = self.analyze_expr(body, cond_state);
                     returns.extend(body_flow.returns);
                     normal_exits.extend(body_flow.breaks.into_iter().map(Some));
-                    // Body continuations target this loop and are consumed here.
+
+                    let mut backedge_states = body_flow.normal.into_iter().collect::<Vec<_>>();
+                    backedge_states.extend(body_flow.continues);
+                    for backedge_state in backedge_states {
+                        let backedge_cond_flow = self.analyze_cond(cond, backedge_state);
+                        returns.extend(backedge_cond_flow.returns);
+                        breaks.extend(backedge_cond_flow.breaks);
+                        continues.extend(backedge_cond_flow.continues);
+                        if !self.cond_is_literal_bool(cond, true) {
+                            normal_exits.push(backedge_cond_flow.normal);
+                        }
+                    }
                 }
                 AssignmentFlow {
                     normal: merge_normal_states(normal_exits),
@@ -1067,6 +1110,7 @@ where
                     .chain(args.iter().map(|arg| arg.expr))
                     .collect::<Vec<_>>();
                 let mut flow = self.analyze_exprs(&exprs, state);
+                self.clear_value_facts(&mut flow);
                 self.apply_call_assignments(expr, expr_data, &mut flow);
                 flow
             }
@@ -1079,6 +1123,7 @@ where
                     .chain(args.iter().map(|arg| arg.expr))
                     .collect::<Vec<_>>();
                 let mut flow = self.analyze_exprs(&exprs, state);
+                self.clear_value_facts(&mut flow);
                 self.apply_call_assignments(expr, expr_data, &mut flow);
                 flow
             }
@@ -1142,16 +1187,24 @@ where
             }
             Expr::Assign(lhs, rhs) => {
                 let mut flow = self.analyze_expr(*rhs, state);
-                if let Some(normal) = &mut flow.normal
-                    && let Some(item) =
-                        self.domain
-                            .direct_assignment(self.db, self.body, self.typed_body, *lhs)
-                {
-                    normal.assigned.insert(item);
+                let value_fact = flow
+                    .normal
+                    .as_ref()
+                    .and_then(|normal| self.assignment_value_fact(*lhs, *rhs, normal));
+                let direct_assignment =
+                    self.domain
+                        .direct_assignment(self.db, self.body, self.typed_body, *lhs);
+                if let Some(normal) = &mut flow.normal {
+                    if let Some(item) = direct_assignment {
+                        normal.assigned.insert(item);
+                    }
+                    if let Some((binding, value)) = value_fact {
+                        update_value_fact(normal, binding, value);
+                    }
                 }
                 flow
             }
-            Expr::AugAssign(lhs, rhs, _) => self.analyze_expr_pair(*lhs, *rhs, state),
+            Expr::AugAssign(lhs, rhs, op) => self.analyze_aug_assign(*lhs, *rhs, *op, state),
             Expr::With(bindings, body) => {
                 let exprs = bindings
                     .iter()
@@ -1257,6 +1310,168 @@ where
         }
     }
 
+    fn analyze_aug_assign(
+        &mut self,
+        lhs: ExprId,
+        rhs: ExprId,
+        op: ArithBinOp,
+        state: AssignmentState<D::Item>,
+    ) -> AssignmentFlow<D::Item> {
+        let lhs_flow = self.analyze_expr(lhs, state);
+        let mut returns = lhs_flow.returns;
+        let mut breaks = lhs_flow.breaks;
+        let mut continues = lhs_flow.continues;
+        let normal = lhs_flow.normal.and_then(|lhs_state| {
+            let lhs_value = self.expr_value(lhs, &lhs_state);
+            let rhs_flow = self.analyze_expr(rhs, lhs_state);
+            returns.extend(rhs_flow.returns);
+            breaks.extend(rhs_flow.breaks);
+            continues.extend(rhs_flow.continues);
+
+            let value_fact = rhs_flow.normal.as_ref().and_then(|normal| {
+                let binding = self.value_fact_binding_for_place(lhs)?;
+                let rhs_value = self.expr_value(rhs, normal);
+                let value = match (lhs_value, rhs_value) {
+                    (Some(ValueFact::Int(lhs)), Some(ValueFact::Int(rhs))) => {
+                        eval_arith_value(op, &lhs, &rhs).map(ValueFact::Int)
+                    }
+                    _ => None,
+                };
+                Some((binding, value))
+            });
+
+            let mut normal = rhs_flow.normal;
+            if let Some(normal) = &mut normal
+                && let Some((binding, value)) = value_fact
+            {
+                update_value_fact(normal, binding, value);
+            }
+            normal
+        });
+        AssignmentFlow {
+            normal,
+            returns,
+            breaks,
+            continues,
+        }
+    }
+
+    fn apply_let_value_fact(&self, pat: PatId, init: ExprId, state: &mut AssignmentState<D::Item>) {
+        let Some(binding) = self.typed_body.pat_binding(pat).map(value_fact_binding) else {
+            return;
+        };
+        let value = self.expr_value(init, state);
+        update_value_fact(state, binding, value);
+    }
+
+    fn assignment_value_fact(
+        &self,
+        lhs: ExprId,
+        rhs: ExprId,
+        state: &AssignmentState<D::Item>,
+    ) -> Option<(ValueFactBinding, Option<ValueFact>)> {
+        let binding = self.value_fact_binding_for_place(lhs)?;
+        Some((binding, self.expr_value(rhs, state)))
+    }
+
+    fn clear_value_facts(&self, flow: &mut AssignmentFlow<D::Item>) {
+        if let Some(normal) = &mut flow.normal {
+            normal.values.clear();
+        }
+    }
+
+    fn value_fact_binding_for_place(&self, expr: ExprId) -> Option<ValueFactBinding> {
+        self.typed_body
+            .expr_place(expr)
+            .and_then(root_binding_from_place)
+            .map(value_fact_binding)
+    }
+
+    fn value_fact_binding_for_expr(&self, expr: ExprId) -> Option<ValueFactBinding> {
+        self.typed_body.expr_binding(expr).map(value_fact_binding)
+    }
+
+    fn cond_value(
+        &self,
+        cond: crate::hir_def::CondId,
+        state: &AssignmentState<D::Item>,
+    ) -> Option<bool> {
+        let Partial::Present(cond) = cond.data(self.db, self.body) else {
+            return None;
+        };
+        match cond {
+            Cond::Expr(expr) | Cond::Let(_, expr) => match self.expr_value(*expr, state) {
+                Some(ValueFact::Bool(value)) => Some(value),
+                _ => None,
+            },
+            Cond::Bin(lhs, rhs, LogicalBinOp::And) => {
+                match (self.cond_value(*lhs, state), self.cond_value(*rhs, state)) {
+                    (Some(false), _) | (_, Some(false)) => Some(false),
+                    (Some(true), Some(true)) => Some(true),
+                    _ => None,
+                }
+            }
+            Cond::Bin(lhs, rhs, LogicalBinOp::Or) => {
+                match (self.cond_value(*lhs, state), self.cond_value(*rhs, state)) {
+                    (Some(true), _) | (_, Some(true)) => Some(true),
+                    (Some(false), Some(false)) => Some(false),
+                    _ => None,
+                }
+            }
+        }
+    }
+
+    fn expr_value(&self, expr: ExprId, state: &AssignmentState<D::Item>) -> Option<ValueFact> {
+        let Partial::Present(expr_data) = expr.data(self.db, self.body) else {
+            return None;
+        };
+        match expr_data {
+            Expr::Lit(LitKind::Bool(value)) => Some(ValueFact::Bool(*value)),
+            Expr::Lit(LitKind::Int(value)) => Some(ValueFact::Int(value.data(self.db).clone())),
+            Expr::Path(_) => self
+                .value_fact_binding_for_expr(expr)
+                .and_then(|binding| state.values.get(&binding).cloned()),
+            Expr::Cast(inner, _) => self.expr_value(*inner, state),
+            Expr::Bin(lhs, rhs, BinOp::Arith(op)) => {
+                match (self.expr_value(*lhs, state), self.expr_value(*rhs, state)) {
+                    (Some(ValueFact::Int(lhs)), Some(ValueFact::Int(rhs))) => {
+                        eval_arith_value(*op, &lhs, &rhs).map(ValueFact::Int)
+                    }
+                    _ => None,
+                }
+            }
+            Expr::Bin(lhs, rhs, BinOp::Comp(op)) => compare_values(
+                *op,
+                &self.expr_value(*lhs, state)?,
+                &self.expr_value(*rhs, state)?,
+            )
+            .map(ValueFact::Bool),
+            Expr::Bin(lhs, rhs, BinOp::Logical(LogicalBinOp::And)) => {
+                match (self.expr_value(*lhs, state), self.expr_value(*rhs, state)) {
+                    (Some(ValueFact::Bool(false)), _) | (_, Some(ValueFact::Bool(false))) => {
+                        Some(ValueFact::Bool(false))
+                    }
+                    (Some(ValueFact::Bool(true)), Some(ValueFact::Bool(true))) => {
+                        Some(ValueFact::Bool(true))
+                    }
+                    _ => None,
+                }
+            }
+            Expr::Bin(lhs, rhs, BinOp::Logical(LogicalBinOp::Or)) => {
+                match (self.expr_value(*lhs, state), self.expr_value(*rhs, state)) {
+                    (Some(ValueFact::Bool(true)), _) | (_, Some(ValueFact::Bool(true))) => {
+                        Some(ValueFact::Bool(true))
+                    }
+                    (Some(ValueFact::Bool(false)), Some(ValueFact::Bool(false))) => {
+                        Some(ValueFact::Bool(false))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn apply_call_assignments(
         &mut self,
         call_expr: ExprId,
@@ -1272,6 +1487,54 @@ where
         {
             normal.assigned.insert(item);
         }
+    }
+}
+
+fn value_fact_binding(binding: LocalBinding<'_>) -> ValueFactBinding {
+    match binding {
+        LocalBinding::Local { pat, .. } => ValueFactBinding::Local(pat),
+        LocalBinding::Param { idx, .. } => ValueFactBinding::Param(idx),
+        LocalBinding::EffectParam { idx, .. } => ValueFactBinding::Effect(idx),
+    }
+}
+
+fn update_value_fact<K>(
+    state: &mut AssignmentState<K>,
+    binding: ValueFactBinding,
+    value: Option<ValueFact>,
+) {
+    if let Some(value) = value {
+        state.values.insert(binding, value);
+    } else {
+        state.values.remove(&binding);
+    }
+}
+
+fn eval_arith_value(op: ArithBinOp, lhs: &BigUint, rhs: &BigUint) -> Option<BigUint> {
+    match op {
+        ArithBinOp::Add => Some(lhs + rhs),
+        ArithBinOp::Sub => (lhs >= rhs).then(|| lhs - rhs),
+        ArithBinOp::Mul => Some(lhs * rhs),
+        _ => None,
+    }
+}
+
+fn compare_values(op: CompBinOp, lhs: &ValueFact, rhs: &ValueFact) -> Option<bool> {
+    match (lhs, rhs) {
+        (ValueFact::Bool(lhs), ValueFact::Bool(rhs)) => match op {
+            CompBinOp::Eq => Some(lhs == rhs),
+            CompBinOp::NotEq => Some(lhs != rhs),
+            _ => None,
+        },
+        (ValueFact::Int(lhs), ValueFact::Int(rhs)) => match op {
+            CompBinOp::Eq => Some(lhs == rhs),
+            CompBinOp::NotEq => Some(lhs != rhs),
+            CompBinOp::Lt => Some(lhs < rhs),
+            CompBinOp::LtEq => Some(lhs <= rhs),
+            CompBinOp::Gt => Some(lhs > rhs),
+            CompBinOp::GtEq => Some(lhs >= rhs),
+        },
+        _ => None,
     }
 }
 

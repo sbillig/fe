@@ -48,3 +48,19 @@ error[8-0082]: immutable contract field is not initialized
    │ ╰─────' this init block may finish without assigning `x`
    │
    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0082]: immutable contract field is not initialized
+    ┌─ immutable_contract_field_init.fe:115:5
+    │
+115 │       x: u256
+    │       ^ `x` must be assigned in `init` on every successful path
+116 │
+117 │       init(flag: bool, v: u256) uses (mut x) {
+    │ ╭────────────────────────────────────────────'
+118 │ │         while flag {
+119 │ │             x = v
+120 │ │         }
+121 │ │     }
+    │ ╰─────' this init block may finish without assigning `x`
+    │
+    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage

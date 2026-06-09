@@ -110,3 +110,40 @@ contract InitViaBreakDrivenLoop {
         }
     }
 }
+
+contract InitMaybeSkipsConditionExitLoop {
+    x: u256
+
+    init(flag: bool, v: u256) uses (mut x) {
+        while flag {
+            x = v
+        }
+    }
+}
+
+contract InitViaConditionExitLoop {
+    x: u256
+    mut i: u256
+
+    init(v: u256) uses (mut x, mut i) {
+        i = 0
+        while i < 1 {
+            x = v
+            i += 1
+        }
+    }
+}
+
+contract InitViaConditionExitContinueLoop {
+    x: u256
+    mut i: u256
+
+    init(v: u256) uses (mut x, mut i) {
+        i = 0
+        while i < 1 {
+            x = v
+            i += 1
+            continue
+        }
+    }
+}
