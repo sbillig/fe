@@ -1639,26 +1639,32 @@ fn ty_from_adtref<'db>(
     completed_args.extend(layout_provided.iter().copied());
 
     let provided_layout_len = layout_provided.len();
-    for (layout_idx, hole_ty) in layout_plan
-        .hole_tys()
+    for (layout_idx, entry) in layout_plan
+        .entries()
         .iter()
         .copied()
         .enumerate()
         .skip(provided_layout_len)
     {
-        completed_args.push(layout_hole_with_fallback_ty(
-            db,
-            hole_ty,
-            HoleId::structural(
+        completed_args.push(match entry.source {
+            // The plan occurrence was substituted in from an explicit arg:
+            // reuse that hole's identity so one logical hole stays one TyId
+            // across the arg position and the instantiated field types.
+            Some(placeholder) => placeholder,
+            None => layout_hole_with_fallback_ty(
                 db,
-                hole_ty,
-                StructuralHoleOrigin::ExplicitWildcard {
-                    site: LayoutHoleArgSite::Path(path),
-                    arg_idx: explicit_param_len + layout_idx,
-                },
-                ProvenanceId::root(db, ProvenanceSite::Lex(LexSite::RootPath(path))),
+                entry.hole_ty,
+                HoleId::structural(
+                    db,
+                    entry.hole_ty,
+                    StructuralHoleOrigin::ExplicitWildcard {
+                        site: LayoutHoleArgSite::Path(path),
+                        arg_idx: explicit_param_len + layout_idx,
+                    },
+                    ProvenanceId::root(db, ProvenanceSite::Lex(LexSite::RootPath(path))),
+                ),
             ),
-        ));
+        });
     }
 
     let applied =

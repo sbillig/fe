@@ -437,6 +437,22 @@ pub(crate) fn collect_layout_placeholder_tys_in_order_with_policy<'db, T>(
 where
     T: TyVisitable<'db>,
 {
+    collect_layout_placeholder_pairs_in_order_with_policy(db, value, policy)
+        .into_iter()
+        .map(|(_, hole_ty)| hole_ty)
+        .collect()
+}
+
+/// Like [`collect_layout_placeholder_tys_in_order_with_policy`], but pairs
+/// each (fallbacked) placeholder value type with the placeholder itself.
+pub(crate) fn collect_layout_placeholder_pairs_in_order_with_policy<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    policy: LayoutPlaceholderPolicy,
+) -> Vec<(TyId<'db>, TyId<'db>)>
+where
+    T: TyVisitable<'db>,
+{
     collect_layout_placeholders_in_order_with_policy(db, value, policy)
         .into_iter()
         .filter_map(|placeholder| {
@@ -444,8 +460,12 @@ where
                 return None;
             };
             match const_ty.data(db) {
-                ConstTyData::Hole(hole_ty, _) => Some(layout_hole_fallback_ty(db, *hole_ty)),
-                ConstTyData::TyParam(param, ty) if param.is_implicit() => Some(*ty),
+                ConstTyData::Hole(hole_ty, _) => {
+                    Some((placeholder, layout_hole_fallback_ty(db, *hole_ty)))
+                }
+                ConstTyData::TyParam(param, ty) if param.is_implicit() => {
+                    Some((placeholder, *ty))
+                }
                 _ => None,
             }
         })
