@@ -1236,13 +1236,25 @@ pub(crate) fn evaluate_const_ty<'db>(
 
     if let ConstTyData::Abstract(expr, ty) = const_ty.data(db)
         && let ConstExpr::TraitConst(assoc) = expr.data(db)
-        && let Some(resolved) = const_ty_from_assoc_const_use(db, *assoc)
     {
-        let evaluated = resolved.evaluate(db, expected_ty.or(Some(*ty)));
-        if evaluated.ty(db).has_invalid(db) {
-            return const_ty;
+        if let Some(resolved) = const_ty_from_assoc_const_use(db, *assoc) {
+            let evaluated = resolved.evaluate(db, expected_ty.or(Some(*ty)));
+            if evaluated.ty(db).has_invalid(db) {
+                return const_ty;
+            }
+            return evaluated;
         }
-        return evaluated;
+        // Unresolvable here (e.g. `Self` is still generic): keep the const
+        // abstract, but adopt the use position's integer shape the same way
+        // resolved trait consts are normalized into it on evaluation.
+        if let Some(expected) = expected_ty
+            && expected != *ty
+            && int_ty_shape(db, expected).is_some()
+            && int_ty_shape(db, *ty).is_some()
+        {
+            return const_ty.with_ty(db, expected);
+        }
+        return const_ty;
     }
 
     let (body, const_ty_ty, generic_args, const_def) = match const_ty.data(db) {
