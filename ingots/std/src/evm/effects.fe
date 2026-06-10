@@ -825,14 +825,6 @@ impl ContractHost for Evm {
         self.stor_ptr(slot)
     }
 
-    fn immutable_field<T>(self, _ offset: u256) -> core::effect_ref::CodePtr<T> {
-        core::effect_ref::CodePtr::from_raw(offset)
-    }
-
-    fn init_immutable_field<T>(mut self, _ offset: u256) -> core::effect_ref::MemPtr<T> {
-        self.mem_ptr(offset)
-    }
-
     fn create_contract<F>(mut self, _ runtime: F) -> ! {
         let len = self.code_region_len(runtime)
         let offset = self.code_region_offset(runtime)
