@@ -1022,6 +1022,14 @@ pub enum ImplDiag<'db> {
         const_name: IdentId<'db>,
         trait_: Trait<'db>,
     },
+
+    ConstTyMismatchWithTrait {
+        primary: DynLazySpan<'db>,
+        trait_decl_span: DynLazySpan<'db>,
+        const_name: IdentId<'db>,
+        trait_ty: TyId<'db>,
+        impl_ty: TyId<'db>,
+    },
 }
 
 impl ImplDiag<'_> {
@@ -1043,6 +1051,7 @@ impl ImplDiag<'_> {
             Self::MissingAssociatedConstValue { .. } => 13,
             Self::ConstNotDefinedInTrait { .. } => 14,
             Self::MissingAssociatedConst { .. } => 15,
+            Self::ConstTyMismatchWithTrait { .. } => 16,
         }
     }
 }

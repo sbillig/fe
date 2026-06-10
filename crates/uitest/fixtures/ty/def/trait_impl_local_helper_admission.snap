@@ -29,3 +29,9 @@ error[6-0008]: method `run` has incompatible return type
    ·
 28 │     fn run(self) -> bool {
    │        ^^^ expected `u32`, found `bool`
+
+error[8-0012]: undefined variable
+   ┌─ trait_impl_local_helper_admission.fe:50:20
+   │
+50 │     const C: u32 = missing()
+   │                    ^^^^^^^ undefined variable `missing`

@@ -3,4 +3,16 @@ source: crates/uitest/tests/ty.rs
 expression: diags
 input_file: fixtures/ty/def/trait_impl_assoc_const_cycle_admissibility.fe
 ---
-
+error[2-0018]: multiple trait candidates found
+    ┌─ trait_impl_assoc_const_cycle_admissibility.fe:120:35
+    │
+103 │ trait OtherNamedConst {
+    │       --------------- candidate: `<ShadowedConst as OtherNamedConst>::C`
+    ·
+107 │ trait CurrentNamedConst {
+    │       ----------------- candidate: `<ShadowedConst as CurrentNamedConst>::C`
+    ·
+120 │     const D: u32 = ShadowedConst::C
+    │                                   ^ `C` is ambiguous
+    │
+    = hint: specify the trait explicitly: `<ShadowedConst as CurrentNamedConst>::C`

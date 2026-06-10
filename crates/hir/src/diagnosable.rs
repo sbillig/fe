@@ -11,12 +11,11 @@ use smallvec1::SmallVec;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
 use crate::analysis::ty;
-use crate::analysis::ty::diagnostics::{
-    BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
-};
+use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
+use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::trait_lower::lower_impl_trait;
-use crate::analysis::ty::ty_check::check_anon_const_body;
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
+use crate::analysis::ty::ty_error::collect_ty_lower_errors;
 use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{
     Contract, Enum, EnumVariant, FieldParent, Func, GenericParam, GenericParamOwner,
@@ -70,19 +69,6 @@ fn const_ty_mismatch_diag<'db>(
         given,
     }
     .into()
-}
-
-fn extract_type_mismatch<'db>(
-    diag: &FuncBodyDiag<'db>,
-) -> Option<(DynLazySpan<'db>, TyId<'db>, TyId<'db>)> {
-    match diag {
-        FuncBodyDiag::Body(BodyDiag::TypeMismatch {
-            span,
-            expected,
-            given,
-        }) => Some((span.clone(), *expected, *given)),
-        _ => None,
-    }
 }
 
 fn cyclic_trait_ref_diag<'db>(span: DynLazySpan<'db>, context: &str) -> TyDiagCollection<'db> {
@@ -675,22 +661,59 @@ impl<'db> ImplTrait<'db> {
             }
         }
 
+        // Validate the impl const's declared (header) type: surface lowering
+        // errors, and require it to match the trait's declaration. Body
+        // checking lives in the body analysis pass.
         for impl_const in self.assoc_consts(db) {
             let Some(name) = impl_const.name(db) else {
                 continue;
             };
-            let Some(body) = impl_const.value_body(db) else {
+            let Some(impl_header_ty) = impl_const.ty(db) else {
                 continue;
             };
-            let Some(expected) = trait_hir.const_(db, name).and_then(|c| c.ty_binder(db)) else {
+            let scope = self.scope();
+            let assumptions = constraints_for(db, self.into());
+            if impl_header_ty.has_invalid(db) {
+                let errs = impl_const.hir_ty(db).map(|hir_ty| {
+                    collect_ty_lower_errors(db, scope, hir_ty, impl_const.span().ty(), assumptions)
+                });
+                match errs {
+                    Some(errs) if !errs.is_empty() => diags.extend(errs),
+                    _ => {
+                        if let Some(diag) =
+                            impl_header_ty.emit_diag(db, impl_const.span().ty().into())
+                        {
+                            diags.push(diag);
+                        }
+                    }
+                }
                 continue;
-            };
+            }
 
+            let Some(trait_const) = trait_hir.const_(db, name) else {
+                continue;
+            };
+            let Some(expected) = trait_const.ty_binder(db) else {
+                continue;
+            };
             let expected_ty = expected.instantiate(db, trait_args);
-            let (body_diags, _) = check_anon_const_body(db, body, expected_ty);
-            if let Some((span, expected, given)) = body_diags.iter().find_map(extract_type_mismatch)
-            {
-                diags.push(const_ty_mismatch_diag(span, expected, given));
+            if expected_ty.has_invalid(db) {
+                continue;
+            }
+
+            let expected_ty = normalize_ty(db, expected_ty, scope, assumptions);
+            let impl_header_ty = normalize_ty(db, impl_header_ty, scope, assumptions);
+            if expected_ty != impl_header_ty {
+                diags.push(
+                    ImplDiag::ConstTyMismatchWithTrait {
+                        primary: impl_const.span().ty().into(),
+                        trait_decl_span: trait_const.span().ty().into(),
+                        const_name: name,
+                        trait_ty: expected_ty,
+                        impl_ty: impl_header_ty,
+                    }
+                    .into(),
+                );
             }
         }
 
