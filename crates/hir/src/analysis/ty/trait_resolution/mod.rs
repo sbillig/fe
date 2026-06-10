@@ -282,15 +282,20 @@ pub(crate) fn check_ty_wf<'db>(
     solve_cx: TraitSolveCx<'db>,
     ty: TyId<'db>,
 ) -> WellFormedness<'db> {
-    match ty.data(db) {
-        TyData::TyApp(abs, arg) => {
-            for ty in [*abs, *arg] {
-                let wf = check_ty_wf(db, solve_cx, ty);
-                if !wf.is_wf() {
-                    return wf;
-                }
-            }
+    // Check the arguments and the structural content of the application base
+    // (projections and const expressions). The base's *constraints* are not
+    // checked here: `ty_constraints` of a partial application instantiates
+    // the constraint binder with missing arguments, producing spurious
+    // unsatisfied goals; the fully-applied type's constraints are checked
+    // below.
+    let (base, args) = ty.decompose_ty_app(db);
+    for &arg in args {
+        let wf = check_ty_wf(db, solve_cx, arg);
+        if !wf.is_wf() {
+            return wf;
         }
+    }
+    match base.data(db) {
         TyData::AssocTy(assoc) => {
             let wf = check_projected_trait_use_wf(db, solve_cx, assoc.trait_);
             if !wf.is_wf() {
@@ -309,7 +314,8 @@ pub(crate) fn check_ty_wf<'db>(
                 return wf;
             }
         }
-        TyData::TyVar(_)
+        TyData::TyApp(..)
+        | TyData::TyVar(_)
         | TyData::TyParam(_)
         | TyData::TyBase(_)
         | TyData::Never

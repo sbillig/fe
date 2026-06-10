@@ -189,9 +189,11 @@ fn lower_opt_const_body<'db>(
                 .and_then(|v| v.ty_binder(db))
                 .map(|b| b.instantiate(db, inst.args(db)))
             {
+                // Defer evaluation: the use position's expected type may
+                // differ in integer shape from the const's declared type
+                // (e.g. a `u256` trait const used as an array length).
                 let assoc = AssocConstUse::new(scope, assumptions, inst, name);
-                super::const_ty::const_ty_or_abstract_from_assoc_const_use(db, assoc, expected_ty)
-                    .unwrap_or_else(|| ConstTyId::invalid(db, InvalidCause::Other))
+                super::const_ty::abstract_const_ty_from_assoc_const_use(db, assoc, expected_ty)
             } else {
                 ConstTyId::invalid(db, InvalidCause::Other)
             }
