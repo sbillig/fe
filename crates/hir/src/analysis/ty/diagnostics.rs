@@ -170,6 +170,7 @@ pub enum TyLowerDiag<'db> {
     ConstEvalNegativeExponent(DynLazySpan<'db>),
     ConstEvalStepLimitExceeded(DynLazySpan<'db>),
     ConstEvalRecursionLimitExceeded(DynLazySpan<'db>),
+    ConstEvalRecursiveConst(DynLazySpan<'db>),
 
     NonTrailingDefaultGenericParam(LazyGenericParamSpan<'db>),
 
@@ -209,6 +210,7 @@ impl TyLowerDiag<'_> {
             Self::ConstEvalNegativeExponent(_) => 35,
             Self::ConstEvalStepLimitExceeded(_) => 26,
             Self::ConstEvalRecursionLimitExceeded(_) => 27,
+            Self::ConstEvalRecursiveConst(_) => 37,
             Self::MixedRefSelfPrefixWithExplicitType { .. } => 28,
             Self::MixedOwnSelfPrefixWithExplicitType { .. } => 29,
             Self::InvalidMutSelfPrefixWithExplicitType { .. } => 30,

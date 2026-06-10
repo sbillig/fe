@@ -1197,6 +1197,13 @@ pub enum InvalidCause<'db> {
         expr: ExprId,
     },
 
+    /// The const's definition requires its own value (directly or through a
+    /// cycle of const items).
+    ConstEvalRecursiveConst {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
     // TraitConstraintNotSat(PredicateId),
     ParseError,
 
@@ -1272,6 +1279,7 @@ impl InvalidCause<'_> {
             InvalidCause::ConstEvalRecursionLimitExceeded { .. } => {
                 "ConstEvalRecursionLimitExceeded".into()
             }
+            InvalidCause::ConstEvalRecursiveConst { .. } => "ConstEvalRecursiveConst".into(),
         }
     }
 }

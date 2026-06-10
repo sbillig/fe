@@ -102,11 +102,30 @@ pub enum CtfeError<'db> {
     RecursionLimitExceeded {
         origin: SemOrigin<'db>,
     },
+    /// Evaluating the const required its own value (directly or through a
+    /// cycle of const items). Produced as the fixpoint-initial value of the
+    /// eval queries below, so a recursive definition converges to this error
+    /// instead of panicking on the salsa dependency cycle.
+    RecursiveConst {
+        origin: SemOrigin<'db>,
+    },
     CalleeError {
         origin: SemOrigin<'db>,
         callee: SemanticInstance<'db>,
         source: Box<CtfeError<'db>>,
     },
+}
+
+impl<'db> CtfeError<'db> {
+    /// Whether the root error (through any `CalleeError` chain) is a
+    /// recursive-const error.
+    pub fn root_is_recursive_const(&self) -> bool {
+        match self {
+            CtfeError::RecursiveConst { .. } => true,
+            CtfeError::CalleeError { source, .. } => source.root_is_recursive_const(),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -135,7 +154,14 @@ enum SaturatingArithmetic {
     Mul,
 }
 
-#[salsa::tracked]
+// Const-item references are evaluated through these salsa queries (the
+// machine calls `eval_const_ref` when it hits an `SConst::Ref`), so a
+// recursive const definition is a salsa dependency cycle, not a deep machine
+// stack. Each query recovers with `Err(RecursiveConst)` as the fixpoint
+// initial value; the machine's ref site keeps that error shape stable across
+// iterations (see `SExpr::Const(SConst::Ref(..))` in `eval_expr`), so the
+// cycle converges to a recursion error instead of panicking.
+#[salsa::tracked(cycle_initial=eval_const_instance_cycle_initial, cycle_fn=eval_const_instance_cycle_recover)]
 pub fn eval_const_instance<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -148,7 +174,25 @@ pub fn eval_const_instance<'db>(
     )
 }
 
-#[salsa::tracked]
+fn eval_const_instance_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Result<SemConstId<'db>, CtfeError<'db>> {
+    Err(CtfeError::RecursiveConst {
+        origin: SemOrigin::Body(instance.key(db).owner(db)),
+    })
+}
+
+fn eval_const_instance_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Result<SemConstId<'db>, CtfeError<'db>>,
+    _count: u32,
+    _instance: SemanticInstance<'db>,
+) -> salsa::CycleRecoveryAction<Result<SemConstId<'db>, CtfeError<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+#[salsa::tracked(cycle_initial=eval_const_ref_cycle_initial, cycle_fn=eval_const_ref_cycle_recover)]
 pub fn eval_const_ref<'db>(
     db: &'db dyn HirAnalysisDb,
     cref: SemanticConstRef<'db>,
@@ -161,7 +205,25 @@ pub fn eval_const_ref<'db>(
     )
 }
 
-#[salsa::tracked]
+fn eval_const_ref_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    cref: SemanticConstRef<'db>,
+) -> Result<SemConstId<'db>, CtfeError<'db>> {
+    Err(CtfeError::RecursiveConst {
+        origin: cref.origin(db),
+    })
+}
+
+fn eval_const_ref_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Result<SemConstId<'db>, CtfeError<'db>>,
+    _count: u32,
+    _cref: SemanticConstRef<'db>,
+) -> salsa::CycleRecoveryAction<Result<SemConstId<'db>, CtfeError<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+#[salsa::tracked(cycle_initial=eval_body_owner_const_cycle_initial, cycle_fn=eval_body_owner_const_cycle_recover)]
 pub fn eval_body_owner_const<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
@@ -177,7 +239,27 @@ pub fn eval_body_owner_const<'db>(
     eval_const_instance(db, get_or_build_semantic_instance(db, key))
 }
 
-#[salsa::tracked]
+fn eval_body_owner_const_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    _generic_args: Vec<crate::analysis::ty::ty_def::TyId<'db>>,
+) -> Result<SemConstId<'db>, CtfeError<'db>> {
+    Err(CtfeError::RecursiveConst {
+        origin: SemOrigin::Body(owner),
+    })
+}
+
+fn eval_body_owner_const_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Result<SemConstId<'db>, CtfeError<'db>>,
+    _count: u32,
+    _owner: BodyOwner<'db>,
+    _generic_args: Vec<crate::analysis::ty::ty_def::TyId<'db>>,
+) -> salsa::CycleRecoveryAction<Result<SemConstId<'db>, CtfeError<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+#[salsa::tracked(cycle_initial=eval_body_owner_const_with_args_cycle_initial, cycle_fn=eval_body_owner_const_with_args_cycle_recover)]
 pub fn eval_body_owner_const_with_args<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
@@ -200,6 +282,28 @@ pub fn eval_body_owner_const_with_args<'db>(
             .collect(),
         SemOrigin::Body(owner),
     )
+}
+
+fn eval_body_owner_const_with_args_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    _generic_args: Vec<crate::analysis::ty::ty_def::TyId<'db>>,
+    _args: Vec<SemConstId<'db>>,
+) -> Result<SemConstId<'db>, CtfeError<'db>> {
+    Err(CtfeError::RecursiveConst {
+        origin: SemOrigin::Body(owner),
+    })
+}
+
+fn eval_body_owner_const_with_args_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Result<SemConstId<'db>, CtfeError<'db>>,
+    _count: u32,
+    _owner: BodyOwner<'db>,
+    _generic_args: Vec<crate::analysis::ty::ty_def::TyId<'db>>,
+    _args: Vec<SemConstId<'db>>,
+) -> salsa::CycleRecoveryAction<Result<SemConstId<'db>, CtfeError<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 pub(super) fn try_eval_expr_to_const<'db>(
@@ -1101,10 +1205,25 @@ impl<'db> CtfeMachine<'db> {
             SExpr::Const(SConst::Value(value)) => Ok(CtfeValue::concrete(self.db, value)),
             SExpr::Const(SConst::Ref(cref)) => eval_const_ref(self.db, cref)
                 .map(|value| CtfeValue::concrete(self.db, value))
-                .map_err(|err| CtfeError::CalleeError {
-                    origin: cref.origin(self.db),
-                    callee: SemanticInstance::new(self.db, cref.instance(self.db)),
-                    source: Box::new(err),
+                .map_err(|err| {
+                    // Recursion errors must not accumulate `CalleeError`
+                    // wrappers: during salsa fixpoint iteration each pass
+                    // through this site would add a layer and the value
+                    // would never converge. Re-originating at the reference
+                    // site also keeps the origin an expression of the body
+                    // being evaluated, so the eventual diagnostic anchors in
+                    // the right body.
+                    if err.root_is_recursive_const() {
+                        CtfeError::RecursiveConst {
+                            origin: cref.origin(self.db),
+                        }
+                    } else {
+                        CtfeError::CalleeError {
+                            origin: cref.origin(self.db),
+                            callee: SemanticInstance::new(self.db, cref.instance(self.db)),
+                            source: Box::new(err),
+                        }
+                    }
                 }),
             SExpr::Unary { op, value } => {
                 let value = self.load_value(frame_idx, value, origin)?;
