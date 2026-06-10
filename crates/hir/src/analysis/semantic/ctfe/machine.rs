@@ -12,14 +12,15 @@ use crate::{
         HirAnalysisDb,
         semantic::instance::{
             GenericSubst, ImplEnv, SemanticInstance, SemanticInstanceKey,
-            get_or_build_semantic_instance, instantiate_with_generic_args,
+            get_or_build_semantic_instance,
         },
         semantic::{
             FieldIndex, SConst, SExpr, SLocalId, SOperand, SPlace, SStmt, SStmtKind,
             STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody,
-            SemanticConstRef, VariantIndex, array_const, bool_const, bytes_const, enum_const,
-            int_const, int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_eq,
-            sem_const_from_ty, sem_const_ty, struct_const, tuple_const, unit_const,
+            SemanticConstRef, VariantIndex, array_const, bool_const, bytes_const,
+            consts::demand_concrete_const_ty, enum_const, int_const, int_ty_shape,
+            normalize_int_to_shape, runtime_size_bytes, sem_const_eq, sem_const_from_ty,
+            sem_const_ty, struct_const, tuple_const, unit_const,
         },
         ty::{
             const_expr::{ConstExpr, ConstExprId},
@@ -2439,29 +2440,22 @@ impl<'db> CtfeMachine<'db> {
                     ..
                 } => Ok(value),
                 SemConstValue::TypeLevel { ty, const_ty } if ty == TyId::bool(self.db) => {
-                    let TyData::ConstTy(const_ty) = const_ty.data(self.db) else {
+                    let subst = self.frames[frame_idx]
+                        .body
+                        .owner
+                        .key(self.db)
+                        .subst(self.db);
+                    let Some(const_ty) = demand_concrete_const_ty(
+                        self.db,
+                        const_ty,
+                        ty,
+                        subst.generic_args(self.db),
+                    ) else {
                         return Err(CtfeError::InvalidOperation {
                             origin: value.error_origin(origin),
                             message: format!("expected bool, got {:?}", interned.value(self.db)),
                         });
                     };
-                    let mut const_ty = const_ty.evaluate(self.db, Some(ty));
-                    if matches!(const_ty.data(self.db), ConstTyData::Abstract(..)) {
-                        let subst = self.frames[frame_idx]
-                            .body
-                            .owner
-                            .key(self.db)
-                            .subst(self.db);
-                        let instantiated = instantiate_with_generic_args(
-                            self.db,
-                            TyId::const_ty(self.db, const_ty),
-                            subst.generic_args(self.db),
-                        );
-                        let TyData::ConstTy(instantiated) = instantiated.data(self.db) else {
-                            unreachable!("instantiating a const ty must yield a const ty");
-                        };
-                        const_ty = instantiated.evaluate(self.db, Some(ty));
-                    }
                     let ConstTyData::Evaluated(EvaluatedConstTy::LitBool(value), _) =
                         const_ty.data(self.db)
                     else {
@@ -2528,29 +2522,22 @@ impl<'db> CtfeMachine<'db> {
                     ..
                 } => Ok(value.clone()),
                 SemConstValue::TypeLevel { ty, const_ty } => {
-                    let TyData::ConstTy(const_ty) = const_ty.data(self.db) else {
+                    let subst = self.frames[frame_idx]
+                        .body
+                        .owner
+                        .key(self.db)
+                        .subst(self.db);
+                    let Some(const_ty) = demand_concrete_const_ty(
+                        self.db,
+                        const_ty,
+                        ty,
+                        subst.generic_args(self.db),
+                    ) else {
                         return Err(CtfeError::InvalidOperation {
                             origin: value.error_origin(origin),
                             message: format!("expected int, got {:?}", interned.value(self.db)),
                         });
                     };
-                    let mut const_ty = const_ty.evaluate(self.db, Some(ty));
-                    if matches!(const_ty.data(self.db), ConstTyData::Abstract(..)) {
-                        let subst = self.frames[frame_idx]
-                            .body
-                            .owner
-                            .key(self.db)
-                            .subst(self.db);
-                        let instantiated = instantiate_with_generic_args(
-                            self.db,
-                            TyId::const_ty(self.db, const_ty),
-                            subst.generic_args(self.db),
-                        );
-                        let TyData::ConstTy(instantiated) = instantiated.data(self.db) else {
-                            unreachable!("instantiating a const ty must yield a const ty");
-                        };
-                        const_ty = instantiated.evaluate(self.db, Some(ty));
-                    }
                     let ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) =
                         const_ty.data(self.db)
                     else {
