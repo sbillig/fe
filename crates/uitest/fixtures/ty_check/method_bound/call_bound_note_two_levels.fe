@@ -1,0 +1,19 @@
+trait Red {}
+trait Blue {}
+
+struct Pair<T> {
+    item: T,
+}
+
+impl<T: Red> Pair<T> {
+    fn join<U: Blue>(self, _ other: U) {}
+}
+
+fn call_join<T, U>(pair: Pair<T>, other: U) {
+    pair.join(other)
+}
+
+// BUG: the "required by this bound" notes are swapped. The constraint list
+// for `join` is [T: Red (impl), U: Blue (own)], but the note decoder assumes
+// the function's own bounds come first, so the `T: Red` failure points at
+// `Blue` and the `U: Blue` failure points at `Red`.
