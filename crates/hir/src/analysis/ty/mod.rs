@@ -406,6 +406,14 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
 
         diags.extend(
             top_mod
+                .all_traits(db)
+                .iter()
+                .flat_map(|trait_| ty_check::check_trait_const_default_bodies(db, *trait_))
+                .map(|diag| diag.to_voucher()),
+        );
+
+        diags.extend(
+            top_mod
                 .all_static_asserts(db)
                 .iter()
                 .flat_map(|assert_| ty_check::check_static_assert(db, *assert_).iter())

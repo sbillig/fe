@@ -10,6 +10,12 @@ error[6-0002]: not all trait methods are implemented
   │                      ^^^^^^^^^ missing implementations: run
 
 error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_local_helper_admission.fe:173:20
+    │
+173 │     const D: u32 = <Self as AssocConstHelper>::C
+    │                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Self` doesn't implement `AssocConstHelper`
+
+error[6-0003]: trait bound is not satisfied
     ┌─ trait_impl_local_helper_admission.fe:199:22
     │
 199 │     fn make(self) -> <Self as AssocMethodHelper>::X
