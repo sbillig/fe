@@ -3584,12 +3584,14 @@ impl<'db> TyChecker<'db> {
                         inst.assoc_type_bindings(self.db).clone(),
                     );
 
-                    if let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
-                        self.db,
-                        TraitSolveCx::new(self.db, self.env.scope())
-                            .with_assumptions(self.env.assumptions()),
-                        inst,
-                    ) {
+                    if !super::trait_const_goal_has_foreign_params(self.db, inst, self.env.scope())
+                        && let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
+                            self.db,
+                            TraitSolveCx::new(self.db, self.env.scope())
+                                .with_assumptions(self.env.assumptions()),
+                            inst,
+                        )
+                    {
                         self.push_diag(TyDiagCollection::from(
                             TraitConstraintDiag::TraitBoundNotSat {
                                 span: path_expr_span.clone().into(),
