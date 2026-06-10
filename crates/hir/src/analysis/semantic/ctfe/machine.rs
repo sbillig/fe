@@ -327,6 +327,12 @@ struct CtfeMachine<'db> {
     instance_cache: FxHashMap<SemanticInstanceKey<'db>, SemanticInstance<'db>>,
     body_cache: FxHashMap<SemanticInstanceKey<'db>, Rc<SemanticBody<'db>>>,
     frames: Vec<CtfeFrame<'db>>,
+    /// Memoized results of const-item references evaluated by this machine.
+    const_results: FxHashMap<SemanticInstanceKey<'db>, Result<SemConstId<'db>, CtfeError<'db>>>,
+    /// Const items currently being evaluated, outermost first. A reference to
+    /// a const already on this stack is a recursive definition; the machine
+    /// owns this check so const recursion never becomes a salsa query cycle.
+    const_stack: Vec<SemanticInstanceKey<'db>>,
 }
 
 struct CtfeFrame<'db> {
@@ -979,6 +985,8 @@ impl<'db> CtfeMachine<'db> {
             instance_cache: FxHashMap::default(),
             body_cache: FxHashMap::default(),
             frames: Vec::new(),
+            const_results: FxHashMap::default(),
+            const_stack: Vec::new(),
         }
     }
 
@@ -1045,6 +1053,37 @@ impl<'db> CtfeMachine<'db> {
         result
     }
 
+    /// Evaluates a const-item reference in this machine, pushing a frame for
+    /// the referenced instance instead of re-entering the salsa eval
+    /// queries. The const stack makes recursive definitions a detected
+    /// error (with the reference site as the origin) rather than a salsa
+    /// dependency cycle, and results are memoized per machine so shared
+    /// sub-consts are evaluated once.
+    fn eval_const_ref_value(
+        &mut self,
+        cref: SemanticConstRef<'db>,
+    ) -> Result<SemConstId<'db>, CtfeError<'db>> {
+        let key = cref.instance(self.db);
+        if let Some(result) = self.const_results.get(&key) {
+            return result.clone();
+        }
+        let origin = cref.origin(self.db);
+        if self.const_stack.contains(&key) {
+            return Err(CtfeError::RecursiveConst { origin });
+        }
+
+        self.const_stack.push(key);
+        let result = self
+            .eval_instance(SemanticInstance::new(self.db, key), Vec::new(), origin)
+            .and_then(|value| match value {
+                CtfeValue::Value(value) => Ok(value.materialize(self.db)),
+                CtfeValue::Ref(_) => Err(CtfeError::InvalidBorrow { origin }),
+            });
+        self.const_stack.pop();
+        self.const_results.insert(key, result.clone());
+        result
+    }
+
     fn eval_instance(
         &mut self,
         instance: SemanticInstance<'db>,
@@ -1052,7 +1091,11 @@ impl<'db> CtfeMachine<'db> {
         origin: SemOrigin<'db>,
     ) -> Result<CtfeValue<'db>, CtfeError<'db>> {
         self.ensure_const_evaluable(instance, origin)?;
-        if self.frames.len() >= self.config.recursion_limit {
+        // Const-item frames are exempt from the limit: the const stack's
+        // cycle check already bounds them (each const is evaluated at most
+        // once per path), and a long but finite chain of const definitions
+        // is not call recursion.
+        if self.frames.len().saturating_sub(self.const_stack.len()) >= self.config.recursion_limit {
             return Err(CtfeError::RecursionLimitExceeded { origin });
         }
 
@@ -1203,16 +1246,15 @@ impl<'db> CtfeMachine<'db> {
             }
             SExpr::CodeRegionRef { .. } => Err(CtfeError::NotConstEvaluable { origin }),
             SExpr::Const(SConst::Value(value)) => Ok(CtfeValue::concrete(self.db, value)),
-            SExpr::Const(SConst::Ref(cref)) => eval_const_ref(self.db, cref)
+            SExpr::Const(SConst::Ref(cref)) => self
+                .eval_const_ref_value(cref)
                 .map(|value| CtfeValue::concrete(self.db, value))
                 .map_err(|err| {
-                    // Recursion errors must not accumulate `CalleeError`
-                    // wrappers: during salsa fixpoint iteration each pass
-                    // through this site would add a layer and the value
-                    // would never converge. Re-originating at the reference
-                    // site also keeps the origin an expression of the body
-                    // being evaluated, so the eventual diagnostic anchors in
-                    // the right body.
+                    // Re-originating recursion errors at the reference site
+                    // keeps the origin an expression of the body being
+                    // evaluated, so the eventual diagnostic anchors in the
+                    // right body. (It also keeps the error shape stable if
+                    // an outer salsa fixpoint iteration replays this site.)
                     if err.root_is_recursive_const() {
                         CtfeError::RecursiveConst {
                             origin: cref.origin(self.db),
