@@ -50,17 +50,53 @@ error[8-0082]: immutable contract field is not initialized
    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
 error[8-0082]: immutable contract field is not initialized
-    ┌─ immutable_contract_field_init.fe:115:5
+    ┌─ immutable_contract_field_init.fe:136:5
     │
-115 │       x: u256
+136 │       x: u256
     │       ^ `x` must be assigned in `init` on every successful path
-116 │
-117 │       init(flag: bool, v: u256) uses (mut x) {
+137 │
+138 │       init(flag: bool, v: u256) uses (mut x) {
     │ ╭────────────────────────────────────────────'
-118 │ │         while flag {
-119 │ │             x = v
-120 │ │         }
-121 │ │     }
+139 │ │         while flag {
+140 │ │             x = v
+141 │ │         }
+142 │ │     }
+    │ ╰─────' this init block may finish without assigning `x`
+    │
+    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0082]: immutable contract field is not initialized
+    ┌─ immutable_contract_field_init.fe:146:5
+    │
+146 │       x: u256
+    │       ^ `x` must be assigned in `init` on every successful path
+147 │
+148 │       init(v: u256) uses (mut x) {
+    │ ╭────────────────────────────────'
+149 │ │         let b = true
+150 │ │         while let false = b {
+151 │ │             x = v
+152 │ │             break
+153 │ │         }
+154 │ │     }
+    │ ╰─────' this init block may finish without assigning `x`
+    │
+    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0082]: immutable contract field is not initialized
+    ┌─ immutable_contract_field_init.fe:158:5
+    │
+158 │       x: u256
+    │       ^ `x` must be assigned in `init` on every successful path
+159 │
+160 │       init(v: u256) uses (mut x) {
+    │ ╭────────────────────────────────'
+161 │ │         let mut run = true
+162 │ │         for _ in 0..1 {
+163 │ │             run = false
+    · │
+168 │ │         }
+169 │ │     }
     │ ╰─────' this init block may finish without assigning `x`
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage

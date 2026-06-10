@@ -820,6 +820,11 @@ impl<K: Copy + Eq + Hash> AssignmentState<K> {
                 .collect(),
         }
     }
+
+    fn without_values(mut self) -> Self {
+        self.values.clear();
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1000,17 +1005,18 @@ where
                     let mut backedge_states = body_flow.normal.into_iter().collect::<Vec<_>>();
                     backedge_states.extend(body_flow.continues);
                     for backedge_state in backedge_states {
+                        let backedge_truth = self.cond_value(cond, &backedge_state);
                         let backedge_cond_flow = self.analyze_cond(cond, backedge_state);
                         returns.extend(backedge_cond_flow.returns);
                         breaks.extend(backedge_cond_flow.breaks);
                         continues.extend(backedge_cond_flow.continues);
-                        if !self.cond_is_literal_bool(cond, true) {
+                        if backedge_truth != Some(true) {
                             normal_exits.push(backedge_cond_flow.normal);
                         }
                     }
                 }
                 AssignmentFlow {
-                    normal: merge_normal_states(normal_exits),
+                    normal: merge_normal_states(normal_exits).map(AssignmentState::without_values),
                     returns,
                     breaks,
                     continues,
@@ -1029,7 +1035,7 @@ where
                     // Body continuations target this loop and are consumed here.
                 }
                 AssignmentFlow {
-                    normal: merge_normal_states(normal_exits),
+                    normal: merge_normal_states(normal_exits).map(AssignmentState::without_values),
                     returns,
                     breaks,
                     continues,
@@ -1072,20 +1078,6 @@ where
                 }
             }
         }
-    }
-
-    fn cond_is_literal_bool(&self, cond: crate::hir_def::CondId, value: bool) -> bool {
-        let Partial::Present(Cond::Expr(expr)) = cond.data(self.db, self.body) else {
-            return false;
-        };
-        self.expr_is_literal_bool(*expr, value)
-    }
-
-    fn expr_is_literal_bool(&self, expr: ExprId, value: bool) -> bool {
-        matches!(
-            expr.data(self.db, self.body),
-            Partial::Present(Expr::Lit(LitKind::Bool(flag))) if *flag == value
-        )
     }
 
     fn analyze_expr(
@@ -1133,24 +1125,45 @@ where
             }
             Expr::Field(base, _) => self.analyze_expr(*base, state),
             Expr::If(cond, then_expr, else_expr) => {
+                let truth = self.cond_value(*cond, &state);
                 let cond_flow = self.analyze_cond(*cond, state);
                 let mut returns = cond_flow.returns;
                 let mut breaks = cond_flow.breaks;
                 let mut continues = cond_flow.continues;
-                let normal = cond_flow.normal.and_then(|cond_state| {
-                    let then_flow = self.analyze_expr(*then_expr, cond_state.clone());
-                    returns.extend(then_flow.returns);
-                    breaks.extend(then_flow.breaks);
-                    continues.extend(then_flow.continues);
-                    let else_flow = if let Some(else_expr) = else_expr {
-                        self.analyze_expr(*else_expr, cond_state)
-                    } else {
-                        AssignmentFlow::normal(cond_state)
-                    };
-                    returns.extend(else_flow.returns);
-                    breaks.extend(else_flow.breaks);
-                    continues.extend(else_flow.continues);
-                    merge_normal_states([then_flow.normal, else_flow.normal])
+                let normal = cond_flow.normal.and_then(|cond_state| match truth {
+                    Some(true) => {
+                        let then_flow = self.analyze_expr(*then_expr, cond_state);
+                        returns.extend(then_flow.returns);
+                        breaks.extend(then_flow.breaks);
+                        continues.extend(then_flow.continues);
+                        then_flow.normal
+                    }
+                    Some(false) => {
+                        let else_flow = if let Some(else_expr) = else_expr {
+                            self.analyze_expr(*else_expr, cond_state)
+                        } else {
+                            AssignmentFlow::normal(cond_state)
+                        };
+                        returns.extend(else_flow.returns);
+                        breaks.extend(else_flow.breaks);
+                        continues.extend(else_flow.continues);
+                        else_flow.normal
+                    }
+                    None => {
+                        let then_flow = self.analyze_expr(*then_expr, cond_state.clone());
+                        returns.extend(then_flow.returns);
+                        breaks.extend(then_flow.breaks);
+                        continues.extend(then_flow.continues);
+                        let else_flow = if let Some(else_expr) = else_expr {
+                            self.analyze_expr(*else_expr, cond_state)
+                        } else {
+                            AssignmentFlow::normal(cond_state)
+                        };
+                        returns.extend(else_flow.returns);
+                        breaks.extend(else_flow.breaks);
+                        continues.extend(else_flow.continues);
+                        merge_normal_states([then_flow.normal, else_flow.normal])
+                    }
                 });
                 AssignmentFlow {
                     normal,
@@ -1400,10 +1413,11 @@ where
             return None;
         };
         match cond {
-            Cond::Expr(expr) | Cond::Let(_, expr) => match self.expr_value(*expr, state) {
+            Cond::Expr(expr) => match self.expr_value(*expr, state) {
                 Some(ValueFact::Bool(value)) => Some(value),
                 _ => None,
             },
+            Cond::Let(pat, _) => self.pattern_is_irrefutable(*pat).then_some(true),
             Cond::Bin(lhs, rhs, LogicalBinOp::And) => {
                 match (self.cond_value(*lhs, state), self.cond_value(*rhs, state)) {
                     (Some(false), _) | (_, Some(false)) => Some(false),
@@ -1470,6 +1484,14 @@ where
             }
             _ => None,
         }
+    }
+
+    fn pattern_is_irrefutable(&self, pat: PatId) -> bool {
+        self.typed_body.pattern_root(pat).is_none_or(|root| {
+            self.typed_body
+                .pattern_store()
+                .is_irrefutable(self.db, root)
+        })
     }
 
     fn apply_call_assignments(
