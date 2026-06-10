@@ -1807,7 +1807,7 @@ pub fn check_contract_immutable_fields_initialized<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
-    let required_fields = contract
+    let valid_fields = contract
         .field_layout(db)
         .values()
         .filter(|field| field.slot_count != 0)
@@ -1824,14 +1824,35 @@ pub fn check_contract_immutable_fields_initialized<'db>(
             .ty_diags(db)
             .is_empty()
         })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut diags = valid_fields
+        .iter()
+        .filter(|field| {
+            address_space_from_ty(db, contract.scope(), field.address_space)
+                == Some(ProviderAddressSpace::Memory)
+        })
+        .map(|field| {
+            BodyDiag::UnsupportedMemoryContractField {
+                primary: FieldView {
+                    parent: FieldParent::Contract(contract),
+                    idx: field.index as usize,
+                }
+                .ty_span(),
+                field: field.name,
+            }
+            .into()
+        })
+        .collect::<Vec<_>>();
+    let required_fields = valid_fields
+        .into_iter()
         .filter(|field| {
             address_space_from_ty(db, contract.scope(), field.address_space)
                 == Some(ProviderAddressSpace::Code)
         })
-        .cloned()
         .collect::<Vec<_>>();
     if required_fields.is_empty() {
-        return Vec::new();
+        return diags;
     }
 
     let required = required_fields
@@ -1871,10 +1892,8 @@ pub fn check_contract_immutable_fields_initialized<'db>(
     };
 
     let init_span = init.map(|_| contract.span().init_block().body().into());
-    required_fields
-        .into_iter()
-        .filter(|field| missing.contains(&field.index))
-        .map(|field| {
+    diags.extend(required_fields.into_iter().filter_map(|field| {
+        missing.contains(&field.index).then(|| {
             BodyDiag::ImmutableContractFieldNotInitialized {
                 primary: FieldParent::Contract(contract).field_name_span(field.index as usize),
                 field: field.name,
@@ -1882,7 +1901,8 @@ pub fn check_contract_immutable_fields_initialized<'db>(
             }
             .into()
         })
-        .collect()
+    }));
+    diags
 }
 
 #[salsa::tracked(return_ref)]

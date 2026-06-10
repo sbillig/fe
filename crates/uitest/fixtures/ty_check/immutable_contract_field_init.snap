@@ -100,3 +100,11 @@ error[8-0082]: immutable contract field is not initialized
     │ ╰─────' this init block may finish without assigning `x`
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0084]: memory-backed contract fields are not supported
+    ┌─ immutable_contract_field_init.fe:200:10
+    │
+200 │     ptr: std::evm::MemPtr<u256>
+    │          ^^^^^^^^^^^^^^^^^^^^^^ `ptr` has a memory-backed contract field type
+    │
+    = memory handles cannot be persisted as contract fields; use a plain immutable field for code-backed data or a plain `mut` field for storage-backed state

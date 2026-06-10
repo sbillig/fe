@@ -195,3 +195,7 @@ contract InitViaConditionExitContinueLoop {
         }
     }
 }
+
+contract MemorySpaceField {
+    ptr: std::evm::MemPtr<u256>
+}

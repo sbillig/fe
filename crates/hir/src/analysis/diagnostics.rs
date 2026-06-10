@@ -3281,6 +3281,24 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::UnsupportedMemoryContractField { primary, field } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "memory-backed contract fields are not supported".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`{}` has a memory-backed contract field type",
+                        field.data(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "memory handles cannot be persisted as contract fields; use a plain immutable field for code-backed data or a plain `mut` field for storage-backed state"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
             Self::LoopControlOutsideOfLoop { primary, is_break } => {
                 let stmt = if *is_break { "break" } else { "continue" };
 

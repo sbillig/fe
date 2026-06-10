@@ -505,6 +505,10 @@ pub enum BodyDiag<'db> {
         field: IdentId<'db>,
         init: Option<DynLazySpan<'db>>,
     },
+    UnsupportedMemoryContractField {
+        primary: DynLazySpan<'db>,
+        field: IdentId<'db>,
+    },
 
     LoopControlOutsideOfLoop {
         primary: DynLazySpan<'db>,
@@ -823,6 +827,7 @@ impl<'db> BodyDiag<'db> {
             Self::NonAssignableExpr(..) => 17,
             Self::ImmutableAssignment { .. } => 18,
             Self::ImmutableContractFieldNotInitialized { .. } => 82,
+            Self::UnsupportedMemoryContractField { .. } => 84,
             Self::LoopControlOutsideOfLoop { .. } => 19,
             Self::TraitNotImplemented { .. } => 20,
             Self::NotCallable(..) => 21,
