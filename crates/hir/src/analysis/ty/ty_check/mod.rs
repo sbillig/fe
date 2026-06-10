@@ -4113,14 +4113,17 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
         }
 
         // We need this additional check for method call because the callable type is
-        // not tied to the expression type.
+        // not tied to the expression type. Well-formedness is not re-checked
+        // here: the callable's declared constraints were already registered as
+        // call-constraint obligations (with a `required by this bound` note),
+        // so a WF check would report every unsatisfied bound a second time —
+        // the same reason direct-call callees are excluded above.
         if let Expr::MethodCall(..) = expr_data
             && let Some(callable) = self.body.callable_expr(expr)
         {
             let callable_ty = callable.ty(self.db);
             let span = ctxt.span().unwrap().into_method_call_expr().method_name();
-            self.check_unknown(callable_ty, span.clone().into());
-            self.check_wf(callable_ty, span.into())
+            self.check_unknown(callable_ty, span.into());
         }
 
         walk_expr(self, ctxt, expr);

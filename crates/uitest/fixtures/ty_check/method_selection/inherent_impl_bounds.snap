@@ -13,23 +13,11 @@ error[6-0003]: trait bound is not satisfied
    │          ^^^^^ `T` doesn't implement `DirectBound`
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ inherent_impl_bounds.fe:16:10
-   │
-16 │     box_.touch()
-   │          ^^^^^ `T` doesn't implement `DirectBound`
-
-error[6-0003]: trait bound is not satisfied
    ┌─ inherent_impl_bounds.fe:42:10
    │
 29 │ impl<T: AssocStrong> AssocBox<T::Item> {
    │         ----------- required by this bound on `touch`
    ·
-42 │     box_.touch()
-   │          ^^^^^ `T` doesn't implement `AssocStrong`
-
-error[6-0003]: trait bound is not satisfied
-   ┌─ inherent_impl_bounds.fe:42:10
-   │
 42 │     box_.touch()
    │          ^^^^^ `T` doesn't implement `AssocStrong`
 
