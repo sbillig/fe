@@ -2011,6 +2011,14 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::TypeLoweringCycle(span) => primary_diag(
+                Severity::Error,
+                "cycle detected while resolving this type",
+                "this type's definition depends on itself",
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::NonTrailingDefaultGenericParam(span) => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "generic parameters with a default must be trailing".to_string(),
