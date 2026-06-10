@@ -15,7 +15,9 @@ use super::{
     fold::{AssocTySubst, TyFoldable},
     normalize::normalize_ty,
     trait_def::TraitInstId,
-    trait_resolution::{TraitSolveCx, constraint::collect_constraints, GoalSatisfiability, is_goal_satisfiable, },
+    trait_resolution::{
+        GoalSatisfiability, TraitSolveCx, constraint::collect_constraints, is_goal_satisfiable,
+    },
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_lower::{ConstDefaultCompletion, collect_generic_params},
@@ -2054,11 +2056,10 @@ pub(crate) fn assumptions_for_body<'db>(
     }
 
     match parent_item {
-        Some(ItemKind::Trait(trait_)) => PredicateListId::new(
-            db,
-            vec![crate::semantic::trait_self_predicate(db, trait_)],
-        )
-        .extend_all_bounds(db),
+        Some(ItemKind::Trait(trait_)) => {
+            PredicateListId::new(db, vec![crate::semantic::trait_self_predicate(db, trait_)])
+                .extend_all_bounds(db)
+        }
         Some(ItemKind::ImplTrait(impl_trait)) => collect_constraints(db, impl_trait.into())
             .instantiate_identity()
             .extend_all_bounds(db),
@@ -2119,11 +2120,19 @@ pub(crate) fn const_ty_or_abstract_from_assoc_const_use<'db>(
     expected_ty: TyId<'db>,
 ) -> Option<ConstTyId<'db>> {
     let Some(evaluated) = const_ty_from_assoc_const_use(db, assoc) else {
-        return Some(abstract_const_ty_from_assoc_const_use(db, assoc, expected_ty));
+        return Some(abstract_const_ty_from_assoc_const_use(
+            db,
+            assoc,
+            expected_ty,
+        ));
     };
     let evaluated = evaluated.evaluate(db, Some(expected_ty));
     if evaluated.ty(db).has_invalid(db) {
-        return Some(abstract_const_ty_from_assoc_const_use(db, assoc, expected_ty));
+        return Some(abstract_const_ty_from_assoc_const_use(
+            db,
+            assoc,
+            expected_ty,
+        ));
     }
     Some(evaluated)
 }

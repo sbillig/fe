@@ -809,9 +809,10 @@ fn provenance_contains_alias_template<'db>(
     provenance: ProvenanceId<'db>,
     alias: HirTypeAlias<'db>,
 ) -> bool {
-    provenance.contains(db, |site| {
-        matches!(site, ProvenanceSite::Lex(LexSite::AliasTemplate(found)) if found == alias)
-    })
+    provenance.contains(
+        db,
+        |site| matches!(site, ProvenanceSite::Lex(LexSite::AliasTemplate(found)) if found == alias),
+    )
 }
 
 /// Lowers the given type alias to [`TyAlias`].
