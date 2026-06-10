@@ -13,7 +13,6 @@ fn call_join<T, U>(pair: Pair<T>, other: U) {
     pair.join(other)
 }
 
-// BUG: the "required by this bound" notes are swapped. The constraint list
-// for `join` is [T: Red (impl), U: Blue (own)], but the note decoder assumes
-// the function's own bounds come first, so the `T: Red` failure points at
-// `Blue` and the `U: Blue` failure points at `Red`.
+// The "required by this bound" notes must point at the bound that produced
+// each constraint: the `T: Red` failure at the impl bound, the `U: Blue`
+// failure at the method's own bound.
