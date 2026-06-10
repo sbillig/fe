@@ -1030,6 +1030,11 @@ pub enum ImplDiag<'db> {
         trait_ty: TyId<'db>,
         impl_ty: TyId<'db>,
     },
+
+    RecursiveAssocConst {
+        primary: DynLazySpan<'db>,
+        const_name: IdentId<'db>,
+    },
 }
 
 impl ImplDiag<'_> {
@@ -1052,6 +1057,7 @@ impl ImplDiag<'_> {
             Self::ConstNotDefinedInTrait { .. } => 14,
             Self::MissingAssociatedConst { .. } => 15,
             Self::ConstTyMismatchWithTrait { .. } => 16,
+            Self::RecursiveAssocConst { .. } => 17,
         }
     }
 }

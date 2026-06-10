@@ -720,6 +720,71 @@ impl<'db> ImplTrait<'db> {
         diags
     }
 
+    /// Diagnostics for associated consts that never reach a concrete value on
+    /// a fully concrete impl. Recursive definitions (`const C: u32 = Self::C`,
+    /// or cycles through other consts) "evaluate" to a symbolic
+    /// self-reference: the salsa cycle in `evaluate_const_ty` recovers with
+    /// the unevaluated form, so no error surfaces anywhere else.
+    pub fn diags_assoc_const_evaluability(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TyDiagCollection<'db>> {
+        use ty::assoc_const::AssocConstUse;
+        use ty::const_ty::{ConstTyData, const_ty_from_assoc_const_use};
+        use ty::diagnostics::ImplDiag;
+
+        // Recursion is user-written; expanded impls are compiler output.
+        if !matches!(self.origin(db), crate::span::HirOrigin::Raw(_)) {
+            return Vec::new();
+        }
+        let Some(implementor) = lower_impl_trait(db, self) else {
+            return Vec::new();
+        };
+        let implementor = implementor.instantiate_identity();
+        // Generic impls can't be evaluated here; their consts are forced (and
+        // retyped) at instantiation sites instead.
+        if !implementor.params(db).is_empty() {
+            return Vec::new();
+        }
+
+        let trait_hir = implementor.trait_def(db);
+        let inst = implementor.trait_inst(db);
+        let scope = self.scope();
+        let assumptions = constraints_for(db, self.into());
+
+        let mut diags = Vec::new();
+        for trait_const in trait_hir.assoc_consts(db) {
+            let Some(name) = trait_const.name(db) else {
+                continue;
+            };
+            let assoc = AssocConstUse::new(scope, assumptions, inst, name);
+            let Some(const_ty) = const_ty_from_assoc_const_use(db, assoc) else {
+                continue;
+            };
+            let declared_ty = trait_const
+                .ty_binder(db)
+                .map(|binder| binder.instantiate(db, inst.args(db)));
+            let evaluated = const_ty.evaluate(db, declared_ty);
+            if matches!(evaluated.data(db), ConstTyData::Evaluated(..))
+                || evaluated.ty(db).has_invalid(db)
+            {
+                continue;
+            }
+            let primary = match self.const_(db, name) {
+                Some(impl_const) => impl_const.span().name().into(),
+                None => self.span().ty().into(),
+            };
+            diags.push(
+                ImplDiag::RecursiveAssocConst {
+                    primary,
+                    const_name: name,
+                }
+                .into(),
+            );
+        }
+        diags
+    }
+
     /// Diagnostics for associated type bounds on implemented assoc types.
     pub fn diags_assoc_types_bounds(
         self,
@@ -1522,6 +1587,7 @@ impl<'db> Diagnosable<'db> for ImplTrait<'db> {
         out.extend(self.diags_assoc_types_bounds(db));
         out.extend(self.diags_missing_assoc_consts(db));
         out.extend(self.diags_assoc_consts(db));
+        out.extend(self.diags_assoc_const_evaluability(db));
         out.extend(GenericParamOwner::ImplTrait(self).diags(db));
         out
     }
