@@ -885,6 +885,7 @@ pub struct ContractFieldBinding<'db> {
     pub declared_ty: TyId<'db>,
     pub class: RuntimeClass<'db>,
     pub kind: RefKind<'db>,
+    pub init_immutable: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

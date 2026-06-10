@@ -702,13 +702,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             let EntryEffectArgPlan::ContractField(binding) = binding else {
                 continue;
             };
-            if !matches!(
-                binding.kind,
-                RefKind::Provider {
-                    space: AddressSpaceKind::Memory,
-                    ..
-                }
-            ) {
+            if !binding.init_immutable {
                 continue;
             }
             let Some(pointee_class) = binding.class.deref_target() else {
