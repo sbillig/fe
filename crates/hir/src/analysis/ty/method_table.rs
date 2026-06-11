@@ -6,9 +6,8 @@ use salsa::Update;
 use super::{
     binder::Binder,
     canonical::{Canonical, Solution},
-    const_ty::ConstTyId,
     fold::{TyFoldable, TyFolder},
-    ty_def::{InvalidCause, TyBase, TyId, strip_derived_adt_layout_args},
+    ty_def::{TyBase, TyId, strip_derived_adt_layout_args},
     unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor},
 };
@@ -187,7 +186,7 @@ impl<'db> MethodBucket<'db> {
         let db = table.db;
         let mut methods = vec![];
         let ty = strip_derived_adt_layout_args(db, ty);
-        let ty = saturate_ty_for_method_probe(db, ty);
+        let ty = saturate_ty_for_method_probe(table, ty);
         for (&cand_key, funcs) in self.methods.iter() {
             let Some(&func) = funcs.get(&name) else {
                 continue;
@@ -223,17 +222,23 @@ impl<'db> MethodBucket<'db> {
     }
 }
 
-fn saturate_ty_for_method_probe<'db>(db: &'db dyn HirAnalysisDb, mut ty: TyId<'db>) -> TyId<'db> {
+fn saturate_ty_for_method_probe<'db>(
+    table: &mut UnificationTable<'db>,
+    mut ty: TyId<'db>,
+) -> TyId<'db> {
+    let db = table.db;
     while !ty.is_star_kind(db) {
         let Some(prop) = ty.applicable_ty(db) else {
             break;
         };
 
-        let arg = if let Some(const_ty) = prop.const_ty {
-            TyId::const_ty(db, ConstTyId::hole_with_ty(db, const_ty))
-        } else {
-            TyId::invalid(db, InvalidCause::Other)
-        };
+        // Fresh vars, not invalid/hole placeholders: the padding args can be
+        // unified into the candidate's binder args during the probe, and the
+        // bound candidate is part of the probe's result — a baked invalid
+        // type poisons downstream bound checks (goals containing invalids
+        // are skipped) and a baked layout hole pins a const arg that the
+        // call site would otherwise infer.
+        let arg = table.new_var_for(prop);
 
         ty = TyId::app(db, ty, arg);
     }
