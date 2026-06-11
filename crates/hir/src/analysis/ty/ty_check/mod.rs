@@ -4037,6 +4037,13 @@ fn try_instantiate_trait_method<'db>(
     receiver_ty: TyId<'db>,
     inst: TraitInstId<'db>,
 ) -> Result<TyId<'db>, UnificationError> {
+    // Positional application is sound here because the args and the binder
+    // come from the same definition: a trait method's leading binder params
+    // are its trait's params in declaration order, and `inst.args` are
+    // exactly their instantiations. Positionally bridging *across*
+    // definitions (e.g. a receiver's type args into an impl's binder) is
+    // not — an impl's self type is an arbitrary pattern over its params;
+    // that binding comes from the method-table probe's unification.
     let ty = TyId::foldl(
         db,
         TyId::func(db, method.as_callable(db).unwrap()),
@@ -4069,6 +4076,8 @@ fn instantiate_trait_assoc_fn<'db>(
     method: CallableDef<'db>,
     inst: TraitInstId<'db>,
 ) -> TyId<'db> {
+    // Same-definition positional application: see
+    // `try_instantiate_trait_method`.
     let ty = TyId::foldl(db, TyId::func(db, method), inst.args(db));
 
     // Apply associated type substitutions from the trait instance
