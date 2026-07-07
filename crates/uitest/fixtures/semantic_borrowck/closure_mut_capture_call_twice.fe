@@ -1,0 +1,8 @@
+pub fn closure_mut_capture_call_twice() {
+    let mut x: u256 = 40
+    let m = mut x
+    let f = |_ unit: own ()| -> u256 { m + 1 }
+    let first = f.call(())
+    let second = f.call(())
+    let _result = first + second
+}

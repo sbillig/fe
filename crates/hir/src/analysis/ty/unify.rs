@@ -12,9 +12,7 @@ use super::{
     const_expr::{ConstExpr, ConstExprId},
     fold::{TyFoldable, TyFolder},
     trait_def::{ImplementorId, TraitInstId},
-    ty_def::{
-        ApplicableTyProp, ClosureTy, Kind, TyBase, TyData, TyId, TyVar, TyVarSort, inference_keys,
-    },
+    ty_def::{ApplicableTyProp, Kind, TyBase, TyData, TyId, TyVar, TyVarSort, inference_keys},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -152,29 +150,32 @@ where
                 if closure1.def(self.db) != closure2.def(self.db) {
                     return Err(UnificationError::TypeMismatch);
                 }
-                let component_pairs = |c1: &ClosureTy<'db>, c2: &ClosureTy<'db>| {
-                    let lhs = c1
-                        .parent_args(self.db)
-                        .iter()
-                        .chain(c1.captures(self.db))
-                        .chain(c1.params(self.db));
-                    let rhs = c2
-                        .parent_args(self.db)
-                        .iter()
-                        .chain(c2.captures(self.db))
-                        .chain(c2.params(self.db));
-                    lhs.zip(rhs)
-                        .map(|(l, r)| (*l, *r))
-                        .collect::<Vec<(TyId<'db>, TyId<'db>)>>()
-                };
                 if closure1.parent_args(self.db).len() != closure2.parent_args(self.db).len()
                     || closure1.captures(self.db).len() != closure2.captures(self.db).len()
                     || closure1.params(self.db).len() != closure2.params(self.db).len()
                 {
                     return Err(UnificationError::TypeMismatch);
                 }
-                for (lhs, rhs) in component_pairs(closure1, closure2) {
-                    self.unify_ty(lhs, rhs)?;
+                for (lhs, rhs) in closure1
+                    .parent_args(self.db)
+                    .iter()
+                    .zip(closure2.parent_args(self.db))
+                {
+                    self.unify_ty(*lhs, *rhs)?;
+                }
+                for (lhs, rhs) in closure1
+                    .captures(self.db)
+                    .iter()
+                    .zip(closure2.captures(self.db))
+                {
+                    self.unify_ty(*lhs, *rhs)?;
+                }
+                for (lhs, rhs) in closure1
+                    .params(self.db)
+                    .iter()
+                    .zip(closure2.params(self.db))
+                {
+                    self.unify_ty(*lhs, *rhs)?;
                 }
                 self.unify_ty(closure1.ret_ty(self.db), closure2.ret_ty(self.db))
             }

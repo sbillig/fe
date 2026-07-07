@@ -24,8 +24,8 @@ use crate::{
             normalize::normalize_ty,
             ty_check::{
                 BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, LocalBinding,
-                PathReadSemantics, RecordInitLowering, RecordLike, SemanticExprLowering, TypedBody,
-                ValuePathRef,
+                ParamSite, PathReadSemantics, RecordInitLowering, RecordLike, SemanticExprLowering,
+                TypedBody, ValuePathRef,
             },
             ty_def::{BorrowKind, TyData, TyId},
         },
@@ -282,14 +282,22 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     fn collect_binding_locals(&mut self) {
-        if let BodyOwner::Closure { ty, def } = self.template_owner {
-            let env_binding = LocalBinding::closure_env(self.db, ty);
-            self.closure_env_local = Some(self.alloc_binding_local(env_binding));
+        if let BodyOwner::Closure { def, .. } = self.template_owner {
+            for binding in self
+                .typed_body
+                .owner_param_bindings(self.db, self.template_owner)
+            {
+                let local = self.alloc_binding_local(binding);
+                if let LocalBinding::Param {
+                    site: ParamSite::ClosureEnv(_),
+                    ..
+                } = binding
+                {
+                    self.closure_env_local = Some(local);
+                }
+            }
 
             if let Some(info) = self.typed_body.closure_info(def.expr).cloned() {
-                for binding in info.params {
-                    self.alloc_binding_local(binding);
-                }
                 for (idx, capture) in info.captures.iter().enumerate() {
                     self.closure_capture_fields
                         .insert(capture.binding, FieldIndex(idx as u16));

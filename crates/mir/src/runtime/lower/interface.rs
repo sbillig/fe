@@ -74,7 +74,9 @@ pub(crate) fn runtime_param_plans<'db>(
     semantic: SemanticInstance<'db>,
 ) -> Vec<RuntimeParamPlan<'db>> {
     let typed_body = semantic.key(db).typed_body(db);
-    runtime_param_bindings(db, semantic.key(db).owner(db), typed_body)
+    let owner = semantic.key(db).owner(db);
+    typed_body
+        .owner_param_bindings(db, owner)
         .into_iter()
         .map(|binding| desired_runtime_binding_plan(db, semantic, typed_body, binding))
         .collect()
@@ -100,7 +102,8 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
         }
     };
 
-    for (idx, binding) in runtime_param_bindings(db, owner, typed_body)
+    for (idx, binding) in typed_body
+        .owner_param_bindings(db, owner)
         .into_iter()
         .enumerate()
     {
@@ -152,7 +155,7 @@ fn runtime_visible_binding_local<'db>(
     binding: LocalBinding<'db>,
 ) -> hir::analysis::semantic::SLocalId {
     let mut next = 0u32;
-    for param_binding in runtime_param_bindings(db, owner, typed_body) {
+    for param_binding in typed_body.owner_param_bindings(db, owner) {
         if param_binding == binding {
             return hir::analysis::semantic::SLocalId::from_u32(next);
         }
@@ -183,27 +186,4 @@ fn runtime_visible_binding_local<'db>(
         next += 1;
     }
     panic!("missing semantic local for runtime-visible binding {binding:?}")
-}
-
-fn runtime_param_bindings<'db>(
-    db: &'db dyn MirDb,
-    owner: BodyOwner<'db>,
-    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
-) -> Vec<LocalBinding<'db>> {
-    if let BodyOwner::Closure { ty, def } = owner {
-        let env = LocalBinding::closure_env(db, ty);
-        let mut bindings = vec![env];
-        if let Some(info) = typed_body.closure_info(def.expr) {
-            bindings.extend(info.params.iter().copied());
-        }
-        return bindings;
-    }
-
-    let mut bindings = Vec::new();
-    let mut idx = 0;
-    while let Some(binding) = typed_body.param_binding(idx) {
-        bindings.push(binding);
-        idx += 1;
-    }
-    bindings
 }

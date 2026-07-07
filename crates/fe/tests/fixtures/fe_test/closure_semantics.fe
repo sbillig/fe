@@ -1,5 +1,9 @@
 use core::functional::Fn
 
+struct ClosureHolder<F> {
+    f: F,
+}
+
 fn passthrough<T>(_ x: T) -> T {
     let f = |_ u: own u256| -> T { x }
     f.call(1)
@@ -22,6 +26,44 @@ fn test_call_closure_twice() {
     let g = |x: own u256| -> u256 { x + 1 }
     assert(g.call(1) == 2)
     assert(g.call(2) == 3)
+}
+
+#[test]
+fn test_closure_captures_closure() {
+    let add_one = |value: own u256| -> u256 { value + 1 }
+    let call_captured = |_ unit: own ()| -> u256 { add_one.call(41) }
+    assert(call_captured.call(()) == 42)
+}
+
+#[test]
+fn test_closure_rebound_then_called() {
+    let inc = |value: own u256| -> u256 { value + 1 }
+    let rebound = inc
+    assert(rebound.call(41) == 42)
+}
+
+#[test]
+fn test_closure_stored_in_struct_and_tuple() {
+    let offset: u256 = 1
+    let holder = ClosureHolder { f: |value: own u256| -> u256 { value + offset } }
+    let from_field = holder.f
+    assert(from_field.call(41) == 42)
+
+    let pair = (|value: own u256| -> u256 { value + 2 }, false)
+    let from_tuple = pair.0
+    assert(from_tuple.call(40) == 42)
+}
+
+#[test]
+fn test_closure_capture_shadowing() {
+    let v: u256 = 40
+    let f = |value: own u256| -> u256 {
+        let captured = v
+        let v: u256 = 1
+        captured + v + value
+    }
+    assert(f.call(1) == 42)
+    assert(v == 40)
 }
 
 #[test]

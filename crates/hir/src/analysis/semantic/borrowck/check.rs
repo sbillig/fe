@@ -649,15 +649,12 @@ impl<'db> Borrowck<'db> {
                 .local(value.local)
                 .is_some_and(|local| local.ty.as_borrow(self.db).is_none())
         {
-            for loan in state.loans_in(value.local) {
-                if let Some(target) = self.loans[loan.0 as usize]
-                    .targets
-                    .iter()
-                    .find(|target| matches!(target.root, BorrowRoot::Local(_)))
-                {
-                    let BorrowRoot::Local(local) = target.root else {
-                        unreachable!()
-                    };
+            for loan_id in state.loans_in(value.local) {
+                let loan = &self.loans[loan_id.0 as usize];
+                if let Some(local) = loan.targets.iter().find_map(|target| match target.root {
+                    BorrowRoot::Local(local) => Some(local),
+                    _ => None,
+                }) {
                     let name = self.pretty_local_name(local);
                     let mut diag = self.invalid_return_diag(
                         term.origin,
@@ -665,7 +662,7 @@ impl<'db> Borrowck<'db> {
                     );
                     self.push_secondary_origin(
                         &mut diag,
-                        self.loans[loan.0 as usize].origin,
+                        loan.origin,
                         "borrow created here".to_string(),
                     );
                     return Err(diag);

@@ -308,10 +308,7 @@ pub(super) fn runtime_zero_sized_ty<'db>(
     if repr_ty.is_never(db)
         || matches!(
             repr_ty.base_ty(db).data(db),
-            TyData::TyBase(
-                hir::analysis::ty::ty_def::TyBase::Func(_)
-                    | hir::analysis::ty::ty_def::TyBase::Closure(_),
-            )
+            TyData::TyBase(TyBase::Func(_) | TyBase::Closure(_))
         )
     {
         return repr_ty

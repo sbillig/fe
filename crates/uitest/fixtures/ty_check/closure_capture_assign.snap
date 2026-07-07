@@ -17,10 +17,21 @@ error[8-0088]: cannot assign to a binding captured by a closure
 error[8-0088]: cannot assign to a binding captured by a closure
   ┌─ closure_capture_assign.fe:9:9
   │
-6 │     let m = mut x
-  │         - `m` is captured by the closure here
+4 │     let mut y: u256 = 1
+  │         ----- `y` is captured by the closure here
   ·
-9 │         m = 5
+9 │         y += 1
   │         ^ cannot assign to a captured binding
   │
   = closures capture by value; writes would only affect the closure's copy
+
+error[8-0088]: cannot assign to a binding captured by a closure
+   ┌─ closure_capture_assign.fe:10:9
+   │
+ 6 │     let m = mut x
+   │         - `m` is captured by the closure here
+   ·
+10 │         m = 5
+   │         ^ cannot assign to a captured binding
+   │
+   = closures capture by value; writes would only affect the closure's copy
