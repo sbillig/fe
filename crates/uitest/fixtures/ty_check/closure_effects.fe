@@ -1,0 +1,19 @@
+use core::functional::Fn
+
+struct Counter {
+    value: u256,
+}
+
+fn bump() uses (c: mut Counter) {
+    c.value += 1
+}
+
+fn effectful_call_in_closure() uses (c: mut Counter) {
+    let g = |_ u: own ()| -> () { bump() }
+    g.call(())
+}
+
+fn effect_binding_in_closure() -> u256 uses (c: Counter) {
+    let g = |_ u: own ()| -> u256 { c.value }
+    g.call(())
+}

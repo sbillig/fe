@@ -9,6 +9,7 @@ use crate::analysis::{
     ty::{
         binder::Binder,
         canonical::{Canonical, Canonicalized, Solution},
+        closure::closure_fn_trait_inst,
         fold::TyFoldable as _,
         method_table::{ProbedMethod, probe_method},
         trait_def::{ImplementorId, TraitInstId, impls_for_ty},
@@ -199,6 +200,7 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
 
     fn assemble_trait_method_candidates(&mut self) {
         let scope_ingot = self.scope.ingot(self.db);
+        self.insert_builtin_closure_fn_candidate();
 
         // When the receiver is a type parameter (e.g. `D` in `fn f<D: Trait>(d: D)`),
         // we don't know its concrete type yet, so probing impls would pull in many
@@ -247,6 +249,18 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
                 cx.rollback_to(snapshot);
             }
         });
+    }
+
+    fn insert_builtin_closure_fn_candidate(&mut self) {
+        let Some(closure) = self.receiver.original().as_closure(self.db) else {
+            return;
+        };
+        let Some(inst) = closure_fn_trait_inst(self.db, self.scope, closure) else {
+            return;
+        };
+        if self.allow_trait(inst.def(self.db)) {
+            self.insert_assumption_trait_method_cand(inst);
+        }
     }
 
     fn allow_trait(&self, trait_def: Trait<'db>) -> bool {

@@ -11,7 +11,7 @@ use crate::{
 
 use super::{
     classify::{
-        RuntimeVisibleBindingPlan, desired_runtime_param_plan, owner_effect_binding_boundary,
+        RuntimeVisibleBindingPlan, desired_runtime_binding_plan, owner_effect_binding_boundary,
     },
     type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
 };
@@ -74,13 +74,10 @@ pub(crate) fn runtime_param_plans<'db>(
     semantic: SemanticInstance<'db>,
 ) -> Vec<RuntimeParamPlan<'db>> {
     let typed_body = semantic.key(db).typed_body(db);
-    let mut plans = Vec::new();
-    let mut idx = 0;
-    while typed_body.param_binding(idx).is_some() {
-        plans.push(desired_runtime_param_plan(db, semantic, typed_body, idx));
-        idx += 1;
-    }
-    plans
+    runtime_param_bindings(db, semantic.key(db).owner(db), typed_body)
+        .into_iter()
+        .map(|binding| desired_runtime_binding_plan(db, semantic, typed_body, binding))
+        .collect()
 }
 
 #[salsa::tracked(return_ref)]
@@ -103,8 +100,10 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
         }
     };
 
-    let mut idx = 0;
-    while let Some(binding) = typed_body.param_binding(idx) {
+    for (idx, binding) in runtime_param_bindings(db, owner, typed_body)
+        .into_iter()
+        .enumerate()
+    {
         push(
             binding,
             param_plans
@@ -112,7 +111,6 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
                 .cloned()
                 .unwrap_or(RuntimeParamPlan::Erased),
         );
-        idx += 1;
     }
 
     if let BodyOwner::ContractRecvArm {
@@ -154,13 +152,11 @@ fn runtime_visible_binding_local<'db>(
     binding: LocalBinding<'db>,
 ) -> hir::analysis::semantic::SLocalId {
     let mut next = 0u32;
-    let mut param_idx = 0;
-    while let Some(param_binding) = typed_body.param_binding(param_idx) {
+    for param_binding in runtime_param_bindings(db, owner, typed_body) {
         if param_binding == binding {
             return hir::analysis::semantic::SLocalId::from_u32(next);
         }
         next += 1;
-        param_idx += 1;
     }
     if let BodyOwner::ContractRecvArm {
         contract,
@@ -187,4 +183,27 @@ fn runtime_visible_binding_local<'db>(
         next += 1;
     }
     panic!("missing semantic local for runtime-visible binding {binding:?}")
+}
+
+fn runtime_param_bindings<'db>(
+    db: &'db dyn MirDb,
+    owner: BodyOwner<'db>,
+    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
+) -> Vec<LocalBinding<'db>> {
+    if let BodyOwner::Closure { ty, def } = owner {
+        let env = LocalBinding::closure_env(db, ty);
+        let mut bindings = vec![env];
+        if let Some(info) = typed_body.closure_info(def.expr) {
+            bindings.extend(info.params.iter().copied());
+        }
+        return bindings;
+    }
+
+    let mut bindings = Vec::new();
+    let mut idx = 0;
+    while let Some(binding) = typed_body.param_binding(idx) {
+        bindings.push(binding);
+        idx += 1;
+    }
+    bindings
 }

@@ -217,12 +217,16 @@ fn callee_arg_is_mutable<'db>(
 ) -> bool {
     let callee = SemanticInstance::new(db, callee.key);
     let typed_body = callee.key(db).typed_body(db);
-    typed_body.param_binding(idx).is_some_and(|binding| {
-        matches!(
-            typed_body.binding_ty(db, binding).as_capability(db),
-            Some((CapabilityKind::Mut, _))
-        )
-    })
+    let owner = callee.key(db).owner(db);
+    typed_body
+        .owner_param_bindings(db, owner)
+        .get(idx)
+        .is_some_and(|&binding| {
+            matches!(
+                typed_body.binding_ty(db, binding).as_capability(db),
+                Some((CapabilityKind::Mut, _))
+            )
+        })
 }
 
 fn writable_local_roots<'db>(

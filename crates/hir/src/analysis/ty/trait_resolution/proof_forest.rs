@@ -16,6 +16,7 @@ use crate::analysis::{
     ty::{
         binder::Binder,
         canonical::Canonical,
+        closure::builtin_fn_candidate_for_goal,
         fold::TyFoldable,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
         ty_def::{TyData, TyId},
@@ -267,6 +268,9 @@ struct GeneratorNodeData<'db> {
     dependents: Vec<ConsumerNode>,
     ///  A list of candidate implementors for the trait.
     cands: &'db [Binder<ImplementorId<'db>>],
+    /// A synthesized candidate for goals whose self type is a closure (the
+    /// builtin `Fn` impl); tried before `cands` by the same candidate loop.
+    builtin_closure_cand: Option<Binder<ImplementorId<'db>>>,
     /// The index of the next candidate to be tried.
     next_cand: usize,
     /// A list of child consumer nodes created for sub-goals.
@@ -288,6 +292,12 @@ impl<'db> GeneratorNodeData<'db> {
         );
         let cands =
             impls_for_trait_in_ingots(db, primary, secondary, Canonical::new(db, extracted_goal));
+        let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
+            db,
+            origin_ingot,
+            extracted_goal,
+        );
+        let builtin_closure_cand = builtin_fn_candidate_for_goal(db, scope, extracted_goal);
 
         Self {
             table,
@@ -296,8 +306,21 @@ impl<'db> GeneratorNodeData<'db> {
             solutions: IndexSet::default(),
             dependents: Vec::new(),
             cands: cands.as_slice(),
+            builtin_closure_cand,
             next_cand: 0,
             children: Vec::new(),
+        }
+    }
+
+    fn impl_cand_count(&self) -> usize {
+        self.cands.len() + usize::from(self.builtin_closure_cand.is_some())
+    }
+
+    fn impl_cand(&self, idx: usize) -> Option<Binder<ImplementorId<'db>>> {
+        match self.builtin_closure_cand {
+            Some(cand) if idx == 0 => Some(cand),
+            Some(_) => self.cands.get(idx - 1).copied(),
+            None => self.cands.get(idx).copied(),
         }
     }
 }
@@ -376,7 +399,7 @@ impl GeneratorNode {
                 || matches!(ty.data(db), TyData::AssocTy(_) | TyData::QualifiedTy(_))
         });
 
-        while let Some(&cand) = g_node.cands.get(g_node.next_cand) {
+        while let Some(cand) = g_node.impl_cand(g_node.next_cand) {
             g_node.next_cand += 1;
 
             let mut table = g_node.table.clone();
@@ -420,7 +443,7 @@ impl GeneratorNode {
         }
 
         if goal_needs_assumptions {
-            let mut next_cand = g_node.next_cand - g_node.cands.len();
+            let mut next_cand = g_node.next_cand - g_node.impl_cand_count();
             while let Some(&assumption) = assumptions.list(db).get(next_cand) {
                 g_node.next_cand += 1;
                 next_cand += 1;
@@ -462,7 +485,6 @@ impl GeneratorNode {
         child.unresolved_subgoal(pf)
     }
 }
-
 struct ConsumerNodeData<'db> {
     /// Holds solutions that are already applied.
     applied_solutions: FxHashSet<Solution<'db>>,

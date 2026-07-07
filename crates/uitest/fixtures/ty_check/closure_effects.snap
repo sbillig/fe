@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_effects.fe
+---
+error[8-0089]: effects cannot be used inside a closure
+   ┌─ closure_effects.fe:12:35
+   │
+12 │     let g = |_ u: own ()| -> () { bump() }
+   │                                   ^^^^^^ this requires an effect from the enclosing function
+
+error[8-0089]: effects cannot be used inside a closure
+   ┌─ closure_effects.fe:17:37
+   │
+17 │     let g = |_ u: own ()| -> u256 { c.value }
+   │                                     ^ this requires an effect from the enclosing function

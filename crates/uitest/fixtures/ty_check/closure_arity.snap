@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_arity.fe
+---
+error[8-0087]: closures must take exactly one parameter
+  ┌─ closure_arity.fe:4:15
+  │
+4 │     let two = |a: own u256, b: own u256| -> u256 { a + b }
+  │               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this closure takes 2 parameters; only single-parameter closures implement `Fn`
+
+error[8-0087]: closures must take exactly one parameter
+  ┌─ closure_arity.fe:5:16
+  │
+5 │     let zero = || -> u256 { 42 }
+  │                ^^^^^^^^^^^^^^^^^ this closure takes 0 parameters; only single-parameter closures implement `Fn`

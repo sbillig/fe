@@ -2072,16 +2072,13 @@ pub(super) fn snapshot_source_place<'a, 'db>(
     body.local(local)?.snapshot_source_place()
 }
 
-pub(crate) fn desired_runtime_param_plan<'db>(
+pub(crate) fn desired_runtime_binding_plan<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
     typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
-    idx: usize,
+    binding: LocalBinding<'db>,
 ) -> RuntimeParamPlan<'db> {
-    let Some(binding) = typed_body.param_binding(idx) else {
-        return RuntimeParamPlan::Erased;
-    };
-    let binding_ty = typed_body.binding_ty(db, binding);
+    let binding_ty = semantic.binding_ty(db, binding);
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
     let scope = env.scope;
     let assumptions = env.assumptions;
@@ -2755,6 +2752,9 @@ pub(crate) fn semantic_return_ty<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> TyId<'db> {
+    if let BodyOwner::Closure { ty, .. } = semantic.key(db).owner(db) {
+        return ty.ret_ty(db);
+    }
     semantic.key(db).typed_body(db).result_ty()
 }
 
@@ -2764,8 +2764,8 @@ pub(crate) fn default_return_class<'db>(
 ) -> Option<RuntimeClass<'db>> {
     let typed_body = semantic.key(db).typed_body(db);
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
-    let return_borrow_provider = typed_body
-        .result_ty()
+    let result_ty = semantic_return_ty(db, semantic);
+    let return_borrow_provider = result_ty
         .as_borrow(db)
         .and(typed_body.return_borrow_provider());
     let default_space =
@@ -2774,11 +2774,11 @@ pub(crate) fn default_return_class<'db>(
         return Some(provider_class_for_target_in_env(
             db,
             env,
-            Some(typed_body.result_ty()),
+            Some(result_ty),
             default_space,
         ));
     }
-    top_level_class_for_ty_in_env(db, env, typed_body.result_ty(), default_space)
+    top_level_class_for_ty_in_env(db, env, result_ty, default_space)
 }
 
 pub(crate) fn desired_runtime_return_plan<'db>(
@@ -2787,13 +2787,10 @@ pub(crate) fn desired_runtime_return_plan<'db>(
 ) -> RuntimeVisibleReturnPlan<'db> {
     let typed_body = semantic.key(db).typed_body(db);
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
-    let return_borrow_provider = typed_body
-        .result_ty()
-        .as_borrow(db)
-        .and(typed_body.return_borrow_provider());
+    let ty = semantic_return_ty(db, semantic);
+    let return_borrow_provider = ty.as_borrow(db).and(typed_body.return_borrow_provider());
     let default_space =
         return_borrow_provider.map_or(AddressSpaceKind::Memory, address_space_from_provider);
-    let ty = typed_body.result_ty();
     if return_borrow_provider.is_some() {
         return RuntimeVisibleReturnPlan::PassActual;
     }

@@ -22,6 +22,7 @@ use super::{
     classify::{
         AssignmentId, BodyEnv, BodyStaticFacts, InferClassCache, RuntimeVisibleReturnPlan,
         default_return_class, desired_runtime_return_plan, selected_visible_return_for_local,
+        semantic_return_ty,
     },
     infer::{
         desired_runtime_value_carrier, merge_runtime_carrier, merge_runtime_class,
@@ -234,7 +235,7 @@ pub(crate) fn static_runtime_return_decision<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> StaticRuntimeReturnDecision<'db> {
-    if semantic.key(db).typed_body(db).result_ty() == TyId::unit(db) {
+    if semantic_return_ty(db, semantic) == TyId::unit(db) {
         return StaticRuntimeReturnDecision::Known(None);
     }
     match desired_runtime_return_plan(db, semantic) {

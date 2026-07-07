@@ -1189,6 +1189,19 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
     }
 
     if !diags.is_empty() {
+        // A closure in the const body can never become evaluable; report it
+        // specifically instead of degrading to a cause that renders nothing.
+        if diags.iter().any(|diag| {
+            matches!(
+                diag,
+                FuncBodyDiag::Body(BodyDiag::ClosureInConstContext { .. })
+            )
+        }) {
+            return Err(InvalidCause::ConstEvalUnsupported {
+                body: *body,
+                expr: body.expr(db),
+            });
+        }
         if let Some(cause) = typed_body
             .body()
             .and_then(|body| typed_body.expr_ty(db, body.expr(db)).invalid_cause(db))
@@ -1879,7 +1892,25 @@ pub(crate) fn evaluate_const_ty<'db>(
     .map(|value| const_ty_from_sem_const(db, value))
     {
         Ok(value) => value,
-        Err(CtfeError::NotConstEvaluable { .. }) => validated.const_ty,
+        Err(CtfeError::NotConstEvaluable { .. }) => {
+            // An unevaluable const may legitimately stay abstract, but a
+            // closure can never become evaluable; letting it stay abstract
+            // would unify with any value (e.g. any array length).
+            if body
+                .exprs(db)
+                .values()
+                .any(|expr| matches!(expr, Partial::Present(Expr::Closure { .. })))
+            {
+                return ConstTyId::invalid(
+                    db,
+                    InvalidCause::ConstEvalUnsupported {
+                        body,
+                        expr: body.expr(db),
+                    },
+                );
+            }
+            validated.const_ty
+        }
         Err(err) => {
             if const_def.is_some() {
                 return ConstTyId::invalid(db, InvalidCause::Other);

@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_break_outside_loop.fe
+---
+error[8-0019]: `break` is not allowed outside of a loop
+  ┌─ closure_break_outside_loop.fe:6:41
+  │
+6 │         let g = |x: own u256| -> u256 { break }
+  │                                         ^^^^^ `break` is not allowed here

@@ -9,6 +9,7 @@ use crate::{
         semantic::{SemOrigin, SemanticConstRef},
         ty::{
             assoc_const::{AssocConstUse, InherentConstUse},
+            closure::callee_closure_for_fn_call,
             const_ty::inherent_const_body_and_impl_args,
             effects::place_effect_provider_param_index_map,
             trait_def::{
@@ -80,6 +81,14 @@ fn semantic_callee_key_with_assumptions<'db>(
         CallableDef::Func(func) => {
             let mut subst_args = callable.generic_args().to_vec();
             let owner = if let Some(inst) = callable.trait_inst()
+                && let Some(closure) = callee_closure_for_fn_call(db, func, inst)
+            {
+                // The callee is the closure body itself. Its typed-body
+                // template is the parent function's, so substitute with the
+                // parent's generic args carried on the closure type.
+                subst_args = closure.parent_args(db).clone();
+                BodyOwner::closure(db, closure)
+            } else if let Some(inst) = callable.trait_inst()
                 && let Some(name) = func.name(db).to_opt()
                 && let Some((impl_func, impl_args)) = resolve_trait_method_instance(
                     db,
@@ -87,7 +96,8 @@ fn semantic_callee_key_with_assumptions<'db>(
                         .with_assumptions(assumptions),
                     inst,
                     name,
-                ) {
+                )
+            {
                 let trait_arg_len = inst.args(db).len();
                 let mut resolved_args = impl_args;
                 let tail = subst_args

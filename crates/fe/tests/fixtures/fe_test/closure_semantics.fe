@@ -1,0 +1,37 @@
+use core::functional::Fn
+
+fn passthrough<T>(_ x: T) -> T {
+    let f = |_ u: own u256| -> T { x }
+    f.call(1)
+}
+
+#[test]
+fn test_generic_closure_u256() {
+    let n: u256 = passthrough(41)
+    assert(n == 41)
+}
+
+#[test]
+fn test_generic_closure_bool() {
+    let b: bool = passthrough(true)
+    assert(b)
+}
+
+#[test]
+fn test_call_closure_twice() {
+    let g = |x: own u256| -> u256 { x + 1 }
+    assert(g.call(1) == 2)
+    assert(g.call(2) == 3)
+}
+
+#[test]
+fn test_early_return_from_closure() {
+    let g = |x: own u256| -> u256 {
+        if x == 0 {
+            return 42
+        }
+        x + 1
+    }
+    assert(g.call(0) == 42)
+    assert(g.call(5) == 6)
+}

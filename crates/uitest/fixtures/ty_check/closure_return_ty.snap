@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_return_ty.fe
+---
+error[8-0013]: returned type mismatch
+  ┌─ closure_return_ty.fe:5:21
+  │
+3 │ pub fn f() -> bool {
+  │               ---- this function expects `u256` to be returned
+4 │     let g = |x: own u256| -> u256 {
+5 │         if x == 0 { return true }
+  │                     ^^^^^^^^^^^ expected `u256`, but `bool` is returned

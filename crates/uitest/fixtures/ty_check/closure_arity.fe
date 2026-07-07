@@ -1,0 +1,7 @@
+use core::functional::Fn
+
+pub fn f() -> u256 {
+    let two = |a: own u256, b: own u256| -> u256 { a + b }
+    let zero = || -> u256 { 42 }
+    1
+}

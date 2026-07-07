@@ -9,7 +9,7 @@ use hir::{
                 BodyOwner, EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
                 LocalBinding,
             },
-            ty_def::{TyBase, TyData, TyId},
+            ty_def::{ClosureTy, TyBase, TyData, TyId},
         },
     },
     hir_def::{CallableDef, ExprId, ItemKind, PatId, TopLevelMod, scope_graph::ScopeId},
@@ -67,6 +67,9 @@ fn body_owner_identity<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -
             "contract_recv${}${recv_idx}${arm_idx}",
             item_identity(db, contract.into())
         ),
+        BodyOwner::Closure { ty, .. } => {
+            format!("closure_body${}", type_identity(db, TyId::closure(db, ty)))
+        }
     }
 }
 
@@ -480,6 +483,29 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
                     variant.name(db).unwrap_or("variant")
                 ),
             },
+            TyBase::Closure(closure) => {
+                let def = closure.def(db);
+                let type_ids = |tys: &Vec<TyId<'db>>| {
+                    tys.iter()
+                        .map(|ty| type_identity(db, *ty))
+                        .collect::<Vec<_>>()
+                        .join("$")
+                };
+                let parent_args = type_ids(closure.parent_args(db));
+                let captures = type_ids(closure.captures(db));
+                let params = type_ids(closure.params(db));
+                // Bodies are nameless, so identify the closure through the
+                // item that owns its defining body; otherwise closures in
+                // different functions of one module could collide.
+                let owner = BodyOwner::from_body(db, def.body)
+                    .map(|owner| body_owner_identity(db, owner))
+                    .unwrap_or_else(|| item_identity(db, def.body.into()));
+                format!(
+                    "closure${owner}${}$args${parent_args}$captures${captures}$params${params}$ret${}",
+                    expr_id(def.expr),
+                    type_identity(db, closure.ret_ty(db))
+                )
+            }
         },
         TyData::TyParam(param) => {
             format!(
@@ -604,6 +630,15 @@ fn ingot_logical_name<'db>(
             IngotKind::Local => format!("local${}", top_mod.name(db).data(db)),
             IngotKind::External => format!("external${}", top_mod.name(db).data(db)),
         })
+}
+
+/// Symbol-name component for a closure body. Kept here so the MIR package
+/// symbols and codegen function symbols cannot drift apart.
+pub fn closure_symbol_component<'db>(db: &'db dyn HirAnalysisDb, ty: ClosureTy<'db>) -> String {
+    format!(
+        "__closure_{}",
+        stable_identity_hash(&type_identity(db, TyId::closure(db, ty)))
+    )
 }
 
 pub fn stable_identity_hash(value: &str) -> String {

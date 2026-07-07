@@ -1,0 +1,9 @@
+use core::functional::Fn
+
+pub fn f() -> bool {
+    let g = |x: own u256| -> u256 {
+        if x == 0 { return true }
+        x
+    }
+    g.call(0) == 0
+}

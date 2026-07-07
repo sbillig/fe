@@ -101,6 +101,7 @@ impl<'db> RuntimeTypeModel<'db> {
             || repr_ty.is_struct(db)
             || repr_ty.is_array(db)
             || repr_ty.is_tuple(db)
+            || repr_ty.as_closure(db).is_some()
         {
             RuntimeTypeShape::Aggregate
         } else {
@@ -204,7 +205,10 @@ impl<'db> RuntimeTypeModel<'db> {
                         runtime_transport_sensitive_aggregate(db, elem, scope, assumptions)
                     });
                 }
-                if self.repr_ty.is_tuple(db) || self.repr_ty.is_struct(db) {
+                if self.repr_ty.is_tuple(db)
+                    || self.repr_ty.is_struct(db)
+                    || self.repr_ty.as_closure(db).is_some()
+                {
                     return self.repr_ty.field_types(db).into_iter().any(|field| {
                         runtime_transport_sensitive_aggregate(db, field, scope, assumptions)
                     });
@@ -304,10 +308,16 @@ pub(super) fn runtime_zero_sized_ty<'db>(
     if repr_ty.is_never(db)
         || matches!(
             repr_ty.base_ty(db).data(db),
-            TyData::TyBase(hir::analysis::ty::ty_def::TyBase::Func(_))
+            TyData::TyBase(
+                hir::analysis::ty::ty_def::TyBase::Func(_)
+                    | hir::analysis::ty::ty_def::TyBase::Closure(_),
+            )
         )
     {
-        return true;
+        return repr_ty
+            .field_types(db)
+            .into_iter()
+            .all(|field| runtime_zero_sized_ty(db, field, scope, assumptions));
     }
     if repr_ty.is_array(db) {
         let (_, args) = repr_ty.decompose_ty_app(db);
@@ -319,7 +329,7 @@ pub(super) fn runtime_zero_sized_ty<'db>(
                     .is_some_and(|elem| runtime_zero_sized_ty(db, elem, scope, assumptions))
         });
     }
-    if repr_ty.is_tuple(db) || repr_ty.is_struct(db) {
+    if repr_ty.is_tuple(db) || repr_ty.is_struct(db) || repr_ty.as_closure(db).is_some() {
         return repr_ty
             .field_types(db)
             .into_iter()

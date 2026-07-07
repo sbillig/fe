@@ -1,0 +1,11 @@
+use core::functional::Fn
+
+pub fn f() -> u256 {
+    let mut i: u256 = 0
+    while true {
+        let g = |x: own u256| -> u256 { break }
+        i = g.call(1)
+        break
+    }
+    i
+}

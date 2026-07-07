@@ -15,7 +15,7 @@ use crate::{
         },
         ty::{
             normalize::normalize_ty,
-            ty_check::{EffectPassMode, LocalBinding},
+            ty_check::{EffectPassMode, LocalBinding, ParamSite},
             ty_def::{BorrowKind, TyId},
             ty_is_copy,
         },
@@ -563,6 +563,14 @@ impl<'db> NormalizeCtxt<'db> {
     ) -> NBorrowRootId {
         let root = NBorrowRootId::from_u32(self.borrow_roots.len() as u32);
         let param_idx = source.and_then(|binding| match binding {
+            // Closure params sit after the synthetic environment param (index
+            // 0) in the runtime interface; keep borrow-root param indices
+            // aligned with `TypedBody::owner_param_bindings` order.
+            LocalBinding::Param {
+                site: ParamSite::Closure(_),
+                idx,
+                ..
+            } => Some(idx as u32 + 1),
             LocalBinding::Param { idx, .. } => Some(idx as u32),
             _ => None,
         });
@@ -900,6 +908,12 @@ impl<'db> NormalizeCtxt<'db> {
                 .filter(|mode| *mode == crate::hir_def::FuncParamMode::View)
                 .map(|_| self.read_mode_for_view_call_arg(ty))
                 .unwrap_or_else(|| self.read_mode_for_operand(local, origin, ty)),
+            // `Fn::call` takes the closure by `self` (view); calling must not
+            // consume the closure value, so the receiver arg is a read, not a
+            // move.
+            crate::analysis::ty::ty_check::BodyOwner::Closure { .. } if idx == 0 => {
+                self.read_mode_for_view_call_arg(ty)
+            }
             _ => self.read_mode_for_operand(local, origin, ty),
         };
         NOperand {
@@ -1126,7 +1140,8 @@ impl<'db> NormalizeCtxt<'db> {
                     .instance
                     .key(self.db)
                     .instantiate_typed_body(self.db)
-                    .param_binding(*param_idx as usize)
+                    .owner_param_bindings(self.db, self.raw.template_owner)
+                    .get(*param_idx as usize)
                     .is_some_and(|binding| {
                         matches!(
                             binding,

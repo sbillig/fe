@@ -237,6 +237,7 @@ fn call_like_receiver_expr<'db>(expr_data: &Expr<'db>) -> Option<ExprId> {
         | Expr::Field(..)
         | Expr::Cast(..)
         | Expr::Assign(..)
+        | Expr::Closure { .. }
         | Expr::Block(..)
         | Expr::If(..)
         | Expr::Match(..)
@@ -1495,7 +1496,8 @@ fn root_owner_generic_args<'db>(
         BodyOwner::Const(_)
         | BodyOwner::AnonConstBody { .. }
         | BodyOwner::ContractInit { .. }
-        | BodyOwner::ContractRecvArm { .. } => Ok(Vec::new()),
+        | BodyOwner::ContractRecvArm { .. }
+        | BodyOwner::Closure { .. } => Ok(Vec::new()),
     }
 }
 
@@ -1508,7 +1510,8 @@ fn owner_identity_generic_args<'db>(
         BodyOwner::Const(_)
         | BodyOwner::AnonConstBody { .. }
         | BodyOwner::ContractInit { .. }
-        | BodyOwner::ContractRecvArm { .. } => Vec::new(),
+        | BodyOwner::ContractRecvArm { .. }
+        | BodyOwner::Closure { .. } => Vec::new(),
     }
 }
 

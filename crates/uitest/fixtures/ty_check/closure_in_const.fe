@@ -1,0 +1,6 @@
+use core::functional::Fn
+
+pub fn f() -> u256 {
+    let arr: [u8; { (|x: u8| -> u8 { x + 2 })(3) }] = [1, 2, 3]
+    1
+}

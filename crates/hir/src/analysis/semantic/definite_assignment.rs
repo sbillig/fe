@@ -149,7 +149,7 @@ fn owner_body_is_clean<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -
         } => check_contract_recv_arm_body(db, contract, recv_idx, arm_idx)
             .0
             .is_empty(),
-        BodyOwner::AnonConstBody { .. } => false,
+        BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => false,
     }
 }
 

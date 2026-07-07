@@ -7,8 +7,8 @@ use common::indexmap::{IndexMap, IndexSet};
 use super::{
     trait_def::{ImplementorId, TraitInstId},
     trait_resolution::{PredicateListId, TraitGoalSolution, TraitSolverQuery},
-    ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
-    ty_def::{TyData, TyId},
+    ty_check::{ClosureCapture, ClosureInfo, EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
+    ty_def::{ClosureTy, TyBase as TyBaseData, TyData, TyId},
     visitor::TyVisitable,
 };
 use crate::analysis::{
@@ -146,6 +146,23 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
             QualifiedTy(trait_inst) => {
                 let folded_trait = trait_inst.fold_with(db, folder);
                 TyId::qualified_ty(db, folded_trait)
+            }
+
+            TyBase(TyBaseData::Closure(closure)) => {
+                let fold_tys = |folder: &mut F, tys: &Vec<TyId<'db>>| -> Vec<TyId<'db>> {
+                    tys.iter()
+                        .copied()
+                        .map(|ty| folder.fold_ty(db, ty))
+                        .collect()
+                };
+                let parent_args = fold_tys(folder, closure.parent_args(db));
+                let captures = fold_tys(folder, closure.captures(db));
+                let params = fold_tys(folder, closure.params(db));
+                let ret_ty = folder.fold_ty(db, closure.ret_ty(db));
+                TyId::closure(
+                    db,
+                    ClosureTy::new(db, closure.def(db), parent_args, captures, params, ret_ty),
+                )
             }
 
             TyVar(_) | TyParam(_) | TyBase(_) | Never | Invalid(_) => self,
@@ -390,6 +407,30 @@ impl<'db> TyFoldable<'db> for ExprProp<'db> {
             ty,
             binding,
             ..self
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for ClosureCapture<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            binding: self.binding.fold_with(db, folder),
+            ty: self.ty.fold_with(db, folder),
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for ClosureInfo<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            params: self.params.fold_with(db, folder),
+            captures: self.captures.fold_with(db, folder),
         }
     }
 }

@@ -64,7 +64,9 @@ fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId
                     .scope()
                     .pretty_path(db)
                     .unwrap_or_else(|| ty.pretty_print(db).to_string()),
-                TyBase::Prim(_) | TyBase::Func(_) => ty.pretty_print(db).to_string(),
+                TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_) => {
+                    ty.pretty_print(db).to_string()
+                }
             }
         }
         TyData::ConstTy(_) => ty.pretty_print(db).to_string(),
@@ -3514,6 +3516,69 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 }
             }
+
+            Self::UnsupportedClosureArity { primary, arity } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "closures must take exactly one parameter".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "this closure takes {arity} parameters; only single-parameter closures implement `Fn`"
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::AssignToCapturedBinding { primary, binding } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "cannot assign to a captured binding".to_string(),
+                    span: primary.resolve(db),
+                }];
+                if let Some((ident, def_span)) = binding {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{}` is captured by the closure here", ident.data(db)),
+                        span: def_span.resolve(db),
+                    });
+                }
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "cannot assign to a binding captured by a closure".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "closures capture by value; writes would only affect the closure's copy"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::EffectInClosure { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "effects cannot be used inside a closure".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this requires an effect from the enclosing function".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::ClosureInConstContext { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "closures cannot be used in const contexts".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "closures cannot be evaluated at compile time".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
 
             Self::TraitNotImplemented {
                 primary,

@@ -5,20 +5,21 @@ use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
-    ArithBinOp, BinOp, CallArg as HirCallArg, CallableDef, Cond, CondId, Expr, ExprId, FieldIndex,
-    IdentId, IntegerId, LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt, StmtId, UnOp,
-    VariantKind, WithBinding,
+    ArithBinOp, BinOp, CallArg as HirCallArg, CallArg, CallableDef, ClosureDef, Cond, CondId, Expr,
+    ExprId, FieldIndex, IdentId, IntegerId, LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt,
+    StmtId, UnOp, VariantKind, WithBinding,
 };
 use crate::span::DynLazySpan;
 
 use super::{
-    CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, RecordLike, Typeable, ValuePathRef,
+    BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, RecordLike, Typeable,
+    ValuePathRef,
     effect_env::{
         FamilyKeyedEntry, FrameLookupResult, MatchedForwarder, MatchedKeyedEntry, MatchedWitness,
     },
     env::{
-        EffectOrigin, EffectParamSite, ExprProp, LocalBinding, ParamSite, PendingPrimitiveOp,
-        ProvidedEffect, TraitObligation, TraitObligationOrigin, TyCheckEnv,
+        ClosureInfo, EffectOrigin, EffectParamSite, ExprProp, LocalBinding, ParamSite,
+        PendingPrimitiveOp, ProvidedEffect, TraitObligation, TraitObligationOrigin, TyCheckEnv,
     },
     path::ResolvedPathInBody,
     ty_may_be_code_region_token,
@@ -61,7 +62,8 @@ use crate::analysis::ty::{
         GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx, is_goal_satisfiable,
     },
     ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
-    ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
+    ty_contains_const_hole,
+    ty_def::{CapabilityKind, ClosureTy, PrimTy, TyBase, TyData, prim_int_bits},
     unify::UnificationTable,
 };
 use crate::analysis::{
@@ -81,10 +83,10 @@ use crate::analysis::{
         normalize::normalize_ty,
         ty_check::{RecordInitLowering, TyChecker, path::RecordInitChecker},
         ty_def::{InvalidCause, TyId},
-        ty_lower::instantiate_callable_effect_layout_args,
+        ty_lower::{instantiate_callable_effect_layout_args, lower_hir_ty},
     },
 };
-use crate::hir_def::{FieldParent, ItemKind, scope_graph::ScopeId};
+use crate::hir_def::{FieldParent, ItemKind, params::FuncParamMode, scope_graph::ScopeId};
 use crate::semantic::ProviderBinding;
 use common::indexmap::IndexMap;
 
@@ -204,6 +206,19 @@ pub(super) enum PendingPrimitiveOpResolution {
 }
 
 impl<'db> TyChecker<'db> {
+    fn call_args_include_closure(&mut self, args: &[CallArg<'db>]) -> bool {
+        // Direct closure literals already carry `TyBase::Closure`; only types
+        // still holding inference vars need the (expensive) resolving fold.
+        args.iter().any(|arg| {
+            let Some(prop) = self.env.typed_expr(arg.expr) else {
+                return false;
+            };
+            prop.ty.as_closure(self.db).is_some()
+                || (prop.ty.has_var(self.db)
+                    && self.normalize_ty(prop.ty).as_closure(self.db).is_some())
+        })
+    }
+
     fn code_region_intrinsic_kind(
         &self,
         callable_def: CallableDef<'db>,
@@ -299,6 +314,7 @@ impl<'db> TyChecker<'db> {
             }
             Expr::Lit(lit) => ExprProp::new(self.lit_ty_for_expected(lit, expected), true),
             Expr::Block(..) => self.check_block(expr, expr_data, expected, result_discarded),
+            Expr::Closure { .. } => self.check_closure(expr, expr_data),
             Expr::Un(..) => self.check_unary(expr, expr_data),
             Expr::Cast(inner, ty) => self.check_cast(expr, *inner, *ty),
             Expr::Bin(lhs, rhs, op) => self.check_binary(expr, *lhs, *rhs, *op),
@@ -458,6 +474,113 @@ impl<'db> TyChecker<'db> {
                 subject: MustUseSubject::Function(callable.callable_def()),
             });
         }
+    }
+
+    fn check_closure(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
+        let Expr::Closure {
+            params,
+            ret_ty,
+            body,
+        } = expr_data
+        else {
+            unreachable!()
+        };
+        let def = ClosureDef {
+            body: self.body(),
+            expr,
+        };
+        let assumptions = self.env.assumptions();
+
+        if params.data(self.db).len() != 1 {
+            let span = expr.span(self.body()).into_closure_expr();
+            self.push_diag(BodyDiag::UnsupportedClosureArity {
+                primary: span.into(),
+                arity: params.data(self.db).len(),
+            });
+        }
+
+        // CTFE cannot evaluate closures, so a closure in a const context can
+        // never produce a value (`ConstFnChecker` covers const fns; this
+        // covers `const` items and anonymous const bodies such as array
+        // lengths).
+        if matches!(
+            self.env.owner(),
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. }
+        ) {
+            self.push_diag(BodyDiag::ClosureInConstContext {
+                primary: expr.span(self.body()).into(),
+            });
+        }
+
+        self.env.enter_closure(def);
+        self.env.enter_lexical_scope();
+
+        let mut param_tys = Vec::with_capacity(params.data(self.db).len());
+        for (idx, param) in params.data(self.db).iter().enumerate() {
+            let mut ty = param.ty.to_opt().map_or_else(
+                || TyId::invalid(self.db, InvalidCause::ParseError),
+                |hir_ty| lower_hir_ty(self.db, hir_ty, self.env.scope(), assumptions),
+            );
+            if param.mode == FuncParamMode::View && ty.as_capability(self.db).is_none() {
+                ty = TyId::view_of(self.db, ty);
+            }
+            if !ty.is_star_kind(self.db) || ty_contains_const_hole(self.db, ty) {
+                ty = TyId::invalid(self.db, InvalidCause::Other);
+            }
+
+            let binding = LocalBinding::Param {
+                site: ParamSite::Closure(def),
+                idx,
+                mode: param.mode,
+                ty,
+                is_mut: param.is_mut,
+            };
+            self.env.register_closure_param(param.name(), binding);
+            param_tys.push(ty);
+        }
+
+        let ret_expected = match ret_ty {
+            Some(ret_ty) => {
+                let ret_ty = lower_hir_ty(self.db, *ret_ty, self.env.scope(), assumptions);
+                if ret_ty.is_star_kind(self.db) && !ty_contains_const_hole(self.db, ret_ty) {
+                    ret_ty
+                } else {
+                    TyId::invalid(self.db, InvalidCause::Other)
+                }
+            }
+            None => self.fresh_ty(),
+        };
+
+        // The closure body is its own body for control-flow purposes even
+        // though it is checked inline: `break`/`continue` must not see the
+        // enclosing body's loops, and `return` returns from the closure.
+        let saved_body_ctx = self.env.take_body_ctx();
+        let saved_expected = std::mem::replace(&mut self.expected, ret_expected);
+        let body_prop = self.check_expr(*body, ret_expected);
+        self.expected = saved_expected;
+        self.env.restore_body_ctx(saved_body_ctx);
+
+        let ret_ty = self.normalize_ty(body_prop.ty);
+
+        self.env.leave_scope();
+        let (param_bindings, captures) = self.env.leave_closure();
+        let capture_tys = captures
+            .iter()
+            .map(|capture| capture.ty)
+            .collect::<Vec<_>>();
+        let parent_args = match self.env.owner() {
+            BodyOwner::Func(func) => CallableDef::Func(func).params(self.db).to_vec(),
+            _ => Vec::new(),
+        };
+        let closure_ty = ClosureTy::new(self.db, def, parent_args, capture_tys, param_tys, ret_ty);
+        self.env.register_closure_info(
+            expr,
+            ClosureInfo {
+                params: param_bindings,
+                captures,
+            },
+        );
+        ExprProp::new(TyId::closure(self.db, closure_ty), false)
     }
 
     fn check_unary(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
@@ -1289,6 +1412,14 @@ impl<'db> TyChecker<'db> {
 
         callable.check_args(self, args, call_span.clone().args(), None, false);
 
+        if self.call_args_include_closure(args) {
+            self.eagerly_process_callable_constraints(
+                &callable,
+                expr,
+                call_span.clone().callee().into(),
+            );
+        }
+
         self.check_callable_effects(expr, &mut callable);
 
         let ret_ty = callable.ret_ty(self.db);
@@ -1369,6 +1500,17 @@ impl<'db> TyChecker<'db> {
     pub(super) fn check_callable_effects(&mut self, expr: ExprId, callable: &mut Callable<'db>) {
         let body = self.body();
         let call_span: DynLazySpan<'db> = expr.span(body).into();
+        // Closure bodies have no effect parameters of their own and cannot
+        // capture the enclosing function's providers (signature-pinned
+        // carriers can't live in the environment aggregate), so effectful
+        // calls inside closures are rejected for now.
+        if self.env.in_closure()
+            && let CallableDef::Func(func) = callable.callable_def
+            && func.has_effects(self.db)
+        {
+            self.push_diag(BodyDiag::EffectInClosure { primary: call_span });
+            return;
+        }
         let args = self.resolve_callable_effects(call_span.clone(), callable);
         for arg in args {
             self.env.push_call_effect_arg(expr, arg);
@@ -3259,6 +3401,14 @@ impl<'db> TyChecker<'db> {
             false,
         );
 
+        if self.call_args_include_closure(args) {
+            self.eagerly_process_callable_constraints(
+                &callable,
+                expr,
+                call_span.clone().method_name().into(),
+            );
+        }
+
         // Check required effects for the method call
         self.check_callable_effects(expr, &mut callable);
 
@@ -3337,6 +3487,15 @@ impl<'db> TyChecker<'db> {
                     .lookup_binding_ty(&binding)
                     .fold_with(self.db, &mut self.table);
                 let ty = self.normalize_ty(ty);
+                if matches!(binding, LocalBinding::EffectParam { .. })
+                    && self.env.binding_is_capture(binding)
+                {
+                    self.push_diag(BodyDiag::EffectInClosure {
+                        primary: expr.span(self.body()).into(),
+                    });
+                    return ExprProp::invalid(self.db);
+                }
+                self.env.record_capture_if_needed(binding, ty);
                 let mut is_mut = binding.is_mut();
                 if let Some((cap, _)) = ty.as_capability(self.db) {
                     is_mut = match cap {
@@ -4549,6 +4708,17 @@ impl<'db> TyChecker<'db> {
             }
 
             return AssignLhsStatus::NonAssignable;
+        }
+
+        if let Some(binding) = self.find_base_binding(lhs)
+            && self.env.binding_is_capture(binding)
+        {
+            let (ident, def_span) = (binding.binding_name(&self.env), binding.def_span(&self.env));
+            self.push_diag(BodyDiag::AssignToCapturedBinding {
+                primary: lhs.span(self.body()).into(),
+                binding: Some((ident, def_span)),
+            });
+            return AssignLhsStatus::Immutable;
         }
 
         if !typed_lhs.is_mut {

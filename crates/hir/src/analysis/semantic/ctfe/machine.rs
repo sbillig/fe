@@ -1155,9 +1155,9 @@ impl<'db> CtfeMachine<'db> {
                     Ok(())
                 }
             }
-            BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
-                Err(CtfeError::NotConstEvaluable { origin })
-            }
+            BodyOwner::ContractInit { .. }
+            | BodyOwner::ContractRecvArm { .. }
+            | BodyOwner::Closure { .. } => Err(CtfeError::NotConstEvaluable { origin }),
         }
     }
 

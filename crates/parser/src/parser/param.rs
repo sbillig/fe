@@ -33,6 +33,25 @@ impl super::Parse for FuncParamListScope {
     }
 }
 
+define_scope! {
+    pub(crate) ClosureParamListScope,
+    FuncParamList,
+    (Pipe, Comma)
+}
+impl super::Parse for ClosureParamListScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parse_list(
+            parser,
+            false,
+            SyntaxKind::FuncParamList,
+            (SyntaxKind::Pipe, SyntaxKind::Pipe),
+            |parser| parser.parse(FnParamScope::new(false)),
+        )
+    }
+}
+
 define_scope! { FnParamScope{allow_self: bool}, FnParam }
 impl super::Parse for FnParamScope {
     type Error = Recovery<ErrProof>;

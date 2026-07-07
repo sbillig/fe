@@ -45,7 +45,8 @@ use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::Pac
 use ena::unify::InPlace;
 use env::TyCheckEnv;
 pub use env::{
-    EffectParamSite, ExprProp, LocalBinding, ParamSite, PatBindingMode, PathReadSemantics,
+    ClosureCapture, ClosureInfo, EffectParamSite, ExprProp, LocalBinding, ParamSite,
+    PatBindingMode, PathReadSemantics,
 };
 pub(super) use expr::TraitOps;
 pub use owner::BodyOwner;
@@ -385,7 +386,8 @@ pub(super) fn check_body<'db>(
                 BodyOwner::Const(_)
                 | BodyOwner::AnonConstBody { .. }
                 | BodyOwner::ContractInit { .. }
-                | BodyOwner::ContractRecvArm { .. } => TypedBody::empty(db),
+                | BodyOwner::ContractRecvArm { .. }
+                | BodyOwner::Closure { .. } => TypedBody::empty(db),
             },
         );
     };
@@ -511,6 +513,7 @@ fn typed_body_for_bodyless_func<'db>(
         value_path_refs: SecondaryMap::new(),
         semantic_expr_lowering: SecondaryMap::new(),
         record_init_lowering: SecondaryMap::new(),
+        closure_infos: SecondaryMap::new(),
         resolved_field_index: SecondaryMap::new(),
         call_effect_args: SecondaryMap::new(),
         return_borrow_provider: None,
@@ -602,7 +605,11 @@ impl<'db> TyChecker<'db> {
             self.env.flush_pending_bindings();
         }
 
-        let root_expr = self.env.body().expr(self.db);
+        let root_expr = self
+            .env
+            .owner()
+            .root_expr(self.db)
+            .unwrap_or_else(|| self.env.body().expr(self.db));
         self.check_expr(root_expr, self.expected);
         self.record_implicit_move_for_owned_expr(root_expr, self.expected);
     }
@@ -646,14 +653,15 @@ impl<'db> TyChecker<'db> {
             }
             BodyOwner::Const(_)
             | BodyOwner::AnonConstBody { .. }
-            | BodyOwner::ContractRecvArm { .. } => {}
+            | BodyOwner::ContractRecvArm { .. }
+            | BodyOwner::Closure { .. } => {}
         }
     }
 
     fn check_effect_param_keys_resolve(&mut self) {
         match self.env.owner() {
             BodyOwner::Func(func) => self.check_free_func_effect_list(func, func.effects(self.db)),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {}
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {}
             owner @ BodyOwner::ContractInit { contract } => {
                 self.check_contract_scoped_effect_list(owner, contract, owner.effects(self.db));
             }
@@ -704,7 +712,9 @@ impl<'db> TyChecker<'db> {
     ) {
         let (owner, site) = match owner {
             BodyOwner::Func(func) => (EffectParamOwner::Func(func), EffectParamSite::Func(func)),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => unreachable!(),
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {
+                unreachable!()
+            }
             BodyOwner::ContractInit { contract } => (
                 EffectParamOwner::ContractInit { contract },
                 EffectParamSite::ContractInit { contract },
@@ -1283,6 +1293,22 @@ impl<'db> TyChecker<'db> {
                 }
             }
             GoalSatisfiability::ContainsInvalid => TraitObligationOutcome::Discharged,
+        }
+    }
+
+    /// Eagerly solves the callee's constraints at the call site so that a
+    /// closure argument's builtin `Fn` bound grounds the call's return type
+    /// before it is read. Never emits diagnostics (non-final pass); the same
+    /// obligations are also registered for the deferred pipeline, which
+    /// reports failures.
+    fn eagerly_process_callable_constraints(
+        &mut self,
+        callable: &Callable<'db>,
+        call_expr: ExprId,
+        span: DynLazySpan<'db>,
+    ) {
+        for obligation in callable.constraint_obligations(self, call_expr, span) {
+            let _ = self.process_trait_obligation(obligation, false);
         }
     }
 
@@ -2557,6 +2583,7 @@ pub struct TypedBody<'db> {
     value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
     semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
     record_init_lowering: SecondaryMap<ExprId, Option<RecordInitLowering<'db>>>,
+    closure_infos: SecondaryMap<ExprId, Option<ClosureInfo<'db>>>,
     resolved_field_index: SecondaryMap<ExprId, Option<u16>>,
     call_effect_args: SecondaryMap<ExprId, Option<Vec<ResolvedEffectArg<'db>>>>,
     return_borrow_provider: Option<ProviderAddressSpace>,
@@ -2743,6 +2770,9 @@ impl<'db> TyVisitable<'db> for TypedBody<'db> {
         for lowering in self.record_init_lowering.values().flatten() {
             lowering.visit_with(visitor);
         }
+        for info in self.closure_infos.values().flatten() {
+            info.visit_with(visitor);
+        }
         for place in self.expr_places.values() {
             place.visit_with(visitor);
         }
@@ -2785,6 +2815,10 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .values_mut()
             .flatten()
             .for_each(|lowering| *lowering = (*lowering).fold_with(db, folder));
+        this.closure_infos
+            .values_mut()
+            .flatten()
+            .for_each(|info| *info = info.clone().fold_with(db, folder));
         for args in this.call_effect_args.values_mut().flatten() {
             for arg in args {
                 *arg = arg.clone().fold_with(db, folder);
@@ -2946,6 +2980,39 @@ impl<'db> TypedBody<'db> {
 
     pub fn record_init_lowering(&self, expr: ExprId) -> Option<RecordInitLowering<'db>> {
         self.record_init_lowering[expr]
+    }
+
+    pub fn closure_info(&self, expr: ExprId) -> Option<&ClosureInfo<'db>> {
+        self.closure_infos[expr].as_ref()
+    }
+
+    /// Runtime-visible parameter bindings of `owner`'s body, in interface
+    /// order. For a closure this is the synthetic environment parameter
+    /// followed by the closure's declared parameters (`self` must be the
+    /// parent's typed body, which holds the closure info); for other owners
+    /// it is the plain `param_binding` sequence. Any consumer that maps
+    /// parameter indices to bindings must go through here so closure bodies
+    /// aren't resolved against the parent function's parameters.
+    pub fn owner_param_bindings(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+    ) -> Vec<LocalBinding<'db>> {
+        if let BodyOwner::Closure { ty, def } = owner {
+            let mut bindings = vec![LocalBinding::closure_env(db, ty)];
+            if let Some(info) = self.closure_info(def.expr) {
+                bindings.extend(info.params.iter().copied());
+            }
+            return bindings;
+        }
+
+        let mut bindings = Vec::new();
+        let mut idx = 0;
+        while let Some(binding) = self.param_binding(idx) {
+            bindings.push(binding);
+            idx += 1;
+        }
+        bindings
     }
 
     pub fn resolved_field_index(&self, expr: ExprId) -> Option<u16> {
@@ -3700,6 +3767,9 @@ impl<'db> TypedBody<'db> {
                     seen,
                 );
             }
+            Expr::Closure { .. } => {
+                *saw_non_param = true;
+            }
             Expr::Lit(_) | Expr::Path(_) => {}
         }
     }
@@ -3924,7 +3994,7 @@ impl<'db> TypedBody<'db> {
             .collect()
     }
 
-    fn empty(db: &'db dyn HirAnalysisDb) -> Self {
+    pub(crate) fn empty(db: &'db dyn HirAnalysisDb) -> Self {
         Self {
             body: None,
             result_ty: TyId::unit(db),
@@ -3936,6 +4006,7 @@ impl<'db> TypedBody<'db> {
             value_path_refs: SecondaryMap::new(),
             semantic_expr_lowering: SecondaryMap::new(),
             record_init_lowering: SecondaryMap::new(),
+            closure_infos: SecondaryMap::new(),
             resolved_field_index: SecondaryMap::new(),
             call_effect_args: SecondaryMap::new(),
             return_borrow_provider: None,

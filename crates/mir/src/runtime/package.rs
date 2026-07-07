@@ -40,8 +40,8 @@ use crate::{
         EntryEffectContext, entry_effect_arg_plans, target_root_provider_materialization,
     },
     runtime::stable_key::{
-        item_identity, semantic_instance_identity, semantic_instance_symbol_identity,
-        stable_identity_hash, type_identity,
+        closure_symbol_component, item_identity, semantic_instance_identity,
+        semantic_instance_symbol_identity, stable_identity_hash, type_identity,
     },
     runtime::{
         AddressSpaceKind, ConstRegionId, ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm,
@@ -2582,6 +2582,7 @@ fn symbol_base_for_semantic_instance<'db>(
             recv_idx,
             arm_idx
         ),
+        BodyOwner::Closure { ty, .. } => closure_symbol_component(db, ty),
         BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => "__const".to_string(),
     }
 }
@@ -2650,6 +2651,7 @@ fn inline_hint_for_semantic<'db>(
         },
         BodyOwner::Const(_)
         | BodyOwner::AnonConstBody { .. }
+        | BodyOwner::Closure { .. }
         | BodyOwner::ContractInit { .. }
         | BodyOwner::ContractRecvArm { .. } => RuntimeInlineHint::Auto,
     }

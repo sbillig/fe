@@ -29,6 +29,7 @@ pub mod adt_def;
 pub mod assoc_const;
 pub mod binder;
 pub mod canonical;
+pub(crate) mod closure;
 pub(crate) mod const_check;
 pub mod const_expr;
 pub mod const_ty;
@@ -219,6 +220,12 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
         } else if ty.is_tuple(db) {
             ty.field_types(db)
                 .into_iter()
+                .any(|field_ty| inner(db, field_ty, visiting))
+        } else if let Some(closure) = ty.as_closure(db) {
+            closure
+                .captures(db)
+                .iter()
+                .copied()
                 .any(|field_ty| inner(db, field_ty, visiting))
         } else if ty.is_array(db) {
             let (_, args) = ty.decompose_ty_app(db);

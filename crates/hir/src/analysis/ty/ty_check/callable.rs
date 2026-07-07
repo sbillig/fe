@@ -760,16 +760,21 @@ impl<'db> CallArg<'db> {
 }
 
 impl<'db> Callable<'db> {
-    pub(super) fn enqueue_constraints(
+    /// Builds the callee's instantiated declared constraints as trait
+    /// obligations. Both the deferred path (`enqueue_constraints`) and the
+    /// eager path (`TyChecker::eagerly_process_callable_constraints`) consume
+    /// this, so constraint instantiation cannot diverge between them.
+    pub(super) fn constraint_obligations(
         &self,
         tc: &mut TyChecker<'db>,
         call_expr: ExprId,
         span: DynLazySpan<'db>,
-    ) {
+    ) -> Vec<super::env::TraitObligation<'db>> {
         let db = tc.db;
         let constraints = collect_func_decl_constraints(db, self.callable_def, true);
         let instantiated = constraints.instantiate(db, &self.generic_args);
 
+        let mut obligations = Vec::new();
         for (constraint_idx, &constraint) in instantiated.list(db).iter().enumerate() {
             let constraint = if let Some(inst) = self.trait_inst {
                 let mut subst = AssocTySubst::new(inst);
@@ -782,16 +787,27 @@ impl<'db> Callable<'db> {
                 continue;
             }
 
-            tc.env
-                .register_trait_obligation(super::env::TraitObligation {
-                    goal: constraint,
-                    origin: super::env::TraitObligationOrigin::CallConstraint {
-                        call_expr,
-                        callable_def: self.callable_def,
-                        constraint_idx,
-                    },
-                    span: span.clone(),
-                });
+            obligations.push(super::env::TraitObligation {
+                goal: constraint,
+                origin: super::env::TraitObligationOrigin::CallConstraint {
+                    call_expr,
+                    callable_def: self.callable_def,
+                    constraint_idx,
+                },
+                span: span.clone(),
+            });
+        }
+        obligations
+    }
+
+    pub(super) fn enqueue_constraints(
+        &self,
+        tc: &mut TyChecker<'db>,
+        call_expr: ExprId,
+        span: DynLazySpan<'db>,
+    ) {
+        for obligation in self.constraint_obligations(tc, call_expr, span) {
+            tc.env.register_trait_obligation(obligation);
         }
     }
 }

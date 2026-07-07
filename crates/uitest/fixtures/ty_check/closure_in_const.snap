@@ -1,0 +1,19 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_in_const.fe
+---
+error[3-0023]: the expression cannot be evaluated at compile time
+  ┌─ closure_in_const.fe:4:19
+  │
+4 │     let arr: [u8; { (|x: u8| -> u8 { x + 2 })(3) }] = [1, 2, 3]
+  │                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsupported in const evaluation
+
+error[8-0031]: type annotation is needed
+  ┌─ closure_in_const.fe:4:9
+  │
+4 │     let arr: [u8; { (|x: u8| -> u8 { x + 2 })(3) }] = [1, 2, 3]
+  │         ^^^
+  │         │
+  │         type annotation is needed
+  │         consider giving `: [{integer}; 3]` here
