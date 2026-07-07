@@ -12,7 +12,10 @@ use crate::{
             SBlockId, SemOrigin, SemanticInstance, get_or_build_semantic_instance,
             identity_semantic_instance_key,
         },
-        ty::{ty_check::BodyOwner, ty_def::BorrowKind},
+        ty::{
+            ty_check::{BodyOwner, LocalBinding},
+            ty_def::BorrowKind,
+        },
     },
     hir_def::{Body, Expr, FuncParamMode, ItemKind, Partial, TopLevelMod},
     projection::{IndexSource, Projection},
@@ -304,10 +307,16 @@ impl<'db> Borrowck<'db> {
     ) -> Result<Self, SemanticBorrowDiagnostic<'db>> {
         verify_normalized_semantic_body(db, instance, &body)?;
         let owner = instance.key(db).owner(db);
-        let param_modes = match owner {
-            BodyOwner::Func(func) => func.params(db).map(|param| param.mode(db)).collect(),
-            _ => Vec::new(),
-        };
+        let param_modes = instance
+            .key(db)
+            .typed_body(db)
+            .owner_param_bindings(db, owner)
+            .into_iter()
+            .map(|binding| match binding {
+                LocalBinding::Param { mode, .. } => mode,
+                LocalBinding::Local { .. } | LocalBinding::EffectParam { .. } => FuncParamMode::Own,
+            })
+            .collect();
         let mut param_index_of_local = FxHashMap::default();
         for root_id in 0..body.borrow_roots.len() {
             let root_id = NBorrowRootId::from_u32(root_id as u32);

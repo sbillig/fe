@@ -4,9 +4,18 @@ struct ClosureHolder<F> {
     f: F,
 }
 
+struct ClosureBoxed {
+    value: u256,
+}
+
 fn passthrough<T>(_ x: T) -> T {
     let f = |_ u: own u256| -> T { x }
     f.call(1)
+}
+
+fn read_default_param_rebind(boxed: ClosureBoxed) -> u256 {
+    let rebound = boxed
+    rebound.value
 }
 
 #[test]
@@ -94,4 +103,20 @@ fn test_early_return_from_closure() {
     }
     assert(g.call(0) == 42)
     assert(g.call(5) == 6)
+}
+
+#[test]
+fn test_default_param_rebind_as_ref() {
+    let boxed = ClosureBoxed { value: 41 }
+    assert(read_default_param_rebind(boxed) == 41)
+}
+
+#[test]
+fn test_closure_default_param_rebind_as_ref() {
+    let f = |boxed: ClosureBoxed| -> u256 {
+        let rebound = boxed
+        rebound.value
+    }
+    let boxed = ClosureBoxed { value: 41 }
+    assert(f.call(boxed) == 41)
 }
