@@ -621,6 +621,38 @@ impl<'db> Borrowck<'db> {
                 "borrow return local has no tracked loan targets".to_string(),
             ));
         }
+        // A returned aggregate that holds a borrow handle targeting one of our
+        // locals would dangle in the caller. (Borrow-typed returns are covered
+        // by the return-summary path above.)
+        if let NSTerminatorKind::Return(Some(value)) = term.kind
+            && self
+                .body
+                .local(value.local)
+                .is_some_and(|local| local.ty.as_borrow(self.db).is_none())
+        {
+            for loan in state.loans_in(value.local) {
+                if let Some(target) = self.loans[loan.0 as usize]
+                    .targets
+                    .iter()
+                    .find(|target| matches!(target.root, BorrowRoot::Local(_)))
+                {
+                    let BorrowRoot::Local(local) = target.root else {
+                        unreachable!()
+                    };
+                    let name = self.pretty_local_name(local);
+                    let mut diag = self.invalid_return_diag(
+                        term.origin,
+                        format!("cannot return a value that holds a borrow of local `{name}`"),
+                    );
+                    self.push_secondary_origin(
+                        &mut diag,
+                        self.loans[loan.0 as usize].origin,
+                        "borrow created here".to_string(),
+                    );
+                    return Err(diag);
+                }
+            }
+        }
         Ok(())
     }
 

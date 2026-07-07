@@ -10,6 +10,7 @@ use crate::{
         ty::{
             provider::{ProviderAddressSpace, ProviderKind},
             ty_def::BorrowKind,
+            ty_is_noesc,
         },
     },
     projection::Aliasing,
@@ -143,31 +144,99 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
     }
 
     pub(super) fn apply_stmt_state(&self, state: &mut State, stmt: &NSStmt<'db>) {
-        let NSStmtKind::Assign { dst, expr } = &stmt.kind else {
-            return;
-        };
-        let loans = match expr {
-            NExpr::Use(src) => {
-                let loans = state.loans_in(src.local);
-                if loans.is_empty() {
-                    self.loan_for_local
+        match &stmt.kind {
+            NSStmtKind::Assign { dst, expr } => {
+                let loans = match expr {
+                    NExpr::Use(src) => {
+                        let loans = self.propagated_held_loans(state, src.local, *dst);
+                        if loans.is_empty() {
+                            self.loan_for_local
+                                .get(dst)
+                                .copied()
+                                .map(|loan| FxHashSet::from_iter([loan]))
+                                .unwrap_or_default()
+                        } else {
+                            loans
+                        }
+                    }
+                    NExpr::Borrow { .. } | NExpr::Call { .. } => self
+                        .loan_for_local
                         .get(dst)
                         .copied()
                         .map(|loan| FxHashSet::from_iter([loan]))
-                        .unwrap_or_default()
-                } else {
-                    loans
+                        .unwrap_or_default(),
+                    // An aggregate value holds the loans of any borrow handles
+                    // stored in it; the loans stay active while it is live.
+                    NExpr::AggregateMake { fields, .. } | NExpr::EnumMake { fields, .. } => fields
+                        .iter()
+                        .flat_map(|field| state.loans_in(field.local))
+                        .collect(),
+                    NExpr::ArrayRepeat { value, .. } => state.loans_in(value.local),
+                    NExpr::ExtractEnumField { value, .. } => {
+                        self.propagated_held_loans(state, value.local, *dst)
+                    }
+                    NExpr::ReadPlace { place, .. } => self
+                        .place_base_local(place)
+                        .map(|base| self.propagated_held_loans(state, base, *dst))
+                        .unwrap_or_default(),
+                    _ => FxHashSet::default(),
+                };
+                state.assign_loans(*dst, loans);
+            }
+            NSStmtKind::Store { dst, src } => {
+                // A handle stored into a local aggregate slot is held by that
+                // aggregate from then on. Stores through borrow handles
+                // (CarrierDerefLocal roots) escape our per-body tracking and
+                // are left to the noesc address-space rules.
+                if let NSPlaceRoot::Root(root) = dst.root
+                    && let Some(base) = self.root_base_local(root)
+                {
+                    let src_loans = state.loans_in(src.local);
+                    if !src_loans.is_empty() {
+                        let mut loans = state.loans_in(base);
+                        loans.extend(src_loans);
+                        state.assign_loans(base, loans);
+                    }
                 }
             }
-            NExpr::Borrow { .. } | NExpr::Call { .. } => self
-                .loan_for_local
-                .get(dst)
-                .copied()
-                .map(|loan| FxHashSet::from_iter([loan]))
-                .unwrap_or_default(),
-            _ => FxHashSet::default(),
+        }
+    }
+
+    /// Loans held by `base` that a value read out of it keeps alive. A read
+    /// whose result type cannot contain a borrow handle is a plain copy and
+    /// holds nothing.
+    fn propagated_held_loans(
+        &self,
+        state: &State,
+        base: SLocalId,
+        dst: SLocalId,
+    ) -> FxHashSet<LoanId> {
+        let held = state.loans_in(base);
+        if held.is_empty() {
+            return held;
+        }
+        let Some(dst_local) = self.body.local(dst) else {
+            return FxHashSet::default();
         };
-        state.assign_loans(*dst, loans);
+        if dst_local.ty.as_capability(self.db).is_some() || ty_is_noesc(self.db, dst_local.ty) {
+            held
+        } else {
+            FxHashSet::default()
+        }
+    }
+
+    fn root_base_local(&self, root: NBorrowRootId) -> Option<SLocalId> {
+        match self.body.root(root)? {
+            NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local } => Some(*local),
+            NBorrowRoot::Provider { .. } => None,
+        }
+    }
+
+    fn place_base_local(&self, place: &NSPlace<'db>) -> Option<SLocalId> {
+        match place.root {
+            NSPlaceRoot::CarrierDerefLocal(local) => Some(local),
+            NSPlaceRoot::Root(root) => self.root_base_local(root),
+        }
     }
 
     pub(super) fn canonicalize_value_base(
