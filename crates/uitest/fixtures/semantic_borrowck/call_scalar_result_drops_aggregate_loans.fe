@@ -1,0 +1,17 @@
+struct Esc {
+    h: mut u256,
+    tag: u256,
+}
+
+fn get_tag(e: own Esc) -> u256 {
+    e.tag
+}
+
+pub fn call_scalar_result_drops_aggregate_loans() {
+    // Scalar call results cannot hold handles, so loans in the aggregate
+    // argument are not propagated to the result.
+    let mut x: u256 = 0
+    let tag = get_tag(Esc { h: mut x, tag: 1 })
+    let m = mut x
+    m = tag
+}

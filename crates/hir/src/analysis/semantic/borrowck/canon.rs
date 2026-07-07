@@ -159,12 +159,16 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
                             loans
                         }
                     }
-                    NExpr::Borrow { .. } | NExpr::Call { .. } => self
-                        .loan_for_local
-                        .get(dst)
-                        .copied()
-                        .map(|loan| FxHashSet::from_iter([loan]))
-                        .unwrap_or_default(),
+                    NExpr::Borrow { .. } => self.own_loan_for_local(*dst),
+                    NExpr::Call { args, .. } => {
+                        let mut loans = self.own_loan_for_local(*dst);
+                        let held = args
+                            .iter()
+                            .flat_map(|arg| state.loans_in(arg.local))
+                            .collect();
+                        loans.extend(self.propagated_held_loans_from_set(*dst, held));
+                        loans
+                    }
                     // An aggregate value holds the loans of any borrow handles
                     // stored in it; the loans stay active while it is live.
                     NExpr::AggregateMake { fields, .. } | NExpr::EnumMake { fields, .. } => fields
@@ -212,6 +216,14 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
         dst: SLocalId,
     ) -> FxHashSet<LoanId> {
         let held = state.loans_in(base);
+        self.propagated_held_loans_from_set(dst, held)
+    }
+
+    fn propagated_held_loans_from_set(
+        &self,
+        dst: SLocalId,
+        held: FxHashSet<LoanId>,
+    ) -> FxHashSet<LoanId> {
         if held.is_empty() {
             return held;
         }
@@ -223,6 +235,14 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
         } else {
             FxHashSet::default()
         }
+    }
+
+    fn own_loan_for_local(&self, local: SLocalId) -> FxHashSet<LoanId> {
+        self.loan_for_local
+            .get(&local)
+            .copied()
+            .map(|loan| FxHashSet::from_iter([loan]))
+            .unwrap_or_default()
     }
 
     fn root_base_local(&self, root: NBorrowRootId) -> Option<SLocalId> {

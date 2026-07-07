@@ -1,0 +1,11 @@
+pub fn store_overwrite_keeps_loan_known_gap() {
+    // Known conservative gap: overwriting t.0 should eventually kill the stale
+    // loan of a, but field-precise held-loan tracking is future work.
+    let mut a: u256 = 0
+    let mut b: u256 = 1
+    let mut t: (mut u256, u256) = (mut a, 0)
+    t.0 = mut b
+    let m = mut a
+    m = 2
+    let _k = t
+}

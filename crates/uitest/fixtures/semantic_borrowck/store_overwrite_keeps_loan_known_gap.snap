@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/store_overwrite_keeps_loan_known_gap.fe
+---
+error[16-0001]: borrow conflict in `fn store_overwrite_keeps_loan_known_gap`
+  ┌─ store_overwrite_keeps_loan_known_gap.fe:8:13
+  │
+6 │     let mut t: (mut u256, u256) = (mut a, 0)
+  │                                    ----- borrow created here
+7 │     t.0 = mut b
+8 │     let m = mut a
+  │             ^^^^^ cannot mutably borrow this place while a mut borrow is active

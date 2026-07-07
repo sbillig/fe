@@ -1,0 +1,15 @@
+struct Esc {
+    h: mut u256,
+    tag: u256,
+}
+
+fn id(e: own Esc) -> Esc {
+    e
+}
+
+pub fn dangle() -> Esc {
+    // This used to be accepted because the call result lost the local borrow
+    // held by the aggregate argument.
+    let mut x: u256 = 5
+    id(Esc { h: mut x, tag: 0 })
+}

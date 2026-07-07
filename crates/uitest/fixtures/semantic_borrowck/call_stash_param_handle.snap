@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/call_stash_param_handle.fe
+---
+error[16-0001]: borrow conflict in `fn call_stash_param_handle`
+   ┌─ call_stash_param_handle.fe:18:13
+   │
+17 │     let s2 = stash(s0, mut x)
+   │                        ----- borrow created here
+18 │     let m = mut x
+   │             ^^^^^ cannot mutably borrow this place while a mut borrow is active
