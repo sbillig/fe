@@ -1,0 +1,10 @@
+pub fn closure_body_borrow_conflict() {
+    let g = |_ unit: own ()| -> () {
+        let mut x: u256 = 0
+        let a = mut x
+        let b = mut x
+        a = 1
+        b = 2
+    }
+    g.call(())
+}

@@ -79,6 +79,7 @@ pub(crate) struct TyCheckEnv<'db> {
     pending_vars: FxHashMap<IdentId<'db>, LocalBinding<'db>>,
     loop_stack: Vec<StmtId>,
     expr_stack: Vec<ExprId>,
+    pub(super) first_return_borrow_provider: Option<(DynLazySpan<'db>, ProviderAddressSpace)>,
 
     /// Param bindings for transfer to TypedBody
     param_bindings: Vec<LocalBinding<'db>>,
@@ -111,10 +112,12 @@ pub struct ClosureCapture<'db> {
 
 /// Per-body control-flow context saved while a closure body is checked.
 /// `break`/`continue` must not see the enclosing body's loops, and `return`
-/// checks against the closure's own return type (`TyChecker::expected` is
+/// checks against the closure's own return type, and returned-borrow provider
+/// tracking must not leak across the boundary (`TyChecker::expected` is
 /// swapped alongside in `check_closure`).
-pub(super) struct BodyCtxSnapshot {
+pub(super) struct BodyCtxSnapshot<'db> {
     loop_stack: Vec<StmtId>,
+    first_return_borrow_provider: Option<(DynLazySpan<'db>, ProviderAddressSpace)>,
 }
 
 #[derive(Debug, Clone)]
@@ -222,6 +225,7 @@ impl<'db> TyCheckEnv<'db> {
             pending_vars: FxHashMap::default(),
             loop_stack: Vec::new(),
             expr_stack: Vec::new(),
+            first_return_borrow_provider: None,
             param_bindings: Vec::new(),
             pat_bindings: SecondaryMap::new(),
             local_borrow_providers: SecondaryMap::new(),
@@ -760,15 +764,20 @@ impl<'db> TyCheckEnv<'db> {
     /// Takes the per-body control-flow context so a closure body starts
     /// clean. Any checker state that must not leak from the enclosing body
     /// into a closure body (or back out) belongs in [`BodyCtxSnapshot`].
-    pub(super) fn take_body_ctx(&mut self) -> BodyCtxSnapshot {
+    pub(super) fn take_body_ctx(&mut self) -> BodyCtxSnapshot<'db> {
         BodyCtxSnapshot {
             loop_stack: std::mem::take(&mut self.loop_stack),
+            first_return_borrow_provider: self.first_return_borrow_provider.take(),
         }
     }
 
-    pub(super) fn restore_body_ctx(&mut self, snapshot: BodyCtxSnapshot) {
-        let BodyCtxSnapshot { loop_stack } = snapshot;
+    pub(super) fn restore_body_ctx(&mut self, snapshot: BodyCtxSnapshot<'db>) {
+        let BodyCtxSnapshot {
+            loop_stack,
+            first_return_borrow_provider,
+        } = snapshot;
         self.loop_stack = loop_stack;
+        self.first_return_borrow_provider = first_return_borrow_provider;
     }
 
     pub(super) fn enter_closure(&mut self, def: ClosureDef<'db>) {

@@ -10,6 +10,8 @@ use crate::{
 };
 use salsa::Update;
 
+use super::TypedBody;
+
 /// Identifies the HIR owner of a [`Body`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub enum BodyOwner<'db> {
@@ -110,6 +112,13 @@ impl<'db> BodyOwner<'db> {
         Self::Closure {
             ty,
             def: ty.def(db),
+        }
+    }
+
+    pub fn result_ty(self, db: &'db dyn HirAnalysisDb, typed_body: &TypedBody<'db>) -> TyId<'db> {
+        match self {
+            BodyOwner::Closure { ty, .. } => ty.ret_ty(db),
+            _ => typed_body.result_ty(),
         }
     }
 

@@ -253,6 +253,20 @@ fn collect_owner<'db>(
     {
         diags.push(Box::new(diag));
     }
+    if !matches!(owner, BodyOwner::Closure { .. }) && owner.body(db).is_some() {
+        let typed_body = key.typed_body(db);
+        for (expr, _) in typed_body.closure_infos() {
+            if let Some(closure_ty) = typed_body.expr_ty(db, expr).as_closure(db) {
+                collect_owner(
+                    db,
+                    BodyOwner::closure(db, closure_ty),
+                    seen_owners,
+                    seen_diags,
+                    diags,
+                );
+            }
+        }
+    }
 }
 
 pub(super) struct Borrowck<'db> {
@@ -341,7 +355,12 @@ impl<'db> Borrowck<'db> {
     ) -> Result<Option<BorrowSummary<'db>>, SemanticBorrowDiagnostic<'db>> {
         let owner = self.instance.key(self.db).owner(self.db);
         let typed_body = self.instance.key(self.db).instantiate_typed_body(self.db);
-        if typed_body.result_ty().as_borrow(self.db).is_none() || owner.body(self.db).is_none() {
+        if owner
+            .result_ty(self.db, &typed_body)
+            .as_borrow(self.db)
+            .is_none()
+            || owner.body(self.db).is_none()
+        {
             return Ok(None);
         }
         self.compute_entry_states();
@@ -355,11 +374,11 @@ impl<'db> Borrowck<'db> {
         self.compute_moved_states()?;
         self.compute_liveness();
         self.check_conflicts()?;
-        if self
-            .instance
-            .key(self.db)
-            .instantiate_typed_body(self.db)
-            .result_ty()
+        let key = self.instance.key(self.db);
+        let typed_body = key.instantiate_typed_body(self.db);
+        if key
+            .owner(self.db)
+            .result_ty(self.db, &typed_body)
             .as_borrow(self.db)
             .is_some()
         {
@@ -1177,7 +1196,12 @@ fn instance_returns_borrow<'db>(
     instance: SemanticInstance<'db>,
 ) -> bool {
     let key = instance.key(db);
-    key.owner(db).body(db).is_some() && key.typed_body(db).result_ty().as_borrow(db).is_some()
+    let owner = key.owner(db);
+    owner.body(db).is_some()
+        && owner
+            .result_ty(db, key.typed_body(db))
+            .as_borrow(db)
+            .is_some()
 }
 
 fn semantic_borrow_summary_cycle_recover<'db>(

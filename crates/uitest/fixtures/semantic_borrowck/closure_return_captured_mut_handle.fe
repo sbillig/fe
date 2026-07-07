@@ -1,0 +1,7 @@
+pub fn closure_return_captured_mut_handle() {
+    let mut x: u256 = 40
+    let m = mut x
+    let g = |_ unit: own ()| -> mut u256 { m }
+    let returned = g.call(())
+    returned = 42
+}

@@ -2752,10 +2752,8 @@ pub(crate) fn semantic_return_ty<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> TyId<'db> {
-    if let BodyOwner::Closure { ty, .. } = semantic.key(db).owner(db) {
-        return ty.ret_ty(db);
-    }
-    semantic.key(db).typed_body(db).result_ty()
+    let key = semantic.key(db);
+    key.owner(db).result_ty(db, key.typed_body(db))
 }
 
 pub(crate) fn default_return_class<'db>(

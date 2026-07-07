@@ -549,7 +549,6 @@ pub struct TyChecker<'db> {
     pub(crate) table: UnificationTable<'db>,
     expected: TyId<'db>,
     effect_provider_keys: FxHashSet<InferenceKey<'db>>,
-    first_return_borrow_provider: Option<(DynLazySpan<'db>, ProviderAddressSpace)>,
     diags: Vec<FuncBodyDiag<'db>>,
 }
 
@@ -1652,7 +1651,6 @@ impl<'db> TyChecker<'db> {
             table,
             expected,
             effect_provider_keys: FxHashSet::default(),
-            first_return_borrow_provider: None,
             diags: Vec::new(),
         }
     }
@@ -2986,6 +2984,12 @@ impl<'db> TypedBody<'db> {
         self.closure_infos[expr].as_ref()
     }
 
+    pub fn closure_infos(&self) -> impl Iterator<Item = (ExprId, &ClosureInfo<'db>)> + '_ {
+        self.closure_infos
+            .iter()
+            .filter_map(|(expr, info)| info.as_ref().map(|info| (expr, info)))
+    }
+
     /// Runtime-visible parameter bindings of `owner`'s body, in interface
     /// order. For a closure this is the synthetic environment parameter
     /// followed by the closure's declared parameters (`self` must be the
@@ -4289,10 +4293,13 @@ impl<'db> TyCheckerFinalizer<'db> {
     fn new(mut checker: TyChecker<'db>) -> Self {
         let assumptions = checker.env.assumptions();
         checker.resolve_deferred();
-        let mut body = checker.env.finish(&mut checker.table);
-        body.return_borrow_provider = checker
+        let return_borrow_provider = checker
+            .env
             .first_return_borrow_provider
-            .map(|(_, provider)| provider);
+            .as_ref()
+            .map(|(_, provider)| *provider);
+        let mut body = checker.env.finish(&mut checker.table);
+        body.return_borrow_provider = return_borrow_provider;
         let direct_call_callees = body.body.map_or_else(FxHashSet::default, |body_id| {
             body_id
                 .exprs(checker.db)

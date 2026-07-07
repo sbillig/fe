@@ -25,6 +25,24 @@ fn test_call_closure_twice() {
 }
 
 #[test]
+fn test_ref_capture_closure_call_twice() {
+    let x: u256 = 40
+    let r = ref x
+    let g = |_ unit: own ()| -> u256 { r + 1 }
+    assert(g.call(()) == 41)
+    assert(g.call(()) == 41)
+}
+
+#[test]
+fn test_mut_capture_closure_call_twice() {
+    let mut x: u256 = 40
+    let m = mut x
+    let g = |_ unit: own ()| -> u256 { m + 1 }
+    assert(g.call(()) == 41)
+    assert(g.call(()) == 41)
+}
+
+#[test]
 fn test_early_return_from_closure() {
     let g = |x: own u256| -> u256 {
         if x == 0 {
