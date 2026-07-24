@@ -987,7 +987,7 @@ module.exports = grammar({
 
     // No-let condition expressions with `||`.
     condition_or_expression_no_let: $ => prec.left(PREC.OR, seq(
-      field('left', $._condition_no_or_no_let),
+      field('left', $._condition_no_let),
       field('operator', '||'),
       field('right', $._condition_no_or_no_let),
     )),

@@ -201,6 +201,38 @@ fn tree_sitter_parse_newline_lt_continuations() {
     }
 }
 
+#[test]
+fn tree_sitter_parse_condition_or_chains() {
+    let mut parser = new_parser();
+    let cases = [
+        (
+            "chained_or",
+            "fn f(a: bool, b: bool, c: bool) {\n    if a || b || c {}\n}\n",
+            false,
+        ),
+        (
+            "let_then_or",
+            "fn f(opt: Option<bool>, ready: bool) {\n    if let Some(value) = opt || ready {}\n}\n",
+            true,
+        ),
+        (
+            "or_then_let",
+            "fn f(opt: Option<bool>, ready: bool) {\n    if ready || let Some(value) = opt {}\n}\n",
+            true,
+        ),
+    ];
+
+    for (name, source, should_error) in cases {
+        let errors = parse_errors(&mut parser, source);
+        assert_eq!(
+            !errors.is_empty(),
+            should_error,
+            "unexpected parse result for {name}: {}",
+            errors.join("\n"),
+        );
+    }
+}
+
 /// Strict test: these suites must parse with zero errors.
 /// Covers syntax_node fixtures, formatter fixtures, and the core/std ingots.
 #[test]
