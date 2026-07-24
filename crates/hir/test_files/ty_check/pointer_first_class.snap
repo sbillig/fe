@@ -8,7 +8,7 @@ note:
    │
 10 │   fn pointer_casts_and_offsets(data: *Data, bytes: *u8) -> u256 {
    │ ╭───────────────────────────────────────────────────────────────^
-11 │ │     let bytes_from_typed: *u8 = core::ptr::as_bytes(data)
+11 │ │     let bytes_from_typed: *u8 = core::ptr::byte_ptr(data)
 12 │ │     let typed_again: *Data = core::ptr::cast<u8, Data>(bytes_from_typed)
 13 │ │     let next: *Data = core::ptr::offset_bytes(typed_again, 32)
    · │
@@ -19,25 +19,25 @@ note:
 note:
    ┌─ pointer_first_class.fe:11:9
    │
-11 │     let bytes_from_typed: *u8 = core::ptr::as_bytes(data)
+11 │     let bytes_from_typed: *u8 = core::ptr::byte_ptr(data)
    │         ^^^^^^^^^^^^^^^^ *<u8>
 
 note:
    ┌─ pointer_first_class.fe:11:33
    │
-11 │     let bytes_from_typed: *u8 = core::ptr::as_bytes(data)
-   │                                 ^^^^^^^^^^^^^^^^^^^ fn as_bytes<Data>
+11 │     let bytes_from_typed: *u8 = core::ptr::byte_ptr(data)
+   │                                 ^^^^^^^^^^^^^^^^^^^ fn byte_ptr<Data>
 
 note:
    ┌─ pointer_first_class.fe:11:33
    │
-11 │     let bytes_from_typed: *u8 = core::ptr::as_bytes(data)
+11 │     let bytes_from_typed: *u8 = core::ptr::byte_ptr(data)
    │                                 ^^^^^^^^^^^^^^^^^^^^^^^^^ *<u8>
 
 note:
    ┌─ pointer_first_class.fe:11:53
    │
-11 │     let bytes_from_typed: *u8 = core::ptr::as_bytes(data)
+11 │     let bytes_from_typed: *u8 = core::ptr::byte_ptr(data)
    │                                                     ^^^^ *<Data>
 
 note:

@@ -1,5 +1,6 @@
 /// Common Solidity ABI dynamic types and memory-backed byte views.
-pub use core::abi::{Bytes, BytesView, DynArray, DynString, MemoryInput}
+pub use core::abi::{Bytes, BytesView, DynArray, DynString}
+pub use core::ptr::MemSpan
 
 /// UTF-8 text stored as Solidity ABI `string`.
 pub type Text = DynString

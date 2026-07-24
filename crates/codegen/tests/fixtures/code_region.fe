@@ -7,15 +7,25 @@ fn init() uses (evm: mut Evm) {
         let len = evm.code_region_len(child_init)
         let offset = evm.code_region_offset(child_init)
         let mut dest = ptr::MemBuffer::alloc(len)
-        evm.codecopy(dest: mut dest, offset: offset)
-        evm.create2_raw(value: 0, init_code: dest, salt: 0x1234)
+        evm.codecopy(
+            dest: mut dest,
+            dest_offset: 0,
+            src_offset: offset,
+            len,
+        )
+        evm.create2_raw(value: 0, init_code: dest.span(), salt: 0x1234)
     }
 
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
     let mut dest = ptr::MemBuffer::alloc(len)
-    evm.codecopy(dest: mut dest, offset: offset)
-    evm.return_data(data: dest)
+    evm.codecopy(
+        dest: mut dest,
+        dest_offset: 0,
+        src_offset: offset,
+        len,
+    )
+    evm.return_data(data: dest.span())
 }
 
 #[contract_runtime(Foo)]
@@ -27,7 +37,7 @@ fn runtime() uses (evm: mut Evm) {
             _ => {}
         }
     }
-    evm.return_data(data: ptr::MemBuffer::empty())
+    evm.return_data(data: ptr::MemSpan::empty())
 }
 
 #[contract_init(Child)]
@@ -35,23 +45,28 @@ fn child_init() uses (evm: mut Evm) {
     let len = evm.code_region_len(child_runtime)
     let offset = evm.code_region_offset(child_runtime)
     let mut dest = ptr::MemBuffer::alloc(len)
-    evm.codecopy(dest: mut dest, offset: offset)
-    evm.return_data(data: dest)
+    evm.codecopy(
+        dest: mut dest,
+        dest_offset: 0,
+        src_offset: offset,
+        len,
+    )
+    evm.return_data(data: dest.span())
 }
 
 #[contract_runtime(Child)]
 fn child_runtime() uses (evm: mut Evm) {
     let mut data = ptr::MemBuffer::alloc(4)
-    evm.calldatacopy(dest: mut data, offset: 0)
-    evm.return_data(data: data)
+    evm.calldatacopy(dest: mut data, dest_offset: 0, src_offset: 0, len: 4)
+    evm.return_data(data: data.span())
 }
 
 fn balance() uses (ops: RawOps) {
-    ops.return_data(data: ptr::MemBuffer::empty())
+    ops.return_data(data: ptr::MemSpan::empty())
 }
 
 fn transfer() uses (ops: RawOps) {
-    ops.return_data(data: ptr::MemBuffer::empty())
+    ops.return_data(data: ptr::MemSpan::empty())
 }
 
 pub fn read_selector() -> u256 uses (ops: RawOps) {

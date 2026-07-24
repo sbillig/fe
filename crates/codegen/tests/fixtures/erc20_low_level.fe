@@ -8,17 +8,17 @@ const ALLOWANCES_SALT: u256 = 1
 
 fn abi_encode_u256(value: u256) -> ! uses (ops: mut RawOps) {
     let data = ptr::MemBuffer::alloc(32)
-    ops.mstore(addr: data.ptr, value: value)
-    ops.return_data(data: data)
+    ops.mstore(addr: data.ptr(), value)
+    ops.return_data(data: data.span())
 }
 
 fn abi_encode_string(word: u256, len: u256) -> ! uses (ops: mut RawOps) {
     // ABI encoding for a single dynamic string literal
     let data = ptr::MemBuffer::alloc(96)
-    ops.mstore(addr: data.ptr, value: 32) // offset to data
-    ops.mstore(addr: ptr::offset_bytes(data.ptr, 32), value: len) // string length
-    ops.mstore(addr: ptr::offset_bytes(data.ptr, 64), value: word)
-    ops.return_data(data: data)
+    ops.mstore(addr: data.ptr(), value: 32) // offset to data
+    ops.mstore(addr: ptr::offset_bytes(data.ptr(), 32), value: len) // string length
+    ops.mstore(addr: ptr::offset_bytes(data.ptr(), 64), value: word)
+    ops.return_data(data: data.span())
 }
 
 // ERC20 storage ---------------------------------------------------------
@@ -52,7 +52,7 @@ impl<const BALANCES_ROOT: u256, const ALLOWANCES_ROOT: u256>
 
     fn set_owner_once(mut self, owner: Address) uses (ops: RawOps) {
         if self.owner != Address::zero() {
-            ops.revert(data: ptr::MemBuffer::empty())
+            ops.revert(data: ptr::MemSpan::empty())
         }
         self.owner = owner
     }
@@ -60,7 +60,7 @@ impl<const BALANCES_ROOT: u256, const ALLOWANCES_ROOT: u256>
     fn transfer(mut self, from: Address, to: Address, amount: u256) uses (ops: RawOps) {
         let from_bal = self.balance_of(addr: from)
         if from_bal < amount {
-            ops.revert(data: ptr::MemBuffer::empty())
+            ops.revert(data: ptr::MemSpan::empty())
         }
         let to_bal = self.balance_of(addr: to)
         self.balances.set(key: from, value: from_bal - amount)
@@ -71,7 +71,7 @@ impl<const BALANCES_ROOT: u256, const ALLOWANCES_ROOT: u256>
         let spender = ctx.caller()
         let allowed = self.allowance(owner: owner, spender: spender)
         if allowed < amount {
-            ops.revert(data: ptr::MemBuffer::empty())
+            ops.revert(data: ptr::MemSpan::empty())
         }
         self.transfer(from: owner, to: to, amount: amount)
         self.allowances.set(key: (owner, spender), value: allowed - amount)
@@ -80,7 +80,7 @@ impl<const BALANCES_ROOT: u256, const ALLOWANCES_ROOT: u256>
     fn mint(mut self, to: Address, amount: u256) uses (ctx: Ctx, ops: RawOps) {
         let caller = ctx.caller()
         if caller != self.owner {
-            ops.revert(data: ptr::MemBuffer::empty())
+            ops.revert(data: ptr::MemSpan::empty())
         }
         let bal = self.balance_of(addr: to)
         self.balances.set(key: to, value: bal + amount)
@@ -131,8 +131,13 @@ fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
     let mut dest = ptr::MemBuffer::alloc(len)
-    evm.codecopy(dest: mut dest, offset: offset)
-    evm.return_data(data: dest)
+    evm.codecopy(
+        dest: mut dest,
+        dest_offset: 0,
+        src_offset: offset,
+        len,
+    )
+    evm.return_data(data: dest.span())
 }
 
 #[contract_runtime(Erc20Contract)]
@@ -186,7 +191,7 @@ fn runtime() uses (evm: mut Evm) {
                 let amount = evm.calldataload(36)
                 abi_encode_u256(value: mint(to: to, amount: amount))
             }
-            _ => evm.revert(data: ptr::MemBuffer::empty())
+            _ => evm.revert(data: ptr::MemSpan::empty())
         }
     }
 }

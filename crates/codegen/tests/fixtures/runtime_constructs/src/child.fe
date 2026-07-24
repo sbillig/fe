@@ -6,13 +6,18 @@ pub fn child_init() uses (evm: mut Evm) {
     let len = evm.code_region_len(child_runtime)
     let offset = evm.code_region_offset(child_runtime)
     let mut dest = ptr::MemBuffer::alloc(len)
-    evm.codecopy(dest: mut dest, offset: offset)
-    evm.return_data(data: dest)
+    evm.codecopy(
+        dest: mut dest,
+        dest_offset: 0,
+        src_offset: offset,
+        len,
+    )
+    evm.return_data(data: dest.span())
 }
 
 #[contract_runtime(Child)]
 pub fn child_runtime() uses (evm: mut Evm) {
     let data = ptr::MemBuffer::alloc(32)
-    evm.mstore(addr: data.ptr, value: 0xbeef)
-    evm.return_data(data: data)
+    evm.mstore(addr: data.ptr(), value: 0xbeef)
+    evm.return_data(data: data.span())
 }

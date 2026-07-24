@@ -19,8 +19,8 @@ impl Square {
 
 fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
     let data = ptr::MemBuffer::alloc(32)
-    ops.mstore(addr: data.ptr, value: value)
-    ops.return_data(data: data)
+    ops.mstore(addr: data.ptr(), value)
+    ops.return_data(data: data.span())
 }
 
 #[contract_init(ShapeDispatcher)]
@@ -28,8 +28,13 @@ fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(dispatch)
     let offset = evm.code_region_offset(dispatch)
     let mut dest = ptr::MemBuffer::alloc(len)
-    evm.codecopy(dest: mut dest, offset: offset)
-    evm.return_data(data: dest)
+    evm.codecopy(
+        dest: mut dest,
+        dest_offset: 0,
+        src_offset: offset,
+        len,
+    )
+    evm.return_data(data: dest.span())
 }
 
 #[contract_runtime(ShapeDispatcher)]
@@ -52,5 +57,5 @@ fn dispatch() uses (evm: mut Evm) {
         with (RawOps = evm) { abi_encode(value) }
     }
 
-    evm.return_data(data: ptr::MemBuffer::empty())
+    evm.return_data(data: ptr::MemSpan::empty())
 }

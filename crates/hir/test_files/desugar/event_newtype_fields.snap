@@ -19,6 +19,6 @@ impl std::evm::Event for Swap {
 
     #[inline(always)]
     fn emit<L: std::evm::Log>(own self, _ log: mut L) {
-        log.log2(data: std::evm::encode_abi_payload((self.tick, self.amount)), topic0: Self::TOPIC0, topic1: self.sender.as_topic())
+        log.log2(data: std::evm::encode_abi_payload((self.tick, self.amount)).span(), topic0: Self::TOPIC0, topic1: self.sender.as_topic())
     }
 }

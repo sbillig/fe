@@ -236,7 +236,7 @@ define_runtime_intrinsics! {
     Mload => (Std, ["evm", "ops", "mload"], READ_POINTEE_0, None),
     Mstore => (Std, ["evm", "ops", "mstore"], WRITE_POINTEE_0, None),
     Mstore8 => (Std, ["evm", "ops", "mstore8"], WRITE_POINTEE_0, None),
-    Mcopy => (Core, ["abi", "mcopy"], COPY_MEMORY, None),
+    Mcopy => (Core, ["ptr", "copy_mem"], COPY_MEMORY, None),
     ZeroMem => (Core, ["ptr", "zero_mem"], WRITE_POINTEE_0, None),
     Msize => (Std, ["evm", "ops", "msize"], NO_MEMORY_ACCESSES, None),
     Sload => (Std, ["evm", "ops", "sload"], NO_MEMORY_ACCESSES, None),

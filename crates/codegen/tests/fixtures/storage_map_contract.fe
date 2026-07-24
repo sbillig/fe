@@ -3,8 +3,8 @@ use std::evm::{Evm, RawMem, RawOps, RawStorage, StorageMap, StorPtr}
 
 fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
     let data = ptr::MemBuffer::alloc(32)
-    ops.mstore(addr: data.ptr, value: value)
-    ops.return_data(data: data)
+    ops.mstore(addr: data.ptr(), value)
+    ops.return_data(data: data.span())
 }
 
 // Two separate StorageMaps - balances and allowances
@@ -50,8 +50,13 @@ fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
     let mut dest = ptr::MemBuffer::alloc(len)
-    evm.codecopy(dest: mut dest, offset: offset)
-    evm.return_data(data: dest)
+    evm.codecopy(
+        dest: mut dest,
+        dest_offset: 0,
+        src_offset: offset,
+        len,
+    )
+    evm.return_data(data: dest.span())
 }
 
 #[contract_runtime(BalanceMap)]
@@ -104,7 +109,7 @@ fn runtime() uses (evm: mut Evm) {
                     }
                     abi_encode(value: 0)
                 }
-                _ => evm.return_data(data: ptr::MemBuffer::empty())
+                _ => evm.return_data(data: ptr::MemSpan::empty())
             }
         }
     }

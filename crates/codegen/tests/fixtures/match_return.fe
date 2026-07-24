@@ -5,8 +5,8 @@ enum E { A, B }
 
 fn f(e: E) uses (ops: RawOps) {
     match e {
-        E::A => { ops.return_data(data: ptr::MemBuffer::empty()) }
-        E::B => { ops.return_data(data: ptr::MemBuffer::empty()) }
+        E::A => { ops.return_data(data: ptr::MemSpan::empty()) }
+        E::B => { ops.return_data(data: ptr::MemSpan::empty()) }
     }
 }
 

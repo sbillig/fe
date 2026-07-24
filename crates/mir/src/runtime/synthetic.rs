@@ -422,7 +422,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 },
             );
             let input =
-                self.push_memory_bytes_value(decode_bb, plan.contract.scope(), tail_ptr, tail_len);
+                self.push_memory_span_value(decode_bb, plan.contract.scope(), tail_ptr, tail_len);
             let input_ty = self.locals[input.index()].semantic_ty;
             let decoder_new = resolve_sol_decoder_new(self.db, plan.contract.scope(), input_ty)
                 .expect("decoder_new");
@@ -1467,14 +1467,14 @@ impl<'db> SyntheticBodyBuilder<'db> {
         dst
     }
 
-    fn push_memory_bytes_value(
+    fn push_memory_span_value(
         &mut self,
         bb: RBlockId,
         scope: hir::hir_def::scope_graph::ScopeId<'db>,
         ptr: RLocalId,
         len: RLocalId,
     ) -> RLocalId {
-        let ty = memory_bytes_ty(self.db, scope).expect("MemoryBytes");
+        let ty = memory_span_ty(self.db, scope).expect("MemSpan");
         let class = top_level_class_for_ty_in_env(
             self.db,
             self.runtime_type_env(scope),
@@ -1493,11 +1493,9 @@ impl<'db> SyntheticBodyBuilder<'db> {
             | RuntimeClass::RawAddr { .. }
             | RuntimeClass::AggregateValue { .. } => PlaceRoot::Slot(local),
         };
-        let layout = class
-            .aggregate_layout()
-            .expect("MemoryBytes aggregate layout");
+        let layout = class.aggregate_layout().expect("MemSpan aggregate layout");
         let crate::runtime::Layout::Struct(layout) = layout.data(self.db) else {
-            panic!("MemoryBytes should lower as a struct layout");
+            panic!("MemSpan should lower as a struct layout");
         };
         let field_tys = ty.field_types(self.db);
         let ptr = self.coerce_runtime_value(bb, ptr, &layout.fields[0], field_tys[0]);
@@ -1759,11 +1757,11 @@ fn sol_abi_ty<'db>(
     resolve_lib_type_path(db, scope, "std::abi::Sol")
 }
 
-fn memory_bytes_ty<'db>(
+fn memory_span_ty<'db>(
     db: &'db dyn MirDb,
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
 ) -> Option<TyId<'db>> {
-    resolve_lib_type_path(db, scope, "std::evm::memory_input::MemoryBytes")
+    resolve_lib_type_path(db, scope, "core::ptr::MemSpan")
 }
 
 #[cfg(test)]

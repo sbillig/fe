@@ -430,6 +430,7 @@ fn lower_emit_method<'db>(
     let log_provider_ident = builder.ident("log");
     let data_ident = builder.ident("data");
     let as_topic_ident = builder.ident("as_topic");
+    let span_ident = builder.ident("span");
     let log_method_ident = builder.ident(&format!("log{}", indexed_fields.len() + 1));
 
     let log_trait_ref = TraitRefId::new(
@@ -477,7 +478,7 @@ fn lower_emit_method<'db>(
         move |body| {
             let self_expr = body.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
 
-            let data = if data_fields.is_empty() {
+            let data_buffer = if data_fields.is_empty() {
                 let empty_buffer = PathId::from_ident(db, roots.core)
                     .push_str(db, "ptr")
                     .push_str(db, "MemBuffer")
@@ -496,6 +497,7 @@ fn lower_emit_method<'db>(
                 let encode_expr = body.path_expr(encode_path);
                 body.call_expr(encode_expr, vec![payload_expr])
             };
+            let data = body.method_call_expr(data_buffer, span_ident, vec![]);
 
             let topic0 = {
                 let path = PathId::from_ident(db, IdentId::make_self_ty(db)).push_str(db, "TOPIC0");

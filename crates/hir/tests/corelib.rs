@@ -128,6 +128,39 @@ fn analyze_stdlib_under_release_profile() {
 }
 
 #[test]
+fn mem_slice_by_value_access_requires_copy_elements() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///mem_slice_by_value_access_requires_copy_elements.fe").unwrap();
+    let src = r#"
+fn index_noncopy(
+    slice: core::ptr::MemSlice<core::ptr::MemBuffer>,
+) -> core::ptr::MemBuffer {
+    slice[0]
+}
+
+fn get_noncopy(
+    slice: core::ptr::MemSlice<core::ptr::MemBuffer>,
+) -> core::option::Option<core::ptr::MemBuffer> {
+    slice.get(0)
+}
+"#;
+
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    let diags = db.run_on_top_mod(top_mod);
+    let rendered = diags.format_diags(&db);
+
+    assert!(
+        rendered.contains("trait bound `MemBuffer: Copy` is not satisfied"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("`MemBuffer` doesn't implement `Copy`"),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn solver_proves_encode_for_fixed_bool_arrays() {
     let mut db = DriverDataBase::default();
     let url = Url::parse("file:///encode_fixed_bool_array_goal.fe").unwrap();

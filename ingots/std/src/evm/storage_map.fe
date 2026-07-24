@@ -141,7 +141,7 @@ fn storagemap_storage_slot_with_salt<K>(key: K, salt: u256) -> u256
     let scratch = ptr::alloc_bytes(0)
     let key_len = K::write_key(ptr: scratch, key)
     mstore(addr: ptr::offset_bytes(scratch, key_len), value: salt)
-    keccak256(ptr::MemBuffer::from_raw_parts(ptr: scratch, len: key_len + 32))
+    keccak256(ptr::MemSpan::from_raw_parts(ptr: scratch, len: key_len + 32))
 }
 
 #[inline(always)]

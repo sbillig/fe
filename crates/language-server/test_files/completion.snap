@@ -29,6 +29,7 @@ completions:
   - Err (EnumMember)
   - ErrorVariant (Interface)
   - Evm (Struct)
+  - FixedMemBuffer (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
@@ -37,6 +38,8 @@ completions:
   - Log (Interface)
   - MemArray (Struct)
   - MemBuffer (Struct)
+  - MemSlice (Struct)
+  - MemSpan (Class)
   - MsgVariant (Interface)
   - None (EnumMember)
   - Ok (EnumMember)
@@ -52,8 +55,8 @@ completions:
   - UnsignedAbs (Interface)
   - Vec (Class)
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
-  - as_bytes (Function) -> "as_bytes(${1:ptr})$0" [fn as_bytes(ptr: *<T>) -> *<u8>]
   - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
+  - byte_ptr (Function) -> "byte_ptr(${1:ptr})$0" [fn byte_ptr(ptr: *<T>) -> *<u8>]
   - cast (Function) -> "cast(${1:ptr})$0" [fn cast(ptr: *<T>) -> *<U>]
   - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
   - help (Function) -> "help()$0" [use utils::help [fn help() -> i32]] {+0:use utils::help}
@@ -102,11 +105,14 @@ completions:
   - Address (Struct)
   - Bytes (Struct)
   - Evm (Struct)
+  - FixedMemBuffer (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
   - MemArray (Struct)
   - MemBuffer (Struct)
+  - MemSlice (Struct)
+  - MemSpan (Class)
   - Option (Enum)
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+0:use other_stuff::OtherThing}
   - Panic (Struct)
@@ -129,8 +135,8 @@ completions:
   - Ok (EnumMember)
   - Some (EnumMember)
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
-  - as_bytes (Function) -> "as_bytes(${1:ptr})$0" [fn as_bytes(ptr: *<T>) -> *<u8>]
   - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
+  - byte_ptr (Function) -> "byte_ptr(${1:ptr})$0" [fn byte_ptr(ptr: *<T>) -> *<u8>]
   - cast (Function) -> "cast(${1:ptr})$0" [fn cast(ptr: *<T>) -> *<U>]
   - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
   - help (Function) -> "help()$0" [use utils::help [fn help() -> i32]] {+0:use utils::help}
@@ -174,11 +180,14 @@ completions:
   - Address (Struct)
   - Bytes (Struct)
   - Evm (Struct)
+  - FixedMemBuffer (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
   - MemArray (Struct)
   - MemBuffer (Struct)
+  - MemSlice (Struct)
+  - MemSpan (Class)
   - Option (Enum)
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+0:use other_stuff::OtherThing}
   - Panic (Struct)
@@ -201,8 +210,8 @@ completions:
   - Ok (EnumMember)
   - Some (EnumMember)
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
-  - as_bytes (Function) -> "as_bytes(${1:ptr})$0" [fn as_bytes(ptr: *<T>) -> *<u8>]
   - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
+  - byte_ptr (Function) -> "byte_ptr(${1:ptr})$0" [fn byte_ptr(ptr: *<T>) -> *<u8>]
   - cast (Function) -> "cast(${1:ptr})$0" [fn cast(ptr: *<T>) -> *<U>]
   - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
   - help (Function) -> "help()$0" [use utils::help [fn help() -> i32]] {+0:use utils::help}
@@ -236,9 +245,12 @@ completions:
   - Address (Struct)
   - Bytes (Struct)
   - Evm (Struct)
+  - FixedMemBuffer (Struct)
   - Helper (Struct)
   - MemArray (Struct)
   - MemBuffer (Struct)
+  - MemSlice (Struct)
+  - MemSpan (Class)
   - Option (Enum)
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+82:use other_stuff::OtherThing}
   - Panic (Struct)
@@ -259,11 +271,14 @@ completions:
   - Address (Struct)
   - Bytes (Struct)
   - Evm (Struct)
+  - FixedMemBuffer (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+104:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+104:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+104:use shadow_test::Helper}
   - MemArray (Struct)
   - MemBuffer (Struct)
+  - MemSlice (Struct)
+  - MemSpan (Class)
   - Option (Enum)
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+104:use other_stuff::OtherThing}
   - Panic (Struct)

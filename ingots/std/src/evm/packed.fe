@@ -43,9 +43,9 @@
 ///   values and Solidity's `bytes`).
 /// - No decoding counterpart: packed encoding is not self-describing,
 ///   and Solidity has none either.
-use core::abi::{Bytes, BytesView, MemoryInput}
+use core::abi::{Bytes, BytesView}
 use core::num::IntDowncast
-use core::ptr
+use core::ptr::{self, MemSpan}
 use core::result::Result
 use ingot::abi::FixedBytes
 use super::crypto
@@ -93,13 +93,8 @@ pub fn keccak_packed<T: EncodePacked>(_ value: own T) -> u256 uses (mem: mut Raw
 /// exceed it — a wrong capacity hint can cost a copy, never a panic
 /// or memory corruption. Growth moves the buffer, which is safe
 /// because the base pointer is never exposed before the terminal ops.
-///
-/// One unsupported edge: `append_mem` reading from this builder's own
-/// buffer (the source may be stale or overlapping if the append
-/// triggers growth).
 pub struct Packed {
     buffer: ptr::MemBuffer,
-    len: u256,
 }
 
 impl Packed {
@@ -113,8 +108,7 @@ impl Packed {
     /// the buffer.
     pub fn with_capacity(bytes: u256) -> Self uses (mem: mut RawMem) {
         Packed {
-            buffer: ptr::MemBuffer::alloc(bytes),
-            len: 0,
+            buffer: ptr::MemBuffer::with_capacity(bytes),
         }
     }
 
@@ -199,40 +193,34 @@ impl Packed {
     /// Append a fixed byte array verbatim.
     pub fn bytes<const N: usize>(mut self, _ value: [u8; N]) uses (mem: mut RawMem) {
         self.reserve(N as u256)
+        let len = self.buffer.len()
         let mut i: usize = 0
         while i < N {
-            mem.mstore8(addr: ptr::offset_bytes(self.buffer.ptr, self.len + (i as u256)), value: value[i])
+            mem.mstore8(addr: ptr::offset_bytes(self.buffer.ptr(), len + (i as u256)), value: value[i])
             i += 1
         }
-        self.len += N as u256
+        self.buffer.set_len(len + (N as u256))
     }
 
-    /// Append `len` raw bytes copied from memory at `ptr`.
-    ///
-    /// Unsupported edge: `ptr` must not point into this builder's own
-    /// buffer — an append that triggers growth would leave `ptr`
-    /// pointing at the stale allocation.
-    pub fn append_mem(mut self, source: *u8, len: u256) uses (mem: mut RawMem) {
-        self.reserve(len)
-        copy_bytes(dest: ptr::offset_bytes(self.buffer.ptr, self.len), src: source, len: len)
-        self.len += len
+    /// Append a read-only memory span.
+    pub fn append_span(mut self, _ source: MemSpan) uses (mem: mut RawMem) {
+        self.append_raw(source: source.ptr(), len: source.len())
     }
 
     /// Bytes written so far.
     pub fn len(self) -> u256 {
-        self.len
+        self.buffer.len()
     }
 
     /// keccak256 of the bytes written so far.
     pub fn keccak256(self) -> u256 {
-        ops::keccak256(offset: self.buffer.ptr, len: self.len)
+        crypto::keccak256(self.buffer.span())
     }
 
     /// SHA-256 of the bytes written so far (precompile 0x02). Reverts
     /// if the precompile call fails.
     pub fn sha256(self) -> u256 {
-        let data = ptr::MemBuffer::from_raw_parts(ptr: self.buffer.ptr, len: self.len)
-        match crypto::sha256(data) {
+        match crypto::sha256(self.buffer.span()) {
             Result::Ok(digest) => digest,
             Result::Err(_) => ops::revert_empty(),
         }
@@ -250,8 +238,8 @@ impl Packed {
             // canonical regardless of what the copy leaves behind.
             mem.mstore(addr: ptr::offset_bytes(data, padded), value: 0)
         }
-        copy_bytes(dest: ptr::offset_bytes(data, 32), src: self.buffer.ptr, len: len)
-        Bytes { data, len, size: 32 + padded }
+        ptr::copy(dest: ptr::offset_bytes(data, 32), source: self.buffer.span())
+        Bytes::from_abi_tail(data, len, size: 32 + padded)
     }
 
     /// Write the low `width` bytes of `value` big-endian at the cursor.
@@ -268,8 +256,9 @@ impl Packed {
             return
         }
         self.reserve(width)
-        let cursor = ptr::offset_bytes(self.buffer.ptr, self.len)
-        if self.len + 32 <= self.buffer.len {
+        let len = self.buffer.len()
+        let cursor = ptr::offset_bytes(self.buffer.ptr(), len)
+        if len + 32 <= self.buffer.capacity() {
             mem.mstore(addr: cursor, value: value << ((32 - width) * 8))
         } else {
             let mut i: u256 = 0
@@ -279,45 +268,24 @@ impl Packed {
                 i += 1
             }
         }
-        self.len += width
+        self.buffer.set_len(len + width)
     }
 
     /// Ensure `additional` bytes fit below `limit`, growing
     /// (copy-on-grow, doubling until it fits) if they don't.
     fn reserve(mut self, _ additional: u256) uses (mem: mut RawMem) {
-        if self.len + additional <= self.buffer.len {
-            return
-        }
-        let needed = self.len + additional
-        let mut cap = self.buffer.len
-        if cap == 0 {
-            cap = 32
-        }
-        while cap < needed {
-            cap *= 2
-        }
-        let buffer = ptr::MemBuffer::alloc(cap)
-        copy_bytes(dest: buffer.ptr, src: self.buffer.ptr, len: self.len)
-        self.buffer = buffer
+        self.buffer.reserve(additional)
     }
-}
 
-// Byte-precise memory copy: whole words first, then the sub-word tail
-// one byte at a time, so exactly `len` destination bytes are written.
-fn copy_bytes(dest: *u8, src: *u8, len: u256) uses (mem: mut RawMem) {
-    let words_end = len / 32 * 32
-    let mut off: u256 = 0
-    while off < words_end {
-        mem.mstore(
-            addr: ptr::offset_bytes(dest, off),
-            value: mem.mload(ptr::offset_bytes(src, off)),
+    fn append_raw(mut self, source: *u8, len: u256) uses (mem: mut RawMem) {
+        self.reserve(len)
+        let old_len = self.buffer.len()
+        ptr::copy_raw(
+            dest: ptr::offset_bytes(self.buffer.ptr(), old_len),
+            source,
+            len,
         )
-        off += 32
-    }
-    while off < len {
-        let b: u8 = (mem.mload(ptr::offset_bytes(src, off)) >> 248).downcast_truncate()
-        mem.mstore8(addr: ptr::offset_bytes(dest, off), value: b)
-        off += 1
+        self.buffer.set_len(old_len + len)
     }
 }
 
@@ -477,17 +445,19 @@ impl<const N: usize> EncodePacked for FixedBytes<N> {
 
 // `len()` raw payload bytes, no length word.
 impl EncodePacked for Bytes {
-    fn packed_width(self) -> u256 { self.len }
+    fn packed_width(self) -> u256 { self.len() }
     fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
-        p.append_mem(source: self.payload_ptr(), len: self.len)
+        let source = self.payload_span()
+        p.append_raw(source: source.ptr(), len: source.len())
         p
     }
 }
 
-impl EncodePacked for BytesView<MemoryInput> {
-    fn packed_width(self) -> u256 { self.len }
+impl EncodePacked for BytesView<MemSpan> {
+    fn packed_width(self) -> u256 { self.len() }
     fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
-        p.append_mem(source: ptr::offset_bytes(self.input.base, self.start), len: self.len)
+        let source = self.into_raw_parts()
+        p.append_raw(source: source.0, len: source.1)
         p
     }
 }

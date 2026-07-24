@@ -667,13 +667,13 @@ fn bad(p: *u256) {
 }
 
 #[test]
-fn mem_array_from_raw_parts_preserves_pointer_provenance() {
+fn mem_span_from_raw_parts_preserves_pointer_provenance() {
     let diags = borrow_diags(
         r#"
 fn bad(p: *u256, len: u256) {
-    let a = core::ptr::MemArray<u256>::from_raw_parts(ptr: p, len: len)
+    let span = core::ptr::MemSpan::from_raw_parts(ptr: core::ptr::byte_ptr(p), len: len)
     let x = mut *p
-    a[0] = 1
+    *span.ptr() = 1
     x = 2
 }
 "#,
@@ -683,14 +683,11 @@ fn bad(p: *u256, len: u256) {
 }
 
 #[test]
-fn generic_into_mem_buffer_preserves_fresh_pointer_provenance() {
+fn mem_buffer_preserves_fresh_pointer_provenance() {
     assert_no_borrow_conflict(
         r#"
-fn read_buffer<B>(buffer: own B) -> u8
-    where B: core::convert::Into<core::ptr::MemBuffer>
-{
-    let buffer = buffer.into()
-    *buffer.ptr
+fn read_buffer(buffer: own core::ptr::MemBuffer) -> u8 {
+    *buffer.ptr()
 }
 
 fn ok(p: *u256) {
@@ -710,7 +707,7 @@ fn encoded_mem_buffer_preserves_fresh_pointer_provenance() {
         r#"
 fn read_encoded(args: own (u256, u256)) -> u8 {
     let buffer = std::evm::encode_abi_payload<(u256, u256)>(args)
-    *buffer.ptr
+    *buffer.ptr()
 }
 
 fn ok(p: *u256) {
@@ -727,8 +724,8 @@ fn ok(p: *u256) {
 fn encode_alloc_returns_fresh_pointer_provenance() {
     with_pointer_summary(
         r#"
-fn encoded(args: own (u256, u256)) -> (*u8, u256) {
-    core::abi::encode_alloc<std::abi::Sol, (u256, u256)>(args)
+fn encoded(args: own (u256, u256)) -> *u8 {
+    core::abi::encode_alloc<std::abi::Sol, (u256, u256)>(args).ptr()
 }
 "#,
         "encoded",
@@ -775,7 +772,7 @@ fn second_array(
     _ a: core::ptr::MemArray<u256>,
     b: core::ptr::MemArray<u256>,
 ) -> mut u256 {
-    mut *b.ptr
+    mut *b.ptr()
 }
 "#,
         "second_array",
@@ -1720,8 +1717,8 @@ fn bad(
     b: core::ptr::MemArray<u256>,
 ) {
     let r = pick(cond, a, b)
-    let x = mut *r.ptr
-    let y = mut *a.ptr
+    let x = mut *r.ptr()
+    let y = mut *a.ptr()
     y = 1
     x = 2
 }
@@ -1747,8 +1744,8 @@ fn bad(
     b: core::ptr::MemArray<u256>,
 ) {
     let r = pick(cond, a, b)
-    let x = mut *r.ptr
-    let y = mut *b.ptr
+    let x = mut *r.ptr()
+    let y = mut *b.ptr()
     y = 1
     x = 2
 }
@@ -2410,14 +2407,14 @@ impl Holder {
 }
 
 #[test]
-fn mem_array_ptr_field_update_does_not_keep_stale_carrier_target() {
+fn mem_span_reassignment_does_not_keep_stale_carrier_target() {
     assert_no_borrow_conflict(
         r#"
 fn ok(q: *u256, len: u256) {
     let p = core::ptr::alloc<u256>()
-    let mut a = core::ptr::MemArray<u256>::from_raw_parts(ptr: p, len: len)
-    a.ptr = q
-    let x = mut *a.ptr
+    let mut span = core::ptr::MemSpan::from_raw_parts(ptr: core::ptr::byte_ptr(p), len: len)
+    span = core::ptr::MemSpan::from_raw_parts(ptr: core::ptr::byte_ptr(q), len: len)
+    let x = mut *core::ptr::cast<u8, u256>(span.ptr())
     let y = mut *p
     y = 1
     x = 2
@@ -3206,7 +3203,7 @@ struct Data {
 }
 
 fn raw_store() uses (data: *Data, mem: mut RawMem) {
-    mem.mstore(addr: ptr::as_bytes(data), value: 8)
+    mem.mstore(addr: ptr::byte_ptr(data), value: 8)
 }
 
 fn ok() uses (mem: mut RawMem) {

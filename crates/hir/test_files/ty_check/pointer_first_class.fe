@@ -8,7 +8,7 @@ struct Holder {
 }
 
 fn pointer_casts_and_offsets(data: *Data, bytes: *u8) -> u256 {
-    let bytes_from_typed: *u8 = core::ptr::as_bytes(data)
+    let bytes_from_typed: *u8 = core::ptr::byte_ptr(data)
     let typed_again: *Data = core::ptr::cast<u8, Data>(bytes_from_typed)
     let next: *Data = core::ptr::offset_bytes(typed_again, 32)
     let input_data: *Data = core::ptr::cast<u8, Data>(bytes)

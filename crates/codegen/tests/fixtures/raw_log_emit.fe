@@ -7,8 +7,8 @@ struct Data {
 
 fn raw_emit(evm: mut Evm) {
     let data = ptr::alloc<Data>()
-    evm.log0(data: ptr::MemBuffer::from_raw_parts(
-        ptr: ptr::as_bytes(data),
+    evm.log0(data: ptr::MemSpan::from_raw_parts(
+        ptr: ptr::byte_ptr(data),
         len: core::size_of<Data>(),
     ))
 }

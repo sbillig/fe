@@ -1,5 +1,6 @@
 use core::ptr
-use std::evm::{MemoryBytes, RawMem}
+use std::abi::sol::decode_input
+use std::evm::RawMem
 
 #[test]
 fn test_dynamic_array_payload_end_uses_max_element_end() uses (raw: mut RawMem) {
@@ -18,9 +19,9 @@ fn test_dynamic_array_payload_end_uses_max_element_end() uses (raw: mut RawMem) 
     raw.mstore(addr: ptr::offset_bytes(ptr, 160), value: 0)
     raw.mstore(addr: ptr::offset_bytes(ptr, 192), value: 0)
 
-    let input = MemoryBytes::new(base: ptr, len: 224)
-    let decoded: Vec<Bytes> = input.decode()
+    let input = ptr::MemSpan::from_raw_parts(ptr, len: 224)
+    let decoded: Vec<Bytes> = decode_input(input)
 
     assert!(decoded.len() == 2)
-    assert!(decoded.size == 224)
+    assert!(decoded.encoded_size() == 224)
 }

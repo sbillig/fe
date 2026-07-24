@@ -11,15 +11,12 @@ type @layout_1 = enum {
     #variant_1,
 };
 
-func private %alloc(v0.i256) -> @layout_0 {
+func private %cast(v0.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.*i8 = evm_malloc v0;
-        v3.i256 = ptr_to_int v2 i256;
-        v4.@layout_0 = call %from_raw_parts v3 v0;
-        return v4;
+        return v0;
 }
 
 func private %empty() -> @layout_0 {
@@ -27,8 +24,11 @@ func private %empty() -> @layout_0 {
         jump block1;
 
     block1:
-        v1.@layout_0 = call %alloc 0.i256;
-        return v1;
+        v1.*i8 = evm_malloc 0.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        v3.i256 = call %cast v2;
+        v4.@layout_0 = call %from_raw_parts v3 0.i256;
+        return v4;
 }
 
 func private %f(v0.@layout_1) {
@@ -60,12 +60,13 @@ func private %from_raw_parts(v0.i256, v1.i256) -> @layout_0 {
         return v8;
 }
 
-func private %into(v0.@layout_0) -> @layout_0 {
+func private %len(v0.@layout_0) -> i256 {
     block0:
         jump block1;
 
     block1:
-        return v0;
+        v3.i256 = extract_value v0 1.i256;
+        return v3;
 }
 
 func private %main() {
@@ -87,32 +88,23 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %return_data(v0.@layout_0) {
+func private %ptr(v0.@layout_0) -> i256 {
     block0:
-        v1.objref<@layout_0> = obj.alloc @layout_0;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        v4.i256 = extract_value v0 0.i256;
-        obj.store v3 v4;
-        v6.objref<i256> = obj.proj v1 1.i256;
-        v7.i256 = extract_value v0 1.i256;
-        obj.store v6 v7;
         jump block1;
 
     block1:
-        v8.@layout_0 = obj.load v1;
-        v9.@layout_0 = call %into v8;
-        v10.objref<@layout_0> = obj.alloc @layout_0;
-        v11.objref<i256> = obj.proj v10 0.i256;
-        v12.i256 = extract_value v9 0.i256;
-        obj.store v11 v12;
-        v13.objref<i256> = obj.proj v10 1.i256;
-        v14.i256 = extract_value v9 1.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v10 0.i256;
-        v16.i256 = obj.load v15;
-        v17.objref<i256> = obj.proj v10 1.i256;
-        v18.i256 = obj.load v17;
-        evm_return v16 v18;
+        v3.i256 = extract_value v0 0.i256;
+        return v3;
+}
+
+func private %return_data(v0.@layout_0) {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %ptr v0;
+        v3.i256 = call %len v0;
+        evm_return v2 v3;
 }
 
 

@@ -6,8 +6,13 @@ fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
     let mut dest = ptr::MemBuffer::alloc(len)
-    evm.codecopy(dest: mut dest, offset: offset)
-    evm.return_data(data: dest)
+    evm.codecopy(
+        dest: mut dest,
+        dest_offset: 0,
+        src_offset: offset,
+        len,
+    )
+    evm.return_data(data: dest.span())
 }
 
 #[contract_runtime(Parent)]
@@ -15,9 +20,14 @@ fn runtime() uses (evm: mut Evm) {
     let len = evm.code_region_len(child::child_init)
     let offset = evm.code_region_offset(child::child_init)
     let mut dest = ptr::MemBuffer::alloc(len)
-    evm.codecopy(dest: mut dest, offset: offset)
-    let addr = evm.create2_raw(value: 0, init_code: dest, salt: 0x1234)
+    evm.codecopy(
+        dest: mut dest,
+        dest_offset: 0,
+        src_offset: offset,
+        len,
+    )
+    let addr = evm.create2_raw(value: 0, init_code: dest.span(), salt: 0x1234)
     let data = ptr::MemBuffer::alloc(32)
-    evm.mstore(addr: data.ptr, value: addr.inner)
-    evm.return_data(data: data)
+    evm.mstore(addr: data.ptr(), value: addr.inner)
+    evm.return_data(data: data.span())
 }

@@ -28,11 +28,11 @@ fn test_nested_msg_encoding_uses_single_dynamic_head_slot() uses (evm: Evm) {
         inner: InnerMsg::Inner { marker: 0, data: Bytes::empty() },
     })
 
-    assert!(data.len == 128)
-    assert!(evm.mload(data.ptr) == 32)
-    assert!(evm.mload(ptr::offset_bytes(data.ptr, 32)) == 0)
-    assert!(evm.mload(ptr::offset_bytes(data.ptr, 64)) == 64)
-    assert!(evm.mload(ptr::offset_bytes(data.ptr, 96)) == 0)
+    assert!(data.len() == 128)
+    assert!(evm.mload(data.ptr()) == 32)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr(), 32)) == 0)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr(), 64)) == 64)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr(), 96)) == 0)
 }
 
 #[test]
@@ -60,11 +60,13 @@ fn test_nested_msg_decode_truncated_inner_head_reverts() uses (evm: mut Evm) {
     evm.mstore(addr: ptr::offset_bytes(ptr, 4), value: 32)
     evm.mstore(addr: ptr::offset_bytes(ptr, 36), value: 0)
 
-    let ok = evm.raw_call(
+    let mut ret = ptr::MemBuffer::empty()
+    let outcome = evm.raw_call(
         addr: receiver,
         gas: 1000000,
         value: 0,
-        args: ptr::MemBuffer::from_raw_parts(ptr: ptr, len: 68),
+        args: ptr::MemSpan::from_raw_parts(ptr, len: 68),
+        ret: mut ret,
     )
-    assert!(!ok)
+    assert!(!outcome.success())
 }

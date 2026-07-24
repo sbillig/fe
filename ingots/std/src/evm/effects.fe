@@ -1,5 +1,5 @@
 use core::effect_ref::{EffectHandle, EffectHandleMut, EffectRef, EffectRefMut}
-use core::{Into, ptr, size_of}
+use core::{ptr, size_of}
 use core::abi::{
     Abi,
     AbiDecoder,
@@ -25,10 +25,10 @@ use ingot::abi::sol::{decode_input_at, decode_output}
 use super::calldata::CallData
 use super::contract_field_slot
 use super::panic::Panic
-use ingot::evm::memory_input::MemoryBytes
 use ingot::evm::ops
 
 type MemBuffer = ptr::MemBuffer
+type MemSpan = ptr::MemSpan
 
 // -----------------------------------------------------------------------------
 // Value types
@@ -276,7 +276,14 @@ pub trait Ctx: EvmCapabilitySeal {
     fn blobhash(self, _: u256) -> u256
     fn blobbasefee(self) -> u256
     fn extcodesize(self, _ addr: Address) -> u256
-    fn extcodecopy(mut self, _ addr: Address, dest: mut MemBuffer, offset: u256)
+    fn extcodecopy(
+        mut self,
+        _ addr: Address,
+        dest: mut MemBuffer,
+        dest_offset: u256,
+        src_offset: u256,
+        len: u256,
+    )
     fn extcodehash(self, _ addr: Address) -> u256
     fn gas(self) -> u256
 }
@@ -307,42 +314,52 @@ pub trait RawOps: RawMem + RawStorage {
     fn tstor_ptr<T>(self, _ slot: u256) -> TStorPtr<T> {
         TStorPtr { slot }
     }
-    fn calldatacopy(mut self, dest: mut MemBuffer, offset: u256)
+    fn calldatacopy(
+        mut self,
+        dest: mut MemBuffer,
+        dest_offset: u256,
+        src_offset: u256,
+        len: u256,
+    )
 
     fn returndatasize(self) -> u256
-    fn returndatacopy(mut self, dest: mut MemBuffer, offset: u256)
+    fn returndatacopy(
+        mut self,
+        dest: mut MemBuffer,
+        dest_offset: u256,
+        src_offset: u256,
+        len: u256,
+    )
 
-    fn codecopy(mut self, dest: mut MemBuffer, offset: u256)
+    fn codecopy(
+        mut self,
+        dest: mut MemBuffer,
+        dest_offset: u256,
+        src_offset: u256,
+        len: u256,
+    )
     fn codesize(self) -> u256
 
-    fn keccak256<B>(self, data: own B) -> u256
-        where B: Into<MemBuffer>
+    fn keccak256(self, data: MemSpan) -> u256
 
-    fn revert<B>(self, data: own B) -> !
-        where B: Into<MemBuffer>
+    fn revert(self, data: MemSpan) -> !
 
-    fn return_data<B>(self, data: own B) -> !
-        where B: Into<MemBuffer>
+    fn return_data(self, data: MemSpan) -> !
 
     fn code_region_offset<F>(self, _: F) -> u256
     fn code_region_len<F>(self, _: F) -> u256
 }
 
 pub trait Log: EvmCapabilitySeal {
-    fn log0<B>(mut self, data: own B)
-        where B: Into<MemBuffer>
+    fn log0(mut self, data: MemSpan)
 
-    fn log1<B>(mut self, data: own B, topic0: u256)
-        where B: Into<MemBuffer>
+    fn log1(mut self, data: MemSpan, topic0: u256)
 
-    fn log2<B>(mut self, data: own B, topic0: u256, topic1: u256)
-        where B: Into<MemBuffer>
+    fn log2(mut self, data: MemSpan, topic0: u256, topic1: u256)
 
-    fn log3<B>(mut self, data: own B, topic0: u256, topic1: u256, topic2: u256)
-        where B: Into<MemBuffer>
+    fn log3(mut self, data: MemSpan, topic0: u256, topic1: u256, topic2: u256)
 
-    fn log4<B>(mut self, data: own B, topic0: u256, topic1: u256, topic2: u256, topic3: u256)
-        where B: Into<MemBuffer>
+    fn log4(mut self, data: MemSpan, topic0: u256, topic1: u256, topic2: u256, topic3: u256)
 
     /// Emit a Solidity-compatible event log (`log1`-`log4`).
     ///
@@ -374,19 +391,15 @@ pub trait Contract {
 
 pub trait Create: EvmCapabilitySeal {
     /// Low-level `CREATE` opcode.
-    fn create_raw<B>(mut self, value: u256, init_code: own B) -> Address
-        where B: Into<MemBuffer>
-    {
-        let buffer = init_code.into()
-        Address { inner: ops::create(value: value, offset: buffer.ptr, len: buffer.len) }
+    fn create_raw(mut self, value: u256, init_code: MemSpan) -> Address {
+        Address { inner: ops::create(value: value, offset: init_code.ptr(), len: init_code.len()) }
     }
 
     /// Low-level `CREATE2` opcode.
-    fn create2_raw<B>(mut self, value: u256, init_code: own B, salt: u256) -> Address
-        where B: Into<MemBuffer>
-    {
-        let buffer = init_code.into()
-        Address { inner: ops::create2(value: value, offset: buffer.ptr, len: buffer.len, salt: salt) }
+    fn create2_raw(mut self, value: u256, init_code: MemSpan, salt: u256) -> Address {
+        Address {
+            inner: ops::create2(value: value, offset: init_code.ptr(), len: init_code.len(), salt: salt),
+        }
     }
 
     /// Deploy a high-level contract using `CREATE`, bubbling revert data on failure.
@@ -396,23 +409,23 @@ pub trait Create: EvmCapabilitySeal {
         let mut addr: Address
 
         if !C::InitArgs::IS_DYNAMIC && C::InitArgs::HEAD_SIZE == 0 {
-            let mut init_code = MemBuffer::alloc(init_len)
-            ops::codecopy(dest: init_code.ptr, offset: init_off, len: init_code.len)
-            addr = self.create_raw(value: value, init_code)
+            let init_code = MemBuffer::alloc(init_len)
+            ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_code.len())
+            addr = self.create_raw(value: value, init_code: init_code.span())
         } else {
             let encoded = encode_abi_payload<C::InitArgs>(args)
-            let mut init_code = MemBuffer::alloc(init_len + encoded.len)
-            ops::codecopy(dest: init_code.ptr, offset: init_off, len: init_len)
-            copy_words(dest: ptr::offset_bytes(init_code.ptr, init_len), src: encoded.ptr, len: encoded.len)
-            addr = self.create_raw(value: value, init_code)
+            let init_code = MemBuffer::alloc(init_len + encoded.len())
+            ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_len)
+            ptr::copy(
+                dest: ptr::offset_bytes(init_code.ptr(), init_len),
+                source: encoded.span(),
+            )
+            addr = self.create_raw(value: value, init_code: init_code.span())
         }
 
         // Solidity-style behavior: bubble revert data if creation fails.
         if addr.inner == 0 {
-            let ret_len = ops::returndatasize()
-            let ret_ptr = ptr::alloc_bytes(ret_len)
-            ops::returndatacopy(dest: ret_ptr, offset: 0, len: ret_len)
-            ops::revert(offset: ret_ptr, len: ret_len)
+            bubble_last_revert()
         }
 
         addr
@@ -425,37 +438,26 @@ pub trait Create: EvmCapabilitySeal {
         let mut addr: Address
 
         if !C::InitArgs::IS_DYNAMIC && C::InitArgs::HEAD_SIZE == 0 {
-            let mut init_code = MemBuffer::alloc(init_len)
-            ops::codecopy(dest: init_code.ptr, offset: init_off, len: init_code.len)
-            addr = self.create2_raw(value: value, init_code, salt: salt)
+            let init_code = MemBuffer::alloc(init_len)
+            ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_code.len())
+            addr = self.create2_raw(value: value, init_code: init_code.span(), salt)
         } else {
             let encoded = encode_abi_payload<C::InitArgs>(args)
-            let mut init_code = MemBuffer::alloc(init_len + encoded.len)
-            ops::codecopy(dest: init_code.ptr, offset: init_off, len: init_len)
-            copy_words(dest: ptr::offset_bytes(init_code.ptr, init_len), src: encoded.ptr, len: encoded.len)
-            addr = self.create2_raw(value: value, init_code, salt: salt)
+            let init_code = MemBuffer::alloc(init_len + encoded.len())
+            ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_len)
+            ptr::copy(
+                dest: ptr::offset_bytes(init_code.ptr(), init_len),
+                source: encoded.span(),
+            )
+            addr = self.create2_raw(value: value, init_code: init_code.span(), salt)
         }
 
         // Solidity-style behavior: bubble revert data if creation fails.
         if addr.inner == 0 {
-            let ret_len = ops::returndatasize()
-            let ret_ptr = ptr::alloc_bytes(ret_len)
-            ops::returndatacopy(dest: ret_ptr, offset: 0, len: ret_len)
-            ops::revert(offset: ret_ptr, len: ret_len)
+            bubble_last_revert()
         }
 
         addr
-    }
-}
-
-fn copy_words(dest: *u8, src: *u8, len: u256) {
-    let mut offset: u256 = 0
-    while offset < len {
-        ops::mstore(
-            addr: ptr::offset_bytes(dest, offset),
-            value: ops::mload(ptr::offset_bytes(src, offset)),
-        )
-        offset += 32
     }
 }
 
@@ -463,63 +465,221 @@ fn copy_words(dest: *u8, src: *u8, len: u256) {
 pub fn encode_abi_payload<T>(_ value: own T) -> MemBuffer
     where T: Encode<Sol> + AbiSize
 {
-    let encoded = encode_alloc<Sol, T>(value)
-    MemBuffer::from_raw_parts(ptr: encoded.0, len: encoded.1)
+    encode_alloc<Sol, T>(value)
+}
+
+/// Metadata returned by a low-level EVM call.
+#[must_use]
+pub struct RawCallOutcome {
+    success: bool,
+    returndata_len: u256,
+}
+
+impl Copy for RawCallOutcome {}
+
+impl RawCallOutcome {
+    pub fn success(self) -> bool {
+        self.success
+    }
+
+    /// Full returndata length, which may exceed the output buffer's `len`.
+    pub fn returndata_len(self) -> u256 {
+        self.returndata_len
+    }
+}
+
+/// Owned returndata from a typed, non-bubbling EVM call.
+///
+/// The payload is preserved for both success and failure, so callers can
+/// inspect or decode it without relying on the ephemeral returndata buffer.
+#[must_use]
+pub struct CallOutcome {
+    success: bool,
+    returndata: MemBuffer,
+}
+
+impl CallOutcome {
+    pub fn success(self) -> bool {
+        self.success
+    }
+
+    pub fn returndata(self) -> MemSpan {
+        self.returndata.span()
+    }
+
+    pub fn returndata_len(self) -> u256 {
+        self.returndata.len()
+    }
+
+    pub fn into_returndata(own self) -> MemBuffer {
+        self.returndata
+    }
+
+    /// Strictly decode successful returndata, bubbling preserved revert data
+    /// when the call failed.
+    pub fn decode<R>(own self) -> R
+        where R: Decode<Sol> + AbiSize
+    {
+        let success = self.success
+        let returndata = self.returndata
+        if !success {
+            ops::revert(offset: returndata.ptr(), len: returndata.len())
+        }
+        decode_returndata(returndata.span())
+    }
+}
+
+fn finish_raw_call(_ success: bool, _ ret: mut MemBuffer) -> RawCallOutcome {
+    let returndata_len = ops::returndatasize()
+    let written = if returndata_len < ret.capacity() {
+        returndata_len
+    } else {
+        ret.capacity()
+    }
+    ret.set_len(written)
+    RawCallOutcome {
+        success,
+        returndata_len,
+    }
+}
+
+fn copy_call_outcome(_ raw: RawCallOutcome) -> CallOutcome {
+    CallOutcome {
+        success: raw.success(),
+        returndata: copy_returndata(),
+    }
+}
+
+fn prepare_copy_destination(
+    dest: mut MemBuffer,
+    dest_offset: u256,
+    len: u256,
+) -> *u8 {
+    if dest_offset > dest.capacity() || len > dest.capacity() - dest_offset {
+        core::panic()
+    }
+    if len != 0 && dest_offset > dest.len() {
+        ptr::zero_bytes(
+            ptr: ptr::offset_bytes(dest.ptr(), dest.len()),
+            len: dest_offset - dest.len(),
+        )
+    }
+    ptr::offset_bytes(dest.ptr(), dest_offset)
 }
 
 /// High-level contract calls with ABI encoding/decoding.
 pub trait Call: EvmCapabilitySeal {
-    /// Low-level `CALL` opcode.
+    /// Low-level `CALL` opcode with explicit input and output regions.
     ///
-    /// Returns `true` on success and `false` on failure. Any returndata is left
-    /// available for inspection via `last_returndata()`.
-    fn raw_call<B>(
+    /// The output buffer receives at most its capacity; the outcome retains
+    /// the full returndata length.
+    fn raw_call(
         mut self,
-        addr: own Address,
+        addr: Address,
         gas: u256,
         value: u256,
-        args: own B,
-    ) -> bool
-        where B: Into<MemBuffer>
-    {
-        let buffer = args.into()
-        ops::call(
+        args: MemSpan,
+        ret: mut MemBuffer,
+    ) -> RawCallOutcome {
+        let success = ops::call(
             gas: gas,
             addr: addr.inner,
             value: value,
-            args_offset: buffer.ptr,
-            args_len: buffer.len,
-            ret_offset: buffer.ptr,
-            ret_len: 0,
+            args_offset: args.ptr(),
+            args_len: args.len(),
+            ret_offset: ret.ptr(),
+            ret_len: ret.capacity(),
         ) != 0
+        finish_raw_call(success, mut ret)
     }
 
     /// Low-level `STATICCALL` opcode with explicit input and output buffers.
     ///
-    /// Returns `true` on success and `false` on failure. Any returndata beyond
-    /// the requested output buffer remains available via `last_returndata()`.
-    fn raw_staticcall<A>(
+    /// The output buffer receives at most its capacity; the outcome retains
+    /// the full returndata length.
+    fn raw_staticcall(
+        mut self,
+        addr: Address,
+        gas: u256,
+        args: MemSpan,
+        ret: mut MemBuffer,
+    ) -> RawCallOutcome {
+        let success = ops::staticcall(
+            gas: gas,
+            addr: addr.inner,
+            args_offset: args.ptr(),
+            args_len: args.len(),
+            ret_offset: ret.ptr(),
+            ret_len: ret.capacity(),
+        ) != 0
+        finish_raw_call(success, mut ret)
+    }
+
+    /// Low-level `DELEGATECALL` opcode with explicit input and output buffers.
+    ///
+    /// The output buffer receives at most its capacity; the outcome retains
+    /// the full returndata length.
+    fn raw_delegatecall(
+        mut self,
+        addr: Address,
+        gas: u256,
+        args: MemSpan,
+        ret: mut MemBuffer,
+    ) -> RawCallOutcome {
+        let success = ops::delegatecall(
+            gas: gas,
+            addr: addr.inner,
+            args_offset: args.ptr(),
+            args_len: args.len(),
+            ret_offset: ret.ptr(),
+            ret_len: ret.capacity(),
+        ) != 0
+        finish_raw_call(success, mut ret)
+    }
+
+    /// Perform a typed `CALL` without bubbling failure.
+    ///
+    /// The returned owner contains the complete success or revert payload.
+    fn try_call<M>(
         mut self,
         addr: own Address,
         gas: u256,
-        args: own A,
-        ret: mut MemBuffer,
-    ) -> bool
-        where A: Into<MemBuffer>
+        value: u256,
+        message: own M,
+    ) -> CallOutcome
+    where M: MsgVariant<Sol> + Encode<Sol>
     {
-        let args_buffer = args.into()
-        ops::staticcall(
-            gas: gas,
-            addr: addr.inner,
-            args_offset: args_buffer.ptr,
-            args_len: args_buffer.len,
-            ret_offset: ret.ptr,
-            ret_len: ret.len,
-        ) != 0
+        let args = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
+        let mut ret = MemBuffer::empty()
+        let raw = self.raw_call(addr, gas, value, args: args.span(), ret: mut ret)
+        copy_call_outcome(raw)
+    }
+
+    /// Perform a typed `STATICCALL` without bubbling failure.
+    fn try_static<M>(mut self, addr: own Address, gas: u256, message: own M) -> CallOutcome
+    where M: MsgVariant<Sol> + Encode<Sol>
+    {
+        let args = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
+        let mut ret = MemBuffer::empty()
+        let raw = self.raw_staticcall(addr, gas, args: args.span(), ret: mut ret)
+        copy_call_outcome(raw)
+    }
+
+    /// Perform a typed `DELEGATECALL` without bubbling failure.
+    fn try_delegate<M>(mut self, addr: own Address, gas: u256, message: own M) -> CallOutcome
+    where M: MsgVariant<Sol> + Encode<Sol>
+    {
+        let args = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
+        let mut ret = MemBuffer::empty()
+        let raw = self.raw_delegatecall(addr, gas, args: args.span(), ret: mut ret)
+        copy_call_outcome(raw)
     }
 
     fn call<M>(mut self, addr: own Address, gas: u256, value: u256, message: own M) -> M::Return
     where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+    {
+        self.try_call(addr, gas, value, message).decode()
+    }
 
     /// Like `call<M>`, but if the call succeeds with EMPTY returndata, returns
     /// `default` instead of reverting in the decoder. Reverts are still bubbled,
@@ -538,12 +698,25 @@ pub trait Call: EvmCapabilitySeal {
         default: own M::Return,
     ) -> M::Return
     where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+    {
+        let outcome = self.try_call(addr, gas, value, message)
+        if outcome.success() && outcome.returndata_len() == 0 {
+            return default
+        }
+        outcome.decode()
+    }
 
     fn static<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
     where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+    {
+        self.try_static(addr, gas, message).decode()
+    }
 
     fn delegate<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
     where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+    {
+        self.try_delegate(addr, gas, message).decode()
+    }
 }
 
 impl Address {
@@ -563,6 +736,22 @@ impl Address {
     uses (call: mut Call) where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
     {
         call.static(addr: self, gas: ops::gas(), message)
+    }
+
+    /// Call this address with a typed message and preserve success or revert
+    /// returndata for inspection.
+    pub fn try_call<M>(self, _ message: own M) -> CallOutcome
+    uses (call: mut Call) where M: MsgVariant<Sol> + Encode<Sol>
+    {
+        call.try_call(addr: self, gas: ops::gas(), value: 0, message)
+    }
+
+    /// `STATICCALL` this address with a typed message and preserve success or
+    /// revert returndata for inspection.
+    pub fn try_static<M>(self, _ message: own M) -> CallOutcome
+    uses (call: mut Call) where M: MsgVariant<Sol> + Encode<Sol>
+    {
+        call.try_static(addr: self, gas: ops::gas(), message)
     }
 
     /// Call a contract at this address with a typed message, returning
@@ -664,8 +853,32 @@ impl Ctx for Evm {
     fn extcodesize(self, _ addr: Address) -> u256 {
         ops::extcodesize(addr.inner)
     }
-    fn extcodecopy(mut self, _ addr: Address, dest: mut MemBuffer, offset: u256) {
-        ops::extcodecopy(addr: addr.inner, dest: dest.ptr, offset: offset, len: dest.len)
+    fn extcodecopy(
+        mut self,
+        _ addr: Address,
+        dest: mut MemBuffer,
+        dest_offset: u256,
+        src_offset: u256,
+        len: u256,
+    ) {
+        let dest_ptr = prepare_copy_destination(
+            dest: mut dest,
+            dest_offset,
+            len,
+        )
+        if len == 0 {
+            return
+        }
+        ops::extcodecopy(
+            addr: addr.inner,
+            dest: dest_ptr,
+            offset: src_offset,
+            len,
+        )
+        let end = dest_offset + len
+        if end > dest.len() {
+            dest.set_len(end)
+        }
     }
     fn extcodehash(self, _ addr: Address) -> u256 {
         ops::extcodehash(addr.inner)
@@ -703,44 +916,101 @@ impl RawOps for Evm {
     fn calldatasize(self) -> u256 {
         ops::calldatasize()
     }
-    fn calldatacopy(mut self, dest: mut MemBuffer, offset: u256) {
-        ops::calldatacopy(dest: dest.ptr, offset: offset, len: dest.len)
+    fn calldatacopy(
+        mut self,
+        dest: mut MemBuffer,
+        dest_offset: u256,
+        src_offset: u256,
+        len: u256,
+    ) {
+        let dest_ptr = prepare_copy_destination(
+            dest: mut dest,
+            dest_offset,
+            len,
+        )
+        if len == 0 {
+            return
+        }
+        ops::calldatacopy(
+            dest: dest_ptr,
+            offset: src_offset,
+            len,
+        )
+        let end = dest_offset + len
+        if end > dest.len() {
+            dest.set_len(end)
+        }
     }
 
     fn returndatasize(self) -> u256 {
         ops::returndatasize()
     }
-    fn returndatacopy(mut self, dest: mut MemBuffer, offset: u256) {
-        ops::returndatacopy(dest: dest.ptr, offset: offset, len: dest.len)
+    fn returndatacopy(
+        mut self,
+        dest: mut MemBuffer,
+        dest_offset: u256,
+        src_offset: u256,
+        len: u256,
+    ) {
+        let dest_ptr = prepare_copy_destination(
+            dest: mut dest,
+            dest_offset,
+            len,
+        )
+        if len == 0 {
+            return
+        }
+        ops::returndatacopy(
+            dest: dest_ptr,
+            offset: src_offset,
+            len,
+        )
+        let end = dest_offset + len
+        if end > dest.len() {
+            dest.set_len(end)
+        }
     }
 
-    fn codecopy(mut self, dest: mut MemBuffer, offset: u256) {
-        ops::codecopy(dest: dest.ptr, offset: offset, len: dest.len)
+    fn codecopy(
+        mut self,
+        dest: mut MemBuffer,
+        dest_offset: u256,
+        src_offset: u256,
+        len: u256,
+    ) {
+        let dest_ptr = prepare_copy_destination(
+            dest: mut dest,
+            dest_offset,
+            len,
+        )
+        if len == 0 {
+            return
+        }
+        ops::codecopy(
+            dest: dest_ptr,
+            offset: src_offset,
+            len,
+        )
+        let end = dest_offset + len
+        if end > dest.len() {
+            dest.set_len(end)
+        }
     }
 
     fn codesize(self) -> u256 {
         ops::codesize()
     }
 
-    fn keccak256<B>(self, data: own B) -> u256
-        where B: Into<MemBuffer>
-    {
-        let buffer = data.into()
-        ops::keccak256(offset: buffer.ptr, len: buffer.len)
+    fn keccak256(self, data: MemSpan) -> u256 {
+        ops::keccak256(offset: data.ptr(), len: data.len())
     }
 
-    fn revert<B>(self, data: own B) -> !
-        where B: Into<MemBuffer>
-    {
-        let buffer = data.into()
-        ops::revert(offset: buffer.ptr, len: buffer.len)
+    fn revert(self, data: MemSpan) -> ! {
+        ops::revert(offset: data.ptr(), len: data.len())
     }
 
-    fn return_data<B>(self, data: own B) -> !
-        where B: Into<MemBuffer>
-    {
-        let buffer = data.into()
-        ops::return_data(offset: buffer.ptr, len: buffer.len)
+    fn return_data(self, data: MemSpan) -> ! {
+        ops::return_data(offset: data.ptr(), len: data.len())
     }
 
     fn code_region_offset<F>(self, _ f: F) -> u256 {
@@ -753,47 +1023,32 @@ impl RawOps for Evm {
 
 impl Log for Evm {
     // Logging opcodes.
-    fn log0<B>(mut self, data: own B)
-        where B: Into<MemBuffer>
-    {
-        let buffer = data.into()
-        ops::log0(offset: buffer.ptr, len: buffer.len)
+    fn log0(mut self, data: MemSpan) {
+        ops::log0(offset: data.ptr(), len: data.len())
     }
 
-    fn log1<B>(mut self, data: own B, topic0: u256)
-        where B: Into<MemBuffer>
-    {
-        let buffer = data.into()
-        ops::log1(offset: buffer.ptr, len: buffer.len, topic0: topic0)
+    fn log1(mut self, data: MemSpan, topic0: u256) {
+        ops::log1(offset: data.ptr(), len: data.len(), topic0: topic0)
     }
 
-    fn log2<B>(mut self, data: own B, topic0: u256, topic1: u256)
-        where B: Into<MemBuffer>
-    {
-        let buffer = data.into()
-        ops::log2(offset: buffer.ptr, len: buffer.len, topic0: topic0, topic1: topic1)
+    fn log2(mut self, data: MemSpan, topic0: u256, topic1: u256) {
+        ops::log2(offset: data.ptr(), len: data.len(), topic0: topic0, topic1: topic1)
     }
 
-    fn log3<B>(mut self, data: own B, topic0: u256, topic1: u256, topic2: u256)
-        where B: Into<MemBuffer>
-    {
-        let buffer = data.into()
+    fn log3(mut self, data: MemSpan, topic0: u256, topic1: u256, topic2: u256) {
         ops::log3(
-            offset: buffer.ptr,
-            len: buffer.len,
+            offset: data.ptr(),
+            len: data.len(),
             topic0: topic0,
             topic1: topic1,
             topic2: topic2,
         )
     }
 
-    fn log4<B>(mut self, data: own B, topic0: u256, topic1: u256, topic2: u256, topic3: u256)
-        where B: Into<MemBuffer>
-    {
-        let buffer = data.into()
+    fn log4(mut self, data: MemSpan, topic0: u256, topic1: u256, topic2: u256, topic3: u256) {
         ops::log4(
-            offset: buffer.ptr,
-            len: buffer.len,
+            offset: data.ptr(),
+            len: data.len(),
             topic0: topic0,
             topic1: topic1,
             topic2: topic2,
@@ -802,21 +1057,7 @@ impl Log for Evm {
     }
 }
 
-impl Create for Evm {
-    fn create_raw<B>(mut self, value: u256, init_code: own B) -> Address
-        where B: Into<MemBuffer>
-    {
-        let buffer = init_code.into()
-        Address { inner: ops::create(value: value, offset: buffer.ptr, len: buffer.len) }
-    }
-
-    fn create2_raw<B>(mut self, value: u256, init_code: own B, salt: u256) -> Address
-        where B: Into<MemBuffer>
-    {
-        let buffer = init_code.into()
-        Address { inner: ops::create2(value: value, offset: buffer.ptr, len: buffer.len, salt: salt) }
-    }
-}
+impl Create for Evm {}
 
 #[arithmetic(unchecked)]
 #[inline(always)]
@@ -826,9 +1067,12 @@ where M: Encode<Sol>
     let selector_size = size_of<Sol::Selector>()
     let selector_word = (selector as u256) << 224
     let encoded = encode_abi_payload(message)
-    let buffer = MemBuffer::alloc(selector_size + encoded.len)
-    ops::mstore(addr: buffer.ptr, value: selector_word)
-    copy_words(dest: ptr::offset_bytes(buffer.ptr, selector_size), src: encoded.ptr, len: encoded.len)
+    let buffer = MemBuffer::alloc(selector_size + encoded.len())
+    ops::mstore(addr: buffer.ptr(), value: selector_word)
+    ptr::copy(
+        dest: ptr::offset_bytes(buffer.ptr(), selector_size),
+        source: encoded.span(),
+    )
     buffer
 }
 
@@ -840,26 +1084,22 @@ where M: MsgVariant<Sol> + Encode<Sol>
     encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
 }
 
-fn copy_returndata() -> MemoryBytes {
+/// Copy the complete current returndata into a fresh owner.
+pub fn copy_returndata() -> MemBuffer {
     let ret_len = ops::returndatasize()
-    let ret_ptr = ptr::alloc_bytes(ret_len)
-    ops::returndatacopy(dest: ret_ptr, offset: 0, len: ret_len)
-    MemoryBytes::new(base: ret_ptr, len: ret_len)
-}
-
-/// Copy the current returndata into freshly allocated memory.
-pub fn last_returndata() -> MemoryBytes {
-    copy_returndata()
+    let buffer = MemBuffer::alloc(ret_len)
+    ops::returndatacopy(dest: buffer.ptr(), offset: 0, len: ret_len)
+    buffer
 }
 
 /// Revert, bubbling the current returndata payload unchanged.
 pub fn bubble_last_revert() -> ! {
     let ret = copy_returndata()
-    ops::revert(offset: ret.base, len: ret.len)
+    ops::revert(offset: ret.ptr(), len: ret.len())
 }
 
 /// Decode Solidity ABI data from an in-memory returndata buffer.
-pub fn decode_returndata<R>(_ ret: MemoryBytes) -> R
+pub fn decode_returndata<R>(_ ret: MemSpan) -> R
     where R: Decode<Sol> + AbiSize
 {
     decode_output(ret)
@@ -869,90 +1109,27 @@ pub fn decode_returndata<R>(_ ret: MemoryBytes) -> R
 ///
 /// This bubbles revert data on call failure and reuses the regular Solidity
 /// decoder, so short or non-canonical returndata also reverts.
-pub fn staticcall_decode<R, B>(addr: Address, gas: u256, args: own B) -> R
-    where R: Decode<Sol> + AbiSize,
-          B: Into<MemBuffer>
+pub fn staticcall_decode<R>(addr: Address, gas: u256, args: MemSpan) -> R
+    where R: Decode<Sol> + AbiSize
 {
-    let buffer = args.into()
-    let ok = ops::staticcall(
-        gas: gas,
+    let ret = MemBuffer::empty()
+    let success = ops::staticcall(
+        gas,
         addr: addr.inner,
-        args_offset: buffer.ptr,
-        args_len: buffer.len,
-        ret_offset: buffer.ptr,
-        ret_len: 0,
-    )
+        args_offset: args.ptr(),
+        args_len: args.len(),
+        ret_offset: ret.ptr(),
+        ret_len: ret.len(),
+    ) != 0
 
-    if ok == 0 {
+    if !success {
         bubble_last_revert()
     }
 
-    decode_returndata(last_returndata())
+    decode_returndata(copy_returndata().span())
 }
 
-impl Call for Evm {
-    fn call<M>(mut self, addr: own Address, gas: u256, value: u256, message: own M) -> M::Return
-    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
-    {
-        let out = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
-
-        if !self.raw_call(addr, gas, value, args: out) {
-            bubble_last_revert()
-        }
-
-        decode_returndata(last_returndata())
-    }
-
-    fn call_with_default<M>(
-        mut self,
-        addr: own Address,
-        gas: u256,
-        value: u256,
-        message: own M,
-        default: own M::Return,
-    ) -> M::Return
-    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
-    {
-        let out = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
-
-        if !self.raw_call(addr, gas, value, args: out) {
-            bubble_last_revert()
-        }
-
-        if ops::returndatasize() == 0 {
-            return default
-        }
-
-        decode_returndata(last_returndata())
-    }
-
-    fn static<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
-    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
-    {
-        let out = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
-        staticcall_decode(addr: addr, gas: gas, args: out)
-    }
-
-    fn delegate<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
-    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
-    {
-        let out = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
-        let ok = ops::delegatecall(
-            gas: gas,
-            addr: addr.inner,
-            args_offset: out.ptr,
-            args_len: out.len,
-            ret_offset: out.ptr,
-            ret_len: 0,
-        )
-
-        if ok == 0 {
-            bubble_last_revert()
-        }
-
-        decode_returndata(last_returndata())
-    }
-}
+impl Call for Evm {}
 
 #[inline(always)]
 pub fn assert(_ b: own bool) {
@@ -966,8 +1143,8 @@ pub fn assert(_ b: own bool) {
 pub fn revert<T>(_ value: own T) -> !
     where T: Encode<Sol> + AbiSize
 {
-    let (result_ptr, result_len) = encode_single_root_alloc<Sol, T>(value)
-    ops::revert(offset: result_ptr, len: result_len)
+    let result = encode_single_root_alloc<Sol, T>(value)
+    ops::revert(offset: result.ptr(), len: result.len())
 }
 
 /// Revert with a Solidity-compatible custom error.
@@ -978,14 +1155,14 @@ pub fn revert_error<T>(_ error: own T) -> !
     where T: ErrorVariant<Sol> + Encode<Sol>
 {
     let buffer = encode_calldata(<T as ErrorVariant<Sol>>::SELECTOR, error)
-    ops::revert(offset: buffer.ptr, len: buffer.len)
+    ops::revert(offset: buffer.ptr(), len: buffer.len())
 }
 
 impl Super for Evm {}
 
 impl ContractHost for Evm {
     type Input = CallData
-    type InitInput = MemoryBytes
+    type InitInput = MemSpan
 
     fn input(self) -> Self::Input {
         CallData::new()
@@ -1001,32 +1178,60 @@ impl ContractHost for Evm {
         }
         let args_len = code_size - args_offset
         let mut args = MemBuffer::alloc(args_len)
-        self.codecopy(dest: mut args, offset: args_offset)
-        MemoryBytes::new(base: args.ptr, len: args.len)
+        self.codecopy(
+            dest: mut args,
+            dest_offset: 0,
+            src_offset: args_offset,
+            len: args_len,
+        )
+        args.span()
     }
 
     fn create_contract<F>(mut self, _ runtime: F) -> ! {
         let len = self.code_region_len(runtime)
         let offset = self.code_region_offset(runtime)
         let mut buffer = MemBuffer::alloc(len)
-        self.codecopy(dest: mut buffer, offset: offset)
-        self.return_data(data: buffer)
+        self.codecopy(
+            dest: mut buffer,
+            dest_offset: 0,
+            src_offset: offset,
+            len,
+        )
+        self.return_data(data: buffer.span())
     }
 
     fn abort(self) -> ! {
         ops::revert_empty()
     }
 
-    fn return_bytes<B>(self, data: own B) -> !
-        where B: Into<MemBuffer>
-    {
+    fn return_bytes(self, data: MemSpan) -> ! {
         self.return_data(data)
     }
 
     fn return_value<A: Abi, T>(mut self, _ value: own T) -> !
         where T: Encode<A> + AbiSize
     {
-        let (out_ptr, out_len) = encode_single_root_alloc<A, T>(value)
-        self.return_bytes(data: MemBuffer::from_raw_parts(ptr: out_ptr, len: out_len))
+        if !T::IS_DYNAMIC {
+            if T::HEAD_SIZE <= 32 {
+                let out = ptr::FixedMemBuffer<32>::alloc()
+                value.encode(out.ptr())
+                self.return_data(
+                    data: MemSpan::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE),
+                )
+            } else if T::HEAD_SIZE <= 64 {
+                let out = ptr::FixedMemBuffer<64>::alloc()
+                value.encode(out.ptr())
+                self.return_data(
+                    data: MemSpan::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE),
+                )
+            } else {
+                let out = MemBuffer::alloc(T::HEAD_SIZE)
+                value.encode(out.ptr())
+                self.return_data(data: out.span())
+            }
+        } else {
+            let out = encode_single_root_alloc<A, T>(value)
+            self.return_bytes(data: out.span())
+        }
     }
 }

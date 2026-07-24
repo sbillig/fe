@@ -60,13 +60,8 @@ impl ByteInput for CallData {
     }
 
     fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
-        if len % 32 != 0 {
-            revert_empty()
-        }
-
         let input_len = self.len()
-        let end = src_offset + len
-        if end < src_offset || end > input_len {
+        if src_offset > input_len || len > input_len - src_offset {
             revert_empty()
         }
 

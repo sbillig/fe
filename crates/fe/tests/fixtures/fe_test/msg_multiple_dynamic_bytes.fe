@@ -19,7 +19,7 @@ uses (mem: mut RawMem)
 {
     let data = core::ptr::alloc_bytes(64)
     mem.mstore(addr: data, value: 32)
-    Bytes { data: data, len: 32, size: 64 }
+    Bytes::from_abi_tail(data: data, len: 32, size: 64)
 }
 
 #[test]

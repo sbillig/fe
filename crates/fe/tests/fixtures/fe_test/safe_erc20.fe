@@ -119,9 +119,9 @@ pub contract MalformedToken {
     recv MalformedTokenMsg {
         Transfer { receiver, amount } -> bool uses (raw: mut RawOps) {
             let mut data = ptr::MemBuffer::alloc(32)
-            raw.mstore(addr: data.ptr, value: 0xaabbccdd << 224)
-            data.len = 4
-            raw.return_data(data)
+            raw.mstore(addr: data.ptr(), value: 0xaabbccdd << 224)
+            data.set_len(4)
+            raw.return_data(data: data.span())
         }
     }
 }

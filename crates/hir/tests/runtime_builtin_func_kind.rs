@@ -20,6 +20,8 @@ fn classifies_core_and_std_runtime_builtins() {
         .expect("failed to resolve core::ptr::alloc_raw");
     let ptr_eq = resolve_lib_func_path(&db, func.scope(), "core::ptr::addr_eq")
         .expect("failed to resolve core::ptr::addr_eq");
+    let copy_mem = resolve_lib_func_path(&db, func.scope(), "core::ptr::copy_mem")
+        .expect("failed to resolve core::ptr::copy_mem");
     let mload = resolve_lib_func_path(&db, func.scope(), "std::evm::ops::mload")
         .expect("failed to resolve std::evm::ops::mload");
     let revert_empty = resolve_lib_func_path(&db, func.scope(), "std::evm::ops::revert_empty")
@@ -40,6 +42,10 @@ fn classifies_core_and_std_runtime_builtins() {
     assert_eq!(
         runtime_builtin_func_kind(&db, ptr_eq),
         Some(RuntimeBuiltinFuncKind::PtrEq)
+    );
+    assert_eq!(
+        runtime_builtin_func_kind(&db, copy_mem),
+        Some(RuntimeBuiltinFuncKind::Mcopy)
     );
     assert_eq!(
         runtime_builtin_func_kind(&db, mload),
@@ -76,6 +82,24 @@ fn classifies_core_and_std_runtime_builtins() {
             projection: IntrinsicMemoryProjection::Pointee,
             kind: MemoryAccessKind::Read,
         }]
+    );
+    assert_eq!(
+        intrinsic_contract(&db, copy_mem)
+            .expect("memory-copy intrinsic contract")
+            .memory
+            .expect("memory-copy memory contract"),
+        &[
+            IntrinsicMemoryAccess {
+                input: 1,
+                projection: IntrinsicMemoryProjection::Pointee,
+                kind: MemoryAccessKind::Read,
+            },
+            IntrinsicMemoryAccess {
+                input: 0,
+                projection: IntrinsicMemoryProjection::Pointee,
+                kind: MemoryAccessKind::Write,
+            },
+        ]
     );
     assert_eq!(
         intrinsic_contract(&db, revert_empty)

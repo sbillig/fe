@@ -1521,33 +1521,33 @@ fn runtime() uses (evm: mut Evm) {
     if sel == BYTES_LEN_SELECTOR {
         let view = decode_bytes_view(CallData::with_base(4))
         let out = ptr::MemBuffer::alloc(32)
-        evm.mstore(addr: out.ptr, value: view.len())
-        evm.return_data(data: out)
+        evm.mstore(addr: out.ptr(), value: view.len())
+        evm.return_data(data: out.span())
     }
 
     if sel == SECOND_BYTES_LEN_SELECTOR {
         let view = decode_bytes_view_at(CallData::with_base(4), base: 0, head_pos: 32)
         let out = ptr::MemBuffer::alloc(32)
-        evm.mstore(addr: out.ptr, value: view.len())
-        evm.return_data(data: out)
+        evm.mstore(addr: out.ptr(), value: view.len())
+        evm.return_data(data: out.span())
     }
 
     if sel == STRING_FIRST_SELECTOR {
         let view = decode_string_view(CallData::with_base(4))
         let first: u256 = if view.is_empty() { 0 } else { view.byte_at(0) as u256 }
         let out = ptr::MemBuffer::alloc(32)
-        evm.mstore(addr: out.ptr, value: first)
-        evm.return_data(data: out)
+        evm.mstore(addr: out.ptr(), value: first)
+        evm.return_data(data: out.span())
     }
 
     if sel == STRING_LEN_SELECTOR {
         let view = decode_string_view(CallData::with_base(4))
         let out = ptr::MemBuffer::alloc(32)
-        evm.mstore(addr: out.ptr, value: view.len())
-        evm.return_data(data: out)
+        evm.mstore(addr: out.ptr(), value: view.len())
+        evm.return_data(data: out.span())
     }
 
-    evm.revert(data: ptr::MemBuffer::empty())
+    evm.revert(data: ptr::MemSpan::empty())
 }
 "#;
 
@@ -1592,7 +1592,7 @@ fn runtime() uses (evm: mut Evm) {
             with (mut blobs) {
                 blobs.store_view(key: 0, view: view)
             }
-            evm.return_data(data: ptr::MemBuffer::empty())
+            evm.return_data(data: ptr::MemSpan::empty())
         }
 
         if sel == GET_SELECTOR {
@@ -1603,17 +1603,17 @@ fn runtime() uses (evm: mut Evm) {
             with (mut blobs) {
                 blobs.clear(key: 0)
             }
-            evm.return_data(data: ptr::MemBuffer::empty())
+            evm.return_data(data: ptr::MemSpan::empty())
         }
 
         if sel == EMIT_SELECTOR {
             let view = decode_bytes_view_at(CallData::new(), base: 4, head_pos: 0)
             emit_bytes_event_view(topic0: TOPIC0, view: view)
-            evm.return_data(data: ptr::MemBuffer::empty())
+            evm.return_data(data: ptr::MemSpan::empty())
         }
     }
 
-    evm.revert(data: ptr::MemBuffer::empty())
+    evm.revert(data: ptr::MemSpan::empty())
 }
 "#;
 
@@ -1719,13 +1719,13 @@ pub contract RawStaticCaller {
     recv RawStaticCallerMsg {
         CallWord { target } -> u256 uses (evm: mut Evm) {
             let args = ptr::MemBuffer::alloc(4)
-            evm.mstore(addr: args.ptr, value: (WORD_SELECTOR as u256) << 224)
-            staticcall_decode(addr: target, gas: evm.gas(), args: args)
+            evm.mstore(addr: args.ptr(), value: (WORD_SELECTOR as u256) << 224)
+            staticcall_decode(addr: target, gas: evm.gas(), args: args.span())
         }
         CallFlag { target } -> bool uses (evm: mut Evm) {
             let args = ptr::MemBuffer::alloc(4)
-            evm.mstore(addr: args.ptr, value: (FLAG_SELECTOR as u256) << 224)
-            staticcall_decode(addr: target, gas: evm.gas(), args: args)
+            evm.mstore(addr: args.ptr(), value: (FLAG_SELECTOR as u256) << 224)
+            staticcall_decode(addr: target, gas: evm.gas(), args: args.span())
         }
     }
 }
@@ -1760,11 +1760,11 @@ fn init() uses (evm: mut Evm) {
 fn runtime() uses (evm: mut Evm) {
     if evm.selector() == FLAG_SELECTOR {
         let out = ptr::MemBuffer::alloc(32)
-        evm.mstore(addr: out.ptr, value: 2)
-        evm.return_data(data: out)
+        evm.mstore(addr: out.ptr(), value: 2)
+        evm.return_data(data: out.span())
     }
 
-    evm.revert(data: ptr::MemBuffer::empty())
+    evm.revert(data: ptr::MemSpan::empty())
 }
 "#
     }

@@ -34,12 +34,14 @@ pub contract Counter {
 fn raw_call(addr: Address, gas: u256, value: u256, args_offset: *u8, args_len: u256) -> bool
 uses (evm: mut Evm)
 {
+    let mut ret = ptr::MemBuffer::empty()
     evm.raw_call(
         addr: addr,
         gas: gas,
         value: value,
-        args: ptr::MemBuffer::from_raw_parts(ptr: args_offset, len: args_len),
-    )
+        args: ptr::MemSpan::from_raw_parts(ptr: args_offset, len: args_len),
+        ret: mut ret,
+    ).success()
 }
 
 #[test]

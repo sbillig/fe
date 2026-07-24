@@ -34,7 +34,7 @@ fn host_input_len<H>(_ host: mut H) -> u256
 
 fn require_msg(_ evm: mut Evm, condition: bool) {
     if !condition {
-        evm.revert(data: ptr::MemBuffer::empty())
+        evm.revert(data: ptr::MemSpan::empty())
     }
 }
 

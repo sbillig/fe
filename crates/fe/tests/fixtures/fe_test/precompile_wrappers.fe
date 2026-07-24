@@ -13,6 +13,7 @@ use std::evm::crypto::{
     bls12_map_fp2_to_g2,
     bls12_pairing,
     ec_add,
+    ec_pairing,
     ecrecover,
     ecrecover_raw,
     identity,
@@ -31,9 +32,10 @@ const ECRECOVER_LOW_S: u256 = 0x0878b2f0cafb98fc3d0fbc7349118150d6972483bd2a4599
 const ECRECOVER_HIGH_S: u256 = 0xf7874d0f35046703c2f0438cb6ee7eade417b862f21e5aa1e08f4aca7e46834c
 
 type MemBuffer = ptr::MemBuffer
+type MemSpan = ptr::MemSpan
 
-fn buffer(_ ptr: *u8, _ len: u256) -> MemBuffer {
-    MemBuffer::from_raw_parts(ptr: ptr, len: len)
+fn buffer(_ ptr: *u8, _ len: u256) -> MemSpan {
+    MemSpan::from_raw_parts(ptr, len)
 }
 
 fn expect_word(_ result: Result<PrecompileError, u256>) -> u256 {
@@ -56,12 +58,12 @@ fn expect_bool(_ result: Result<PrecompileError, bool>) -> bool {
     }
 }
 
-fn expect_bytes(_ result: Result<PrecompileError, std::evm::MemoryBytes>) -> std::evm::MemoryBytes {
+fn expect_bytes(_ result: own Result<PrecompileError, MemBuffer>) -> MemBuffer {
     match result {
         Result::Ok(value) => value,
         Result::Err(_) => {
             assert(false)
-            std::evm::MemoryBytes::new(base: ptr::alloc_bytes(0), len: 0)
+            MemBuffer::empty()
         }
     }
 }
@@ -151,9 +153,9 @@ uses (evm: mut Evm)
     assert(ripemd == 0x9c1185a5c5e9fc54612808977ee8f548b2258d31)
 
     let copied = expect_bytes(identity(buffer(ptr, 64)))
-    assert(copied.len == 64)
-    assert(evm.mload(copied.base) == evm.mload(ptr))
-    assert(evm.mload(ptr::offset_bytes(copied.base, 32)) == evm.mload(ptr::offset_bytes(ptr, 32)))
+    assert(copied.len() == 64)
+    assert(evm.mload(copied.ptr()) == evm.mload(ptr))
+    assert(evm.mload(ptr::offset_bytes(copied.ptr(), 32)) == evm.mload(ptr::offset_bytes(ptr, 32)))
 }
 
 #[test]
@@ -202,12 +204,14 @@ uses (evm: mut Evm)
     evm.mstore(addr: ptr::offset_bytes(raw, 96), value: 2)
     evm.mstore(addr: ptr::offset_bytes(raw, 128), value: 5)
     evm.mstore(addr: ptr::offset_bytes(raw, 160), value: 13)
-    let raw_out = expect_bytes(modexp_raw(buffer(raw, 192), ret_len: 32))
-    assert(evm.mload(raw_out.base) == 6)
+    let raw_out = expect_bytes(modexp_raw(buffer(raw, 192), ret_len: 64))
+    assert(raw_out.len() == 32)
+    assert(evm.mload(raw_out.ptr()) == 6)
 
     let sum = expect_pair(ec_add(ax: 0, ay: 0, bx: 0, by: 0))
     assert(sum.0 == 0)
     assert(sum.1 == 0)
+    assert(expect_bool(ec_pairing(buffer(raw, 0))))
 
     match ec_add(ax: 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001, ay: 0, bx: 0, by: 0) {
         Result::Ok(_) => assert(false),
@@ -221,16 +225,18 @@ uses (evm: mut Evm)
 {
     let ptr = ptr::alloc_bytes(64)
     zero_memory(ptr, len: 64)
-    let out = ptr::alloc_bytes(64)
-    let mut ret = buffer(out, 64)
-    assert(evm.raw_staticcall(
+    let mut ret = MemBuffer::with_capacity(32)
+    let outcome = evm.raw_staticcall(
         addr: Address { inner: 4 },
         gas: 1000000,
         args: buffer(ptr, 64),
         ret: mut ret,
-    ))
-    assert(evm.mload(out) == 0)
-    assert(evm.mload(ptr::offset_bytes(out, 32)) == 0)
+    )
+    assert(outcome.success())
+    assert(outcome.returndata_len() == 64)
+    assert(ret.len() == 32)
+    assert(ret.capacity() == 32)
+    assert(evm.mload(ret.ptr()) == 0)
 }
 
 #[test]
@@ -257,9 +263,32 @@ fn test_fixed_precompile_wrappers_reject_mismatched_buffer_lengths() {
     expect_invalid_input(blake2f(buffer(ptr, 212)))
     expect_invalid_input(blake2f(buffer(ptr, 214)))
     expect_invalid_input(kzg_point_evaluation(buffer(ptr, 191)))
+    expect_invalid_input(kzg_point_evaluation(buffer(ptr, 193)))
     expect_invalid_input(bls12_g1_add(buffer(ptr, 255)))
+    expect_invalid_input(bls12_g1_add(buffer(ptr, 257)))
     expect_invalid_input(bls12_g2_add(buffer(ptr, 511)))
+    expect_invalid_input(bls12_g2_add(buffer(ptr, 513)))
     expect_invalid_input(bls12_map_fp_to_g1(buffer(ptr, 63)))
+    expect_invalid_input(bls12_map_fp_to_g1(buffer(ptr, 65)))
     expect_invalid_input(bls12_map_fp2_to_g2(buffer(ptr, 127)))
+    expect_invalid_input(bls12_map_fp2_to_g2(buffer(ptr, 129)))
     expect_invalid_input(p256_verify(buffer(ptr, 159)))
+    expect_invalid_input(p256_verify(buffer(ptr, 161)))
+}
+
+#[test]
+fn test_variable_precompile_wrappers_reject_invalid_chunk_lengths() {
+    let ptr = ptr::alloc_bytes(512)
+
+    expect_invalid_input(ec_pairing(buffer(ptr, 191)))
+    expect_invalid_input(ec_pairing(buffer(ptr, 193)))
+    expect_invalid_input(bls12_g1_msm(buffer(ptr, 0)))
+    expect_invalid_input(bls12_g1_msm(buffer(ptr, 159)))
+    expect_invalid_input(bls12_g1_msm(buffer(ptr, 161)))
+    expect_invalid_input(bls12_g2_msm(buffer(ptr, 0)))
+    expect_invalid_input(bls12_g2_msm(buffer(ptr, 287)))
+    expect_invalid_input(bls12_g2_msm(buffer(ptr, 289)))
+    expect_invalid_input(bls12_pairing(buffer(ptr, 0)))
+    expect_invalid_input(bls12_pairing(buffer(ptr, 383)))
+    expect_invalid_input(bls12_pairing(buffer(ptr, 385)))
 }
