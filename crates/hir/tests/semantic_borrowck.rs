@@ -3008,6 +3008,73 @@ fn ok() {
 }
 
 #[test]
+fn raw_pointers_and_memory_aggregates_cannot_escape_through_storage_handles() {
+    for (source, expected) in [
+        (
+            r#"
+use core::ptr
+use std::evm::StorPtr
+
+pub contract PointerNoEsc {
+    mut saved: StorPtr<*u256>
+
+    init() uses (mut saved) {
+        saved = ptr::alloc<u256>()
+    }
+}
+"#,
+            "cannot store `*<u256>` in storage",
+        ),
+        (
+            r#"
+use core::ptr
+use std::evm::TStorPtr
+
+pub contract PointerNoEsc {
+    mut saved: TStorPtr<*u256>
+
+    init() uses (mut saved) {
+        saved = ptr::alloc<u256>()
+    }
+}
+"#,
+            "cannot store `*<u256>` in transient storage",
+        ),
+        (
+            r#"
+use core::ptr
+use std::evm::StorPtr
+
+pub contract PointerNoEsc {
+    mut saved: StorPtr<ptr::MemArray<u256>>
+
+    init() uses (mut saved) {
+        saved = ptr::MemArray<u256>::new_uninit(1)
+    }
+}
+"#,
+            "cannot store `MemArray<u256>` in storage",
+        ),
+    ] {
+        let diags = borrow_diags(source);
+        assert!(diags.contains("noesc violation"), "{diags}");
+        assert!(diags.contains(expected), "{diags}");
+    }
+
+    let diags = borrow_diags(
+        r#"
+use core::ptr
+
+fn keep_pointer_in_memory(value: *u256) {
+    let destination = ptr::alloc<*u256>()
+    *destination = value
+}
+"#,
+    );
+    assert!(!diags.contains("noesc violation"), "{diags}");
+}
+
+#[test]
 fn generic_noesc_store_is_rejected_only_after_storage_specialization() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

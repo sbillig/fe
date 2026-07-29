@@ -212,7 +212,7 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
             return false;
         }
 
-        let result = if ty.as_capability(db).is_some() {
+        let result = if ty.as_capability(db).is_some() || ty.as_ptr(db).is_some() {
             true
         } else if ty.is_tuple(db) {
             ty.field_types(db)
