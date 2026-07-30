@@ -42,7 +42,9 @@ use crate::analysis::{
             constraint::{collect_constraints, collect_func_effect_provider_constraints},
         },
         ty_contains_const_hole,
-        ty_def::{ClosureTy, InvalidCause, StringFallback, TyData, TyId, TyVarSort},
+        ty_def::{
+            ClosureCaptureAccess, ClosureTy, InvalidCause, StringFallback, TyData, TyId, TyVarSort,
+        },
         ty_lower::lower_hir_ty,
         unify::UnificationTable,
     },
@@ -120,21 +122,8 @@ pub struct ClosureCapture<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum ClosureCaptureConstruction {
     Copy,
+    Deferred,
     Move,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum ClosureCaptureAccess {
-    Read,
-    Move,
-}
-
-impl ClosureCaptureAccess {
-    fn include(&mut self, access: Self) {
-        if access == Self::Move {
-            *self = Self::Move;
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -902,6 +891,10 @@ impl<'db> TyCheckEnv<'db> {
         self.contextual_view_sources[expr] = Some(source_ty);
     }
 
+    pub(super) fn contextual_view_source(&self, expr: ExprId) -> Option<TyId<'db>> {
+        self.contextual_view_sources[expr]
+    }
+
     pub(super) fn binding_is_capture(&self, binding: LocalBinding<'db>) -> bool {
         let Some(active) = self.closure_stack.last() else {
             return false;
@@ -913,6 +906,10 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn in_closure(&self) -> bool {
         !self.closure_stack.is_empty()
+    }
+
+    pub(super) fn active_closure(&self) -> Option<ClosureDef<'db>> {
+        self.closure_stack.last().map(|active| active.def)
     }
 
     pub(super) fn record_capture_if_needed(&mut self, binding: LocalBinding<'db>, ty: TyId<'db>) {
@@ -1062,10 +1059,11 @@ impl<'db> TyCheckEnv<'db> {
         };
         prop.value_access = match (prop.value_access, access) {
             (ValueAccess::Infer, access) | (access, ValueAccess::Infer) => access,
-            (current, access) if current == access => current,
-            (current, access) => {
-                panic!("conflicting value access for {expr:?}: {current:?} and {access:?}")
+            (ValueAccess::Move, _) | (_, ValueAccess::Move) => ValueAccess::Move,
+            (ValueAccess::MoveIfNonCopy, _) | (_, ValueAccess::MoveIfNonCopy) => {
+                ValueAccess::MoveIfNonCopy
             }
+            (ValueAccess::Read, ValueAccess::Read) => ValueAccess::Read,
         };
     }
 
@@ -1124,6 +1122,18 @@ impl<'db> TyCheckEnv<'db> {
                 }
             });
         let assumptions = self.assumptions.fold_with(self.db, &mut prober);
+        let db = self.db;
+        let scope = self.scope();
+        self.expr_ty.values_mut().flatten().for_each(|prop| {
+            if prop.value_access == ValueAccess::MoveIfNonCopy {
+                prop.value_access =
+                    if crate::analysis::ty::ty_is_copy(db, scope, prop.ty, assumptions) {
+                        ValueAccess::Read
+                    } else {
+                        ValueAccess::Move
+                    };
+            }
+        });
         let pattern_store = self.pattern_store.fold_with(self.db, &mut prober);
 
         self.semantic_expr_lowering
@@ -1579,6 +1589,7 @@ pub enum ValueAccess {
     #[default]
     Infer,
     Read,
+    MoveIfNonCopy,
     Move,
 }
 

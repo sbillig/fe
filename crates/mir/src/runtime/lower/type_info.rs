@@ -108,7 +108,7 @@ impl<'db> RuntimeTypeModel<'db> {
                         default_space,
                     ))
                 } else {
-                    Some(object_ref_class_for_target_in_env(db, env, *inner))
+                    Some(memory_borrow_class_for_target_in_env(db, env, *inner))
                 }
             }
             RuntimeTypeShape::Capability { inner } => Some(provider_class_for_target_in_env(
@@ -152,7 +152,13 @@ impl<'db> RuntimeTypeModel<'db> {
                 if self.repr_ty.is_array(db) {
                     let (_, args) = self.repr_ty.decompose_ty_app(db);
                     return args.first().copied().is_some_and(|elem| {
-                        runtime_transport_sensitive_aggregate(db, elem, env.scope, env.assumptions)
+                        effect_handle_transport_class_for_ty_in_env(db, env, elem).is_some()
+                            || runtime_transport_sensitive_aggregate(
+                                db,
+                                elem,
+                                env.scope,
+                                env.assumptions,
+                            )
                     });
                 }
                 if self.repr_ty.is_tuple(db)
@@ -160,7 +166,13 @@ impl<'db> RuntimeTypeModel<'db> {
                     || self.repr_ty.as_closure(db).is_some()
                 {
                     return self.repr_ty.field_types(db).into_iter().any(|field| {
-                        runtime_transport_sensitive_aggregate(db, field, env.scope, env.assumptions)
+                        effect_handle_transport_class_for_ty_in_env(db, env, field).is_some()
+                            || runtime_transport_sensitive_aggregate(
+                                db,
+                                field,
+                                env.scope,
+                                env.assumptions,
+                            )
                     });
                 }
                 if let Some(enum_) = self.repr_ty.as_enum(db) {
@@ -172,14 +184,17 @@ impl<'db> RuntimeTypeModel<'db> {
                         .enumerate()
                         .any(|(variant_idx, variant)| {
                             (0..variant.num_types()).any(|field_idx| {
-                                runtime_transport_sensitive_aggregate(
-                                    db,
-                                    adt.fields(db)[variant_idx]
-                                        .ty(db, field_idx)
-                                        .instantiate(db, args),
-                                    env.scope,
-                                    env.assumptions,
-                                )
+                                let field = adt.fields(db)[variant_idx]
+                                    .ty(db, field_idx)
+                                    .instantiate(db, args);
+                                effect_handle_transport_class_for_ty_in_env(db, env, field)
+                                    .is_some()
+                                    || runtime_transport_sensitive_aggregate(
+                                        db,
+                                        field,
+                                        env.scope,
+                                        env.assumptions,
+                                    )
                             })
                         });
                 }
@@ -326,16 +341,24 @@ pub(crate) fn stored_class_for_ty_in_env<'db>(
     runtime_stored_class(db, ty, env.scope, env.assumptions)
 }
 
-pub(crate) fn object_ref_class_for_target_in_env<'db>(
+pub(crate) fn memory_borrow_class_for_target_in_env<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
     target_ty: TyId<'db>,
 ) -> RuntimeClass<'db> {
     let target_ty = runtime_repr_ty_in_env(db, env, target_ty);
-    RuntimeClass::Ref {
-        pointee: Box::new(stored_class_for_ty_in_env(db, env, target_ty)),
-        kind: RefKind::Object,
-        view: RefView::Whole,
+    let pointee = stored_class_for_ty_in_env(db, env, target_ty);
+    if matches!(pointee, RuntimeClass::AggregateValue { .. }) {
+        RuntimeClass::Ref {
+            pointee: Box::new(pointee),
+            kind: RefKind::Object,
+            view: RefView::Whole,
+        }
+    } else {
+        RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Memory,
+            target: None,
+        }
     }
 }
 
@@ -734,16 +757,16 @@ mod tests {
             borrowed_word,
             AddressSpaceKind::Memory,
         )
-        .expect("non-ZST borrow should have a top-level object ref class");
+        .expect("non-ZST borrow should have a top-level memory address class");
         assert!(
             matches!(
                 top_level,
-                RuntimeClass::Ref {
-                    kind: RefKind::Object,
-                    ..
+                RuntimeClass::RawAddr {
+                    space: AddressSpaceKind::Memory,
+                    target: None,
                 }
             ),
-            "non-ZST borrow top-level class should remain an object ref: {top_level:#?}",
+            "non-aggregate borrows should use raw memory addresses: {top_level:#?}",
         );
         assert_memory_provider_ref(&stored_class_for_ty_in_env(
             &db,

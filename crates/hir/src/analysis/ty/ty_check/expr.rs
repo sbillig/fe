@@ -13,8 +13,8 @@ use crate::span::DynLazySpan;
 
 use super::{
     BodyOwner, ClosureCapture, ClosureCaptureAccess, ClosureCaptureConstruction,
-    CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, PatternLayoutContext, RecordLike,
-    Typeable, ValueAccess, ValuePathRef,
+    CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, PatternLayoutContext, PendingPlaceCheck,
+    RecordLike, Typeable, ValueAccess, ValuePathRef,
     effect_env::{
         FamilyKeyedEntry, FrameLookupResult, MatchedForwarder, MatchedKeyedEntry, MatchedWitness,
     },
@@ -71,8 +71,8 @@ use crate::analysis::ty::{
     ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
     ty_contains_const_hole,
     ty_def::{
-        CapabilityKind, ClosureCallMode, ClosureParamMode, ClosureSignature, ClosureTy, PrimTy,
-        TyBase, TyData, TyVarSort, prim_int_bits,
+        BorrowKind, CapabilityKind, ClosureCaptures, ClosureParamMode, ClosureSignature, ClosureTy,
+        PrimTy, TyBase, TyData, TyVarSort, prim_int_bits,
     },
     ty_error::collect_hir_ty_diags,
     unify::UnificationTable,
@@ -223,6 +223,7 @@ enum AssignLhsStatus {
     Assignable,
     Immutable,
     NonAssignable,
+    Deferred,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -798,6 +799,8 @@ impl<'db> TyChecker<'db> {
                     || self.ty_is_copy(capture.ty)
                 {
                     ClosureCaptureConstruction::Copy
+                } else if capture.ty.has_var(self.db) {
+                    ClosureCaptureConstruction::Deferred
                 } else {
                     ClosureCaptureConstruction::Move
                 },
@@ -805,22 +808,20 @@ impl<'db> TyChecker<'db> {
             })
             .collect::<Vec<_>>();
         for capture in &captures {
-            if capture.construction == ClosureCaptureConstruction::Move {
-                self.env
-                    .record_capture_access(capture.binding, ClosureCaptureAccess::Move);
-            }
+            let access = match capture.construction {
+                ClosureCaptureConstruction::Copy => continue,
+                ClosureCaptureConstruction::Deferred => ClosureCaptureAccess::MoveIfNonCopy,
+                ClosureCaptureConstruction::Move => ClosureCaptureAccess::Move,
+            };
+            self.env.record_capture_access(capture.binding, access);
         }
-        let call_mode = if captures
-            .iter()
-            .any(|capture| capture.access == ClosureCaptureAccess::Move)
-        {
-            ClosureCallMode::Consuming
-        } else {
-            ClosureCallMode::Reusable
-        };
         let capture_tys = captures
             .iter()
             .map(|capture| capture.ty)
+            .collect::<Vec<_>>();
+        let capture_accesses = captures
+            .iter()
+            .map(|capture| capture.access)
             .collect::<Vec<_>>();
         let parent_args = match self.env.owner() {
             BodyOwner::Func(func) => CallableDef::Func(func).params(self.db).to_vec(),
@@ -830,9 +831,8 @@ impl<'db> TyChecker<'db> {
             self.db,
             def,
             parent_args,
-            capture_tys,
+            ClosureCaptures::new(capture_tys, capture_accesses),
             ClosureSignature::new(param_tys, param_modes, ret_ty),
-            call_mode,
         );
         self.env.register_closure_info(
             expr,
@@ -952,7 +952,23 @@ impl<'db> TyChecker<'db> {
         }
 
         if matches!(op, UnOp::Mut | UnOp::Ref) {
-            if self.env.expr_place(*lhs).is_none() {
+            let captured = self
+                .find_base_binding(*lhs)
+                .is_some_and(|binding| self.env.binding_is_capture(binding));
+            let deferred = self.place_check_requires_deferred(*lhs);
+            let place = self.current_expr_place(*lhs);
+            if deferred {
+                self.pending_place_checks.push(PendingPlaceCheck::Borrow {
+                    expr,
+                    source: *lhs,
+                    kind: match op {
+                        UnOp::Mut => BorrowKind::Mut,
+                        UnOp::Ref => BorrowKind::Ref,
+                        _ => unreachable!(),
+                    },
+                    captured,
+                });
+            } else if place.is_none() {
                 self.push_diag(BodyDiag::BorrowFromNonPlace {
                     primary: expr.span(self.body()).into(),
                 });
@@ -964,10 +980,9 @@ impl<'db> TyChecker<'db> {
                 .as_capability(self.db)
                 .map(|(_, inner)| inner)
                 .unwrap_or(prop.ty);
-            let borrow_provider = self
-                .env
-                .expr_place(*lhs)
-                .and_then(|place| self.concrete_borrow_provider_for_place(&place));
+            let borrow_provider = place
+                .as_ref()
+                .and_then(|place| self.concrete_borrow_provider_for_place(place));
 
             return match op {
                 UnOp::Ref => ExprProp {
@@ -979,7 +994,24 @@ impl<'db> TyChecker<'db> {
                     value_access: ValueAccess::Infer,
                 },
                 UnOp::Mut => {
-                    if !prop.is_mut {
+                    if !deferred
+                        && captured
+                        && !self.place_reaches_mut_capability(
+                            place
+                                .as_ref()
+                                .expect("non-deferred borrow source must be a place"),
+                        )
+                    {
+                        let binding = self.find_base_binding(*lhs);
+                        self.push_diag(BodyDiag::BorrowMutFromCapturedBinding {
+                            primary: expr.span(self.body()).into(),
+                            binding: binding.map(|binding| {
+                                (binding.binding_name(&self.env), binding.def_span(&self.env))
+                            }),
+                        });
+                        return ExprProp::invalid(self.db);
+                    }
+                    if !deferred && !prop.is_mut {
                         let binding = self.find_base_binding(*lhs).map(|binding| {
                             (binding.binding_name(&self.env), binding.def_span(&self.env))
                         });
@@ -1427,9 +1459,20 @@ impl<'db> TyChecker<'db> {
             })
         }
         if let Some(projected) = self.contract_field_projected_index_ty(lhs_expr, rhs_expr) {
-            return ExprProp::new(self.table.fold_ty(self.db, projected), lhs.is_mut);
+            let projected = self.table.fold_ty(self.db, projected);
+            let is_mut = self.projected_place_mutability(lhs.is_mut, projected);
+            return ExprProp::new(projected, is_mut);
         }
-        ExprProp::new(elem_ty, lhs.is_mut)
+        let is_mut = self.projected_place_mutability(lhs.is_mut, elem_ty);
+        ExprProp::new(elem_ty, is_mut)
+    }
+
+    fn projected_place_mutability(&mut self, inherited: bool, ty: TyId<'db>) -> bool {
+        match self.normalize_ty(ty).as_capability(self.db) {
+            Some((CapabilityKind::Mut, _)) => true,
+            Some((CapabilityKind::Ref, _)) => false,
+            Some((CapabilityKind::View, _)) | None => inherited,
+        }
     }
 
     pub(super) fn resolve_pending_method_lookup(
@@ -1515,7 +1558,7 @@ impl<'db> TyChecker<'db> {
         if resolved.ty.has_invalid(self.db) {
             return PendingPrimitiveOpResolution::Done;
         }
-        if !self.reconcile_deferred_expr_ty(pending.expr, expr_prop, resolved.ty) {
+        if !self.reconcile_deferred_expr_prop(pending.expr, expr_prop, resolved) {
             return PendingPrimitiveOpResolution::Done;
         }
         if let Some(callable) = self.env.callable_expr(pending.expr).cloned() {
@@ -1661,7 +1704,7 @@ impl<'db> TyChecker<'db> {
         if resolved.ty.has_invalid(self.db) {
             return PendingPrimitiveOpResolution::Done;
         }
-        if self.reconcile_deferred_expr_ty(pending.expr(), expr_prop, resolved.ty) {
+        if self.reconcile_deferred_expr_prop(pending.expr(), expr_prop, resolved) {
             PendingPrimitiveOpResolution::Resolved
         } else {
             PendingPrimitiveOpResolution::Done
@@ -1703,7 +1746,7 @@ impl<'db> TyChecker<'db> {
         if resolved.ty.has_invalid(self.db) {
             return PendingPrimitiveOpResolution::Done;
         }
-        if self.reconcile_deferred_expr_ty(pending.expr, expr_prop, resolved.ty) {
+        if self.reconcile_deferred_expr_prop(pending.expr, expr_prop, resolved) {
             PendingPrimitiveOpResolution::Resolved
         } else {
             PendingPrimitiveOpResolution::Done
@@ -1740,7 +1783,7 @@ impl<'db> TyChecker<'db> {
         if resolved.ty.has_invalid(self.db) {
             return PendingPrimitiveOpResolution::Done;
         }
-        if self.reconcile_deferred_expr_ty(pending.expr, expr_prop, resolved.ty) {
+        if self.reconcile_deferred_expr_prop(pending.expr, expr_prop, resolved) {
             PendingPrimitiveOpResolution::Resolved
         } else {
             PendingPrimitiveOpResolution::Done
@@ -1756,10 +1799,9 @@ impl<'db> TyChecker<'db> {
         if let super::PatternDestructureMode::Borrow(kind) = mode {
             self.retype_pattern_bindings_for_borrow(pat, kind);
         }
-        let moves_value =
-            mode == super::PatternDestructureMode::Owned && self.pattern_moves_non_copy_value(pat);
         if mode == super::PatternDestructureMode::Owned {
-            self.record_pattern_value_use(scrutinee, moves_value);
+            let capture_access = self.pattern_value_capture_access(pat);
+            self.record_pattern_value_use(scrutinee, capture_access);
         }
 
         ExprProp::new(TyId::bool(self.db), true)
@@ -4190,14 +4232,7 @@ impl<'db> TyChecker<'db> {
                     return ExprProp::invalid(self.db);
                 }
                 self.env.record_capture_if_needed(binding, ty);
-                let mut is_mut = binding.is_mut();
-                if let Some((cap, _)) = ty.as_capability(self.db) {
-                    is_mut = match cap {
-                        CapabilityKind::Mut => true,
-                        CapabilityKind::Ref => false,
-                        CapabilityKind::View => binding.is_mut(),
-                    };
-                }
+                let is_mut = self.projected_place_mutability(binding.is_mut(), ty);
                 ExprProp {
                     ty,
                     is_mut,
@@ -4764,21 +4799,22 @@ impl<'db> TyChecker<'db> {
                         if let Some(projected) =
                             self.contract_field_projected_field_ty(lhs, field_index)
                         {
-                            return ExprProp::new(
-                                self.table.fold_ty(self.db, projected),
-                                typed_lhs.is_mut,
-                            );
+                            let projected = self.table.fold_ty(self.db, projected);
+                            let is_mut =
+                                self.projected_place_mutability(typed_lhs.is_mut, projected);
+                            return ExprProp::new(projected, is_mut);
                         }
                         if let Some(projected) =
                             self.callable_input_projected_field_ty(lhs, field_index)
                         {
-                            return ExprProp::new(
-                                self.table.fold_ty(self.db, projected),
-                                typed_lhs.is_mut,
-                            );
+                            let projected = self.table.fold_ty(self.db, projected);
+                            let is_mut =
+                                self.projected_place_mutability(typed_lhs.is_mut, projected);
+                            return ExprProp::new(projected, is_mut);
                         }
                     }
-                    return ExprProp::new(field_ty, typed_lhs.is_mut);
+                    let is_mut = self.projected_place_mutability(typed_lhs.is_mut, field_ty);
+                    return ExprProp::new(field_ty, is_mut);
                 }
             }
 
@@ -4791,22 +4827,23 @@ impl<'db> TyChecker<'db> {
                         if let Some(projected) =
                             self.contract_field_projected_field_ty(lhs, field_index)
                         {
-                            return ExprProp::new(
-                                self.table.fold_ty(self.db, projected),
-                                typed_lhs.is_mut,
-                            );
+                            let projected = self.table.fold_ty(self.db, projected);
+                            let is_mut =
+                                self.projected_place_mutability(typed_lhs.is_mut, projected);
+                            return ExprProp::new(projected, is_mut);
                         }
                         if let Some(projected) =
                             self.callable_input_projected_field_ty(lhs, field_index)
                         {
-                            return ExprProp::new(
-                                self.table.fold_ty(self.db, projected),
-                                typed_lhs.is_mut,
-                            );
+                            let projected = self.table.fold_ty(self.db, projected);
+                            let is_mut =
+                                self.projected_place_mutability(typed_lhs.is_mut, projected);
+                            return ExprProp::new(projected, is_mut);
                         }
                     }
                     let ty = ty_args[i];
-                    return ExprProp::new(ty, typed_lhs.is_mut);
+                    let is_mut = self.projected_place_mutability(typed_lhs.is_mut, ty);
+                    return ExprProp::new(ty, is_mut);
                 }
             }
         };
@@ -5470,7 +5507,7 @@ impl<'db> TyChecker<'db> {
         let mut provider_conflict = false;
         let mut arm_statuses = Vec::with_capacity(arms.len());
         let mut arm_props = Vec::with_capacity(arms.len());
-        let mut moves_value = false;
+        let mut capture_access = ClosureCaptureAccess::Read;
         let infer_result = !result_discarded
             && matches!(
                 self.normalize_ty(expected).data(self.db),
@@ -5483,8 +5520,9 @@ impl<'db> TyChecker<'db> {
             if let super::PatternDestructureMode::Borrow(kind) = mode {
                 self.retype_pattern_bindings_for_borrow(arm.pat, kind);
             }
-            moves_value |= mode == super::PatternDestructureMode::Owned
-                && self.pattern_moves_non_copy_value(arm.pat);
+            if mode == super::PatternDestructureMode::Owned {
+                capture_access.include(self.pattern_value_capture_access(arm.pat));
+            }
             arm_statuses.push(pat_result.analysis);
 
             self.env.enter_scope(arm.body);
@@ -5531,7 +5569,7 @@ impl<'db> TyChecker<'db> {
             }
         }
         if mode == super::PatternDestructureMode::Owned {
-            self.record_pattern_value_use(*scrutinee, moves_value);
+            self.record_pattern_value_use(*scrutinee, capture_access);
         }
 
         if !scrutinee_pat_ty.has_invalid(self.db)
@@ -5601,12 +5639,19 @@ impl<'db> TyChecker<'db> {
     }
 
     fn infer_branch_result_ty(&mut self, branches: &[(ExprId, ExprProp<'db>)]) -> TyId<'db> {
-        let Some((_, first)) = branches.first() else {
-            return self.fresh_ty();
+        let Some(first_idx) = branches
+            .iter()
+            .position(|(_, branch)| !self.normalize_ty(branch.ty).is_never(self.db))
+        else {
+            return TyId::never(self.db);
         };
+        let first = &branches[first_idx].1;
         let mut joined = self.normalize_ty(first.ty);
-        for (_, branch) in branches.iter().skip(1) {
+        for (_, branch) in branches.iter().skip(first_idx + 1) {
             let branch_ty = self.normalize_ty(branch.ty);
+            if branch_ty.is_never(self.db) {
+                continue;
+            }
             joined = match (
                 joined.as_capability(self.db),
                 branch_ty.as_capability(self.db),
@@ -5988,7 +6033,7 @@ impl<'db> TyChecker<'db> {
     }
 
     fn check_assign_lhs(&mut self, lhs: ExprId, typed_lhs: &ExprProp<'db>) -> AssignLhsStatus {
-        if !self.is_assignable_expr(lhs) || self.env.expr_place(lhs).is_none() {
+        if !self.is_assignable_expr(lhs) {
             if !typed_lhs.ty.has_invalid(self.db) {
                 let diag = BodyDiag::NonAssignableExpr(lhs.span(self.body()).into());
                 self.push_diag(diag);
@@ -5997,9 +6042,32 @@ impl<'db> TyChecker<'db> {
             return AssignLhsStatus::NonAssignable;
         }
 
-        if let Some(binding) = self.find_base_binding(lhs)
-            && self.env.binding_is_capture(binding)
-        {
+        let captured = self
+            .find_base_binding(lhs)
+            .is_some_and(|binding| self.env.binding_is_capture(binding));
+        if self.place_check_requires_deferred(lhs) {
+            self.pending_place_checks
+                .push(PendingPlaceCheck::Assign { lhs, captured });
+            return AssignLhsStatus::Deferred;
+        }
+        let Some(place) = self.current_expr_place(lhs) else {
+            if !typed_lhs.ty.has_invalid(self.db) {
+                self.push_diag(BodyDiag::NonAssignableExpr(lhs.span(self.body()).into()));
+            }
+            return AssignLhsStatus::NonAssignable;
+        };
+        self.check_resolved_assign_lhs(lhs, typed_lhs, &place, captured)
+    }
+
+    fn check_resolved_assign_lhs(
+        &mut self,
+        lhs: ExprId,
+        typed_lhs: &ExprProp<'db>,
+        place: &Place<'db>,
+        captured: bool,
+    ) -> AssignLhsStatus {
+        let PlaceBase::Binding(binding) = place.base;
+        if captured && !self.place_reaches_mut_capability(place) {
             self.push_diag(BodyDiag::AssignToCapturedBinding {
                 primary: lhs.span(self.body()).into(),
                 binding: Some((binding.binding_name(&self.env), binding.def_span(&self.env))),
@@ -6008,22 +6076,9 @@ impl<'db> TyChecker<'db> {
         }
 
         if !typed_lhs.is_mut {
-            let binding = self.find_base_binding(lhs);
-            let diag = match binding {
-                Some(binding) => {
-                    let (ident, def_span) =
-                        (binding.binding_name(&self.env), binding.def_span(&self.env));
-
-                    BodyDiag::ImmutableAssignment {
-                        primary: lhs.span(self.body()).into(),
-                        binding: Some((ident, def_span)),
-                    }
-                }
-
-                None => BodyDiag::ImmutableAssignment {
-                    primary: lhs.span(self.body()).into(),
-                    binding: None,
-                },
+            let diag = BodyDiag::ImmutableAssignment {
+                primary: lhs.span(self.body()).into(),
+                binding: Some((binding.binding_name(&self.env), binding.def_span(&self.env))),
             };
 
             self.push_diag(diag);
@@ -6031,6 +6086,141 @@ impl<'db> TyChecker<'db> {
         }
 
         AssignLhsStatus::Assignable
+    }
+
+    fn place_reaches_mut_capability(&mut self, place: &Place<'db>) -> bool {
+        let PlaceBase::Binding(binding) = place.base;
+        let mut tys = vec![self.env.lookup_binding_ty(&binding)];
+        tys.extend(
+            place
+                .projections
+                .iter()
+                .copied()
+                .map(PlaceProjection::result_ty),
+        );
+        tys.into_iter().any(|ty| {
+            matches!(
+                self.normalize_ty(ty).as_capability(self.db),
+                Some((CapabilityKind::Mut, _))
+            )
+        })
+    }
+
+    fn place_check_requires_deferred(&self, expr: ExprId) -> bool {
+        self.find_base_binding(expr).is_some() && self.place_expr_has_inference(expr)
+    }
+
+    fn place_expr_has_inference(&self, expr: ExprId) -> bool {
+        if self
+            .env
+            .typed_expr(expr)
+            .is_some_and(|prop| prop.ty.has_var(self.db))
+        {
+            return true;
+        }
+        match self.env.expr_data(expr) {
+            Partial::Present(Expr::Field(base, ..))
+            | Partial::Present(Expr::Bin(base, _, BinOp::Index)) => {
+                self.place_expr_has_inference(*base)
+            }
+            Partial::Present(Expr::Un(base, UnOp::Mut | UnOp::Ref)) => {
+                self.place_expr_has_inference(*base)
+            }
+            _ => false,
+        }
+    }
+
+    fn current_expr_place(&mut self, expr: ExprId) -> Option<Place<'db>> {
+        let db = self.db;
+        let body = self.body();
+        let scope = self.env.scope();
+        let assumptions = self.env.assumptions();
+        let env = &self.env;
+        let table = &mut self.table;
+        Place::from_expr_in_body(
+            db,
+            body,
+            expr,
+            |expr| env.typed_expr(expr).and_then(|prop| prop.binding),
+            |expr| {
+                let ty = env
+                    .typed_expr(expr)
+                    .map_or_else(|| TyId::invalid(db, InvalidCause::Other), |prop| prop.ty);
+                let mut prober = super::env::Prober::new(table, scope);
+                normalize_ty(db, ty.fold_with(db, &mut prober), scope, assumptions)
+            },
+        )
+    }
+
+    pub(super) fn resolve_pending_place_checks(&mut self) {
+        for check in std::mem::take(&mut self.pending_place_checks) {
+            let source = match check {
+                PendingPlaceCheck::Assign { lhs, .. } => lhs,
+                PendingPlaceCheck::Borrow { source, .. } => source,
+            };
+            let Some(mut source_prop) = self.env.typed_expr(source) else {
+                continue;
+            };
+            source_prop.ty = self.normalize_ty(source_prop.ty);
+            if source_prop.ty.has_invalid(self.db) || source_prop.ty.has_var(self.db) {
+                continue;
+            }
+            let Some(place) = self.current_expr_place(source) else {
+                self.push_diag(match check {
+                    PendingPlaceCheck::Assign { .. } => {
+                        BodyDiag::NonAssignableExpr(source.span(self.body()).into())
+                    }
+                    PendingPlaceCheck::Borrow { expr, .. } => BodyDiag::BorrowFromNonPlace {
+                        primary: expr.span(self.body()).into(),
+                    },
+                });
+                continue;
+            };
+            match check {
+                PendingPlaceCheck::Assign { lhs, captured } => {
+                    self.check_resolved_assign_lhs(lhs, &source_prop, &place, captured);
+                }
+                PendingPlaceCheck::Borrow {
+                    expr,
+                    kind,
+                    captured,
+                    ..
+                } => {
+                    let valid = match kind {
+                        BorrowKind::Ref => true,
+                        BorrowKind::Mut
+                            if captured && !self.place_reaches_mut_capability(&place) =>
+                        {
+                            let PlaceBase::Binding(binding) = place.base;
+                            self.push_diag(BodyDiag::BorrowMutFromCapturedBinding {
+                                primary: expr.span(self.body()).into(),
+                                binding: Some((
+                                    binding.binding_name(&self.env),
+                                    binding.def_span(&self.env),
+                                )),
+                            });
+                            false
+                        }
+                        BorrowKind::Mut if !source_prop.is_mut => {
+                            let PlaceBase::Binding(binding) = place.base;
+                            self.push_diag(BodyDiag::CannotBorrowMut {
+                                primary: expr.span(self.body()).into(),
+                                binding: Some((
+                                    binding.binding_name(&self.env),
+                                    binding.def_span(&self.env),
+                                )),
+                            });
+                            false
+                        }
+                        BorrowKind::Mut => true,
+                    };
+                    if valid && let Some(mut prop) = self.env.typed_expr(expr) {
+                        prop.borrow_provider = self.concrete_borrow_provider_for_place(&place);
+                        self.env.type_expr(expr, prop);
+                    }
+                }
+            }
+        }
     }
 
     fn check_expr_in_new_scope(

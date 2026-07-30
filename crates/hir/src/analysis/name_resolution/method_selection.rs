@@ -9,7 +9,7 @@ use crate::analysis::{
     ty::{
         binder::Binder,
         canonical::{Canonical, Canonicalized, Solution},
-        closure::closure_call_trait_for_method,
+        closure::{ClosureCallTrait, closure_call_trait_for_method},
         fold::TyFoldable as _,
         method_table::{ProbedMethod, probe_method},
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_and_ty, impls_for_ty},
@@ -119,6 +119,12 @@ pub(crate) fn select_method_candidate<'db>(
 ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
     let receiver_ty = receiver.original();
     if receiver_ty.is_ty_var(db) {
+        return Err(MethodSelectionError::ReceiverTypeMustBeKnown);
+    }
+    if let TyData::TyBase(TyBase::Closure(closure)) = receiver_ty.base_ty(db).data(db)
+        && method_name.data(db) == ClosureCallTrait::Fn.method_name()
+        && closure.fn_capability_depends_on_inference(db, assumptions)
+    {
         return Err(MethodSelectionError::ReceiverTypeMustBeKnown);
     }
 
@@ -266,6 +272,7 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
         let Some((_, call_trait)) = closure_call_trait_for_method(
             self.db,
             self.scope,
+            self.assumptions,
             *closure,
             self.method_name.data(self.db),
         ) else {

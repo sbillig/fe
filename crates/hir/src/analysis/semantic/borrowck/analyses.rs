@@ -15,10 +15,7 @@ use crate::analysis::{
 use super::{
     canon::{BorrowCanonCx, CanonPlace, CfgAdjacency, Loan, LoanId, MovedPlaces, State},
     check::Borrowck,
-    ir::{
-        BorrowInput, BorrowResult, BorrowTransform, NormalizedSemanticBody,
-        SemanticBorrowDiagnostic,
-    },
+    ir::{BorrowResult, BorrowTransform, NormalizedSemanticBody, SemanticBorrowDiagnostic},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,18 +37,32 @@ pub(super) struct BorrowLoanTargetAnalysis<'a, 'db> {
     constant_indices: &'a SecondaryMap<SLocalId, Option<usize>>,
     call_result_loans: &'a FxHashMap<SStmtId, Vec<(BorrowResult, LoanId)>>,
     call_loan_transforms: &'a FxHashMap<LoanId, Vec<BorrowTransform>>,
+    fresh_call_args: &'a FxHashSet<(SStmtId, SLocalId)>,
+}
+
+pub(super) struct BorrowLoanTargetInputs<'a, 'db> {
+    pub(super) db: &'db dyn HirAnalysisDb,
+    pub(super) body: &'a NormalizedSemanticBody<'db>,
+    pub(super) entry_state: &'a SecondaryMap<SBlockId, State>,
+    pub(super) loan_for_local: &'a FxHashMap<SLocalId, LoanId>,
+    pub(super) constant_indices: &'a SecondaryMap<SLocalId, Option<usize>>,
+    pub(super) call_result_loans: &'a FxHashMap<SStmtId, Vec<(BorrowResult, LoanId)>>,
+    pub(super) call_loan_transforms: &'a FxHashMap<LoanId, Vec<BorrowTransform>>,
+    pub(super) fresh_call_args: &'a FxHashSet<(SStmtId, SLocalId)>,
 }
 
 impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
-    pub(super) fn new(
-        db: &'db dyn HirAnalysisDb,
-        body: &'a NormalizedSemanticBody<'db>,
-        entry_state: &'a SecondaryMap<SBlockId, State>,
-        loan_for_local: &'a FxHashMap<SLocalId, LoanId>,
-        constant_indices: &'a SecondaryMap<SLocalId, Option<usize>>,
-        call_result_loans: &'a FxHashMap<SStmtId, Vec<(BorrowResult, LoanId)>>,
-        call_loan_transforms: &'a FxHashMap<LoanId, Vec<BorrowTransform>>,
-    ) -> Self {
+    pub(super) fn new(inputs: BorrowLoanTargetInputs<'a, 'db>) -> Self {
+        let BorrowLoanTargetInputs {
+            db,
+            body,
+            entry_state,
+            loan_for_local,
+            constant_indices,
+            call_result_loans,
+            call_loan_transforms,
+            fresh_call_args,
+        } = inputs;
         Self {
             db,
             body,
@@ -60,6 +71,7 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
             constant_indices,
             call_result_loans,
             call_loan_transforms,
+            fresh_call_args,
         }
     }
 
@@ -139,11 +151,13 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
                         let Some(arg) = args.get(param as usize) else {
                             continue;
                         };
-                        let arg_targets = match &transform.input {
-                            BorrowInput::Place { projection, .. } => canon
-                                .canonicalize_value_layout_projection(state, arg.local, projection),
-                            BorrowInput::AnyInParam(_) => canon.all_value_targets(state, arg.local),
-                        };
+                        let arg_targets = canon.canonicalize_call_input(
+                            state,
+                            stmt.id,
+                            arg.local,
+                            &transform.input,
+                            self.fresh_call_args.contains(&(stmt.id, arg.local)),
+                        );
                         parents.extend(canon.mut_loans_for_value_targets(
                             state,
                             arg.local,
@@ -160,12 +174,9 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
                     return Ok(false);
                 };
                 let canon = self.canon(loans);
-                Ok(self.extend_loan(
-                    loans,
-                    loan_id,
-                    canon.borrow_local_targets(state, value.local),
-                    canon.mut_loans_for_value(state, value.local),
-                ))
+                let targets = canon.borrow_local_targets(state, value.local);
+                let parents = canon.mut_loans_for_value_targets(state, value.local, &targets);
+                Ok(self.extend_loan(loans, loan_id, targets, parents))
             }
             _ => Ok(false),
         }

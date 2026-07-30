@@ -25,9 +25,10 @@ use crate::analysis::{
     ty::{
         binder::Binder,
         canonical::{Canonical, Solution},
+        closure::implemented_closure_call_trait,
         fold::TyFoldable,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
-        ty_def::{TyData, TyId},
+        ty_def::{TyBase, TyData, TyId},
         unify::PersistentUnificationTable,
         visitor::{TyVisitable, TyVisitor},
     },
@@ -64,6 +65,7 @@ pub(crate) enum TargetSolutionMatch {
 
 #[derive(Clone, Copy)]
 enum Clause<'db> {
+    BuiltinClosureCall,
     Implementor(Binder<ImplementorId<'db>>),
     Assumption(usize),
 }
@@ -291,8 +293,15 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             Canonical::new(self.db, prepared.query.goal),
         );
 
-        let mut clauses =
-            Vec::with_capacity(implementors.len() + prepared.query.assumptions.list(self.db).len());
+        let has_builtin = potential_builtin_closure_call(self.db, prepared.normalized_goal);
+        let mut clauses = Vec::with_capacity(
+            implementors.len()
+                + prepared.query.assumptions.list(self.db).len()
+                + usize::from(has_builtin),
+        );
+        if has_builtin {
+            clauses.push(Clause::BuiltinClosureCall);
+        }
         clauses.extend(implementors.iter().copied().map(Clause::Implementor));
         if self.goal_can_use_assumptions(prepared.normalized_goal) {
             clauses.extend(
@@ -312,16 +321,30 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             query,
             normalized_goal,
         } = self.prepare_query(*key);
+        let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
+            self.db,
+            self.origin_ingot,
+            query.goal,
+        );
 
         let selected_impl = match clause {
+            Clause::BuiltinClosureCall => {
+                if apply_builtin_closure_call(
+                    self.db,
+                    scope,
+                    query.assumptions,
+                    normalized_goal,
+                    &mut table,
+                )
+                .is_none()
+                {
+                    return Ok(Transition::Reject);
+                }
+                ImplementorId::assumption(self.db, query.goal.fold_with(self.db, &mut table))
+            }
             Clause::Implementor(candidate) => {
                 let selected_impl = candidate.instantiate_identity();
                 let candidate = table.instantiate_with_fresh_vars(candidate);
-                let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
-                    self.db,
-                    self.origin_ingot,
-                    query.goal,
-                );
                 let normalized_candidate = normalize_trait_inst_preserving_validity(
                     self.db,
                     candidate.trait_inst(self.db),
@@ -645,6 +668,39 @@ pub(crate) fn ty_depth_impl<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> u
             std::cmp::max(lhs_depth, rhs_depth) + 1
         }
     }
+}
+
+fn potential_builtin_closure_call<'db>(db: &'db dyn HirAnalysisDb, goal: TraitInstId<'db>) -> bool {
+    let args = goal.args(db);
+    args.len() == 3
+        && matches!(
+            args[0].base_ty(db).data(db),
+            TyData::TyBase(TyBase::Closure(_))
+        )
+}
+
+fn apply_builtin_closure_call<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    assumptions: super::PredicateListId<'db>,
+    goal: TraitInstId<'db>,
+    table: &mut PersistentUnificationTable<'db>,
+) -> Option<()> {
+    let args = goal.args(db);
+    if args.len() != 3 {
+        return None;
+    }
+    let self_ty = args[0];
+    let arg_ty = args[1];
+    let ret_ty = args[2];
+    let TyData::TyBase(TyBase::Closure(closure)) = self_ty.base_ty(db).data(db) else {
+        return None;
+    };
+    implemented_closure_call_trait(db, scope, assumptions, *closure, goal.def(db))?;
+    let arg_ty = arg_ty.fold_with(db, table);
+    table.unify(closure.args_pack_ty(db), arg_ty).ok()?;
+    table.unify(closure.ret_ty(db), ret_ty).ok()?;
+    Some(())
 }
 
 fn maximum_ty_depth<'db, V>(db: &'db dyn HirAnalysisDb, value: V) -> usize

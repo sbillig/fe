@@ -17,9 +17,9 @@ use crate::{
             normalize::normalize_ty,
             pattern_ir::{ConstructorKind, PatternStore, ValidatedPatId, ValidatedPatKind},
             pattern_types::{
-                PatternProjectionStep, apply_pattern_borrow_mode, destructure_pattern_source,
-                pattern_match_expected_ty, project_pattern_child_carrier_ty,
-                project_pattern_child_source_ty,
+                PatternDestructureMode, PatternProjectionStep, apply_pattern_borrow_mode,
+                destructure_pattern_source, pattern_match_expected_ty,
+                project_pattern_child_carrier_ty, project_pattern_child_source_ty,
             },
             ty_check::PatBindingMode,
             ty_def::{PrimTy, TyBase, TyData, TyId},
@@ -68,6 +68,18 @@ fn assigned_pattern_child_carrier_ty<'db>(
     let assigned_match = pattern_store.node(child).match_ty().raw();
     let assigned_carrier = apply_pattern_borrow_mode(db, child_mode, assigned_match);
     apply_pattern_borrow_mode(db, parent_mode, assigned_carrier)
+}
+
+fn projection_inherits_pattern_borrow<'db>(
+    db: &'db dyn HirAnalysisDb,
+    parent_carrier_ty: TyId<'db>,
+    projection: PatternProjectionStep<'db>,
+) -> bool {
+    let (container_ty, parent_mode) = destructure_pattern_source(db, parent_carrier_ty);
+    matches!(parent_mode, PatternDestructureMode::Borrow(_))
+        && project_pattern_child_source_ty(db, container_ty, projection)
+            .as_capability(db)
+            .is_none()
 }
 
 impl<'db> DecisionTreeProjectionCache<'db> {
@@ -303,22 +315,30 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         field_idx: usize,
         assigned_ty: Option<TyId<'db>>,
     ) -> PatternValue<'db> {
+        let projection = PatternProjectionStep::VariantField { variant, field_idx };
         let ty = assigned_ty.unwrap_or_else(|| {
-            project_pattern_child_carrier_ty(
-                self.db,
-                base.carrier_ty.0,
-                PatternProjectionStep::VariantField { variant, field_idx },
-            )
+            project_pattern_child_carrier_ty(self.db, base.carrier_ty.0, projection)
         });
-        let value = self.emit_expr_with_origin(
-            base.origin,
-            ty,
+        let variant = VariantIndex(variant.idx);
+        let field = FieldIndex(field_idx as u16);
+        let expr = if projection_inherits_pattern_borrow(self.db, base.carrier_ty.0, projection) {
+            SExpr::ReadPlace {
+                place: SPlace::variant_field(
+                    base.value,
+                    variant,
+                    pattern_match_expected_ty(self.db, base.carrier_ty.0),
+                    field,
+                ),
+                intent: SOperandIntent::Read,
+            }
+        } else {
             SExpr::ExtractEnumField {
                 value: SOperand::synthetic(base.value).with_intent(SOperandIntent::Read),
-                variant: VariantIndex(variant.idx),
-                field: FieldIndex(field_idx as u16),
-            },
-        );
+                variant,
+                field,
+            }
+        };
+        let value = self.emit_expr_with_origin(base.origin, ty, expr);
         PatternValue {
             value,
             carrier_ty: PatternCarrierTy(ty),

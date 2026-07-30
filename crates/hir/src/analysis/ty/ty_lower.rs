@@ -2186,13 +2186,17 @@ pub fn layout_bundle_schema_for_semantic_value<'db>(
     body: crate::hir_def::Body<'db>,
     local: u32,
     ty: TyId<'db>,
+    template_local: u32,
     template_ty: TyId<'db>,
 ) -> LayoutBundleSchema<'db> {
     let mut schema =
         callable_layout_projections_for_ty(db, CallableLayoutSchemaSite::Value { body, local }, ty);
     let mut template = callable_layout_projections_for_ty(
         db,
-        CallableLayoutSchemaSite::Value { body, local },
+        CallableLayoutSchemaSite::Value {
+            body,
+            local: template_local,
+        },
         template_ty,
     );
     bind_direct_layout_const_params(db, &mut template.schema);

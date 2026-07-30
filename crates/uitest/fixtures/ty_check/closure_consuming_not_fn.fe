@@ -4,12 +4,13 @@ struct Boxed {
     value: u256,
 }
 
-fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
-    func.call(value)
+fn call_twice<T, F: Fn<(), T>>(_ func: F) -> T {
+    func.call()
+    func.call()
 }
 
 pub fn closure_consuming_not_fn() -> Boxed {
     let boxed = Boxed { value: 42 }
-    let take = |_ unit: own ()| -> Boxed { boxed }
-    invoke(func: take, value: ())
+    let take = || -> Boxed { boxed }
+    call_twice(take)
 }

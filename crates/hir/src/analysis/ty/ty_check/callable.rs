@@ -12,7 +12,8 @@ use crate::{
 use salsa::Update;
 
 use super::{
-    BodyOwner, ClosureExpectation, ExprProp, LocalBinding, TraitObligationOutcome, TyChecker,
+    BodyOwner, ClosureCaptureAccess, ClosureExpectation, ExprProp, LocalBinding,
+    TraitObligationOutcome, TyChecker, ValueAccess,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -29,6 +30,7 @@ use crate::analysis::{
         },
         ty_def::{BorrowKind, CapabilityKind},
         ty_def::{InvalidCause, TyBase, TyData, TyFlags, TyId},
+        ty_is_noesc,
         ty_lower::{lower_generic_arg_list, specialized_callable_layout_bundle_signature},
         visitor::{TyVisitable, TyVisitor, collect_flags},
     },
@@ -610,25 +612,50 @@ impl<'db> Callable<'db> {
                 }
                 (CallableDef::VariantCtor(_), None) => None,
             };
-            // Constructors for layout-bearing inputs must see the callee's specialized type so
-            // their inferred roots are anchored to the value being passed. Keep this contextual
-            // typing selective: applying it to every call argument changes ordinary inference and
-            // compile-time evaluation. `view` is an interface capability, not the type of the value
-            // constructed at the call boundary, so use its inner type as the hint.
+            let accepts_contextual_hint = matches!(
+                hir_arg.expr.data(db, tc.body()),
+                Partial::Present(
+                    Expr::RecordInit(..)
+                        | Expr::Tuple(..)
+                        | Expr::Array(..)
+                        | Expr::ArrayRep(..)
+                        | Expr::Call(..)
+                        | Expr::MethodCall(..)
+                        | Expr::Block(..)
+                        | Expr::If(..)
+                        | Expr::Match(..)
+                        | Expr::With(..)
+                )
+            );
+            let expected_arg_ty = expected_arg_tys.get(arg_idx).copied().map(|ty| {
+                let ty = tc.normalize_ty(ty);
+                ty.as_view(db).unwrap_or(ty)
+            });
+            let payload_contains_noesc = expected_arg_ty.is_some_and(|ty| {
+                let payload = ty.as_capability(db).map_or(ty, |(_, payload)| payload);
+                ty_is_noesc(db, payload)
+            });
+            // Aggregate constructors need the logical parameter type when it carries layout
+            // evidence or nested capabilities. Layout roots must be anchored to the value being
+            // passed, while nested capabilities must reach tuple/array elements before the
+            // aggregate is formed; whole-value coercion is too late to recover either.
+            //
+            // Keep contextual typing selective because applying every expected call type changes
+            // ordinary inference and compile-time evaluation. A top-level `view` remains an
+            // interface capability rather than the constructed value's type, so strip only that
+            // outer layer and preserve capabilities nested in the payload.
             let expected_hint = call_args_pack
                 .is_none()
                 .then(|| self.compile_time_string_literal_arg_expected(tc, hir_arg.expr, arg_idx))
                 .flatten()
                 .or_else(|| {
-                    (matches!(self.callable_def, CallableDef::VariantCtor(_))
-                        || layout_origin
-                            .is_some_and(|origin| layout_input_origins.contains(&origin)))
-                    .then(|| self.arg_ty(db, arg_idx))
-                    .flatten()
-                    .map(|ty| {
-                        let ty = tc.normalize_ty(ty);
-                        ty.as_view(db).unwrap_or(ty)
-                    })
+                    (accepts_contextual_hint
+                        && (matches!(self.callable_def, CallableDef::VariantCtor(_))
+                            || layout_origin
+                                .is_some_and(|origin| layout_input_origins.contains(&origin))
+                            || payload_contains_noesc))
+                        .then_some(expected_arg_ty)
+                        .flatten()
                 });
             args.push(CallArg::from_hir_arg(
                 tc,
@@ -810,15 +837,22 @@ impl<'db> Callable<'db> {
                         )
                     })
                 });
-                if mode == FuncParamMode::Own {
-                    if expected.as_borrow(db).is_some() {
-                        tc.push_diag(BodyDiag::OwnParamCannotBeBorrow {
-                            primary: given.expr_span.clone(),
-                            ty: expected,
-                        });
-                    } else {
-                        tc.record_owned_value_use(given.expr, expected);
+                match mode {
+                    FuncParamMode::Own => {
+                        if expected.as_borrow(db).is_some() {
+                            tc.push_diag(BodyDiag::OwnParamCannotBeBorrow {
+                                primary: given.expr_span.clone(),
+                                ty: expected,
+                            });
+                        } else {
+                            tc.record_owned_value_use(given.expr, expected);
+                        }
                     }
+                    FuncParamMode::View => tc.record_expr_value_use(
+                        given.expr,
+                        ValueAccess::Read,
+                        ClosureCaptureAccess::Read,
+                    ),
                 }
             } else {
                 tc.equate_ty(actual, expected, given.expr_span.clone());

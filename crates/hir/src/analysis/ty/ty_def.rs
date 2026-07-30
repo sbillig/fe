@@ -1057,6 +1057,31 @@ impl ClosureCallMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ClosureCaptureAccess {
+    Read,
+    MoveIfNonCopy,
+    Move,
+}
+
+impl ClosureCaptureAccess {
+    pub(crate) fn include(&mut self, access: Self) {
+        *self = match (*self, access) {
+            (Self::Move, _) | (_, Self::Move) => Self::Move,
+            (Self::MoveIfNonCopy, _) | (_, Self::MoveIfNonCopy) => Self::MoveIfNonCopy,
+            (Self::Read, Self::Read) => Self::Read,
+        };
+    }
+
+    pub(crate) fn consumes(self, copy: bool) -> bool {
+        match self {
+            Self::Read => false,
+            Self::MoveIfNonCopy => !copy,
+            Self::Move => true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum ClosureParamMode {
     Own,
     View,
@@ -1151,6 +1176,40 @@ impl<'db> ClosureSignature<'db> {
     }
 }
 
+/// The type and body access for every captured closure value.
+///
+/// Keeping these parallel slices behind a checked constructor makes their
+/// positional relationship an invariant of [`ClosureTy`], rather than an
+/// assumption each consumer has to re-establish.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct ClosureCaptures<'db> {
+    tys: Vec<TyId<'db>>,
+    accesses: Vec<ClosureCaptureAccess>,
+}
+
+impl<'db> ClosureCaptures<'db> {
+    pub fn new(tys: Vec<TyId<'db>>, accesses: Vec<ClosureCaptureAccess>) -> Self {
+        assert_eq!(
+            tys.len(),
+            accesses.len(),
+            "every closure capture must retain its body access"
+        );
+        Self { tys, accesses }
+    }
+
+    pub fn tys(&self) -> &[TyId<'db>] {
+        &self.tys
+    }
+
+    pub fn accesses(&self) -> &[ClosureCaptureAccess] {
+        &self.accesses
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (TyId<'db>, ClosureCaptureAccess)> + '_ {
+        self.tys.iter().copied().zip(self.accesses.iter().copied())
+    }
+}
+
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ClosureTy<'db> {
@@ -1161,13 +1220,31 @@ pub struct ClosureTy<'db> {
     #[return_ref]
     pub parent_args: Vec<TyId<'db>>,
     #[return_ref]
-    pub captures: Vec<TyId<'db>>,
+    pub capture_data: ClosureCaptures<'db>,
     #[return_ref]
     pub signature: ClosureSignature<'db>,
-    pub call_mode: ClosureCallMode,
 }
 
 impl<'db> ClosureTy<'db> {
+    pub fn captures(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
+        self.capture_data(db).tys()
+    }
+
+    /// How the closure body uses each corresponding capture. Whether a move
+    /// access actually consumes the environment depends on the capture's
+    /// resolved `Copy` status and therefore cannot be frozen during initial
+    /// type inference.
+    pub fn capture_accesses(self, db: &'db dyn HirAnalysisDb) -> &'db [ClosureCaptureAccess] {
+        self.capture_data(db).accesses()
+    }
+
+    pub fn captures_with_accesses(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> impl ExactSizeIterator<Item = (TyId<'db>, ClosureCaptureAccess)> + 'db {
+        self.capture_data(db).iter()
+    }
+
     pub fn params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
         self.signature(db).params()
     }

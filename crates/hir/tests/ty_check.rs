@@ -134,7 +134,7 @@ struct Box<T> {
 impl<T: Copy> Copy for Box<T> {}
 
 impl<T> Box<T> {
-    fn new(value: T) -> Box<T> {
+    fn new(value: own T) -> Box<T> {
         Box { value: value }
     }
 }
@@ -400,6 +400,21 @@ fn probe(e: E) -> u256 {
         E::B => { 1 }
     }
     value + 1
+}
+
+fn reverse(e: E) -> u256 {
+    let value = match e {
+        E::A => { 1 }
+        E::B => { return 0 }
+    }
+    value + 1
+}
+
+fn all_diverge(e: E) -> ! {
+    match e {
+        E::A => panic()
+        E::B => panic()
+    }
 }
 "#,
     );

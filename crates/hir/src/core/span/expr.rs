@@ -134,6 +134,9 @@ define_lazy_span_node!(
 define_lazy_span_node!(
     LazyClosureExprSpan,
     ast::ClosureExpr,
+    @token {
+        (empty_params, empty_params_token),
+    }
     @node {
         (params, params, LazyFuncParamListSpan),
         (ret_ty, ret_ty, LazyTySpan),

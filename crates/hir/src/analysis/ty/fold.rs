@@ -8,7 +8,7 @@ use super::{
     trait_def::{ImplementorId, TraitInstId},
     trait_resolution::{PredicateListId, TraitGoalSolution, TraitSolverQuery},
     ty_check::{ClosureCapture, ClosureInfo, EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
-    ty_def::{ClosureSignature, ClosureTy, TyBase as TyBaseData, TyData, TyId},
+    ty_def::{ClosureCaptures, ClosureSignature, ClosureTy, TyBase as TyBaseData, TyData, TyId},
     visitor::TyVisitable,
 };
 use crate::analysis::{
@@ -167,9 +167,8 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         db,
                         closure.def(db),
                         parent_args,
-                        captures,
+                        ClosureCaptures::new(captures, closure.capture_accesses(db).to_vec()),
                         ClosureSignature::new(params, closure.param_modes(db).to_vec(), ret_ty),
-                        closure.call_mode(db),
                     ),
                 )
             }

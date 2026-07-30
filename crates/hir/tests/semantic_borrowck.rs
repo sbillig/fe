@@ -32,6 +32,13 @@ fn borrow_diags(src: &str) -> String {
     )
 }
 
+fn analysis_diags(src: &str) -> String {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("semantic_borrowck.fe".into(), src);
+    let (top_mod, _) = db.top_mod(file);
+    format_diagnostics(&db, &db.run_on_top_mod(top_mod))
+}
+
 fn contract_init_instance<'db>(
     db: &'db HirAnalysisTestDb,
     top_mod: fe_hir::hir_def::TopLevelMod<'db>,
@@ -139,6 +146,386 @@ fn probe() {
 }
 
 #[test]
+fn closure_argument_return_does_not_borrow_unrelated_noncopy_environment() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() -> u256 {
+    let captured = Boxed { value: 1 }
+    let value = 41
+    let project = |argument: ref u256| -> ref u256 {
+        captured.value
+        argument
+    }
+    let returned = project.call(ref value)
+    let moved = project
+    returned + moved.call(ref value) - 40
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn generic_higher_order_call_preserves_closure_parameter_borrow_provenance() {
+    let src = r#"
+use core::functional::Fn
+
+fn invoke<T, F: Fn<(mut T,), mut T>>(
+    _ function: F,
+    _ value: mut T,
+) -> mut T {
+    function.call(value)
+}
+
+fn probe() {
+    let mut value: u256 = 0
+    let project = |target: mut u256| -> mut u256 { target }
+    let returned = invoke(project, mut value)
+    let other = mut value
+    other = 1
+    returned = 2
+}
+"#;
+    let analysis = analysis_diags(src);
+    assert!(analysis.is_empty(), "{analysis}");
+    let diags = borrow_diags(src);
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn generic_higher_order_call_preserves_closure_capture_borrow_provenance() {
+    let src = r#"
+use core::functional::Fn
+
+fn invoke<F: Fn<((),), mut u256>>(_ function: F) -> mut u256 {
+    function.call(())
+}
+
+fn probe() {
+    let mut value = 0
+    let captured = mut value
+    let project = |_ unit: own ()| -> mut u256 { captured }
+    let returned = invoke(project)
+    let other = mut value
+    other = 1
+    returned = 2
+}
+"#;
+    let analysis = analysis_diags(src);
+    assert!(analysis.is_empty(), "{analysis}");
+    let diags = borrow_diags(src);
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn generic_higher_order_return_borrows_the_reusable_closure_environment() {
+    let src = r#"
+use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+fn invoke<F: Fn<(), ref u256>>(_ function: F) -> ref u256 {
+    function.call()
+}
+
+fn probe() -> u256 {
+    let boxed = Boxed { value: 42 }
+    let read = || -> ref u256 { ref boxed.value }
+    let returned = invoke(read)
+    let moved = read
+    returned
+}
+"#;
+    let analysis = analysis_diags(src);
+    assert!(analysis.is_empty(), "{analysis}");
+    let diags = borrow_diags(src);
+    assert!(
+        diags.contains("cannot move out of a value while it is borrowed"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn generic_higher_order_call_rejects_aliasing_between_two_closure_environments() {
+    let src = r#"
+use core::functional::Fn
+
+fn borrow_both<F: Fn<(), mut u256>, G: Fn<(), mut u256>>(
+    _ first: F,
+    _ second: G,
+) {
+    let left = first.call()
+    let right = second.call()
+    left = 1
+    right = 2
+}
+
+fn probe() {
+    let mut value = 0
+    let captured = mut value
+    let first = || -> mut u256 { captured }
+    let second = || -> mut u256 { captured }
+    borrow_both(first, second)
+}
+"#;
+    let analysis = analysis_diags(src);
+    assert!(analysis.is_empty(), "{analysis}");
+    let diags = borrow_diags(src);
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn generic_fn_once_call_preserves_consumed_closure_capture_borrow_provenance() {
+    let src = r#"
+use core::functional::FnOnce
+
+struct Boxed {
+    value: u256,
+}
+
+fn consume(_ value: own Boxed) {}
+
+fn invoke<F: FnOnce<(), mut u256>>(_ function: own F) -> mut u256 {
+    function.call_once()
+}
+
+fn probe() {
+    let mut value = 0
+    let captured = mut value
+    let consumed = Boxed { value: 42 }
+    let project = || -> mut u256 {
+        consume(consumed)
+        captured
+    }
+    let returned = invoke(project)
+    let other = mut value
+    other = 1
+    returned = 2
+}
+"#;
+    let analysis = analysis_diags(src);
+    assert!(analysis.is_empty(), "{analysis}");
+    let diags = borrow_diags(src);
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn generic_higher_order_call_preserves_wrapped_closure_capture_provenance() {
+    let src = r#"
+use core::functional::Fn
+
+struct Wrapped<F> {
+    function: F,
+}
+
+fn invoke<F: Fn<((),), mut u256>>(_ wrapped: own Wrapped<F>) -> mut u256 {
+    wrapped.function.call(())
+}
+
+fn probe() {
+    let mut value = 0
+    let captured = mut value
+    let project = |_ unit: own ()| -> mut u256 { captured }
+    let returned = invoke(Wrapped { function: project })
+    let other = mut value
+    other = 1
+    returned = 2
+}
+"#;
+    let analysis = analysis_diags(src);
+    assert!(analysis.is_empty(), "{analysis}");
+    let diags = borrow_diags(src);
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn generic_higher_order_call_preserves_dynamically_projected_closure_provenance() {
+    let src = r#"
+use core::functional::Fn
+
+fn invoke<F: Fn<((),), mut u256>>(
+    _ functions: own [F; 2],
+    _ index: usize,
+) -> mut u256 {
+    functions[index].call(())
+}
+
+fn probe(_ index: usize) {
+    let mut value = 0
+    let captured = mut value
+    let project = |_ unit: own ()| -> mut u256 { captured }
+    let returned = invoke([project, project], index)
+    let other = mut value
+    other = 1
+    returned = 2
+}
+"#;
+    let analysis = analysis_diags(src);
+    assert!(analysis.is_empty(), "{analysis}");
+    let diags = borrow_diags(src);
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn generic_higher_order_call_rejects_aliasing_closure_capture_and_argument() {
+    let src = r#"
+use core::functional::Fn
+
+fn invoke<F: Fn<(mut u256,), ()>>(_ function: F, _ target: mut u256) {
+    function.call(target)
+}
+
+fn probe() {
+    let mut value = 0
+    let captured = mut value
+    let write = |target: mut u256| {
+        captured = 1
+        target = 2
+    }
+    invoke(write, mut value)
+}
+"#;
+    let analysis = analysis_diags(src);
+    assert!(analysis.is_empty(), "{analysis}");
+    let diags = borrow_diags(src);
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn recursive_higher_order_summary_preserves_closure_return_provenance() {
+    let src = r#"
+use core::functional::Fn
+
+fn forward<F: Fn<(mut u256,), mut u256>>(
+    _ function: F,
+    _ target: mut u256,
+    _ depth: u256,
+) -> mut u256 {
+    if depth == 0 {
+        function.call(target)
+    } else {
+        forward(function, target, depth - 1)
+    }
+}
+
+fn probe(_ depth: u256) {
+    let mut value = 0
+    let project = |target: mut u256| -> mut u256 { target }
+    let returned = forward(project, mut value, depth)
+    let other = mut value
+    other = 1
+    returned = 2
+}
+"#;
+    let analysis = analysis_diags(src);
+    assert!(analysis.is_empty(), "{analysis}");
+    let diags = borrow_diags(src);
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn recursive_higher_order_summary_converges_through_parameter_permutation() {
+    let src = r#"
+use core::functional::Fn
+
+fn alternate<F: Fn<(mut u256,), mut u256>>(
+    _ function: F,
+    _ left: mut u256,
+    _ right: mut u256,
+    _ depth: u256,
+) -> mut u256 {
+    if depth == 0 {
+        function.call(left)
+    } else {
+        alternate(function, right, left, depth - 1)
+    }
+}
+
+fn probe(_ depth: u256) {
+    let mut left = 0
+    let mut right = 0
+    let project = |target: mut u256| -> mut u256 { target }
+    let returned = alternate(project, mut left, mut right, depth)
+    let other = mut right
+    other = 1
+    returned = 2
+}
+"#;
+    let analysis = analysis_diags(src);
+    assert!(analysis.is_empty(), "{analysis}");
+    let diags = borrow_diags(src);
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn recursive_closure_forwarding_preserves_capture_provenance() {
+    let src = r#"
+use core::functional::Fn
+
+fn forward<F: Fn<((),), mut u256>>(
+    _ function: own F,
+    _ depth: u256,
+) -> F {
+    if depth == 0 {
+        function
+    } else {
+        forward(function, depth - 1)
+    }
+}
+
+fn probe(_ depth: u256) {
+    let mut value = 0
+    let captured = mut value
+    let project = |_ unit: own ()| -> mut u256 { captured }
+    let forwarded = forward(project, depth)
+    let returned = forwarded.call(())
+    let other = mut value
+    other = 1
+    returned = 2
+}
+"#;
+    let analysis = analysis_diags(src);
+    assert!(analysis.is_empty(), "{analysis}");
+    let diags = borrow_diags(src);
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn mutually_recursive_direct_borrow_summaries_converge() {
+    let src = r#"
+fn forward_left(_ target: mut u256, _ recurse: bool) -> mut u256 {
+    if recurse {
+        forward_right(target)
+    } else {
+        target
+    }
+}
+
+fn forward_right(_ target: mut u256) -> mut u256 {
+    forward_left(target, recurse: false)
+}
+
+fn probe(_ recurse: bool) {
+    let mut value = 0
+    let returned = forward_left(mut value, recurse)
+    let other = mut value
+    other = 1
+    returned = 2
+}
+"#;
+    let analysis = analysis_diags(src);
+    assert!(analysis.is_empty(), "{analysis}");
+    let diags = borrow_diags(src);
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
 fn repeated_closure_calls_cannot_duplicate_returned_mut_capture() {
     let diags = borrow_diags(
         r#"
@@ -154,6 +541,672 @@ fn probe() {
 "#,
     );
     assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn stored_deferred_closure_cannot_duplicate_returned_mut_parameter() {
+    let diags = borrow_diags(
+        r#"
+struct Holder<F> {
+    function: F,
+}
+
+fn probe() {
+    let project = |target: mut| -> mut u256 { target }
+    let holder = Holder { function: project }
+    let mut value: u256 = 0
+    let first = holder.function.call(mut value)
+    let second = holder.function.call(mut value)
+    first = 1
+    second = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn stored_deferred_closure_preserves_owned_parameter_move() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Holder<F> {
+    function: F,
+}
+
+fn probe(_ boxed: own Boxed) {
+    let take = |value: own| value.value
+    let holder = Holder { function: take }
+    let result = holder.function.call_once(boxed)
+    let reused = boxed.value
+}
+"#,
+    );
+    assert!(
+        diags.contains("cannot use a value after it was moved"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn stored_closure_receiver_and_mut_argument_allow_disjoint_fields() {
+    let diags = borrow_diags(
+        r#"
+struct Holder<F> {
+    function: F,
+    value: u256,
+}
+
+fn probe() -> u256 {
+    let write = |target: mut u256| {
+        target = 42
+    }
+    let mut holder = Holder { function: write, value: 0 }
+    holder.function.call(mut holder.value)
+    holder.value
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn stored_mut_enum_pattern_projection_can_be_reborrowed() {
+    let diags = borrow_diags(
+        r#"
+struct Holder {
+    value: mut Option<usize>,
+}
+
+fn update(value: mut Option<Option<usize>>) {
+    if let Option::Some(mut inner) = value {
+        let holder = Holder { value: mut inner }
+        if let Option::Some(mut payload) = holder.value {
+            payload = 42
+        }
+    }
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn stored_view_enum_pattern_projection_can_be_reborrowed() {
+    let diags = borrow_diags(
+        r#"
+struct Holder {
+    value: view Option<usize>,
+}
+
+fn nested(value: Option<Option<usize>>) {
+    if let Option::Some(inner) = value {
+        let holder = Holder { value: ref inner }
+        if let Option::Some(payload) = holder.value {
+            let result = payload
+        }
+    }
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn mutable_pattern_alias_reassignment_conflicts_with_live_shared_borrow() {
+    let diags = borrow_diags(
+        r#"
+fn probe(value: mut Option<u256>) -> u256 {
+    if let Option::Some(mut payload) = value {
+        let borrowed = ref payload
+        payload = 42
+        borrowed
+    } else {
+        0
+    }
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn stored_mut_handle_pattern_through_ref_container_retains_pointee_loan() {
+    let diags = borrow_diags(
+        r#"
+struct Handles {
+    value: mut u256,
+}
+
+fn probe() {
+    let mut value = 0
+    let handles = Handles { value: mut value }
+    let Handles { value: projected } = ref handles
+    projected = 42
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn closure_can_return_stored_mut_handle_through_ref_container() {
+    let diags = borrow_diags(
+        r#"
+struct Handles {
+    value: mut u256,
+}
+
+fn probe() {
+    let mut value = 0
+    let handles = Handles { value: mut value }
+    let borrowed = ref handles
+    let project = || -> mut u256 {
+        let Handles { value: projected } = borrowed
+        projected
+    }
+    let first = project.call()
+    first = 1
+    let second = project.call()
+    second = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn overlapping_closure_returns_from_stored_mut_handle_conflict() {
+    let diags = borrow_diags(
+        r#"
+struct Handles {
+    value: mut u256,
+}
+
+fn probe() {
+    let mut value = 0
+    let handles = Handles { value: mut value }
+    let borrowed = ref handles
+    let project = || -> mut u256 {
+        let Handles { value: projected } = borrowed
+        projected
+    }
+    let first = project.call()
+    let second = project.call()
+    first = 1
+    second = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn closure_can_return_dynamically_indexed_stored_mut_handle_through_ref_array() {
+    let diags = borrow_diags(
+        r#"
+fn probe(index: usize) {
+    let mut x = 0
+    let mut y = 0
+    let handles = [mut x, mut y]
+    let borrowed = ref handles
+    let project = |index: own usize| -> mut u256 { borrowed[index] }
+
+    let first = project.call(index)
+    first = 1
+    let second = project.call(index)
+    second = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn dynamically_indexed_stored_mut_closure_summary_retains_capture_path() {
+    let src = r#"
+fn probe(index: usize) {
+    let mut x = 0
+    let mut y = 0
+    let handles = [mut x, mut y]
+    let borrowed = ref handles
+    let project = |index: own usize| -> mut u256 { borrowed[index] }
+    let returned = project.call(index)
+    returned = 1
+}
+"#;
+    let mut summary = None;
+    for_each_fixture_instance(src, |db, instance| {
+        if matches!(instance.key(db).owner(db), BodyOwner::Closure { .. }) {
+            summary = semantic_borrow_summary(db, instance)
+                .expect("closure borrow summary")
+                .or(summary.take());
+        }
+    });
+    assert_eq!(
+        summary,
+        Some(vec![BorrowTransform {
+            result: BorrowResult {
+                kind: BorrowKind::Mut,
+                projection: Vec::new(),
+            },
+            input: BorrowInput::Place {
+                param: 0,
+                projection: vec![
+                    LayoutBackingProjection::Field(FieldIndex(0)),
+                    LayoutBackingProjection::Index(None),
+                ],
+            },
+        }])
+    );
+}
+
+#[test]
+fn disjoint_stored_mut_fields_returned_by_closures_do_not_conflict() {
+    let diags = borrow_diags(
+        r#"
+struct Handles {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let mut left = 0
+    let mut right = 0
+    let handles = Handles {
+        left: mut left,
+        right: mut right,
+    }
+    let borrowed = ref handles
+    let project_left = || -> mut u256 {
+        let Handles { left, right: _ } = borrowed
+        left
+    }
+    let project_right = || -> mut u256 {
+        let Handles { left: _, right } = borrowed
+        right
+    }
+
+    let returned_left = project_left.call()
+    let returned_right = project_right.call()
+    returned_left = 1
+    returned_right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn same_stored_mut_field_returned_by_distinct_closures_conflicts() {
+    let diags = borrow_diags(
+        r#"
+struct Handles {
+    value: mut u256,
+}
+
+fn probe() {
+    let mut value = 0
+    let handles = Handles { value: mut value }
+    let first_ref = ref handles
+    let second_ref = ref handles
+    let first_project = || -> mut u256 {
+        let Handles { value } = first_ref
+        value
+    }
+    let second_project = || -> mut u256 {
+        let Handles { value } = second_ref
+        value
+    }
+
+    let first = first_project.call()
+    let second = second_project.call()
+    first = 1
+    second = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn overlapping_dynamic_stored_mut_closure_returns_conflict() {
+    let diags = borrow_diags(
+        r#"
+fn probe(first_index: usize, second_index: usize) {
+    let mut x = 0
+    let mut y = 0
+    let handles = [mut x, mut y]
+    let borrowed = ref handles
+    let project = |index: own usize| -> mut u256 { borrowed[index] }
+
+    let first = project.call(first_index)
+    let second = project.call(second_index)
+    first = 1
+    second = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn copied_closures_cannot_duplicate_returned_mut_capture() {
+    let diags = borrow_diags(
+        r#"
+fn probe() {
+    let mut value = 0
+    let captured = mut value
+    let project = || -> mut u256 { captured }
+    let copied = project
+
+    let first = project.call()
+    let second = copied.call()
+    first = 1
+    second = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn fn_once_calls_on_copyable_reusable_closures_retain_capture_provenance() {
+    let direct = borrow_diags(
+        r#"
+fn probe() {
+    let mut value = 0
+    let captured = mut value
+    let project = || -> mut u256 { captured }
+    let first = project.call_once()
+    let second = project.call()
+    first = 1
+    second = 2
+}
+"#,
+    );
+    assert!(direct.contains("borrow conflict in `fn probe`"), "{direct}");
+
+    let generic = borrow_diags(
+        r#"
+use core::functional::Fn
+
+fn invoke_once<F: Fn<(), mut u256>>(_ function: own F) -> mut u256 {
+    function.call_once()
+}
+
+fn probe() {
+    let mut value = 0
+    let captured = mut value
+    let project = || -> mut u256 { captured }
+    let first = invoke_once(project)
+    let second = project.call()
+    first = 1
+    second = 2
+}
+"#,
+    );
+    assert!(
+        generic.contains("borrow conflict in `fn probe`"),
+        "{generic}"
+    );
+}
+
+#[test]
+fn fn_once_on_noncopy_reusable_closure_owns_the_returned_borrow_storage() {
+    let allowed = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() -> u256 {
+    let boxed = Boxed { value: 42 }
+    let project = || -> ref u256 { ref boxed.value }
+    let returned = project.call_once()
+    returned
+}
+"#,
+    );
+    assert!(allowed.is_empty(), "{allowed}");
+
+    let reused = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() -> u256 {
+    let boxed = Boxed { value: 42 }
+    let project = || -> ref u256 { ref boxed.value }
+    let returned = project.call_once()
+    project.call() + returned
+}
+"#,
+    );
+    assert!(
+        reused.contains("cannot use a value after it was moved"),
+        "{reused}"
+    );
+}
+
+#[test]
+fn distinct_closures_cannot_duplicate_the_same_returned_mut_capture() {
+    let diags = borrow_diags(
+        r#"
+fn probe() {
+    let mut value = 0
+    let captured = mut value
+    let first_project = || -> mut u256 { captured }
+    let second_project = || -> mut u256 { captured }
+
+    let first = first_project.call()
+    let second = second_project.call()
+    first = 1
+    second = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn copied_closure_mut_returns_are_reusable_after_last_use() {
+    let diags = borrow_diags(
+        r#"
+fn probe() {
+    let mut value = 0
+    let captured = mut value
+    let project = || -> mut u256 { captured }
+    let copied = project
+
+    let first = project.call()
+    first = 1
+    let second = copied.call()
+    second = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn closure_projected_from_ref_borrowed_tuple_retains_mut_capture_source() {
+    let diags = borrow_diags(
+        r#"
+fn probe() {
+    let mut value = 0
+    let captured = mut value
+    let project = || -> mut u256 { captured }
+    let wrapped = (project, 0 as u256)
+    let (projected, _) = ref wrapped
+
+    let first = projected.call()
+    first = 1
+    let second = projected.call()
+    second = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn closure_projected_from_ref_borrowed_enum_retains_mut_capture_source() {
+    let diags = borrow_diags(
+        r#"
+use core::option::Option::{self, Some}
+
+fn probe() {
+    let mut value = 0
+    let captured = mut value
+    let project = || -> mut u256 { captured }
+    let wrapped = Some(project)
+    let Option::Some(projected) = ref wrapped
+
+    let first = projected.call()
+    first = 1
+    let second = projected.call()
+    second = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn returned_closure_instances_keep_disjoint_mut_capture_sources() {
+    let diags = borrow_diags(
+        r#"
+fn probe() {
+    let mut left = 0
+    let mut right = 0
+    let make = |target: mut u256| {
+        let project = || -> mut u256 { target }
+        project
+    }
+    let project_left = make.call(mut left)
+    let project_right = make.call(mut right)
+
+    let returned_left = project_left.call()
+    let returned_right = project_right.call()
+    returned_left = 1
+    returned_right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn dynamic_projection_of_distinct_returned_closure_instances_is_conservative() {
+    let diags = borrow_diags(
+        r#"
+fn probe(first_index: usize, second_index: usize) {
+    let mut left = 0
+    let mut right = 0
+    let make = |target: mut u256| {
+        let project = || -> mut u256 { target }
+        project
+    }
+    let project_left = make.call(mut left)
+    let project_right = make.call(mut right)
+    let functions = [project_left, project_right]
+
+    let first = functions[first_index].call()
+    let second = functions[second_index].call()
+    first = 1
+    second = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn closure_pattern_mut_return_retains_capture_source() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() {
+    let mut wrapped: Option<Boxed> = Option::Some(Boxed { value: 0 })
+    let handle = mut wrapped
+    let project = || -> mut Boxed {
+        match handle {
+            Option::Some(boxed) => boxed,
+            Option::None => core::panic_with_value(0 as u256),
+        }
+    }
+    let first = project.call()
+    first.value = 1
+    let second = project.call()
+    second.value = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn repeated_closure_pattern_mut_returns_conflict() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() {
+    let mut wrapped: Option<Boxed> = Option::Some(Boxed { value: 0 })
+    let handle = mut wrapped
+    let project = || -> mut Boxed {
+        match handle {
+            Option::Some(boxed) => boxed,
+            Option::None => core::panic_with_value(0 as u256),
+        }
+    }
+    let first = project.call()
+    let second = project.call()
+    first.value = 1
+    second.value = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn closure_pattern_mut_return_keeps_environment_source_borrowed() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() {
+    let mut wrapped: Option<Boxed> = Option::Some(Boxed { value: 0 })
+    let handle = mut wrapped
+    let project = || -> mut Boxed {
+        match handle {
+            Option::Some(boxed) => boxed,
+            Option::None => core::panic_with_value(0 as u256),
+        }
+    }
+    let returned = project.call()
+    let moved = wrapped
+    returned.value = 1
+}
+"#,
+    );
+    assert!(
+        diags.contains("cannot move out of a value while it is borrowed"),
+        "{diags}"
+    );
 }
 
 #[test]
@@ -752,6 +1805,52 @@ fn probe() -> u256 {
 }
 
 #[test]
+fn returned_nested_closure_preserves_default_view_parameter_provenance() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() -> u256 {
+    let boxed = Boxed { value: 42 }
+    let make = |value| {
+        || value.value
+    }
+    let read = make.call(boxed)
+    let moved = boxed
+    read.call() + moved.value
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn nested_closure_cannot_escape_a_borrow_of_its_call_local() {
+    let diags = borrow_diags(
+        r#"
+fn probe() {
+    let make = |_ unit: own ()| {
+        let mut local = 0
+        let captured = mut local
+        let project = |_ inner_unit: own ()| -> mut u256 { captured }
+        project
+    }
+    let project = make.call(())
+    let escaped = project.call(())
+    escaped = 1
+}
+"#,
+    );
+    assert!(
+        diags.contains("invalid return borrow in `fn <closure>`")
+            && diags.contains("cannot return a borrow to local `local`"),
+        "{diags}"
+    );
+}
+
+#[test]
 fn returned_nested_closure_does_not_retain_unrelated_outer_capture() {
     let diags = borrow_diags(
         r#"
@@ -1179,6 +2278,396 @@ fn mixed_returned_borrow_provenance_is_rejected_before_runtime_lowering() {
     );
     assert!(
         diags.contains("effect argument may come from multiple address spaces"),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn nested_borrow_slots_cannot_join_different_provider_spaces() {
+    let diags = borrow_diags(
+        r#"
+struct Holder {
+    value: mut u256,
+}
+
+fn update(flag: bool, local: mut u256) uses (target: mut u256) {
+    let holder = if flag {
+        Holder { value: mut target }
+    } else {
+        Holder { value: local }
+    }
+    holder.value = 42
+}
+
+msg Msg {
+    #[selector = 1]
+    Go
+}
+
+pub contract C {
+    mut target: u256
+
+    recv Msg {
+        Go uses (mut target) {
+            let mut local: u256 = 0
+            update(flag: true, local: mut local)
+        }
+    }
+}
+"#,
+    );
+
+    assert!(
+        diags.contains("provider provenance conflict in `fn update`"),
+        "{diags:?}"
+    );
+    assert!(
+        diags.contains("borrow slot may come from multiple address spaces: memory, storage"),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn nested_ref_slots_cannot_join_different_provider_spaces() {
+    let diags = borrow_diags(
+        r#"
+struct Holder {
+    value: ref u256,
+}
+
+fn read(flag: bool, local: ref u256) -> u256 uses (target: u256) {
+    let holder = if flag {
+        Holder { value: ref target }
+    } else {
+        Holder { value: local }
+    }
+    holder.value
+}
+
+msg Msg {
+    #[selector = 1]
+    Go
+}
+
+pub contract C {
+    target: u256
+
+    recv Msg {
+        Go uses (target) {
+            let local: u256 = 0
+            let _ = read(flag: true, local: ref local)
+        }
+    }
+}
+"#,
+    );
+
+    assert!(
+        diags.contains("provider provenance conflict in `fn read`"),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn nested_implicit_view_slots_cannot_join_different_provider_spaces() {
+    let diags = borrow_diags(
+        r#"
+struct Data {
+    value: u256,
+}
+
+struct Holder {
+    value: view Data,
+}
+
+fn read(flag: bool, local: Data) -> u256 uses (target: Data) {
+    let holder = if flag {
+        Holder { value: target }
+    } else {
+        Holder { value: local }
+    }
+    holder.value.value
+}
+
+msg Msg {
+    #[selector = 1]
+    Go
+}
+
+pub contract C {
+    target: Data
+
+    recv Msg {
+        Go uses (target) {
+            let local = Data { value: 0 }
+            let _ = read(flag: true, local)
+        }
+    }
+}
+"#,
+    );
+
+    assert!(
+        diags.contains("provider provenance conflict in `fn read`"),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn invalid_closure_effect_does_not_reach_borrow_lowering() {
+    let direct_effect = r#"
+fn probe() uses (target: mut u256) {
+    let invalid = || {
+        let borrowed = mut target
+    }
+}
+"#;
+    let effectful_call = r#"
+fn read() -> u256 uses (target: u256) {
+    target
+}
+
+fn probe() uses (target: u256) {
+    let invalid = || read()
+}
+"#;
+
+    for src in [direct_effect, effectful_call] {
+        let borrow_diags = borrow_diags(src);
+        assert!(borrow_diags.is_empty(), "{borrow_diags:?}");
+
+        let diags = analysis_diags(src);
+        assert!(
+            diags.contains("effects cannot be used inside a closure"),
+            "{diags:?}"
+        );
+    }
+}
+
+#[test]
+fn aggregate_stored_mut_param_retains_its_alias_source() {
+    let diags = borrow_diags(
+        r#"
+struct Holder {
+    value: mut u256,
+}
+
+fn write_both(_ left: mut u256, _ right: mut u256) {}
+
+fn bad(_ target: mut u256) {
+    let holder = Holder { value: target }
+    write_both(holder.value, target)
+}
+
+fn probe() {
+    let mut value: u256 = 0
+    bad(mut value)
+}
+"#,
+    );
+
+    assert!(
+        diags.contains("call arguments require conflicting access to the same place"),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn sequential_nested_borrow_slot_assignments_cannot_change_address_space() {
+    let diags = borrow_diags(
+        r#"
+struct Holder {
+    value: mut u256,
+}
+
+fn update(local: mut u256) uses (target: mut u256) {
+    let mut holder = Holder { value: local }
+    holder = Holder { value: mut target }
+    holder.value = 42
+}
+
+msg Msg {
+    #[selector = 1]
+    Go
+}
+
+pub contract C {
+    mut target: u256
+
+    recv Msg {
+        Go uses (mut target) {
+            let mut local: u256 = 0
+            update(local: mut local)
+        }
+    }
+}
+"#,
+    );
+
+    assert!(
+        diags.contains("provider provenance conflict in `fn update`"),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn array_borrow_elements_cannot_use_different_address_spaces() {
+    let diags = borrow_diags(
+        r#"
+fn update(local: mut u256) uses (target: mut u256) {
+    let handles = [mut target, local]
+    handles[0] = 42
+}
+
+msg Msg {
+    #[selector = 1]
+    Go
+}
+
+pub contract C {
+    mut target: u256
+
+    recv Msg {
+        Go uses (mut target) {
+            let mut local: u256 = 0
+            update(local: mut local)
+        }
+    }
+}
+"#,
+    );
+
+    assert!(
+        diags.contains("provider provenance conflict in `fn update`"),
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn distinct_struct_borrow_fields_may_use_different_address_spaces() {
+    let diags = borrow_diags(
+        r#"
+struct Handles {
+    stored: mut u256,
+    local: mut u256,
+}
+
+fn update(local: mut u256) uses (target: mut u256) {
+    let handles = Handles {
+        stored: mut target,
+        local,
+    }
+    handles.stored = 1
+    handles.local = 2
+}
+
+msg Msg {
+    #[selector = 1]
+    Go
+}
+
+pub contract C {
+    mut target: u256
+
+    recv Msg {
+        Go uses (mut target) {
+            let mut local: u256 = 0
+            update(local: mut local)
+        }
+    }
+}
+"#,
+    );
+
+    assert!(diags.is_empty(), "{diags:?}");
+}
+
+#[test]
+fn distinct_enum_variant_borrow_fields_may_use_different_address_spaces() {
+    let diags = borrow_diags(
+        r#"
+enum Handle {
+    Stored(mut u256),
+    Local(mut u256),
+}
+
+fn update(flag: bool, local: mut u256) uses (target: mut u256) {
+    let handle = if flag {
+        Handle::Stored(mut target)
+    } else {
+        Handle::Local(local)
+    }
+    match handle {
+        Handle::Stored(value) => value = 1,
+        Handle::Local(value) => value = 2,
+    }
+}
+
+msg Msg {
+    #[selector = 1]
+    Go
+}
+
+pub contract C {
+    mut target: u256
+
+    recv Msg {
+        Go uses (mut target) {
+            let mut local: u256 = 0
+            update(flag: true, local: mut local)
+        }
+    }
+}
+"#,
+    );
+
+    assert!(diags.is_empty(), "{diags:?}");
+}
+
+#[test]
+fn closure_arguments_cannot_smuggle_storage_borrows_past_noesc() {
+    let diags = borrow_diags(
+        r#"
+enum Handle {
+    Stored(mut u256),
+    Local(mut u256),
+}
+
+fn update(flag: bool, local: mut u256) uses (target: mut u256) {
+    let choose = |choose_stored: own bool, stored: mut u256, local: mut u256| {
+        if choose_stored {
+            Handle::Stored(stored)
+        } else {
+            Handle::Local(local)
+        }
+    }
+    let handle = choose.call(flag, mut target, local)
+    match handle {
+        Handle::Stored(value) => value = 1,
+        Handle::Local(value) => value = 2,
+    }
+}
+
+msg Msg {
+    #[selector = 1]
+    Go
+}
+
+pub contract C {
+    mut target: u256
+
+    recv Msg {
+        Go uses (mut target) {
+            let mut local: u256 = 0
+            update(flag: true, local: mut local)
+        }
+    }
+}
+"#,
+    );
+
+    assert!(
+        diags.contains("cannot pass `(bool, mut u256, mut u256)` from storage"),
         "{diags:?}"
     );
 }
@@ -2624,7 +4113,7 @@ fn find_empty(board: Board, row: usize, col: usize) -> bool {
 }
 
 #[test]
-fn closure_owned_param_projection_ignores_enclosing_view_param_mode() {
+fn closure_owned_param_projection_honors_view_receiver_mode() {
     let src = r#"
 struct Row {
     cells: [u256; 4],
@@ -2672,7 +4161,7 @@ fn read_via_closure(_ marker: u256, _ decoy: Board, board: own Board) -> u256 {
                 _ => None,
             })
             .expect("row projection read from the owned closure parameter");
-        assert_eq!(*row_read_mode, ReadMode::Move);
+        assert_eq!(*row_read_mode, ReadMode::Read);
         let snapshot_source = normalized.locals[logical_param_local.index()]
             .facts
             .snapshot_source_place
@@ -2772,6 +4261,85 @@ fn probe() -> Boxed {
 "#,
     );
     assert!(own_diags.is_empty(), "{own_diags}");
+}
+
+#[test]
+fn suppressed_closure_params_retain_their_logical_modes() {
+    let own_diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() -> u256 {
+    let value = Boxed { value: 42 }
+    let discard = |_: own| {}
+    discard.call_once(value)
+    value.value
+}
+"#,
+    );
+    assert!(
+        own_diags.contains("cannot use a value after it was moved"),
+        "{own_diags}"
+    );
+
+    let aliased_diags = borrow_diags(
+        r#"
+fn probe() {
+    let mut value = 42
+    let discard = |_: mut, _: view| {}
+    discard.call(mut value, value)
+}
+"#,
+    );
+    assert!(
+        aliased_diags.contains("borrow conflict in `fn probe`"),
+        "{aliased_diags}"
+    );
+
+    let shared_diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() -> u256 {
+    let value = Boxed { value: 42 }
+    let discard = |_, _| {}
+    discard.call(value, value)
+    value.value
+}
+"#,
+    );
+    assert!(shared_diags.is_empty(), "{shared_diags}");
+}
+
+#[test]
+fn closure_default_view_param_projection_rebinding_remains_a_move() {
+    let src = r#"
+struct Wrapper {
+    value: Boxed,
+}
+
+struct Boxed {
+    value: u256,
+}
+
+fn probe() -> u256 {
+    let take = |wrapped: Wrapper| -> Boxed {
+        let value = wrapped.value
+        value
+    }
+    let result = take.call(Wrapper { value: Boxed { value: 42 } })
+    result.value
+}
+"#;
+    let diags = borrow_diags(src);
+    assert!(
+        diags.contains("cannot move out of a view parameter"),
+        "{diags}"
+    );
 }
 
 #[test]
@@ -2984,6 +4552,61 @@ fn probe() -> u256 {
 }
 
 #[test]
+fn closure_argument_pack_preserves_disjoint_caller_field_paths() {
+    let allowed = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Values {
+    owned: Boxed,
+    borrowed: Boxed,
+    unrelated: Boxed,
+}
+
+fn probe(_ values: own Values) -> u256 {
+    let select = |owned: own Boxed, borrowed: Boxed| -> view Boxed {
+        owned.value
+        borrowed
+    }
+    let returned = select.call_once(values.owned, values.borrowed)
+    let moved = values.unrelated
+    returned.value + moved.value
+}
+"#,
+    );
+    assert!(allowed.is_empty(), "{allowed}");
+
+    let conflicting = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Values {
+    owned: Boxed,
+    borrowed: Boxed,
+}
+
+fn probe(_ values: own Values) -> u256 {
+    let select = |owned: own Boxed, borrowed: Boxed| -> view Boxed {
+        owned.value
+        borrowed
+    }
+    let returned = select.call_once(values.owned, values.borrowed)
+    let moved = values.borrowed
+    returned.value + moved.value
+}
+"#,
+    );
+    assert!(
+        conflicting.contains("borrow conflict in `fn probe`"),
+        "{conflicting}"
+    );
+}
+
+#[test]
 fn closure_multiple_mut_args_allow_distinct_places() {
     let diags = borrow_diags(
         r#"
@@ -3075,6 +4698,70 @@ fn probe() {
 }
 
 #[test]
+fn erased_closure_arguments_do_not_shift_returned_borrow_provenance() {
+    let allowed = borrow_diags(
+        r#"
+struct Marker {}
+
+fn probe() {
+    let mut left = 0
+    let mut right = 0
+    let pick_right = |
+        _ first: own Marker,
+        left: mut u256,
+        _ middle: own Marker,
+        right: mut u256,
+        _ last: own Marker,
+    | -> mut u256 { right }
+    let returned = pick_right.call(
+        Marker {},
+        mut left,
+        Marker {},
+        mut right,
+        Marker {},
+    )
+    let other = mut left
+    other = 1
+    returned = 2
+}
+"#,
+    );
+    assert!(allowed.is_empty(), "{allowed}");
+
+    let conflicting = borrow_diags(
+        r#"
+struct Marker {}
+
+fn probe() {
+    let mut left = 0
+    let mut right = 0
+    let pick_right = |
+        _ first: own Marker,
+        left: mut u256,
+        _ middle: own Marker,
+        right: mut u256,
+        _ last: own Marker,
+    | -> mut u256 { right }
+    let returned = pick_right.call(
+        Marker {},
+        mut left,
+        Marker {},
+        mut right,
+        Marker {},
+    )
+    let other = mut right
+    other = 1
+    returned = 2
+}
+"#,
+    );
+    assert!(
+        conflicting.contains("borrow conflict in `fn probe`"),
+        "{conflicting}"
+    );
+}
+
+#[test]
 fn inferred_closure_return_retains_selected_mut_arg_provenance() {
     let selected_diags = borrow_diags(
         r#"
@@ -3111,6 +4798,42 @@ fn probe() {
 }
 
 #[test]
+fn closure_mut_parameter_reborrow_suspends_and_releases_its_parent() {
+    let sequential_diags = borrow_diags(
+        r#"
+fn probe() {
+    let mut value = 0
+    let parent = mut value
+    let reborrow = |target: mut u256| -> mut u256 { mut target }
+    let first = reborrow.call(parent)
+    first = 1
+    let second = reborrow.call(parent)
+    second = 2
+}
+"#,
+    );
+    assert!(sequential_diags.is_empty(), "{sequential_diags}");
+
+    let overlapping_diags = borrow_diags(
+        r#"
+fn probe() {
+    let mut value = 0
+    let parent = mut value
+    let reborrow = |target: mut u256| -> mut u256 { mut target }
+    let first = reborrow.call(parent)
+    let second = reborrow.call(parent)
+    first = 1
+    second = 2
+}
+"#,
+    );
+    assert!(
+        overlapping_diags.contains("borrow conflict in `fn probe`"),
+        "{overlapping_diags}"
+    );
+}
+
+#[test]
 fn inferred_closure_return_retains_default_view_arg_provenance() {
     let diags = borrow_diags(
         r#"
@@ -3128,6 +4851,1638 @@ fn probe() -> u256 {
 "#,
     );
     assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn looped_closure_calls_treat_single_use_owned_rvalues_as_fresh_allocations() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Both {
+    left: mut Boxed,
+    right: mut Boxed,
+}
+
+fn probe() {
+    let borrow = |mut boxed: own Boxed| -> mut Boxed { mut boxed }
+    let mut returned = Both {
+        left: borrow.call(Boxed { value: 0 }),
+        right: borrow.call(Boxed { value: 0 }),
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = borrow.call(Boxed { value: 0 })
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left.value = 1
+    returned.right.value = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_closure_calls_treat_new_owned_bindings_as_fresh_allocations() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Both {
+    left: mut Boxed,
+    right: mut Boxed,
+}
+
+fn probe() {
+    let borrow = |mut boxed: own Boxed| -> mut Boxed { mut boxed }
+    let mut returned = Both {
+        left: borrow.call(Boxed { value: 0 }),
+        right: borrow.call(Boxed { value: 0 }),
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let boxed = Boxed { value: 0 }
+        let next = borrow.call(boxed)
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left.value = 1
+    returned.right.value = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_closure_calls_preserve_freshness_through_field_projection() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Wrapped {
+    boxed: mut Boxed,
+}
+
+struct Both {
+    left: mut Boxed,
+    right: mut Boxed,
+}
+
+fn probe() {
+    let allocate = |mut boxed: own Boxed| -> mut Boxed { mut boxed }
+    let mut returned = Both {
+        left: allocate.call(Boxed { value: 0 }),
+        right: allocate.call(Boxed { value: 0 }),
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let wrapped = Wrapped {
+            boxed: allocate.call(Boxed { value: 0 }),
+        }
+        let next = wrapped.boxed
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left.value = 1
+    returned.right.value = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_local_borrows_treat_each_binding_execution_as_fresh_storage() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let mut boxed = Boxed { value: 0 }
+        let next = mut boxed.value
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_owned_scalar_closure_arguments_get_fresh_storage_per_call() {
+    let diags = borrow_diags(
+        r#"
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let borrow = |mut value: own u256| -> mut u256 { mut value }
+    let mut returned = Both {
+        left: borrow.call(0),
+        right: borrow.call(0),
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = borrow.call(0)
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_named_copy_arguments_get_fresh_owned_parameter_storage_per_call() {
+    let diags = borrow_diags(
+        r#"
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let borrow = |mut value: own u256| -> mut u256 { mut value }
+    let seed: u256 = 0
+    let mut returned = Both {
+        left: borrow.call(seed),
+        right: borrow.call(seed),
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = borrow.call(seed)
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_projected_copy_arguments_get_fresh_owned_parameter_storage_per_call() {
+    let diags = borrow_diags(
+        r#"
+struct SeedValue {
+    value: u256,
+}
+
+struct Seed {
+    nested: SeedValue,
+}
+
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let borrow = |mut value: own u256| -> mut u256 { mut value }
+    let seed = Seed {
+        nested: SeedValue { value: 0 },
+    }
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = borrow.call(seed.nested.value)
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn fresh_owned_aggregate_fields_do_not_inherit_embedded_borrow_provenance() {
+    let diags = borrow_diags(
+        r#"
+struct Carrier {
+    value: u256,
+    named: mut u256,
+}
+
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let borrow_value = |mut carrier: own Carrier| -> mut u256 { mut carrier.value }
+    let mut target = 0
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = borrow_value.call(Carrier {
+            value: 0,
+            named: mut target,
+        })
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_owned_aggregate_arguments_preserve_embedded_named_borrow_provenance() {
+    let diags = borrow_diags(
+        r#"
+struct Carrier {
+    value: u256,
+    named: mut u256,
+}
+
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let unwrap = |carrier: own Carrier| -> mut u256 { carrier.named }
+    let mut target = 0
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = unwrap.call(Carrier {
+            value: 0,
+            named: mut target,
+        })
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn looped_dynamic_owned_array_arguments_use_fresh_parameter_storage() {
+    let diags = borrow_diags(
+        r#"
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let borrow_at = |mut values: own [u256; 2], index: own usize| -> mut u256 {
+        mut values[index]
+    }
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = borrow_at.call([0 as u256, 0], index)
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_owned_enum_payloads_use_fresh_parameter_storage() {
+    let diags = borrow_diags(
+        r#"
+enum Value {
+    Present(u256),
+}
+
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let borrow = |mut value: own Value| -> mut u256 {
+        match value {
+            Value::Present(mut inner) => mut inner,
+        }
+    }
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = borrow.call(Value::Present(0))
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_dynamic_array_element_borrows_get_fresh_storage_per_binding() {
+    let diags = borrow_diags(
+        r#"
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let mut values = [0 as u256, 0]
+        let next = mut values[index]
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_local_borrows_from_one_execution_still_conflict() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() {
+    let mut index: usize = 0
+    while index < 1 {
+        let mut boxed = Boxed { value: 0 }
+        let first = mut boxed.value
+        let second = mut boxed.value
+        first = 1
+        second = 2
+        index += 1
+    }
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn looped_fresh_local_cannot_be_read_while_current_borrow_is_live() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() {
+    let mut index: usize = 0
+    while index < 1 {
+        let mut boxed = Boxed { value: 0 }
+        let borrowed = mut boxed.value
+        let copied = boxed.value
+        borrowed = copied
+        index += 1
+    }
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn looped_reassignment_does_not_create_fresh_local_storage() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let mut boxed = Boxed { value: 0 }
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        boxed = Boxed { value: 0 }
+        let next = mut boxed.value
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn looped_aggregate_reassignment_does_not_hide_duplicate_embedded_mut_borrows() {
+    let diags = borrow_diags(
+        r#"
+struct Mixed {
+    value: u256,
+    borrowed: mut u256,
+}
+
+fn probe() {
+    let allocate = |mut value: own u256| -> mut u256 { mut value }
+    let mut index: usize = 0
+    while index < 1 {
+        let mut mixed = Mixed {
+            value: 0,
+            borrowed: allocate.call(0),
+        }
+        mixed = Mixed {
+            value: 1,
+            borrowed: allocate.call(0),
+        }
+        let first = mixed.borrowed
+        let second = mixed.borrowed
+        first = 1
+        second = 2
+        index += 1
+    }
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn looped_aggregate_reassignment_tracks_the_new_embedded_fresh_borrow() {
+    let diags = borrow_diags(
+        r#"
+struct Mixed {
+    value: u256,
+    borrowed: mut u256,
+}
+
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let allocate = |mut value: own u256| -> mut u256 { mut value }
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let mut mixed = Mixed {
+            value: 0,
+            borrowed: allocate.call(0),
+        }
+        mixed = Mixed {
+            value: 1,
+            borrowed: allocate.call(0),
+        }
+        let next = mixed.borrowed
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn inner_loop_reuses_storage_allocated_by_the_outer_iteration() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let mut outer: usize = 0
+    while outer < 1 {
+        let mut boxed = Boxed { value: 0 }
+        let mut initial_left = 0
+        let mut initial_right = 0
+        let mut returned = Both {
+            left: mut initial_left,
+            right: mut initial_right,
+        }
+        let mut inner: usize = 0
+        while inner < 2 {
+            let next = mut boxed.value
+            returned = if inner == 0 {
+                Both { left: next, right: returned.right }
+            } else {
+                Both { left: returned.left, right: next }
+            }
+            inner += 1
+        }
+        returned.left = 1
+        returned.right = 2
+        outer += 1
+    }
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn nested_loop_local_borrows_get_fresh_storage_per_inner_iteration() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut outer: usize = 0
+    while outer < 1 {
+        let mut inner: usize = 0
+        while inner < 2 {
+            let mut boxed = Boxed { value: 0 }
+            let next = mut boxed.value
+            returned = if inner == 0 {
+                Both { left: next, right: returned.right }
+            } else {
+                Both { left: returned.left, right: next }
+            }
+            inner += 1
+        }
+        outer += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn continue_edges_age_retained_borrows_before_the_next_local_allocation() {
+    let diags = borrow_diags(
+        r#"
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let mut value = 0
+        let next = mut value
+        if index == 0 {
+            returned = Both { left: next, right: returned.right }
+            index += 1
+            continue
+        }
+        returned = Both { left: returned.left, right: next }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn for_loop_backedges_age_retained_borrows_before_the_next_local_allocation() {
+    let diags = borrow_diags(
+        r#"
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    for index in [0 as usize, 1] {
+        let mut value = 0
+        let next = mut value
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn while_let_condition_calls_allocate_fresh_owned_parameter_storage() {
+    let diags = borrow_diags(
+        r#"
+use core::option::Option::{self, Some}
+
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let make = |mut value: own u256, index: own usize| -> Option<mut u256> {
+        if index < 2 {
+            Some(mut value)
+        } else {
+            Option::None
+        }
+    }
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while let Some(next) = make.call(0, index) {
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_fresh_local_provenance_survives_nested_closure_storage() {
+    let diags = borrow_diags(
+        r#"
+fn probe() {
+    let make = |target: mut u256| {
+        let get = || -> mut u256 { target }
+        get
+    }
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut functions = [
+        make.call(mut initial_left),
+        make.call(mut initial_right),
+    ]
+    let mut index: usize = 0
+    while index < 2 {
+        let mut value = 0
+        let next = make.call(mut value)
+        if index == 0 {
+            functions[0] = next
+        } else {
+            functions[1] = next
+        }
+        index += 1
+    }
+    let left = functions[0].call()
+    let right = functions[1].call()
+    left = 1
+    right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn copied_fresh_nested_closure_storage_retains_alias_identity() {
+    let diags = borrow_diags(
+        r#"
+fn probe() {
+    let make = |target: mut u256| {
+        let get = || -> mut u256 { target }
+        get
+    }
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut functions = [
+        make.call(mut initial_left),
+        make.call(mut initial_right),
+    ]
+    let mut index: usize = 0
+    while index < 1 {
+        let mut value = 0
+        let next = make.call(mut value)
+        functions[0] = next
+        functions[1] = next
+        index += 1
+    }
+    let left = functions[0].call()
+    let right = functions[1].call()
+    left = 1
+    right = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn looped_fresh_nested_closure_provenance_survives_aggregate_reconstruction() {
+    let diags = borrow_diags(
+        r#"
+fn probe() {
+    let make = |target: mut u256| {
+        let get = || -> mut u256 { target }
+        get
+    }
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut functions = [
+        make.call(mut initial_left),
+        make.call(mut initial_right),
+    ]
+    let mut index: usize = 0
+    while index < 2 {
+        let mut value = 0
+        let next = make.call(mut value)
+        functions = if index == 0 {
+            [next, functions[1]]
+        } else {
+            [functions[0], next]
+        }
+        index += 1
+    }
+    let left = functions[0].call()
+    let right = functions[1].call()
+    left = 1
+    right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_owned_parameter_provenance_survives_nested_closure_storage() {
+    let diags = analysis_diags(
+        r#"
+fn probe() {
+    let make = |mut value: own u256| {
+        let target = mut value
+        let get = || -> mut u256 { target }
+        get
+    }
+    let mut functions = [
+        make.call(0),
+        make.call(0),
+    ]
+    let mut index: usize = 0
+    while index < 2 {
+        let next = make.call(0)
+        if index == 0 {
+            functions[0] = next
+        } else {
+            functions[1] = next
+        }
+        index += 1
+    }
+    let left = functions[0].call()
+    let right = functions[1].call()
+    left = 1
+    right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_fresh_nested_closure_provenance_survives_nested_field_storage() {
+    let diags = borrow_diags(
+        r#"
+fn probe() {
+    let make = |target: mut u256| {
+        let get = || -> mut u256 { target }
+        get
+    }
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut functions = [
+        (make.call(mut initial_left), 0 as u256),
+        (make.call(mut initial_right), 0 as u256),
+    ]
+    let mut index: usize = 0
+    while index < 2 {
+        let mut value = 0
+        let next = make.call(mut value)
+        if index == 0 {
+            functions[0].0 = next
+            functions[0].1 = 1
+        } else {
+            functions[1].0 = next
+            functions[1].1 = 2
+        }
+        index += 1
+    }
+    let left = functions[0].0.call()
+    let right = functions[1].0.call()
+    left = functions[0].1
+    right = functions[1].1
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_fresh_nested_closure_provenance_survives_enum_storage() {
+    let diags = borrow_diags(
+        r#"
+use core::option::Option::Some
+
+fn probe() {
+    let make = |target: mut u256| {
+        let get = || -> mut u256 { target }
+        get
+    }
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut functions = [
+        Some(make.call(mut initial_left)),
+        Some(make.call(mut initial_right)),
+    ]
+    let mut index: usize = 0
+    while index < 2 {
+        let mut value = 0
+        let next = make.call(mut value)
+        if index == 0 {
+            functions[0] = Some(next)
+        } else {
+            functions[1] = Some(next)
+        }
+        index += 1
+    }
+    let Some(left_function) = functions[0]
+    let Some(right_function) = functions[1]
+    let left = left_function.call()
+    let right = right_function.call()
+    left = 1
+    right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn repeated_fresh_nested_closure_storage_retains_alias_identity() {
+    let diags = borrow_diags(
+        r#"
+fn probe() {
+    let make = |target: mut u256| {
+        let get = || -> mut u256 { target }
+        get
+    }
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut functions = [
+        make.call(mut initial_left),
+        make.call(mut initial_right),
+    ]
+    let mut index: usize = 0
+    while index < 1 {
+        let mut value = 0
+        let function = make.call(mut value)
+        functions = [function; 2]
+        index += 1
+    }
+    let left = functions[0].call()
+    let right = functions[1].call()
+    left = 1
+    right = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn mutually_exclusive_borrows_share_one_fresh_local_generation() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let mut boxed = Boxed { value: 0 }
+        let next = if index == 0 {
+            mut boxed.value
+        } else {
+            mut boxed.value
+        }
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn disjoint_borrows_share_one_fresh_local_generation() {
+    let diags = borrow_diags(
+        r#"
+struct Pair {
+    left: u256,
+    right: u256,
+}
+
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let mut pair = Pair { left: 0, right: 0 }
+        let next_left = mut pair.left
+        let next_right = mut pair.right
+        returned = if index == 0 {
+            Both { left: next_left, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next_right }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_closure_calls_preserve_freshness_through_nested_forwarding() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Both {
+    left: mut Boxed,
+    right: mut Boxed,
+}
+
+fn probe() {
+    let allocate = |mut boxed: own Boxed| -> mut Boxed { mut boxed }
+    let forward = |boxed: mut Boxed| -> mut Boxed { mut boxed }
+    let mut returned = Both {
+        left: allocate.call(Boxed { value: 0 }),
+        right: allocate.call(Boxed { value: 0 }),
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = forward.call(allocate.call(Boxed { value: 0 }))
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left.value = 1
+    returned.right.value = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_closure_calls_preserve_freshness_through_control_flow_forwarding() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Both {
+    left: mut Boxed,
+    right: mut Boxed,
+}
+
+fn probe() {
+    let allocate = |mut boxed: own Boxed| -> mut Boxed { mut boxed }
+    let forward = |boxed: mut Boxed| -> mut Boxed { mut boxed }
+    let mut returned = Both {
+        left: allocate.call(Boxed { value: 0 }),
+        right: allocate.call(Boxed { value: 0 }),
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = forward.call(if true {
+            allocate.call(Boxed { value: 0 })
+        } else {
+            allocate.call(Boxed { value: 0 })
+        })
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left.value = 1
+    returned.right.value = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_closure_calls_track_multiple_fresh_owned_arguments_independently() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Both {
+    left: mut Boxed,
+    right: mut Boxed,
+}
+
+fn probe() {
+    let borrow_both = |mut left: own Boxed, mut right: own Boxed| -> Both {
+        Both { left: mut left, right: mut right }
+    }
+    let mut returned = borrow_both.call(
+        Boxed { value: 0 },
+        Boxed { value: 0 },
+    )
+    let mut index: usize = 0
+    while index < 2 {
+        let next = borrow_both.call(
+            Boxed { value: 0 },
+            Boxed { value: 0 },
+        )
+        returned = if index == 0 {
+            Both { left: next.left, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next.right }
+        }
+        index += 1
+    }
+    returned.left.value = 1
+    returned.right.value = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn copied_source_passed_to_multiple_owned_params_gets_distinct_parameter_storage() {
+    let diags = borrow_diags(
+        r#"
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let borrow_both = |mut left: own u256, mut right: own u256| -> Both {
+        Both { left: mut left, right: mut right }
+    }
+    let seed: u256 = 0
+    let returned = borrow_both.call(seed, seed)
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn fresh_aggregate_arguments_do_not_freshen_embedded_named_borrows() {
+    let diags = borrow_diags(
+        r#"
+struct Carrier {
+    handle: mut u256,
+}
+
+fn probe() {
+    let unwrap = |carrier: own Carrier| -> mut u256 { carrier.handle }
+    let mut target = 0
+    let first = unwrap.call(Carrier { handle: mut target })
+    let second = unwrap.call(Carrier { handle: mut target })
+    first = 1
+    second = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn mixed_fresh_and_named_closure_results_preserve_named_conflicts() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Mixed {
+    fresh: mut Boxed,
+    named: mut Boxed,
+}
+
+fn probe() {
+    let combine = |mut fresh: own Boxed, named: mut Boxed| -> Mixed {
+        Mixed { fresh: mut fresh, named }
+    }
+    let mut target = Boxed { value: 0 }
+    let first = combine.call(Boxed { value: 0 }, mut target)
+    let second = combine.call(Boxed { value: 0 }, mut target)
+    first.named.value = 1
+    second.named.value = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn fresh_root_renewal_requires_all_same_site_sources_to_be_current() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() {
+    let allocate = |mut boxed: own Boxed| -> mut Boxed { mut boxed }
+    let reborrow = |boxed: mut Boxed| -> mut Boxed { mut boxed }
+    let choose = |pick_current: own bool, current: mut Boxed, old: mut Boxed| {
+        if pick_current { current } else { old }
+    }
+    let mut retained = allocate.call(Boxed { value: 0 })
+    let mut index: usize = 0
+    while index < 2 {
+        let current = allocate.call(Boxed { value: 0 })
+        if index == 0 {
+            retained = current
+        } else {
+            let existing = reborrow.call(retained)
+            let selected = choose.call(false, current, retained)
+            existing.value = 1
+            selected.value = 2
+        }
+        index += 1
+    }
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn ordinary_function_calls_share_fresh_argument_allocation_semantics() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Both {
+    left: mut Boxed,
+    right: mut Boxed,
+}
+
+fn allocate(mut boxed: own Boxed) -> mut Boxed {
+    mut boxed
+}
+
+fn probe() {
+    let mut returned = Both {
+        left: allocate(Boxed { value: 0 }),
+        right: allocate(Boxed { value: 0 }),
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = allocate(Boxed { value: 0 })
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left.value = 1
+    returned.right.value = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn ordinary_owned_function_params_copy_projected_values_into_fresh_storage() {
+    let diags = borrow_diags(
+        r#"
+struct Seed {
+    value: u256,
+}
+
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn borrow(mut value: own u256) -> mut u256 {
+    mut value
+}
+
+fn probe() {
+    let seed = Seed { value: 0 }
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = borrow(seed.value)
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn looped_closure_calls_do_not_treat_named_reborrowed_places_as_fresh_allocations() {
+    let diags = borrow_diags(
+        r#"
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let mut target = 0
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let reborrow = |value: mut u256| -> mut u256 { mut value }
+    let mut returned = Both {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = reborrow.call(mut target)
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn reusing_one_fresh_call_result_does_not_create_new_allocations() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() {
+    let allocate = |mut boxed: own Boxed| -> mut Boxed { mut boxed }
+    let reborrow = |boxed: mut Boxed| -> mut Boxed { mut boxed }
+    let allocated = allocate.call(Boxed { value: 0 })
+    let first = reborrow.call(allocated)
+    let second = reborrow.call(allocated)
+    first.value = 1
+    second.value = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn reusing_one_fresh_call_result_does_not_hide_mutating_call_conflicts() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() {
+    let allocate = |mut boxed: own Boxed| -> mut Boxed { mut boxed }
+    let reborrow = |boxed: mut Boxed| -> mut Boxed { mut boxed }
+    let write = |boxed: mut Boxed| {
+        boxed.value = 2
+    }
+    let allocated = allocate.call(Boxed { value: 0 })
+    let first = reborrow.call(allocated)
+    write.call(allocated)
+    first.value = 1
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn closure_view_of_rvalue_cannot_escape_the_callers_frame() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn bad() -> view Boxed {
+    let identity = |value| value
+    identity.call(Boxed { value: 42 })
+}
+"#,
+    );
+    assert!(
+        diags.contains("invalid return borrow in `fn bad`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn closure_environment_view_cannot_escape_the_callers_frame() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn bad() -> view Boxed {
+    let boxed = Boxed { value: 42 }
+    let project = || -> view Boxed { boxed }
+    project.call()
+}
+
+fn bad_immediate() -> view Boxed {
+    let boxed = Boxed { value: 42 }
+    (|| -> view Boxed { boxed }).call()
+}
+"#,
+    );
+    assert_eq!(diags.matches("invalid return borrow").count(), 2, "{diags}");
+}
+
+#[test]
+fn aggregate_holding_closure_view_of_rvalue_cannot_escape_the_callers_frame() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Borrowed {
+    value: view Boxed,
+}
+
+fn bad() -> Borrowed {
+    let identity = |value| value
+    Borrowed { value: identity.call(Boxed { value: 42 }) }
+}
+"#,
+    );
+    assert!(
+        diags.contains("invalid return borrow in `fn bad`"),
+        "{diags}"
+    );
 }
 
 #[test]
@@ -3448,6 +6803,123 @@ fn probe() -> u256 {
 }
 
 #[test]
+fn contextual_closure_result_cannot_own_noncopy_view_parameter() {
+    let diags = analysis_diags(
+        r#"
+use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+fn duplicate<F: Fn<(view Boxed,), Boxed>>(
+    _ function: F,
+    _ value: own Boxed,
+) -> u256 {
+    let returned = function.call(value)
+    returned.value + value.value
+}
+
+fn probe() -> u256 {
+    duplicate(|value| value, Boxed { value: 21 })
+}
+"#,
+    );
+    assert!(
+        diags.contains(
+            "expected `semantic_borrowck::Boxed`, but `view semantic_borrowck::Boxed` is given"
+        ),
+        "{diags}"
+    );
+}
+
+#[test]
+fn closure_default_view_param_cannot_return_owned_whole_value() {
+    let diags = analysis_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() -> Boxed {
+    let identity = |value: Boxed| -> Boxed { value }
+    identity.call(Boxed { value: 42 })
+}
+"#,
+    );
+    assert!(
+        diags.contains(
+            "expected `semantic_borrowck::Boxed`, but `view semantic_borrowck::Boxed` is given"
+        ),
+        "{diags}"
+    );
+}
+
+#[test]
+fn specialized_copy_capture_preserves_generic_move_semantics() {
+    let diags = borrow_diags(
+        r#"
+fn passthrough<T>(_ value: own T) -> T {
+    let take = || value
+    take.call_once()
+}
+
+fn probe() -> u256 {
+    passthrough(42 as u256)
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn reusable_closure_projected_from_aggregate_is_not_moved_by_call() {
+    let diags = borrow_diags(
+        r#"
+struct Holder<F> {
+    function: F,
+}
+
+fn probe() -> u256 {
+    let value: u256 = 21
+    let shared = ref value
+    let read = || shared
+    let holder = Holder { function: read }
+    holder.function.call() + holder.function.call()
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn view_argument_projected_from_owned_aggregate_is_not_moved_by_call() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Holder {
+    item: Boxed,
+}
+
+fn read(item: Boxed) -> u256 {
+    item.value
+}
+
+fn probe() -> u256 {
+    let holder = Holder {
+        item: Boxed { value: 21 },
+    }
+    read(item: holder.item) + read(item: holder.item)
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
 fn inferred_copy_view_control_flow_join_materializes_values() {
     for src in [
         r#"
@@ -3708,6 +7180,173 @@ fn probe() -> u256 {
 }
 
 #[test]
+fn owned_tuple_and_array_call_arguments_receive_nested_view_context() {
+    let array_allowed = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn first(_ values: own [view Boxed; 2]) -> view Boxed {
+    values[0]
+}
+
+fn probe() -> u256 {
+    let left = Boxed { value: 20 }
+    let right = Boxed { value: 22 }
+    let returned = first([left, right])
+    let moved = right
+    returned.value + moved.value
+}
+"#,
+    );
+    assert!(array_allowed.is_empty(), "{array_allowed}");
+
+    let array_conflict = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn first(_ values: own [view Boxed; 2]) -> view Boxed {
+    values[0]
+}
+
+fn probe() -> u256 {
+    let left = Boxed { value: 20 }
+    let right = Boxed { value: 22 }
+    let returned = first([left, right])
+    let moved = left
+    returned.value + moved.value
+}
+"#,
+    );
+    assert!(
+        array_conflict.contains("borrow conflict in `fn probe`"),
+        "{array_conflict}"
+    );
+
+    let tuple_allowed = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn second(_ values: own (view Boxed, view Boxed)) -> view Boxed {
+    values.1
+}
+
+fn probe() -> u256 {
+    let left = Boxed { value: 20 }
+    let right = Boxed { value: 22 }
+    let returned = second((left, right))
+    let moved = left
+    returned.value + moved.value
+}
+"#,
+    );
+    assert!(tuple_allowed.is_empty(), "{tuple_allowed}");
+
+    let tuple_conflict = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn second(_ values: own (view Boxed, view Boxed)) -> view Boxed {
+    values.1
+}
+
+fn probe() -> u256 {
+    let left = Boxed { value: 20 }
+    let right = Boxed { value: 22 }
+    let returned = second((left, right))
+    let moved = right
+    returned.value + moved.value
+}
+"#,
+    );
+    assert!(
+        tuple_conflict.contains("borrow conflict in `fn probe`"),
+        "{tuple_conflict}"
+    );
+}
+
+#[test]
+fn closure_call_aggregate_context_recurses_through_repeat_and_control_flow() {
+    let repeat_src = r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() -> u256 {
+    let value = Boxed { value: 42 }
+    let first = |values: own [view Boxed; 2]| -> view Boxed { values[0] }
+    let returned = first.call([value; 2])
+    let moved = value
+    returned.value + moved.value
+}
+"#;
+    let repeat_analysis = analysis_diags(repeat_src);
+    let repeat_borrows = borrow_diags(repeat_src);
+    assert!(
+        !repeat_analysis.contains("type mismatch"),
+        "{repeat_analysis}"
+    );
+    assert!(
+        repeat_borrows.contains("borrow conflict in `fn probe`"),
+        "{repeat_borrows}"
+    );
+
+    let allowed = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe(_ choose_left: bool) -> u256 {
+    let left = Boxed { value: 20 }
+    let right = Boxed { value: 22 }
+    let first = |values: own (view Boxed, view Boxed)| -> view Boxed { values.0 }
+    let returned = first.call(if choose_left {
+        (left, right)
+    } else {
+        (left, right)
+    })
+    let moved = right
+    returned.value + moved.value
+}
+"#,
+    );
+    assert!(allowed.is_empty(), "{allowed}");
+
+    let conflicting = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe(_ choose_left: bool) -> u256 {
+    let left = Boxed { value: 20 }
+    let right = Boxed { value: 22 }
+    let first = |values: own (view Boxed, view Boxed)| -> view Boxed { values.0 }
+    let returned = first.call(if choose_left {
+        (left, right)
+    } else {
+        (left, right)
+    })
+    let moved = left
+    returned.value + moved.value
+}
+"#,
+    );
+    assert!(
+        conflicting.contains("borrow conflict in `fn probe`"),
+        "{conflicting}"
+    );
+}
+
+#[test]
 fn returned_aggregate_with_view_field_retains_argument_provenance() {
     let diags = borrow_diags(
         r#"
@@ -3854,6 +7493,179 @@ fn probe() {
 }
 
 #[test]
+fn closure_cannot_mutably_borrow_an_owned_capture() {
+    let diags = analysis_diags(
+        r#"
+fn probe() {
+    let mut value: u256 = 0
+    let borrow = || -> mut u256 { mut value }
+    borrow.call()
+}
+"#,
+    );
+    assert!(
+        diags.contains("cannot mutably borrow a binding captured by a closure"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn closure_can_write_through_a_captured_mut_handle() {
+    let diags = analysis_diags(
+        r#"
+fn probe() {
+    let mut value: u256 = 0
+    let captured = mut value
+    let write = || {
+        captured = 42
+    }
+    write.call()
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn closure_copyability_preserves_move_and_borrow_tracking() {
+    let copy_diags = borrow_diags(
+        r#"
+fn probe() -> u256 {
+    let offset = 1
+    let add = |value: own u256| value + offset
+    let copied = add
+    add.call(20) + copied.call(20)
+}
+"#,
+    );
+    assert!(copy_diags.is_empty(), "{copy_diags}");
+
+    let noncopy_diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() {
+    let boxed = Boxed { value: 42 }
+    let read = || boxed.value
+    let moved = read
+    read.call()
+}
+"#,
+    );
+    assert!(
+        noncopy_diags.contains("cannot use a value after it was moved"),
+        "{noncopy_diags}"
+    );
+
+    let aliased_diags = borrow_diags(
+        r#"
+fn probe() {
+    let mut value = 0
+    let captured = mut value
+    let get = || captured
+    let copied = get
+    let first = get.call()
+    let second = copied.call()
+    first = 1
+    second = 2
+}
+"#,
+    );
+    assert!(
+        aliased_diags.contains("borrow conflict in `fn probe`"),
+        "{aliased_diags}"
+    );
+
+    let sequential_diags = borrow_diags(
+        r#"
+fn probe() {
+    let mut value = 0
+    let captured = mut value
+    let get = || captured
+    let copied = get
+    let first = get.call()
+    first = 1
+    let second = copied.call()
+    second = 2
+}
+"#,
+    );
+    assert!(sequential_diags.is_empty(), "{sequential_diags}");
+}
+
+#[test]
+fn closure_can_write_through_a_mut_handle_field_in_an_owned_capture() {
+    let diags = analysis_diags(
+        r#"
+struct MutHolder {
+    value: mut u256,
+}
+
+fn probe() {
+    let mut value: u256 = 0
+    let holder = MutHolder { value: mut value }
+    let write = || {
+        holder.value = 42
+    }
+    write.call()
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn ref_handle_fields_do_not_inherit_container_mutability() {
+    let diags = analysis_diags(
+        r#"
+struct RefHolder {
+    value: ref u256,
+}
+
+fn probe() {
+    let value: u256 = 0
+    let mut holder = RefHolder { value: ref value }
+    holder.value = 42
+}
+"#,
+    );
+    assert!(
+        diags.contains("left-hand side of assignment is immutable"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn array_element_capabilities_determine_projection_mutability() {
+    let mutable_diags = analysis_diags(
+        r#"
+fn probe() {
+    let mut value: u256 = 0
+    let handles: [mut u256; 1] = [mut value]
+    handles[0] = 42
+}
+"#,
+    );
+    assert!(mutable_diags.is_empty(), "{mutable_diags}");
+
+    let immutable_diags = analysis_diags(
+        r#"
+fn probe() {
+    let value: u256 = 0
+    let mut handles: [ref u256; 1] = [ref value]
+    handles[0] = 42
+}
+"#,
+    );
+    assert!(
+        immutable_diags.contains("left-hand side of assignment is immutable"),
+        "{immutable_diags}"
+    );
+}
+
+#[test]
 fn closure_preexisting_mut_handles_preserve_argument_aliasing() {
     let distinct_diags = borrow_diags(
         r#"
@@ -3910,6 +7722,251 @@ fn probe() {
 "#,
     );
     assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn closure_returned_borrow_nested_in_view_arg_pack_is_tracked() {
+    let diags = borrow_diags(
+        r#"
+struct Borrowed {
+    value: mut u256,
+}
+
+fn probe() {
+    let mut value = 0
+    let borrowed = Borrowed { value: mut value }
+    let unwrap = |borrowed: Borrowed| -> mut u256 { borrowed.value }
+    let returned = unwrap.call(borrowed)
+    let other = mut value
+    other = 1
+    returned = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn closure_control_flow_mut_return_retains_every_possible_source() {
+    let diags = borrow_diags(
+        r#"
+fn probe(_ flag: bool) {
+    let mut left = 0
+    let mut right = 0
+    let choose = |flag: own bool, left: mut u256, right: mut u256| -> mut u256 {
+        if flag { left } else { right }
+    }
+    let returned = choose.call(flag, mut left, mut right)
+    let other = mut right
+    other = 1
+    returned = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn closure_mixed_capture_and_argument_return_retains_every_possible_source() {
+    for (name, borrowed_place) in [("capture", "left"), ("argument", "right")] {
+        let src = format!(
+            r#"
+fn probe(_ flag: bool) {{
+    let mut left = 0
+    let mut right = 0
+    let captured = mut left
+    let choose = |flag: own bool, argument: mut u256| -> mut u256 {{
+        if flag {{ captured }} else {{ argument }}
+    }}
+    let returned = choose.call(flag, mut right)
+    let other = mut {borrowed_place}
+    other = 1
+    returned = 2
+}}
+"#,
+        );
+        let diags = borrow_diags(&src);
+        assert!(
+            diags.contains("borrow conflict in `fn probe`"),
+            "{name}: {diags}"
+        );
+    }
+
+    let unrelated = borrow_diags(
+        r#"
+fn probe(_ flag: bool) {
+    let mut left = 0
+    let mut right = 0
+    let mut unrelated = 0
+    let captured = mut left
+    let choose = |flag: own bool, argument: mut u256| -> mut u256 {
+        if flag { captured } else { argument }
+    }
+    let returned = choose.call(flag, mut right)
+    let other = mut unrelated
+    other = 1
+    returned = 2
+}
+"#,
+    );
+    assert!(unrelated.is_empty(), "{unrelated}");
+}
+
+#[test]
+fn closure_explicit_mut_returns_retain_every_possible_source() {
+    let diags = borrow_diags(
+        r#"
+fn probe(_ flag: bool) {
+    let mut left = 0
+    let mut right = 0
+    let choose = |flag: own bool, left: mut, right: mut| {
+        if flag {
+            return left
+        }
+        return right
+    }
+    let returned = choose.call(flag, mut left, mut right)
+    let other = mut right
+    other = 1
+    returned = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn closure_projected_capture_return_retains_the_underlying_source() {
+    let diags = borrow_diags(
+        r#"
+struct Holder {
+    value: mut u256,
+}
+
+fn probe() {
+    let mut value = 0
+    let holder = Holder { value: mut value }
+    let get = || holder.value
+    let returned = get.call()
+    let other = mut value
+    other = 1
+    returned = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn closure_environment_cannot_move_while_a_returned_borrow_is_live() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() -> u256 {
+    let boxed = Boxed { value: 42 }
+    let read = || -> ref u256 { ref boxed.value }
+    let returned = read.call()
+    let moved = read
+    returned
+}
+"#,
+    );
+    assert!(
+        diags.contains("cannot move out of a value while it is borrowed"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn projected_closure_environment_borrow_remains_field_precise() {
+    let allowed = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() -> u256 {
+    let captured = Boxed { value: 20 }
+    let project = || -> ref u256 { ref captured.value }
+    let holder = (project, Boxed { value: 22 })
+    let returned = holder.0.call()
+    let moved = holder.1
+    returned + moved.value
+}
+"#,
+    );
+    assert!(allowed.is_empty(), "{allowed}");
+
+    let conflicting = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() -> u256 {
+    let captured = Boxed { value: 42 }
+    let project = || -> ref u256 { ref captured.value }
+    let holder = (project, Boxed { value: 0 })
+    let returned = holder.0.call()
+    let moved = holder.0
+    returned + moved.call()
+}
+"#,
+    );
+    assert!(
+        conflicting.contains("cannot move out of a value while it is borrowed"),
+        "{conflicting}"
+    );
+}
+
+#[test]
+fn closure_aggregate_mut_return_retains_each_used_source() {
+    let diags = borrow_diags(
+        r#"
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let mut left = 0
+    let mut right = 0
+    let borrow_both = |left: mut u256, right: mut u256| -> Both {
+        Both { left, right }
+    }
+    let returned = borrow_both.call(mut left, mut right)
+    let other = mut right
+    other = 1
+    returned.right = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn closure_may_copy_one_mut_parameter_into_sequential_return_slots() {
+    let src = r#"
+struct Both {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn probe() {
+    let duplicate = |value: mut u256| -> Both {
+        Both { left: value, right: value }
+    }
+    let mut target = 0
+    let returned = duplicate.call(mut target)
+    returned.left = 1
+    returned.right = 2
+}
+"#;
+    let diags = borrow_diags(src);
+    assert!(diags.is_empty(), "{diags}");
 }
 
 #[test]
@@ -4195,6 +8252,29 @@ fn read(pair: own Pair) {
         !diags.contains("internal borrow checking error"),
         "{diags:?}"
     );
+}
+
+#[test]
+fn mutable_enum_can_be_replaced_from_its_copy_payload() {
+    let diags = borrow_diags(
+        r#"
+enum Choice {
+    Left(u256),
+    Right(u256),
+}
+
+impl Choice {
+    fn flip(mut self) {
+        match self {
+            Choice::Left(value) => self = Choice::Right(value),
+            Choice::Right(value) => self = Choice::Left(value),
+        }
+    }
+}
+"#,
+    );
+
+    assert!(diags.is_empty(), "{diags}");
 }
 
 #[test]

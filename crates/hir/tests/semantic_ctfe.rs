@@ -1075,6 +1075,122 @@ fn closure_mutates_packed_arg() -> bool {
 }
 
 #[test]
+fn canonicalize_invalidates_const_facts_for_stored_mut_handle_through_ref() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_ctfe_stored_mut_ref.fe".into(),
+        r#"
+struct Holder {
+    value: mut u256,
+}
+
+fn mutate_stored_handle_through_ref() -> bool {
+    let mut value: u256 = 0
+    let holder = Holder { value: mut value }
+    let Holder { value: projected } = ref holder
+    projected = 42
+    value == 42
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    let func = top_mod
+        .all_funcs(&db)
+        .iter()
+        .find(|func| {
+            matches!(
+                func.name(&db),
+                Partial::Present(name)
+                    if name.data(&db) == "mutate_stored_handle_through_ref"
+            )
+        })
+        .expect("expected mutate_stored_handle_through_ref function");
+    let semantic = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+    );
+    let body = canonicalize_semantic_consts(&db, semantic);
+
+    let post_store_comparison = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .filter_map(|stmt| {
+            let SStmtKind::Assign { dst, expr } = &stmt.kind else {
+                return None;
+            };
+            body.locals[dst.index()].ty.is_bool(&db).then_some(expr)
+        })
+        .next_back()
+        .expect("expected post-store boolean comparison");
+    assert!(
+        matches!(post_store_comparison, SExpr::Call { .. }),
+        "a write through a stored mutable handle projected from `ref` must invalidate the pointee constant: {post_store_comparison:#?}",
+    );
+}
+
+#[test]
+fn canonicalize_invalidates_const_facts_for_closure_capture_reaching_stored_mut_handle() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_ctfe_closure_stored_mut_ref.fe".into(),
+        r#"
+struct Holder {
+    value: mut u256,
+}
+
+fn closure_mutates_stored_handle_through_ref() -> bool {
+    let mut value: u256 = 0
+    let holder = Holder { value: mut value }
+    let borrowed = ref holder
+    let write = || {
+        let Holder { value: projected } = borrowed
+        projected = 42
+    }
+    write.call()
+    value == 42
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    let func = top_mod
+        .all_funcs(&db)
+        .iter()
+        .find(|func| {
+            matches!(
+                func.name(&db),
+                Partial::Present(name)
+                    if name.data(&db) == "closure_mutates_stored_handle_through_ref"
+            )
+        })
+        .expect("expected closure_mutates_stored_handle_through_ref function");
+    let semantic = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+    );
+    let body = canonicalize_semantic_consts(&db, semantic);
+
+    let post_call_comparison = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .filter_map(|stmt| {
+            let SStmtKind::Assign { dst, expr } = &stmt.kind else {
+                return None;
+            };
+            body.locals[dst.index()].ty.is_bool(&db).then_some(expr)
+        })
+        .next_back()
+        .expect("expected post-call boolean comparison");
+    assert!(
+        matches!(post_call_comparison, SExpr::Call { .. }),
+        "a closure call that reaches a stored mutable handle through a captured `ref` must invalidate the pointee constant: {post_call_comparison:#?}",
+    );
+}
+
+#[test]
 fn canonicalize_concretizes_negated_min_literal_comparisons() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

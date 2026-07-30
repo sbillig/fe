@@ -183,7 +183,7 @@ impl<T> TStorPtr<T> {
     }
 
     /// Writes the pointed-at transient value.
-    pub fn write(self, _ value: T) {
+    pub fn write(self, _ value: own T) {
         let mut ptr = self
         with (ptr) {
             core::effect_ref::write(ptr, value)
@@ -227,7 +227,7 @@ impl<T, const SLOT: u256> TSlot<T, SLOT> {
     }
 
     /// Writes the value at the assigned slot.
-    pub fn write(mut self, _ value: T) {
+    pub fn write(mut self, _ value: own T) {
         self.ptr_unchecked().write(value)
     }
 }

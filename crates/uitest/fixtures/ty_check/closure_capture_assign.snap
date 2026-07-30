@@ -24,14 +24,3 @@ error[8-0088]: cannot assign to a binding captured by a closure
   │         ^ cannot assign to a captured binding
   │
   = closures capture by value; writes would only affect the closure's copy
-
-error[8-0088]: cannot assign to a binding captured by a closure
-   ┌─ closure_capture_assign.fe:10:9
-   │
- 6 │     let m = mut x
-   │         - `m` is captured by the closure here
-   ·
-10 │         m = 5
-   │         ^ cannot assign to a captured binding
-   │
-   = closures capture by value; writes would only affect the closure's copy

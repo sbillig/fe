@@ -338,6 +338,15 @@ impl<'db> AssignmentSpace<'db> for ReturnSliceSpace<'_, 'db> {
         }
     }
 
+    fn for_each_node_defining_local(&self, local: SLocalId, f: &mut dyn FnMut(SliceAssignmentId)) {
+        for &assign_id in self.0.facts.assignments_defining_local(local) {
+            let Some(slice_id) = self.0.slice_assignment_positions[assign_id] else {
+                continue;
+            };
+            f(slice_id);
+        }
+    }
+
     fn dynamic_dependents(&self, local: SLocalId) -> &[SLocalId] {
         &self.0.slice_dynamic_dependents_by_local[local.index()]
     }
@@ -988,7 +997,7 @@ fn first(_ arr: [u8; 4]) -> u8 {
         );
         assert!(matches!(
             sliced[local.index()],
-            RuntimeCarrier::Value(RuntimeClass::Ref { .. })
+            RuntimeCarrier::Value(RuntimeClass::AggregateValue { .. })
         ));
     }
 

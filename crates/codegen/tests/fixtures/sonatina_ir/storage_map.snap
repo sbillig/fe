@@ -344,28 +344,25 @@ func private %input() -> @layout_1 {
 
 func inline(always) private %len(v0.@layout_1) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
         jump block1;
 
     block1:
-        v2.i256 = evm_calldata_size;
-        v5.i256 = extract_value v0 0.i256;
-        mstore v1 v2 i256;
-        v6.i256 = mload v1 i256;
-        v7.i1 = gt v5 v6;
-        br v7 block2 block3;
+        v1.i256 = evm_calldata_size;
+        v4.i256 = extract_value v0 0.i256;
+        v5.i1 = gt v4 v1;
+        br v5 block2 block3;
 
     block2:
         jump block4;
 
     block3:
-        v9.i256 = extract_value v0 0.i256;
-        (v11.i256, v12.i1) = usubo v2 v9;
-        br v12 block5 block6;
+        v7.i256 = extract_value v0 0.i256;
+        (v9.i256, v10.i1) = usubo v1 v7;
+        br v10 block5 block6;
 
     block4:
-        v17.i256 = phi (0.i256 block2) (v11 block6);
-        return v17;
+        v15.i256 = phi (0.i256 block2) (v9 block6);
+        return v15;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;

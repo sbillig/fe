@@ -17,6 +17,7 @@ pub use self::contract::{
     resolve_variant_bare, resolve_variant_in_msg,
 };
 pub use self::path::RecordLike;
+pub use super::ty_def::ClosureCaptureAccess;
 use crate::analysis::name_resolution::ResolvedVariant;
 pub use crate::analysis::ty::ProviderAddressSpace;
 use crate::analysis::ty::corelib::resolve_lib_type_path;
@@ -42,15 +43,15 @@ use crate::{
 };
 use callable::{CallGenericArgUnifyError, unify_explicit_call_generic_args};
 pub use callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization};
-pub use callable_body::TypedCallableBody;
+pub use callable_body::{TypedCallableBody, TypedClosureBody, TypedClosureCapture};
 use common::indexmap::IndexMap;
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
 use ena::unify::InPlace;
 use env::TyCheckEnv;
 pub use env::{
-    CLOSURE_ARGS_PARAM_IDX, ClosureCapture, ClosureCaptureAccess, ClosureCaptureConstruction,
-    ClosureInfo, EffectParamSite, ExprProp, LocalBinding, ParamSite, PatBindingMode,
-    PathReadSemantics, ValueAccess,
+    CLOSURE_ARGS_PARAM_IDX, ClosureCapture, ClosureCaptureConstruction, ClosureInfo,
+    EffectParamSite, ExprProp, LocalBinding, ParamSite, PatBindingMode, PathReadSemantics,
+    ValueAccess,
 };
 pub(super) use expr::TraitOps;
 use num_traits::ToPrimitive;
@@ -578,6 +579,7 @@ pub struct TyChecker<'db> {
     pub(crate) table: UnificationTable<'db>,
     expected: TyId<'db>,
     closure_expectations: FxHashMap<ExprId, ClosureExpectation<'db>>,
+    pending_place_checks: Vec<PendingPlaceCheck>,
     effect_provider_keys: FxHashSet<InferenceKey<'db>>,
     diags: Vec<FuncBodyDiag<'db>>,
 }
@@ -588,9 +590,24 @@ pub(super) struct ClosureExpectation<'db> {
     pub ret_ty: TyId<'db>,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PendingPlaceCheck {
+    Assign {
+        lhs: ExprId,
+        captured: bool,
+    },
+    Borrow {
+        expr: ExprId,
+        source: ExprId,
+        kind: BorrowKind,
+        captured: bool,
+    },
+}
+
 pub(crate) struct TyCheckerSnapshot<'db> {
     table: Snapshot<InPlace<InferenceKey<'db>>>,
     deferred_len: usize,
+    pending_place_check_len: usize,
 }
 
 enum TraitObligationOutcome<'db> {
@@ -884,12 +901,15 @@ impl<'db> TyChecker<'db> {
         TyCheckerSnapshot {
             table: self.table.snapshot(),
             deferred_len: self.env.deferred_len(),
+            pending_place_check_len: self.pending_place_checks.len(),
         }
     }
 
     pub(crate) fn rollback_state(&mut self, snapshot: TyCheckerSnapshot<'db>) {
         self.table.rollback_to(snapshot.table);
         self.env.truncate_deferred_tasks(snapshot.deferred_len);
+        self.pending_place_checks
+            .truncate(snapshot.pending_place_check_len);
     }
 
     fn commit_state(&mut self, snapshot: TyCheckerSnapshot<'db>) {
@@ -1914,6 +1934,7 @@ impl<'db> TyChecker<'db> {
             table,
             expected,
             closure_expectations: FxHashMap::default(),
+            pending_place_checks: Vec::new(),
             effect_provider_keys: FxHashSet::default(),
             diags: Vec::new(),
         }
@@ -2118,6 +2139,7 @@ impl<'db> TyChecker<'db> {
                 coerced.as_capability(self.db),
                 Some((CapabilityKind::View, _))
             )
+            && self.env.expr_place(expr).is_none()
         {
             self.env.register_contextual_view_source(expr, actual);
         }
@@ -2143,6 +2165,24 @@ impl<'db> TyChecker<'db> {
         !self
             .unify_ty(Typeable::Expr(expr, expr_prop), actual, expected)
             .has_invalid(self.db)
+    }
+
+    fn reconcile_deferred_expr_prop(
+        &mut self,
+        expr: ExprId,
+        expr_prop: ExprProp<'db>,
+        mut actual: ExprProp<'db>,
+    ) -> bool {
+        if !self.reconcile_deferred_expr_ty(expr, expr_prop, actual.ty) {
+            return false;
+        }
+        actual.ty = self
+            .env
+            .typed_expr(expr)
+            .expect("reconciled expression must remain typed")
+            .ty;
+        self.env.type_expr(expr, actual);
+        true
     }
 
     fn try_coerce_capability_expr_to_expected(
@@ -2195,8 +2235,14 @@ impl<'db> TyChecker<'db> {
                 }
 
                 if self.ty_is_copy(given_inner)
-                    || (matches!(given_kind, CapabilityKind::View)
-                        && expr.is_some_and(|expr| self.expr_can_move_from_place(expr)))
+                    || self.ty_is_copy(expected)
+                    || matches!(given_kind, CapabilityKind::View)
+                        && expr.is_some_and(|expr| {
+                            self.env.contextual_view_source(expr).is_some_and(|source| {
+                                source.as_capability(self.db).is_none()
+                                    && self.ty_unifies(source, given_inner)
+                            })
+                        })
                 {
                     return Some(given_inner);
                 }
@@ -2210,21 +2256,6 @@ impl<'db> TyChecker<'db> {
                 Some(TyId::view_of(self.db, actual))
             }
             (None, Some((CapabilityKind::Ref | CapabilityKind::Mut, _))) | (None, None) => None,
-        }
-    }
-
-    fn expr_can_move_from_place(&self, expr: ExprId) -> bool {
-        let Partial::Present(expr_data) = expr.data(self.db, self.body()) else {
-            return false;
-        };
-
-        match expr_data {
-            Expr::Path(_) => true,
-            Expr::Field(lhs, _) => self.expr_can_move_from_place(*lhs),
-            Expr::Bin(lhs, _, crate::hir_def::expr::BinOp::Index) => {
-                self.expr_can_move_from_place(*lhs)
-            }
-            _ => false,
         }
     }
 
@@ -2243,15 +2274,15 @@ impl<'db> TyChecker<'db> {
             return;
         }
 
-        let access = if self.ty_is_copy(ty) {
-            ValueAccess::Read
+        let (access, capture_access) = if ty.has_var(self.db) {
+            (
+                ValueAccess::MoveIfNonCopy,
+                ClosureCaptureAccess::MoveIfNonCopy,
+            )
+        } else if self.ty_is_copy(ty) {
+            (ValueAccess::Read, ClosureCaptureAccess::Read)
         } else {
-            ValueAccess::Move
-        };
-        let capture_access = if access == ValueAccess::Move {
-            ClosureCaptureAccess::Move
-        } else {
-            ClosureCaptureAccess::Read
+            (ValueAccess::Move, ClosureCaptureAccess::Move)
         };
         self.record_expr_value_use(expr, access, capture_access);
     }
@@ -2490,51 +2521,49 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    fn pattern_moves_non_copy_value(&mut self, pat: PatId) -> bool {
+    fn pattern_value_capture_access(&mut self, pat: PatId) -> ClosureCaptureAccess {
         let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
-            return false;
+            return ClosureCaptureAccess::Read;
         };
         match pat_data {
-            Pat::WildCard | Pat::Rest | Pat::Lit(_) => false,
+            Pat::WildCard | Pat::Rest | Pat::Lit(_) => ClosureCaptureAccess::Read,
             Pat::Path(..) => {
                 let Some(binding) = self.env.pat_binding(pat) else {
-                    return false;
+                    return ClosureCaptureAccess::Read;
                 };
                 let ty = self.normalize_ty(self.env.lookup_binding_ty(&binding));
-                !ty.has_invalid(self.db) && !self.ty_is_copy(ty)
+                if ty.has_invalid(self.db) || self.ty_is_copy(ty) {
+                    ClosureCaptureAccess::Read
+                } else if ty.has_var(self.db) {
+                    ClosureCaptureAccess::MoveIfNonCopy
+                } else {
+                    ClosureCaptureAccess::Move
+                }
             }
             Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
+                let mut access = ClosureCaptureAccess::Read;
                 for pat in pats {
-                    if self.pattern_moves_non_copy_value(*pat) {
-                        return true;
-                    }
+                    access.include(self.pattern_value_capture_access(*pat));
                 }
-                false
+                access
             }
             Pat::Record(_, fields) => {
+                let mut access = ClosureCaptureAccess::Read;
                 for field in fields {
-                    if self.pattern_moves_non_copy_value(field.pat) {
-                        return true;
-                    }
+                    access.include(self.pattern_value_capture_access(field.pat));
                 }
-                false
+                access
             }
             Pat::Or(lhs, rhs) => {
-                self.pattern_moves_non_copy_value(*lhs) || self.pattern_moves_non_copy_value(*rhs)
+                let mut access = self.pattern_value_capture_access(*lhs);
+                access.include(self.pattern_value_capture_access(*rhs));
+                access
             }
         }
     }
 
-    fn record_pattern_value_use(&mut self, expr: ExprId, moves_value: bool) {
-        self.record_expr_value_use(
-            expr,
-            ValueAccess::Read,
-            if moves_value {
-                ClosureCaptureAccess::Move
-            } else {
-                ClosureCaptureAccess::Read
-            },
-        );
+    fn record_pattern_value_use(&mut self, expr: ExprId, capture_access: ClosureCaptureAccess) {
+        self.record_expr_value_use(expr, ValueAccess::Read, capture_access);
     }
 
     fn destructure_source_mode(&self, ty: TyId<'db>) -> (TyId<'db>, PatternDestructureMode) {
@@ -3487,7 +3516,7 @@ impl<'db> TypedBody<'db> {
             Expr::Assert(_) => expr_ty.has_invalid(db),
             Expr::RecordInit(..) => self.record_init_lowering(expr).is_none(),
             Expr::Un(inner, crate::hir_def::expr::UnOp::Mut | crate::hir_def::expr::UnOp::Ref) => {
-                expr_ty.has_invalid(db) && self.expr_place(*inner).is_none()
+                self.expr_place(*inner).is_none()
             }
             Expr::Assign(dst, _) => self.expr_place(*dst).is_none(),
             Expr::AugAssign(dst, _, _) => {
@@ -5559,6 +5588,7 @@ impl<'db> TyCheckerFinalizer<'db> {
     fn new(mut checker: TyChecker<'db>) -> Self {
         let assumptions = checker.env.assumptions();
         checker.resolve_deferred();
+        checker.resolve_pending_place_checks();
         let return_borrow_provider = checker
             .env
             .first_return_borrow_provider

@@ -42,8 +42,8 @@ use crate::{
         EntryEffectContext, entry_semantic_args_plan, target_root_provider_materialization,
     },
     runtime::stable_key::{
-        IdentityMode, item_identity, semantic_instance_identity_in_mode, stable_identity_hash,
-        type_identity,
+        IdentityMode, closure_symbol_base, item_identity, semantic_instance_identity_in_mode,
+        stable_identity_hash, type_identity,
     },
     runtime::{
         AddressSpaceKind, ConstRegionId, ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm,
@@ -2383,11 +2383,7 @@ fn symbol_base_for_semantic_instance<'db>(
         ),
         BodyOwner::Closure {
             ty, receiver_mode, ..
-        } => format!(
-            "__closure_{}_{}",
-            stable_identity_hash(&type_identity(db, TyId::closure(db, ty))),
-            receiver_mode.as_str()
-        ),
+        } => closure_symbol_base(db, ty, receiver_mode),
         BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => "__const".to_string(),
     }
 }

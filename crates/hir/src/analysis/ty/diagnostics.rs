@@ -12,8 +12,8 @@ use crate::{analysis::name_resolution::diagnostics::PathResDiag, hir_def::ItemKi
 use crate::{analysis::ty::ty_check::EffectParamOwner, span::DynLazySpan};
 use crate::{
     core::hir_def::{
-        CallableDef, CompBinOp, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId,
-        ImplTrait, IntegerId,
+        CallableDef, ClosureDef, CompBinOp, Enum, FieldIndex, FieldParent, Func, GenericParamOwner,
+        IdentId, ImplTrait, IntegerId,
     },
     hir_def::TypeAlias,
 };
@@ -340,6 +340,12 @@ pub enum MustUseSubject<'db> {
     Function(CallableDef<'db>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ReturnTypeContext<'db> {
+    Function(CallableDef<'db>),
+    Closure(ClosureDef<'db>),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum BodyDiag<'db> {
     TypeMismatch {
@@ -496,7 +502,7 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         actual: TyId<'db>,
         expected: TyId<'db>,
-        func: Option<CallableDef<'db>>,
+        context: Option<ReturnTypeContext<'db>>,
     },
 
     IncompatibleBorrowProviders {
@@ -544,6 +550,11 @@ pub enum BodyDiag<'db> {
     },
 
     CannotBorrowMut {
+        primary: DynLazySpan<'db>,
+        binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
+    },
+
+    BorrowMutFromCapturedBinding {
         primary: DynLazySpan<'db>,
         binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
     },
@@ -968,6 +979,7 @@ impl<'db> BodyDiag<'db> {
             Self::IntLiteralOutOfRange { .. } => 74,
             Self::BorrowFromNonPlace { .. } => 65,
             Self::CannotBorrowMut { .. } => 66,
+            Self::BorrowMutFromCapturedBinding { .. } => 96,
             Self::BorrowArgMustBePlace { .. } => 68,
             Self::ExplicitBorrowRequired { .. } => 69,
             Self::OwnParamCannotBeBorrow { .. } => 70,

@@ -35,18 +35,26 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     fn update_assigned_local_facts(&mut self, dst: SLocalId, expr: &SExpr<'db>) {
         let dst_idx = dst.index();
         let has_source = self.locals[dst_idx].source.is_some();
-        let fallback = (!has_source).then(|| self.fallback_local_role(self.locals[dst_idx].ty));
-        let next_role = fallback
-            .as_ref()
-            .map(|_| self.classify_expr_local_role(self.locals[dst_idx].ty, expr));
+        let fallback = self.fallback_local_role(self.locals[dst_idx].ty);
+        let next_role = self.classify_expr_local_role(self.locals[dst_idx].ty, expr);
         let next_snapshot = self.classify_expr_snapshot_source(expr);
         let next_ownership_sources =
             self.classify_expr_ownership_sources(self.locals[dst_idx].ty, expr);
         let next_layout_backing_sources = self.classify_expr_layout_backing_sources(expr);
 
-        if let Some((next_role, fallback)) = next_role.zip(fallback) {
+        if !has_source {
             self.locals[dst_idx].role =
                 merge_local_roles(self.locals[dst_idx].role.clone(), next_role, fallback);
+        } else if !self.assigned_snapshots[dst_idx]
+            && matches!(
+                (&self.locals[dst_idx].role, &next_role),
+                (
+                    SemanticLocalRole::PlaceCarrier { .. },
+                    SemanticLocalRole::PlaceBoundValue { .. }
+                )
+            )
+        {
+            self.locals[dst_idx].role = next_role;
         }
         if self.assigned_snapshots[dst_idx] {
             self.locals[dst_idx].snapshot_source =
@@ -102,6 +110,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     ) -> SemanticLocalRole<'db> {
         match expr {
             SExpr::Forward(value) => self.classify_forward_role(dst_ty, value.value),
+            SExpr::UseValue(value)
+                if matches!(
+                    self.locals[value.value.index()].role,
+                    SemanticLocalRole::PlaceBoundValue { .. }
+                ) =>
+            {
+                self.classify_forward_role(dst_ty, value.value)
+            }
             SExpr::UseValue(_) | SExpr::Borrow { .. } | SExpr::Call { .. } => {
                 self.fallback_local_role(dst_ty)
             }
@@ -583,7 +599,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     provenance,
                     value_ty: src_value_ty,
                 },
-                SemanticLocalRole::PlaceBoundValue {
+                SemanticLocalRole::PlaceCarrier {
+                    value_ty: dst_value_ty,
+                    ..
+                }
+                | SemanticLocalRole::PlaceBoundValue {
                     value_ty: dst_value_ty,
                     ..
                 },

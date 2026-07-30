@@ -266,10 +266,7 @@ fn read(x: Maybe) -> u256 {
     let body = instance.body(&db);
 
     assert_eq!(
-        first_assignment_ty(&db, body, |expr| matches!(
-            expr,
-            SExpr::ExtractEnumField { .. }
-        )),
+        first_assignment_ty(&db, body, |expr| matches!(expr, SExpr::ReadPlace { .. })),
         "ref u256"
     );
 }
@@ -302,4 +299,39 @@ fn eliminate(value: Empty) -> u8 {
         block.terminator.kind,
         STerminatorKind::Assert { message: None }
     )));
+}
+
+#[test]
+fn mut_enum_destructuring_keeps_mut_payload_type() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "pattern_lowering.fe".into(),
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn write(x: mut Option<Boxed>) {
+    match x {
+        Option::Some(value) => value.value = 42,
+        Option::None => (),
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = find_func(&db, top_mod, "write");
+    let (diags, _) = check_func_body(&db, func).clone();
+    assert!(diags.is_empty(), "{diags:?}");
+
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    let body = instance.body(&db);
+
+    assert_eq!(
+        first_assignment_ty(&db, body, |expr| matches!(expr, SExpr::ReadPlace { .. })),
+        "mut Boxed"
+    );
 }

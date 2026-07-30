@@ -90,8 +90,13 @@ fn semantic_callee_key_with_assumptions<'db>(
                 else {
                     return None;
                 };
-                let call_trait =
-                    implemented_closure_call_trait(db, func.scope(), *closure, inst.def(db))?;
+                let call_trait = implemented_closure_call_trait(
+                    db,
+                    func.scope(),
+                    assumptions,
+                    *closure,
+                    inst.def(db),
+                )?;
                 if func.name(db).to_opt()?.data(db).as_str() != call_trait.method_name() {
                     return None;
                 }
@@ -143,33 +148,35 @@ fn semantic_callee_key_with_assumptions<'db>(
         provider_resolution_mode,
     );
 
-    let impl_env = if let Some(witness) = resolved_trait_witness {
+    let needs_inherited_env = |ty: TyId<'db>| {
+        ty.has_param(db)
+            || ty.has_var(db)
+            || ty.has_projection(db)
+            || ty.has_invalid(db)
+            || ty_contains_const_hole(db, ty)
+    };
+    let inherits_impl_env = subst_args.iter().copied().any(needs_inherited_env)
+        || effect_providers.iter().any(|specialization| {
+            needs_inherited_env(specialization.provider.provider_ty)
+                || specialization
+                    .provider
+                    .semantics
+                    .target_ty
+                    .is_some_and(needs_inherited_env)
+        })
+        || callable.trait_inst().is_some_and(|inst| {
+            inst.args(db).iter().copied().any(needs_inherited_env)
+                || inst
+                    .assoc_type_bindings(db)
+                    .values()
+                    .copied()
+                    .any(needs_inherited_env)
+        });
+    let impl_env = if let Some(witness) = resolved_trait_witness
+        && !inherits_impl_env
+    {
         ImplEnv::for_resolved_trait_method(db, owner, witness)
     } else {
-        let needs_inherited_env = |ty: TyId<'db>| {
-            ty.has_param(db)
-                || ty.has_var(db)
-                || ty.has_projection(db)
-                || ty.has_invalid(db)
-                || ty_contains_const_hole(db, ty)
-        };
-        let inherits_impl_env = subst_args.iter().copied().any(needs_inherited_env)
-            || effect_providers.iter().any(|specialization| {
-                needs_inherited_env(specialization.provider.provider_ty)
-                    || specialization
-                        .provider
-                        .semantics
-                        .target_ty
-                        .is_some_and(needs_inherited_env)
-            })
-            || callable.trait_inst().is_some_and(|inst| {
-                inst.args(db).iter().copied().any(needs_inherited_env)
-                    || inst
-                        .assoc_type_bindings(db)
-                        .values()
-                        .copied()
-                        .any(needs_inherited_env)
-            });
         let mut witnesses: IndexSet<_> = if inherits_impl_env {
             impl_env.witnesses(db).iter().copied().collect()
         } else {

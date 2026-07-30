@@ -7,10 +7,11 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            BorrowActivation, FieldIndex, LayoutBackingProjection, SBlockId, SLocalId, SemOrigin,
-            SemanticInstance,
+            BorrowActivation, FieldIndex, LayoutBackingProjection, SBlockId, SLocalId, SStmtId,
+            SemOrigin, SemanticInstance,
         },
         ty::{
+            adt_def::{AdtRef, instantiate_adt_field_shape},
             provider::{ProviderAddressSpace, ProviderKind},
             ty_check::LocalBinding,
             ty_contains_borrow,
@@ -24,8 +25,8 @@ use crate::{
 use super::{
     diagnostics::normalized_body_internal_diag,
     ir::{
-        BorrowResult, NBorrowRoot, NBorrowRootId, NExpr, NSPlace, NSPlaceRoot, NSProjectionPath,
-        NSStmt, NSStmtKind, NValueOwnershipSource, NormalizedBindingLowering,
+        BorrowInput, BorrowResult, NBorrowRoot, NBorrowRootId, NExpr, NSPlace, NSPlaceRoot,
+        NSProjectionPath, NSStmt, NSStmtKind, NValueOwnershipSource, NormalizedBindingLowering,
         NormalizedSemanticBody, SemanticBorrowDiagnostic, layout_path_for_semantic_projection,
         resolved_layout_backing_places, semantic_projection_for_layout_path,
         semantic_projection_ty,
@@ -39,24 +40,45 @@ pub(super) fn address_space_for_borrow_root<'db>(
     root: &BorrowRoot<'db>,
     origin: SemOrigin<'db>,
 ) -> Result<ProviderAddressSpace, SemanticBorrowDiagnostic<'db>> {
+    if let Some(space) = known_address_space_for_borrow_root(root) {
+        return Ok(space);
+    }
+    let BorrowRoot::Provider(binding) = root else {
+        unreachable!("memory borrow roots always have a known address space")
+    };
+    Err(normalized_body_internal_diag(
+        db,
+        instance,
+        body,
+        origin,
+        format!(
+            "provider `{}` has no address space",
+            binding.provider_ty.pretty_print(db)
+        ),
+    ))
+}
+
+pub(super) fn known_address_space_for_borrow_root(
+    root: &BorrowRoot<'_>,
+) -> Option<ProviderAddressSpace> {
     match root {
-        BorrowRoot::Param(_) | BorrowRoot::Local(_) => Ok(ProviderAddressSpace::Memory),
-        BorrowRoot::Provider(binding) => match binding.semantics.address_space {
-            Some(space) => Ok(space),
-            None if matches!(binding.semantics.kind, ProviderKind::RootObject) => {
-                Ok(ProviderAddressSpace::Memory)
-            }
-            None => Err(normalized_body_internal_diag(
-                db,
-                instance,
-                body,
-                origin,
-                format!(
-                    "provider `{}` has no address space",
-                    binding.provider_ty.pretty_print(db)
-                ),
-            )),
-        },
+        BorrowRoot::Param(_) | BorrowRoot::Local(_) | BorrowRoot::FreshCall { .. } => {
+            Some(ProviderAddressSpace::Memory)
+        }
+        BorrowRoot::Provider(binding) => binding.semantics.address_space.or_else(|| {
+            matches!(binding.semantics.kind, ProviderKind::RootObject)
+                .then_some(ProviderAddressSpace::Memory)
+        }),
+    }
+}
+
+pub(super) fn address_space_rank(space: ProviderAddressSpace) -> u8 {
+    match space {
+        ProviderAddressSpace::Memory => 0,
+        ProviderAddressSpace::Storage => 1,
+        ProviderAddressSpace::Transient => 2,
+        ProviderAddressSpace::Calldata => 3,
+        ProviderAddressSpace::Code => 4,
     }
 }
 
@@ -67,6 +89,7 @@ pub(super) struct LoanId(pub(super) u32);
 pub(super) enum BorrowRoot<'db> {
     Param(u32),
     Local(SLocalId),
+    FreshCall { stmt: SStmtId, source: SLocalId },
     Provider(crate::semantic::ProviderBinding<'db>),
 }
 
@@ -196,6 +219,44 @@ impl State {
         out
     }
 
+    pub(super) fn projected_stored_held_loans(
+        &self,
+        local: SLocalId,
+        projection: &[LayoutBackingProjection],
+    ) -> HeldLoans {
+        let mut out = HeldLoans::default();
+        for (path, loans) in self.local_loans.get(&local).into_iter().flatten() {
+            if !layout_path_is_prefix(projection, path) {
+                continue;
+            }
+            out.entry(path[projection.len()..].to_vec())
+                .or_default()
+                .extend(loans);
+        }
+        out
+    }
+
+    pub(super) fn deepest_held_loans_for_projection(
+        &self,
+        local: SLocalId,
+        projection: &[LayoutBackingProjection],
+    ) -> Option<(usize, FxHashSet<LoanId>)> {
+        let mut deepest: Option<(usize, FxHashSet<LoanId>)> = None;
+        for (path, loans) in self.local_loans.get(&local).into_iter().flatten() {
+            if !layout_path_is_prefix(path, projection) {
+                continue;
+            }
+            match &mut deepest {
+                Some((depth, deepest_loans)) if *depth == path.len() => {
+                    deepest_loans.extend(loans);
+                }
+                Some((depth, _)) if *depth > path.len() => {}
+                _ => deepest = Some((path.len(), loans.clone())),
+            }
+        }
+        deepest
+    }
+
     pub(super) fn replace_held_loans(
         &mut self,
         local: SLocalId,
@@ -272,19 +333,77 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
         let mut out = NSProjectionPath::new();
         for projection in path.iter() {
             out.push(match projection {
-                Projection::Index(IndexSource::Dynamic(index)) => self.constant_indices[*index]
-                    .map_or_else(
-                        || projection.clone(),
-                        |index| Projection::Index(IndexSource::Constant(index)),
-                    ),
+                Projection::Index(IndexSource::Dynamic(index)) => {
+                    if let Some(index) = self.constant_indices[*index] {
+                        Projection::Index(IndexSource::Constant(index))
+                    } else {
+                        projection.clone()
+                    }
+                }
                 projection => projection.clone(),
             });
         }
         out
     }
 
-    fn layout_path(&self, path: &NSProjectionPath<'db>) -> Option<Vec<LayoutBackingProjection>> {
+    pub(super) fn layout_path(
+        &self,
+        path: &NSProjectionPath<'db>,
+    ) -> Option<Vec<LayoutBackingProjection>> {
         layout_path_for_semantic_projection(&self.materialize_constant_indices(path))
+    }
+
+    fn deepest_held_projection_targets(
+        &self,
+        state: &State,
+        local: SLocalId,
+        path: &NSProjectionPath<'db>,
+    ) -> Option<FxHashSet<CanonPlace<'db>>> {
+        let path = self.materialize_constant_indices(path);
+        let projection = self.layout_path(&path)?;
+        let (depth, loans) = state.deepest_held_loans_for_projection(local, &projection)?;
+        let mut consumed = 0;
+        let mut suffix = NSProjectionPath::default();
+        for projection in path.iter() {
+            if consumed < depth {
+                if !matches!(projection, Projection::Deref) {
+                    consumed += 1;
+                }
+                continue;
+            }
+            if suffix.is_empty() && matches!(projection, Projection::Deref) {
+                continue;
+            }
+            suffix.push(projection.clone());
+        }
+        Some(
+            loans
+                .into_iter()
+                .flat_map(|loan| {
+                    self.loans[loan.0 as usize]
+                        .targets
+                        .iter()
+                        .map(|target| CanonPlace {
+                            root: target.root.clone(),
+                            proj: target.proj.concat(&suffix),
+                        })
+                })
+                .collect(),
+        )
+    }
+
+    fn deepest_held_layout_projection_targets(
+        &self,
+        state: &State,
+        local: SLocalId,
+        projection: &[LayoutBackingProjection],
+    ) -> FxHashSet<CanonPlace<'db>> {
+        state
+            .deepest_held_loans_for_projection(local, projection)
+            .into_iter()
+            .flat_map(|(_, loans)| loans)
+            .flat_map(|loan| self.loans[loan.0 as usize].targets.iter().cloned())
+            .collect()
     }
 
     pub(super) fn apply_stmt_state_with_call_loans(
@@ -301,10 +420,26 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
                         if own.is_empty() {
                             self.propagated_held_loans(*dst, state.held_loans_in(src.local))
                         } else {
-                            own
+                            let mut held = own;
+                            for (path, loans) in state.held_loans_in(src.local) {
+                                if !path.is_empty() {
+                                    held.entry(path).or_default().extend(loans);
+                                }
+                            }
+                            self.propagated_held_loans(*dst, held)
                         }
                     }
-                    NExpr::Borrow { .. } => self.own_held_loan_for_local(*dst),
+                    NExpr::Borrow { place, .. } => {
+                        let mut held = self.own_held_loan_for_local(*dst);
+                        if let Some(base) = self.place_base_local(place) {
+                            let projection = self.layout_path(&place.path).unwrap_or_default();
+                            merge_held_loans(
+                                &mut held,
+                                state.projected_stored_held_loans(base, &projection),
+                            );
+                        }
+                        held
+                    }
                     NExpr::Call { args, .. } => {
                         let own = self.own_held_loan_for_local(*dst);
                         if !own.is_empty() {
@@ -376,7 +511,7 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
                         variant,
                         field,
                     } => {
-                        let held = state.projected_held_loans(
+                        let held = state.projected_stored_held_loans(
                             value.local,
                             &[LayoutBackingProjection::VariantField {
                                 variant: *variant,
@@ -386,21 +521,22 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
                         self.propagated_held_loans(*dst, held)
                     }
                     NExpr::ReadPlace { place, .. } => {
-                        let own = self.own_held_loan_for_local(*dst);
-                        if own.is_empty() {
-                            self.place_base_local(place)
-                                .map(|base| {
-                                    let projection =
-                                        self.layout_path(&place.path).unwrap_or_default();
-                                    self.propagated_held_loans(
-                                        *dst,
-                                        state.projected_held_loans(base, &projection),
-                                    )
-                                })
-                                .unwrap_or_default()
-                        } else {
-                            own
+                        let mut held = self.own_held_loan_for_local(*dst);
+                        if let Some(base) = self.place_base_local(place) {
+                            let projection = self.layout_path(&place.path).unwrap_or_default();
+                            let copies_stored_capability = self
+                                .body
+                                .place_root_ty(&place.root)
+                                .and_then(|ty| semantic_projection_ty(self.db, ty, &place.path))
+                                .is_some_and(|(ty, _)| ty.as_capability(self.db).is_some());
+                            let projected = if !held.is_empty() || copies_stored_capability {
+                                state.projected_stored_held_loans(base, &projection)
+                            } else {
+                                state.projected_held_loans(base, &projection)
+                            };
+                            merge_held_loans(&mut held, projected);
                         }
+                        self.propagated_held_loans(*dst, held)
                     }
                     _ => HeldLoans::default(),
                 };
@@ -448,14 +584,14 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
             .unwrap_or_default()
     }
 
-    fn root_base_local(&self, root: NBorrowRootId) -> Option<SLocalId> {
+    pub(super) fn root_base_local(&self, root: NBorrowRootId) -> Option<SLocalId> {
         match self.body.root(root)? {
             NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local } => Some(*local),
             NBorrowRoot::Provider { .. } => None,
         }
     }
 
-    fn place_base_local(&self, place: &NSPlace<'db>) -> Option<SLocalId> {
+    pub(super) fn place_base_local(&self, place: &NSPlace<'db>) -> Option<SLocalId> {
         match place.root {
             NSPlaceRoot::CarrierDerefLocal(local) => Some(local),
             NSPlaceRoot::Root(root) => self.root_base_local(root),
@@ -508,26 +644,13 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
             return FxHashSet::default();
         };
         let projection = self.materialize_constant_indices(projection);
-        let traverses_capability = semantic_projection_ty(self.db, local_data.ty, &projection)
-            .is_none_or(|(_, traverses_capability)| traverses_capability);
-        if local_data.ty.as_borrow(self.db).is_none() && traverses_capability {
-            let held = layout_path_for_semantic_projection(&projection).map_or_else(
-                || state.loans_in(local),
-                |projection| {
-                    state
-                        .projected_held_loans(local, &projection)
-                        .into_values()
-                        .flatten()
-                        .collect()
-                },
-            );
-            let targets = held
-                .into_iter()
-                .flat_map(|loan| self.loans[loan.0 as usize].targets.iter().cloned())
-                .collect::<FxHashSet<_>>();
-            if !targets.is_empty() {
-                return targets;
-            }
+        let projected = semantic_projection_ty(self.db, local_data.ty, &projection);
+        let traverses_capability =
+            projected.is_none_or(|(_, traverses_capability)| traverses_capability);
+        if traverses_capability
+            && let Some(targets) = self.deepest_held_projection_targets(state, local, &projection)
+        {
+            return targets;
         }
         if local_data.ty.as_borrow(self.db).is_none() {
             let resolved =
@@ -568,10 +691,116 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
         let Some(local_ty) = self.body.local(local).map(|local| local.ty) else {
             return FxHashSet::default();
         };
-        semantic_projection_for_layout_path(self.db, local_ty, projection).map_or_else(
-            || self.borrow_local_targets(state, local),
-            |projection| self.canonicalize_value_projection(state, local, &projection),
-        )
+        if let Some(projection) = semantic_projection_for_layout_path(self.db, local_ty, projection)
+        {
+            return self.canonicalize_value_projection(state, local, &projection);
+        }
+        let targets = self.deepest_held_layout_projection_targets(state, local, projection);
+        if targets.is_empty() {
+            self.borrow_local_targets(state, local)
+        } else {
+            targets
+        }
+    }
+
+    pub(super) fn canonicalize_call_input(
+        &self,
+        state: &State,
+        stmt: SStmtId,
+        arg: SLocalId,
+        input: &BorrowInput,
+        fresh_owned_arg: bool,
+    ) -> FxHashSet<CanonPlace<'db>> {
+        if fresh_owned_arg
+            && let BorrowInput::Place { projection, .. } = input
+            && let Some(proj) = self.owned_layout_projection(arg, projection)
+        {
+            return FxHashSet::from_iter([CanonPlace {
+                root: BorrowRoot::FreshCall { stmt, source: arg },
+                proj,
+            }]);
+        }
+
+        let mut targets = match input {
+            BorrowInput::Place { projection, .. } => {
+                self.canonicalize_value_layout_projection(state, arg, projection)
+            }
+            BorrowInput::AnyInParam(_) => self.all_value_targets(state, arg),
+        };
+        if fresh_owned_arg {
+            targets = targets
+                .into_iter()
+                .map(|mut target| {
+                    if target.root == BorrowRoot::Local(arg) {
+                        target.root = BorrowRoot::FreshCall { stmt, source: arg };
+                    }
+                    target
+                })
+                .collect();
+        }
+        targets
+    }
+
+    fn owned_layout_projection(
+        &self,
+        local: SLocalId,
+        projection: &[LayoutBackingProjection],
+    ) -> Option<NSProjectionPath<'db>> {
+        let mut ty = self.body.local(local)?.ty;
+        let mut path = NSProjectionPath::new();
+        let mut precise = true;
+        for step in projection {
+            if ty.as_capability(self.db).is_some() {
+                return None;
+            }
+            match *step {
+                LayoutBackingProjection::Field(field) => {
+                    ty = *ty.field_types(self.db).get(field.0 as usize)?;
+                    if precise {
+                        path.push(Projection::Field(field.0 as usize));
+                    }
+                }
+                LayoutBackingProjection::VariantField { variant, field } => {
+                    let adt = ty.adt_def(self.db)?;
+                    if !matches!(adt.adt_ref(self.db), AdtRef::Enum(_)) {
+                        return None;
+                    }
+                    let enum_ty = ty;
+                    ty = instantiate_adt_field_shape(
+                        self.db,
+                        adt,
+                        variant.0 as usize,
+                        field.0 as usize,
+                        enum_ty.generic_args(self.db),
+                    );
+                    if precise {
+                        path.push(Projection::VariantField {
+                            variant,
+                            enum_ty,
+                            field_idx: field.0 as usize,
+                        });
+                    }
+                }
+                LayoutBackingProjection::Index(index) => {
+                    if !ty.is_array(self.db)
+                        || index.is_some_and(|index| {
+                            ty.array_len(self.db).is_some_and(|len| index >= len)
+                        })
+                    {
+                        return None;
+                    }
+                    ty = *ty.generic_args(self.db).first()?;
+                    if let Some(index) = index {
+                        if precise {
+                            path.push(Projection::Index(IndexSource::Constant(index)));
+                        }
+                    } else {
+                        precise = false;
+                    }
+                }
+            }
+        }
+        ty.as_capability(self.db).is_none().then_some(path)
     }
 
     pub(super) fn canonicalize_place_layout_projection(
@@ -598,12 +827,7 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
                 .layout_path(&self.materialize_constant_indices(&place.path))
                 .unwrap_or_default();
             path.extend_from_slice(projection);
-            let targets = state
-                .projected_held_loans(local, &path)
-                .into_values()
-                .flatten()
-                .flat_map(|loan| self.loans[loan.0 as usize].targets.iter().cloned())
-                .collect::<FxHashSet<_>>();
+            let targets = self.deepest_held_layout_projection_targets(state, local, &path);
             if !targets.is_empty() {
                 return targets;
             }
@@ -629,11 +853,20 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
         let Some(local_data) = self.body.local(local) else {
             return FxHashSet::default();
         };
+        let loans = if local_data.ty.as_borrow(self.db).is_some() {
+            state
+                .deepest_held_loans_for_projection(local, &[])
+                .map(|(_, loans)| loans)
+                .unwrap_or_default()
+        } else {
+            state.loans_in(local)
+        };
+        let has_tracked_loan = !loans.is_empty();
         let mut out = FxHashSet::default();
-        for loan in state.loans_in(local) {
+        for loan in loans {
             out.extend(self.loans[loan.0 as usize].targets.iter().cloned());
         }
-        if !out.is_empty() {
+        if !out.is_empty() || has_tracked_loan {
             return out;
         }
 
@@ -736,33 +969,36 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
                 }])
             }
             NSPlaceRoot::CarrierDerefLocal(local) => {
-                let suffix = path;
-                let mut out = FxHashSet::default();
-                let mut resolved = false;
-                for loan in state.loans_in(local) {
-                    resolved = true;
-                    for target in &self.loans[loan.0 as usize].targets {
-                        out.insert(CanonPlace {
-                            root: target.root.clone(),
-                            proj: target.proj.concat(&suffix),
-                        });
-                    }
+                if let Some(targets) = self.deepest_held_projection_targets(state, local, &path) {
+                    return targets;
                 }
-                if !resolved
-                    && let Some(NormalizedBindingLowering::CarrierLocal { root, provider, .. }) =
-                        self.body.local(local).map(|local| &local.lowering)
-                {
-                    if let Some(provider) = provider {
-                        out.insert(CanonPlace {
-                            root: BorrowRoot::Provider(provider.clone()),
-                            proj: suffix.clone(),
-                        });
-                    } else if let Some(root) = root.and_then(|root| self.root_to_borrow_root(root))
-                    {
-                        out.insert(CanonPlace { root, proj: suffix });
-                    }
+                let Some(local_data) = self.body.local(local) else {
+                    return FxHashSet::default();
+                };
+                if let Some(snapshot_source) = local_data.snapshot_source_place() {
+                    let mut source = snapshot_source.clone();
+                    source.path = source.path.concat(&path);
+                    return self.canonicalize_place_targets(state, &source);
                 }
-                out
+                let NormalizedBindingLowering::CarrierLocal { root, provider, .. } =
+                    &local_data.lowering
+                else {
+                    return FxHashSet::default();
+                };
+                if let Some(provider) = provider {
+                    FxHashSet::from_iter([CanonPlace {
+                        root: BorrowRoot::Provider(provider.clone()),
+                        proj: path,
+                    }])
+                } else {
+                    root.and_then(|root| self.root_to_borrow_root(root))
+                        .into_iter()
+                        .map(|root| CanonPlace {
+                            root,
+                            proj: path.clone(),
+                        })
+                        .collect()
+                }
             }
         }
     }
@@ -812,17 +1048,16 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
 
     pub(super) fn loans_for_place(&self, state: &State, place: &NSPlace<'db>) -> FxHashSet<LoanId> {
         match place.root {
-            NSPlaceRoot::CarrierDerefLocal(local) => state.loans_in(local),
+            NSPlaceRoot::CarrierDerefLocal(local) => {
+                let path = self.materialize_constant_indices(&place.path);
+                let projection = self.layout_path(&path).unwrap_or_default();
+                state
+                    .deepest_held_loans_for_projection(local, &projection)
+                    .map(|(_, loans)| loans)
+                    .unwrap_or_default()
+            }
             NSPlaceRoot::Root(_) => FxHashSet::default(),
         }
-    }
-
-    pub(super) fn mut_loans_for_value(&self, state: &State, local: SLocalId) -> FxHashSet<LoanId> {
-        state
-            .loans_in(local)
-            .into_iter()
-            .filter(|loan| self.loans[loan.0 as usize].kind == BorrowKind::Mut)
-            .collect()
     }
 
     pub(super) fn mut_loans_for_value_targets(

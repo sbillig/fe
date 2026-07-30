@@ -146,6 +146,15 @@ impl<'db> NoEsc<'db> {
             let capture_origin = operand_origin(capture, origin);
             let mode_matches_plan = match capture_plan.construction {
                 ClosureCaptureConstruction::Copy => capture.mode != ReadMode::Move,
+                ClosureCaptureConstruction::Deferred => {
+                    return Err(self.internal_diag(
+                        capture_origin,
+                        format!(
+                            "closure capture {:?} retained deferred construction",
+                            capture_plan.binding
+                        ),
+                    ));
+                }
                 ClosureCaptureConstruction::Move => capture.mode == ReadMode::Move,
             };
             if !mode_matches_plan {

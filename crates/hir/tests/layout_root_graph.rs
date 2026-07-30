@@ -1686,7 +1686,7 @@ fn non_slot_default_holes_do_not_enter_the_layout_evidence_abi() {
         r#"
 struct Ordinary<const VALUE: u8 = _> {}
 
-fn pass<const VALUE: u8>(value: Ordinary<VALUE>) -> Ordinary<VALUE> {
+fn pass<const VALUE: u8>(value: own Ordinary<VALUE>) -> Ordinary<VALUE> {
     value
 }
 "#,

@@ -94,6 +94,58 @@ fn assert_layoutizes(name: &str, src: &str) {
 }
 
 #[test]
+fn layout_evidence_preserves_sparse_statement_identities_after_terminal_calls() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+fn probe(_ stop: bool) {
+    if stop {
+        panic()
+        let dead: u256 = 1
+        let _ = dead
+    }
+    let live: u256 = 2
+    let _ = live
+}
+"#,
+    );
+    let probe = find_func(&db, top_mod, "probe");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(probe)),
+    );
+    let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
+    let statement_ids = normalized
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .map(|statement| statement.id)
+        .collect::<Vec<_>>();
+    let statement_slots = statement_ids
+        .iter()
+        .map(|statement| statement.index() + 1)
+        .max()
+        .unwrap_or(0);
+    assert!(
+        statement_slots > statement_ids.len(),
+        "terminal-call normalization must leave a stable-identity gap: {statement_ids:?}",
+    );
+
+    let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
+    assert_eq!(evidence.statements.len(), statement_slots);
+    assert_eq!(
+        evidence.statements.iter().flatten().count(),
+        statement_ids.len()
+    );
+    assert!(
+        statement_ids
+            .iter()
+            .all(|statement| evidence.statement(*statement).is_some())
+    );
+}
+
+#[test]
 fn closure_capture_layout_outputs_cross_the_call_boundary() {
     parse_ok!(
         db,
@@ -150,6 +202,7 @@ fn root<const ROOT: u256>(map: StorageMap<u256, u256, ROOT>) -> u256 {
     let bindings = evidence
         .statements
         .iter()
+        .flatten()
         .flat_map(|statement| &statement.const_bindings)
         .collect::<Vec<_>>();
     let [binding] = bindings.as_slice() else {
@@ -225,6 +278,7 @@ fn first<const FIRST: u256, const SECOND: u256>(
     let bindings = evidence
         .statements
         .iter()
+        .flatten()
         .flat_map(|statement| &statement.const_bindings)
         .collect::<Vec<_>>();
     let [binding] = bindings.as_slice() else {
@@ -285,6 +339,7 @@ fn forward<const ROOT: u256>(value: Rooted<ROOT>) -> Rooted<ROOT> {
     let call = evidence
         .statements
         .iter()
+        .flatten()
         .find_map(|statement| statement.call.as_ref())
         .expect("missing call evidence");
     assert_eq!(call.args.len(), 2);
@@ -828,19 +883,19 @@ struct Holder<const ROOT: u256> {
     value: A<ROOT>,
 }
 
-fn forward_array<const ROOT: u256>(values: [A<ROOT>; 2]) -> [A<ROOT>; 2] {
+fn forward_array<const ROOT: u256>(values: own [A<ROOT>; 2]) -> [A<ROOT>; 2] {
     values
 }
 
-fn forward_nested<const ROOT: u256>(holder: Holder<ROOT>) -> Holder<ROOT> {
+fn forward_nested<const ROOT: u256>(holder: own Holder<ROOT>) -> Holder<ROOT> {
     holder
 }
 
-fn forward<const ROOT: u256>(value: A<ROOT>) -> A<ROOT> {
+fn forward<const ROOT: u256>(value: own A<ROOT>) -> A<ROOT> {
     value
 }
 
-fn forwarded<const ROOT: u256>(value: A<ROOT>) -> A<ROOT> {
+fn forwarded<const ROOT: u256>(value: own A<ROOT>) -> A<ROOT> {
     forward(value)
 }
 
@@ -1164,7 +1219,7 @@ fn select<const ROOT: u256>(
     assert_eq!(evidence.output.runtime_descriptor_count(), 1);
     assert_eq!(evidence.terminators.len(), normalized.blocks.len());
     assert_eq!(
-        evidence.statements.len(),
+        evidence.statements.iter().flatten().count(),
         normalized
             .blocks
             .iter()
@@ -1174,6 +1229,7 @@ fn select<const ROOT: u256>(
     let (source, indices) = evidence
         .statements
         .iter()
+        .flatten()
         .flat_map(|stmt| stmt.assignments.iter())
         .find_map(|assignment| match &assignment.expr {
             LayoutEvidenceExpr::Project { source, indices } => Some((source, indices)),
@@ -1245,6 +1301,7 @@ pub contract C {
     let (source, indices) = evidence
         .statements
         .iter()
+        .flatten()
         .flat_map(|stmt| stmt.assignments.iter())
         .find_map(|assignment| match &assignment.expr {
             LayoutEvidenceExpr::Project {
@@ -1303,6 +1360,7 @@ fn read<const ROOT: u256>(
     let calls = evidence
         .statements
         .iter()
+        .flatten()
         .filter_map(|stmt| stmt.call.as_ref())
         .collect::<Vec<_>>();
     let family_call = calls
@@ -1313,6 +1371,7 @@ fn read<const ROOT: u256>(
     let assignments = evidence
         .statements
         .iter()
+        .flatten()
         .flat_map(|stmt| stmt.assignments.iter())
         .collect::<Vec<_>>();
     let forwarded = family_call
@@ -1346,6 +1405,7 @@ fn read<const ROOT: u256>(
         evidence
             .statements
             .iter()
+            .flatten()
             .flat_map(|stmt| stmt.assignments.iter())
             .any(|assignment| matches!(assignment.expr, LayoutEvidenceExpr::CallResult { .. }))
     );
@@ -1356,6 +1416,7 @@ fn read<const ROOT: u256>(
     let call = malformed
         .statements
         .iter_mut()
+        .flatten()
         .find_map(|statement| statement.call.as_mut().filter(|call| call.args.len() == 1))
         .expect("missing mutable family call");
     call.args = Box::new([]);
@@ -1382,11 +1443,11 @@ struct Mixed<const ROOT: u256> {
     dynamic: StorageMap<u256, u256, ROOT>,
 }
 
-fn pass<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
+fn pass<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
     value
 }
 
-fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
+fn forward<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
     pass(value: value)
 }
 "#,
@@ -1429,6 +1490,7 @@ fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
     let call = evidence
         .statements
         .iter()
+        .flatten()
         .find_map(|statement| statement.call.as_ref())
         .expect("missing call evidence");
     assert_eq!(call.args.len(), 1);
@@ -1511,6 +1573,7 @@ fn pass() -> Rooted<7> {
     let assignment = evidence
         .statements
         .iter()
+        .flatten()
         .inspect(|statement| assert!(statement.call.is_none()))
         .flat_map(|statement| &statement.assignments)
         .find(|assignment| {
@@ -1580,6 +1643,7 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
         evidence
             .statements
             .iter()
+            .flatten()
             .any(|statement| statement.call.is_some())
     );
     verify_layout_evidence_body(&db, &normalized, evidence).expect("evidence must verify");
@@ -1653,6 +1717,7 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
     malformed
         .statements
         .iter_mut()
+        .flatten()
         .find(|statement| statement.call.is_some())
         .expect("missing runtime evidence call")
         .call = None;
@@ -1691,7 +1756,7 @@ fn recursive_runtime_layout_calls_do_not_form_a_signature_cycle() {
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
-fn recurse<const ROOT: u256>(value: Rooted<ROOT>, depth: u256) -> Rooted<ROOT> {
+fn recurse<const ROOT: u256>(value: own Rooted<ROOT>, depth: u256) -> Rooted<ROOT> {
     if depth == 0 {
         return value
     }
@@ -1707,6 +1772,60 @@ fn recurse<const ROOT: u256>(value: Rooted<ROOT>, depth: u256) -> Rooted<ROOT> {
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     verify_layout_evidence_runtime_compatibility(&db, &normalized, evidence)
         .expect("recursive call evidence must match the runtime body");
+}
+
+#[test]
+fn recursive_owned_layout_carriers_do_not_cycle_never_return_analysis() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use std::evm::StorageMap
+
+struct Wrapped {
+    maps: [StorageMap<u256, u256>; 2],
+}
+
+fn recurse(value: own Wrapped, depth: u256) -> Wrapped {
+    if depth == 0 {
+        return value
+    }
+    recurse(value, depth: depth - 1)
+}
+
+msg M {
+    #[selector = 1]
+    Get { depth: u256 } -> u256,
+}
+
+contract C {
+    wrapped: Wrapped,
+
+    recv M {
+        Get { depth } -> u256 uses (wrapped) {
+            recurse(wrapped, depth).maps[0].get(key: 0)
+        }
+    }
+}
+"#,
+    );
+    let recurse = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "recurse"))),
+    );
+    assert!(!recurse.known_never_returns(&db));
+    let recv = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(
+            &db,
+            BodyOwner::ContractRecvArm {
+                contract: find_contract(&db, top_mod, "C"),
+                recv_idx: 0,
+                arm_idx: 0,
+            },
+        ),
+    );
+    normalize_semantic_body(&db, recv).expect("normalization must not form a query cycle");
 }
 
 #[test]
@@ -2076,6 +2195,7 @@ fn branch<const ROOT: u256>(
     let (branch_local, branch_index) = evidence
         .statements
         .iter()
+        .flatten()
         .flat_map(|statement| &statement.assignments)
         .find_map(|assignment| match &assignment.expr {
             LayoutEvidenceExpr::Project { indices, .. } => indices.iter().find_map(|index| {
@@ -2111,6 +2231,8 @@ fn branch<const ROOT: u256>(
 
     let mut malformed = (*evidence).clone();
     malformed.statements[call_id.index()]
+        .as_mut()
+        .expect("statement")
         .call
         .as_mut()
         .expect("missing post-merge layout call")
@@ -2127,6 +2249,8 @@ fn branch<const ROOT: u256>(
 
     let mut malformed = (*evidence).clone();
     malformed.statements[call_id.index()]
+        .as_mut()
+        .expect("statement")
         .call
         .as_mut()
         .expect("missing post-merge layout call")
@@ -2241,6 +2365,8 @@ fn replace<const ROOT: usize>(
     let mut malformed = (*evidence).clone();
     let statement_id = normalized.blocks[block_idx].stmts[statement_idx].id;
     let index = malformed.statements[statement_id.index()]
+        .as_mut()
+        .expect("statement")
         .call
         .as_mut()
         .and_then(|call| {
@@ -2283,13 +2409,13 @@ struct Pair<const LEFT: u256 = _, const RIGHT: u256 = _> {
 }
 
 fn pass<const LEFT: u256, const RIGHT: u256>(
-    value: Pair<LEFT, RIGHT>,
+    value: own Pair<LEFT, RIGHT>,
 ) -> Pair<LEFT, RIGHT> {
     value
 }
 
 fn caller<const LEFT: u256, const RIGHT: u256>(
-    value: Pair<LEFT, RIGHT>,
+    value: own Pair<LEFT, RIGHT>,
 ) -> Pair<LEFT, RIGHT> {
     pass(value: value)
 }
@@ -2323,6 +2449,7 @@ fn caller<const LEFT: u256, const RIGHT: u256>(
     let assignments = malformed
         .statements
         .iter_mut()
+        .flatten()
         .find_map(|statement| {
             statement
                 .call
@@ -2401,6 +2528,7 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
     let arg = malformed
         .statements
         .iter_mut()
+        .flatten()
         .find_map(|statement| statement.call.as_mut())
         .and_then(|call| call.args.first_mut())
         .expect("missing layout call argument");
@@ -2414,6 +2542,7 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
     let arg = malformed
         .statements
         .iter_mut()
+        .flatten()
         .find_map(|statement| statement.call.as_mut())
         .and_then(|call| call.args.first_mut())
         .expect("missing layout call argument");
@@ -2440,6 +2569,7 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
     let index = malformed
         .statements
         .iter_mut()
+        .flatten()
         .flat_map(|statement| &mut statement.assignments)
         .find_map(|assignment| match &mut assignment.expr {
             LayoutEvidenceExpr::Project { indices, .. } => indices.first_mut(),
@@ -2505,6 +2635,7 @@ fn repeat<const ROOT: u256>(value: Rooted<ROOT>) -> [Rooted<ROOT>; 2] {
         repeat
             .statements
             .iter()
+            .flatten()
             .flat_map(|stmt| stmt.assignments.iter())
             .any(|assignment| matches!(
                 &assignment.expr,
@@ -2642,6 +2773,7 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
         evidence
             .statements
             .iter()
+            .flatten()
             .flat_map(|statement| &statement.assignments)
             .any(|assignment| matches!(
                 assignment.expr,
@@ -2894,6 +3026,7 @@ fn reorder<const ROOT: u256>(
             evidence
                 .statements
                 .iter()
+                .flatten()
                 .flat_map(|statement| &statement.assignments)
                 .any(|assignment| matches!(
                     &assignment.expr,
@@ -2931,6 +3064,7 @@ fn replace<const ROOT: u256>(
         evidence
             .statements
             .iter()
+            .flatten()
             .flat_map(|statement| &statement.assignments)
             .any(|assignment| matches!(
                 &assignment.expr,
@@ -2999,11 +3133,11 @@ enum MapChoice {
 }
 
 impl MapChoice {
-    fn identity(self) -> Self {
+    fn identity(own self) -> Self {
         self
     }
 
-    fn expand(mut self) {
+    fn expand(mut own self) {
         match self {
             MapChoice::Scalar(map) => self = MapChoice::Family([map, map, map]),
             MapChoice::Family(_) => {}
@@ -3131,6 +3265,7 @@ fn specialized_array_enum_leaf_methods_bind_runtime_layout_consts() {
                 evidence
                     .statements
                     .iter()
+                    .flatten()
                     .any(|statement| !statement.const_bindings.is_empty()),
                 "specialized Slot::root must bind ROOT from receiver evidence: {evidence:#?}",
             );

@@ -14,7 +14,7 @@ use crate::analysis::{
 };
 
 use super::{
-    canon::{CanonPlace, State, address_space_for_borrow_root},
+    canon::{CanonPlace, State, address_space_for_borrow_root, address_space_rank},
     check::Borrowck,
     diagnostics::operand_origin,
     ir::{
@@ -179,15 +179,5 @@ impl<'db> CallSiteProviderRefiner<'db> {
             NEffectArgValue::Value(value) => operand_origin(value, fallback),
             NEffectArgValue::Place(_) => fallback,
         }
-    }
-}
-
-fn address_space_rank(space: ProviderAddressSpace) -> u8 {
-    match space {
-        ProviderAddressSpace::Memory => 0,
-        ProviderAddressSpace::Storage => 1,
-        ProviderAddressSpace::Transient => 2,
-        ProviderAddressSpace::Calldata => 3,
-        ProviderAddressSpace::Code => 4,
     }
 }

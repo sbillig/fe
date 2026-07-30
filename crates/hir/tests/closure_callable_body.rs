@@ -1,20 +1,25 @@
 use camino::Utf8PathBuf;
+use common::indexmap::IndexMap;
 use fe_hir::{
     analysis::{
         semantic::{
-            NormalizedBodyFacts, SCallReturnProjectionStep, SExpr, SStmtKind,
-            get_or_build_semantic_instance, identity_semantic_instance_key,
-            normalize_semantic_body,
+            NBorrowRoot, NSPlaceRoot, NSStmtKind, NormalizedBindingLowering, NormalizedBodyFacts,
+            SCallReturnProjectionStep, SExpr, SStmtKind, get_or_build_semantic_instance,
+            identity_semantic_instance_key, normalize_semantic_body,
         },
         ty::{
             closure::implemented_closure_call_trait,
             const_ty::CallableInputLayoutHoleOrigin,
             corelib::resolve_core_trait,
+            trait_def::TraitInstId,
+            trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
             ty_check::{
-                BodyOwner, ClosureCaptureAccess, ReturnIndexSource, ReturnProjectionStep,
-                ReturnProvenance, ReturnSource, TypedCallableBody, check_func_body,
+                BodyOwner, ClosureCaptureAccess, LocalBinding, ParamSite, ReturnIndexSource,
+                ReturnProjectionStep, ReturnProvenance, ReturnSource, TypedCallableBody,
+                check_func_body,
             },
-            ty_def::ClosureCallMode,
+            ty_def::{ClosureCallMode, TyId},
+            ty_is_copy,
         },
     },
     hir_def::{Func, ItemKind, TopLevelMod},
@@ -38,6 +43,92 @@ fn find_func<'db>(db: &'db HirAnalysisTestDb, top_mod: TopLevelMod<'db>, name: &
             _ => None,
         })
         .unwrap_or_else(|| panic!("missing function `{name}`"))
+}
+
+#[test]
+fn unpacked_mut_closure_param_retains_binding_and_lowers_writes_as_stores() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("unpacked_mut_closure_param.fe"),
+        r#"
+fn probe() {
+    let write = |target: mut| {
+        target = 42
+    }
+    let mut value: u256 = 0
+    write.call(mut value)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let probe = find_func(&db, top_mod, "probe");
+    let probe = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(probe)),
+    );
+    let closure = probe
+        .callees(&db)
+        .iter()
+        .find_map(|callee| {
+            matches!(callee.key.owner(&db), BodyOwner::Closure { .. })
+                .then(|| get_or_build_semantic_instance(&db, callee.key))
+        })
+        .expect("specialized closure instance");
+    let normalized = normalize_semantic_body(&db, closure).expect("normalized closure body");
+    let (local_id, local) = normalized
+        .locals
+        .iter()
+        .enumerate()
+        .find(|(_, local)| {
+            matches!(
+                local.source,
+                Some(LocalBinding::Param {
+                    site: ParamSite::Closure(_),
+                    idx: 0,
+                    ..
+                })
+            )
+        })
+        .map(|(idx, local)| {
+            (
+                fe_hir::analysis::semantic::SLocalId::from_u32(idx as u32),
+                local,
+            )
+        })
+        .expect("unpacked logical closure parameter");
+    let NormalizedBindingLowering::CarrierLocal {
+        root: Some(root), ..
+    } = local.lowering
+    else {
+        panic!("mut closure parameter must be a rooted carrier: {local:?}");
+    };
+    assert!(
+        matches!(
+            normalized.root(root),
+            Some(NBorrowRoot::LocalSlot { local }) if *local == local_id
+        ),
+        "an unpacked logical parameter is not a physical ABI parameter",
+    );
+    assert!(
+        normalized.blocks.iter().any(|block| {
+            block.stmts.iter().any(|stmt| {
+                matches!(
+                    &stmt.kind,
+                    NSStmtKind::Store {
+                        dst:
+                            fe_hir::analysis::semantic::NSPlace {
+                                root: NSPlaceRoot::CarrierDerefLocal(local),
+                                ..
+                            },
+                        ..
+                    } if *local == local_id
+                )
+            })
+        }),
+        "assignment through a mut closure parameter must lower as a store",
+    );
 }
 
 fn source(
@@ -175,6 +266,338 @@ fn make() {
 }
 
 #[test]
+fn nested_copy_capture_resolves_reusable_after_outer_parameter_inference() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("nested_inferred_copy_capture.fe"),
+        r#"
+fn probe() -> u256 {
+    let make = |value: own| {
+        let get = || value
+        get
+    }
+    let get = make.call_once(21 as u256)
+    get.call() + get.call()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let probe = find_func(&db, top_mod, "probe");
+    let (_, typed_body) = check_func_body(&db, probe);
+    let call_modes = typed_body
+        .closure_infos()
+        .map(|(_, info)| info.ty.call_mode(&db))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        call_modes,
+        vec![ClosureCallMode::Reusable, ClosureCallMode::Reusable]
+    );
+}
+
+#[test]
+fn nested_copy_capture_call_waits_for_outer_parameter_inference() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("nested_deferred_copy_capture_call.fe"),
+        r#"
+fn probe() -> u256 {
+    let make = |value: own| {
+        let get = || value
+        get.call() + get.call()
+    }
+    make.call_once(21 as u256)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let probe = find_func(&db, top_mod, "probe");
+    let (_, typed_body) = check_func_body(&db, probe);
+    assert!(
+        typed_body
+            .closure_infos()
+            .all(|(_, info)| info.ty.call_mode(&db) == ClosureCallMode::Reusable)
+    );
+}
+
+#[test]
+fn nested_copy_pattern_capture_resolves_reusable_after_outer_inference() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("nested_inferred_copy_pattern_capture.fe"),
+        r#"
+fn probe() -> u256 {
+    let make = |pair: own| {
+        let get = || {
+            let (value,) = pair
+            value
+        }
+        get
+    }
+    let get = make.call_once((21 as u256,))
+    get.call() + get.call()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let probe = find_func(&db, top_mod, "probe");
+    let (_, typed_body) = check_func_body(&db, probe);
+    assert!(
+        typed_body
+            .closure_infos()
+            .all(|(_, info)| info.ty.call_mode(&db) == ClosureCallMode::Reusable)
+    );
+}
+
+#[test]
+fn inferred_copy_construction_propagates_reusability_through_nested_closures() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("nested_inferred_copy_capture_propagation.fe"),
+        r#"
+fn probe() -> u256 {
+    let make = |value: own| {
+        let outer = || {
+            let inner = || value
+            inner
+        }
+        outer
+    }
+    let outer = make.call_once(21 as u256)
+    let left = outer.call()
+    let right = outer.call()
+    left.call() + right.call()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let probe = find_func(&db, top_mod, "probe");
+    let (_, typed_body) = check_func_body(&db, probe);
+    assert!(
+        typed_body
+            .closure_infos()
+            .all(|(_, info)| info.ty.call_mode(&db) == ClosureCallMode::Reusable)
+    );
+}
+
+#[test]
+fn nested_inferred_copy_capture_fn_obligation_waits_for_outer_inference() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("nested_inferred_copy_capture_fn_bound.fe"),
+        r#"
+use core::functional::Fn
+
+fn invoke<T, F: Fn<(), T>>(_ function: F) -> T {
+    function.call()
+}
+
+fn probe() -> u256 {
+    let make = |value: own| {
+        let get = || value
+        invoke(get)
+    }
+    make.call_once(42 as u256)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn nested_inferred_noncopy_capture_does_not_satisfy_fn_obligation() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("nested_inferred_noncopy_capture_fn_bound.fe"),
+        r#"
+use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+fn invoke<T, F: Fn<(), T>>(_ function: F) -> T {
+    function.call()
+}
+
+fn probe() -> Boxed {
+    let make = |value: own| {
+        let take = || value
+        invoke(take)
+    }
+    make.call_once(Boxed { value: 42 })
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let rendered = format_diagnostics(&db, &db.run_on_top_mod(top_mod));
+    assert!(
+        rendered.contains("trait bound is not satisfied") && rendered.contains("Fn"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn concrete_specialization_does_not_reclassify_an_unbounded_generic_capture() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("generic_capture_specialization.fe"),
+        r#"
+fn generic<T>(_ value: own T) -> T {
+    let take = || value
+    take.call()
+}
+
+fn probe() -> u256 {
+    generic(42 as u256)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let rendered = format_diagnostics(&db, &db.run_on_top_mod(top_mod));
+    assert!(
+        rendered.contains("no method named `call` found"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn copy_bound_makes_a_generic_capture_reusable() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("copy_bound_generic_capture.fe"),
+        r#"
+fn generic<T: Copy>(_ value: own T) -> T {
+    let read = || value
+    read.call()
+    read.call()
+}
+
+fn probe() -> u256 {
+    generic(42 as u256)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let generic = find_func(&db, top_mod, "generic");
+    let (_, typed_body) = check_func_body(&db, generic);
+    assert!(
+        typed_body
+            .closure_infos()
+            .all(|(_, info)| info.ty.call_mode(&db) == ClosureCallMode::Reusable)
+    );
+}
+
+#[test]
+fn nested_inferred_noncopy_capture_remains_consuming() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("nested_inferred_noncopy_capture.fe"),
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() -> u256 {
+    let make = |value: own| {
+        let take = || value
+        take
+    }
+    let take = make.call_once(Boxed { value: 42 })
+    take.call_once().value
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let probe = find_func(&db, top_mod, "probe");
+    let (_, typed_body) = check_func_body(&db, probe);
+    assert_eq!(
+        typed_body
+            .closure_infos()
+            .filter(|(_, info)| !info.ty.captures(&db).is_empty())
+            .map(|(_, info)| info.ty.call_mode(&db))
+            .collect::<Vec<_>>(),
+        vec![ClosureCallMode::Consuming]
+    );
+}
+
+#[test]
+fn closure_copyability_is_structural_over_capture_types() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_copy_capture.fe"),
+        r#"
+fn probe() -> u256 {
+    let offset = 1
+    let add = |value: own u256| value + offset
+    let copied = add
+
+    let forty_two = || 42 as u256
+    let copied_empty = forty_two
+
+    add.call(20) + copied.call(20) + forty_two.call() + copied_empty.call() - 84
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    let probe = find_func(&db, top_mod, "probe");
+    let (_, typed_body) = check_func_body(&db, probe);
+    assert!(
+        typed_body.closure_infos().all(|(_, info)| ty_is_copy(
+            &db,
+            probe.scope(),
+            TyId::closure(&db, info.ty),
+            typed_body.assumptions(),
+        )),
+        "empty closures and closures with only Copy captures must be Copy"
+    );
+
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_noncopy_capture.fe"),
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() {
+    let boxed = Boxed { value: 42 }
+    let read = || boxed.value
+    let moved = read
+    read.call()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    let probe = find_func(&db, top_mod, "probe");
+    let (_, typed_body) = check_func_body(&db, probe);
+    let closure = typed_body
+        .closure_infos()
+        .next()
+        .expect("non-Copy capture closure")
+        .1;
+    assert!(!ty_is_copy(
+        &db,
+        probe.scope(),
+        TyId::closure(&db, closure.ty),
+        typed_body.assumptions(),
+    ));
+}
+
+#[test]
 fn discarded_noncopy_capture_makes_closure_consuming() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -231,10 +654,109 @@ fn make() {
         let trait_ = resolve_core_trait(&db, func.scope(), &["functional", trait_name])
             .unwrap_or_else(|| panic!("missing core `{trait_name}` trait"));
         assert!(
-            implemented_closure_call_trait(&db, func.scope(), closure, trait_).is_some(),
+            implemented_closure_call_trait(
+                &db,
+                func.scope(),
+                typed_body.assumptions(),
+                closure,
+                trait_,
+            )
+            .is_some(),
             "reusable borrow-parameter closure must implement `{trait_name}`",
         );
     }
+}
+
+#[test]
+fn table_solver_enforces_closure_call_capabilities_and_signature() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_table_solver.fe"),
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn make() {
+    let read_box = Boxed { value: 1 }
+    let take_box = Boxed { value: 2 }
+    let reusable = || -> u256 { read_box.value }
+    let consuming = || -> Boxed { take_box }
+    let unary = |value: own u256| -> u256 { value }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = find_func(&db, top_mod, "make");
+    let (_, typed_body) = check_func_body(&db, func);
+    let closures = typed_body
+        .closure_infos()
+        .map(|(_, info)| info.ty)
+        .collect::<Vec<_>>();
+    let reusable = closures
+        .iter()
+        .copied()
+        .find(|closure| {
+            closure.call_mode(&db) == ClosureCallMode::Reusable && closure.params(&db).is_empty()
+        })
+        .expect("reusable closure");
+    let consuming = closures
+        .iter()
+        .copied()
+        .find(|closure| closure.call_mode(&db) == ClosureCallMode::Consuming)
+        .expect("consuming closure");
+    let unary = closures
+        .iter()
+        .copied()
+        .find(|closure| closure.params(&db).len() == 1)
+        .expect("unary closure");
+    let assumptions = typed_body.assumptions();
+    let solve_cx = TraitSolveCx::new(&db, func.scope()).with_assumptions(assumptions);
+
+    let solve = |closure, trait_name, args, ret| {
+        let trait_ = resolve_core_trait(&db, func.scope(), &["functional", trait_name])
+            .unwrap_or_else(|| panic!("missing core `{trait_name}` trait"));
+        let goal = TraitInstId::new(
+            &db,
+            trait_,
+            vec![TyId::closure(&db, closure), args, ret],
+            IndexMap::new(),
+        );
+        is_goal_satisfiable(&db, solve_cx, goal)
+    };
+
+    for (closure, trait_name, expected) in [
+        (reusable, "Fn", true),
+        (reusable, "FnOnce", true),
+        (consuming, "Fn", false),
+        (consuming, "FnOnce", true),
+    ] {
+        let result = solve(
+            closure,
+            trait_name,
+            closure.args_pack_ty(&db),
+            closure.ret_ty(&db),
+        );
+        assert_eq!(
+            matches!(result, GoalSatisfiability::Satisfied(_)),
+            expected,
+            "unexpected solver result for {trait_name}: {result:?}",
+        );
+    }
+
+    assert!(matches!(
+        solve(
+            reusable,
+            "Fn",
+            unary.args_pack_ty(&db),
+            reusable.ret_ty(&db),
+        ),
+        GoalSatisfiability::UnSat(_)
+    ));
+    assert!(matches!(
+        solve(reusable, "Fn", reusable.args_pack_ty(&db), TyId::bool(&db),),
+        GoalSatisfiability::UnSat(_)
+    ));
 }
 
 #[test]
@@ -297,6 +819,326 @@ fn probe() {
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn contextual_closure_inference_handles_methods_and_view_callable_params() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_method_context.fe"),
+        r#"
+use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+struct Apply {}
+
+impl Apply {
+    fn call_with<T, F: Fn<(view T,), u256>>(
+        self,
+        _ value: own T,
+        _ function: view F,
+    ) -> u256 {
+        function.call(value)
+    }
+}
+
+fn probe() -> u256 {
+    Apply {}.call_with(Boxed { value: 42 }, |value| value.value)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn contextual_closure_inference_flows_through_tuple_arguments() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_tuple_context.fe"),
+        r#"
+use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+fn apply_wrapped<F: Fn<(Boxed,), u256>>(_ wrapped: own (F,)) -> u256 {
+    wrapped.0.call(Boxed { value: 42 })
+}
+
+fn probe() -> u256 {
+    apply_wrapped((|value: own| value.value,))
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn contextual_closure_inference_flows_through_struct_arguments() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_struct_context.fe"),
+        r#"
+use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+struct Wrapped<F> {
+    function: F,
+}
+
+fn apply_wrapped<F: Fn<(Boxed,), u256>>(_ wrapped: own Wrapped<F>) -> u256 {
+    wrapped.function.call(Boxed { value: 42 })
+}
+
+fn probe() -> u256 {
+    apply_wrapped(Wrapped { function: |value: own| value.value })
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn contextual_closure_inference_flows_through_array_arguments() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_array_context.fe"),
+        r#"
+use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+fn apply_wrapped<F: Fn<(Boxed,), u256>>(_ functions: own [F; 1]) -> u256 {
+    functions[0].call(Boxed { value: 42 })
+}
+
+fn probe() -> u256 {
+    apply_wrapped([|value: own| value.value])
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn contextual_closure_inference_flows_through_enum_arguments() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_enum_context.fe"),
+        r#"
+use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+enum Wrapped<F> {
+    Function(F),
+    Empty,
+}
+
+fn apply_wrapped<F: Fn<(Boxed,), u256>>(_ wrapped: own Wrapped<F>) -> u256 {
+    match wrapped {
+        Wrapped::Function(function) => function.call(Boxed { value: 42 }),
+        Wrapped::Empty => 0,
+    }
+}
+
+fn probe() -> u256 {
+    apply_wrapped(Wrapped::Function(|value: own| value.value))
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn contextual_closure_inference_flows_through_block_arguments() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_block_context.fe"),
+        r#"
+use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+fn apply<F: Fn<(Boxed,), u256>>(_ function: F) -> u256 {
+    function.call(Boxed { value: 42 })
+}
+
+fn probe() -> u256 {
+    apply({
+        |value: own| value.value
+    })
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn inferred_mut_closure_parameter_fields_are_assignable_after_call_resolution() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_inferred_mut_field_assignment.fe"),
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() {
+    let mut boxed = Boxed { value: 0 }
+    let set = |target: mut| {
+        target.value = 42
+    }
+    set.call(mut boxed)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn inferred_owned_closure_parameter_fields_can_be_borrowed_after_call_resolution() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_inferred_owned_field_borrow.fe"),
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() {
+    let borrow = |boxed: own| -> ref u256 { ref boxed.value }
+    let returned = borrow.call_once(Boxed { value: 42 })
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn deferred_closure_place_checks_use_resolved_capability_mutability() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_deferred_place_capabilities.fe"),
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct MutHolder {
+    value: mut u256,
+}
+
+fn probe() {
+    let mut boxed = Boxed { value: 0 }
+    let borrow = |target: mut| -> mut u256 { mut target.value }
+    let returned = borrow.call(mut boxed)
+    returned = 42
+
+    let mut value = 0
+    let holder = MutHolder { value: mut value }
+    let set = |target| {
+        target.value = 42
+    }
+    set.call(holder)
+
+    let mut array_value = 0
+    let handles: [mut u256; 1] = [mut array_value]
+    let set_index = |items| {
+        items[0] = 42
+    }
+    set_index.call(handles)
+
+    let mut borrowed_value = 0
+    let borrowed_handles: [mut u256; 1] = [mut borrowed_value]
+    let borrow_index = |items| -> mut u256 { mut items[0] }
+    let returned = borrow_index.call(borrowed_handles)
+    returned = 42
+
+    let mut incremented_value = 41
+    let incremented_handles: [mut u256; 1] = [mut incremented_value]
+    let increment_index = |items| {
+        items[0] += 1
+    }
+    increment_index.call(incremented_handles)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_deferred_immutable_places.fe"),
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct RefHolder {
+    value: ref u256,
+}
+
+fn probe() {
+    let set_owned = |target: own| {
+        target.value = 42
+    }
+    set_owned.call_once(Boxed { value: 0 })
+
+    let value = 0
+    let mut holder = RefHolder { value: ref value }
+    let set_ref = |target: mut| {
+        target.value = 42
+    }
+    set_ref.call(mut holder)
+
+    let array_value = 0
+    let mut handles: [ref u256; 1] = [ref array_value]
+    let set_index_ref = |items: mut| {
+        items[0] = 42
+    }
+    set_index_ref.call(mut handles)
+
+    let borrowed_array_value = 0
+    let mut borrowed_handles: [ref u256; 1] = [ref borrowed_array_value]
+    let borrow_index_ref = |items: mut| -> mut u256 { mut items[0] }
+    let returned = borrow_index_ref.call(mut borrowed_handles)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let rendered = format_diagnostics(&db, &db.run_on_top_mod(top_mod));
+    assert_eq!(
+        rendered
+            .matches("left-hand side of assignment is immutable")
+            .count(),
+        3,
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("mutable borrow requires a mutable place"),
+        "{rendered}"
+    );
 }
 
 #[test]
@@ -404,6 +1246,8 @@ fn probe() -> u256 {
     let sum = |pair: Pair| -> u256 { pair.left.value + pair.right.value }
     let sum_independent =
         |pair: Independent| -> u256 { pair.left.value + pair.right.value }
+    let sum_separate =
+        |left: Rooted, right: Rooted| -> u256 { left.value + right.value }
     let rooted = Rooted<5> { value: 4 }
     let mut mutable = Rooted<6> { value: 5 }
     read.call(Rooted<7> { value: 2 })
@@ -419,6 +1263,10 @@ fn probe() -> u256 {
             left: Rooted<11> { value: 6 },
             right: Rooted<12> { value: 7 },
         })
+        + sum_separate.call(
+            Rooted<13> { value: 6 },
+            Rooted<14> { value: 7 },
+        )
         + apply_concrete(|value: Rooted| value.value)
 }
 "#,
@@ -476,6 +1324,56 @@ fn probe() {
     let (top_mod, _) = db.top_mod(file);
     let rendered = format_diagnostics(&db, &db.run_on_top_mod(top_mod));
     assert!(rendered.contains("inferred const generic"), "{rendered}");
+}
+
+#[test]
+fn inferred_closure_parameter_types_are_monomorphic_across_calls() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_payload_monomorphism.fe"),
+        r#"
+fn probe() {
+    let identity = |value| value
+    identity.call(42 as u256)
+    identity.call(true)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let rendered = format_diagnostics(&db, &db.run_on_top_mod(top_mod));
+    assert!(rendered.contains("type mismatch"), "{rendered}");
+    assert!(rendered.contains("bool"), "{rendered}");
+    assert!(rendered.contains("u256"), "{rendered}");
+}
+
+#[test]
+fn closure_return_type_is_inferred_from_only_explicit_returns() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_explicit_return_inference.fe"),
+        r#"
+fn probe() -> u256 {
+    let choose = |flag| {
+        if flag {
+            return 20 as u256
+        }
+        return 22 as u256
+    }
+    choose.call(true)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let func = find_func(&db, top_mod, "probe");
+    let (_, typed_body) = check_func_body(&db, func);
+    let closure = typed_body
+        .closure_infos()
+        .next()
+        .expect("missing closure")
+        .1;
+    assert_eq!(closure.ty.ret_ty(&db), TyId::u256(&db));
 }
 
 #[test]
@@ -747,8 +1645,132 @@ pub fn invoke() {
             .map(|capture| capture.ty)
             .collect::<Vec<_>>()
             .as_slice(),
-        closure.captures(&db).as_slice(),
+        closure.captures(&db),
     );
+}
+
+#[test]
+fn typed_closure_descriptor_preserves_param_and_capture_field_order() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_descriptor_field_order.fe"),
+        r#"
+struct Left {
+    value: u256,
+}
+
+struct Right {
+    value: u256,
+}
+
+fn make(_ first: own Left, _ second: own Right) {
+    let ordered = |alpha: own u256, beta: own u256| -> u256 {
+        second.value + first.value + alpha + beta
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let func = find_func(&db, top_mod, "make");
+    let (_, typed_body) = check_func_body(&db, func);
+    let (_, info) = typed_body
+        .closure_infos()
+        .next()
+        .expect("missing closure metadata");
+    let callable = TypedCallableBody::new(BodyOwner::closure(&db, info.ty), typed_body);
+    let (closure_body, receiver_mode) = callable
+        .owner_closure_body(&db)
+        .expect("closure metadata must form a coherent descriptor");
+
+    assert_eq!(closure_body.ty(), info.ty);
+    assert_eq!(
+        closure_body.param_bindings().len(),
+        info.ty.params(&db).len()
+    );
+    for (idx, binding) in closure_body.param_bindings().iter().enumerate() {
+        assert!(matches!(
+            binding,
+            LocalBinding::Param {
+                site: ParamSite::Closure(def),
+                idx: binding_idx,
+                ..
+            } if *def == info.def && *binding_idx == idx
+        ));
+    }
+
+    let captures = closure_body.captures(&db).collect::<Vec<_>>();
+    assert_eq!(captures.len(), info.ty.captures(&db).len());
+    assert_eq!(
+        captures
+            .iter()
+            .map(|capture| capture.binding)
+            .collect::<Vec<_>>(),
+        info.captures
+            .iter()
+            .map(|capture| capture.binding)
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        captures
+            .iter()
+            .map(|capture| capture.ty)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        info.ty.captures(&db),
+    );
+    assert_eq!(
+        captures
+            .iter()
+            .map(|capture| capture.access)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        info.ty.capture_accesses(&db),
+    );
+
+    let physical_params = closure_body.physical_param_bindings(&db, receiver_mode);
+    assert!(matches!(
+        physical_params,
+        [
+            LocalBinding::Param {
+                site: ParamSite::ClosureEnv(env_def),
+                ..
+            },
+            LocalBinding::Param {
+                site: ParamSite::ClosureArgs(args_def),
+                ..
+            }
+        ] if env_def == info.def && args_def == info.def
+    ));
+
+    let closure = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::closure(&db, info.ty)),
+    );
+    let semantic_body = closure.body(&db);
+    for (expected_field, binding) in closure_body.param_bindings().iter().copied().enumerate() {
+        let local = semantic_body
+            .locals
+            .iter()
+            .enumerate()
+            .find_map(|(idx, local)| {
+                (local.source == Some(binding))
+                    .then_some(fe_hir::analysis::semantic::SLocalId::from_u32(idx as u32))
+            })
+            .expect("logical closure parameter local");
+        assert!(semantic_body.blocks.iter().any(|block| {
+            block.stmts.iter().any(|stmt| {
+                matches!(
+                    &stmt.kind,
+                    SStmtKind::Assign {
+                        dst,
+                        expr: SExpr::Field { field, .. },
+                    } if *dst == local && usize::from(field.0) == expected_field
+                )
+            })
+        }));
+    }
 }
 
 #[test]
@@ -989,5 +2011,34 @@ fn invoke(_ values: own [Boxed; 2], _ index: own usize) -> Boxed {
             .local_dependency_uses(call_result)
             .contains(&index_local),
         "return slicing and carrier invalidation must retain layout-only dependencies",
+    );
+}
+
+#[test]
+fn closure_loop_control_cannot_target_an_enclosing_loop() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_loop_control_boundary.fe"),
+        r#"
+fn probe() {
+    while true {
+        let bad_break = || { break }
+        let bad_continue = || { continue }
+        let valid = || {
+            while true {
+                break
+            }
+        }
+        break
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let rendered = format_diagnostics(&db, &db.run_on_top_mod(top_mod));
+    assert_eq!(
+        rendered.matches("is not allowed outside of a loop").count(),
+        2,
+        "{rendered}"
     );
 }

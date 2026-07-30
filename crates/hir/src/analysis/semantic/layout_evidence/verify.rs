@@ -579,11 +579,9 @@ fn verify_statement_id_set(
         .iter()
         .map(|block| block.stmts.len())
         .sum();
-    if body.statements.len() != expected {
-        return Err(LayoutEvidenceVerifyError::StatementCount {
-            expected,
-            actual: body.statements.len(),
-        });
+    let actual = body.statements.iter().flatten().count();
+    if actual != expected {
+        return Err(LayoutEvidenceVerifyError::StatementCount { expected, actual });
     }
     let mut seen = FxHashSet::default();
     for (block, normalized_block) in normalized.blocks.iter().enumerate() {

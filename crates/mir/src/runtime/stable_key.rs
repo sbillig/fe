@@ -6,10 +6,10 @@ use hir::{
         ty::{
             trait_def::TraitInstId,
             ty_check::{
-                BodyOwner, EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
-                LocalBinding,
+                BodyOwner, ClosureReceiverMode, EffectParamSite, EffectProviderProvenance,
+                EffectProviderSpecialization, LocalBinding,
             },
-            ty_def::{TyBase, TyData, TyId},
+            ty_def::{ClosureTy, TyBase, TyData, TyId},
         },
     },
     hir_def::{CallableDef, ExprId, ItemKind, PatId, TopLevelMod, scope_graph::ScopeId},
@@ -39,6 +39,18 @@ pub fn semantic_instance_symbol_identity<'db>(
     semantic: SemanticInstance<'db>,
 ) -> String {
     semantic_instance_identity_in_mode(db, semantic, IdentityMode::Symbol)
+}
+
+pub fn closure_symbol_base<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: ClosureTy<'db>,
+    receiver_mode: ClosureReceiverMode,
+) -> String {
+    format!(
+        "__closure_{}_{}",
+        stable_identity_hash(&type_identity(db, TyId::closure(db, ty))),
+        receiver_mode.as_str()
+    )
 }
 
 pub fn semantic_instance_identity_in_mode<'db>(

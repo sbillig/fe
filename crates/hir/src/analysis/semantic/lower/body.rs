@@ -314,13 +314,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     fn collect_binding_locals(&mut self) {
-        if let BodyOwner::Closure { def, .. } = self.template_owner {
-            for binding in self
-                .instance
-                .key(self.db)
-                .callable_body(self.db)
-                .param_bindings(self.db)
-            {
+        if matches!(self.template_owner, BodyOwner::Closure { .. }) {
+            let callable_body = self.instance.key(self.db).callable_body(self.db);
+            let (closure_body, receiver_mode) = callable_body
+                .owner_closure_body(self.db)
+                .expect("closure body must have coherent typed metadata");
+            for binding in closure_body.physical_param_bindings(self.db, receiver_mode) {
                 let local = self.alloc_entry_binding_local(binding);
                 if let LocalBinding::Param {
                     site: ParamSite::ClosureEnv(_),
@@ -337,49 +336,51 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
             }
 
-            if let Some(info) = self.typed_body.closure_info(def.expr).cloned() {
-                let args_local = self
-                    .closure_args_local
-                    .expect("closure body must have an argument-pack local");
-                for (idx, binding) in info.params.iter().copied().enumerate() {
-                    let local = self.alloc_local(
-                        self.binding_ty(binding),
-                        if binding.is_mut() {
-                            Mutability::Mutable
-                        } else {
-                            Mutability::Immutable
-                        },
-                        None,
-                    );
-                    self.binding_locals.insert(binding, local);
-                    let intent = match binding {
-                        LocalBinding::Param {
-                            mode: crate::hir_def::params::FuncParamMode::Own,
-                            ..
-                        } => SOperandIntent::Move,
-                        LocalBinding::Param {
-                            mode: crate::hir_def::params::FuncParamMode::View,
-                            ..
-                        } => SOperandIntent::Read,
-                        LocalBinding::Local { .. } | LocalBinding::EffectParam { .. } => {
-                            unreachable!("closure parameters are parameter bindings")
-                        }
-                    };
-                    self.push_synthetic_stmt(SStmtKind::Assign {
-                        dst: local,
-                        expr: SExpr::Field {
-                            base: SOperand::synthetic(args_local).with_intent(intent),
-                            field: FieldIndex(
-                                u16::try_from(idx)
-                                    .expect("closure argument field index must fit in u16"),
-                            ),
-                        },
-                    });
-                }
-                for (idx, capture) in info.captures.iter().enumerate() {
-                    self.closure_capture_fields
-                        .insert(capture.binding, FieldIndex(idx as u16));
-                }
+            let args_local = self
+                .closure_args_local
+                .expect("closure body must have an argument-pack local");
+            for (idx, binding) in closure_body.param_bindings().iter().copied().enumerate() {
+                let local = self.alloc_local(
+                    self.binding_ty(binding),
+                    if binding.is_mut() {
+                        Mutability::Mutable
+                    } else {
+                        Mutability::Immutable
+                    },
+                    Some(binding),
+                );
+                self.binding_locals.insert(binding, local);
+                let intent = match binding {
+                    LocalBinding::Param {
+                        mode: crate::hir_def::params::FuncParamMode::Own,
+                        ..
+                    } => SOperandIntent::Move,
+                    LocalBinding::Param {
+                        mode: crate::hir_def::params::FuncParamMode::View,
+                        ..
+                    } => SOperandIntent::Read,
+                    LocalBinding::Local { .. } | LocalBinding::EffectParam { .. } => {
+                        unreachable!("closure parameters are parameter bindings")
+                    }
+                };
+                self.push_synthetic_stmt(SStmtKind::Assign {
+                    dst: local,
+                    expr: SExpr::Field {
+                        base: SOperand::synthetic(args_local).with_intent(intent),
+                        field: FieldIndex(
+                            u16::try_from(idx)
+                                .expect("closure argument field index must fit in u16"),
+                        ),
+                    },
+                });
+            }
+            for (idx, capture) in closure_body.captures(self.db).enumerate() {
+                self.closure_capture_fields.insert(
+                    capture.binding,
+                    FieldIndex(
+                        u16::try_from(idx).expect("closure capture field index must fit in u16"),
+                    ),
+                );
             }
             return;
         }
@@ -643,6 +644,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         match self.typed_body.expr_value_access(self.db, expr) {
             ValueAccess::Infer => SOperandIntent::Infer,
             ValueAccess::Read => SOperandIntent::Read,
+            ValueAccess::MoveIfNonCopy => {
+                unreachable!("conditional value access must be resolved before semantic lowering")
+            }
             ValueAccess::Move => SOperandIntent::Move,
         }
     }
@@ -697,14 +701,17 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Expr::Lit(lit) => self.lower_leaf_literal(expr, lit, ty),
             Expr::Path(_) => self.lower_path_expr(expr, ty),
             Expr::Closure { .. } => {
-                let info = self
-                    .typed_body
-                    .closure_info(expr)
-                    .unwrap_or_else(|| panic!("closure info missing for {expr:?}"))
-                    .clone();
-                let fields = info
-                    .captures
-                    .iter()
+                let closure = ty
+                    .as_closure(self.db)
+                    .unwrap_or_else(|| panic!("closure expression has non-closure type: {ty:?}"));
+                let captures = self
+                    .instance
+                    .key(self.db)
+                    .callable_body(self.db)
+                    .closure_capture_plan(self.db, closure)
+                    .unwrap_or_else(|| panic!("closure capture plan missing for {expr:?}"));
+                let fields = captures
+                    .into_iter()
                     .map(|capture| {
                         self.lower_binding_capture_operand(
                             capture.binding,
@@ -1166,6 +1173,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     ) -> SOperand {
         let intent = match construction {
             ClosureCaptureConstruction::Copy => SOperandIntent::Read,
+            ClosureCaptureConstruction::Deferred => {
+                unreachable!("closure capture construction must be resolved before lowering")
+            }
             ClosureCaptureConstruction::Move => SOperandIntent::Move,
         };
         if let Some(local) = self.binding_locals.get(&binding).copied() {

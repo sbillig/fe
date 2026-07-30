@@ -203,21 +203,39 @@ impl<'db> NormalizeCtxt<'db> {
         let mut blocks = Vec::with_capacity(self.raw.blocks.len());
         let raw_blocks = self.raw.blocks.clone();
         for block in &raw_blocks {
-            let stmts = block
-                .stmts
-                .iter()
-                .map(|stmt| {
-                    Ok(NSStmt {
-                        id: stmt.id,
-                        origin: stmt.origin,
-                        kind: self.normalize_stmt(stmt.origin, &stmt.kind)?,
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let terminator = NSTerminator {
-                origin: block.terminator.origin,
-                kind: self.normalize_terminator(block.terminator.origin, &block.terminator.kind),
-            };
+            let mut stmts = Vec::with_capacity(block.stmts.len());
+            let mut terminal_call_origin = None;
+            for stmt in &block.stmts {
+                let stmt = NSStmt {
+                    id: stmt.id,
+                    origin: stmt.origin,
+                    kind: self.normalize_stmt(stmt.origin, &stmt.kind)?,
+                };
+                let never_returns = matches!(
+                    &stmt.kind,
+                    NSStmtKind::Assign {
+                        expr: NExpr::Call { callee, .. },
+                        ..
+                    } if SemanticInstance::new(self.db, callee.key).known_never_returns(self.db)
+                );
+                let origin = stmt.origin;
+                stmts.push(stmt);
+                if never_returns {
+                    terminal_call_origin = Some(origin);
+                    break;
+                }
+            }
+            let terminator = terminal_call_origin.map_or_else(
+                || NSTerminator {
+                    origin: block.terminator.origin,
+                    kind: self
+                        .normalize_terminator(block.terminator.origin, &block.terminator.kind),
+                },
+                |origin| NSTerminator {
+                    origin,
+                    kind: NSTerminatorKind::Assert { message: None },
+                },
+            );
             blocks.push(NSBlock { stmts, terminator });
         }
         let locals = self.take_normalized_locals();
@@ -787,6 +805,10 @@ impl<'db> NormalizeCtxt<'db> {
     ) -> NBorrowRootId {
         let root = NBorrowRootId::from_u32(self.borrow_roots.len() as u32);
         let param_idx = source.and_then(|binding| match binding {
+            LocalBinding::Param {
+                site: ParamSite::Closure(_),
+                ..
+            } => None,
             LocalBinding::Param { idx, .. } => Some(idx as u32),
             _ => None,
         });

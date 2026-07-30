@@ -13,8 +13,8 @@ use crate::analysis::{
         ProviderAddressSpace,
         diagnostics::{
             BodyDiag, CallConstraintDiagInfo, ContractFieldLayoutIssue, DefConflictError,
-            FuncBodyDiag, ImplDiag, MustUseSubject, TraitConstraintDiag, TraitLowerDiag,
-            TyDiagCollection, TyLowerDiag,
+            FuncBodyDiag, ImplDiag, MustUseSubject, ReturnTypeContext, TraitConstraintDiag,
+            TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
@@ -23,7 +23,10 @@ use crate::analysis::{
 };
 use crate::{
     ParserError, SpannedHirDb,
-    hir_def::{CallableDef, FieldIndex, GenericParamOwner, PathKind, Trait, params::FuncParamMode},
+    hir_def::{
+        CallableDef, Expr, FieldIndex, GenericParamOwner, Partial, PathKind, Trait,
+        params::FuncParamMode,
+    },
     span::LazySpan,
 };
 use common::diagnostics::{
@@ -3209,7 +3212,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary,
                 actual,
                 expected,
-                func,
+                context,
             } => {
                 let actual = actual.pretty_print(db);
                 let expected = expected.pretty_print(db);
@@ -3219,33 +3222,68 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     span: primary.resolve(db),
                 }];
 
-                if let Some(func) = func {
-                    let has_explicit = match func {
-                        CallableDef::Func(f) => f.has_explicit_return_ty(db),
-                        CallableDef::VariantCtor(_) => false,
-                    };
+                if let Some(context) = context {
+                    match context {
+                        ReturnTypeContext::Function(func) => {
+                            let has_explicit = match func {
+                                CallableDef::Func(f) => f.has_explicit_return_ty(db),
+                                CallableDef::VariantCtor(_) => false,
+                            };
 
-                    // For explicit return types, point at the return type span;
-                    // otherwise, point at the function name span (where a return
-                    // type could be added).
-                    let name_span = func.name_span();
-                    let span = match (has_explicit, func) {
-                        (true, CallableDef::Func(f)) => f.span().ret_ty().into(),
-                        _ => name_span,
-                    };
+                            // For explicit return types, point at the return type span;
+                            // otherwise, point at the function name span (where a return
+                            // type could be added).
+                            let name_span = func.name_span();
+                            let span = match (has_explicit, func) {
+                                (true, CallableDef::Func(f)) => f.span().ret_ty().into(),
+                                _ => name_span,
+                            };
 
-                    if has_explicit {
-                        sub_diagnostics.push(SubDiagnostic {
-                            style: LabelStyle::Secondary,
-                            message: format!("this function expects `{expected}` to be returned"),
-                            span: span.resolve(db),
-                        });
-                    } else {
-                        sub_diagnostics.push(SubDiagnostic {
-                            style: LabelStyle::Secondary,
-                            message: format!("try adding `-> {actual}`"),
-                            span: span.resolve(db),
-                        });
+                            if has_explicit {
+                                sub_diagnostics.push(SubDiagnostic {
+                                    style: LabelStyle::Secondary,
+                                    message: format!(
+                                        "this function expects `{expected}` to be returned"
+                                    ),
+                                    span: span.resolve(db),
+                                });
+                            } else {
+                                sub_diagnostics.push(SubDiagnostic {
+                                    style: LabelStyle::Secondary,
+                                    message: format!("try adding `-> {actual}`"),
+                                    span: span.resolve(db),
+                                });
+                            }
+                        }
+                        ReturnTypeContext::Closure(def) => {
+                            let has_explicit = matches!(
+                                def.expr.data(db, def.body),
+                                Partial::Present(Expr::Closure {
+                                    ret_ty: Some(_),
+                                    ..
+                                })
+                            );
+                            let closure_span = def.expr.span(def.body).into_closure_expr();
+                            let span = if has_explicit {
+                                closure_span.ret_ty().resolve(db)
+                            } else {
+                                closure_span
+                                    .clone()
+                                    .params()
+                                    .resolve(db)
+                                    .or_else(|| closure_span.empty_params().resolve(db))
+                            };
+                            let message = if has_explicit {
+                                format!("this closure expects `{expected}` to be returned")
+                            } else {
+                                format!("this closure is inferred to return `{expected}`")
+                            };
+                            sub_diagnostics.push(SubDiagnostic {
+                                style: LabelStyle::Secondary,
+                                message,
+                                span,
+                            });
+                        }
                     }
                 }
 
@@ -3506,6 +3544,35 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     message: "mutable borrow requires a mutable place".to_string(),
                     sub_diagnostics,
                     notes: vec![],
+                    error_code,
+                }
+            }
+
+            Self::BorrowMutFromCapturedBinding { primary, binding } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "cannot mutably borrow closure-owned capture storage".to_string(),
+                    span: primary.resolve(db),
+                }];
+
+                if let Some((name, span)) = binding {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{}` is captured by value here", name.data(db)),
+                        span: span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "cannot mutably borrow a binding captured by a closure".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "reusable closure environments do not expose mutable capture storage"
+                            .to_string(),
+                        "capture an explicit `mut` handle to mutate the referenced value"
+                            .to_string(),
+                    ],
                     error_code,
                 }
             }

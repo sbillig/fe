@@ -8,13 +8,13 @@ use crate::analysis::{
     semantic::{
         SBlock, SBlockId, SConst, SExpr, SStmt, SStmtKind, STerminatorKind, SemConstId,
         SemConstValue, SemanticBody, SemanticCalleeRef, array_const,
-        borrowck::borrow_results_in_ty, consts::demand_concrete_const_ty, enum_const,
-        instance::SemanticInstance, reify_runtime_const_for_ty, sem_const_from_ty, struct_const,
-        tuple_const,
+        consts::demand_concrete_const_ty, enum_const, instance::SemanticInstance,
+        reify_runtime_const_for_ty, sem_const_from_ty, struct_const, tuple_const,
     },
     ty::{
         const_ty::CallableInputLayoutHoleOrigin,
         ty_def::{BorrowKind, TyId},
+        ty_reaches_mut_borrow,
     },
 };
 
@@ -205,7 +205,7 @@ fn invalidate_mutated_call_locals<'db>(
     let mut memo = vec![None; body.locals.len()];
     let mut visiting = FxHashSet::default();
     for (idx, arg) in args.iter().enumerate() {
-        if !callee_arg_contains_mut_borrow(db, *callee, idx) {
+        if !callee_arg_reaches_mut_borrow(db, *callee, idx) {
             continue;
         }
         for root in writable_local_roots(arg.value, local_defs, &mut memo, &mut visiting) {
@@ -214,7 +214,7 @@ fn invalidate_mutated_call_locals<'db>(
     }
 }
 
-fn callee_arg_contains_mut_borrow<'db>(
+fn callee_arg_reaches_mut_borrow<'db>(
     db: &'db dyn HirAnalysisDb,
     callee: SemanticCalleeRef<'db>,
     idx: usize,
@@ -225,11 +225,7 @@ fn callee_arg_contains_mut_borrow<'db>(
         .callable_body(db)
         .param_binding(db, idx)
         .map(|binding| callee.normalized_binding_ty(db, binding))
-        .is_some_and(|ty| {
-            borrow_results_in_ty(db, ty)
-                .iter()
-                .any(|result| result.kind == BorrowKind::Mut)
-        })
+        .is_some_and(|ty| ty_reaches_mut_borrow(db, ty))
 }
 
 fn writable_local_roots<'db>(
@@ -248,12 +244,20 @@ fn writable_local_roots<'db>(
     let mut roots = FxHashSet::default();
     for expr in &local_defs[local.index()] {
         match expr {
-            SExpr::Borrow {
-                place,
-                kind: BorrowKind::Mut,
-                ..
-            } => {
-                roots.insert(place.local);
+            SExpr::Borrow { place, kind, .. } => {
+                if *kind == BorrowKind::Mut {
+                    roots.insert(place.local);
+                }
+                // An immutable aggregate borrow can still expose mutable
+                // capabilities stored in the borrowed value. Follow its value
+                // graph so a later write through one of those capabilities
+                // invalidates the pointee's cached constant.
+                roots.extend(writable_local_roots(
+                    place.local,
+                    local_defs,
+                    memo,
+                    visiting,
+                ));
             }
             SExpr::Forward(src) | SExpr::UseValue(src) => {
                 roots.extend(writable_local_roots(src.value, local_defs, memo, visiting));
@@ -303,13 +307,19 @@ fn writable_local_roots<'db>(
                     }
                 }
             }
-            SExpr::ReadPlace { .. } => {}
+            SExpr::ReadPlace { place, .. } => {
+                roots.extend(writable_local_roots(
+                    place.local,
+                    local_defs,
+                    memo,
+                    visiting,
+                ));
+            }
             SExpr::CodeRegionRef { .. }
             | SExpr::Const(_)
             | SExpr::Unary { .. }
             | SExpr::Binary { .. }
             | SExpr::Cast { .. }
-            | SExpr::Borrow { .. }
             | SExpr::GetEnumTag { .. }
             | SExpr::IsEnumVariant { .. }
             | SExpr::CodeRegionOffset { .. }

@@ -9,8 +9,8 @@ use hir::analysis::{
 use mir::{
     RuntimeFunctionOwner,
     runtime::stable_key::{
-        generic_args_identity, ingot_component_for_scope, module_path_components_for_scope,
-        semantic_owner_context_identity, stable_identity_hash, type_identity,
+        closure_symbol_base, generic_args_identity, ingot_component_for_scope,
+        module_path_components_for_scope, semantic_owner_context_identity, stable_identity_hash,
     },
 };
 use rustc_hash::FxHashSet;
@@ -306,10 +306,9 @@ fn semantic_leaf_component<'db>(db: &'db DriverDataBase, owner: BodyOwner<'db>) 
             recv_idx,
             arm_idx
         ),
-        BodyOwner::Closure { ty, .. } => format!(
-            "__closure_{}",
-            stable_identity_hash(&type_identity(db, TyId::closure(db, ty)))
-        ),
+        BodyOwner::Closure {
+            ty, receiver_mode, ..
+        } => closure_symbol_base(db, ty, receiver_mode),
     }
 }
 
@@ -396,4 +395,95 @@ fn generic_component<'db>(db: &'db DriverDataBase, args: &[TyId<'db>]) -> Option
         let hash = stable_identity_hash(&generic_args_identity(db, args));
         format!("g{}", &hash[..GENERIC_SUFFIX_HASH_LEN])
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use common::InputDb as _;
+    use hir::analysis::ty::ty_check::ClosureReceiverMode;
+    use url::Url;
+
+    use super::*;
+
+    #[test]
+    fn reusable_closure_call_abis_use_mode_aware_symbols() {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///reusable_closure_call_abis_use_mode_aware_symbols.fe").unwrap(),
+            Some(
+                r#"
+use core::functional::Fn
+use core::functional::FnOnce
+
+struct Boxed {
+    value: u256,
+}
+
+#[test]
+fn reusable_closure_call_abis_use_mode_aware_symbols() {
+    let boxed = Boxed { value: 21 }
+    let read = |_ unit: own ()| -> u256 { boxed.value }
+    let first = read.call(())
+    let second = read.call_once(())
+    assert(first + second == 42)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let package = mir::build_test_runtime_package(
+            &db,
+            top_mod,
+            Some("reusable_closure_call_abis_use_mode_aware_symbols"),
+        )
+        .expect("test package should build");
+        let functions = package
+            .functions(&db)
+            .iter()
+            .copied()
+            .filter(|function| {
+                let RuntimeFunctionOwner::Semantic(semantic) = function.owner(&db) else {
+                    return false;
+                };
+                matches!(semantic.key(&db).owner(&db), BodyOwner::Closure { .. })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(functions.len(), 2, "expected Fn and FnOnce closure bodies");
+
+        let inputs = functions
+            .iter()
+            .map(|function| FunctionSymbolInput {
+                owner: function.owner(&db).clone(),
+                fallback_symbol: function.symbol(&db).clone(),
+                variant_suffix: String::new(),
+                disambiguator: mir::runtime_instance_symbol_key(&db, function.instance(&db)),
+            })
+            .collect::<Vec<_>>();
+        let codegen_symbols = assign_function_symbols(&db, &inputs);
+
+        let mut saw_view = false;
+        let mut saw_own = false;
+        for (function, codegen_symbol) in functions.iter().zip(codegen_symbols) {
+            let RuntimeFunctionOwner::Semantic(semantic) = function.owner(&db) else {
+                unreachable!("closure function is semantic");
+            };
+            let BodyOwner::Closure {
+                ty, receiver_mode, ..
+            } = semantic.key(&db).owner(&db)
+            else {
+                unreachable!("filtered to closure functions");
+            };
+            let expected = closure_symbol_base(&db, ty, receiver_mode);
+            assert_eq!(function.symbol(&db), expected.clone());
+            assert_eq!(codegen_symbol, expected);
+            match receiver_mode {
+                ClosureReceiverMode::View => saw_view = true,
+                ClosureReceiverMode::Own => saw_own = true,
+            }
+        }
+        assert!(saw_view, "missing reusable Fn body");
+        assert!(saw_own, "missing reusable FnOnce body");
+    }
 }

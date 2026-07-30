@@ -11,7 +11,7 @@ use crate::analysis::ty::{
     LayoutBundlePathStep,
     canonical::Canonical,
     corelib::resolve_core_trait,
-    diagnostics::BodyDiag,
+    diagnostics::{BodyDiag, ReturnTypeContext},
     fold::{TyFoldable, TyFolder},
     trait_def::{TraitInstId, impls_for_ty},
     trait_resolution::TraitSolveCx,
@@ -116,10 +116,9 @@ impl<'db> TyChecker<'db> {
                     .set_local_borrow_provider(pat, prop.borrow_provider);
             }
 
-            let moves_value = mode == super::PatternDestructureMode::Owned
-                && self.pattern_moves_non_copy_value(*pat);
             if mode == super::PatternDestructureMode::Owned {
-                self.record_pattern_value_use(*expr, moves_value);
+                let capture_access = self.pattern_value_capture_access(*pat);
+                self.record_pattern_value_use(*expr, capture_access);
             }
             if let super::PatternDestructureMode::Borrow(kind) = mode {
                 self.retype_pattern_bindings_for_borrow(*pat, kind);
@@ -528,13 +527,18 @@ impl<'db> TyChecker<'db> {
             && self.table.unify(returned_ty, self.expected).is_ok();
 
         if !had_child_err && !returned_ty.has_invalid(self.db) && !ret_ty_ok {
-            let func = self.env.func();
+            let expected = self.expected.fold_with(self.db, &mut self.table);
+            let context = self
+                .env
+                .active_closure()
+                .map(ReturnTypeContext::Closure)
+                .or_else(|| self.env.func().map(ReturnTypeContext::Function));
             let span = stmt.span(self.env.body());
             let diag = BodyDiag::ReturnedTypeMismatch {
                 primary: span.into(),
                 actual: returned_ty,
-                expected: self.expected,
-                func,
+                expected,
+                context,
             };
 
             self.push_diag(diag);

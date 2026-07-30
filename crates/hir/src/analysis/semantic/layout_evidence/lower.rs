@@ -22,11 +22,12 @@ use crate::analysis::{
         provider::{
             EffectHandleTargetResolution, ProviderLayoutEvidence, resolve_effect_handle_target,
         },
-        ty_check::LocalBinding,
+        ty_check::{LocalBinding, ParamSite},
         ty_def::TyId,
         ty_lower::layout_bundle_schema_for_semantic_value,
     },
 };
+use crate::hir_def::params::FuncParamMode;
 use crate::projection::{IndexSource, Projection};
 use crate::semantic::{AssignedRootValue, LayoutProjection, LayoutViewKind, ProviderBinding};
 
@@ -38,6 +39,87 @@ use super::{
     LayoutEvidenceStatement, LayoutEvidenceTerminator, LayoutEvidenceValue,
     layout_const_param_uses, verify_layout_evidence_body,
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum LocalBindingTemplateKey<'db> {
+    Param {
+        site: ParamSite<'db>,
+        idx: usize,
+        mode: FuncParamMode,
+        is_mut: bool,
+    },
+    Other(LocalBinding<'db>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum SemanticLocalTemplateKey<'db> {
+    Binding(LocalBindingTemplateKey<'db>),
+    Assignment {
+        origin: SemOrigin<'db>,
+        expr: std::mem::Discriminant<NExpr<'db>>,
+    },
+}
+
+fn local_binding_template_key(binding: LocalBinding<'_>) -> LocalBindingTemplateKey<'_> {
+    match binding {
+        LocalBinding::Param {
+            site,
+            idx,
+            mode,
+            is_mut,
+            ..
+        } => LocalBindingTemplateKey::Param {
+            site,
+            idx,
+            mode,
+            is_mut,
+        },
+        binding => LocalBindingTemplateKey::Other(binding),
+    }
+}
+
+fn semantic_local_template_keys<'db>(
+    body: &NormalizedSemanticBody<'db>,
+) -> Vec<Option<SemanticLocalTemplateKey<'db>>> {
+    let mut keys = body
+        .locals
+        .iter()
+        .map(|local| {
+            local.source.map(|binding| {
+                SemanticLocalTemplateKey::Binding(local_binding_template_key(binding))
+            })
+        })
+        .collect::<Vec<_>>();
+    for statement in body.blocks.iter().flat_map(|block| &block.stmts) {
+        let NSStmtKind::Assign { dst, expr } = &statement.kind else {
+            continue;
+        };
+        keys[dst.index()].get_or_insert(SemanticLocalTemplateKey::Assignment {
+            origin: statement.origin,
+            expr: std::mem::discriminant(expr),
+        });
+    }
+    keys
+}
+
+fn align_template_locals(
+    template: &NormalizedSemanticBody<'_>,
+    specialized: &NormalizedSemanticBody<'_>,
+) -> Vec<Option<usize>> {
+    let mut template_locals = FxHashMap::<_, VecDeque<_>>::default();
+    for (idx, key) in semantic_local_template_keys(template)
+        .into_iter()
+        .enumerate()
+    {
+        if let Some(key) = key {
+            template_locals.entry(key).or_default().push_back(idx);
+        }
+    }
+    semantic_local_template_keys(specialized)
+        .into_iter()
+        .map(|key| key.and_then(|key| template_locals.get_mut(&key).and_then(VecDeque::pop_front)))
+        .collect()
+}
 
 #[derive(Clone, PartialEq, Eq)]
 struct ComponentExpr<'db> {
@@ -1984,10 +2066,13 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         Ok(())
     }
 
-    fn propagate_layout_context(
+    fn propagate_layout_context<'transfer>(
         &mut self,
-        transfers: &[LayoutTransfer<'db>],
-    ) -> Result<(), LayoutEvidenceError<'db>> {
+        transfers: impl IntoIterator<Item = &'transfer LayoutTransfer<'db>>,
+    ) -> Result<(), LayoutEvidenceError<'db>>
+    where
+        'db: 'transfer,
+    {
         let witnesses = self
             .declared_sources
             .iter()
@@ -2179,6 +2264,11 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         let mut path = Vec::new();
         let mut indices = Vec::new();
         for step in place.path.iter() {
+            if !matches!(step, Projection::Deref) {
+                while let Some((_, inner)) = ty.as_capability(self.db) {
+                    ty = inner;
+                }
+            }
             match step {
                 Projection::Field(field) => {
                     path.push(LayoutEvidencePathStep::Field(
@@ -2436,14 +2526,9 @@ fn layout_evidence_body_query<'db>(
             .map_err(LayoutEvidenceError::Normalize)
         })
         .transpose()?;
-    if let Some(template) = &template_normalized
-        && template.locals.len() != normalized.locals.len()
-    {
-        return Err(LayoutEvidenceError::TemplateLocalCountMismatch {
-            expected: template.locals.len(),
-            actual: normalized.locals.len(),
-        });
-    }
+    let template_locals = template_normalized
+        .as_ref()
+        .map(|template| align_template_locals(template, &normalized));
     let signature = owner.key(db).layout_bundle_signature(db);
     signature
         .output
@@ -2465,9 +2550,17 @@ fn layout_evidence_body_query<'db>(
     for (idx, local) in normalized.locals.iter().enumerate() {
         let semantic_local = SLocalId::from_u32(idx as u32);
         let layout_ty = local.ty;
-        let template_ty = template_normalized
-            .as_ref()
-            .map_or(layout_ty, |template| template.locals[idx].ty);
+        let template_local = template_locals.as_ref().and_then(|locals| locals[idx]);
+        let template_ty = template_local
+            .and_then(|template_local| {
+                template_normalized
+                    .as_ref()?
+                    .locals
+                    .get(template_local)
+                    .map(|local| local.ty)
+            })
+            .unwrap_or(layout_ty);
+        let template_local = template_local.unwrap_or(idx);
         let origin = local
             .source
             .and_then(|source| source.callable_input_origin(db));
@@ -2482,6 +2575,7 @@ fn layout_evidence_body_query<'db>(
                 body.ok_or(LayoutEvidenceError::MissingBody(template_owner))?,
                 idx as u32,
                 layout_ty,
+                template_local as u32,
                 template_ty,
             );
             if matches!(local.source, None | Some(LocalBinding::Local { .. })) {
@@ -2542,12 +2636,14 @@ fn layout_evidence_body_query<'db>(
                 .ok_or(LayoutEvidenceError::InvalidPlace),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let statement_count = normalized
+    let statement_slots = normalized
         .blocks
         .iter()
-        .map(|block| block.stmts.len())
-        .sum();
-    let mut transfers = vec![None; statement_count];
+        .flat_map(|block| &block.stmts)
+        .map(|statement| statement.id.index() + 1)
+        .max()
+        .unwrap_or(0);
+    let mut transfers = (0..statement_slots).map(|_| None).collect::<Vec<_>>();
     for statement in normalized.blocks.iter().flat_map(|block| &block.stmts) {
         let slot = transfers
             .get_mut(statement.id.index())
@@ -2557,19 +2653,15 @@ fn layout_evidence_body_query<'db>(
         }
         *slot = Some(builder.build_layout_transfer(statement)?);
     }
-    let transfers = transfers
-        .into_iter()
-        .enumerate()
-        .map(|(idx, transfer)| {
-            transfer.ok_or(LayoutEvidenceError::InvalidStatementIdentity(
-                crate::analysis::semantic::SStmtId::from_u32(idx as u32),
-            ))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    builder.propagate_layout_context(&transfers)?;
+    builder.propagate_layout_context(transfers.iter().flatten())?;
     let statements = transfers
         .iter()
-        .map(|transfer| builder.lower_layout_transfer(transfer))
+        .map(|transfer| {
+            transfer
+                .as_ref()
+                .map(|transfer| builder.lower_layout_transfer(transfer))
+                .transpose()
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let terminators = normalized
         .blocks

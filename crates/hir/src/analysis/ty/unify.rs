@@ -145,7 +145,7 @@ where
                 TyData::TyBase(TyBase::Closure(closure2)),
             ) => {
                 if closure1.def(self.db) != closure2.def(self.db)
-                    || closure1.call_mode(self.db) != closure2.call_mode(self.db)
+                    || closure1.capture_accesses(self.db) != closure2.capture_accesses(self.db)
                     || closure1.parent_args(self.db).len() != closure2.parent_args(self.db).len()
                     || closure1.captures(self.db).len() != closure2.captures(self.db).len()
                     || closure1.params(self.db).len() != closure2.params(self.db).len()

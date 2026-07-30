@@ -68,6 +68,11 @@ impl<'db> NormalizedSemanticBody<'db> {
             },
         }
     }
+
+    pub fn place_ty(&self, db: &'db dyn HirAnalysisDb, place: &NSPlace<'db>) -> Option<TyId<'db>> {
+        let root_ty = self.place_root_ty(&place.root)?;
+        semantic_projection_ty(db, root_ty, &place.path).map(|(ty, _)| ty)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -560,6 +565,16 @@ impl<'db> NormalizedBindingLowering<'db> {
 }
 
 impl<'db> NSLocal<'db> {
+    pub fn is_derived_place_bound_alias(&self) -> bool {
+        matches!(
+            (&self.facts.interface, &self.facts.origin),
+            (
+                SemanticLocalKind::PlaceBoundValue,
+                NLocalOrigin::AliasedPlace
+            )
+        )
+    }
+
     pub fn layout_ty(&self) -> TyId<'db> {
         match (&self.facts.interface, &self.lowering) {
             (

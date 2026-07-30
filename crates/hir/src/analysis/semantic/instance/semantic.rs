@@ -119,6 +119,7 @@ pub fn semantic_layout_bundle_signature<'db>(
                         body,
                         local.index() as u32,
                         ty,
+                        local.index() as u32,
                         ty,
                     );
                     (!schema.components.is_empty()).then(|| CallableLayoutBundleInput {
@@ -836,8 +837,11 @@ impl<'db> SemanticInstance<'db> {
         if self.is_intrinsically_never_returning(db) {
             return true;
         }
+        if self.key(db).typed_body(db).has_smir_lowering_blocker(db) {
+            return false;
+        }
 
-        let body = self.body(db);
+        let body = self.provisional_body(db);
         if body.blocks.is_empty() {
             return false;
         }
@@ -937,8 +941,11 @@ impl<'db> SemanticInstance<'db> {
         if self.is_intrinsically_never_returning(db) {
             return true;
         }
+        if self.key(db).typed_body(db).has_smir_lowering_blocker(db) {
+            return false;
+        }
 
-        self.body(db).blocks.iter().any(|block| {
+        self.provisional_body(db).blocks.iter().any(|block| {
             block.stmts.iter().any(|stmt| {
                 if let SStmtKind::Assign {
                     expr: SExpr::Call { callee, .. },
