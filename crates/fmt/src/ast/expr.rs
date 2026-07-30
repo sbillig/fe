@@ -153,16 +153,22 @@ fn format_bin_expr_inner<'a>(
             None
         };
 
-        if let Some(inner_bin) = higher_prec_bin {
+        let operand_doc = if let Some(inner_bin) = higher_prec_bin {
             // Format inner chain without its own nesting, we control it here
-            let inner_doc = format_bin_expr_inner(&inner_bin, ctx, false);
-            result = result
-                .append(alloc.line())
-                .append(alloc.text(op_str.clone()))
-                .append(alloc.text(" "))
-                .append(inner_doc.nest(indent));
+            format_bin_expr_inner(&inner_bin, ctx, false).nest(indent)
         } else {
-            let operand_doc = operand.to_doc(ctx);
+            operand.to_doc(ctx)
+        };
+
+        if matches!(op_str.as_str(), "*" | "-") {
+            // These operators can also begin unary expressions. Keep them on
+            // the preceding line so formatted output reparses unambiguously.
+            result = result
+                .append(alloc.text(" "))
+                .append(alloc.text(op_str.clone()))
+                .append(alloc.line())
+                .append(operand_doc);
+        } else {
             result = result
                 .append(alloc.line())
                 .append(alloc.text(op_str.clone()))

@@ -376,6 +376,9 @@ fn infix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<(u8, u8
             (120, 121)
         }
         Star => {
+            // A bare `*` at the start of a new statement line is a pointer
+            // dereference, not a multiplication continuation. Multiline
+            // multiplication must keep `*` on the preceding line.
             if has_line_break_before(parser) {
                 parser.set_newline_as_trivia(is_trivia);
                 return None;
