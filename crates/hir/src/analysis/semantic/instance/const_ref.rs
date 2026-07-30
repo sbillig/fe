@@ -10,6 +10,7 @@ use crate::{
         ty::{
             assoc_const::{AssocConstUse, InherentConstUse},
             const_ty::inherent_const_body_and_impl_args,
+            corelib::resolve_core_trait,
             effects::place_effect_provider_param_index_map,
             trait_def::{
                 assoc_const_body_and_impl_args_for_trait_inst, complete_resolved_trait_method_args,
@@ -19,7 +20,7 @@ use crate::{
             ty_check::{
                 BodyOwner, Callable, ConstRef, EffectParamSite, EffectProviderSpecialization,
             },
-            ty_def::TyId,
+            ty_def::{TyBase, TyData, TyId},
             ty_lower::instantiate_callable_effect_layout_args,
         },
     },
@@ -82,6 +83,21 @@ fn semantic_callee_key_with_assumptions<'db>(
         CallableDef::Func(func) => {
             let mut subst_args = callable.generic_args().to_vec();
             let owner = if let Some(inst) = callable.trait_inst()
+                && func
+                    .name(db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(db) == "call")
+                && resolve_core_trait(db, func.scope(), &["functional", "Fn"])
+                    .is_some_and(|fn_trait| inst.def(db) == fn_trait)
+                && let TyData::TyBase(TyBase::Closure(closure)) =
+                    inst.self_ty(db).base_ty(db).data(db)
+            {
+                subst_args.clear();
+                BodyOwner::Closure {
+                    ty: *closure,
+                    def: closure.def(db),
+                }
+            } else if let Some(inst) = callable.trait_inst()
                 && let Some(name) = func.name(db).to_opt()
                 && let Some((impl_func, impl_args)) = resolve_trait_method_instance(
                     db,

@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_multiple_args.fe
+---
+error[8-0087]: closures must take exactly one parameter
+  ┌─ closure_multiple_args.fe:2:14
+  │
+2 │     let _f = |a: own u256, b: own u256| -> u256 { a + b }
+  │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this closure takes 2 parameters; only single-parameter closures implement `Fn`

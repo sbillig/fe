@@ -484,16 +484,18 @@ impl<'db> TyChecker<'db> {
             && let Some(prop) = returned_prop
             && let Some(provider) = prop.borrow_provider
         {
-            if let Some((ref previous_span, previous_provider)) = self.first_return_borrow_provider
+            if let Some((previous_span, previous_provider)) =
+                self.env.first_return_borrow_provider.clone()
             {
                 self.merge_concrete_borrow_providers(
-                    previous_span.clone(),
+                    previous_span,
                     Some(previous_provider),
                     expr.span(self.body()).into(),
                     Some(provider),
                 );
             } else {
-                self.first_return_borrow_provider = Some((expr.span(self.body()).into(), provider));
+                self.env.first_return_borrow_provider =
+                    Some((expr.span(self.body()).into(), provider));
             }
         }
 

@@ -25,8 +25,8 @@ use crate::{
             normalize::normalize_ty,
             ty_check::{
                 BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, LocalBinding,
-                PathReadSemantics, RecordInitLowering, RecordLike, SemanticExprLowering, TypedBody,
-                ValuePathRef,
+                ParamSite, PathReadSemantics, RecordInitLowering, RecordLike, SemanticExprLowering,
+                TypedBody, ValuePathRef,
             },
             ty_def::{BorrowKind, TyData, TyId},
         },
@@ -149,13 +149,16 @@ pub(crate) fn lower_to_smir_with_call_sites<'a, 'db>(
             binding_role_mode,
         },
     );
-    let result = cx.lower_expr(body.expr(db));
+    let root_expr = template_owner
+        .root_expr(db)
+        .unwrap_or_else(|| body.expr(db));
+    let result = cx.lower_expr(root_expr);
     if !cx.is_terminated(cx.current) {
-        let result = SOperand::expr(result, body.expr(db));
+        let result = SOperand::expr(result, root_expr);
         cx.set_terminator(
             cx.current,
             SemOrigin::Body(template_owner),
-            if cx.expr_ty(body.expr(db)) == TyId::unit(db) {
+            if cx.expr_ty(root_expr) == TyId::unit(db) {
                 STerminatorKind::Return(None)
             } else {
                 STerminatorKind::Return(Some(result))
@@ -192,6 +195,8 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     pub(super) assigned_layout_backing_sources: Vec<bool>,
     pub(super) blocks: Vec<BlockState<'db>>,
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, SLocalId>,
+    pub(super) closure_env_local: Option<SLocalId>,
+    pub(super) closure_capture_fields: FxHashMap<LocalBinding<'db>, FieldIndex>,
     pub(super) with_binding_values: FxHashMap<ExprId, SValueId>,
     pub(super) current: SBlockId,
     pub(super) next_stmt_id: u32,
@@ -265,6 +270,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             assigned_layout_backing_sources: Vec::new(),
             blocks: Vec::new(),
             binding_locals: FxHashMap::default(),
+            closure_env_local: None,
+            closure_capture_fields: FxHashMap::default(),
             with_binding_values: FxHashMap::default(),
             current: SBlockId::from_u32(0),
             next_stmt_id: 0,
@@ -298,6 +305,30 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     fn collect_binding_locals(&mut self) {
+        if let BodyOwner::Closure { def, .. } = self.template_owner {
+            for binding in self
+                .typed_body
+                .owner_param_bindings(self.db, self.template_owner)
+            {
+                let local = self.alloc_entry_binding_local(binding);
+                if let LocalBinding::Param {
+                    site: ParamSite::ClosureEnv(_),
+                    ..
+                } = binding
+                {
+                    self.closure_env_local = Some(local);
+                }
+            }
+
+            if let Some(info) = self.typed_body.closure_info(def.expr).cloned() {
+                for (idx, capture) in info.captures.iter().enumerate() {
+                    self.closure_capture_fields
+                        .insert(capture.binding, FieldIndex(idx as u16));
+                }
+            }
+            return;
+        }
+
         let mut param_idx = 0;
         while let Some(binding) = self.typed_body.param_binding(param_idx) {
             self.alloc_entry_binding_local(binding);
@@ -501,6 +532,19 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         match expr_data {
             Expr::Lit(lit) => self.lower_leaf_literal(expr, lit),
             Expr::Path(_) => self.lower_path_expr(expr),
+            Expr::Closure { .. } => {
+                let info = self
+                    .typed_body
+                    .closure_info(expr)
+                    .unwrap_or_else(|| panic!("closure info missing for {expr:?}"))
+                    .clone();
+                let fields = info
+                    .captures
+                    .iter()
+                    .map(|capture| self.lower_binding_capture_operand(capture.binding, capture.ty))
+                    .collect();
+                self.emit_expr_with_origin(origin, ty, SExpr::AggregateMake { ty, fields })
+            }
             Expr::Tuple(elems) | Expr::Array(elems) => {
                 let fields = elems
                     .iter()
@@ -811,6 +855,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     fn lower_path_expr(&mut self, expr: ExprId) -> SValueId {
         if let Some(binding) = self.typed_body.expr_binding(expr) {
+            if let Some(value) = self.lower_captured_binding_read(expr, binding) {
+                return value;
+            }
             let local = *self
                 .binding_locals
                 .get(&binding)
@@ -889,6 +936,50 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.typed_body.expr_code_region_ref(self.db, expr),
             ),
         }
+    }
+
+    fn lower_captured_binding_read(
+        &mut self,
+        expr: ExprId,
+        binding: LocalBinding<'db>,
+    ) -> Option<SValueId> {
+        let field = *self.closure_capture_fields.get(&binding)?;
+        let env = self.closure_env_local?;
+        Some(self.emit_expr_with_origin(
+            SemOrigin::Expr(expr),
+            self.expr_ty(expr),
+            SExpr::Field {
+                base: SOperand::inherited(env),
+                field,
+            },
+        ))
+    }
+
+    fn lower_binding_capture_operand(
+        &mut self,
+        binding: LocalBinding<'db>,
+        ty: TyId<'db>,
+    ) -> SOperand {
+        if let Some(local) = self.binding_locals.get(&binding).copied() {
+            return SOperand::inherited(local);
+        }
+
+        let field = *self
+            .closure_capture_fields
+            .get(&binding)
+            .unwrap_or_else(|| panic!("capture binding local should be allocated: {binding:?}"));
+        let env = self.closure_env_local.unwrap_or_else(|| {
+            panic!("closure environment local missing for capture: {binding:?}")
+        });
+        let value = self.emit_expr_with_origin(
+            SemOrigin::Synthetic,
+            ty,
+            SExpr::Field {
+                base: SOperand::inherited(env),
+                field,
+            },
+        );
+        SOperand::synthetic(value)
     }
 
     fn binding_path_read_semantics(

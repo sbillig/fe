@@ -20,7 +20,7 @@ use crate::{
 use super::{
     classify::{
         AssignmentId, BodyEnv, BodyStaticFacts, RuntimeVisibleReturnPlan, default_return_class,
-        desired_runtime_return_plan, selected_visible_return_for_local,
+        desired_runtime_return_plan, selected_visible_return_for_local, semantic_return_ty,
     },
     infer::{AssignmentSpace, CarrierInferer, ReturnClassLookup, merge_runtime_class},
     interface::runtime_visible_binding_plans,
@@ -230,7 +230,7 @@ pub(crate) fn static_runtime_return_decision<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> StaticRuntimeReturnDecision<'db> {
-    if semantic.key(db).typed_body(db).result_ty() == TyId::unit(db) {
+    if semantic_return_ty(db, semantic) == TyId::unit(db) {
         return StaticRuntimeReturnDecision::Known(None);
     }
     match desired_runtime_return_plan(db, semantic) {

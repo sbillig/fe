@@ -12,7 +12,11 @@ use crate::{
             SBlockId, SemOrigin, SemanticInstance, get_or_build_semantic_instance,
             identity_semantic_instance_key,
         },
-        ty::{ty_check::BodyOwner, ty_def::BorrowKind},
+        ty::{
+            ty_check::BodyOwner,
+            ty_def::{BorrowKind, TyId},
+            ty_is_noesc,
+        },
     },
     hir_def::{Body, Expr, FuncParamMode, ItemKind, Partial, TopLevelMod},
     projection::{IndexSource, Projection},
@@ -253,6 +257,20 @@ fn collect_owner<'db>(
     {
         diags.push(Box::new(diag));
     }
+    if !matches!(owner, BodyOwner::Closure { .. }) && owner.body(db).is_some() {
+        let typed_body = key.typed_body(db);
+        for (expr, _) in typed_body.closure_infos() {
+            if let Some(closure_ty) = typed_body.expr_ty(db, expr).as_closure(db) {
+                collect_owner(
+                    db,
+                    BodyOwner::closure(db, closure_ty),
+                    seen_owners,
+                    seen_diags,
+                    diags,
+                );
+            }
+        }
+    }
 }
 
 pub(super) struct Borrowck<'db> {
@@ -290,10 +308,19 @@ impl<'db> Borrowck<'db> {
     ) -> Result<Self, SemanticBorrowDiagnostic<'db>> {
         verify_normalized_semantic_body(db, instance, &body)?;
         let owner = instance.key(db).owner(db);
-        let param_modes = match owner {
-            BodyOwner::Func(func) => func.params(db).map(|param| param.mode(db)).collect(),
-            _ => Vec::new(),
-        };
+        let param_modes = instance
+            .key(db)
+            .typed_body(db)
+            .owner_param_bindings(db, owner)
+            .into_iter()
+            .map(|binding| match binding {
+                crate::analysis::ty::ty_check::LocalBinding::Param { mode, .. } => mode,
+                crate::analysis::ty::ty_check::LocalBinding::Local { .. }
+                | crate::analysis::ty::ty_check::LocalBinding::EffectParam { .. } => {
+                    FuncParamMode::Own
+                }
+            })
+            .collect();
         let mut param_index_of_local = FxHashMap::default();
         for root_id in 0..body.borrow_roots.len() {
             let root_id = NBorrowRootId::from_u32(root_id as u32);
@@ -341,7 +368,12 @@ impl<'db> Borrowck<'db> {
     ) -> Result<Option<BorrowSummary<'db>>, SemanticBorrowDiagnostic<'db>> {
         let owner = self.instance.key(self.db).owner(self.db);
         let typed_body = self.instance.key(self.db).instantiate_typed_body(self.db);
-        if typed_body.result_ty().as_borrow(self.db).is_none() || owner.body(self.db).is_none() {
+        if owner
+            .result_ty(self.db, &typed_body)
+            .as_borrow(self.db)
+            .is_none()
+            || owner.body(self.db).is_none()
+        {
             return Ok(None);
         }
         self.compute_entry_states();
@@ -355,11 +387,11 @@ impl<'db> Borrowck<'db> {
         self.compute_moved_states()?;
         self.compute_liveness();
         self.check_conflicts()?;
-        if self
-            .instance
-            .key(self.db)
-            .instantiate_typed_body(self.db)
-            .result_ty()
+        let key = self.instance.key(self.db);
+        let typed_body = key.instantiate_typed_body(self.db);
+        if key
+            .owner(self.db)
+            .result_ty(self.db, &typed_body)
             .as_borrow(self.db)
             .is_some()
         {
@@ -415,7 +447,7 @@ impl<'db> Borrowck<'db> {
             let Some(local) = self.body.local(local_id) else {
                 continue;
             };
-            if let Some((kind, _)) = local.ty.as_borrow(self.db)
+            if let Some(kind) = self.loan_kind_for_ty(local.ty)
                 && let Some(&param_idx) = self.param_index_of_local.get(&local_id)
                 && !matches!(
                     local.lowering,
@@ -443,21 +475,19 @@ impl<'db> Borrowck<'db> {
                 let NSStmtKind::Assign { dst, expr } = &stmt.kind else {
                     continue;
                 };
-                if self
+                if let Some(kind) = self
                     .body
                     .local(*dst)
-                    .is_some_and(|local| local.ty.as_borrow(self.db).is_some())
+                    .and_then(|local| self.loan_kind_for_ty(local.ty))
                     && matches!(
                         expr,
-                        NExpr::Borrow { .. } | NExpr::Call { .. } | NExpr::Use(_)
+                        NExpr::Borrow { .. }
+                            | NExpr::Call { .. }
+                            | NExpr::Use(_)
+                            | NExpr::ReadPlace { .. }
+                            | NExpr::AggregateMake { .. }
                     )
                 {
-                    let kind = self
-                        .body
-                        .local(*dst)
-                        .and_then(|local| local.ty.as_borrow(self.db))
-                        .map(|(kind, _)| kind)
-                        .expect("borrow local");
                     let loan = LoanId(self.loans.len() as u32);
                     self.loan_for_local.insert(*dst, loan);
                     self.loans.push(Loan {
@@ -469,6 +499,41 @@ impl<'db> Borrowck<'db> {
                 }
             }
         }
+    }
+
+    fn loan_kind_for_ty(&self, ty: TyId<'db>) -> Option<BorrowKind> {
+        self.loan_kind_for_ty_inner(ty, &mut FxHashSet::default())
+    }
+
+    fn loan_kind_for_ty_inner(
+        &self,
+        ty: TyId<'db>,
+        visiting: &mut FxHashSet<TyId<'db>>,
+    ) -> Option<BorrowKind> {
+        if !visiting.insert(ty) {
+            return None;
+        }
+        if let Some((kind, _)) = ty.as_borrow(self.db) {
+            visiting.remove(&ty);
+            return Some(kind);
+        }
+        if !ty_is_noesc(self.db, ty) {
+            visiting.remove(&ty);
+            return None;
+        }
+
+        let mut kind = BorrowKind::Ref;
+        for field_ty in ty.field_types(self.db) {
+            if matches!(
+                self.loan_kind_for_ty_inner(field_ty, visiting),
+                Some(BorrowKind::Mut)
+            ) {
+                kind = BorrowKind::Mut;
+                break;
+            }
+        }
+        visiting.remove(&ty);
+        Some(kind)
     }
 
     pub(super) fn compute_entry_states(&mut self) {
@@ -1156,7 +1221,12 @@ fn instance_returns_borrow<'db>(
     instance: SemanticInstance<'db>,
 ) -> bool {
     let key = instance.key(db);
-    key.owner(db).body(db).is_some() && key.typed_body(db).result_ty().as_borrow(db).is_some()
+    let owner = key.owner(db);
+    owner.body(db).is_some()
+        && owner
+            .result_ty(db, key.typed_body(db))
+            .as_borrow(db)
+            .is_some()
 }
 
 fn semantic_borrow_summary_cycle_recover<'db>(

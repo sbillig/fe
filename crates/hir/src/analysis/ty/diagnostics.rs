@@ -625,6 +625,24 @@ pub enum BodyDiag<'db> {
         is_break: bool,
     },
 
+    UnsupportedClosureArity {
+        primary: DynLazySpan<'db>,
+        arity: usize,
+    },
+
+    AssignToCapturedBinding {
+        primary: DynLazySpan<'db>,
+        binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
+    },
+
+    EffectInClosure {
+        primary: DynLazySpan<'db>,
+    },
+
+    ClosureInConstContext {
+        primary: DynLazySpan<'db>,
+    },
+
     TraitNotImplemented {
         primary: DynLazySpan<'db>,
         ty: String,
@@ -945,6 +963,10 @@ impl<'db> BodyDiag<'db> {
             Self::UnsupportedContractFieldAddressSpace { .. } => 84,
             Self::ImmutableContractFieldMutBinding { .. } => 85,
             Self::LoopControlOutsideOfLoop { .. } => 19,
+            Self::UnsupportedClosureArity { .. } => 87,
+            Self::AssignToCapturedBinding { .. } => 88,
+            Self::EffectInClosure { .. } => 89,
+            Self::ClosureInConstContext { .. } => 90,
             Self::TraitNotImplemented { .. } => 20,
             Self::NotCallable(..) => 21,
             Self::CallGenericArgNumMismatch { .. } => 22,

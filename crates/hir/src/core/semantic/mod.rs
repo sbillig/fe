@@ -4145,7 +4145,7 @@ impl<'db> ImplTrait<'db> {
         Self::impl_trait_local_nominal_root(db, impl_trait).is_some_and(|root| match root {
             TyBase::Adt(adt) => adt.ingot(db) == impl_trait_ingot,
             TyBase::Contract(contract) => contract.top_mod(db).ingot(db) == impl_trait_ingot,
-            TyBase::Prim(_) | TyBase::Func(_) => false,
+            TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_) => false,
         })
     }
 

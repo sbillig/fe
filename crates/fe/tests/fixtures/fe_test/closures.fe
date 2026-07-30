@@ -1,0 +1,53 @@
+use core::functional::Fn
+use core::option::Option::{self, Some}
+
+struct Boxed {
+    value: u256,
+}
+
+fn call_with_owned_capture(_ boxed: own Boxed) -> u256 {
+    let add_boxed = |value: own u256| -> u256 { value + boxed.value }
+    add_boxed.call(1)
+}
+
+fn call_with_ref_and_owned_capture(_ boxed: own Boxed) -> u256 {
+    let x: u256 = 1
+    let r = ref x
+    let add_both = |value: own u256| -> u256 { value + r + boxed.value }
+    add_both.call(40)
+}
+
+#[test]
+fn test_closure_call_method() {
+    let offset: u256 = 1
+    let inc = |value: own u256| -> u256 { value + offset }
+    assert(inc.call(41) == 42)
+}
+
+#[test]
+fn test_option_map_closure_capture() {
+    let offset: u256 = 10
+    let input: Option<u256> = Some(32)
+    let result = input.map(|value: own u256| -> u256 { value + offset }).unwrap()
+    assert(result == 42)
+}
+
+#[test]
+fn test_nested_closure_capture() {
+    let base: u256 = 40
+    let outer = |value: own u256| -> u256 {
+        let inner = |delta: own u256| -> u256 { base + value + delta }
+        inner.call(1)
+    }
+    assert(outer.call(1) == 42)
+}
+
+#[test]
+fn test_owned_capture_call() {
+    assert(call_with_owned_capture(Boxed { value: 41 }) == 42)
+}
+
+#[test]
+fn test_ref_and_owned_capture_call() {
+    assert(call_with_ref_and_owned_capture(Boxed { value: 1 }) == 42)
+}

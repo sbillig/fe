@@ -1,0 +1,3 @@
+pub fn f() {
+    let _f = |a: own u256, b: own u256| -> u256 { a + b }
+}

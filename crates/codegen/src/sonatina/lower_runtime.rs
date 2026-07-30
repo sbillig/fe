@@ -595,6 +595,7 @@ fn describe_runtime_instance<'db>(
                     .to_opt()
                     .map(|name| format!("contract-recv {}", name.data(db)))
                     .unwrap_or_else(|| format!("{owner:?}")),
+                BodyOwner::Closure { .. } => format!("{owner:?}"),
             };
             format!("semantic owner={owner_desc} params={:?}", key.params(db))
         }

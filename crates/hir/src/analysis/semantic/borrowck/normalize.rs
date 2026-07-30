@@ -14,7 +14,7 @@ use crate::{
         },
         ty::{
             normalize::normalize_ty,
-            ty_check::{EffectPassMode, LocalBinding, ParamSite},
+            ty_check::{BodyOwner, EffectPassMode, LocalBinding, ParamSite},
             ty_def::{BorrowKind, TyId},
             ty_is_copy,
         },
@@ -1133,13 +1133,22 @@ impl<'db> NormalizeCtxt<'db> {
             .expect("all locals normalized before call arg lowering")
             .ty;
         let mode = match callee.key.owner(self.db) {
-            crate::analysis::ty::ty_check::BodyOwner::Func(func) => func
+            BodyOwner::Func(func) => func
                 .params(self.db)
                 .nth(idx)
                 .map(|param| param.mode(self.db))
                 .filter(|mode| *mode == crate::hir_def::FuncParamMode::View)
                 .map(|_| self.read_mode_for_view_call_arg(ty))
                 .unwrap_or_else(|| self.read_mode_for_operand(local, origin, ty)),
+            BodyOwner::Closure { ty: closure_ty, .. } if idx == 0 => {
+                if closure_ty.captures(self.db).iter().all(|capture| {
+                    capture.as_capability(self.db).is_some() || self.ty_is_copy(*capture)
+                }) {
+                    self.read_mode_for_view_call_arg(ty)
+                } else {
+                    self.read_mode_for_operand(local, origin, ty)
+                }
+            }
             _ => self.read_mode_for_operand(local, origin, ty),
         };
         NOperand {

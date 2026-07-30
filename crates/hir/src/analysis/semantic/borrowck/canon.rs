@@ -159,7 +159,10 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
                     loans
                 }
             }
-            NExpr::Borrow { .. } | NExpr::Call { .. } => self
+            NExpr::Borrow { .. }
+            | NExpr::Call { .. }
+            | NExpr::ReadPlace { .. }
+            | NExpr::AggregateMake { .. } => self
                 .loan_for_local
                 .get(dst)
                 .copied()

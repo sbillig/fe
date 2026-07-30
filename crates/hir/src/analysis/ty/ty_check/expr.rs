@@ -5,21 +5,21 @@ use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
-    ArithBinOp, BinOp, CallArg as HirCallArg, CallableDef, Cond, CondId, Expr, ExprId, FieldIndex,
-    IdentId, IntegerId, LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt, StmtId, UnOp,
-    VariantKind, WithBinding,
+    ArithBinOp, BinOp, CallArg, CallArg as HirCallArg, CallableDef, ClosureDef, Cond, CondId, Expr,
+    ExprId, FieldIndex, IdentId, IntegerId, LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt,
+    StmtId, UnOp, VariantKind, WithBinding,
 };
 use crate::span::DynLazySpan;
 
 use super::{
-    CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, PatternLayoutContext, RecordLike,
-    Typeable, ValuePathRef,
+    BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, PatternLayoutContext,
+    RecordLike, Typeable, ValuePathRef,
     effect_env::{
         FamilyKeyedEntry, FrameLookupResult, MatchedForwarder, MatchedKeyedEntry, MatchedWitness,
     },
     env::{
-        EffectOrigin, EffectParamSite, ExprProp, LocalBinding, ParamSite, PendingPrimitiveOp,
-        ProvidedEffect, TraitObligation, TraitObligationOrigin, TyCheckEnv,
+        ClosureInfo, EffectOrigin, EffectParamSite, ExprProp, LocalBinding, ParamSite,
+        PendingPrimitiveOp, ProvidedEffect, TraitObligation, TraitObligationOrigin, TyCheckEnv,
     },
     path::ResolvedPathInBody,
     ty_may_be_code_region_token,
@@ -63,7 +63,8 @@ use crate::analysis::ty::{
         GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx, is_goal_satisfiable,
     },
     ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
-    ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
+    ty_contains_const_hole,
+    ty_def::{CapabilityKind, ClosureTy, PrimTy, TyBase, TyData, prim_int_bits},
     unify::UnificationTable,
 };
 use crate::analysis::{
@@ -92,6 +93,7 @@ use crate::analysis::{
             callable_input_carrier_projected_layout_ty, callable_input_layout_origin_ty,
             callable_input_layout_projection_paths, callable_input_projected_layout_ty,
             instantiate_callable_effect_layout_args, instantiate_callable_projection_layout_args,
+            lower_hir_ty,
         },
     },
 };
@@ -244,6 +246,14 @@ pub(super) enum PendingPrimitiveOpResolution {
 }
 
 impl<'db> TyChecker<'db> {
+    fn call_args_include_closure(&mut self, args: &[CallArg<'db>]) -> bool {
+        args.iter().any(|arg| {
+            self.env
+                .typed_expr(arg.expr)
+                .is_some_and(|prop| self.normalize_ty(prop.ty).as_closure(self.db).is_some())
+        })
+    }
+
     fn code_region_intrinsic_kind(
         &self,
         callable_def: CallableDef<'db>,
@@ -339,6 +349,7 @@ impl<'db> TyChecker<'db> {
             }
             Expr::Lit(lit) => ExprProp::new(self.lit_ty_for_expected(lit, expected), true),
             Expr::Block(..) => self.check_block(expr, expr_data, expected, result_discarded),
+            Expr::Closure { .. } => self.check_closure(expr, expr_data),
             Expr::Un(..) => self.check_unary(expr, expr_data),
             Expr::Cast(inner, ty) => self.check_cast(expr, *inner, *ty),
             Expr::Bin(lhs, rhs, op) => self.check_binary(expr, *lhs, *rhs, *op),
@@ -479,6 +490,103 @@ impl<'db> TyChecker<'db> {
                 subject: MustUseSubject::Function(callable.callable_def()),
             });
         }
+    }
+
+    fn check_closure(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
+        let Expr::Closure {
+            params,
+            ret_ty,
+            body,
+        } = expr_data
+        else {
+            unreachable!()
+        };
+        let def = ClosureDef {
+            body: self.body(),
+            expr,
+        };
+        let assumptions = self.env.assumptions();
+
+        if params.data(self.db).len() != 1 {
+            self.push_diag(BodyDiag::UnsupportedClosureArity {
+                primary: expr.span(self.body()).into(),
+                arity: params.data(self.db).len(),
+            });
+        }
+        if matches!(
+            self.env.owner(),
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. }
+        ) {
+            self.push_diag(BodyDiag::ClosureInConstContext {
+                primary: expr.span(self.body()).into(),
+            });
+        }
+
+        self.env.enter_closure(def);
+        self.env.enter_lexical_scope();
+
+        let mut param_tys = Vec::with_capacity(params.data(self.db).len());
+        for (idx, param) in params.data(self.db).iter().enumerate() {
+            let mut ty = param.ty.to_opt().map_or_else(
+                || TyId::invalid(self.db, InvalidCause::ParseError),
+                |hir_ty| lower_hir_ty(self.db, hir_ty, self.env.scope(), assumptions),
+            );
+            if param.mode == crate::hir_def::params::FuncParamMode::View
+                && ty.as_capability(self.db).is_none()
+            {
+                ty = TyId::view_of(self.db, ty);
+            }
+            if !ty.is_star_kind(self.db) || ty_contains_const_hole(self.db, ty) {
+                ty = TyId::invalid(self.db, InvalidCause::Other);
+            }
+
+            let binding = LocalBinding::Param {
+                site: ParamSite::Closure(def),
+                idx,
+                mode: param.mode,
+                ty,
+                is_mut: param.is_mut,
+            };
+            self.env.register_closure_param(param.name(), binding);
+            param_tys.push(ty);
+        }
+
+        let ret_expected = match ret_ty {
+            Some(ret_ty) => {
+                let ret_ty = lower_hir_ty(self.db, *ret_ty, self.env.scope(), assumptions);
+                if ret_ty.is_star_kind(self.db) && !ty_contains_const_hole(self.db, ret_ty) {
+                    ret_ty
+                } else {
+                    TyId::invalid(self.db, InvalidCause::Other)
+                }
+            }
+            None => self.fresh_ty(),
+        };
+        let saved_body_ctx = self.env.take_body_ctx();
+        let saved_expected = std::mem::replace(&mut self.expected, ret_expected);
+        let body_prop = self.check_expr(*body, ret_expected);
+        self.expected = saved_expected;
+        self.env.restore_body_ctx(saved_body_ctx);
+        let ret_ty = self.normalize_ty(body_prop.ty);
+
+        self.env.leave_scope();
+        let (param_bindings, captures) = self.env.leave_closure();
+        let capture_tys = captures
+            .iter()
+            .map(|capture| capture.ty)
+            .collect::<Vec<_>>();
+        let closure_ty = ClosureTy::new(self.db, def, capture_tys, param_tys, ret_ty);
+        self.env.register_closure_info(
+            expr,
+            ClosureInfo {
+                def,
+                body: *body,
+                params: param_bindings,
+                captures,
+                ty: closure_ty,
+            },
+        );
+        ExprProp::new(TyId::closure(self.db, closure_ty), false)
     }
 
     fn check_unary(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
@@ -1336,6 +1444,13 @@ impl<'db> TyChecker<'db> {
 
         callable.check_args(self, args, call_span.clone().args(), None, false);
         self.specialize_callable_layout_args(&mut callable, None, args);
+        if self.call_args_include_closure(args) {
+            self.eagerly_process_callable_constraints(
+                &callable,
+                expr,
+                call_span.clone().callee().into(),
+            );
+        }
 
         self.check_callable_effects(expr, &mut callable);
 
@@ -1419,6 +1534,13 @@ impl<'db> TyChecker<'db> {
     pub(super) fn check_callable_effects(&mut self, expr: ExprId, callable: &mut Callable<'db>) {
         let body = self.body();
         let call_span: DynLazySpan<'db> = expr.span(body).into();
+        if self.env.in_closure()
+            && let CallableDef::Func(func) = callable.callable_def
+            && func.has_effects(self.db)
+        {
+            self.push_diag(BodyDiag::EffectInClosure { primary: call_span });
+            return;
+        }
         let args = self.resolve_callable_effects(call_span.clone(), callable);
         for arg in args {
             self.env.push_call_effect_arg(expr, arg);
@@ -3338,6 +3460,14 @@ impl<'db> TyChecker<'db> {
         );
         self.specialize_callable_layout_args(&mut callable, Some(*receiver), args);
 
+        if self.call_args_include_closure(args) {
+            self.eagerly_process_callable_constraints(
+                &callable,
+                expr,
+                call_span.clone().method_name().into(),
+            );
+        }
+
         // Check required effects for the method call
         self.check_callable_effects(expr, &mut callable);
 
@@ -3423,6 +3553,15 @@ impl<'db> TyChecker<'db> {
                     .lookup_binding_ty(&binding)
                     .fold_with(self.db, &mut self.table);
                 let ty = self.normalize_ty(ty);
+                if matches!(binding, LocalBinding::EffectParam { .. })
+                    && self.env.binding_is_capture(binding)
+                {
+                    self.push_diag(BodyDiag::EffectInClosure {
+                        primary: expr.span(self.body()).into(),
+                    });
+                    return ExprProp::invalid(self.db);
+                }
+                self.env.record_capture_if_needed(binding, ty);
                 let mut is_mut = binding.is_mut();
                 if let Some((cap, _)) = ty.as_capability(self.db) {
                     is_mut = match cap {
@@ -5092,6 +5231,16 @@ impl<'db> TyChecker<'db> {
             }
 
             return AssignLhsStatus::NonAssignable;
+        }
+
+        if let Some(binding) = self.find_base_binding(lhs)
+            && self.env.binding_is_capture(binding)
+        {
+            self.push_diag(BodyDiag::AssignToCapturedBinding {
+                primary: lhs.span(self.body()).into(),
+                binding: Some((binding.binding_name(&self.env), binding.def_span(&self.env))),
+            });
+            return AssignLhsStatus::Immutable;
         }
 
         if !typed_lhs.is_mut {

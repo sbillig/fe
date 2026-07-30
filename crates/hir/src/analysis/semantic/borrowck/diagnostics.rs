@@ -272,5 +272,6 @@ pub(crate) fn checker_name<'db>(
                 Partial::Absent => "<contract>".to_string(),
             }
         ),
+        BodyOwner::Closure { .. } => "<closure>".to_string(),
     }
 }

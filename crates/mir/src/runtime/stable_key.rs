@@ -79,6 +79,9 @@ fn body_owner_identity<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -
             "contract_recv${}${recv_idx}${arm_idx}",
             item_identity(db, contract.into())
         ),
+        BodyOwner::Closure { ty, .. } => {
+            format!("closure_body${}", type_identity(db, TyId::closure(db, ty)))
+        }
     }
 }
 
@@ -428,6 +431,27 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
                     variant.name(db).unwrap_or("variant")
                 ),
             },
+            TyBase::Closure(closure) => {
+                let def = closure.def(db);
+                let captures = closure
+                    .captures(db)
+                    .iter()
+                    .map(|ty| type_identity(db, *ty))
+                    .collect::<Vec<_>>()
+                    .join("$");
+                let params = closure
+                    .params(db)
+                    .iter()
+                    .map(|ty| type_identity(db, *ty))
+                    .collect::<Vec<_>>()
+                    .join("$");
+                format!(
+                    "closure${}${}$captures${captures}$params${params}$ret${}",
+                    item_identity(db, def.body.into()),
+                    expr_id(def.expr),
+                    type_identity(db, closure.ret_ty(db))
+                )
+            }
         },
         TyData::TyParam(param) => {
             format!(

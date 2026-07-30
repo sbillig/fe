@@ -13,7 +13,7 @@ use crate::{
 
 use super::{
     classify::{
-        RuntimeVisibleBindingPlan, desired_runtime_param_plan, owner_effect_binding_boundary,
+        RuntimeVisibleBindingPlan, desired_runtime_binding_plan, owner_effect_binding_boundary,
     },
     type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
 };
@@ -76,13 +76,11 @@ pub(crate) fn runtime_param_plans<'db>(
     semantic: SemanticInstance<'db>,
 ) -> Vec<RuntimeParamPlan<'db>> {
     let typed_body = semantic.key(db).typed_body(db);
-    let mut plans = Vec::new();
-    let mut idx = 0;
-    while typed_body.param_binding(idx).is_some() {
-        plans.push(desired_runtime_param_plan(db, semantic, typed_body, idx));
-        idx += 1;
-    }
-    plans
+    typed_body
+        .owner_param_bindings(db, semantic.key(db).owner(db))
+        .into_iter()
+        .map(|binding| desired_runtime_binding_plan(db, semantic, typed_body, binding))
+        .collect()
 }
 
 #[salsa::tracked(return_ref)]
@@ -105,8 +103,11 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
         }
     };
 
-    let mut idx = 0;
-    while let Some(binding) = typed_body.param_binding(idx) {
+    for (idx, binding) in typed_body
+        .owner_param_bindings(db, owner)
+        .into_iter()
+        .enumerate()
+    {
         push(
             binding,
             param_plans
@@ -114,7 +115,6 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
                 .cloned()
                 .unwrap_or(RuntimeParamPlan::Erased),
         );
-        idx += 1;
     }
 
     if let BodyOwner::ContractRecvArm {

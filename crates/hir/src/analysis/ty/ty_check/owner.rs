@@ -1,12 +1,16 @@
-use crate::analysis::ty::ty_def::TyId;
-use crate::hir_def::{ItemKind, attr::ArithmeticMode};
+use crate::analysis::ty::ty_def::{ClosureTy, TyId};
+use crate::hir_def::{ClosureDef, Expr, ItemKind, Partial, attr::ArithmeticMode};
 use crate::span::DynLazySpan;
 use crate::{
     analysis::HirAnalysisDb,
-    hir_def::{Body, Const, Contract, EffectParamListId, Func, PathId, scope_graph::ScopeId},
+    hir_def::{
+        Body, Const, Contract, EffectParamListId, ExprId, Func, PathId, scope_graph::ScopeId,
+    },
     span::item::{LazyContractRecvSpan, LazyRecvArmSpan},
 };
 use salsa::Update;
+
+use super::TypedBody;
 
 /// Identifies the HIR owner of a [`Body`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
@@ -24,6 +28,10 @@ pub enum BodyOwner<'db> {
         contract: Contract<'db>,
         recv_idx: u32,
         arm_idx: u32,
+    },
+    Closure {
+        ty: ClosureTy<'db>,
+        def: ClosureDef<'db>,
     },
 }
 
@@ -97,6 +105,64 @@ impl<'db> EffectParamOwner<'db> {
 }
 
 impl<'db> BodyOwner<'db> {
+    pub fn closure(db: &'db dyn HirAnalysisDb, ty: ClosureTy<'db>) -> Self {
+        Self::Closure {
+            def: ty.def(db),
+            ty,
+        }
+    }
+
+    pub fn result_ty(self, db: &'db dyn HirAnalysisDb, typed_body: &TypedBody<'db>) -> TyId<'db> {
+        match self {
+            Self::Closure { ty, .. } => ty.ret_ty(db),
+            _ => typed_body.result_ty(),
+        }
+    }
+
+    pub fn from_body(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<Self> {
+        if let Some(func) = body.containing_func(db) {
+            return Some(Self::Func(func));
+        }
+
+        match body.scope().parent_item(db)? {
+            ItemKind::Const(const_) if const_.body(db).to_opt() == Some(body) => {
+                Some(Self::Const(const_))
+            }
+            ItemKind::Contract(contract) => {
+                if contract.init(db).is_some_and(|init| init.body(db) == body) {
+                    return Some(Self::ContractInit { contract });
+                }
+                for (recv_idx, recv) in contract.recvs(db).data(db).iter().enumerate() {
+                    for (arm_idx, arm) in recv.arms.data(db).iter().enumerate() {
+                        if arm.body == body {
+                            return Some(Self::ContractRecvArm {
+                                contract,
+                                recv_idx: recv_idx as u32,
+                                arm_idx: arm_idx as u32,
+                            });
+                        }
+                    }
+                }
+                None
+            }
+            ItemKind::Body(parent) => Self::from_body(db, parent),
+            _ => None,
+        }
+    }
+
+    pub fn root_expr(self, db: &'db dyn HirAnalysisDb) -> Option<ExprId> {
+        match self {
+            Self::Closure { def, .. } => {
+                let Partial::Present(Expr::Closure { body, .. }) = def.expr.data(db, def.body)
+                else {
+                    return None;
+                };
+                Some(*body)
+            }
+            _ => self.body(db).map(|body| body.expr(db)),
+        }
+    }
+
     pub fn arithmetic_mode(self, db: &'db dyn HirAnalysisDb) -> ArithmeticMode {
         if let Self::Func(func) = self {
             return func.arithmetic_mode(db);
@@ -131,7 +197,9 @@ impl<'db> BodyOwner<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> Option<crate::hir_def::ContractRecvArm<'db>> {
         match self {
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => None,
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {
+                None
+            }
             BodyOwner::ContractInit { .. } => None,
             BodyOwner::ContractRecvArm {
                 contract,
@@ -167,6 +235,7 @@ impl<'db> BodyOwner<'db> {
                     .recv_arm(db, recv_idx as usize, arm_idx as usize)?
                     .body,
             ),
+            BodyOwner::Closure { def, .. } => Some(def.body),
         }
     }
 
@@ -177,13 +246,14 @@ impl<'db> BodyOwner<'db> {
             BodyOwner::AnonConstBody { body, .. } => body.scope(),
             BodyOwner::ContractInit { contract } => contract.scope(),
             BodyOwner::ContractRecvArm { contract, .. } => contract.scope(),
+            BodyOwner::Closure { def, .. } => def.body.scope(),
         }
     }
 
     pub fn effects(self, db: &'db dyn HirAnalysisDb) -> EffectParamListId<'db> {
         match self {
             BodyOwner::Func(func) => func.effects(db),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {
                 EffectParamListId::new(db, Vec::new())
             }
             BodyOwner::ContractInit { contract } => contract
@@ -209,7 +279,9 @@ impl<'db> BodyOwner<'db> {
     ) -> DynLazySpan<'db> {
         match self {
             BodyOwner::Func(func) => func.span().effects().param_idx(idx).path().into(),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => DynLazySpan::invalid(),
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {
+                DynLazySpan::invalid()
+            }
             BodyOwner::ContractInit { contract } => contract
                 .span()
                 .init_block()

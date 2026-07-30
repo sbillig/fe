@@ -24,11 +24,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     pub(super) fn lower_place_data(&mut self, source_place: &Place<'db>) -> SPlace<'db> {
         let PlaceBase::Binding(binding) = source_place.base;
-        let local = *self
-            .binding_locals
-            .get(&binding)
-            .expect("binding local should be allocated");
-        let mut place = SPlace::new(local);
+        let mut place = if let Some(local) = self.binding_locals.get(&binding).copied() {
+            SPlace::new(local)
+        } else if let (Some(env), Some(field)) = (
+            self.closure_env_local,
+            self.closure_capture_fields.get(&binding).copied(),
+        ) {
+            let mut place = SPlace::new(env);
+            place.push_field(field);
+            place
+        } else {
+            panic!("binding local should be allocated: {binding:?}");
+        };
 
         for projection in &source_place.projections {
             match *projection {

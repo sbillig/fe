@@ -11,6 +11,7 @@ use crate::analysis::{
         borrowck::ir::{NExpr, NSStmtKind},
         get_or_build_semantic_instance,
     },
+    ty::ty_is_noesc,
 };
 
 use super::{
@@ -105,6 +106,13 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
                 };
                 Ok(self.extend_loan(loans, loan_id, targets, parents))
             }
+            NExpr::ReadPlace { place, .. } => {
+                let targets = {
+                    let canon = self.canon(loans);
+                    canon.canonicalize_place(state, place, stmt.origin)?
+                };
+                Ok(self.extend_loan(loans, loan_id, targets, FxHashSet::default()))
+            }
             NExpr::Call { callee, args, .. } => {
                 let callee_instance = get_or_build_semantic_instance(self.db, callee.key);
                 let summary = match self.summary_mode {
@@ -132,6 +140,25 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
                                 });
                             }
                             parents.extend(canon.mut_loans_for_value(state, arg.local));
+                        }
+                    }
+                    (targets, parents)
+                };
+                Ok(self.extend_loan(loans, loan_id, targets, parents))
+            }
+            NExpr::AggregateMake { fields, .. } => {
+                let (targets, parents) = {
+                    let canon = self.canon(loans);
+                    let mut targets = FxHashSet::default();
+                    let mut parents = FxHashSet::default();
+                    for field in fields {
+                        if self
+                            .body
+                            .local(field.local)
+                            .is_some_and(|local| ty_is_noesc(self.db, local.ty))
+                        {
+                            targets.extend(canon.borrow_local_targets(state, field.local));
+                            parents.extend(canon.mut_loans_for_value(state, field.local));
                         }
                     }
                     (targets, parents)

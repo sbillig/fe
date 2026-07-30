@@ -216,6 +216,12 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
             ty.field_types(db)
                 .into_iter()
                 .any(|field_ty| inner(db, field_ty, visiting))
+        } else if let Some(closure) = ty.as_closure(db) {
+            closure
+                .captures(db)
+                .iter()
+                .copied()
+                .any(|field_ty| inner(db, field_ty, visiting))
         } else if ty.is_array(db) {
             let (_, args) = ty.decompose_ty_app(db);
             args.first()

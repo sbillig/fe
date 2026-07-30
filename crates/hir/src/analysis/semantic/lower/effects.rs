@@ -175,7 +175,7 @@ pub(super) fn provisional_owner_effect_bindings<'db>(
 pub fn effect_param_site<'db>(owner: BodyOwner<'db>) -> Option<EffectParamSite<'db>> {
     match owner {
         BodyOwner::Func(func) => Some(EffectParamSite::Func(func)),
-        BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => None,
+        BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => None,
         BodyOwner::ContractInit { contract } => Some(EffectParamSite::ContractInit { contract }),
         BodyOwner::ContractRecvArm {
             contract,

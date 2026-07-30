@@ -9,6 +9,7 @@ use crate::analysis::{
     ty::{
         binder::Binder,
         canonical::{Canonical, Canonicalized, Solution},
+        corelib::resolve_core_trait,
         fold::TyFoldable as _,
         method_table::{ProbedMethod, probe_method},
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_and_ty, impls_for_ty},
@@ -16,7 +17,7 @@ use crate::analysis::{
             CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
             goal_query_has_solution, is_goal_query_satisfiable,
         },
-        ty_def::{TyData, TyId},
+        ty_def::{TyBase, TyData, TyId},
         unify::UnificationTable,
     },
 };
@@ -199,6 +200,7 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
 
     fn assemble_trait_method_candidates(&mut self) {
         let scope_ingot = self.scope.ingot(self.db);
+        self.insert_builtin_closure_fn_candidate();
 
         // When the receiver is a type parameter (e.g. `D` in `fn f<D: Trait>(d: D)`),
         // we don't know its concrete type yet, so probing impls would pull in many
@@ -252,6 +254,30 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
                 cx.rollback_to(snapshot);
             }
         });
+    }
+
+    fn insert_builtin_closure_fn_candidate(&mut self) {
+        let TyData::TyBase(TyBase::Closure(closure)) =
+            self.receiver.original().base_ty(self.db).data(self.db)
+        else {
+            return;
+        };
+        let Some(fn_trait) = resolve_core_trait(self.db, self.scope, &["functional", "Fn"]) else {
+            return;
+        };
+        if !self.allow_trait(fn_trait) {
+            return;
+        }
+        let [arg_ty] = closure.params(self.db).as_slice() else {
+            return;
+        };
+        let inst = TraitInstId::new(
+            self.db,
+            fn_trait,
+            vec![self.receiver.original(), *arg_ty, closure.ret_ty(self.db)],
+            IndexMap::new(),
+        );
+        self.insert_assumption_trait_method_cand(inst);
     }
 
     fn allow_trait(&self, trait_def: Trait<'db>) -> bool {

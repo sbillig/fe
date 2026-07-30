@@ -2383,6 +2383,10 @@ fn symbol_base_for_semantic_instance<'db>(
             recv_idx,
             arm_idx
         ),
+        BodyOwner::Closure { ty, .. } => format!(
+            "__closure_{}",
+            stable_identity_hash(&type_identity(db, TyId::closure(db, ty)))
+        ),
         BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => "__const".to_string(),
     }
 }
@@ -2448,6 +2452,7 @@ fn inline_hint_for_semantic<'db>(
         },
         BodyOwner::Const(_)
         | BodyOwner::AnonConstBody { .. }
+        | BodyOwner::Closure { .. }
         | BodyOwner::ContractInit { .. }
         | BodyOwner::ContractRecvArm { .. } => RuntimeInlineHint::Auto,
     }

@@ -626,6 +626,7 @@ module.exports = grammar({
       $.binary_expression,
       $.unary_expression,
       $.cast_expression,
+      $.closure_expression,
       $.call_expression,
       $.macro_call_expression,
       $.method_call_expression,
@@ -663,6 +664,21 @@ module.exports = grammar({
       field('mode', choice('mut', 'ref', 'own')),
       field('value', $._expression),
     )),
+
+    closure_expression: $ => prec.right(seq(
+      $.closure_parameter_list,
+      optional(seq('->', field('return_type', $._type))),
+      field('body', $.block),
+    )),
+
+    closure_parameter_list: $ => choice(
+      '||',
+      seq(
+        '|',
+        sepTrailing($.parameter, ','),
+        '|',
+      ),
+    ),
 
     // Qualified path in expression context: <T as Trait>::method(args)
     qualified_path_expression: $ => prec.right(seq(

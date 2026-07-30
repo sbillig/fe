@@ -10,7 +10,7 @@ use mir::{
     RuntimeFunctionOwner,
     runtime::stable_key::{
         generic_args_identity, ingot_component_for_scope, module_path_components_for_scope,
-        semantic_owner_context_identity, stable_identity_hash,
+        semantic_owner_context_identity, stable_identity_hash, type_identity,
     },
 };
 use rustc_hash::FxHashSet;
@@ -306,6 +306,10 @@ fn semantic_leaf_component<'db>(db: &'db DriverDataBase, owner: BodyOwner<'db>) 
             recv_idx,
             arm_idx
         ),
+        BodyOwner::Closure { ty, .. } => format!(
+            "__closure_{}",
+            stable_identity_hash(&type_identity(db, TyId::closure(db, ty)))
+        ),
     }
 }
 
@@ -353,7 +357,7 @@ fn readable_type_component<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> Optio
             .name(db)
             .to_opt()
             .map(|name| name.data(db).to_string()),
-        TyData::TyBase(TyBase::Prim(_) | TyBase::Func(_))
+        TyData::TyBase(TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_))
         | TyData::TyParam(_)
         | TyData::QualifiedTy(_) => {
             let component = base.pretty_print(db).to_string();

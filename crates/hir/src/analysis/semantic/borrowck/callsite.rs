@@ -169,7 +169,8 @@ impl<'db> CallSiteProviderRefiner<'db> {
             BodyOwner::Const(_)
             | BodyOwner::AnonConstBody { .. }
             | BodyOwner::ContractInit { .. }
-            | BodyOwner::ContractRecvArm { .. } => None,
+            | BodyOwner::ContractRecvArm { .. }
+            | BodyOwner::Closure { .. } => None,
         }
     }
 
