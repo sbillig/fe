@@ -7,7 +7,8 @@ use hir::analysis::{
         SemanticLocalRole, ValueProvenance, VariantIndex,
         borrowck::{
             NAssignmentId, NBorrowRoot, NExpr, NLocalOrigin, NOperand, NSLocal, NSPlace,
-            NSPlaceRoot, NormalizedBindingLowering, NormalizedBodyFacts, NormalizedSemanticBody,
+            NSPlaceRoot, NSStmtKind, NSTerminatorKind, NormalizedBindingLowering,
+            NormalizedBodyFacts, NormalizedSemanticBody, normalized_cfg_successors_and_reachable,
         },
         get_or_build_semantic_instance,
     },
@@ -80,9 +81,12 @@ use super::{
 #[derive(Clone)]
 pub(crate) struct BodyStaticFacts<'db> {
     normalized_facts: NormalizedBodyFacts,
-    local_facts: Vec<LocalStaticFacts<'db>>,
+    local_facts: Vec<Option<LocalStaticFacts<'db>>>,
     assignments: PrimaryMap<AssignmentId, AssignStaticFacts<'db>>,
     root_provider_locals: FxHashMap<ProviderBinding<'db>, SLocalId>,
+    cfg_successors: Vec<Vec<SBlockId>>,
+    reachable_blocks: Vec<bool>,
+    reachable_locals: Vec<bool>,
 }
 
 pub(crate) type AssignmentId = NAssignmentId;
@@ -267,8 +271,62 @@ impl<'db> BodyStaticFacts<'db> {
         typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
         type_env: RuntimeTypeEnv<'db>,
     ) -> Self {
+        let (cfg_successors, reachable_blocks) = normalized_cfg_successors_and_reachable(db, body);
+
+        // Static runtime facts are executable-program facts. Keep the original
+        // block and statement coordinates, but remove statements and uses from
+        // blocks the shared semantic CFG proved unreachable.
+        let mut reachable_body = body.clone();
+        for (block_idx, block) in reachable_body.blocks.iter_mut().enumerate() {
+            if !reachable_blocks[block_idx] {
+                block.stmts.clear();
+                block.terminator.kind = NSTerminatorKind::Return(None);
+            }
+        }
         let mut boundary_sites = BoundarySiteAllocator::default();
-        let normalized_facts = NormalizedBodyFacts::new(body);
+        let normalized_facts = NormalizedBodyFacts::new(&reachable_body);
+        let root_provider_locals = build_runtime_visible_root_provider_locals(db, body.owner);
+        let mut reachable_locals = vec![false; body.locals.len()];
+        for local in body
+            .entry_locals
+            .iter()
+            .copied()
+            .chain(root_provider_locals.values().copied())
+        {
+            reachable_locals[local.index()] = true;
+        }
+        for (block_idx, block) in body.blocks.iter().enumerate() {
+            if !reachable_blocks[block_idx] {
+                continue;
+            }
+            let block_id = SBlockId::new(block_idx);
+            for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
+                if let NSStmtKind::Assign { dst, .. } = &stmt.kind {
+                    reachable_locals[dst.index()] = true;
+                }
+                for local in normalized_facts.stmt_uses(block_id, stmt_idx) {
+                    reachable_locals[local.index()] = true;
+                }
+            }
+            for local in normalized_facts.terminator_uses(block_id) {
+                reachable_locals[local.index()] = true;
+            }
+        }
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for local_idx in 0..reachable_locals.len() {
+                if !reachable_locals[local_idx] {
+                    continue;
+                }
+                for dependency in normalized_facts.local_dependency_uses(SLocalId::new(local_idx)) {
+                    if !reachable_locals[dependency.index()] {
+                        reachable_locals[dependency.index()] = true;
+                        changed = true;
+                    }
+                }
+            }
+        }
         let expr_facts_builder = ExprStaticFactsBuilder {
             db,
             body,
@@ -281,7 +339,8 @@ impl<'db> BodyStaticFacts<'db> {
             .enumerate()
             .map(|(idx, local_data)| {
                 let local = SLocalId::from_u32(idx as u32);
-                build_local_static_facts(db, type_env, local, local_data)
+                reachable_locals[idx]
+                    .then(|| build_local_static_facts(db, type_env, local, local_data))
             })
             .collect();
         let mut assignments = PrimaryMap::new();
@@ -308,17 +367,45 @@ impl<'db> BodyStaticFacts<'db> {
             });
             debug_assert_eq!(pushed, assign_id);
         }
-        let root_provider_locals = build_runtime_visible_root_provider_locals(db, body.owner);
         Self {
             normalized_facts,
             local_facts,
             assignments,
             root_provider_locals,
+            cfg_successors,
+            reachable_blocks,
+            reachable_locals,
         }
     }
 
+    pub(super) fn cfg_successors(&self) -> &[Vec<SBlockId>] {
+        &self.cfg_successors
+    }
+
+    pub(super) fn reachable_blocks(&self) -> &[bool] {
+        &self.reachable_blocks
+    }
+
+    pub(super) fn reachable_locals(&self) -> &[bool] {
+        &self.reachable_locals
+    }
+
+    pub(super) fn block_is_reachable(&self, block: SBlockId) -> bool {
+        self.reachable_blocks
+            .get(block.index())
+            .copied()
+            .unwrap_or(false)
+    }
+
+    pub(super) fn local_is_reachable(&self, local: SLocalId) -> bool {
+        self.reachable_locals
+            .get(local.index())
+            .copied()
+            .unwrap_or(false)
+    }
+
     fn local(&self, local: SLocalId) -> Option<&LocalStaticFacts<'db>> {
-        self.local_facts.get(local.index())
+        self.local_facts.get(local.index())?.as_ref()
     }
 
     fn expr(&self, block_idx: usize, stmt_idx: usize) -> Option<&ExprStaticFacts<'db>> {
@@ -458,6 +545,22 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
 
     pub(super) fn dynamic_dependents(self, local: SLocalId) -> &'a [SLocalId] {
         self.facts.dynamic_dependents(local)
+    }
+
+    pub(super) fn block_is_reachable(self, block: SBlockId) -> bool {
+        self.facts.block_is_reachable(block)
+    }
+
+    pub(super) fn reachable_blocks(self) -> &'a [bool] {
+        self.facts.reachable_blocks()
+    }
+
+    pub(super) fn local_is_reachable(self, local: SLocalId) -> bool {
+        self.facts.local_is_reachable(local)
+    }
+
+    pub(super) fn reachable_locals(self) -> &'a [bool] {
+        self.facts.reachable_locals()
     }
 
     pub(super) fn value_source_locals(self, local: SLocalId) -> &'a [SLocalId] {
@@ -705,9 +808,9 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                     FieldIndex((*field).try_into().expect("field index fits")),
                 ),
                 Projection::Index(_) => project_index_class(self.db, current),
-                Projection::Deref => current
-                    .deref_target()
-                    .unwrap_or_else(|| panic!("invalid deref projection class")),
+                Projection::Deref => current.deref_target().unwrap_or_else(|| {
+                    panic!("invalid deref projection class: class={current:?}; place={place:?}")
+                }),
                 Projection::VariantField {
                     variant, field_idx, ..
                 } => project_variant_field_place_class(
@@ -2860,7 +2963,7 @@ mod tests {
     use driver::DriverDataBase;
     use hir::{
         analysis::semantic::{
-            NBorrowRoot, NEffectArg, NSPlace, NSPlaceRoot, SemanticInstance,
+            Mutability, NBorrowRoot, NEffectArg, NSPlace, NSPlaceRoot, SemanticInstance,
             borrowck::{NSTerminatorKind, NormalizedSemanticBody, normalize_semantic_body},
             get_or_build_semantic_instance, owner_effect_bindings,
             resolved_provider_binding_for_instance_effect, root_semantic_instance_key,
@@ -2946,6 +3049,270 @@ mod tests {
             panic!("failed to build root semantic key for `{name}`: {err:?}")
         });
         get_or_build_semantic_instance(db, key)
+    }
+
+    #[test]
+    fn runtime_static_facts_and_inference_exclude_refined_dead_blocks() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///runtime_static_facts_exclude_refined_dead_blocks.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn probe() -> u256 {
+    let known = true
+    let result = if known {
+        41
+    } else {
+        let dead = 1
+        dead
+    }
+    result + 1
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let semantic = semantic_instance_for_named_func(&db, top_mod, "probe");
+        let normalized = normalize_semantic_body(&db, semantic).expect("normalized body");
+        let raw_facts = NormalizedBodyFacts::new(&normalized);
+        let facts = BodyStaticFacts::new(&db, &normalized);
+        let dead_assignments = raw_facts
+            .assignments()
+            .iter()
+            .filter(|(_, assignment)| !facts.block_is_reachable(assignment.block))
+            .map(|(_, assignment)| assignment.dst)
+            .collect::<Vec<_>>();
+        assert!(
+            !dead_assignments.is_empty(),
+            "the fixture must retain assignments in a refined-unreachable block"
+        );
+        assert!(
+            facts.assignments().iter().all(
+                |(_, assignment)| facts.block_is_reachable(SBlockId::new(assignment.block_idx))
+            ),
+            "runtime static facts must contain only executable assignments"
+        );
+
+        let instance = runtime_instance_for_semantic(&db, semantic);
+        let params = instance.key(&db).params(&db);
+        let inferred = LocalStateInferer::new(
+            BodyEnv::new(&db, &normalized, &facts),
+            params,
+            &runtime_param_locals(&db, semantic, params),
+        )
+        .run();
+        assert!(
+            dead_assignments.iter().copied().any(|local| {
+                !facts.local_is_reachable(local)
+                    && inferred.carriers[local.index()] == RuntimeCarrier::Erased
+                    && inferred.roots[local.index()] == RuntimeLocalRoot::None
+            }),
+            "at least one dead-only local must stay erased and rootless"
+        );
+    }
+
+    #[test]
+    fn refined_dead_borrow_does_not_force_live_value_into_root_storage() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///refined_dead_borrow_does_not_force_live_value_root.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn probe() -> u256 {
+    let mut value: u256 = 41
+    let known = false
+    if known {
+        let alias = mut value
+        alias = 0
+    }
+    value + 1
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let semantic = semantic_instance_for_named_func(&db, top_mod, "probe");
+        let normalized = normalize_semantic_body(&db, semantic).expect("normalized body");
+        let facts = BodyStaticFacts::new(&db, &normalized);
+        let value_locals = normalized
+            .locals
+            .iter()
+            .enumerate()
+            .filter(|(_, local)| {
+                matches!(local.source, Some(LocalBinding::Local { .. }))
+                    && local.mutability == Mutability::Mutable
+            })
+            .map(|(idx, _)| SLocalId::new(idx))
+            .collect::<Vec<_>>();
+        let [value] = value_locals.as_slice() else {
+            panic!("expected one mutable source local, found {value_locals:?}");
+        };
+        assert!(
+            normalized
+                .blocks
+                .iter()
+                .enumerate()
+                .any(|(block_idx, block)| {
+                    !facts.block_is_reachable(SBlockId::new(block_idx))
+                        && block.stmts.iter().any(|stmt| {
+                            matches!(
+                                &stmt.kind,
+                                NSStmtKind::Assign {
+                                    expr: NExpr::Borrow { .. },
+                                    ..
+                                }
+                            )
+                        })
+                }),
+            "the fixture must retain a borrow in a refined-unreachable block"
+        );
+        assert!(
+            !normalized.locals[value.index()]
+                .facts
+                .root_demand
+                .needs_runtime_root(),
+            "a refined-dead borrow must not add executable root demand"
+        );
+
+        let instance = runtime_instance_for_semantic(&db, semantic);
+        let params = instance.key(&db).params(&db);
+        let inferred = LocalStateInferer::new(
+            BodyEnv::new(&db, &normalized, &facts),
+            params,
+            &runtime_param_locals(&db, semantic, params),
+        )
+        .run();
+        assert_eq!(
+            inferred.roots[value.index()],
+            RuntimeLocalRoot::None,
+            "the live scalar must remain an unrooted value"
+        );
+        crate::runtime::lower::lower_to_rmir(&db, instance).expect("lower probe");
+    }
+
+    #[test]
+    fn refined_dead_aggregate_definition_does_not_root_its_source() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///refined_dead_aggregate_definition_does_not_root_source.fe")
+                .unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Handle {
+    target: mut u256,
+}
+
+fn probe() -> u256 {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let known = true
+    let selected = if known {
+        Handle { target: mut first }
+    } else {
+        Handle { target: mut second }
+    }
+    selected.target = 9
+    first * 100 + second
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let semantic = semantic_instance_for_named_func(&db, top_mod, "probe");
+        let normalized = normalize_semantic_body(&db, semantic).expect("normalized body");
+        let facts = BodyStaticFacts::new(&db, &normalized);
+        let mutable_source_locals = normalized
+            .locals
+            .iter()
+            .enumerate()
+            .filter(|(_, local)| {
+                matches!(local.source, Some(LocalBinding::Local { .. }))
+                    && local.mutability == Mutability::Mutable
+            })
+            .map(|(idx, _)| SLocalId::new(idx))
+            .collect::<Vec<_>>();
+        let [first, second] = mutable_source_locals.as_slice() else {
+            panic!("expected the two mutable source locals, found {mutable_source_locals:?}");
+        };
+        assert!(
+            normalized.locals[first.index()]
+                .facts
+                .root_demand
+                .borrowed_or_addr_taken,
+            "the live aggregate definition must keep its source rooted"
+        );
+        assert!(
+            !normalized.locals[second.index()]
+                .facts
+                .root_demand
+                .needs_runtime_root(),
+            "the refined-dead aggregate definition must not root its source"
+        );
+        assert!(
+            normalized
+                .blocks
+                .iter()
+                .enumerate()
+                .any(|(block_idx, block)| {
+                    !facts.block_is_reachable(SBlockId::new(block_idx))
+                        && block.stmts.iter().any(|stmt| {
+                            matches!(
+                                &stmt.kind,
+                                NSStmtKind::Assign {
+                                    expr: NExpr::Borrow { .. },
+                                    ..
+                                }
+                            )
+                        })
+                }),
+            "the fixture must retain the dead aggregate source borrow"
+        );
+
+        let instance = runtime_instance_for_semantic(&db, semantic);
+        let params = instance.key(&db).params(&db);
+        let inferred = LocalStateInferer::new(
+            BodyEnv::new(&db, &normalized, &facts),
+            params,
+            &runtime_param_locals(&db, semantic, params),
+        )
+        .run();
+        assert!(
+            matches!(
+                inferred.roots[first.index()],
+                RuntimeLocalRoot::Slot(_) | RuntimeLocalRoot::HeapSlot(_)
+            ),
+            "the live capability source must have addressable storage"
+        );
+        assert_eq!(
+            inferred.roots[second.index()],
+            RuntimeLocalRoot::None,
+            "the dead-only capability source must remain unrooted"
+        );
+        crate::runtime::lower::lower_to_rmir(&db, instance).expect("lower probe");
     }
 
     #[test]

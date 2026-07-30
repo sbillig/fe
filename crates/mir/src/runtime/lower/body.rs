@@ -12,6 +12,7 @@ use hir::analysis::{
         borrowck::{
             NBorrowRoot, NEffectArg, NExpr, NOperand, NSPlace, NSPlaceRoot, NSStmt, NSStmtKind,
             NSTerminator, NSTerminatorKind, NormalizedSemanticBody, normalize_semantic_body,
+            store_rebinds_capability,
         },
         get_or_build_semantic_instance, layout_evidence_body, reify_runtime_const_for_ty,
         sem_const_ty, verify_layout_evidence_runtime_compatibility,
@@ -115,8 +116,8 @@ pub fn lower_to_rmir<'db>(
             semantic.key(db)
         ))
     })?;
-    check_runtime_body_supported(db, semantic.key(db), &normalized_body)?;
     let facts = BodyStaticFacts::new(db, &normalized_body);
+    check_runtime_body_supported(db, semantic.key(db), &normalized_body, &facts)?;
     let abi = runtime_abi_plan(db, key);
     let param_locals =
         crate::runtime::lower::interface::runtime_param_locals(db, semantic, key.params(db));
@@ -133,7 +134,9 @@ pub fn lower_to_rmir<'db>(
         let return_locals = normalized_body
             .blocks
             .iter()
-            .filter_map(|block| match &block.terminator.kind {
+            .enumerate()
+            .filter(|(block_idx, _)| facts.block_is_reachable(SBlockId::new(*block_idx)))
+            .filter_map(|(_, block)| match &block.terminator.kind {
                 NSTerminatorKind::Return(Some(value)) => Some(value.local),
                 NSTerminatorKind::Goto(_)
                 | NSTerminatorKind::Branch { .. }
@@ -154,8 +157,12 @@ fn check_runtime_body_supported<'db>(
     db: &'db dyn MirDb,
     key: SemanticInstanceKey<'db>,
     body: &NormalizedSemanticBody<'db>,
+    facts: &BodyStaticFacts<'db>,
 ) -> Result<(), LowerError> {
-    for block in &body.blocks {
+    for (block_idx, block) in body.blocks.iter().enumerate() {
+        if !facts.block_is_reachable(SBlockId::new(block_idx)) {
+            continue;
+        }
         for stmt in &block.stmts {
             if let NSStmtKind::Assign {
                 expr: NExpr::Call { callee, args, .. },
@@ -291,6 +298,8 @@ pub(super) struct RmirEmitter<'db> {
     pub(super) instance: RuntimeInstance<'db>,
     pub(super) key: RuntimeInstanceKey<'db>,
     pub(super) semantic_body: NormalizedSemanticBody<'db>,
+    semantic_successors: Vec<Vec<SBlockId>>,
+    semantic_reachable: Vec<bool>,
     pub(super) layout_evidence: &'db LayoutEvidenceBody<'db>,
     pub(super) facts: BodyStaticFacts<'db>,
     pub(super) abi: RuntimeAbiPlan<'db>,
@@ -461,7 +470,10 @@ impl<'db> RmirEmitter<'db> {
                     semantic.key(db)
                 ))
             })?;
-        let const_ref_regions = collect_const_ref_regions(db, env, &semantic_body);
+        let semantic_successors = facts.cfg_successors().to_vec();
+        let semantic_reachable = facts.reachable_blocks().to_vec();
+        let const_ref_regions =
+            collect_const_ref_regions(db, env, &semantic_body, &semantic_reachable);
         let terminated_blocks = vec![false; semantic_body.blocks.len()];
         let mut locals = semantic_body
             .locals
@@ -543,6 +555,8 @@ impl<'db> RmirEmitter<'db> {
             instance,
             key,
             semantic_body,
+            semantic_successors,
+            semantic_reachable,
             layout_evidence,
             facts,
             abi,
@@ -957,6 +971,10 @@ impl<'db> RmirEmitter<'db> {
         let blocks = self.semantic_body.blocks.clone();
         for (idx, block) in blocks.iter().enumerate() {
             let bb = RBlockId::from_u32(idx as u32);
+            if !self.semantic_reachable[idx] {
+                self.blocks[idx].terminator = RTerminator::Goto(bb);
+                continue;
+            }
             for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
                 self.lower_stmt(bb, stmt_idx, stmt);
                 if self.terminated_blocks[bb.index()] {
@@ -987,7 +1005,20 @@ impl<'db> RmirEmitter<'db> {
                 {
                     let place = self.lower_store_place(bb, dst);
                     let target = self.project_place_class(&place);
-                    let value = self.read_semantic_value(bb, src.local);
+                    let value = if store_rebinds_capability(self.db, &self.semantic_body, dst, *src)
+                    {
+                        self.handle_like_semantic_value(src.local).unwrap_or_else(|| {
+                                panic!(
+                                    "capability rebind source has no runtime transport: owner={:?}; src={src:?}; ty={}",
+                                    self.current_semantic_key(),
+                                    self.semantic_body.locals[src.local.index()]
+                                        .ty
+                                        .pretty_print(self.db),
+                                )
+                            })
+                    } else {
+                        self.read_semantic_value(bb, src.local)
+                    };
                     self.write_value_to_place(bb, place, value, &target);
                 }
             }
@@ -4466,6 +4497,18 @@ impl<'db> RmirEmitter<'db> {
         bb: RBlockId,
         terminator: &NSTerminator<'db>,
     ) -> RTerminator<'db> {
+        let refined = &self.semantic_successors[bb.index()];
+        if matches!(
+            terminator.kind,
+            NSTerminatorKind::Branch { .. } | NSTerminatorKind::MatchEnum { .. }
+        ) {
+            if refined.is_empty() {
+                return self.lower_assert_terminator(bb, None);
+            }
+            if refined.iter().all(|target| *target == refined[0]) {
+                return RTerminator::Goto(self.runtime_block(refined[0]));
+            }
+        }
         match &terminator.kind {
             NSTerminatorKind::Goto(block) => RTerminator::Goto(self.runtime_block(*block)),
             NSTerminatorKind::Branch {
@@ -5518,21 +5561,7 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn lower_store_place(&mut self, bb: RBlockId, place: &NSPlace<'db>) -> RuntimePlace<'db> {
-        let source_ty = self.semantic_body.place_ty(self.db, place);
-        let place = self.lower_place(bb, place);
-        if source_ty.and_then(|ty| ty.as_borrow(self.db)).is_none() {
-            return place;
-        }
-        let source_ty = source_ty.expect("borrow-typed place must have a semantic type");
-        let handle = self.load_runtime_place_value(bb, place, source_ty);
-        self.runtime_place_from_addr_value(handle)
-            .unwrap_or_else(|| {
-                panic!(
-                    "borrow-typed assignment place did not contain an address value: owner={:?}; ty={}; handle={handle:?}",
-                    self.current_semantic_key(),
-                    source_ty.pretty_print(self.db),
-                )
-            })
+        self.lower_place(bb, place)
     }
 
     fn project_place_class(&self, place: &RuntimePlace<'db>) -> RuntimeClass<'db> {
@@ -6033,7 +6062,153 @@ mod tests {
     };
     use url::Url;
 
-    use crate::{build_test_runtime_package, runtime::package::runtime_instance_for_semantic};
+    use crate::{
+        PlaceElem, PlaceRoot, RStmt, RuntimeClass, RuntimeLocalRoot, build_test_runtime_package,
+        format_runtime_body, runtime::package::runtime_instance_for_semantic,
+    };
+
+    #[test]
+    fn capability_field_rebind_and_write_through_lower_to_distinct_places() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("capability_field_assignment_runtime_lowering.fe"),
+        )
+        .expect("fixture path should be absolute");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Handle {
+    target: mut u256,
+}
+
+struct NestedHandle {
+    target: mut Handle,
+}
+
+fn probe() -> u256 {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = mut second
+    handle.target = 7
+    first * 100 + second
+}
+
+fn nested_probe() -> u256 {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut inner = Handle { target: mut first }
+    let outer = NestedHandle { target: mut inner }
+    outer.target.target = mut second
+    outer.target.target = 9
+    first * 100 + second
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let func = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "probe")
+            })
+            .expect("missing probe");
+        let semantic = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+        );
+        let body = runtime_instance_for_semantic(&db, semantic).body(&db);
+        let formatted = format_runtime_body(&db, &body);
+        let stores = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.stmts)
+            .filter_map(|stmt| {
+                let RStmt::Store { dst, src } = stmt else {
+                    return None;
+                };
+                Some((dst, *src))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(stores.len(), 2, "{formatted}",);
+
+        let (rebind_dst, rebind_src) = stores[0];
+        assert!(
+            matches!(rebind_dst.root, PlaceRoot::Ref(_))
+                && matches!(rebind_dst.path.as_ref(), [PlaceElem::Field(_)])
+                && matches!(
+                    body.value_class(rebind_src),
+                    Some(RuntimeClass::RawAddr { .. })
+                ),
+            "a capability rebind should store the new address in the aggregate field:\n{formatted}",
+        );
+
+        let (write_dst, write_src) = stores[1];
+        assert!(
+            matches!(write_dst.root, PlaceRoot::Ptr { .. })
+                && write_dst.path.is_empty()
+                && matches!(body.value_class(write_src), Some(RuntimeClass::Scalar(_))),
+            "an ordinary assignment should store the payload through the held address:\n{formatted}",
+        );
+
+        let nested_func = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "nested_probe")
+            })
+            .expect("missing nested_probe");
+        let nested_semantic = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(nested_func)),
+        );
+        let nested_body = runtime_instance_for_semantic(&db, nested_semantic).body(&db);
+        let nested_formatted = format_runtime_body(&db, &nested_body);
+        let nested_rebind = nested_body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.stmts)
+            .find_map(|stmt| {
+                let RStmt::Store { dst, src } = stmt else {
+                    return None;
+                };
+                matches!(
+                    nested_body.value_class(*src),
+                    Some(RuntimeClass::RawAddr { .. })
+                )
+                .then_some((dst, *src))
+            })
+            .expect("nested rebind store");
+        assert!(
+            matches!(nested_rebind.0.root, PlaceRoot::Ref(_))
+                && matches!(
+                    nested_rebind.0.path.as_ref(),
+                    [PlaceElem::Field(_), PlaceElem::Deref, PlaceElem::Field(_)]
+                ),
+            "a nested rebind must dereference the outer capability but replace the inner field:\n{nested_formatted}",
+        );
+        assert!(
+            matches!(
+                nested_body.locals[1].root,
+                RuntimeLocalRoot::HeapSlot(RuntimeClass::Scalar(_))
+            ),
+            "the local stored into the nested capability slot must not remain static-arena storage:\n{nested_formatted}",
+        );
+    }
 
     #[test]
     fn mixed_compile_time_and_runtime_layout_components_lower_through_calls() {

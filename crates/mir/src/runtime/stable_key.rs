@@ -48,7 +48,7 @@ pub fn closure_symbol_base<'db>(
 ) -> String {
     format!(
         "__closure_{}_{}",
-        stable_identity_hash(&type_identity(db, TyId::closure(db, ty))),
+        stable_identity_hash(&runtime_closure_type_identity(db, ty)),
         receiver_mode.as_str()
     )
 }
@@ -95,7 +95,7 @@ fn body_owner_identity<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -
             ty, receiver_mode, ..
         } => format!(
             "closure_body${}${}",
-            type_identity(db, TyId::closure(db, ty)),
+            runtime_closure_type_identity(db, ty),
             receiver_mode.as_str()
         ),
     }
@@ -449,22 +449,10 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
             },
             TyBase::Closure(closure) => {
                 let def = closure.def(db);
-                let type_ids = |tys: &[TyId<'db>]| {
-                    tys.iter()
-                        .map(|ty| type_identity(db, *ty))
-                        .collect::<Vec<_>>()
-                        .join("$")
-                };
-                let parent_args = type_ids(closure.parent_args(db));
-                let captures = type_ids(closure.captures(db));
-                let params = type_ids(closure.params(db));
-                let call_mode = closure.call_mode(db).as_str();
-                format!(
-                    "closure${}${}$args${parent_args}$captures${captures}$params${params}$ret${}$mode${call_mode}",
-                    item_identity(db, def.body.into()),
-                    expr_id(def.expr),
-                    type_identity(db, closure.ret_ty(db))
-                )
+                let owner = BodyOwner::from_body(db, def.body)
+                    .map(|owner| body_owner_identity(db, owner))
+                    .unwrap_or_else(|| item_identity(db, def.body.into()));
+                closure_type_identity(db, *closure, &owner)
             }
         },
         TyData::TyParam(param) => {
@@ -493,6 +481,39 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
         }
         TyData::TyApp(..) => unreachable!("TyApp handled before data match"),
     }
+}
+
+fn closure_type_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    closure: ClosureTy<'db>,
+    owner: &str,
+) -> String {
+    let def = closure.def(db);
+    let type_ids = |tys: &[TyId<'db>]| {
+        tys.iter()
+            .map(|ty| type_identity(db, *ty))
+            .collect::<Vec<_>>()
+            .join("$")
+    };
+    let parent_args = type_ids(closure.parent_args(db));
+    let captures = type_ids(closure.captures(db));
+    let params = type_ids(closure.params(db));
+    let call_mode = closure.call_mode(db).as_str();
+    format!(
+        "closure${owner}${}$args${parent_args}$captures${captures}$params${params}$ret${}$mode${call_mode}",
+        expr_id(def.expr),
+        type_identity(db, closure.ret_ty(db))
+    )
+}
+
+fn runtime_closure_type_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    closure: ClosureTy<'db>,
+) -> String {
+    let def = closure.def(db);
+    let owner = BodyOwner::from_body(db, def.body)
+        .expect("runtime closure definition must have a stable enclosing body owner");
+    closure_type_identity(db, closure, &body_owner_identity(db, owner))
 }
 
 fn trait_identity<'db>(db: &'db dyn HirAnalysisDb, trait_inst: TraitInstId<'db>) -> String {

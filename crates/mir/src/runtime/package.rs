@@ -258,6 +258,12 @@ impl<'db> RuntimeGraphBuilder<'db> {
     }
 }
 
+/// Builds runtime artifacts for a module whose semantic diagnostics have
+/// already completed without errors.
+///
+/// Normal compiler drivers enforce this phase boundary before requesting a
+/// package. Direct internal callers must likewise avoid lowering a module with
+/// outstanding semantic diagnostics.
 pub fn build_runtime_package<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,

@@ -2282,15 +2282,25 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ));
             }
             RTerminator::TerminalCall { callee, args } => {
+                let callee_ref = self.module.func_ref(*callee)?;
                 let args = args
                     .iter()
                     .map(|arg| self.local_value(*arg))
                     .collect::<Result<SmallVec<[ValueId; 8]>, _>>()?;
-                self.fb.insert_inst_no_result(Call::new(
-                    self.module.inst_set(),
-                    self.module.func_ref(*callee)?,
-                    args,
-                ));
+                match callee.body(self.module.db).signature.ret.clone() {
+                    Some(class) => {
+                        let ret_ty = self.module.ty_for_class(&class)?;
+                        self.fb.insert_inst(
+                            Call::new(self.module.inst_set(), callee_ref, args),
+                            ret_ty,
+                        );
+                    }
+                    None => self.fb.insert_inst_no_result(Call::new(
+                        self.module.inst_set(),
+                        callee_ref,
+                        args,
+                    )),
+                }
                 self.fb
                     .insert_inst_no_result(Unreachable::new_unchecked(self.module.inst_set()));
             }

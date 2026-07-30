@@ -1,7 +1,7 @@
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        NBorrowRoot, NBorrowRootId, SLocalId, SemanticLocalKind, VariantIndex,
+        NBorrowRoot, NBorrowRootId, SBlockId, SLocalId, SemanticLocalKind, VariantIndex,
         borrowck::{
             NExpr, NSLocal, NSPlace, NSPlaceRoot, NSStmtKind, NormalizedBindingLowering,
             NormalizedSemanticBody,
@@ -351,8 +351,12 @@ pub(super) fn local_read_places_extractable_from_value<'db>(
     body: &NormalizedSemanticBody<'db>,
     local: SLocalId,
 ) -> bool {
-    let snapshot_sources_are_extractable =
-        body.locals.iter().enumerate().all(|(dst, local_data)| {
+    let snapshot_sources_are_extractable = body
+        .locals
+        .iter()
+        .enumerate()
+        .filter(|(dst, _)| env.local_is_reachable(SLocalId::new(*dst)))
+        .all(|(dst, local_data)| {
             local_data.snapshot_source_place().is_none_or(|place| {
                 place_root_local(body, place) != Some(local)
                     || place_is_value_extractable_into(
@@ -364,14 +368,19 @@ pub(super) fn local_read_places_extractable_from_value<'db>(
             })
         });
     snapshot_sources_are_extractable
-        && body.blocks.iter().all(|block| {
-            block.stmts.iter().all(|stmt| match &stmt.kind {
-                NSStmtKind::Assign { dst, expr } => {
-                    expr_read_places_extractable_from_value(env, carriers, body, local, *dst, expr)
-                }
-                NSStmtKind::Store { .. } => true,
+        && body
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(block_idx, _)| env.block_is_reachable(SBlockId::new(*block_idx)))
+            .all(|(_, block)| {
+                block.stmts.iter().all(|stmt| match &stmt.kind {
+                    NSStmtKind::Assign { dst, expr } => expr_read_places_extractable_from_value(
+                        env, carriers, body, local, *dst, expr,
+                    ),
+                    NSStmtKind::Store { .. } => true,
+                })
             })
-        })
 }
 
 pub(super) fn place_root_local<'db>(

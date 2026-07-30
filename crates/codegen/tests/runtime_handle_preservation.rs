@@ -1118,8 +1118,16 @@ fn projected_repeated_mut_return() {
                 .iter()
                 .enumerate()
                 .filter_map(|(index, local)| {
-                    (local.semantic_ty.pretty_print(&db) == "Holder<fn() -> mut u256>")
-                        .then_some((index, RLocalId::from_u32(index as u32)))
+                    let generic_args = local.semantic_ty.generic_args(&db);
+                    let is_holder_of_closure = local
+                        .semantic_ty
+                        .adt_ref(&db)
+                        .and_then(|adt| adt.name(&db))
+                        .is_some_and(|name| name.data(&db) == "Holder")
+                        && generic_args.len() == 1
+                        && generic_args[0].as_closure(&db).is_some();
+
+                    is_holder_of_closure.then_some((index, RLocalId::from_u32(index as u32)))
                 })
                 .collect::<Vec<_>>();
 
@@ -1166,6 +1174,449 @@ fn projected_repeated_mut_return() {
                 "a captured pointer returned across a closure call must outlive static alloca storage even when its enclosing holder stays in SSA:\n{body:#?}"
             );
         }
+    );
+}
+
+#[test]
+fn closure_ref_and_owned_captures_lower_without_an_o0_alloca_escape() {
+    with_top_mod_for_source(
+        "closure_ref_and_owned_captures_lower_without_an_o0_alloca_escape.fe",
+        r#"use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+fn call_with_ref_and_owned_capture(_ boxed: own Boxed) -> u256 {
+    let x: u256 = 1
+    let r = ref x
+    let add_both = |value: own u256| -> u256 { value + r + boxed.value }
+    add_both.call(40)
+}
+
+#[test]
+fn ref_and_owned_capture_call() {
+    assert(call_with_ref_and_owned_capture(Boxed { value: 1 }) == 42)
+}
+"#,
+        |db, top_mod| {
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("ref_and_owned_capture_call"),
+            )
+            .expect("mixed ref and owned closure captures must not escape O0 alloca storage");
+        },
+    );
+}
+
+#[test]
+fn nested_capability_rebind_sources_lower_without_an_o0_alloca_escape() {
+    with_top_mod_for_source(
+        "nested_capability_rebind_sources_lower_without_an_o0_alloca_escape.fe",
+        r#"
+struct ScalarHandle {
+    target: mut u256,
+}
+
+struct NestedScalarHandle {
+    target: mut ScalarHandle,
+}
+
+fn forward(value: mut u256) -> mut u256 {
+    value
+}
+
+fn make_handle(value: mut u256) -> ScalarHandle {
+    ScalarHandle { target: value }
+}
+
+#[test]
+fn nested_capability_rebind_sources() {
+    let mut direct_old: u256 = 1
+    let mut direct_new: u256 = 2
+    let mut direct_inner = ScalarHandle { target: mut direct_old }
+    let direct_outer = NestedScalarHandle { target: mut direct_inner }
+    direct_outer.target.target = mut direct_new
+    direct_outer.target.target = 11
+
+    let mut returned_old: u256 = 3
+    let mut returned_new: u256 = 4
+    let mut returned_inner = ScalarHandle { target: mut returned_old }
+    let returned_outer = NestedScalarHandle { target: mut returned_inner }
+    returned_outer.target.target = forward(mut returned_new)
+    returned_outer.target.target = 13
+
+    let mut projected_old: u256 = 5
+    let mut projected_new: u256 = 6
+    let mut projected_inner = ScalarHandle { target: mut projected_old }
+    let projected_outer = NestedScalarHandle { target: mut projected_inner }
+    projected_outer.target.target = make_handle(mut projected_new).target
+    projected_outer.target.target = 17
+
+    assert(direct_old == 1)
+    assert(direct_new == 11)
+    assert(returned_old == 3)
+    assert(returned_new == 13)
+    assert(projected_old == 5)
+    assert(projected_new == 17)
+}
+"#,
+        |db, top_mod| {
+            let package =
+                build_test_runtime_package(db, top_mod, Some("nested_capability_rebind_sources"))
+                    .expect("runtime test package");
+            let body = runtime_body_for_symbol(db, package, "nested_capability_rebind_sources");
+            let escaping_scalar_slots = body
+                .locals
+                .iter()
+                .filter(|local| {
+                    matches!(
+                        local.root,
+                        RuntimeLocalRoot::HeapSlot(RuntimeClass::Scalar(_))
+                    )
+                })
+                .count();
+            assert!(
+                escaping_scalar_slots >= 6,
+                "both the old and replacement targets of each nested handle must use escaping storage:\n{body:#?}"
+            );
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("nested_capability_rebind_sources"),
+            )
+            .expect("nested capability rebinds must not store static allocas into object slots");
+        },
+    );
+}
+
+#[test]
+fn interprocedural_capability_retention_promotes_only_retained_actuals() {
+    with_top_mod_for_source(
+        "interprocedural_capability_retention_promotes_only_retained_actuals.fe",
+        r#"use core::functional::Fn
+
+struct ScalarHandle {
+    target: mut u256,
+}
+
+struct NestedScalarHandle {
+    target: mut ScalarHandle,
+}
+
+fn retain(
+    outer: mut NestedScalarHandle,
+    target: mut u256,
+    ordinary: mut u256,
+) {
+    outer.target.target = mut target
+    ordinary = 41
+}
+
+fn retain_wrapper(
+    outer: mut NestedScalarHandle,
+    target: mut u256,
+    ordinary: mut u256,
+) {
+    retain(outer, target, ordinary)
+}
+
+fn retain_wrapper_twice(
+    outer: mut NestedScalarHandle,
+    target: mut u256,
+    ordinary: mut u256,
+) {
+    retain_wrapper(outer, target, ordinary)
+}
+
+fn identity(target: mut u256) -> mut u256 {
+    target
+}
+
+fn retain_identity_result(outer: mut NestedScalarHandle, target: mut u256) {
+    outer.target.target = identity(target)
+}
+
+fn local_rebind_only(initial: mut u256, replacement: mut u256) {
+    let handle = ScalarHandle { target: initial }
+    handle.target = mut replacement
+    handle.target = 37
+}
+
+fn make_rebound_handle(
+    initial: mut u256,
+    replacement: mut u256,
+) -> ScalarHandle {
+    let handle = ScalarHandle { target: initial }
+    handle.target = mut replacement
+    handle
+}
+
+fn make_target_array(target: mut u256) -> [mut u256; 1] {
+    [target]
+}
+
+fn retain_recursive(
+    direct: bool,
+    outer: mut NestedScalarHandle,
+    target: mut u256,
+) {
+    if direct {
+        outer.target.target = mut target
+    } else {
+        retain_recursive(direct: true, outer, target)
+    }
+}
+
+fn retain_effect(outer: mut NestedScalarHandle) uses (target: mut u256) {
+    outer.target.target = mut target
+}
+
+fn retain_via_closure(outer: mut NestedScalarHandle, target: mut u256) {
+    let retain = || { outer.target.target = mut target }
+    retain.call()
+}
+
+impl NestedScalarHandle {
+    fn retain_method(mut self, target: mut u256) {
+        self.target.target = mut target
+    }
+}
+
+#[test]
+fn retained_call_inputs() {
+    let mut direct_old: u256 = 1
+    let mut direct_new: u256 = 2
+    let mut direct_ordinary: u256 = 3
+    let mut direct_inner = ScalarHandle { target: mut direct_old }
+    let mut direct_outer = NestedScalarHandle { target: mut direct_inner }
+    retain(mut direct_outer, mut direct_new, mut direct_ordinary)
+    direct_outer.target.target = 11
+
+    let mut wrapped_old: u256 = 4
+    let mut wrapped_new: u256 = 5
+    let mut wrapped_ordinary: u256 = 6
+    let mut wrapped_inner = ScalarHandle { target: mut wrapped_old }
+    let mut wrapped_outer = NestedScalarHandle { target: mut wrapped_inner }
+    retain_wrapper_twice(mut wrapped_outer, mut wrapped_new, mut wrapped_ordinary)
+    wrapped_outer.target.target = 13
+
+    let mut identity_old: u256 = 7
+    let mut identity_new: u256 = 8
+    let mut identity_inner = ScalarHandle { target: mut identity_old }
+    let mut identity_outer = NestedScalarHandle { target: mut identity_inner }
+    retain_identity_result(mut identity_outer, mut identity_new)
+    identity_outer.target.target = 17
+
+    let mut returned_old: u256 = 18
+    let mut returned_new: u256 = 20
+    let returned = make_rebound_handle(mut returned_old, mut returned_new)
+    returned.target = 21
+
+    let mut returned_array_value: u256 = 22
+    let returned_array = make_target_array(mut returned_array_value)
+    returned_array[0] = 27
+
+    let mut recursive_old: u256 = 9
+    let mut recursive_new: u256 = 10
+    let mut recursive_inner = ScalarHandle { target: mut recursive_old }
+    let mut recursive_outer = NestedScalarHandle { target: mut recursive_inner }
+    retain_recursive(direct: true, mut recursive_outer, mut recursive_new)
+    recursive_outer.target.target = 19
+
+    let mut effect_old: u256 = 12
+    let mut effect_new: u256 = 14
+    let mut effect_inner = ScalarHandle { target: mut effect_old }
+    let mut effect_outer = NestedScalarHandle { target: mut effect_inner }
+    with (mut effect_new) {
+        retain_effect(mut effect_outer)
+    }
+    effect_outer.target.target = 23
+
+    let mut method_old: u256 = 15
+    let mut method_new: u256 = 16
+    let mut method_inner = ScalarHandle { target: mut method_old }
+    let mut method_outer = NestedScalarHandle { target: mut method_inner }
+    method_outer.retain_method(mut method_new)
+    method_outer.target.target = 29
+
+    let mut closure_old: u256 = 24
+    let mut closure_new: u256 = 25
+    let mut closure_inner = ScalarHandle { target: mut closure_old }
+    let mut closure_outer = NestedScalarHandle { target: mut closure_inner }
+    retain_via_closure(mut closure_outer, mut closure_new)
+    closure_outer.target.target = 31
+
+    assert(direct_old == 1)
+    assert(direct_new == 11)
+    assert(direct_ordinary == 41)
+    assert(wrapped_old == 4)
+    assert(wrapped_new == 13)
+    assert(wrapped_ordinary == 41)
+    assert(identity_old == 7)
+    assert(identity_new == 17)
+    assert(returned_old == 18)
+    assert(returned_new == 21)
+    assert(returned_array_value == 27)
+    assert(recursive_old == 9)
+    assert(recursive_new == 19)
+    assert(effect_old == 12)
+    assert(effect_new == 23)
+    assert(method_old == 15)
+    assert(method_new == 29)
+    assert(closure_old == 24)
+    assert(closure_new == 31)
+}
+
+#[test]
+fn return_only_call_input() {
+    let mut value: u256 = 31
+    let target = identity(mut value)
+    target = 37
+    assert(value == 37)
+}
+
+#[test]
+fn local_only_call_inputs() {
+    let mut initial: u256 = 41
+    let mut replacement: u256 = 43
+    local_rebind_only(mut initial, mut replacement)
+    assert(initial == 41)
+    assert(replacement == 37)
+}
+"#,
+        |db, top_mod| {
+            let package = build_test_runtime_package(db, top_mod, Some("retained_call_inputs"))
+                .expect("runtime test package");
+            let body = runtime_body_for_symbol(db, package, "retained_call_inputs");
+            assert!(
+                body.locals.iter().any(|local| matches!(
+                    local.root,
+                    RuntimeLocalRoot::HeapSlot(RuntimeClass::Scalar(_))
+                )),
+                "retained capability inputs must use escaping storage:\n{body:#?}"
+            );
+            assert!(
+                body.locals.iter().any(|local| matches!(
+                    local.root,
+                    RuntimeLocalRoot::Slot(RuntimeClass::Scalar(_))
+                )),
+                "an unrelated nonretained mutable argument should keep static storage:\n{body:#?}"
+            );
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("retained_call_inputs"),
+            )
+            .expect("retained direct, wrapped, effect, method, and recursive inputs must pass O0");
+
+            let return_package =
+                build_test_runtime_package(db, top_mod, Some("return_only_call_input"))
+                    .expect("return-only runtime test package");
+            let return_body = runtime_body_for_symbol(db, return_package, "return_only_call_input");
+            assert!(
+                return_body.locals.iter().any(|local| matches!(
+                    local.root,
+                    RuntimeLocalRoot::Slot(RuntimeClass::Scalar(_))
+                )),
+                "a capability that is only returned to its caller should remain static storage:\n{return_body:#?}"
+            );
+            assert!(
+                !return_body.locals.iter().any(|local| matches!(
+                    local.root,
+                    RuntimeLocalRoot::HeapSlot(RuntimeClass::Scalar(_))
+                )),
+                "a return-only helper must not be classified as retaining its input:\n{return_body:#?}"
+            );
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("return_only_call_input"),
+            )
+            .expect("return-only capability forwarding must pass O0 without heap promotion");
+
+            let local_package =
+                build_test_runtime_package(db, top_mod, Some("local_only_call_inputs"))
+                    .expect("local-only runtime test package");
+            let local_body = runtime_body_for_symbol(db, local_package, "local_only_call_inputs");
+            assert!(
+                local_body.locals.iter().any(|local| matches!(
+                    local.root,
+                    RuntimeLocalRoot::Slot(RuntimeClass::Scalar(_))
+                )),
+                "locally consumed capability inputs should use static storage:\n{local_body:#?}"
+            );
+            assert!(
+                !local_body.locals.iter().any(|local| matches!(
+                    local.root,
+                    RuntimeLocalRoot::HeapSlot(RuntimeClass::Scalar(_))
+                )),
+                "a local aggregate must not make its input storage externally retained:\n{local_body:#?}"
+            );
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("local_only_call_inputs"),
+            )
+            .expect("local-only capability rebinding must pass O0 without heap promotion");
+        },
+    );
+}
+
+#[test]
+fn aggregate_capability_effect_provider_crosses_the_runtime_boundary() {
+    with_top_mod_for_source(
+        "aggregate_capability_effect_provider_crosses_the_runtime_boundary.fe",
+        r#"
+struct ScalarHandle {
+    target: mut u256,
+}
+
+struct NestedScalarHandle {
+    target: mut ScalarHandle,
+}
+
+fn retain_via_aggregate_effect(_ target: mut u256)
+uses (outer: mut NestedScalarHandle)
+{
+    outer.target.target = mut target
+}
+
+#[test]
+fn aggregate_effect_provider() {
+    let mut old: u256 = 1
+    let mut replacement: u256 = 2
+    let mut inner = ScalarHandle { target: mut old }
+    let mut outer = NestedScalarHandle { target: mut inner }
+    with (mut outer) {
+        retain_via_aggregate_effect(mut replacement)
+    }
+    outer.target.target = 37
+    assert(old == 1)
+    assert(replacement == 37)
+}
+"#,
+        |db, top_mod| {
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("aggregate_effect_provider"),
+            )
+            .expect("aggregate capability effect providers must cross the runtime boundary");
+        },
     );
 }
 

@@ -5,7 +5,7 @@ use dataflow::{SparseAnalysis, solve_sparse};
 use hir::{
     analysis::{
         semantic::{
-            SLocalId, SemanticLocalKind,
+            SBlockId, SLocalId, SemanticLocalKind,
             borrowck::{
                 NExpr, NLocalOrigin, NSLocal, NSStmtKind, NSTerminatorKind,
                 NormalizedBindingLowering, NormalizedSemanticBody,
@@ -40,6 +40,9 @@ use super::{
     },
     conversion::RuntimeConversionPlanner,
     interface::runtime_visible_binding_plans,
+    retention::{
+        RetainedCapabilityInput, retained_capability_inputs, store_carries_borrow_transport,
+    },
     returns::runtime_return_class,
     source::{local_read_places_extractable_from_value, place_root_local},
     type_info::{
@@ -234,6 +237,11 @@ impl<'a, 'lookup, 'db, S: AssignmentSpace<'db>> CarrierInferer<'a, 'lookup, 'db,
         let mut roots = Vec::with_capacity(cx.env.body().locals.len());
         for (idx, _) in cx.env.body().locals.iter().enumerate() {
             let local_id = SLocalId::from_u32(idx as u32);
+            if !cx.env.local_is_reachable(local_id) {
+                self.carriers[idx] = RuntimeCarrier::Erased;
+                roots.push(RuntimeLocalRoot::None);
+                continue;
+            }
             let (carrier, root) = plan_runtime_local_root(
                 cx,
                 local_id,
@@ -244,9 +252,24 @@ impl<'a, 'lookup, 'db, S: AssignmentSpace<'db>> CarrierInferer<'a, 'lookup, 'db,
             roots.push(root);
         }
 
-        let borrow_storage_roots = borrow_storage_roots(cx.env.db(), cx.env.body(), &self.carriers);
+        let (borrow_storage_roots, escaping_store_sources) = borrow_storage_roots(
+            cx.env.db(),
+            cx.env.body(),
+            &self.carriers,
+            cx.env.reachable_blocks(),
+            cx.env.reachable_locals(),
+        );
+        for source in escaping_store_sources {
+            promote_escaping_slot(&mut roots, source);
+            for &backing in &borrow_storage_roots[source.index()] {
+                promote_escaping_slot(&mut roots, backing);
+            }
+        }
         let mut returned_locals = vec![false; cx.env.body().locals.len()];
-        for block in &cx.env.body().blocks {
+        for (block_idx, block) in cx.env.body().blocks.iter().enumerate() {
+            if !cx.env.block_is_reachable(SBlockId::new(block_idx)) {
+                continue;
+            }
             if let NSTerminatorKind::Return(Some(value)) = block.terminator.kind {
                 returned_locals[value.local.index()] = true;
             }
@@ -255,6 +278,9 @@ impl<'a, 'lookup, 'db, S: AssignmentSpace<'db>> CarrierInferer<'a, 'lookup, 'db,
         while changed {
             changed = false;
             for (idx, local) in cx.env.body().locals.iter().enumerate() {
+                if !cx.env.local_is_reachable(SLocalId::new(idx)) {
+                    continue;
+                }
                 let stores_escaping_borrow_transport =
                     matches!(
                         &roots[idx],
@@ -520,6 +546,9 @@ pub(crate) fn seed_root_provider_carriers<'a, 'db>(
     carriers: &mut [RuntimeCarrier<'db>],
 ) {
     for (idx, local) in env.body().locals.iter().enumerate() {
+        if !env.local_is_reachable(SLocalId::new(idx)) {
+            continue;
+        }
         if !matches!(carriers[idx], RuntimeCarrier::Erased) {
             continue;
         }
@@ -661,6 +690,9 @@ fn lower_semantic_locals<'db>(
     let mut provider_bindings = Vec::new();
     for (idx, local) in body.locals.iter().enumerate() {
         let local_id = SLocalId::from_u32(idx as u32);
+        if !cx.env.local_is_reachable(local_id) {
+            continue;
+        }
         if local
             .facts
             .origin
@@ -794,7 +826,11 @@ fn lower_semantic_locals<'db>(
         .locals
         .iter()
         .enumerate()
-        .map(|(idx, local)| match (&local.facts.interface, &local.facts.origin) {
+        .map(|(idx, local)| {
+            if !cx.env.local_is_reachable(SLocalId::new(idx)) {
+                return RuntimeLocalLowering::Erased;
+            }
+            match (&local.facts.interface, &local.facts.origin) {
             (SemanticLocalKind::Erased, _) => RuntimeLocalLowering::Erased,
             (_, NLocalOrigin::RootProvider(provider))
                 if provider_erases_runtime_root(db, provider, scope, assumptions) =>
@@ -892,6 +928,7 @@ fn lower_semantic_locals<'db>(
                     place_class,
                 }
             }
+        }
         })
         .collect();
     (lowerings, provider_bindings)
@@ -1030,12 +1067,16 @@ fn borrow_storage_roots<'db>(
     db: &'db dyn MirDb,
     body: &NormalizedSemanticBody<'db>,
     carriers: &[RuntimeCarrier<'db>],
-) -> Vec<Vec<SLocalId>> {
+    reachable_blocks: &[bool],
+    reachable_locals: &[bool],
+) -> (Vec<Vec<SLocalId>>, Vec<SLocalId>) {
     let mut dependencies = vec![Vec::new(); body.locals.len()];
+    let mut escaping_store_sources = Vec::new();
     for (idx, local) in body.locals.iter().enumerate() {
-        if !carriers[idx]
-            .value_class()
-            .is_some_and(|class| class.contains_transport(db))
+        if reachable_locals.get(idx) != Some(&true)
+            || !carriers[idx]
+                .value_class()
+                .is_some_and(|class| class.contains_transport(db))
         {
             continue;
         }
@@ -1047,46 +1088,103 @@ fn borrow_storage_roots<'db>(
             }
         }
     }
-    for stmt in body.blocks.iter().flat_map(|block| &block.stmts) {
-        let NSStmtKind::Assign { dst, expr } = &stmt.kind else {
-            continue;
-        };
-        if !carriers[dst.index()]
-            .value_class()
-            .is_some_and(|class| class.contains_transport(db))
-        {
+    for (block_idx, block) in body.blocks.iter().enumerate() {
+        if reachable_blocks.get(block_idx) != Some(&true) {
             continue;
         }
-        let mut add_dependency = |source: SLocalId| {
-            if !dependencies[dst.index()].contains(&source) {
-                dependencies[dst.index()].push(source);
-            }
-        };
-        match expr {
-            NExpr::Borrow { place, .. } => {
-                if let Some(source) = place_root_local(body, place) {
-                    add_dependency(source);
+        for stmt in &block.stmts {
+            if let NSStmtKind::Assign {
+                expr:
+                    NExpr::Call {
+                        callee,
+                        args,
+                        effect_args,
+                        ..
+                    },
+                ..
+            } = &stmt.kind
+            {
+                for retained in retained_capability_inputs(db, callee.key) {
+                    let source =
+                        match retained {
+                            RetainedCapabilityInput::Param(idx) => {
+                                args.get(*idx as usize).map(|arg| arg.local)
+                            }
+                            RetainedCapabilityInput::Effect(binding_idx) => effect_args
+                                .iter()
+                                .find(|effect| effect.binding_idx == *binding_idx)
+                                .and_then(|effect| {
+                                    effect.arg.value_operand().map(|value| value.local).or_else(
+                                        || {
+                                            effect
+                                                .arg
+                                                .place_operand()
+                                                .and_then(|place| place_root_local(body, place))
+                                        },
+                                    )
+                                }),
+                        };
+                    if let Some(source) = source
+                        && !escaping_store_sources.contains(&source)
+                    {
+                        escaping_store_sources.push(source);
+                    }
                 }
             }
-            NExpr::Use(value)
-            | NExpr::Cast { value, .. }
-            | NExpr::ArrayRepeat { value, .. }
-            | NExpr::ExtractEnumField { value, .. } => add_dependency(value.local),
-            NExpr::AggregateMake { fields, .. } | NExpr::EnumMake { fields, .. } => {
-                for field in fields {
-                    add_dependency(field.local);
+            match &stmt.kind {
+                NSStmtKind::Assign { dst, expr }
+                    if carriers[dst.index()]
+                        .value_class()
+                        .is_some_and(|class| class.contains_transport(db)) =>
+                {
+                    let mut add_dependency = |source: SLocalId| {
+                        if !dependencies[dst.index()].contains(&source) {
+                            dependencies[dst.index()].push(source);
+                        }
+                    };
+                    match expr {
+                        NExpr::Borrow { place, .. } => {
+                            if let Some(source) = place_root_local(body, place) {
+                                add_dependency(source);
+                            }
+                        }
+                        NExpr::Use(value)
+                        | NExpr::Cast { value, .. }
+                        | NExpr::ArrayRepeat { value, .. }
+                        | NExpr::ExtractEnumField { value, .. } => {
+                            add_dependency(value.local);
+                        }
+                        NExpr::AggregateMake { fields, .. } | NExpr::EnumMake { fields, .. } => {
+                            for field in fields {
+                                add_dependency(field.local);
+                            }
+                        }
+                        NExpr::ReadPlace { .. }
+                        | NExpr::Call { .. }
+                        | NExpr::CodeRegionRef { .. }
+                        | NExpr::Const(_)
+                        | NExpr::Unary { .. }
+                        | NExpr::Binary { .. }
+                        | NExpr::GetEnumTag { .. }
+                        | NExpr::IsEnumVariant { .. }
+                        | NExpr::CodeRegionOffset { .. }
+                        | NExpr::CodeRegionLen { .. } => {}
+                    }
                 }
+                NSStmtKind::Store { dst, src }
+                    if store_carries_borrow_transport(db, body, dst, *src) =>
+                {
+                    if let Some(dst) = place_root_local(body, dst)
+                        && !dependencies[dst.index()].contains(&src.local)
+                    {
+                        dependencies[dst.index()].push(src.local);
+                    }
+                    if !escaping_store_sources.contains(&src.local) {
+                        escaping_store_sources.push(src.local);
+                    }
+                }
+                NSStmtKind::Assign { .. } | NSStmtKind::Store { .. } => {}
             }
-            NExpr::ReadPlace { .. }
-            | NExpr::Call { .. }
-            | NExpr::CodeRegionRef { .. }
-            | NExpr::Const(_)
-            | NExpr::Unary { .. }
-            | NExpr::Binary { .. }
-            | NExpr::GetEnumTag { .. }
-            | NExpr::IsEnumVariant { .. }
-            | NExpr::CodeRegionOffset { .. }
-            | NExpr::CodeRegionLen { .. } => {}
         }
     }
 
@@ -1105,7 +1203,7 @@ fn borrow_storage_roots<'db>(
             }
         }
     }
-    roots
+    (roots, escaping_store_sources)
 }
 
 fn promote_escaping_slot<'db>(roots: &mut [RuntimeLocalRoot<'db>], source: SLocalId) -> bool {

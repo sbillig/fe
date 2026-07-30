@@ -25,4 +25,12 @@ fn test_intrinsic_closure_calls_precede_extension_traits() {
     let boxed = Boxed { value: 42 }
     let take = || boxed
     assert(take.call_once().value == 42)
+
+    let explicitly_called = Boxed { value: 42 }
+    let explicit_call = || explicitly_called
+    assert(Hijack::call(explicit_call, 41 as u256) == 0)
+
+    let explicitly_called_once = Boxed { value: 42 }
+    let explicit_call_once = || explicitly_called_once
+    assert(Hijack::call_once(explicit_call_once, 41 as u256) == 0)
 }

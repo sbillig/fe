@@ -812,7 +812,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
     }
 
     fn select_place_effect_arg(
-        &self,
+        &mut self,
         arg: &NEffectArg<'db>,
         place: &NSPlace<'db>,
         plan: &CompiledEffectPlacePlan<'db>,
@@ -830,11 +830,17 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
     }
 
     fn select_effect_place_for_boundary(
-        &self,
+        &mut self,
         arg: &NEffectArg<'db>,
         place: &NSPlace<'db>,
         boundary: RuntimeBoundarySpec<'db>,
     ) -> SelectedRuntimeArg<'db> {
+        let aggregate_layout = self
+            .env
+            .normalized_place_class(self.carriers, place)
+            .and_then(|class| class.aggregate_layout());
+        let boundary =
+            specialize_boundary_for_aggregate_layout(&boundary, aggregate_layout).into_owned();
         if let Some(selected) = self.select_effect_handle_value_for_boundary(place, &boundary) {
             return selected;
         }
