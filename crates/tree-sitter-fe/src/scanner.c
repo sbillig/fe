@@ -48,27 +48,29 @@ static bool is_continuation_after_newline(int32_t c) {
   }
 }
 
-// Skip a block comment (after consuming /*). Returns true if successfully skipped.
-static bool skip_block_comment(TSLexer *lexer) {
+// Consume a block comment after `/*`. Lookahead performed after a token's
+// `mark_end` must use `advance`, not `skip`: skipped bytes move the token start
+// and can collapse an already-marked token to a zero-width range.
+static bool consume_block_comment(TSLexer *lexer, bool as_trivia) {
   int depth = 1;
   while (depth > 0 && !lexer->eof(lexer)) {
     if (lexer->lookahead == '*') {
-      skip(lexer);
+      lexer->advance(lexer, as_trivia);
       if (!lexer->eof(lexer) && lexer->lookahead == '/') {
-        skip(lexer);
+        lexer->advance(lexer, as_trivia);
         depth--;
       }
       continue;
     }
     if (lexer->lookahead == '/') {
-      skip(lexer);
+      lexer->advance(lexer, as_trivia);
       if (!lexer->eof(lexer) && lexer->lookahead == '*') {
-        skip(lexer);
+        lexer->advance(lexer, as_trivia);
         depth++;
       }
       continue;
     }
-    skip(lexer);
+    lexer->advance(lexer, as_trivia);
   }
   return depth == 0;
 }
@@ -76,6 +78,45 @@ static bool skip_block_comment(TSLexer *lexer) {
 static bool is_identifier_continue(int32_t c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
          (c >= '0' && c <= '9') || c == '_';
+}
+
+static bool skip_quoted_string(TSLexer *lexer) {
+  advance(lexer);
+  while (!lexer->eof(lexer)) {
+    if (lexer->lookahead == '\\') {
+      advance(lexer);
+      if (lexer->eof(lexer)) return false;
+      advance(lexer);
+      continue;
+    }
+    if (lexer->lookahead == '"') {
+      advance(lexer);
+      return true;
+    }
+    advance(lexer);
+  }
+  return false;
+}
+
+static bool skip_type_trivia(TSLexer *lexer) {
+  for (;;) {
+    while (!lexer->eof(lexer) &&
+           (lexer->lookahead == ' ' || lexer->lookahead == '\t' ||
+            lexer->lookahead == '\r' || lexer->lookahead == '\n')) {
+      advance(lexer);
+    }
+    if (lexer->lookahead != '/') return true;
+    advance(lexer);
+    if (lexer->lookahead == '/') {
+      while (!lexer->eof(lexer) && lexer->lookahead != '\n') {
+        advance(lexer);
+      }
+      continue;
+    }
+    if (lexer->lookahead != '*') return false;
+    advance(lexer);
+    if (!consume_block_comment(lexer, false)) return false;
+  }
 }
 
 static bool scan_qualified_type_after_view(TSLexer *lexer) {
@@ -106,22 +147,42 @@ static bool scan_qualified_type_after_view(TSLexer *lexer) {
     }
 
     switch (c) {
+      case '/':
+        advance(lexer);
+        if (lexer->lookahead == '/') {
+          while (!lexer->eof(lexer) && lexer->lookahead != '\n') {
+            advance(lexer);
+          }
+        } else if (lexer->lookahead == '*') {
+          advance(lexer);
+          if (!consume_block_comment(lexer, false)) return false;
+        }
+        previous_was_identifier = false;
+        break;
+      case '"':
+        if (!skip_quoted_string(lexer)) return false;
+        previous_was_identifier = false;
+        break;
       case '<':
-        angle_depth++;
+        if (paren_depth == 0 && bracket_depth == 0 && brace_depth == 0) {
+          angle_depth++;
+        }
         previous_was_identifier = false;
         advance(lexer);
         break;
       case '>':
+        if (paren_depth != 0 || bracket_depth != 0 || brace_depth != 0) {
+          previous_was_identifier = false;
+          advance(lexer);
+          break;
+        }
         angle_depth--;
         previous_was_identifier = false;
         advance(lexer);
         if (angle_depth == 0) {
-          while (!lexer->eof(lexer) &&
-                 (lexer->lookahead == ' ' || lexer->lookahead == '\t' ||
-                  lexer->lookahead == '\r' || lexer->lookahead == '\n')) {
-            advance(lexer);
-          }
-          if (!saw_top_level_as || lexer->lookahead != ':') return false;
+          if (!saw_top_level_as || !skip_type_trivia(lexer) ||
+              lexer->lookahead != ':')
+            return false;
           advance(lexer);
           return lexer->lookahead == ':';
         }
@@ -184,22 +245,7 @@ static bool scan_view_mode(TSLexer *lexer, bool prefix_is_valid,
   if (is_identifier_continue(lexer->lookahead)) return false;
   lexer->mark_end(lexer);
 
-  for (;;) {
-    while (!lexer->eof(lexer) &&
-           (lexer->lookahead == ' ' || lexer->lookahead == '\t' ||
-            lexer->lookahead == '\r' || lexer->lookahead == '\n')) {
-      advance(lexer);
-    }
-    if (lexer->lookahead != '/') break;
-    advance(lexer);
-    if (lexer->lookahead == '/') {
-      while (!lexer->eof(lexer) && lexer->lookahead != '\n') advance(lexer);
-      continue;
-    }
-    if (lexer->lookahead != '*') return false;
-    advance(lexer);
-    if (!skip_block_comment(lexer)) return false;
-  }
+  if (!skip_type_trivia(lexer)) return false;
 
   if (lexer->lookahead == '<') {
     if (!prefix_is_valid || !scan_qualified_type_after_view(lexer)) return false;
@@ -276,7 +322,7 @@ static bool scan_automatic_semicolon(TSLexer *lexer) {
       if (lexer->lookahead == '*') {
         // Block comment -- skip through it
         skip(lexer);
-        skip_block_comment(lexer);
+        consume_block_comment(lexer, true);
         continue;
       }
       // Just `/` -- division operator continuation

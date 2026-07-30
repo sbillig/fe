@@ -5,7 +5,7 @@ use super::{
     expr::parse_expr,
     param::GenericArgListScope,
     parse_list,
-    path::{PathScope, is_path_segment},
+    path::{PathScope, is_path_segment, is_qualified_type},
     token_stream::TokenStream,
 };
 use crate::{ExpectedKind, ParseError, SyntaxKind};
@@ -59,22 +59,22 @@ fn starts_view_mode_type<S: TokenStream>(parser: &mut Parser<S>) -> bool {
     let Some(next) = parser.peek_n_non_trivia(2).get(1).copied() else {
         return false;
     };
-    if next == SyntaxKind::Lt
-        && parser.dry_run(|parser| {
+    if next == SyntaxKind::Lt {
+        return parser.dry_run(|parser| {
             parser.bump();
-            parser.parses_without_error(GenericArgListScope::default())
-        })
-    {
-        return false;
+            is_qualified_type(parser)
+        });
     }
     is_type_start(next)
 }
 
 pub(crate) fn is_type_start(kind: SyntaxKind) -> bool {
     match kind {
-        SyntaxKind::Star | SyntaxKind::SelfTypeKw | SyntaxKind::LParen | SyntaxKind::LBracket => {
-            true
-        }
+        SyntaxKind::Star
+        | SyntaxKind::Not
+        | SyntaxKind::SelfTypeKw
+        | SyntaxKind::LParen
+        | SyntaxKind::LBracket => true,
         SyntaxKind::MutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw => true,
         kind if is_path_segment(kind) => true,
         _ => false,
@@ -108,13 +108,16 @@ impl super::Parse for ModeTypeScope {
             )?;
         }
         parser.bump();
-        if self.allow_missing_inner
-            && matches!(
+        if self.allow_missing_inner {
+            let newline_as_trivia = parser.set_newline_as_trivia(true);
+            let missing_inner = matches!(
                 parser.current_kind(),
                 Some(SyntaxKind::Comma | SyntaxKind::Pipe)
-            )
-        {
-            return Ok(());
+            );
+            parser.set_newline_as_trivia(newline_as_trivia);
+            if missing_inner {
+                return Ok(());
+            }
         }
         parse_type(parser, None).map(|_| ())
     }
