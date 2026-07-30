@@ -161,13 +161,23 @@ fn canonicalize_stmt<'db>(
             SStmtKind::Assign { dst: *dst, expr }
         }
         SStmtKind::Store { dst, src } => {
-            locals[dst.local.index()] = None;
-            // A store through a mut-borrow carrier also mutates the borrowed
-            // locals, so their cached constants are stale.
             let mut memo = vec![None; body.locals.len()];
             let mut visiting = FxHashSet::default();
-            for root in writable_local_roots(dst.local, local_defs, &mut memo, &mut visiting) {
-                locals[root.index()] = None;
+            // A store through a mut-borrow carrier also mutates the borrowed
+            // locals, so their cached constants are stale.
+            invalidate_writable_local(dst.local, locals, local_defs, &mut memo, &mut visiting);
+            // Rebinding a capability field can install either a capability
+            // directly or an aggregate which contains one. Its pointees then
+            // become reachable through later field reads which are not
+            // represented in `local_defs`. Forget those pointees now so a
+            // subsequent write through the replacement cannot leave a stale
+            // compile-time value for the source local.
+            if body
+                .locals
+                .get(src.value.index())
+                .is_some_and(|local| ty_reaches_mut_borrow(db, local.ty))
+            {
+                invalidate_writable_local(src.value, locals, local_defs, &mut memo, &mut visiting);
             }
             SStmtKind::Store {
                 dst: dst.clone(),
@@ -199,7 +209,13 @@ fn invalidate_mutated_call_locals<'db>(
     body: &SemanticBody<'db>,
     local_defs: &LocalDefs<'db>,
 ) {
-    let SExpr::Call { callee, args, .. } = expr else {
+    let SExpr::Call {
+        callee,
+        args,
+        effect_args,
+        ..
+    } = expr
+    else {
         return;
     };
     let mut memo = vec![None; body.locals.len()];
@@ -208,9 +224,30 @@ fn invalidate_mutated_call_locals<'db>(
         if !callee_arg_reaches_mut_borrow(db, *callee, idx) {
             continue;
         }
-        for root in writable_local_roots(arg.value, local_defs, &mut memo, &mut visiting) {
-            locals[root.index()] = None;
+        invalidate_writable_local(arg.value, locals, local_defs, &mut memo, &mut visiting);
+    }
+    for arg in effect_args {
+        if !arg.required_mut {
+            continue;
         }
+        let local = match &arg.arg {
+            crate::analysis::semantic::SEffectArgValue::Place(place) => place.local,
+            crate::analysis::semantic::SEffectArgValue::Value(value) => value.value,
+        };
+        invalidate_writable_local(local, locals, local_defs, &mut memo, &mut visiting);
+    }
+}
+
+fn invalidate_writable_local<'db>(
+    local: crate::analysis::semantic::SLocalId,
+    locals: &mut LocalConstMap<'db>,
+    local_defs: &LocalDefs<'db>,
+    memo: &mut [Option<Vec<crate::analysis::semantic::SLocalId>>],
+    visiting: &mut FxHashSet<crate::analysis::semantic::SLocalId>,
+) {
+    locals[local.index()] = None;
+    for root in writable_local_roots(local, local_defs, memo, visiting) {
+        locals[root.index()] = None;
     }
 }
 

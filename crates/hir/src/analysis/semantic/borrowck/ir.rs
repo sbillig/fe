@@ -6,14 +6,17 @@ use crate::{
         HirAnalysisDb,
         place::projectable_place_ty,
         semantic::{
-            BorrowActivation, FieldIndex, LayoutBackingProjection, Mutability, SConst, SLocalId,
-            SStmtId, SemOrigin, SemanticBody, SemanticCalleeRef, SemanticCodeRegionRef,
-            SemanticCodeRegionTarget, SemanticLocalKind, SemanticProjectionPath, VariantIndex,
+            BorrowActivation, BorrowSlotFamilyId, FieldIndex, LayoutBackingProjection, Mutability,
+            SCallReturnSource, SConst, SLocalId, SStmtId, SemOrigin, SemanticBody,
+            SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticLocalKind,
+            SemanticProjectionPath, VariantIndex,
         },
         ty::{
             adt_def::{AdtRef, instantiate_adt_field_shape},
             provider::ProviderAddressSpace,
-            ty_check::{BodyOwner, EffectPassMode, LocalBinding},
+            ty_check::{
+                BodyOwner, EffectPassMode, LocalBinding, ReturnProjectionStep, ReturnSource,
+            },
             ty_def::{BorrowKind, TyId},
         },
     },
@@ -191,8 +194,8 @@ fn layout_backing_projection_matches(
         || matches!(
             (pattern, candidate),
             (
-                LayoutBackingProjection::Index(None),
-                LayoutBackingProjection::Index(_)
+                LayoutBackingProjection::Index(None) | LayoutBackingProjection::IndexFamily(_),
+                LayoutBackingProjection::Index(_) | LayoutBackingProjection::IndexFamily(_)
             )
         )
 }
@@ -283,7 +286,9 @@ pub(super) fn semantic_projection_for_layout_path<'db>(
                 ty = *ty.generic_args(db).first()?;
                 out.push(Projection::Index(IndexSource::Constant(index)));
             }
-            LayoutBackingProjection::Index(None) => return None,
+            LayoutBackingProjection::Index(None) | LayoutBackingProjection::IndexFamily(_) => {
+                return None;
+            }
         }
     }
     Some(out)
@@ -334,30 +339,241 @@ pub(crate) fn semantic_projection_ty<'db>(
     Some((ty, traverses_capability))
 }
 
+/// Returns whether a store replaces a capability held in an aggregate slot,
+/// rather than writing through that capability.
+///
+/// The destination must end at a capability and the source must itself be a
+/// capability. This remains a rebind when the slot is reached through an
+/// earlier capability; runtime lowering still stores the source's transport
+/// in that nested slot.
+pub fn store_rebinds_capability<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: &NormalizedSemanticBody<'db>,
+    dst: &NSPlace<'db>,
+    src: NOperand,
+) -> bool {
+    if dst.path.is_empty()
+        || body
+            .place_ty(db, dst)
+            .and_then(|ty| ty.as_capability(db))
+            .is_none()
+        || body
+            .local(src.local)
+            .and_then(|local| local.ty.as_capability(db))
+            .is_none()
+    {
+        return false;
+    }
+
+    true
+}
+
+/// Returns whether a return-provenance path reaches storage supplied through
+/// an incoming capability carrier.
+///
+/// A borrow into an owned aggregate parameter is rooted in fresh callee
+/// storage, even when the result itself is a capability. Only a capability
+/// encountered on the input side makes that borrow replayable at the call
+/// site.
+pub(crate) fn return_projection_reaches_capability<'db>(
+    db: &'db dyn HirAnalysisDb,
+    mut ty: TyId<'db>,
+    projection: &[ReturnProjectionStep],
+) -> bool {
+    let mut traverses_capability = false;
+    for step in projection {
+        while let Some((_, inner)) = ty.as_capability(db) {
+            traverses_capability = true;
+            ty = inner;
+        }
+        ty = match step {
+            ReturnProjectionStep::Field(field) => {
+                let Some(field_ty) = ty.field_types(db).get(usize::from(*field)).copied() else {
+                    return false;
+                };
+                field_ty
+            }
+            ReturnProjectionStep::VariantField { variant, field } => {
+                let Some(adt) = ty.adt_def(db) else {
+                    return false;
+                };
+                instantiate_adt_field_shape(
+                    db,
+                    adt,
+                    usize::from(*variant),
+                    usize::from(*field),
+                    ty.generic_args(db),
+                )
+            }
+            ReturnProjectionStep::ConstantIndex(_)
+            | ReturnProjectionStep::DynamicIndex(_)
+            | ReturnProjectionStep::AnyIndex => {
+                if !ty.is_array(db) {
+                    return false;
+                }
+                let Some(element_ty) = ty.generic_args(db).first().copied() else {
+                    return false;
+                };
+                element_ty
+            }
+        };
+    }
+    traverses_capability || ty.as_capability(db).is_some()
+}
+
+/// Tests a single returned borrow slot against its corresponding input leaf.
+///
+/// `source.result_projection` may describe an aggregate containing the borrow
+/// rather than the borrow slot itself. The unmatched result suffix therefore
+/// has to be replayed on the input before deciding whether the source reaches
+/// an incoming capability.
+pub(crate) fn return_source_borrow_input_reaches_capability<'db>(
+    db: &'db dyn HirAnalysisDb,
+    input_ty: TyId<'db>,
+    source: &ReturnSource,
+    result: &[LayoutBackingProjection],
+) -> Option<bool> {
+    if source.result_projection.len() > result.len() {
+        return None;
+    }
+    let mut input_projection = source.projection.clone();
+    for (source_step, result_step) in source.result_projection.iter().zip(result) {
+        let matches = match (source_step, result_step) {
+            (ReturnProjectionStep::Field(source), LayoutBackingProjection::Field(result)) => {
+                *source == result.0
+            }
+            (
+                ReturnProjectionStep::VariantField {
+                    variant: source_variant,
+                    field: source_field,
+                },
+                LayoutBackingProjection::VariantField {
+                    variant: result_variant,
+                    field: result_field,
+                },
+            ) => *source_variant == result_variant.0 && *source_field == result_field.0,
+            (
+                ReturnProjectionStep::ConstantIndex(source),
+                LayoutBackingProjection::Index(Some(result)),
+            ) => source == result,
+            (
+                ReturnProjectionStep::ConstantIndex(_)
+                | ReturnProjectionStep::DynamicIndex(_)
+                | ReturnProjectionStep::AnyIndex,
+                LayoutBackingProjection::Index(None) | LayoutBackingProjection::IndexFamily(_),
+            )
+            | (
+                ReturnProjectionStep::DynamicIndex(_) | ReturnProjectionStep::AnyIndex,
+                LayoutBackingProjection::Index(Some(_)),
+            ) => true,
+            _ => false,
+        };
+        if !matches {
+            return None;
+        }
+    }
+    input_projection.extend(result[source.result_projection.len()..].iter().map(
+        |step| match step {
+            LayoutBackingProjection::Field(field) => ReturnProjectionStep::Field(field.0),
+            LayoutBackingProjection::VariantField { variant, field } => {
+                ReturnProjectionStep::VariantField {
+                    variant: variant.0,
+                    field: field.0,
+                }
+            }
+            LayoutBackingProjection::Index(Some(index)) => {
+                ReturnProjectionStep::ConstantIndex(*index)
+            }
+            LayoutBackingProjection::Index(None) | LayoutBackingProjection::IndexFamily(_) => {
+                ReturnProjectionStep::AnyIndex
+            }
+        },
+    ));
+    Some(return_projection_reaches_capability(
+        db,
+        input_ty,
+        &input_projection,
+    ))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BorrowResult {
     pub kind: BorrowKind,
     pub projection: Vec<LayoutBackingProjection>,
 }
 
+#[derive(Default)]
+pub(super) struct BorrowSlotFamilyIds {
+    next: BorrowSlotFamilyId,
+}
+
+impl BorrowSlotFamilyIds {
+    fn allocate(&mut self) -> BorrowSlotFamilyId {
+        let family = self.next;
+        self.next = self
+            .next
+            .checked_add(1)
+            .expect("borrow-slot family id space exhausted");
+        family
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::analysis::semantic::LayoutBackingProjection;
+
+    use super::BorrowSlotFamilyIds;
+
+    #[test]
+    fn borrow_slot_family_ids_remain_distinct_beyond_u16_space() {
+        let mut family_ids = BorrowSlotFamilyIds::default();
+        let first_id_outside_u16 = usize::from(u16::MAX) + 1;
+        let mut previous = None;
+
+        for expected in 0..=first_id_outside_u16 {
+            let projection = LayoutBackingProjection::IndexFamily(family_ids.allocate());
+            assert_eq!(projection, LayoutBackingProjection::IndexFamily(expected));
+            assert_ne!(Some(projection), previous);
+            previous = Some(projection);
+        }
+    }
+}
+
 pub(crate) fn borrow_results_in_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
 ) -> Vec<BorrowResult> {
-    borrow_results_in_ty_impl(db, ty, false)
+    borrow_results_in_ty_impl(db, ty, false, &mut BorrowSlotFamilyIds::default())
 }
 
 pub(crate) fn return_borrow_results_in_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
 ) -> Vec<BorrowResult> {
-    borrow_results_in_ty_impl(db, ty, true)
+    borrow_results_in_ty_impl(db, ty, true, &mut BorrowSlotFamilyIds::default())
+}
+
+pub(super) fn borrow_results_in_ty_with_family_ids<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    family_ids: &mut BorrowSlotFamilyIds,
+) -> Vec<BorrowResult> {
+    borrow_results_in_ty_impl(db, ty, false, family_ids)
+}
+
+pub(super) fn return_borrow_results_in_ty_with_family_ids<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    family_ids: &mut BorrowSlotFamilyIds,
+) -> Vec<BorrowResult> {
+    borrow_results_in_ty_impl(db, ty, true, family_ids)
 }
 
 fn borrow_results_in_ty_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
     track_views: bool,
+    family_ids: &mut BorrowSlotFamilyIds,
 ) -> Vec<BorrowResult> {
     fn collect<'db>(
         db: &'db dyn HirAnalysisDb,
@@ -365,6 +581,7 @@ fn borrow_results_in_ty_impl<'db>(
         track_views: bool,
         path: &mut Vec<LayoutBackingProjection>,
         visiting: &mut Vec<TyId<'db>>,
+        family_ids: &mut BorrowSlotFamilyIds,
         out: &mut Vec<BorrowResult>,
     ) {
         if let Some((kind, _)) = ty.as_borrow(db) {
@@ -381,7 +598,7 @@ fn borrow_results_in_ty_impl<'db>(
                     projection: path.clone(),
                 });
             }
-            collect(db, inner, track_views, path, visiting, out);
+            collect(db, inner, track_views, path, visiting, family_ids, out);
             return;
         }
         if visiting.contains(&ty) {
@@ -390,17 +607,19 @@ fn borrow_results_in_ty_impl<'db>(
         visiting.push(ty);
 
         if ty.is_array(db) {
+            if ty.array_len(db) == Some(0) {
+                visiting.pop();
+                return;
+            }
             if let Some(elem) = ty.generic_args(db).first().copied() {
-                if let Some(len) = ty.array_len(db) {
-                    for index in 0..len {
-                        path.push(LayoutBackingProjection::Index(Some(index)));
-                        collect(db, elem, track_views, path, visiting, out);
-                        path.pop();
-                    }
-                } else {
-                    path.push(LayoutBackingProjection::Index(None));
-                    collect(db, elem, track_views, path, visiting, out);
-                    path.pop();
+                let family_checkpoint = family_ids.next;
+                let result_checkpoint = out.len();
+                let family = family_ids.allocate();
+                path.push(LayoutBackingProjection::IndexFamily(family));
+                collect(db, elem, track_views, path, visiting, family_ids, out);
+                path.pop();
+                if out.len() == result_checkpoint {
+                    family_ids.next = family_checkpoint;
                 }
             }
         } else if let Some(closure) = ty.as_closure(db) {
@@ -409,7 +628,7 @@ fn borrow_results_in_ty_impl<'db>(
                     continue;
                 };
                 path.push(LayoutBackingProjection::Field(FieldIndex(idx)));
-                collect(db, field_ty, track_views, path, visiting, out);
+                collect(db, field_ty, track_views, path, visiting, family_ids, out);
                 path.pop();
             }
         } else if ty.is_tuple(db)
@@ -422,7 +641,7 @@ fn borrow_results_in_ty_impl<'db>(
                     continue;
                 };
                 path.push(LayoutBackingProjection::Field(FieldIndex(idx)));
-                collect(db, field_ty, track_views, path, visiting, out);
+                collect(db, field_ty, track_views, path, visiting, family_ids, out);
                 path.pop();
             }
         } else if let Some(adt) = ty.adt_def(db)
@@ -447,7 +666,7 @@ fn borrow_results_in_ty_impl<'db>(
                         variant: VariantIndex(variant_idx),
                         field: FieldIndex(field),
                     });
-                    collect(db, field_ty, track_views, path, visiting, out);
+                    collect(db, field_ty, track_views, path, visiting, family_ids, out);
                     path.pop();
                 }
             }
@@ -463,6 +682,7 @@ fn borrow_results_in_ty_impl<'db>(
         track_views,
         &mut Vec::new(),
         &mut Vec::new(),
+        family_ids,
         &mut out,
     );
     out.sort_unstable();
@@ -655,6 +875,12 @@ pub struct NOperand {
     pub mode: ReadMode,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NCallReturnSources<'a> {
+    pub(crate) sources: &'a [SCallReturnSource],
+    pub(crate) complete: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NEffectArg<'db> {
     pub binding_idx: u32,
@@ -753,6 +979,8 @@ pub enum NExpr<'db> {
         callee: SemanticCalleeRef<'db>,
         args: Box<[NOperand]>,
         effect_args: Box<[NEffectArg<'db>]>,
+        return_sources: Box<[SCallReturnSource]>,
+        return_sources_complete: bool,
     },
 }
 
@@ -776,7 +1004,10 @@ impl<'db> NExpr<'db> {
                 }
             }
             Self::Call {
-                args, effect_args, ..
+                args,
+                effect_args,
+                return_sources,
+                ..
             } => {
                 for arg in args {
                     f(*arg);
@@ -786,6 +1017,27 @@ impl<'db> NExpr<'db> {
                     .filter_map(|effect_arg| effect_arg.arg.value_operand())
                 {
                     f(value);
+                }
+                for index in return_sources
+                    .iter()
+                    .flat_map(|source| source.result_projection.iter().chain(&source.projection))
+                    .filter_map(|step| match step {
+                        crate::analysis::semantic::SCallReturnProjectionStep::DynamicIndex(
+                            index,
+                        ) => Some(*index),
+                        crate::analysis::semantic::SCallReturnProjectionStep::Field(_)
+                        | crate::analysis::semantic::SCallReturnProjectionStep::VariantField {
+                            ..
+                        }
+                        | crate::analysis::semantic::SCallReturnProjectionStep::ConstantIndex(_)
+                        | crate::analysis::semantic::SCallReturnProjectionStep::AnyIndex => None,
+                    })
+                {
+                    f(NOperand {
+                        local: index,
+                        origin: None,
+                        mode: ReadMode::Copy,
+                    });
                 }
             }
             Self::ReadPlace { .. }
@@ -1009,6 +1261,8 @@ pub enum SemanticBorrowDiagKind {
     Internal,
     NoEscViolation,
     ProviderProvenanceConflict,
+    UninitializedLocal,
+    NonRegularPolymorphicRecursion,
 }
 
 pub fn empty_normalized_body<'db>(

@@ -7,10 +7,13 @@ use crate::analysis::{
     HirAnalysisDb,
     semantic::{
         NBorrowRoot, NEffectArg, NEffectArgValue, NExpr, NOperand, NSPlace, NSPlaceRoot,
-        NSStmtKind, NSTerminatorKind, NormalizedSemanticBody, SConst, SLocalId, SemConstId,
-        SemOrigin, SemanticCalleeRef, SemanticInstance,
-        borrowck::normalize_semantic_body_for_layout_evidence, get_or_build_semantic_instance,
-        identity_semantic_instance_key,
+        NSStmtKind, NSTerminatorKind, NormalizedSemanticBody, SBlockId, SConst, SLocalId,
+        SemConstId, SemOrigin, SemanticCalleeRef, SemanticInstance,
+        borrowck::{
+            cfg_reachable_blocks, normalize_semantic_body_for_layout_evidence,
+            normalized_cfg_successor_indices,
+        },
+        get_or_build_semantic_instance, identity_semantic_instance_key,
     },
     ty::{
         CallableLayoutParamPort, CallableLayoutPort, LayoutBundleComponent,
@@ -2069,6 +2072,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
     fn propagate_layout_context<'transfer>(
         &mut self,
         transfers: impl IntoIterator<Item = &'transfer LayoutTransfer<'db>>,
+        returned_locals: impl IntoIterator<Item = SLocalId>,
     ) -> Result<(), LayoutEvidenceError<'db>>
     where
         'db: 'transfer,
@@ -2102,19 +2106,17 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         }
         let mut queue = VecDeque::new();
         let mut queued = FxHashSet::default();
-        for block in &self.normalized.blocks {
-            if let NSTerminatorKind::Return(Some(value)) = block.terminator.kind {
-                for witness in &witnesses {
-                    self.enqueue_contextual_source(
-                        value.local,
-                        ContextualComponentExpr {
-                            value: witness.clone(),
-                            strength: ContextStrength::Required,
-                        },
-                        &mut queue,
-                        &mut queued,
-                    )?;
-                }
+        for local in returned_locals {
+            for witness in &witnesses {
+                self.enqueue_contextual_source(
+                    local,
+                    ContextualComponentExpr {
+                        value: witness.clone(),
+                        strength: ContextStrength::Required,
+                    },
+                    &mut queue,
+                    &mut queued,
+                )?;
             }
         }
         for (source_local, fallback) in store_seeds {
@@ -2643,39 +2645,84 @@ fn layout_evidence_body_query<'db>(
         .map(|statement| statement.id.index() + 1)
         .max()
         .unwrap_or(0);
+    let cfg_successors = normalized_cfg_successor_indices(db, &normalized);
+    let reachable_blocks = cfg_reachable_blocks(&cfg_successors);
     let mut transfers = (0..statement_slots).map(|_| None).collect::<Vec<_>>();
-    for statement in normalized.blocks.iter().flat_map(|block| &block.stmts) {
-        let slot = transfers
-            .get_mut(statement.id.index())
-            .ok_or(LayoutEvidenceError::InvalidStatementIdentity(statement.id))?;
-        if slot.is_some() {
-            return Err(LayoutEvidenceError::InvalidStatementIdentity(statement.id));
+    let mut reachable_transfers = vec![false; statement_slots];
+    for (block_idx, block) in normalized.blocks.iter().enumerate() {
+        let block_is_reachable = reachable_blocks.contains(&SBlockId::new(block_idx));
+        for statement in &block.stmts {
+            let slot = transfers
+                .get_mut(statement.id.index())
+                .ok_or(LayoutEvidenceError::InvalidStatementIdentity(statement.id))?;
+            if slot.is_some() {
+                return Err(LayoutEvidenceError::InvalidStatementIdentity(statement.id));
+            }
+            *slot = Some(builder.build_layout_transfer(statement)?);
+            reachable_transfers[statement.id.index()] = block_is_reachable;
         }
-        *slot = Some(builder.build_layout_transfer(statement)?);
     }
-    builder.propagate_layout_context(transfers.iter().flatten())?;
+    let executable_transfers = transfers
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| reachable_transfers[*idx])
+        .filter_map(|(_, transfer)| transfer.as_ref());
+    let executable_returns =
+        normalized
+            .blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(block_idx, block)| {
+                if !reachable_blocks.contains(&SBlockId::new(block_idx)) {
+                    return None;
+                }
+                match block.terminator.kind {
+                    NSTerminatorKind::Return(Some(value)) => Some(value.local),
+                    NSTerminatorKind::Goto(_)
+                    | NSTerminatorKind::Branch { .. }
+                    | NSTerminatorKind::MatchEnum { .. }
+                    | NSTerminatorKind::Assert { .. }
+                    | NSTerminatorKind::Return(None) => None,
+                }
+            });
+    builder.propagate_layout_context(executable_transfers, executable_returns)?;
     let statements = transfers
         .iter()
-        .map(|transfer| {
+        .enumerate()
+        .map(|(statement_idx, transfer)| {
             transfer
                 .as_ref()
-                .map(|transfer| builder.lower_layout_transfer(transfer))
+                .map(|transfer| {
+                    if reachable_transfers[statement_idx] {
+                        builder.lower_layout_transfer(transfer)
+                    } else {
+                        Ok(LayoutEvidenceStatement::default())
+                    }
+                })
                 .transpose()
         })
         .collect::<Result<Vec<_>, _>>()?;
     let terminators = normalized
         .blocks
         .iter()
-        .map(|block| {
-            let returns = match block.terminator.kind {
-                NSTerminatorKind::Return(Some(value)) => {
+        .enumerate()
+        .map(|(block_idx, block)| {
+            let returns = match (
+                reachable_blocks.contains(&SBlockId::new(block_idx)),
+                &block.terminator.kind,
+            ) {
+                (true, NSTerminatorKind::Return(Some(value))) => {
                     builder.return_operands(value.local, &signature.output)?
                 }
-                NSTerminatorKind::Goto(_)
-                | NSTerminatorKind::Branch { .. }
-                | NSTerminatorKind::MatchEnum { .. }
-                | NSTerminatorKind::Assert { .. }
-                | NSTerminatorKind::Return(None) => Box::new([]),
+                (false, _)
+                | (
+                    true,
+                    NSTerminatorKind::Goto(_)
+                    | NSTerminatorKind::Branch { .. }
+                    | NSTerminatorKind::MatchEnum { .. }
+                    | NSTerminatorKind::Assert { .. }
+                    | NSTerminatorKind::Return(None),
+                ) => Box::new([]),
             };
             Ok(LayoutEvidenceTerminator { returns })
         })

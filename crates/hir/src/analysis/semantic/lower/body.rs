@@ -1,5 +1,5 @@
 use cranelift_entity::EntityRef;
-use num_bigint::BigInt;
+use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::ToPrimitive;
 use rustc_hash::FxHashMap;
 
@@ -10,22 +10,29 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            BorrowActivation, CallSiteId, FieldIndex, LayoutBackingPlace, LayoutBackingSource,
-            Mutability, SBlock, SBlockId, SCallReturnProjectionStep, SCallReturnSource, SConst,
-            SEffectArg, SEffectArgValue, SExpr, SLocal, SLocalId, SOperand, SOperandIntent, SPlace,
-            SStmt, SStmtId, SStmtKind, STerminator, STerminatorKind, SValueId, SemConstValue,
-            SemOrigin, SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex,
-            bool_const, bytes_const, int_const, reify_runtime_const_for_ty, runtime_size_bytes,
-            sem_const_from_ty, unit_const,
+            BorrowActivation, CallSiteId, FieldIndex, LayoutBackingPlace, LayoutBackingProjection,
+            LayoutBackingSource, Mutability, SBlock, SBlockId, SCallReturnProjectionStep,
+            SCallReturnSource, SConst, SEffectArg, SEffectArgValue, SExpr, SLocal, SLocalId,
+            SOperand, SOperandIntent, SPlace, SStmt, SStmtId, SStmtKind, STerminator,
+            STerminatorKind, SValueId, SemConstValue, SemOrigin, SemanticBody,
+            SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex, bool_const, bytes_const,
+            eval_const_ref, int_const, reify_runtime_const_for_ty, return_borrow_results_in_ty,
+            return_source_borrow_input_reaches_capability, runtime_size_bytes, sem_const_from_ty,
+            unit_const,
         },
         ty::{
             adt_def::instantiate_adt_field_shape,
             const_ty::{
                 CallableInputLayoutHoleOrigin, ConstTyData, EvaluatedConstTy,
                 const_ty_or_abstract_from_assoc_const_use,
-                const_ty_or_abstract_from_inherent_const_use,
+                const_ty_or_abstract_from_inherent_const_use, try_eval_const_int_expr,
             },
             normalize::normalize_ty,
+            pattern_ir::{
+                KnownPatternScrutinee, PatternBranchReachability,
+                known_pattern_scrutinee_from_const, known_scrutinee_arm_reachability,
+                single_pattern_branch_reachability,
+            },
             ty_check::{
                 BodyOwner, ClosureCaptureConstruction, CodeRegionIntrinsicKind, ConstIntrinsicKind,
                 ConstRef, LocalBinding, ParamSite, PathReadSemantics, RecordInitLowering,
@@ -37,10 +44,12 @@ use crate::{
     },
     hir_def::{
         ArithBinOp, Body, CallArg, CallableDef, Cond, CondId, Expr, ExprId, Field as HirField,
-        LitKind, MatchArm, Partial, PatId, PathId, Stmt, StmtId,
+        IntegerId, ItemKind, LitKind, MatchArm, Partial, Pat, PatId, PathId, Stmt, StmtId,
         expr::{BinOp, CompBinOp, LogicalBinOp, UnOp},
     },
     projection::{IndexSource, Projection},
+    span::{expr::LazyExprSpan, item::LazyItemSpan, pat::LazyPatSpan},
+    visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat},
 };
 
 use super::{
@@ -52,6 +61,114 @@ use super::{
 pub(crate) enum BindingRoleMode {
     Final,
     Provisional,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct BranchReachability {
+    then_branch: bool,
+    else_branch: bool,
+}
+
+fn closure_body_local_bindings<'db>(
+    db: &'db dyn HirAnalysisDb,
+    typed_body: &'db TypedBody<'db>,
+    body: Body<'db>,
+    root: ExprId,
+) -> Vec<LocalBinding<'db>> {
+    struct Collector<'a, 'db> {
+        typed_body: &'a TypedBody<'db>,
+        bindings: Vec<LocalBinding<'db>>,
+        seen: rustc_hash::FxHashSet<LocalBinding<'db>>,
+    }
+
+    impl<'db> Visitor<'db> for Collector<'_, 'db> {
+        fn visit_expr(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, LazyExprSpan<'db>>,
+            expr: ExprId,
+            expr_data: &Expr<'db>,
+        ) {
+            // Nested closures own their parameters and body-local patterns.
+            // Their enclosing closure only lowers the construction expression.
+            if !matches!(expr_data, Expr::Closure { .. }) {
+                walk_expr(self, ctxt, expr);
+            }
+        }
+
+        fn visit_pat(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, LazyPatSpan<'db>>,
+            pat: PatId,
+            _pat_data: &Pat<'db>,
+        ) {
+            if let Some(binding @ LocalBinding::Local { .. }) = self.typed_body.pat_binding(pat)
+                && self.seen.insert(binding)
+            {
+                self.bindings.push(binding);
+            }
+            walk_pat(self, ctxt, pat);
+        }
+
+        fn visit_item(
+            &mut self,
+            _ctxt: &mut VisitorCtxt<'db, LazyItemSpan<'db>>,
+            _item: ItemKind<'db>,
+        ) {
+            // Block-local items have independent callable bodies.
+        }
+    }
+
+    let Partial::Present(root_data) = root.data(db, body) else {
+        return Vec::new();
+    };
+    let mut collector = Collector {
+        typed_body,
+        bindings: Vec::new(),
+        seen: rustc_hash::FxHashSet::default(),
+    };
+    let mut ctxt = VisitorCtxt::with_expr(db, body.scope(), body, root);
+    collector.visit_expr(&mut ctxt, root, root_data);
+    collector.bindings
+}
+
+fn return_source_result_projection_overlaps_borrow(
+    source: &[ReturnProjectionStep],
+    borrow: &[LayoutBackingProjection],
+) -> bool {
+    source.len() <= borrow.len()
+        && source
+            .iter()
+            .zip(borrow)
+            .all(|(source, borrow)| match (source, borrow) {
+                (ReturnProjectionStep::Field(source), LayoutBackingProjection::Field(borrow)) => {
+                    *source == borrow.0
+                }
+                (
+                    ReturnProjectionStep::VariantField {
+                        variant: source_variant,
+                        field: source_field,
+                    },
+                    LayoutBackingProjection::VariantField {
+                        variant: borrow_variant,
+                        field: borrow_field,
+                    },
+                ) => *source_variant == borrow_variant.0 && *source_field == borrow_field.0,
+                (
+                    ReturnProjectionStep::ConstantIndex(source),
+                    LayoutBackingProjection::Index(Some(borrow)),
+                ) => source == borrow,
+                (
+                    ReturnProjectionStep::ConstantIndex(_)
+                    | ReturnProjectionStep::DynamicIndex(_)
+                    | ReturnProjectionStep::AnyIndex,
+                    LayoutBackingProjection::Index(None) | LayoutBackingProjection::IndexFamily(_),
+                )
+                | (
+                    ReturnProjectionStep::DynamicIndex(_) | ReturnProjectionStep::AnyIndex,
+                    LayoutBackingProjection::Index(Some(_)),
+                ) => true,
+                _ => false,
+            })
 }
 
 pub fn lower_to_smir<'db>(
@@ -204,10 +321,12 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     pub(super) closure_env_local: Option<SLocalId>,
     pub(super) closure_args_local: Option<SLocalId>,
     pub(super) closure_capture_fields: FxHashMap<LocalBinding<'db>, FieldIndex>,
+    pub(super) closure_capture_tys: FxHashMap<LocalBinding<'db>, TyId<'db>>,
     pub(super) with_binding_values: FxHashMap<ExprId, SValueId>,
     pub(super) current: SBlockId,
     pub(super) next_stmt_id: u32,
     pub(super) loop_stack: Vec<LoopScope>,
+    capability_rebind_result_ty: Option<TyId<'db>>,
 }
 
 pub(super) struct BlockState<'db> {
@@ -226,6 +345,7 @@ struct SmirLowerInputs<'a, 'db> {
 pub(super) struct LoopScope {
     pub(super) continue_bb: SBlockId,
     pub(super) break_bb: SBlockId,
+    pub(super) has_reachable_break: bool,
 }
 
 impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
@@ -281,10 +401,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             closure_env_local: None,
             closure_args_local: None,
             closure_capture_fields: FxHashMap::default(),
+            closure_capture_tys: FxHashMap::default(),
             with_binding_values: FxHashMap::default(),
             current: SBlockId::from_u32(0),
             next_stmt_id: 0,
             loop_stack: Vec::new(),
+            capability_rebind_result_ty: None,
         };
         cx.current = cx.new_block();
         cx.collect_binding_locals();
@@ -339,9 +461,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             let args_local = self
                 .closure_args_local
                 .expect("closure body must have an argument-pack local");
-            for (idx, binding) in closure_body.param_bindings().iter().copied().enumerate() {
+            for (idx, param) in closure_body.params(self.db).enumerate() {
+                let binding = param.binding;
                 let local = self.alloc_local(
-                    self.binding_ty(binding),
+                    param.ty,
                     if binding.is_mut() {
                         Mutability::Mutable
                     } else {
@@ -381,6 +504,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         u16::try_from(idx).expect("closure capture field index must fit in u16"),
                     ),
                 );
+                self.closure_capture_tys.insert(capture.binding, capture.ty);
+            }
+            let root = self
+                .template_owner
+                .root_expr(self.db)
+                .expect("closure body must have a root expression");
+            for binding in closure_body_local_bindings(self.db, self.typed_body, self.body, root) {
+                self.alloc_binding_local(binding);
             }
             return;
         }
@@ -476,7 +607,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         id
     }
 
-    fn binding_ty(&self, binding: LocalBinding<'db>) -> TyId<'db> {
+    pub(super) fn binding_ty(&self, binding: LocalBinding<'db>) -> TyId<'db> {
         match self.binding_role_mode {
             BindingRoleMode::Final => self.instance.binding_ty(self.db, binding),
             BindingRoleMode::Provisional => self.instance.provisional_binding_ty(self.db, binding),
@@ -640,6 +771,24 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         SOperand::expr(self.lower_expr(expr), expr).with_intent(self.expr_operand_intent(expr))
     }
 
+    /// Materializes an index expression at the exact projection site.
+    ///
+    /// A direct path read can otherwise reuse its mutable binding local. That
+    /// would make an earlier projection appear to change when the binding is
+    /// reassigned later, defeating program-point constant and alias facts.
+    /// Program-point reaching-value facts relate snapshots that are guaranteed
+    /// to observe the same source version, without leaking branch-local values
+    /// through joins.
+    pub(super) fn lower_index_operand(&mut self, expr: ExprId) -> SOperand {
+        let source = self.lower_expr(expr);
+        let snapshot = self.emit_expr_with_origin(
+            SemOrigin::Expr(expr),
+            self.expr_ty(expr),
+            SExpr::UseValue(SOperand::expr(source, expr).with_intent(SOperandIntent::Read)),
+        );
+        SOperand::expr(snapshot, expr).with_intent(SOperandIntent::Read)
+    }
+
     pub(super) fn expr_operand_intent(&self, expr: ExprId) -> SOperandIntent {
         match self.typed_body.expr_value_access(self.db, expr) {
             ValueAccess::Infer => SOperandIntent::Infer,
@@ -694,6 +843,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     fn lower_expr_as(&mut self, expr: ExprId, ty: TyId<'db>) -> SValueId {
         let Partial::Present(expr_data) = expr.data(self.db, self.body) else {
             panic!("cannot lower absent expression")
+        };
+        let ty = if ty.as_capability(self.db).is_some()
+            && matches!(
+                expr_data,
+                Expr::Block(..) | Expr::If(..) | Expr::Match(..) | Expr::With(..)
+            ) {
+            self.capability_rebind_result_ty.unwrap_or(ty)
+        } else {
+            ty
         };
         let origin = SemOrigin::Expr(expr);
 
@@ -781,7 +939,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 let base = self
                     .lower_expr_operand(*base)
                     .with_intent(self.expr_operand_intent(expr));
-                let index = self.lower_expr_operand(*index);
+                let index = self.lower_index_operand(*index);
                 self.emit_expr_with_origin(origin, ty, SExpr::Index { base, index })
             }
             Expr::Un(inner, UnOp::Mut | UnOp::Ref) => {
@@ -870,33 +1028,43 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.lower_call(expr, Some(*receiver), args, ty)
             }
             Expr::Assign(dst, src) => {
-                let dst_place = self.lower_place(*dst);
+                let rebinds_capability = self.typed_body.assignment_rebinds_capability(expr);
+                let dst_place = self.lower_assignment_place(*dst, rebinds_capability);
+                let previous_result_ty = self.capability_rebind_result_ty;
+                if rebinds_capability {
+                    self.capability_rebind_result_ty = Some(self.expr_ty(*dst));
+                }
                 let src = self.lower_expr_operand(*src);
-                self.push_place_write(origin, dst_place, src);
+                if rebinds_capability {
+                    self.capability_rebind_result_ty = previous_result_ty;
+                }
+                self.push_place_write(origin, dst_place, src, rebinds_capability);
                 self.unit_value()
             }
             Expr::AugAssign(dst, src, op) => {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
                     return self.lower_call_like_expr(expr, ty, Some(*dst), &[*src]);
                 }
-                let dst_place = self.lower_place(*dst);
-                let lhs = if dst_place.path.is_empty() {
-                    self.lower_expr_operand(*dst)
-                } else {
-                    SOperand::expr(
-                        self.emit_expr_with_origin(
-                            SemOrigin::Expr(*dst),
-                            self.expr_ty(*dst),
-                            SExpr::ReadPlace {
-                                place: dst_place.clone(),
-                                intent: SOperandIntent::Read,
-                            },
-                        ),
-                        *dst,
-                    )
-                };
+                let dst_expr_ty = self.expr_ty(*dst);
+                let dst_place = self.lower_assignment_place(*dst, false);
+                let lhs =
+                    if dst_expr_ty.as_capability(self.db).is_some() || !dst_place.path.is_empty() {
+                        SOperand::expr(
+                            self.emit_expr_with_origin(
+                                SemOrigin::Expr(*dst),
+                                self.projectable_place_ty(dst_expr_ty),
+                                SExpr::ReadPlace {
+                                    place: dst_place.clone(),
+                                    intent: SOperandIntent::Read,
+                                },
+                            ),
+                            *dst,
+                        )
+                    } else {
+                        self.lower_expr_operand(*dst)
+                    };
                 let rhs = self.lower_expr_operand(*src);
-                let dst_ty = self.projectable_place_ty(self.expr_ty(*dst));
+                let dst_ty = self.projectable_place_ty(dst_expr_ty);
                 let sum = self.emit_expr_with_origin(
                     origin,
                     dst_ty,
@@ -906,7 +1074,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         rhs,
                     },
                 );
-                self.push_place_write(origin, dst_place, SOperand::inherited(sum));
+                self.push_place_write(origin, dst_place, SOperand::inherited(sum), false);
                 self.unit_value()
             }
             Expr::Block(stmts) => self.lower_block_expr(stmts),
@@ -936,18 +1104,29 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let success_bb = self.new_block();
         let failure_bb = self.new_block();
         let join_bb = self.new_block();
-        self.lower_expr_branch(cond_arg.expr, success_bb, failure_bb);
+        let reachable = self.lower_expr_branch(cond_arg.expr, success_bb, failure_bb);
 
         self.switch_to(success_bb);
-        self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
+        if reachable.then_branch {
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
+        } else {
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(self.current));
+        }
 
         self.switch_to(failure_bb);
-        self.set_terminator(
-            self.current,
-            SemOrigin::Expr(expr),
-            STerminatorKind::Assert { message },
-        );
+        if reachable.else_branch {
+            self.set_terminator(
+                self.current,
+                SemOrigin::Expr(expr),
+                STerminatorKind::Assert { message },
+            );
+        } else {
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(self.current));
+        }
 
+        if !reachable.then_branch {
+            self.set_synthetic_terminator(join_bb, STerminatorKind::Goto(join_bb));
+        }
         self.switch_to(join_bb);
         self.unit_value()
     }
@@ -1169,7 +1348,19 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         ty: TyId<'db>,
     ) -> Option<SValueId> {
         let field = *self.closure_capture_fields.get(&binding)?;
+        let field_ty = *self.closure_capture_tys.get(&binding)?;
         let env = self.closure_env_local?;
+        if field_ty != ty && field_ty.as_capability(self.db).is_some() {
+            let place = SPlace::new(self.lower_effect_binding_value(binding));
+            return Some(self.emit_expr_with_origin(
+                SemOrigin::Expr(expr),
+                ty,
+                SExpr::ReadPlace {
+                    place,
+                    intent: self.expr_operand_intent(expr),
+                },
+            ));
+        }
         Some(self.emit_expr_with_origin(
             SemOrigin::Expr(expr),
             ty,
@@ -1178,6 +1369,31 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 field,
             },
         ))
+    }
+
+    pub(super) fn lower_effect_binding_value(&mut self, binding: LocalBinding<'db>) -> SValueId {
+        if let Some(local) = self.binding_locals.get(&binding).copied() {
+            return local;
+        }
+        let field = *self
+            .closure_capture_fields
+            .get(&binding)
+            .unwrap_or_else(|| panic!("effect binding local should be allocated: {binding:?}"));
+        let ty = *self
+            .closure_capture_tys
+            .get(&binding)
+            .expect("closure effect capture must retain its field type");
+        let env = self
+            .closure_env_local
+            .expect("closure environment local missing for effect capture");
+        self.emit_expr_with_origin(
+            SemOrigin::Synthetic,
+            ty,
+            SExpr::Field {
+                base: SOperand::inherited(env),
+                field,
+            },
+        )
     }
 
     fn lower_binding_capture_operand(
@@ -1193,17 +1409,67 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             ClosureCaptureConstruction::Move => SOperandIntent::Move,
         };
-        if let Some(local) = self.binding_locals.get(&binding).copied() {
-            return SOperand::inherited(local).with_intent(intent);
+        let (source_ty, source_place, source_value, source_field) =
+            if let Some(local) = self.binding_locals.get(&binding).copied() {
+                (
+                    self.locals[local.index()].ty,
+                    SPlace::new(local),
+                    Some(local),
+                    None,
+                )
+            } else {
+                let field = *self
+                    .closure_capture_fields
+                    .get(&binding)
+                    .unwrap_or_else(|| {
+                        panic!("capture binding local should be allocated: {binding:?}")
+                    });
+                let env = self.closure_env_local.unwrap_or_else(|| {
+                    panic!("closure environment local missing for capture: {binding:?}")
+                });
+                let mut place = SPlace::new(env);
+                place.push_field(field);
+                (
+                    *self
+                        .closure_capture_tys
+                        .get(&binding)
+                        .expect("nested closure capture must retain its field type"),
+                    place,
+                    None,
+                    Some((env, field)),
+                )
+            };
+        if let Some((kind, inner)) = ty.as_capability(self.db)
+            && source_ty.as_capability(self.db).is_none()
+            && inner == source_ty
+        {
+            let kind = match kind {
+                CapabilityKind::Mut => BorrowKind::Mut,
+                CapabilityKind::View | CapabilityKind::Ref => BorrowKind::Ref,
+            };
+            let provider = self.binding_provider_space(binding).or_else(|| {
+                matches!(
+                    binding,
+                    LocalBinding::Local { .. } | LocalBinding::Param { .. }
+                )
+                .then_some(crate::analysis::ty::ProviderAddressSpace::Memory)
+            });
+            let value = self.emit_expr_with_origin(
+                SemOrigin::Synthetic,
+                ty,
+                SExpr::Borrow {
+                    place: source_place,
+                    kind,
+                    provider,
+                    activation: BorrowActivation::Immediate,
+                },
+            );
+            return SOperand::synthetic(value).with_intent(intent);
         }
-
-        let field = *self
-            .closure_capture_fields
-            .get(&binding)
-            .unwrap_or_else(|| panic!("capture binding local should be allocated: {binding:?}"));
-        let env = self.closure_env_local.unwrap_or_else(|| {
-            panic!("closure environment local missing for capture: {binding:?}")
-        });
+        if let Some(value) = source_value {
+            return SOperand::inherited(value).with_intent(intent);
+        }
+        let (env, field) = source_field.expect("nested closure capture field");
         let value = self.emit_expr_with_origin(
             SemOrigin::Synthetic,
             ty,
@@ -1468,8 +1734,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     .callee
                     .unwrap_or_else(|| panic!("call lowering plan missing callee for {expr:?}"));
                 let effect_args = self.lower_effect_arg_slice(&call_site.effect_args);
-                let return_sources = self.lower_call_return_sources(callee, &values, &effect_args);
-                self.emit_expr_with_origin(
+                let (return_sources, return_sources_complete) =
+                    self.lower_call_return_sources(callee, &values, &effect_args);
+                let value = self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
                     ty,
                     SExpr::Call {
@@ -1478,8 +1745,19 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         args: values.into_boxed_slice(),
                         effect_args,
                         return_sources,
+                        return_sources_complete,
                     },
-                )
+                );
+                if SemanticInstance::new(self.db, callee.key)
+                    .normalized_result_ty(self.db)
+                    .is_never(self.db)
+                {
+                    self.set_synthetic_terminator(
+                        self.current,
+                        STerminatorKind::Goto(self.current),
+                    );
+                }
+                value
             }
         }
     }
@@ -1489,40 +1767,83 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         callee: crate::analysis::semantic::SemanticCalleeRef<'db>,
         args: &[SOperand],
         effect_args: &[SEffectArg<'db>],
-    ) -> Box<[SCallReturnSource]> {
-        let ReturnProvenance::Forwarded(sources) =
-            callee.key.callable_body(self.db).return_provenance(self.db)
-        else {
-            return Box::default();
+    ) -> (Box<[SCallReturnSource]>, bool) {
+        let callable_body = callee.key.callable_body(self.db);
+        let mut sources = match callable_body.return_provenance(self.db) {
+            ReturnProvenance::Forwarded(sources) => sources,
+            ReturnProvenance::Fresh | ReturnProvenance::Unknown => Vec::new(),
         };
+        let (forwarded_sources, mut sources_complete) =
+            callable_body.forwarded_return_sources_with_completeness(self.db);
+        // Exact carrier provenance stays unchanged, while borrowed result
+        // slots also retain every conservative input source. Callsite
+        // instantiation is needed for ordinary functions as well as closures:
+        // it replaces type-level dynamic-index descriptors with caller-local
+        // snapshot values before normalized analyses consume the call.
+        let result_ty = SemanticInstance::new(self.db, callee.key).normalized_result_ty(self.db);
+        let borrow_results = return_borrow_results_in_ty(self.db, result_ty);
+        sources.extend(forwarded_sources.into_iter().filter(|source| {
+            borrow_results.iter().any(|result| {
+                return_source_result_projection_overlaps_borrow(
+                    &source.result_projection,
+                    &result.projection,
+                )
+            })
+        }));
+        sources.sort_unstable();
+        sources.dedup();
+        sources.retain(|source| {
+            let relevant_results = borrow_results
+                .iter()
+                .filter(|result| {
+                    return_source_result_projection_overlaps_borrow(
+                        &source.result_projection,
+                        &result.projection,
+                    )
+                })
+                .collect::<Vec<_>>();
+            if relevant_results.is_empty() {
+                return true;
+            }
+            let Some(input_ty) = self.call_return_source_input_ty(callee, source) else {
+                sources_complete = false;
+                return true;
+            };
+            let mut reaches_capability = false;
+            let mut unclassified = false;
+            for result in relevant_results {
+                let Some(reaches) = return_source_borrow_input_reaches_capability(
+                    self.db,
+                    input_ty,
+                    source,
+                    &result.projection,
+                ) else {
+                    unclassified = true;
+                    continue;
+                };
+                reaches_capability |= reaches;
+            }
+            if unclassified {
+                sources_complete = false;
+            }
+            reaches_capability || unclassified
+        });
         let mut index_values = FxHashMap::default();
-        sources
+        let sources = sources
             .into_iter()
             .map(|source| {
-                let result_projection = self
-                    .lower_call_return_projection(
-                        &source.result_projection,
-                        args,
-                        effect_args,
-                        &mut index_values,
-                    )
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "callable result provenance contains an unlowerable result projection: callee={callee:?} source={source:?}"
-                        )
-                    });
-                let projection = self
-                    .lower_call_return_projection(
-                        &source.projection,
-                        args,
-                        effect_args,
-                        &mut index_values,
-                    )
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "callable result provenance contains an unlowerable input projection: callee={callee:?} source={source:?}"
-                        )
-                    });
+                let result_projection = self.lower_call_return_projection(
+                    &source.result_projection,
+                    args,
+                    effect_args,
+                    &mut index_values,
+                );
+                let projection = self.lower_call_return_projection(
+                    &source.projection,
+                    args,
+                    effect_args,
+                    &mut index_values,
+                );
                 SCallReturnSource {
                     result_projection,
                     origin: source.origin,
@@ -1530,7 +1851,22 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
             })
             .collect::<Vec<_>>()
-            .into_boxed_slice()
+            .into_boxed_slice();
+        (sources, sources_complete)
+    }
+
+    fn call_return_source_input_ty(
+        &self,
+        callee: crate::analysis::semantic::SemanticCalleeRef<'db>,
+        source: &crate::analysis::ty::ty_check::ReturnSource,
+    ) -> Option<TyId<'db>> {
+        let instance = SemanticInstance::new(self.db, callee.key);
+        let callable = callee.key.callable_body(self.db);
+        let binding = callable
+            .param_bindings(self.db)
+            .into_iter()
+            .find(|binding| binding.callable_input_origin(self.db) == Some(source.origin))?;
+        Some(instance.normalized_binding_ty(self.db, binding))
     }
 
     fn lower_call_return_projection(
@@ -1539,33 +1875,26 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         args: &[SOperand],
         effect_args: &[SEffectArg<'db>],
         index_values: &mut FxHashMap<ReturnIndexSource, SLocalId>,
-    ) -> Option<Vec<SCallReturnProjectionStep>> {
+    ) -> Vec<SCallReturnProjectionStep> {
         projection
             .iter()
-            .map(|step| {
-                Some(match step {
-                    ReturnProjectionStep::Field(field) => SCallReturnProjectionStep::Field(*field),
-                    ReturnProjectionStep::VariantField { variant, field } => {
-                        SCallReturnProjectionStep::VariantField {
-                            variant: *variant,
-                            field: *field,
-                        }
+            .map(|step| match step {
+                ReturnProjectionStep::Field(field) => SCallReturnProjectionStep::Field(*field),
+                ReturnProjectionStep::VariantField { variant, field } => {
+                    SCallReturnProjectionStep::VariantField {
+                        variant: *variant,
+                        field: *field,
                     }
-                    ReturnProjectionStep::ConstantIndex(index) => {
-                        SCallReturnProjectionStep::ConstantIndex(*index)
-                    }
-                    ReturnProjectionStep::DynamicIndex(source) => {
-                        SCallReturnProjectionStep::DynamicIndex(
-                            self.lower_call_return_index_source(
-                                source,
-                                args,
-                                effect_args,
-                                index_values,
-                            )?,
-                        )
-                    }
-                    ReturnProjectionStep::AnyIndex => SCallReturnProjectionStep::AnyIndex,
-                })
+                }
+                ReturnProjectionStep::ConstantIndex(index) => {
+                    SCallReturnProjectionStep::ConstantIndex(*index)
+                }
+                ReturnProjectionStep::DynamicIndex(source) => self
+                    .lower_call_return_index_source(source, args, effect_args, index_values)
+                    .map_or(SCallReturnProjectionStep::AnyIndex, |index| {
+                        SCallReturnProjectionStep::DynamicIndex(index)
+                    }),
+                ReturnProjectionStep::AnyIndex => SCallReturnProjectionStep::AnyIndex,
             })
             .collect()
     }
@@ -1776,8 +2105,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 );
             }
             Stmt::Break => {
-                let scope = self.loop_stack.last().copied().expect("break outside loop");
-                self.set_terminator(self.current, origin, STerminatorKind::Goto(scope.break_bb));
+                let is_reachable = !self.is_terminated(self.current);
+                let scope = self.loop_stack.last_mut().expect("break outside loop");
+                scope.has_reachable_break |= is_reachable;
+                let break_bb = scope.break_bb;
+                self.set_terminator(self.current, origin, STerminatorKind::Goto(break_bb));
             }
             Stmt::Return(expr) => {
                 let value = expr.map(|expr| self.lower_expr_operand(expr));
@@ -1804,19 +2136,27 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.set_synthetic_terminator(self.current, STerminatorKind::Goto(cond_bb));
 
         self.switch_to(cond_bb);
-        self.lower_cond_branch(cond, body_bb, exit_bb);
+        let reachable = self.lower_cond_branch(cond, body_bb, exit_bb);
 
         self.loop_stack.push(LoopScope {
             continue_bb: cond_bb,
             break_bb: exit_bb,
+            has_reachable_break: false,
         });
         self.switch_to(body_bb);
-        let _ = self.lower_expr(body_expr);
-        if !self.is_terminated(self.current) {
-            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(cond_bb));
+        if reachable.then_branch {
+            let _ = self.lower_expr(body_expr);
+            if !self.is_terminated(self.current) {
+                self.set_synthetic_terminator(self.current, STerminatorKind::Goto(cond_bb));
+            }
+        } else {
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(self.current));
         }
-        self.loop_stack.pop();
+        let scope = self.loop_stack.pop().expect("while loop scope");
 
+        if !reachable.else_branch && !scope.has_reachable_break {
+            self.set_synthetic_terminator(exit_bb, STerminatorKind::Goto(exit_bb));
+        }
         self.switch_to(exit_bb);
     }
 
@@ -1849,7 +2189,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .callee
             .expect("Seq::len should lower to a semantic callee");
         let len_args = [iter_operand];
-        let len_return_sources =
+        let (len_return_sources, len_return_sources_complete) =
             self.lower_call_return_sources(len_callee, &len_args, &len_effect_args);
         let len_value = self.emit_expr(
             usize_ty,
@@ -1859,6 +2199,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 args: Box::new(len_args),
                 effect_args: len_effect_args,
                 return_sources: len_return_sources,
+                return_sources_complete: len_return_sources_complete,
             },
         );
 
@@ -1888,6 +2229,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.loop_stack.push(LoopScope {
             continue_bb: cond_bb,
             break_bb: exit_bb,
+            has_reachable_break: false,
         });
         self.switch_to(body_bb);
         let get_effect_args = self.lower_effect_arg_slice(&for_loop_call_sites.get.effect_args);
@@ -1896,7 +2238,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .callee
             .expect("Seq::get should lower to a semantic callee");
         let get_args = [iter_operand, SOperand::synthetic(idx_local)];
-        let get_return_sources =
+        let (get_return_sources, get_return_sources_complete) =
             self.lower_call_return_sources(get_callee, &get_args, &get_effect_args);
         let elem = self.emit_expr(
             elem_ty,
@@ -1906,6 +2248,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 args: Box::new(get_args),
                 effect_args: get_effect_args,
                 return_sources: get_return_sources,
+                return_sources_complete: get_return_sources_complete,
             },
         );
         if seq.element_layout_backing_source {
@@ -1957,35 +2300,63 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let join_bb = self.new_block();
         let mut join_reachable = false;
 
-        self.lower_cond_branch(cond, then_bb, else_bb);
+        let reachable = self.lower_cond_branch(cond, then_bb, else_bb);
+        let known_condition = self.known_cond_bool(cond);
+        let then_result_reachable = known_condition != Some(false);
+        let else_result_reachable = known_condition != Some(true);
 
         self.switch_to(then_bb);
-        let then_value = self.lower_expr(then_expr);
-        if !self.is_terminated(self.current) {
-            join_reachable = true;
-            self.push_synthetic_stmt(SStmtKind::Assign {
-                dst: result,
-                expr: SExpr::Forward(
-                    SOperand::expr(then_value, then_expr)
-                        .with_intent(self.expr_operand_intent(then_expr)),
-                ),
-            });
-            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
+        if reachable.then_branch {
+            let then_value = self.lower_expr(then_expr);
+            if !self.is_terminated(self.current) {
+                if then_result_reachable && self.typed_body.expr_can_complete_normally(then_expr) {
+                    join_reachable = true;
+                    self.push_synthetic_stmt(SStmtKind::Assign {
+                        dst: result,
+                        expr: SExpr::Forward(
+                            SOperand::expr(then_value, then_expr)
+                                .with_intent(self.expr_operand_intent(then_expr)),
+                        ),
+                    });
+                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
+                } else {
+                    self.set_synthetic_terminator(
+                        self.current,
+                        STerminatorKind::Goto(self.current),
+                    );
+                }
+            }
+        } else {
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(self.current));
         }
 
         self.switch_to(else_bb);
-        let else_value = if let Some(expr) = else_expr {
-            SOperand::expr(self.lower_expr(expr), expr).with_intent(self.expr_operand_intent(expr))
+        if reachable.else_branch {
+            let else_value = if let Some(expr) = else_expr {
+                SOperand::expr(self.lower_expr(expr), expr)
+                    .with_intent(self.expr_operand_intent(expr))
+            } else {
+                SOperand::synthetic(self.unit_value())
+            };
+            if !self.is_terminated(self.current) {
+                let else_completes =
+                    else_expr.is_none_or(|expr| self.typed_body.expr_can_complete_normally(expr));
+                if else_result_reachable && else_completes {
+                    join_reachable = true;
+                    self.push_synthetic_stmt(SStmtKind::Assign {
+                        dst: result,
+                        expr: SExpr::Forward(else_value),
+                    });
+                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
+                } else {
+                    self.set_synthetic_terminator(
+                        self.current,
+                        STerminatorKind::Goto(self.current),
+                    );
+                }
+            }
         } else {
-            SOperand::synthetic(self.unit_value())
-        };
-        if !self.is_terminated(self.current) {
-            join_reachable = true;
-            self.push_synthetic_stmt(SStmtKind::Assign {
-                dst: result,
-                expr: SExpr::Forward(else_value),
-            });
-            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(self.current));
         }
 
         if !join_reachable {
@@ -1993,6 +2364,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
         self.switch_to(join_bb);
         result
+    }
+
+    fn known_cond_bool(&self, cond: CondId) -> Option<bool> {
+        self.typed_body.cond_normal_bool_value(cond)
     }
 
     fn lower_logical_expr(&mut self, expr: ExprId) -> SValueId {
@@ -2011,10 +2386,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let join_bb = self.new_block();
         let mut join_reachable = false;
 
-        self.lower_expr_branch(expr, true_bb, false_bb);
+        let reachable = self.lower_expr_branch(expr, true_bb, false_bb);
 
         self.switch_to(true_bb);
-        if !self.is_terminated(self.current) {
+        if reachable.then_branch && !self.is_terminated(self.current) {
             join_reachable = true;
             let value = self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),
@@ -2026,10 +2401,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 expr: SExpr::Forward(SOperand::synthetic(value)),
             });
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
+        } else if !reachable.then_branch {
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(self.current));
         }
 
         self.switch_to(false_bb);
-        if !self.is_terminated(self.current) {
+        if reachable.else_branch && !self.is_terminated(self.current) {
             join_reachable = true;
             let value = self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),
@@ -2041,6 +2418,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 expr: SExpr::Forward(SOperand::synthetic(value)),
             });
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
+        } else if !reachable.else_branch {
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(self.current));
         }
 
         if !join_reachable {
@@ -2050,7 +2429,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         result
     }
 
-    fn lower_expr_branch(&mut self, expr: ExprId, then_bb: SBlockId, else_bb: SBlockId) {
+    fn lower_expr_branch(
+        &mut self,
+        expr: ExprId,
+        then_bb: SBlockId,
+        else_bb: SBlockId,
+    ) -> BranchReachability {
         let Partial::Present(expr_data) = expr.data(self.db, self.body) else {
             panic!("cannot lower absent condition expression")
         };
@@ -2058,18 +2442,51 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         match expr_data {
             Expr::Bin(lhs, rhs, BinOp::Logical(LogicalBinOp::And)) => {
                 let rhs_bb = self.new_block();
-                self.lower_expr_branch(*lhs, rhs_bb, else_bb);
+                let lhs_reachable = self.lower_expr_branch(*lhs, rhs_bb, else_bb);
                 self.switch_to(rhs_bb);
-                self.lower_expr_branch(*rhs, then_bb, else_bb);
+                let rhs_reachable = if lhs_reachable.then_branch {
+                    self.lower_expr_branch(*rhs, then_bb, else_bb)
+                } else {
+                    self.set_synthetic_terminator(rhs_bb, STerminatorKind::Goto(rhs_bb));
+                    BranchReachability::default()
+                };
+                BranchReachability {
+                    then_branch: lhs_reachable.then_branch && rhs_reachable.then_branch,
+                    else_branch: lhs_reachable.else_branch
+                        || lhs_reachable.then_branch && rhs_reachable.else_branch,
+                }
             }
             Expr::Bin(lhs, rhs, BinOp::Logical(LogicalBinOp::Or)) => {
                 let rhs_bb = self.new_block();
-                self.lower_expr_branch(*lhs, then_bb, rhs_bb);
+                let lhs_reachable = self.lower_expr_branch(*lhs, then_bb, rhs_bb);
                 self.switch_to(rhs_bb);
-                self.lower_expr_branch(*rhs, then_bb, else_bb);
+                let rhs_reachable = if lhs_reachable.else_branch {
+                    self.lower_expr_branch(*rhs, then_bb, else_bb)
+                } else {
+                    self.set_synthetic_terminator(rhs_bb, STerminatorKind::Goto(rhs_bb));
+                    BranchReachability::default()
+                };
+                BranchReachability {
+                    then_branch: lhs_reachable.then_branch
+                        || lhs_reachable.else_branch && rhs_reachable.then_branch,
+                    else_branch: lhs_reachable.else_branch && rhs_reachable.else_branch,
+                }
             }
             _ => {
                 let cond = self.lower_expr(expr);
+                if self.is_terminated(self.current) {
+                    return BranchReachability::default();
+                }
+                if let Some(value) = self.typed_body.expr_normal_bool_value(expr) {
+                    self.set_synthetic_terminator(
+                        self.current,
+                        STerminatorKind::Goto(if value { then_bb } else { else_bb }),
+                    );
+                    return BranchReachability {
+                        then_branch: value,
+                        else_branch: !value,
+                    };
+                }
                 self.set_synthetic_terminator(
                     self.current,
                     STerminatorKind::Branch {
@@ -2078,6 +2495,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         else_bb,
                     },
                 );
+                BranchReachability {
+                    then_branch: true,
+                    else_branch: true,
+                }
             }
         }
     }
@@ -2091,19 +2512,259 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let Partial::Present(arms) = arms else {
             panic!("match arms missing")
         };
+        let result_reachability = self
+            .known_pattern_scrutinee(scrutinee)
+            .and_then(|scrutinee| {
+                known_scrutinee_arm_reachability(
+                    self.db,
+                    self.typed_body.pattern_store(),
+                    arms.iter().map(|arm| arm.pat),
+                    &scrutinee,
+                )
+            });
         let value = self.lower_expr(scrutinee);
         let result = self.alloc_temp(result_ty);
         let join_bb = self.new_block();
+        if self.is_terminated(self.current) {
+            self.set_synthetic_terminator(join_bb, STerminatorKind::Goto(join_bb));
+            self.switch_to(join_bb);
+            return result;
+        }
         self.lower_match_expr_with_decision_tree(
             value,
             SemOrigin::Expr(scrutinee),
             result,
             join_bb,
             arms,
+            result_reachability.as_deref(),
         )
     }
 
-    fn lower_cond_branch(&mut self, cond: CondId, then_bb: SBlockId, else_bb: SBlockId) {
+    fn known_pattern_scrutinee(&self, expr: ExprId) -> Option<KnownPatternScrutinee<'db>> {
+        if let Some(const_ref) = self.typed_body.expr_const_ref(expr)
+            && let Some(const_ref) = resolve_semantic_const_ref(
+                self.db,
+                const_ref,
+                normalize_ty(
+                    self.db,
+                    self.expr_ty(expr),
+                    self.body.scope(),
+                    self.assumptions,
+                ),
+                SemOrigin::Expr(expr),
+            )
+            && let Ok(value) = eval_const_ref(self.db, const_ref)
+        {
+            return Some(known_pattern_scrutinee_from_const(self.db, value));
+        }
+        let ty = normalize_ty(
+            self.db,
+            self.expr_ty(expr),
+            self.body.scope(),
+            self.assumptions,
+        );
+        if ty.is_integral(self.db)
+            && let Some(value) = try_eval_const_int_expr(self.db, self.body, expr, ty)
+        {
+            let (sign, bytes) = value.to_bytes_be();
+            if sign != Sign::Minus {
+                return Some(KnownPatternScrutinee::Literal(LitKind::Int(
+                    IntegerId::new(self.db, BigUint::from_bytes_be(&bytes)),
+                )));
+            }
+        }
+
+        let Partial::Present(expr_data) = expr.data(self.db, self.body) else {
+            return None;
+        };
+        match expr_data {
+            Expr::Lit(lit) => Some(KnownPatternScrutinee::Literal(*lit)),
+            Expr::Path(_) => match self.typed_body.value_path_ref(expr) {
+                Some(ValuePathRef::UnitVariant(variant)) => Some(KnownPatternScrutinee::variant(
+                    variant.variant,
+                    std::iter::empty(),
+                )),
+                Some(ValuePathRef::TypeConst(_) | ValuePathRef::FunctionItem) | None => None,
+            },
+            Expr::Tuple(fields) | Expr::Array(fields) => {
+                let ty = normalize_ty(
+                    self.db,
+                    self.expr_ty(expr),
+                    self.body.scope(),
+                    self.assumptions,
+                );
+                Some(KnownPatternScrutinee::type_constructor(
+                    ty,
+                    fields.iter().map(|field| {
+                        self.known_pattern_scrutinee(*field)
+                            .unwrap_or(KnownPatternScrutinee::Unknown)
+                    }),
+                ))
+            }
+            Expr::RecordInit(_, fields) => {
+                let (record_like, constructor) = match self.typed_body.record_init_lowering(expr)? {
+                    RecordInitLowering::Struct => {
+                        let ty = normalize_ty(
+                            self.db,
+                            self.expr_ty(expr),
+                            self.body.scope(),
+                            self.assumptions,
+                        );
+                        (
+                            RecordLike::Type(ty),
+                            KnownPatternScrutinee::type_constructor(ty, std::iter::empty()),
+                        )
+                    }
+                    RecordInitLowering::EnumVariant(variant) => (
+                        RecordLike::from_variant(variant),
+                        KnownPatternScrutinee::variant(variant.variant, std::iter::empty()),
+                    ),
+                };
+                let mut known_fields =
+                    vec![KnownPatternScrutinee::Unknown; record_like.record_labels(self.db).len()];
+                for field in fields {
+                    let Some(label) = field.label_eagerly(self.db, self.body) else {
+                        continue;
+                    };
+                    let Some(field_idx) = record_like.record_field_idx(self.db, label) else {
+                        continue;
+                    };
+                    let Some(slot) = known_fields.get_mut(field_idx) else {
+                        continue;
+                    };
+                    *slot = self
+                        .known_pattern_scrutinee(field.expr)
+                        .unwrap_or(KnownPatternScrutinee::Unknown);
+                }
+                Some(match constructor {
+                    KnownPatternScrutinee::Variant { variant, .. } => {
+                        KnownPatternScrutinee::variant(variant, known_fields)
+                    }
+                    KnownPatternScrutinee::Type { ty, .. } => {
+                        KnownPatternScrutinee::type_constructor(ty, known_fields)
+                    }
+                    KnownPatternScrutinee::Unknown | KnownPatternScrutinee::Literal(_) => {
+                        unreachable!("record constructors have a structural shape")
+                    }
+                })
+            }
+            Expr::Call(_, args) => {
+                let SemanticExprLowering::Call { callable } =
+                    self.typed_body.semantic_expr_lowering(expr)?
+                else {
+                    return None;
+                };
+                match callable.callable_def() {
+                    CallableDef::VariantCtor(variant) => Some(KnownPatternScrutinee::variant(
+                        variant,
+                        args.iter().map(|arg| {
+                            self.known_pattern_scrutinee(arg.expr)
+                                .unwrap_or(KnownPatternScrutinee::Unknown)
+                        }),
+                    )),
+                    CallableDef::Func(_) => None,
+                }
+            }
+            Expr::Block(stmts) => {
+                let tail = stmts.last()?;
+                match tail.data(self.db, self.body) {
+                    Partial::Present(Stmt::Expr(tail)) => self.known_pattern_scrutinee(*tail),
+                    _ => None,
+                }
+            }
+            Expr::With(_, body) => self.known_pattern_scrutinee(*body),
+            Expr::If(cond, then_expr, Some(else_expr)) => {
+                let known_condition = self.typed_body.cond_normal_bool_value(*cond);
+                self.merge_known_pattern_scrutinees(
+                    [
+                        (known_condition != Some(false)).then_some(*then_expr),
+                        (known_condition != Some(true)).then_some(*else_expr),
+                    ]
+                    .into_iter()
+                    .flatten(),
+                )
+            }
+            Expr::Match(scrutinee, Partial::Present(arms)) => {
+                if !self.typed_body.expr_can_complete_normally(*scrutinee) {
+                    return None;
+                }
+                let reachable = self
+                    .known_pattern_scrutinee(*scrutinee)
+                    .and_then(|scrutinee| {
+                        known_scrutinee_arm_reachability(
+                            self.db,
+                            self.typed_body.pattern_store(),
+                            arms.iter().map(|arm| arm.pat),
+                            &scrutinee,
+                        )
+                    });
+                self.merge_known_pattern_scrutinees(
+                    arms.iter()
+                        .enumerate()
+                        .filter(|(idx, _)| {
+                            reachable.as_ref().is_none_or(|reachable| reachable[*idx])
+                        })
+                        .map(|(_, arm)| arm.body),
+                )
+            }
+            Expr::Cast(inner, _) if ty.is_integral(self.db) => {
+                match self.known_pattern_scrutinee(*inner)? {
+                    KnownPatternScrutinee::Literal(LitKind::Int(value)) => {
+                        Some(KnownPatternScrutinee::Literal(LitKind::Int(value)))
+                    }
+                    KnownPatternScrutinee::Literal(LitKind::Bool(value)) => {
+                        Some(KnownPatternScrutinee::Literal(LitKind::Int(
+                            IntegerId::new(self.db, BigUint::from(u8::from(value))),
+                        )))
+                    }
+                    KnownPatternScrutinee::Unknown
+                    | KnownPatternScrutinee::Variant { .. }
+                    | KnownPatternScrutinee::Type { .. }
+                    | KnownPatternScrutinee::Literal(_) => None,
+                }
+            }
+            Expr::Closure { .. }
+            | Expr::Bin(..)
+            | Expr::Un(..)
+            | Expr::Cast(..)
+            | Expr::Assert(..)
+            | Expr::MethodCall(..)
+            | Expr::Field(..)
+            | Expr::ArrayRep(..)
+            | Expr::If(..)
+            | Expr::Match(_, Partial::Absent)
+            | Expr::Assign(..)
+            | Expr::AugAssign(..) => None,
+        }
+    }
+
+    fn merge_known_pattern_scrutinees(
+        &self,
+        exprs: impl IntoIterator<Item = ExprId>,
+    ) -> Option<KnownPatternScrutinee<'db>> {
+        let mut merged = None;
+        for expr in exprs {
+            if !self.typed_body.expr_can_complete_normally(expr) {
+                continue;
+            }
+            let value = self
+                .known_pattern_scrutinee(expr)
+                .unwrap_or(KnownPatternScrutinee::Unknown);
+            match &merged {
+                Some(previous) if previous != &value => return None,
+                Some(_) => {}
+                None => merged = Some(value),
+            }
+        }
+        merged
+    }
+
+    fn lower_cond_branch(
+        &mut self,
+        cond: CondId,
+        then_bb: SBlockId,
+        else_bb: SBlockId,
+    ) -> BranchReachability {
         let Partial::Present(cond_data) = cond.data(self.db, self.body) else {
             panic!("cannot lower absent condition")
         };
@@ -2111,6 +2772,19 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         match cond_data {
             Cond::Expr(expr) => {
                 let cond = self.lower_expr(*expr);
+                if self.is_terminated(self.current) {
+                    return BranchReachability::default();
+                }
+                if let Some(value) = self.typed_body.expr_normal_bool_value(*expr) {
+                    self.set_synthetic_terminator(
+                        self.current,
+                        STerminatorKind::Goto(if value { then_bb } else { else_bb }),
+                    );
+                    return BranchReachability {
+                        then_branch: value,
+                        else_branch: !value,
+                    };
+                }
                 self.set_synthetic_terminator(
                     self.current,
                     STerminatorKind::Branch {
@@ -2119,41 +2793,113 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         else_bb,
                     },
                 );
+                BranchReachability {
+                    then_branch: true,
+                    else_branch: true,
+                }
             }
             Cond::Bin(lhs, rhs, LogicalBinOp::And) => {
                 let rhs_bb = self.new_block();
-                self.lower_cond_branch(*lhs, rhs_bb, else_bb);
+                let lhs_reachable = self.lower_cond_branch(*lhs, rhs_bb, else_bb);
                 self.switch_to(rhs_bb);
-                self.lower_cond_branch(*rhs, then_bb, else_bb);
+                let rhs_reachable = if lhs_reachable.then_branch {
+                    self.lower_cond_branch(*rhs, then_bb, else_bb)
+                } else {
+                    self.set_synthetic_terminator(rhs_bb, STerminatorKind::Goto(rhs_bb));
+                    BranchReachability::default()
+                };
+                BranchReachability {
+                    then_branch: lhs_reachable.then_branch && rhs_reachable.then_branch,
+                    else_branch: lhs_reachable.else_branch
+                        || lhs_reachable.then_branch && rhs_reachable.else_branch,
+                }
             }
             Cond::Bin(lhs, rhs, LogicalBinOp::Or) => {
                 let rhs_bb = self.new_block();
-                self.lower_cond_branch(*lhs, then_bb, rhs_bb);
+                let lhs_reachable = self.lower_cond_branch(*lhs, then_bb, rhs_bb);
                 self.switch_to(rhs_bb);
-                self.lower_cond_branch(*rhs, then_bb, else_bb);
+                let rhs_reachable = if lhs_reachable.else_branch {
+                    self.lower_cond_branch(*rhs, then_bb, else_bb)
+                } else {
+                    self.set_synthetic_terminator(rhs_bb, STerminatorKind::Goto(rhs_bb));
+                    BranchReachability::default()
+                };
+                BranchReachability {
+                    then_branch: lhs_reachable.then_branch
+                        || lhs_reachable.else_branch && rhs_reachable.then_branch,
+                    else_branch: lhs_reachable.else_branch && rhs_reachable.else_branch,
+                }
             }
             Cond::Let(pat, expr) => {
                 let value = self.lower_expr(*expr);
-                if self.pattern_is_irrefutable(*pat) {
-                    self.bind_pattern(*pat, value, SemOrigin::Expr(*expr));
-                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
-                } else {
-                    self.lower_pattern_branch(
+                if self.is_terminated(self.current) {
+                    return BranchReachability::default();
+                }
+                let known_scrutinee = self.known_pattern_scrutinee(*expr);
+                let reachable = single_pattern_branch_reachability(
+                    self.db,
+                    self.typed_body.pattern_store(),
+                    *pat,
+                    known_scrutinee.as_ref(),
+                )
+                .unwrap_or(PatternBranchReachability::BOTH);
+                match (reachable.can_match, reachable.can_miss) {
+                    (true, false) => {
+                        self.bind_pattern(*pat, value, SemOrigin::Expr(*expr));
+                        self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
+                    }
+                    (false, true) => {
+                        self.set_synthetic_terminator(self.current, STerminatorKind::Goto(else_bb));
+                    }
+                    (true, true) => self.lower_pattern_branch(
                         *pat,
                         value,
                         SemOrigin::Expr(*expr),
                         then_bb,
                         else_bb,
-                    );
+                    ),
+                    (false, false) => unreachable!("a pattern must match or miss"),
+                }
+                BranchReachability {
+                    then_branch: reachable.can_match,
+                    else_branch: reachable.can_miss,
                 }
             }
         }
+    }
+
+    /// Lowers the physical destination of an assignment.
+    ///
+    /// A projected capability field has two distinct locations: the field
+    /// slot that stores the handle and the pointee reached through that
+    /// handle. Explicit capability construction rebinds the former. Ordinary
+    /// assignment materializes the stored handle as a carrier local so the
+    /// semantic `Store` is rooted directly at the latter; runtime lowering no
+    /// longer has to guess from the destination type.
+    fn lower_assignment_place(&mut self, expr: ExprId, rebinds_capability: bool) -> SPlace<'db> {
+        let place = self.lower_place(expr);
+        let ty = self.expr_ty(expr);
+        if rebinds_capability || ty.as_capability(self.db).is_none() || place.path.is_empty() {
+            return place;
+        }
+        let carrier = self.emit_expr_with_origin(
+            SemOrigin::Expr(expr),
+            ty,
+            SExpr::ReadPlace {
+                place,
+                intent: SOperandIntent::Read,
+            },
+        );
+        SPlace::new(carrier)
     }
 
     fn place_needs_indirect_store(&self, place: &SPlace<'db>) -> bool {
         let Some(local) = self.locals.get(place.local.index()) else {
             return false;
         };
+        if local.ty.as_capability(self.db).is_some() {
+            return true;
+        }
         let Some(binding) = local.source else {
             return false;
         };
@@ -2174,8 +2920,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         place.path.is_empty() && !self.place_needs_indirect_store(place)
     }
 
-    fn push_place_write(&mut self, origin: SemOrigin<'db>, dst: SPlace<'db>, src: SOperand) {
-        let kind = if self.place_can_assign_directly(&dst) {
+    fn push_place_write(
+        &mut self,
+        origin: SemOrigin<'db>,
+        dst: SPlace<'db>,
+        src: SOperand,
+        rebinds_capability: bool,
+    ) {
+        let kind = if (rebinds_capability && dst.path.is_empty())
+            || self.place_can_assign_directly(&dst)
+        {
             SStmtKind::Assign {
                 dst: dst.local,
                 expr: SExpr::UseValue(src),

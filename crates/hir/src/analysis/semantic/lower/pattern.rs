@@ -213,6 +213,7 @@ enum DecisionTreeTarget<'a> {
         result: SLocalId,
         join_bb: SBlockId,
         arms: &'a [MatchArm],
+        result_reachability: Option<&'a [bool]>,
     },
     /// Refutable single-pattern test (`if let` / `while let`): row 0 is the
     /// pattern (bind, then jump to `then_bb`), row 1 is the synthetic wildcard
@@ -224,16 +225,6 @@ enum DecisionTreeTarget<'a> {
 }
 
 impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
-    fn validated_pattern_is_irrefutable(&self, pat: ValidatedPatId) -> bool {
-        self.typed_body.pattern_store().is_irrefutable(self.db, pat)
-    }
-
-    pub(super) fn pattern_is_irrefutable(&self, pat: PatId) -> bool {
-        self.typed_body
-            .pattern_root(pat)
-            .is_none_or(|root| self.validated_pattern_is_irrefutable(root))
-    }
-
     pub(super) fn bind_pattern(&mut self, pat: PatId, value: SValueId, origin: SemOrigin<'db>) {
         if let Some(root) = self.typed_body.pattern_root(pat) {
             let value = self.owned_pattern_value(value, self.locals[value.index()].ty, origin);
@@ -493,6 +484,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         result: crate::analysis::semantic::SLocalId,
         join_bb: SBlockId,
         arms: &[MatchArm],
+        result_reachability: Option<&[bool]>,
     ) -> SValueId {
         let value = self.owned_pattern_value(value, self.locals[value.index()].ty, origin);
         let roots = arms
@@ -511,6 +503,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             result,
             join_bb,
             arms,
+            result_reachability,
         };
         if !self.lower_decision_tree(&tree, &mut projections, target) {
             self.set_synthetic_terminator(join_bb, STerminatorKind::Goto(join_bb));
@@ -547,11 +540,25 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     result,
                     join_bb,
                     arms,
+                    result_reachability,
                 } => {
+                    if result_reachability.is_some_and(|reachable| !reachable[leaf.arm_index]) {
+                        self.set_synthetic_terminator(
+                            self.current,
+                            STerminatorKind::Goto(self.current),
+                        );
+                        return false;
+                    }
                     self.bind_decision_tree_leaf(leaf, projections);
                     let arm = &arms[leaf.arm_index];
                     let arm_value = self.lower_expr(arm.body);
                     if self.is_terminated(self.current) {
+                        false
+                    } else if !self.typed_body.expr_can_complete_normally(arm.body) {
+                        self.set_synthetic_terminator(
+                            self.current,
+                            STerminatorKind::Goto(self.current),
+                        );
                         false
                     } else {
                         self.push_synthetic_stmt(SStmtKind::Assign {

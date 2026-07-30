@@ -152,6 +152,13 @@ pub enum PlaceProvenance<'db> {
     Derived(SPlace<'db>),
 }
 
+/// Identity of one symbolic fixed-array borrow-slot family.
+///
+/// Family ids are local to a single borrow-result traversal. Using the host
+/// collection index width avoids imposing an unrelated field-count limit on
+/// the number of independent array nodes that traversal can represent.
+pub type BorrowSlotFamilyId = usize;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
 pub enum LayoutBackingProjection {
     Field(FieldIndex),
@@ -160,6 +167,12 @@ pub enum LayoutBackingProjection {
         field: FieldIndex,
     },
     Index(Option<usize>),
+    /// A symbolic member of an indexed borrow-slot family.
+    ///
+    /// `Index(None)` is an uncorrelated/dynamic index. A family id instead
+    /// preserves pointwise identity across a borrow result transform until a
+    /// caller projects a concrete index.
+    IndexFamily(BorrowSlotFamilyId),
 }
 
 /// Physical place provenance for layout-bearing value projections.
@@ -555,6 +568,7 @@ pub enum SExpr<'db> {
         args: Box<[SOperand]>,
         effect_args: Box<[SEffectArg<'db>]>,
         return_sources: Box<[SCallReturnSource]>,
+        return_sources_complete: bool,
     },
 }
 

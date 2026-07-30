@@ -1111,7 +1111,6 @@ fn mutate_stored_handle_through_ref() -> bool {
         identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
     );
     let body = canonicalize_semantic_consts(&db, semantic);
-
     let post_store_comparison = body
         .blocks
         .iter()
@@ -1127,6 +1126,67 @@ fn mutate_stored_handle_through_ref() -> bool {
     assert!(
         matches!(post_store_comparison, SExpr::Call { .. }),
         "a write through a stored mutable handle projected from `ref` must invalidate the pointee constant: {post_store_comparison:#?}",
+    );
+}
+
+#[test]
+fn canonicalize_invalidates_const_facts_for_aggregate_capability_replacement() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_ctfe_aggregate_capability_replacement.fe".into(),
+        r#"
+struct Handle {
+    target: mut u256,
+}
+
+struct Nested {
+    target: mut Handle,
+}
+
+fn replace_nested_handle() -> bool {
+    let mut old: u256 = 1
+    let mut next: u256 = 2
+    let mut inner = Handle { target: mut old }
+    let outer = Nested { target: mut inner }
+    outer.target = Handle { target: mut next }
+    outer.target.target = 37
+    next == 37
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    let func = top_mod
+        .all_funcs(&db)
+        .iter()
+        .find(|func| {
+            matches!(
+                func.name(&db),
+                Partial::Present(name) if name.data(&db) == "replace_nested_handle"
+            )
+        })
+        .expect("expected replace_nested_handle function");
+    let semantic = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+    );
+    let body = canonicalize_semantic_consts(&db, semantic);
+
+    let post_store_comparison = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .filter_map(|stmt| {
+            let SStmtKind::Assign { dst, expr } = &stmt.kind else {
+                return None;
+            };
+            body.locals[dst.index()].ty.is_bool(&db).then_some(expr)
+        })
+        .next_back()
+        .expect("expected post-store boolean comparison");
+    assert!(
+        matches!(post_store_comparison, SExpr::Call { .. }),
+        "replacing a nested handle must invalidate constants reachable from the aggregate source: {post_store_comparison:#?}",
     );
 }
 

@@ -48,6 +48,9 @@ impl<'db> CallSiteProviderRefiner<'db> {
         let mut out = Vec::new();
         for (bb_idx, block) in self.borrowck.body.blocks.iter().enumerate() {
             let mut state = self.borrowck.entry_state[SBlockId::new(bb_idx)].clone();
+            if !state.is_reachable() {
+                continue;
+            }
             for stmt in &block.stmts {
                 self.refine_stmt(&state, stmt, &mut out)?;
                 self.borrowck.apply_stmt_state(&mut state, stmt);
@@ -178,6 +181,109 @@ impl<'db> CallSiteProviderRefiner<'db> {
         match arg.arg {
             NEffectArgValue::Value(value) => operand_origin(value, fallback),
             NEffectArgValue::Place(_) => fallback,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        analysis::{
+            semantic::{get_or_build_semantic_instance, identity_semantic_instance_key},
+            ty::ty_check::BodyOwner,
+        },
+        hir_def::ItemKind,
+        test_db::HirAnalysisTestDb,
+    };
+
+    use super::provisional_call_site_provider_refinements;
+
+    #[test]
+    fn provider_refinements_follow_only_reachable_known_control_flow() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "unreachable_callsite_refinement.fe".into(),
+            r#"
+enum Choice {
+    Stop,
+    Continue,
+}
+
+fn increment() uses (target: mut u256) {
+    target += 1
+}
+
+fn set_false(value: mut bool) {
+    value = false
+}
+
+fn bool_dead_call() uses (target: mut u256) {
+    let done = true
+    if done {
+        return
+    }
+    increment()
+}
+
+fn enum_dead_call() uses (target: mut u256) {
+    let choice = Choice::Stop
+    match choice {
+        Choice::Stop => return,
+        Choice::Continue => increment(),
+    }
+}
+
+fn conflicting_join_keeps_call(flag: bool) uses (target: mut u256) {
+    let done = if flag { true } else { false }
+    if done {
+        return
+    }
+    increment()
+}
+
+fn mutable_alias_keeps_call() uses (target: mut u256) {
+    let mut done = true
+    set_false(mut done)
+    if done {
+        return
+    }
+    increment()
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        for (name, expected_refinement_count) in [
+            ("bool_dead_call", 0),
+            ("enum_dead_call", 0),
+            ("conflicting_join_keeps_call", 1),
+            ("mutable_alias_keeps_call", 1),
+        ] {
+            let func = top_mod
+                .all_items(&db)
+                .iter()
+                .find_map(|item| match item {
+                    ItemKind::Func(func)
+                        if func
+                            .name(&db)
+                            .to_opt()
+                            .is_some_and(|candidate| candidate.data(&db) == name) =>
+                    {
+                        Some(*func)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing function `{name}`"));
+            let instance = get_or_build_semantic_instance(
+                &db,
+                identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+            );
+            let refinements = provisional_call_site_provider_refinements(&db, instance)
+                .expect("provider refinements");
+            assert_eq!(
+                refinements.len(),
+                expected_refinement_count,
+                "{name}: {refinements:#?}"
+            );
         }
     }
 }

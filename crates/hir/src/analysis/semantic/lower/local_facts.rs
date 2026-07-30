@@ -753,8 +753,8 @@ fn layout_backing_source_projection_matches(
         || matches!(
             (pattern, candidate),
             (
-                LayoutBackingProjection::Index(None),
-                LayoutBackingProjection::Index(_)
+                LayoutBackingProjection::Index(None) | LayoutBackingProjection::IndexFamily(_),
+                LayoutBackingProjection::Index(_) | LayoutBackingProjection::IndexFamily(_)
             )
         )
 }
@@ -788,12 +788,24 @@ fn project_layout_backing_sources<'db>(
     target: &[LayoutBackingProjection],
     path: &SemanticProjectionPath<'db>,
 ) -> Vec<LayoutBackingSource<'db>> {
-    debug_assert_eq!(target.len(), path.len());
+    // Dereferencing a place carrier changes how a place is reached, but it
+    // does not add a projection to the layout value backed by that carrier.
+    // Keep the semantic path aligned with `target`: a backing source already
+    // records the carrier's referent, so replaying the dereference against
+    // that source would both misalign the paths and project through the
+    // referent as though it were another capability.
+    let mut layout_path = SemanticProjectionPath::new();
+    for projection in path.iter() {
+        if !matches!(projection, Projection::Deref) {
+            layout_path.push(projection.clone());
+        }
+    }
+    debug_assert_eq!(target.len(), layout_path.len());
     let mut projected = Vec::new();
     for mut source in sources {
         if layout_backing_source_path_is_prefix(&source.target, target) {
             let mut suffix = SemanticProjectionPath::new();
-            for projection in path.iter().skip(source.target.len()) {
+            for projection in layout_path.iter().skip(source.target.len()) {
                 suffix.push(projection.clone());
             }
             append_layout_backing_source_path(&mut source.source, &suffix);

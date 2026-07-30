@@ -22,7 +22,7 @@ use super::{
     ir::{
         BorrowDiagnosticId, NExpr, NOperand, NSStmt, NSStmtKind, ReadMode,
         SemanticBorrowCheckResult, SemanticBorrowDiagKind, SemanticBorrowDiagnostic,
-        SemanticBorrowDiagnosticSpan,
+        SemanticBorrowDiagnosticSpan, local_has_runtime_move_semantics,
     },
 };
 
@@ -48,7 +48,7 @@ pub(super) fn semantic_noesc_check_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> SemanticBorrowCheckResult<'db> {
-    match Borrowck::new(db, instance).and_then(NoEsc::check) {
+    match Borrowck::new_for_check(db, instance).and_then(NoEsc::check) {
         Ok(()) => SemanticBorrowCheckResult::Ok,
         Err(diag) => SemanticBorrowCheckResult::Err(BorrowDiagnosticId::new(db, diag)),
     }
@@ -69,6 +69,9 @@ impl<'db> NoEsc<'db> {
         for (bb_idx, block) in self.borrowck.body.blocks.iter().enumerate() {
             let mut state =
                 self.borrowck.entry_state[crate::analysis::semantic::SBlockId::new(bb_idx)].clone();
+            if !state.is_reachable() {
+                continue;
+            }
             for stmt in &block.stmts {
                 self.check_stmt(&state, stmt)?;
                 self.borrowck.apply_stmt_state(&mut state, stmt);
@@ -155,7 +158,9 @@ impl<'db> NoEsc<'db> {
                         ),
                     ));
                 }
-                ClosureCaptureConstruction::Move => capture.mode == ReadMode::Move,
+                ClosureCaptureConstruction::Move => {
+                    capture.mode == ReadMode::Move || self.logical_move_uses_runtime_copy(capture)
+                }
             };
             if !mode_matches_plan {
                 return Err(self.internal_diag(
@@ -203,6 +208,24 @@ impl<'db> NoEsc<'db> {
             ));
         }
         Ok(())
+    }
+
+    /// A logical move may lower to a physical copy for an unpacked ABI
+    /// carrier. The capture plan remains `Move`, but normalized runtime
+    /// ownership intentionally does not attach move semantics to that carrier.
+    fn logical_move_uses_runtime_copy(&self, capture: NOperand) -> bool {
+        capture.mode == ReadMode::Copy
+            && self
+                .borrowck
+                .body
+                .local(capture.local)
+                .is_some_and(|local| {
+                    !local_has_runtime_move_semantics(
+                        self.borrowck.db,
+                        local,
+                        &self.borrowck.body.borrow_roots,
+                    )
+                })
     }
 
     fn check_store(

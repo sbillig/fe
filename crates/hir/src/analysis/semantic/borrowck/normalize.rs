@@ -6,9 +6,10 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            LayoutBackingPlace, PlaceProvenance, SExpr, SLocalId, SOperand, SOperandIntent, SPlace,
-            SStmtKind, STerminatorKind, SemanticBody, SemanticInstance, SemanticLocalKind,
-            SemanticLocalRole, ValueOwnershipSource, ValueProvenance,
+            LayoutBackingPlace, PlaceProvenance, SBlockId, SExpr, SLocalId, SOperand,
+            SOperandIntent, SPlace, SStmtId, SStmtKind, STerminatorKind, SemanticBody,
+            SemanticInstance, SemanticLocalKind, SemanticLocalRole, ValueOwnershipSource,
+            ValueProvenance,
             ctfe::{canonicalize_semantic_const_refs_from_body, canonicalize_semantic_consts},
             semantic_instance_base_assumptions_for_key,
         },
@@ -23,7 +24,6 @@ use crate::{
     projection::{IndexSource, Projection, ProjectionPath},
 };
 
-use super::diagnostics::normalize_error_to_diag;
 use super::ir::{
     NBorrowRoot, NBorrowRootId, NEffectArg, NEffectArgValue, NExpr, NLayoutBackingSource,
     NLocalFacts, NLocalOrigin, NLocalRootDemand, NOperand, NSBlock, NSLocal, NSPlace, NSPlaceRoot,
@@ -31,6 +31,11 @@ use super::ir::{
     NormalizedBindingLowering, NormalizedSemanticBody, NormalizedSemanticBodyId, ReadMode,
     SemanticBorrowDiagnostic, SemanticNormalizeError, SemanticNormalizeResult,
     empty_normalized_body, local_has_runtime_move_semantics, resolved_layout_backing_places,
+};
+use super::{
+    check::{cfg_reachable_blocks, normalized_cfg_successor_indices},
+    diagnostics::normalize_error_to_diag,
+    facts::NormalizedBodyFacts,
 };
 
 pub fn normalize_semantic_body<'db>(
@@ -70,6 +75,23 @@ pub(crate) fn normalize_provisional_semantic_body<'db>(
     instance: SemanticInstance<'db>,
 ) -> Result<NormalizedSemanticBody<'db>, SemanticBorrowDiagnostic<'db>> {
     match provisional_normalized_semantic_body_query(db, instance) {
+        SemanticNormalizeResult::Ok(body) => Ok(body.body(db).clone()),
+        SemanticNormalizeResult::Err(diag) => Err(diag.diag(db).clone()),
+    }
+}
+
+/// Builds the provisional operation-preserving view used to decide whether an
+/// instance can return normally.
+///
+/// Unlike the ordinary normalized views, this deliberately retains statements
+/// after calls that are currently believed not to return. That keeps
+/// `known_never_returns` from depending on a body whose shape was already
+/// truncated by the same recursive query.
+pub(crate) fn normalize_provisional_semantic_body_for_never_return_analysis<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Result<NormalizedSemanticBody<'db>, SemanticBorrowDiagnostic<'db>> {
+    match provisional_never_return_analysis_body_query(db, instance) {
         SemanticNormalizeResult::Ok(body) => Ok(body.body(db).clone()),
         SemanticNormalizeResult::Err(diag) => Err(diag.diag(db).clone()),
     }
@@ -122,6 +144,23 @@ fn provisional_normalized_semantic_body_query<'db>(
     normalize_semantic_body_result(db, instance, raw, assumptions, NormalizationMode::Analysis)
 }
 
+#[salsa::tracked]
+fn provisional_never_return_analysis_body_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> SemanticNormalizeResult<'db> {
+    let raw =
+        canonicalize_semantic_const_refs_from_body(db, instance, instance.provisional_body(db));
+    let assumptions = semantic_instance_base_assumptions_for_key(db, instance.key(db));
+    normalize_semantic_body_result(
+        db,
+        instance,
+        raw,
+        assumptions,
+        NormalizationMode::NeverReturnAnalysis,
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NormalizationMode {
     /// Preserve the historical runtime representation and inferred reads.
@@ -129,6 +168,19 @@ enum NormalizationMode {
     /// Retain ownership effects that runtime lowering may represent as a
     /// synthetic value transfer.
     Analysis,
+    /// Preserve analysis effects and retain the full statement sequence so
+    /// never-return inference can establish its own call-graph fixed point.
+    NeverReturnAnalysis,
+}
+
+impl NormalizationMode {
+    fn preserves_analysis_effects(self) -> bool {
+        !matches!(self, Self::Runtime)
+    }
+
+    fn truncates_after_known_never_returning_call(self) -> bool {
+        !matches!(self, Self::NeverReturnAnalysis)
+    }
 }
 
 fn normalize_semantic_body_result<'db>(
@@ -159,6 +211,7 @@ struct NormalizeCtxt<'db> {
     local_state: Vec<LocalNormState>,
     root_demands: Vec<NLocalRootDemand>,
     borrow_roots: Vec<NBorrowRoot<'db>>,
+    assignment_ownership_sources: FxHashMap<SStmtId, Vec<NValueOwnershipSource<'db>>>,
     copy_cache: RefCell<FxHashMap<TyId<'db>, bool>>,
 }
 
@@ -188,6 +241,7 @@ impl<'db> NormalizeCtxt<'db> {
             local_state: vec![LocalNormState::Unseen; local_capacity],
             root_demands: vec![NLocalRootDemand::default(); local_capacity],
             borrow_roots: Vec::new(),
+            assignment_ownership_sources: FxHashMap::default(),
             copy_cache: RefCell::new(FxHashMap::default()),
         }
     }
@@ -209,15 +263,17 @@ impl<'db> NormalizeCtxt<'db> {
                 let stmt = NSStmt {
                     id: stmt.id,
                     origin: stmt.origin,
-                    kind: self.normalize_stmt(stmt.origin, &stmt.kind)?,
+                    kind: self.normalize_stmt(stmt.id, stmt.origin, &stmt.kind)?,
                 };
-                let never_returns = matches!(
-                    &stmt.kind,
-                    NSStmtKind::Assign {
-                        expr: NExpr::Call { callee, .. },
-                        ..
-                    } if SemanticInstance::new(self.db, callee.key).known_never_returns(self.db)
-                );
+                let never_returns = self.mode.truncates_after_known_never_returning_call()
+                    && matches!(
+                        &stmt.kind,
+                        NSStmtKind::Assign {
+                            expr: NExpr::Call { callee, .. },
+                            ..
+                        } if SemanticInstance::new(self.db, callee.key)
+                            .known_never_returns(self.db)
+                    );
                 let origin = stmt.origin;
                 stmts.push(stmt);
                 if never_returns {
@@ -239,15 +295,18 @@ impl<'db> NormalizeCtxt<'db> {
             blocks.push(NSBlock { stmts, terminator });
         }
         let locals = self.take_normalized_locals();
+        let assignment_ownership_sources = std::mem::take(&mut self.assignment_ownership_sources);
 
-        Ok(NormalizedSemanticBody {
+        let mut body = NormalizedSemanticBody {
             owner: self.instance,
             template_owner: self.raw.template_owner,
             entry_locals: self.raw.entry_locals.clone(),
             locals,
             blocks,
             borrow_roots: self.borrow_roots,
-        })
+        };
+        refine_reachable_local_facts(self.db, &mut body, &assignment_ownership_sources);
+        Ok(body)
     }
 
     fn take_normalized_locals(&mut self) -> Vec<NSLocal<'db>> {
@@ -406,9 +465,8 @@ impl<'db> NormalizeCtxt<'db> {
                 )
             })
             .transpose()?;
-        let ownership_sources = match self.mode {
-            NormalizationMode::Runtime => Vec::new(),
-            NormalizationMode::Analysis => raw_local
+        let ownership_sources = if self.mode.preserves_analysis_effects() {
+            raw_local
                 .ownership_sources
                 .iter()
                 .cloned()
@@ -424,7 +482,9 @@ impl<'db> NormalizeCtxt<'db> {
                         }
                     })
                 })
-                .collect::<Result<Vec<_>, SemanticNormalizeError<'db>>>()?,
+                .collect::<Result<Vec<_>, SemanticNormalizeError<'db>>>()?
+        } else {
+            Vec::new()
         };
         let layout_backing_sources = raw_local
             .layout_backing_sources
@@ -487,73 +547,6 @@ impl<'db> NormalizeCtxt<'db> {
             self.mark_place_root_demand(&source.source, |demand| {
                 demand.nonself_backing_place = true;
             });
-        }
-    }
-
-    fn mark_stmt_root_demand(&mut self, stmt: &NSStmtKind<'db>) {
-        match stmt {
-            NSStmtKind::Assign { expr, .. } => self.mark_expr_root_demand(expr),
-            NSStmtKind::Store { dst, .. } => {
-                self.mark_place_root_demand(dst, |demand| {
-                    demand.written_by_place = true;
-                });
-            }
-        }
-    }
-
-    fn mark_expr_root_demand(&mut self, expr: &NExpr<'db>) {
-        match expr {
-            NExpr::Use(_)
-            | NExpr::Const(_)
-            | NExpr::Unary { .. }
-            | NExpr::Binary { .. }
-            | NExpr::Cast { .. }
-            | NExpr::ArrayRepeat { .. }
-            | NExpr::AggregateMake { .. }
-            | NExpr::EnumMake { .. }
-            | NExpr::GetEnumTag { .. }
-            | NExpr::IsEnumVariant { .. }
-            | NExpr::ExtractEnumField { .. }
-            | NExpr::CodeRegionRef { .. }
-            | NExpr::CodeRegionOffset { .. }
-            | NExpr::CodeRegionLen { .. } => {}
-            NExpr::ReadPlace { place, .. } => {
-                self.mark_place_root_demand(place, |demand| {
-                    demand.read_by_place = true;
-                });
-            }
-            NExpr::Borrow { kind, place, .. } => {
-                self.mark_place_root_demand(place, |demand| {
-                    demand.borrowed_or_addr_taken = true;
-                    if matches!(kind, BorrowKind::Mut) {
-                        demand.mut_borrowed_or_addr_taken = true;
-                    }
-                });
-            }
-            NExpr::Call { effect_args, .. } => {
-                for arg in effect_args {
-                    match &arg.arg {
-                        NEffectArgValue::Place(place) => {
-                            self.mark_place_root_demand(place, |demand| {
-                                demand.passed_by_place = true;
-                                if arg.required_mut {
-                                    demand.mut_borrowed_or_addr_taken = true;
-                                }
-                            });
-                        }
-                        NEffectArgValue::Value(value)
-                            if arg.required_mut
-                                && matches!(arg.pass_mode, EffectPassMode::ByTempPlace) =>
-                        {
-                            if let Some(demand) = self.root_demands.get_mut(value.local.index()) {
-                                demand.passed_by_place = true;
-                                demand.mut_borrowed_or_addr_taken = true;
-                            }
-                        }
-                        NEffectArgValue::Value(_) => {}
-                    }
-                }
-            }
         }
     }
 
@@ -855,21 +848,81 @@ impl<'db> NormalizeCtxt<'db> {
 
     fn normalize_stmt(
         &mut self,
+        stmt_id: SStmtId,
         origin: crate::analysis::semantic::SemOrigin<'db>,
         stmt: &SStmtKind<'db>,
     ) -> Result<NSStmtKind<'db>, SemanticNormalizeError<'db>> {
         let stmt = match stmt {
-            SStmtKind::Assign { dst, expr } => Ok(NSStmtKind::Assign {
-                dst: *dst,
-                expr: self.normalize_expr(origin, *dst, expr)?,
-            }),
+            SStmtKind::Assign { dst, expr } => {
+                let normalized_expr = self.normalize_expr(origin, *dst, expr)?;
+                if self.mode.preserves_analysis_effects() {
+                    let ownership_sources =
+                        self.normalize_assignment_ownership_sources(*dst, expr)?;
+                    self.assignment_ownership_sources
+                        .insert(stmt_id, ownership_sources);
+                }
+                Ok(NSStmtKind::Assign {
+                    dst: *dst,
+                    expr: normalized_expr,
+                })
+            }
             SStmtKind::Store { dst, src } => Ok(NSStmtKind::Store {
                 dst: self.normalize_place(dst)?,
                 src: self.normalize_operand(*src, origin),
             }),
         }?;
-        self.mark_stmt_root_demand(&stmt);
         Ok(stmt)
+    }
+
+    fn normalize_assignment_ownership_sources(
+        &mut self,
+        dst: SLocalId,
+        expr: &SExpr<'db>,
+    ) -> Result<Vec<NValueOwnershipSource<'db>>, SemanticNormalizeError<'db>> {
+        let raw_dst = self.raw.locals[dst.index()].clone();
+        if raw_dst.ty.as_capability(self.db).is_none() && self.ty_is_copy(raw_dst.ty) {
+            return Ok(vec![NValueOwnershipSource::Local]);
+        }
+        let place = match expr {
+            SExpr::Forward(value) | SExpr::UseValue(value)
+                if value.intent == SOperandIntent::Read =>
+            {
+                SPlace::new(value.value)
+            }
+            SExpr::ReadPlace {
+                place,
+                intent: SOperandIntent::Read,
+            } => place.clone(),
+            SExpr::Field { base, field } if base.intent == SOperandIntent::Read => {
+                SPlace::field(base.value, *field)
+            }
+            SExpr::Index { base, index } if base.intent == SOperandIntent::Read => {
+                SPlace::dynamic_index(base.value, index.value)
+            }
+            SExpr::ExtractEnumField {
+                value,
+                variant,
+                field,
+            } if value.intent == SOperandIntent::Read => SPlace::variant_field(
+                value.value,
+                *variant,
+                self.raw.locals[value.value.index()].ty,
+                *field,
+            ),
+            _ => return Ok(vec![NValueOwnershipSource::Local]),
+        };
+        if matches!(
+            self.raw.locals[place.local.index()].role,
+            SemanticLocalRole::Erased
+        ) {
+            return Ok(vec![NValueOwnershipSource::Local]);
+        }
+        let source = self.normalize_place_provenance(
+            dst,
+            PlaceProvenance::Derived(place),
+            raw_dst.role.layout_ty(raw_dst.ty),
+        )?;
+        Ok(vec![NValueOwnershipSource::Place(source)])
     }
 
     fn normalize_terminator(
@@ -1038,7 +1091,8 @@ impl<'db> NormalizeCtxt<'db> {
                 callee,
                 args,
                 effect_args,
-                return_sources: _,
+                return_sources,
+                return_sources_complete,
             } => NExpr::Call {
                 call_site: *call_site,
                 callee: *callee,
@@ -1053,6 +1107,8 @@ impl<'db> NormalizeCtxt<'db> {
                     .map(|arg| self.normalize_effect_arg(arg, origin))
                     .collect::<Result<Vec<_>, _>>()?
                     .into_boxed_slice(),
+                return_sources: return_sources.clone(),
+                return_sources_complete: *return_sources_complete,
             },
         })
     }
@@ -1091,7 +1147,7 @@ impl<'db> NormalizeCtxt<'db> {
         ty: TyId<'db>,
     ) -> Result<Option<NExpr<'db>>, SemanticNormalizeError<'db>> {
         let origin = operand.sem_origin(origin);
-        if self.mode == NormalizationMode::Analysis
+        if self.mode.preserves_analysis_effects()
             && operand.intent == SOperandIntent::Move
             && let Some(place) = self.local_read_place(operand.value, false)?
         {
@@ -1379,4 +1435,290 @@ impl<'db> NormalizeCtxt<'db> {
             }
         }
     }
+}
+
+/// Rebuild whole-local facts that depend on executable definitions and uses.
+fn refine_reachable_local_facts<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: &mut NormalizedSemanticBody<'db>,
+    assignment_ownership_sources: &FxHashMap<SStmtId, Vec<NValueOwnershipSource<'db>>>,
+) {
+    if body.blocks.is_empty() {
+        return;
+    }
+
+    let successors = normalized_cfg_successor_indices(db, body);
+    let reachable_blocks = cfg_reachable_blocks(&successors);
+    refine_reachable_ownership_sources(body, &reachable_blocks, assignment_ownership_sources);
+    refine_reachable_root_demands(body, &reachable_blocks);
+}
+
+/// Rebuild analysis-only ownership origins from executable definitions.
+///
+/// Semantic lowering retains one local for control-flow joins, and its
+/// path-insensitive metadata unions every assignment. Once constant evaluation
+/// refines an edge away, an ownership source from that dead definition must not
+/// make a later read appear to touch (or move from) the dead source.
+fn refine_reachable_ownership_sources<'db>(
+    body: &mut NormalizedSemanticBody<'db>,
+    reachable_blocks: &rustc_hash::FxHashSet<SBlockId>,
+    assignment_ownership_sources: &FxHashMap<SStmtId, Vec<NValueOwnershipSource<'db>>>,
+) {
+    let mut saw_reachable_definition = vec![false; body.locals.len()];
+    let mut sources_by_local = vec![Vec::new(); body.locals.len()];
+    for (block_idx, block) in body.blocks.iter().enumerate() {
+        if !reachable_blocks.contains(&SBlockId::new(block_idx)) {
+            continue;
+        }
+        for stmt in &block.stmts {
+            let NSStmtKind::Assign { dst, .. } = &stmt.kind else {
+                continue;
+            };
+            let Some(sources) = assignment_ownership_sources.get(&stmt.id) else {
+                continue;
+            };
+            saw_reachable_definition[dst.index()] = true;
+            for source in sources {
+                if !sources_by_local[dst.index()].contains(source) {
+                    sources_by_local[dst.index()].push(source.clone());
+                }
+            }
+        }
+    }
+    for (local_idx, local) in body.locals.iter_mut().enumerate() {
+        if saw_reachable_definition[local_idx] {
+            local.facts.ownership_sources = std::mem::take(&mut sources_by_local[local_idx]);
+        }
+    }
+}
+
+/// Rebuild root-storage requirements from the executable normalized program.
+///
+/// Local provenance is intentionally a conservative whole-local summary, but
+/// storage demand is a property of operations that can actually execute. If a
+/// borrow, place read, or store appears only behind a refined-dead edge, keeping
+/// its demand would unnecessarily force the live local into addressable
+/// storage. In particular, runtime lowering could otherwise replay a dead
+/// borrow by changing the representation of a value used on the live path.
+fn refine_reachable_root_demands<'db>(
+    body: &mut NormalizedSemanticBody<'db>,
+    reachable_blocks: &rustc_hash::FxHashSet<SBlockId>,
+) {
+    let facts = NormalizedBodyFacts::new(body);
+    let mut reachable_locals = vec![false; body.locals.len()];
+    for local in body.entry_locals.iter().copied() {
+        reachable_locals[local.index()] = true;
+    }
+    for (local_idx, local) in body.locals.iter().enumerate() {
+        if local.facts.origin.root_provider().is_some() {
+            reachable_locals[local_idx] = true;
+        }
+    }
+    for (block_idx, block) in body.blocks.iter().enumerate() {
+        if !reachable_blocks.contains(&SBlockId::new(block_idx)) {
+            continue;
+        }
+        let block_id = SBlockId::from_u32(block_idx as u32);
+        for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
+            if let NSStmtKind::Assign { dst, .. } = &stmt.kind {
+                reachable_locals[dst.index()] = true;
+            }
+            for local in facts.stmt_uses(block_id, stmt_idx) {
+                reachable_locals[local.index()] = true;
+            }
+        }
+        for local in facts.terminator_uses(block_id) {
+            reachable_locals[local.index()] = true;
+        }
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for local_idx in 0..reachable_locals.len() {
+            if !reachable_locals[local_idx] {
+                continue;
+            }
+            for dependency in facts.local_dependency_uses(SLocalId::new(local_idx)) {
+                if !reachable_locals[dependency.index()] {
+                    reachable_locals[dependency.index()] = true;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    let mut demands = body
+        .locals
+        .iter()
+        .enumerate()
+        .map(|(local_idx, local)| {
+            if reachable_locals[local_idx] {
+                NLocalRootDemand {
+                    always_rooted: local.facts.root_demand.always_rooted,
+                    ..NLocalRootDemand::default()
+                }
+            } else {
+                NLocalRootDemand::default()
+            }
+        })
+        .collect::<Vec<_>>();
+    for (local_idx, reachable) in reachable_locals.iter().copied().enumerate() {
+        if reachable {
+            mark_reachable_local_root_demand(body, SLocalId::new(local_idx), &mut demands);
+        }
+    }
+    for (block_idx, block) in body.blocks.iter().enumerate() {
+        if !reachable_blocks.contains(&SBlockId::new(block_idx)) {
+            continue;
+        }
+        for stmt in &block.stmts {
+            mark_reachable_stmt_root_demand(body, &stmt.kind, &mut demands);
+        }
+    }
+    for (local, demand) in body.locals.iter_mut().zip(demands) {
+        local.facts.root_demand = demand;
+    }
+}
+
+fn mark_reachable_local_root_demand(
+    body: &NormalizedSemanticBody<'_>,
+    local: SLocalId,
+    demands: &mut [NLocalRootDemand],
+) {
+    let local_data = &body.locals[local.index()];
+    if let NormalizedBindingLowering::ValueLocal { place } = &local_data.lowering
+        && !normalized_place_is_self_rooted(body, local, place)
+    {
+        mark_normalized_place_root_demand(body, demands, place, |demand| {
+            demand.nonself_backing_place = true;
+        });
+    }
+    if let Some(place) = local_data.facts.snapshot_source_place.as_ref() {
+        mark_normalized_place_root_demand(body, demands, place, |demand| {
+            demand.nonself_backing_place = true;
+        });
+    }
+    for source in &local_data.facts.layout_backing_sources {
+        if Some(&source.source) == local_data.facts.snapshot_source_place.as_ref()
+            || local_data.lowering.place() == Some(&source.source)
+        {
+            continue;
+        }
+        mark_normalized_place_root_demand(body, demands, &source.source, |demand| {
+            demand.nonself_backing_place = true;
+        });
+    }
+}
+
+fn mark_reachable_stmt_root_demand(
+    body: &NormalizedSemanticBody<'_>,
+    stmt: &NSStmtKind<'_>,
+    demands: &mut [NLocalRootDemand],
+) {
+    match stmt {
+        NSStmtKind::Assign { expr, .. } => {
+            mark_reachable_expr_root_demand(body, expr, demands);
+        }
+        NSStmtKind::Store { dst, .. } => {
+            mark_normalized_place_root_demand(body, demands, dst, |demand| {
+                demand.written_by_place = true;
+            });
+        }
+    }
+}
+
+fn mark_reachable_expr_root_demand(
+    body: &NormalizedSemanticBody<'_>,
+    expr: &NExpr<'_>,
+    demands: &mut [NLocalRootDemand],
+) {
+    match expr {
+        NExpr::Use(_)
+        | NExpr::Const(_)
+        | NExpr::Unary { .. }
+        | NExpr::Binary { .. }
+        | NExpr::Cast { .. }
+        | NExpr::ArrayRepeat { .. }
+        | NExpr::AggregateMake { .. }
+        | NExpr::EnumMake { .. }
+        | NExpr::GetEnumTag { .. }
+        | NExpr::IsEnumVariant { .. }
+        | NExpr::ExtractEnumField { .. }
+        | NExpr::CodeRegionRef { .. }
+        | NExpr::CodeRegionOffset { .. }
+        | NExpr::CodeRegionLen { .. } => {}
+        NExpr::ReadPlace { place, .. } => {
+            mark_normalized_place_root_demand(body, demands, place, |demand| {
+                demand.read_by_place = true;
+            });
+        }
+        NExpr::Borrow { kind, place, .. } => {
+            mark_normalized_place_root_demand(body, demands, place, |demand| {
+                demand.borrowed_or_addr_taken = true;
+                if matches!(kind, BorrowKind::Mut) {
+                    demand.mut_borrowed_or_addr_taken = true;
+                }
+            });
+        }
+        NExpr::Call { effect_args, .. } => {
+            for arg in effect_args {
+                match &arg.arg {
+                    NEffectArgValue::Place(place) => {
+                        mark_normalized_place_root_demand(body, demands, place, |demand| {
+                            demand.passed_by_place = true;
+                            if arg.required_mut {
+                                demand.mut_borrowed_or_addr_taken = true;
+                            }
+                        });
+                    }
+                    NEffectArgValue::Value(value)
+                        if arg.required_mut
+                            && matches!(arg.pass_mode, EffectPassMode::ByTempPlace) =>
+                    {
+                        if let Some(demand) = demands.get_mut(value.local.index()) {
+                            demand.passed_by_place = true;
+                            demand.mut_borrowed_or_addr_taken = true;
+                        }
+                    }
+                    NEffectArgValue::Value(_) => {}
+                }
+            }
+        }
+    }
+}
+
+fn mark_normalized_place_root_demand(
+    body: &NormalizedSemanticBody<'_>,
+    demands: &mut [NLocalRootDemand],
+    place: &NSPlace<'_>,
+    mark: impl FnOnce(&mut NLocalRootDemand),
+) {
+    if let Some(local) = normalized_place_root_local(body, place)
+        && let Some(demand) = demands.get_mut(local.index())
+    {
+        mark(demand);
+    }
+}
+
+fn normalized_place_root_local(
+    body: &NormalizedSemanticBody<'_>,
+    place: &NSPlace<'_>,
+) -> Option<SLocalId> {
+    match place.root {
+        NSPlaceRoot::CarrierDerefLocal(local) => Some(local),
+        NSPlaceRoot::Root(root) => match body.root(root) {
+            Some(NBorrowRoot::Param { local, .. }) | Some(NBorrowRoot::LocalSlot { local }) => {
+                Some(*local)
+            }
+            Some(NBorrowRoot::Provider { .. }) | None => None,
+        },
+    }
+}
+
+fn normalized_place_is_self_rooted(
+    body: &NormalizedSemanticBody<'_>,
+    local: SLocalId,
+    place: &NSPlace<'_>,
+) -> bool {
+    place.path.is_empty() && normalized_place_root_local(body, place) == Some(local)
 }

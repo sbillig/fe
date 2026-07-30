@@ -30,9 +30,27 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             self.closure_env_local,
             self.closure_capture_fields.get(&binding).copied(),
         ) {
-            let mut place = SPlace::new(env);
-            place.push_field(field);
-            place
+            if self
+                .closure_capture_tys
+                .get(&binding)
+                .is_some_and(|capture_ty| {
+                    capture_ty.as_capability(self.db).is_some()
+                        && *capture_ty != self.binding_ty(binding)
+                })
+            {
+                // A synthetic capability capture stores a carrier for the
+                // original binding. Materialize that field as its own local so
+                // semantic normalization can make it a `CarrierDerefLocal`
+                // root. Explicit `Deref` projections are not valid in
+                // normalized runtime paths, and treating the environment field
+                // itself as the target would address the carrier slot instead
+                // of its referent.
+                SPlace::new(self.lower_effect_binding_value(binding))
+            } else {
+                let mut place = SPlace::new(env);
+                place.push_field(field);
+                place
+            }
         } else {
             panic!("binding local should be allocated: {binding:?}");
         };
@@ -43,8 +61,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     place.push_field(FieldIndex(index));
                 }
                 PlaceProjection::Index { index_expr, .. } => {
-                    let index = self.lower_expr(index_expr);
-                    place.push_dynamic_index(index);
+                    let index = self.lower_index_operand(index_expr);
+                    place.push_dynamic_index(index.value);
                 }
             }
         }

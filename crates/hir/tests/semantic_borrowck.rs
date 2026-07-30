@@ -8,9 +8,11 @@ use fe_hir::{
             BorrowInput, BorrowResult, BorrowTransform, FieldIndex, LayoutBackingProjection,
             NBorrowRoot, NExpr, NLocalOrigin, NSPlace, NSPlaceRoot, NSStmtKind,
             NormalizedBindingLowering, ReadMode, SStmtKind, SemanticBorrowDiagKind,
-            SemanticInstance, SemanticLocalKind, check_semantic_borrows, check_semantic_noesc,
+            SemanticInstance, SemanticInstanceCompleteness, SemanticLocalKind,
+            check_semantic_borrows, check_semantic_noesc,
             collect_semantic_borrow_diagnostic_vouchers, get_or_build_semantic_instance,
-            identity_semantic_instance_key, normalize_semantic_body, semantic_borrow_summary,
+            identity_semantic_instance_key, normalize_semantic_body,
+            normalize_semantic_body_for_layout_evidence, semantic_borrow_summary,
         },
         ty::{
             ProviderAddressSpace,
@@ -1348,6 +1350,137 @@ fn probe<T: BorrowValue>(mut value: T) {
 }
 
 #[test]
+fn conservative_array_summary_uses_disjoint_nested_family_axes() {
+    let src = r#"
+trait Permute {
+    fn permute(
+        self,
+        values: own [[mut u256; 2]; 2],
+        other: own [mut u256; 2],
+    ) -> [[mut u256; 2]; 2]
+}
+
+fn instantiate<T: Permute>(
+    permuter: T,
+    values: own [[mut u256; 2]; 2],
+    other: own [mut u256; 2],
+) -> [[mut u256; 2]; 2] {
+    permuter.permute(values, other)
+}
+"#;
+    let mut summary = None;
+    for_each_fixture_instance(src, |db, instance| {
+        if owner_name(db, instance.key(db).owner(db)) == "permute" {
+            summary = semantic_borrow_summary(db, instance)
+                .expect("opaque trait borrow summary")
+                .or(summary.take());
+        }
+    });
+    let summary = summary.expect("missing opaque trait borrow summary");
+    let result = summary
+        .iter()
+        .find_map(|transform| match transform.result.projection.as_slice() {
+            [
+                LayoutBackingProjection::IndexFamily(outer),
+                LayoutBackingProjection::IndexFamily(inner),
+            ] => Some((*outer, *inner)),
+            _ => None,
+        })
+        .expect("missing nested result family");
+    let input = summary
+        .iter()
+        .find_map(|transform| match &transform.input {
+            BorrowInput::Place {
+                param: 1,
+                projection,
+            } => match projection.as_slice() {
+                [
+                    LayoutBackingProjection::IndexFamily(outer),
+                    LayoutBackingProjection::IndexFamily(inner),
+                ] => Some((*outer, *inner)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("missing nested input family");
+    let other = summary
+        .iter()
+        .find_map(|transform| match &transform.input {
+            BorrowInput::Place {
+                param: 2,
+                projection,
+            } => match projection.as_slice() {
+                [LayoutBackingProjection::IndexFamily(family)] => Some(*family),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("missing second input family");
+    let families = [result.0, result.1, input.0, input.1, other]
+        .into_iter()
+        .collect::<rustc_hash::FxHashSet<_>>();
+    assert_eq!(families.len(), 5, "{summary:#?}");
+}
+
+#[test]
+fn opaque_array_result_does_not_assume_pointwise_family_correlation() {
+    let diags = borrow_diags(
+        r#"
+trait Permute {
+    fn permute(
+        self,
+        values: own [[mut u256; 2]; 2],
+        other: own [mut u256; 2],
+    ) -> [[mut u256; 2]; 2]
+}
+
+fn nested_input_can_be_permuted<T: Permute>(permuter: T) {
+    let mut a = 0
+    let mut b = 0
+    let mut c = 0
+    let mut d = 0
+    let mut e = 0
+    let mut f = 0
+    let returned = permuter.permute(
+        [[mut a, mut b], [mut c, mut d]],
+        [mut e, mut f],
+    )
+    let selected = returned[0][0]
+    let alias = mut d
+    alias = 1
+    selected = 2
+}
+
+fn separate_input_can_supply_any_result<T: Permute>(permuter: T) {
+    let mut a = 0
+    let mut b = 0
+    let mut c = 0
+    let mut d = 0
+    let mut e = 0
+    let mut f = 0
+    let returned = permuter.permute(
+        [[mut a, mut b], [mut c, mut d]],
+        [mut e, mut f],
+    )
+    let selected = returned[0][0]
+    let alias = mut f
+    alias = 1
+    selected = 2
+}
+"#,
+    );
+    for name in [
+        "nested_input_can_be_permuted",
+        "separate_input_can_supply_any_result",
+    ] {
+        assert!(
+            diags.contains(&format!("borrow conflict in `fn {name}`")),
+            "{diags}"
+        );
+    }
+}
+
+#[test]
 fn returned_aggregate_tracks_fresh_mut_borrow_from_view_param() {
     let diags = borrow_diags(
         r#"
@@ -1642,6 +1775,995 @@ fn probe() {
 }
 
 #[test]
+fn large_fixed_array_borrow_summary_uses_one_symbolic_slot() {
+    let src = r#"
+fn forward(values: own [mut u256; 1000000]) -> [mut u256; 1000000] {
+    values
+}
+"#;
+    let mut summary = None;
+    for_each_fixture_instance(src, |db, instance| {
+        let BodyOwner::Func(func) = instance.key(db).owner(db) else {
+            return;
+        };
+        if func
+            .name(db)
+            .to_opt()
+            .is_none_or(|name| name.data(db) != "forward")
+        {
+            return;
+        }
+        summary = semantic_borrow_summary(db, instance)
+            .expect("large-array borrow summary")
+            .or(summary.take());
+    });
+    assert_eq!(
+        summary,
+        Some(vec![BorrowTransform {
+            result: BorrowResult {
+                kind: BorrowKind::Mut,
+                projection: vec![LayoutBackingProjection::IndexFamily(0)],
+            },
+            input: BorrowInput::Place {
+                param: 0,
+                projection: vec![LayoutBackingProjection::IndexFamily(0)],
+            },
+        }])
+    );
+}
+
+#[test]
+fn zero_length_array_axes_do_not_create_phantom_borrow_families() {
+    let src = r#"
+fn empty(values: own [mut u256; 0]) -> [mut u256; 0] {
+    values
+}
+
+fn nested_inner_empty(
+    values: own [[mut u256; 0]; 2],
+) -> [[mut u256; 0]; 2] {
+    values
+}
+
+fn nested_outer_empty(
+    values: own [[mut u256; 2]; 0],
+) -> [[mut u256; 2]; 0] {
+    values
+}
+
+struct EmptyThenBorrowing {
+    empty: [[mut u256; 0]; 2],
+    values: [mut u256; 2],
+}
+
+fn mixed(values: own EmptyThenBorrowing) -> EmptyThenBorrowing {
+    values
+}
+"#;
+    assert!(analysis_diags(src).is_empty());
+    let mut seen = rustc_hash::FxHashSet::default();
+    let mut mixed_summary = None;
+    for_each_fixture_instance(src, |db, instance| {
+        let name = owner_name(db, instance.key(db).owner(db));
+        if matches!(
+            name.as_str(),
+            "empty" | "nested_inner_empty" | "nested_outer_empty"
+        ) {
+            seen.insert(name);
+            assert_eq!(
+                semantic_borrow_summary(db, instance).expect("zero-array borrow summary"),
+                None
+            );
+        } else if name == "mixed" {
+            mixed_summary = semantic_borrow_summary(db, instance)
+                .expect("mixed zero-array borrow summary")
+                .or(mixed_summary.take());
+        }
+    });
+    assert_eq!(seen.len(), 3, "{seen:?}");
+    assert_eq!(
+        mixed_summary,
+        Some(vec![BorrowTransform {
+            result: BorrowResult {
+                kind: BorrowKind::Mut,
+                projection: vec![
+                    LayoutBackingProjection::Field(FieldIndex(1)),
+                    LayoutBackingProjection::IndexFamily(0),
+                ],
+            },
+            input: BorrowInput::Place {
+                param: 0,
+                projection: vec![
+                    LayoutBackingProjection::Field(FieldIndex(1)),
+                    LayoutBackingProjection::IndexFamily(0),
+                ],
+            },
+        }])
+    );
+}
+
+#[test]
+fn returned_array_family_keeps_constant_siblings_disjoint() {
+    let diags = borrow_diags(
+        r#"
+fn forward(values: own [mut u256; 2]) -> [mut u256; 2] {
+    values
+}
+
+fn forward_twice(values: own [mut u256; 2]) -> [mut u256; 2] {
+    forward(values)
+}
+
+fn probe() {
+    let mut left = 0
+    let mut right = 0
+    let returned = forward_twice([mut left, mut right])
+    let first = returned[0]
+    let other = mut right
+    other = 1
+    first = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn returned_array_family_dynamic_index_overlaps_every_sibling() {
+    let diags = borrow_diags(
+        r#"
+fn forward(values: own [mut u256; 2]) -> [mut u256; 2] {
+    values
+}
+
+fn probe(index: usize) {
+    let mut left = 0
+    let mut right = 0
+    let returned = forward([mut left, mut right])
+    let selected = returned[index]
+    let other = mut right
+    other = 1
+    selected = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn returned_array_literal_materializes_only_its_exact_slots() {
+    let src = r#"
+fn pair(left: mut u256, right: mut u256) -> [mut u256; 2] {
+    [left, right]
+}
+"#;
+    let mut summary = None;
+    for_each_fixture_instance(src, |db, instance| {
+        let BodyOwner::Func(func) = instance.key(db).owner(db) else {
+            return;
+        };
+        if func
+            .name(db)
+            .to_opt()
+            .is_none_or(|name| name.data(db) != "pair")
+        {
+            return;
+        }
+        summary = semantic_borrow_summary(db, instance)
+            .expect("array-literal borrow summary")
+            .or(summary.take());
+    });
+    assert_eq!(summary.as_ref().map(Vec::len), Some(2), "{summary:#?}");
+    let summary = summary.expect("pair summary");
+    assert!(summary.iter().any(|transform| {
+        transform.result.projection == [LayoutBackingProjection::Index(Some(0))]
+            && transform.input
+                == BorrowInput::Place {
+                    param: 0,
+                    projection: Vec::new(),
+                }
+    }));
+    assert!(summary.iter().any(|transform| {
+        transform.result.projection == [LayoutBackingProjection::Index(Some(1))]
+            && transform.input
+                == BorrowInput::Place {
+                    param: 1,
+                    projection: Vec::new(),
+                }
+    }));
+}
+
+#[test]
+fn closure_returned_array_literal_materializes_only_its_exact_slots() {
+    let src = r#"
+fn probe() {
+    let mut left = 0
+    let mut right = 0
+    let pair = |left: mut u256, right: mut u256| -> [mut u256; 2] {
+        [left, right]
+    }
+    let returned = pair.call(mut left, mut right)
+    returned[0] = 1
+    returned[1] = 2
+}
+"#;
+    let diags = borrow_diags(src);
+    assert!(diags.is_empty(), "{diags}");
+
+    let mut summaries = Vec::new();
+    for_each_fixture_instance(src, |db, instance| {
+        if !matches!(instance.key(db).owner(db), BodyOwner::Closure { .. }) {
+            return;
+        }
+        if let Some(summary) =
+            semantic_borrow_summary(db, instance).expect("closure array-literal borrow summary")
+        {
+            summaries.push(summary);
+        }
+    });
+    assert!(!summaries.is_empty(), "missing closure borrow summary");
+    let expected = vec![
+        BorrowTransform {
+            result: BorrowResult {
+                kind: BorrowKind::Mut,
+                projection: vec![LayoutBackingProjection::Index(Some(0))],
+            },
+            input: BorrowInput::Place {
+                param: 1,
+                projection: vec![LayoutBackingProjection::Field(FieldIndex(0))],
+            },
+        },
+        BorrowTransform {
+            result: BorrowResult {
+                kind: BorrowKind::Mut,
+                projection: vec![LayoutBackingProjection::Index(Some(1))],
+            },
+            input: BorrowInput::Place {
+                param: 1,
+                projection: vec![LayoutBackingProjection::Field(FieldIndex(1))],
+            },
+        },
+    ];
+    for summary in summaries {
+        assert_eq!(summary, expected);
+    }
+}
+
+#[test]
+fn returned_array_sparse_override_retains_the_symbolic_remainder() {
+    let src = r#"
+fn replace_first(
+    mut values: own [mut u256; 2],
+    replacement: mut u256,
+) -> [mut u256; 2] {
+    values[0] = mut replacement
+    values
+}
+
+fn maybe_replace_first(
+    mut values: own [mut u256; 2],
+    replacement: mut u256,
+    replace: bool,
+) -> [mut u256; 2] {
+    if replace {
+        values[0] = mut replacement
+    }
+    values
+}
+
+fn releases_replaced() {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let returned = replace_first(
+        [mut old_left, mut right],
+        mut replacement,
+    )
+    let released = mut old_left
+    released = 1
+    returned[0] = 2
+    returned[1] = 3
+}
+
+fn retains_sibling() {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let returned = replace_first(
+        [mut old_left, mut right],
+        mut replacement,
+    )
+    let alias = mut right
+    alias = 1
+    returned[1] = 2
+}
+
+fn conditional_replacement_retains_old(replace: bool) {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let returned = maybe_replace_first(
+        [mut old_left, mut right],
+        mut replacement,
+        replace,
+    )
+    let alias = mut old_left
+    alias = 1
+    returned[0] = 2
+}
+"#;
+    let diags = borrow_diags(src);
+    assert!(
+        !diags.contains("borrow conflict in `fn releases_replaced`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn retains_sibling`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn conditional_replacement_retains_old`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn sparse_array_override_forwarded_through_family_summary_keeps_untouched_siblings() {
+    let src = r#"
+fn forward(values: own [mut u256; 2]) -> [mut u256; 2] {
+    values
+}
+
+fn replace_then_forward(
+    mut values: own [mut u256; 2],
+    replacement: mut u256,
+) -> [mut u256; 2] {
+    values[0] = mut replacement
+    forward(values)
+}
+
+fn releases_replaced_through_forward() {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let returned = replace_then_forward(
+        [mut old_left, mut right],
+        mut replacement,
+    )
+    let released = mut old_left
+    released = 1
+    returned[0] = 2
+    returned[1] = 3
+}
+
+fn retains_sibling_through_forward() {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let returned = replace_then_forward(
+        [mut old_left, mut right],
+        mut replacement,
+    )
+    let alias = mut right
+    alias = 1
+    returned[1] = 2
+}
+"#;
+    let diags = borrow_diags(src);
+    assert!(
+        !diags.contains("borrow conflict in `fn releases_replaced_through_forward`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn retains_sibling_through_forward`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn nested_sparse_array_override_partitions_only_the_exact_member() {
+    let diags = borrow_diags(
+        r#"
+fn replace_nested(
+    mut values: own [[mut u256; 2]; 2],
+    replacement: mut u256,
+) -> [[mut u256; 2]; 2] {
+    values[0][1] = mut replacement
+    values
+}
+
+fn releases_replaced_nested_member() {
+    let mut a = 0
+    let mut old = 0
+    let mut b = 0
+    let mut c = 0
+    let mut replacement = 0
+    let returned = replace_nested(
+        [[mut a, mut old], [mut b, mut c]],
+        mut replacement,
+    )
+    let released = mut old
+    released = 1
+    returned[0][1] = 2
+}
+
+fn retains_untouched_nested_member() {
+    let mut a = 0
+    let mut old = 0
+    let mut b = 0
+    let mut c = 0
+    let mut replacement = 0
+    let returned = replace_nested(
+        [[mut a, mut old], [mut b, mut c]],
+        mut replacement,
+    )
+    let alias = mut c
+    alias = 1
+    returned[1][1] = 2
+}
+"#,
+    );
+    assert!(
+        !diags.contains("borrow conflict in `fn releases_replaced_nested_member`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn retains_untouched_nested_member`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn sparse_array_partitions_include_sources_from_every_return_path() {
+    let diags = borrow_diags(
+        r#"
+fn replace_or_return_untouched(
+    mut values: own [mut u256; 2],
+    replacement: mut u256,
+    replace: bool,
+) -> [mut u256; 2] {
+    if replace {
+        values[0] = mut replacement
+        return values
+    }
+    values
+}
+
+fn return_untouched_or_replace_member_one(
+    mut values: own [mut u256; 2],
+    replacement: mut u256,
+    replace: bool,
+) -> [mut u256; 2] {
+    if replace == false {
+        return values
+    }
+    values[1] = mut replacement
+    values
+}
+
+fn replace_nested_or_return_untouched(
+    mut values: own [[mut u256; 2]; 2],
+    replacement: mut u256,
+    replace: bool,
+) -> [[mut u256; 2]; 2] {
+    if replace {
+        values[1][1] = mut replacement
+        return values
+    }
+    values
+}
+
+fn old_member_source_is_retained(replace: bool) {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let returned = replace_or_return_untouched(
+        [mut old_left, mut right],
+        mut replacement,
+        replace,
+    )
+    let alias = mut old_left
+    alias = 1
+    returned[0] = 2
+}
+
+fn replacement_source_is_retained(replace: bool) {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let returned = replace_or_return_untouched(
+        [mut old_left, mut right],
+        mut replacement,
+        replace,
+    )
+    let alias = mut replacement
+    alias = 1
+    returned[0] = 2
+}
+
+fn family_complement_retains_untouched_sibling(replace: bool) {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let returned = replace_or_return_untouched(
+        [mut old_left, mut right],
+        mut replacement,
+        replace,
+    )
+    let alias = mut right
+    alias = 1
+    returned[1] = 2
+}
+
+fn reversed_return_retains_old_member_one(replace: bool) {
+    let mut left = 0
+    let mut old_right = 0
+    let mut replacement = 0
+    let returned = return_untouched_or_replace_member_one(
+        [mut left, mut old_right],
+        mut replacement,
+        replace,
+    )
+    let alias = mut old_right
+    alias = 1
+    returned[1] = 2
+}
+
+fn nested_return_retains_old_exact_member(replace: bool) {
+    let mut a = 0
+    let mut b = 0
+    let mut c = 0
+    let mut old = 0
+    let mut replacement = 0
+    let returned = replace_nested_or_return_untouched(
+        [[mut a, mut b], [mut c, mut old]],
+        mut replacement,
+        replace,
+    )
+    let alias = mut old
+    alias = 1
+    returned[1][1] = 2
+}
+"#,
+    );
+    for name in [
+        "old_member_source_is_retained",
+        "replacement_source_is_retained",
+        "family_complement_retains_untouched_sibling",
+        "reversed_return_retains_old_member_one",
+        "nested_return_retains_old_exact_member",
+    ] {
+        assert!(
+            diags.contains(&format!("borrow conflict in `fn {name}`")),
+            "{diags}"
+        );
+    }
+}
+
+#[test]
+fn unreachable_array_returns_do_not_add_borrow_sources() {
+    let diags = borrow_diags(
+        r#"
+fn replace_on_known_true(
+    mut values: own [mut u256; 2],
+    replacement: mut u256,
+) -> [mut u256; 2] {
+    if true {
+        values[0] = mut replacement
+        return values
+    }
+    values
+}
+
+fn replace_after_known_false_return(
+    mut values: own [mut u256; 2],
+    replacement: mut u256,
+) -> [mut u256; 2] {
+    if false {
+        return values
+    }
+    values[1] = mut replacement
+    values
+}
+
+fn releases_old_zero() {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let returned = replace_on_known_true(
+        [mut old_left, mut right],
+        mut replacement,
+    )
+    let released = mut old_left
+    released = 1
+    returned[0] = 2
+}
+
+fn releases_old_one() {
+    let mut left = 0
+    let mut old_right = 0
+    let mut replacement = 0
+    let returned = replace_after_known_false_return(
+        [mut left, mut old_right],
+        mut replacement,
+    )
+    let released = mut old_right
+    released = 1
+    returned[1] = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn statically_unreachable_blocks_do_not_produce_borrow_diagnostics() {
+    let diags = borrow_diags(
+        r#"
+fn return_live_param(value: mut u256) -> mut u256 {
+    if true {
+        return value
+    }
+    let mut local = 0
+    mut local
+}
+
+fn dead_alias_conflict() {
+    let mut value = 0
+    if true {
+        return
+    }
+    let first = mut value
+    let second = mut value
+    first = 1
+    second = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn refined_dead_branch_ownership_sources_do_not_cause_false_moves() {
+    let src = r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Holder {
+    boxed: Boxed,
+}
+
+fn inspect(holder: Holder) -> u256 {
+    holder.boxed.value
+}
+
+fn probe() -> u256 {
+    let live = Holder { boxed: Boxed { value: 1 } }
+    let dead = Holder { boxed: Boxed { value: 2 } }
+    let consumed = dead.boxed
+    let done = true
+    inspect(if done { live } else { dead })
+}
+"#;
+    let diags = borrow_diags(src);
+
+    let mut multi_source_locals = Vec::new();
+    for_each_fixture_instance(src, |db, instance| {
+        if owner_name(db, instance.key(db).owner(db)) != "probe" {
+            return;
+        }
+        let body = normalize_semantic_body_for_layout_evidence(db, instance)
+            .expect("analysis normalized body");
+        multi_source_locals.extend(
+            body.locals
+                .iter()
+                .enumerate()
+                .filter(|(_, local)| local.ownership_sources().len() > 1)
+                .map(|(idx, local)| (idx, local.ownership_sources().len())),
+        );
+    });
+    assert!(diags.is_empty(), "{diags}");
+    assert!(multi_source_locals.is_empty(), "{multi_source_locals:#?}");
+}
+
+#[test]
+fn dynamic_branch_ownership_sources_remain_conservative() {
+    let src = r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Holder {
+    boxed: Boxed,
+}
+
+fn inspect(holder: Holder) -> u256 {
+    holder.boxed.value
+}
+
+fn probe(flag: bool) -> u256 {
+    let live = Holder { boxed: Boxed { value: 1 } }
+    let dead = Holder { boxed: Boxed { value: 2 } }
+    let consumed = dead.boxed
+    inspect(if flag { live } else { dead })
+}
+"#;
+    let diags = borrow_diags(src);
+    assert!(
+        diags.contains("cannot use a value after it was moved"),
+        "{diags}"
+    );
+
+    let mut max_ownership_sources = 0;
+    for_each_fixture_instance(src, |db, instance| {
+        if owner_name(db, instance.key(db).owner(db)) != "probe" {
+            return;
+        }
+        let body = normalize_semantic_body_for_layout_evidence(db, instance)
+            .expect("analysis normalized body");
+        max_ownership_sources = body
+            .locals
+            .iter()
+            .map(|local| local.ownership_sources().len())
+            .max()
+            .unwrap_or_default();
+    });
+    assert_eq!(max_ownership_sources, 2);
+}
+
+#[test]
+fn refined_dead_capability_join_tracks_only_the_live_target() {
+    let diags = borrow_diags(
+        r#"
+fn known_join() {
+    let mut first = 1
+    let mut second = 2
+    let known = true
+    let selected = if known { mut first } else { mut second }
+    let other = mut second
+    other = 8
+    selected = 9
+}
+
+fn dynamic_join(flag: bool) {
+    let mut first = 1
+    let mut second = 2
+    let selected = if flag { mut first } else { mut second }
+    let other = mut second
+    other = 8
+    selected = 9
+}
+"#,
+    );
+    assert!(
+        !diags.contains("borrow conflict in `fn known_join`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn dynamic_join`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn statically_unreachable_effect_calls_do_not_refine_provider_provenance() {
+    let src = r#"
+fn increment() uses (target: mut u256) {
+    target += 1
+}
+
+fn update() uses (target: mut u256) {
+    let done = true
+    if done {
+        return
+    }
+    increment()
+}
+
+pub contract C {
+    mut target: u256
+
+    init() uses (mut target) {
+        update()
+    }
+}
+"#;
+    let diags = borrow_diags(src);
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn statically_dead_index_writes_do_not_destroy_constant_array_precision() {
+    let diags = borrow_diags(
+        r#"
+fn forward(values: own [mut u256; 2]) -> [mut u256; 2] {
+    values
+}
+
+fn set_one(index: mut usize) {
+    index = 1
+}
+
+fn probe() {
+    let mut left = 0
+    let mut right = 0
+    let returned = forward([mut left, mut right])
+    let mut index: usize = 0
+    if false {
+        set_one(mut index)
+    }
+    let selected = returned[index]
+    let alias = mut right
+    alias = 1
+    selected = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn known_branch_constant_index_flows_through_the_join() {
+    let diags = borrow_diags(
+        r#"
+fn forward(values: own [mut u256; 2]) -> [mut u256; 2] {
+    values
+}
+
+fn probe() {
+    let mut left = 0
+    let mut right = 0
+    let returned = forward([mut left, mut right])
+    let index: usize = if false { 1 } else { 0 }
+    let selected = returned[index]
+    let alias = mut right
+    alias = 1
+    selected = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn mutably_aliased_constant_index_remains_dynamic() {
+    let diags = borrow_diags(
+        r#"
+fn forward(values: own [mut u256; 2]) -> [mut u256; 2] {
+    values
+}
+
+fn set_one(index: mut usize) {
+    index = 1
+}
+
+fn probe() {
+    let mut left = 0
+    let mut right = 0
+    let returned = forward([mut left, mut right])
+    let mut index: usize = 0
+    set_one(mut index)
+    let selected = returned[index]
+    let alias = mut right
+    alias = 1
+    selected = 2
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn statically_dead_uses_do_not_destroy_fresh_owned_call_storage() {
+    let diags = borrow_diags(
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+struct Both {
+    left: mut Boxed,
+    right: mut Boxed,
+}
+
+fn probe() {
+    let borrow = |mut boxed: own Boxed| -> mut Boxed { mut boxed }
+    let mut returned = Both {
+        left: borrow.call(Boxed { value: 0 }),
+        right: borrow.call(Boxed { value: 0 }),
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let boxed = Boxed { value: 0 }
+        if false {
+            let ignored = boxed.value
+        }
+        let next = borrow.call(boxed)
+        returned = if index == 0 {
+            Both { left: next, right: returned.right }
+        } else {
+            Both { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left.value = 1
+    returned.right.value = 2
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn returned_dynamic_array_override_retains_all_possible_sources() {
+    let diags = borrow_diags(
+        r#"
+fn replace_dynamic(
+    mut values: own [mut u256; 2],
+    replacement: mut u256,
+    index: usize,
+) -> [mut u256; 2] {
+    values[index] = mut replacement
+    values
+}
+
+fn old_left_may_remain(index: usize) {
+    let mut old_left = 0
+    let mut old_right = 0
+    let mut replacement = 0
+    let returned = replace_dynamic(
+        [mut old_left, mut old_right],
+        mut replacement,
+        index,
+    )
+    let alias = mut old_left
+    alias = 1
+    returned[0] = 2
+}
+
+fn old_right_may_remain(index: usize) {
+    let mut old_left = 0
+    let mut old_right = 0
+    let mut replacement = 0
+    let returned = replace_dynamic(
+        [mut old_left, mut old_right],
+        mut replacement,
+        index,
+    )
+    let alias = mut old_right
+    alias = 1
+    returned[1] = 2
+}
+
+fn replacement_is_returned(index: usize) {
+    let mut old_left = 0
+    let mut old_right = 0
+    let mut replacement = 0
+    let returned = replace_dynamic(
+        [mut old_left, mut old_right],
+        mut replacement,
+        index,
+    )
+    let alias = mut replacement
+    alias = 1
+    returned[index] = 2
+}
+"#,
+    );
+    for name in [
+        "old_left_may_remain",
+        "old_right_may_remain",
+        "replacement_is_returned",
+    ] {
+        assert!(
+            diags.contains(&format!("borrow conflict in `fn {name}`")),
+            "{diags}"
+        );
+    }
+}
+
+#[test]
 fn overwriting_constant_array_element_releases_only_that_elements_borrows() {
     let diags = borrow_diags(
         r#"
@@ -1827,6 +2949,53 @@ fn probe() -> u256 {
 }
 
 #[test]
+fn returned_nested_closure_rebuilds_owned_array_view_storage() {
+    let cases = [
+        (
+            "array literal",
+            r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() {
+    let make = |values: own [view Boxed; 2]| {
+        || values[0].value + values[1].value
+    }
+    let reader = make.call([
+        Boxed { value: 20 },
+        Boxed { value: 22 },
+    ])
+    let _result = reader.call()
+}
+"#,
+        ),
+        (
+            "array repeat",
+            r#"
+struct Boxed {
+    value: u256,
+}
+
+fn probe() {
+    let boxed = Boxed { value: 21 }
+    let make = |values: own [view Boxed; 2]| {
+        || values[0].value + values[1].value
+    }
+    let reader = make.call([boxed; 2])
+    let _result = reader.call()
+}
+"#,
+        ),
+    ];
+
+    for (name, src) in cases {
+        let diags = borrow_diags(src);
+        assert!(diags.is_empty(), "{name}: {diags}");
+    }
+}
+
+#[test]
 fn nested_closure_cannot_escape_a_borrow_of_its_call_local() {
     let diags = borrow_diags(
         r#"
@@ -1941,6 +3110,187 @@ fn for_each_fixture_instance(
             pending.push_back(get_or_build_semantic_instance(&db, callee.key));
         }
     }
+}
+
+#[test]
+fn partial_effect_provider_instance_borrowchecks_parametrically() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        include_str!(
+            "../../uitest/fixtures/semantic_borrowck/closure_memory_handle_capture_through_generic.fe"
+        ),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let provide = top_mod
+        .all_items(&db)
+        .iter()
+        .find_map(|item| match item {
+            ItemKind::Func(func)
+                if func
+                    .name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "provide") =>
+            {
+                Some(*func)
+            }
+            _ => None,
+        })
+        .expect("provide function");
+    let provide_identity = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(provide)),
+    );
+    assert_eq!(
+        provide_identity.key(&db).completeness(&db),
+        SemanticInstanceCompleteness::Parametric,
+    );
+    let partial_capture_target = provide_identity
+        .callees(&db)
+        .iter()
+        .find_map(|callee| {
+            (owner_name(&db, callee.key.owner(&db)) == "capture_target")
+                .then(|| get_or_build_semantic_instance(&db, callee.key))
+        })
+        .expect("partially specialized capture_target callee");
+
+    let providers = partial_capture_target
+        .key(&db)
+        .effect_providers(&db)
+        .providers(&db);
+    assert!(
+        providers
+            .iter()
+            .any(|specialization| specialization.provider.provider_ty.has_param(&db)),
+        "expected the provider to retain provide's H parameter: {providers:#?}"
+    );
+    assert_eq!(
+        partial_capture_target.key(&db).completeness(&db),
+        SemanticInstanceCompleteness::Partial,
+    );
+    check_semantic_borrows(&db, partial_capture_target)
+        .expect("partial effect-provider instances should borrowcheck parametrically");
+    check_semantic_noesc(&db, partial_capture_target)
+        .expect("partial effect-provider instances should check noesc parametrically");
+
+    let concrete_entry = top_mod
+        .all_items(&db)
+        .iter()
+        .find_map(|item| match item {
+            ItemKind::Func(func)
+                if func.name(&db).to_opt().is_some_and(|name| {
+                    name.data(&db) == "closure_memory_handle_capture_through_generic"
+                }) =>
+            {
+                Some(get_or_build_semantic_instance(
+                    &db,
+                    identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+                ))
+            }
+            _ => None,
+        })
+        .expect("concrete entry function");
+    let concrete_provide = concrete_entry
+        .callees(&db)
+        .iter()
+        .find_map(|callee| {
+            (owner_name(&db, callee.key.owner(&db)) == "provide")
+                .then(|| get_or_build_semantic_instance(&db, callee.key))
+        })
+        .expect("concrete provide callee");
+    assert_eq!(
+        concrete_provide.key(&db).completeness(&db),
+        SemanticInstanceCompleteness::Complete,
+    );
+    let concrete_capture_target = concrete_provide
+        .callees(&db)
+        .iter()
+        .find_map(|callee| {
+            (owner_name(&db, callee.key.owner(&db)) == "capture_target")
+                .then(|| get_or_build_semantic_instance(&db, callee.key))
+        })
+        .expect("concrete capture_target callee");
+    assert_eq!(
+        concrete_capture_target.key(&db).completeness(&db),
+        SemanticInstanceCompleteness::Complete,
+    );
+    check_semantic_borrows(&db, concrete_capture_target)
+        .expect("complete memory-provider instances should use final borrow checking");
+    check_semantic_noesc(&db, concrete_capture_target)
+        .expect("complete memory-provider instances should retain final noesc semantics");
+}
+
+#[test]
+fn partial_effect_provider_borrow_summary_is_parametric() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+use core::effect_ref::{EffectHandle, EffectRefMut}
+use ingot::Copy
+
+fn update_target(value: mut u256) -> mut u256 uses (target: mut u256) {
+    target = 1
+    value
+}
+
+fn provide<H: EffectHandle<Target = u256> + EffectRefMut<u256> + Copy>(
+    _ ptr: H,
+    _ value: mut u256,
+) -> mut u256 {
+    with (ptr) {
+        update_target(value)
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let provide = top_mod
+        .all_items(&db)
+        .iter()
+        .find_map(|item| match item {
+            ItemKind::Func(func)
+                if func
+                    .name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "provide") =>
+            {
+                Some(*func)
+            }
+            _ => None,
+        })
+        .expect("provide function");
+    let provide_identity = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(provide)),
+    );
+    let partial_update_target = provide_identity
+        .callees(&db)
+        .iter()
+        .find_map(|callee| {
+            (owner_name(&db, callee.key.owner(&db)) == "update_target")
+                .then(|| get_or_build_semantic_instance(&db, callee.key))
+        })
+        .expect("partially specialized update_target callee");
+    assert_eq!(
+        partial_update_target.key(&db).completeness(&db),
+        SemanticInstanceCompleteness::Partial,
+    );
+
+    assert_eq!(
+        semantic_borrow_summary(&db, partial_update_target)
+            .expect("partial borrow summary should not fail normalization"),
+        Some(vec![BorrowTransform {
+            result: BorrowResult {
+                kind: BorrowKind::Mut,
+                projection: Vec::new(),
+            },
+            input: BorrowInput::Place {
+                param: 0,
+                projection: Vec::new(),
+            },
+        }]),
+    );
 }
 
 fn owner_name(db: &HirAnalysisTestDb, owner: BodyOwner<'_>) -> String {
@@ -2207,6 +3557,1431 @@ fn stash(mut borrowed: own Borrowed, value: mut u256) -> Borrowed {
 }
 
 #[test]
+fn capability_field_rebind_and_write_through_have_distinct_store_places() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+struct Handle {
+    target: mut u256,
+}
+
+fn probe() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = mut second
+    handle.target = 7
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let instance = top_mod
+        .all_items(&db)
+        .iter()
+        .find_map(|item| match item {
+            ItemKind::Func(func)
+                if func
+                    .name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "probe") =>
+            {
+                Some(get_or_build_semantic_instance(
+                    &db,
+                    identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+                ))
+            }
+            _ => None,
+        })
+        .expect("probe instance");
+    let normalized = normalize_semantic_body(&db, instance).expect("normalized body");
+    let stores = normalized
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .filter_map(|stmt| {
+            let NSStmtKind::Store { dst, src } = &stmt.kind else {
+                return None;
+            };
+            Some((
+                dst,
+                *src,
+                normalized.place_ty(&db, dst),
+                normalized.local(src.local).map(|local| local.ty),
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        stores.iter().any(|(dst, _, dst_ty, src_ty)| {
+            matches!(dst.root, NSPlaceRoot::Root(_))
+                && dst.path.len() == 1
+                && dst_ty.is_some_and(|ty| ty.as_capability(&db).is_some())
+                && src_ty.is_some_and(|ty| ty.as_capability(&db).is_some())
+        }),
+        "explicit `mut` must store the new carrier in the field slot: {stores:#?}",
+    );
+    assert!(
+        stores.iter().any(|(dst, _, dst_ty, src_ty)| {
+            matches!(dst.root, NSPlaceRoot::CarrierDerefLocal(_))
+                && dst.path.is_empty()
+                && dst_ty.is_some_and(|ty| ty.as_capability(&db).is_none())
+                && src_ty.is_some_and(|ty| ty.as_capability(&db).is_none())
+        }),
+        "ordinary assignment must store through the materialized carrier: {stores:#?}",
+    );
+    check_semantic_borrows(&db, instance).expect("both store forms must borrow-check");
+}
+
+#[test]
+fn capability_returning_operator_calls_rebind_at_the_semantic_store_boundary() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+use core::ops::{Add, Neg}
+
+struct Handle {
+    target: mut u256,
+}
+
+struct Forwarder {
+    target: mut u256,
+}
+
+impl Add<Forwarder> for Forwarder {
+    type Output = mut u256
+
+    fn add(own self, _ other: own Forwarder) -> mut u256 {
+        self.target
+    }
+}
+
+impl Neg for Forwarder {
+    type Output = mut u256
+
+    fn neg(own self) -> mut u256 {
+        self.target
+    }
+}
+
+fn binary_probe() {
+    let mut old: u256 = 1
+    let mut selected: u256 = 2
+    let mut other: u256 = 3
+    let mut handle = Handle { target: mut old }
+    let left = Forwarder { target: mut selected }
+    let right = Forwarder { target: mut other }
+    handle.target = left + right
+}
+
+fn unary_probe() {
+    let mut old: u256 = 4
+    let mut selected: u256 = 5
+    let mut handle = Handle { target: mut old }
+    let forwarder = Forwarder { target: mut selected }
+    handle.target = -forwarder
+}
+
+fn primitive_probe() {
+    let mut value: u256 = 6
+    let mut handle = Handle { target: mut value }
+    handle.target = 20 + 22
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let store_shapes = |name: &str| {
+        let instance = top_mod
+            .all_items(&db)
+            .iter()
+            .find_map(|item| match item {
+                ItemKind::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|ident| ident.data(&db) == name) =>
+                {
+                    Some(get_or_build_semantic_instance(
+                        &db,
+                        identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+                    ))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{name} instance"));
+        let normalized = normalize_semantic_body(&db, instance).expect("normalized body");
+        check_semantic_borrows(&db, instance)
+            .unwrap_or_else(|diag| panic!("{name} should borrow-check: {diag:#?}"));
+        normalized
+            .blocks
+            .iter()
+            .flat_map(|block| &block.stmts)
+            .filter_map(|stmt| {
+                let NSStmtKind::Store { dst, src } = &stmt.kind else {
+                    return None;
+                };
+                Some((
+                    matches!(dst.root, NSPlaceRoot::Root(_)),
+                    matches!(dst.root, NSPlaceRoot::CarrierDerefLocal(_)),
+                    dst.path.len(),
+                    normalized
+                        .place_ty(&db, dst)
+                        .is_some_and(|ty| ty.as_capability(&db).is_some()),
+                    normalized
+                        .local(src.local)
+                        .is_some_and(|local| local.ty.as_capability(&db).is_some()),
+                ))
+            })
+            .collect::<Vec<_>>()
+    };
+
+    for name in ["binary_probe", "unary_probe"] {
+        let shapes = store_shapes(name);
+        assert!(
+            shapes
+                .iter()
+                .any(|shape| shape.0 && !shape.1 && shape.2 == 1 && shape.3 && shape.4),
+            "{name} must store the operator's carrier in the capability slot: {shapes:#?}",
+        );
+    }
+
+    let primitive_shapes = store_shapes("primitive_probe");
+    assert!(
+        primitive_shapes.iter().any(|shape| !shape.0
+            && shape.1
+            && shape.2 == 0
+            && !shape.3
+            && !shape.4),
+        "primitive arithmetic must retain payload write-through: {primitive_shapes:#?}",
+    );
+}
+
+#[test]
+fn deferred_capability_call_revalidates_assignment_slot_mutability_once() {
+    let immutable_diags = analysis_diags(
+        r#"
+struct Handle {
+    target: mut u256,
+}
+
+struct Forwarder {}
+
+impl Forwarder {
+    fn forward(self, value: mut u256) -> mut u256 {
+        value
+    }
+}
+
+fn probe() {
+    let assign = |forwarder| {
+        let mut first: u256 = 1
+        let mut second: u256 = 2
+        let handle = Handle { target: mut first }
+        handle.target = forwarder.forward(value: mut second)
+    }
+    assign.call_once(Forwarder {})
+}
+"#,
+    );
+    assert_eq!(
+        immutable_diags
+            .matches("left-hand side of assignment is immutable")
+            .count(),
+        1,
+        "{immutable_diags}",
+    );
+
+    let mutable_diags = analysis_diags(
+        r#"
+struct Handle {
+    target: mut u256,
+}
+
+struct Forwarder {}
+
+impl Forwarder {
+    fn forward(self, value: mut u256) -> mut u256 {
+        value
+    }
+}
+
+fn probe() {
+    let assign = |forwarder| {
+        let mut first: u256 = 1
+        let mut second: u256 = 2
+        let mut handle = Handle { target: mut first }
+        handle.target = forwarder.forward(value: mut second)
+    }
+    assign.call_once(Forwarder {})
+}
+"#,
+    );
+    assert!(mutable_diags.is_empty(), "{mutable_diags}");
+}
+
+#[test]
+fn capability_field_assignment_ignores_only_proven_never_result_arms() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+struct Handle {
+    target: mut u256,
+}
+
+struct Cell {
+    value: u256,
+}
+
+struct CellHandle {
+    target: mut Cell,
+}
+
+enum Choice {
+    Second,
+    Abort,
+}
+
+enum KnownChoice {
+    Second,
+    Payload,
+}
+
+struct Diverger {}
+
+struct NeverWrapper {
+    value: u256,
+}
+
+impl Diverger {
+    fn fail(self) -> ! {
+        core::panic()
+    }
+
+    fn fail_mut(mut self) -> ! {
+        core::panic()
+    }
+}
+
+fn make_diverger() -> Diverger {
+    Diverger {}
+}
+
+fn abort() -> ! {
+    core::panic()
+}
+
+fn if_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { abort() }
+}
+
+fn match_block_rebind(choice: Choice) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = match choice {
+        Choice::Second => { mut second }
+        Choice::Abort => {
+            abort()
+        }
+    }
+}
+
+fn method_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    let diverger = Diverger {}
+    handle.target = if flag { mut second } else { diverger.fail() }
+}
+
+fn call_receiver_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { make_diverger().fail() }
+}
+
+fn record_receiver_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { (Diverger {}).fail() }
+}
+
+fn block_receiver_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { ({ make_diverger() }).fail() }
+}
+
+fn if_receiver_rebind(flag: bool, choose_call: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        (if choose_call { make_diverger() } else { Diverger {} }).fail()
+    }
+}
+
+fn mutable_receiver_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    let mut diverger = Diverger {}
+    handle.target = if flag { mut second } else { diverger.fail_mut() }
+}
+
+fn aggregate_wrapped_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        NeverWrapper { value: abort() }
+    }
+}
+
+fn eager_prefix_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        assert!(abort())
+        let fallback: u256 = 3
+        fallback
+    }
+}
+
+fn forced_and_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { true && abort() }
+}
+
+fn forced_or_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { false || abort() }
+}
+
+fn constant_if_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { if true { abort() } else { 3 } }
+}
+
+fn infinite_loop_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        while true {}
+        3
+    }
+}
+
+fn assert_false_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        assert!(false)
+        3
+    }
+}
+
+fn known_match_rebind() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = match KnownChoice::Second {
+        KnownChoice::Second => mut second,
+        KnownChoice::Payload => 3,
+    }
+}
+
+fn block_tail_condition_rebind() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if { true } { mut second } else { 3 }
+}
+
+fn with_body_condition_rebind() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let marker: bool = false
+    let mut handle = Handle { target: mut first }
+    handle.target = if with (marker) { true } { mut second } else { 3 }
+}
+
+fn nested_if_condition_rebind() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if (if true { true } else { false }) {
+        mut second
+    } else {
+        3
+    }
+}
+
+fn irrefutable_if_let_rebind() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let marker: u256 = 0
+    let mut handle = Handle { target: mut first }
+    handle.target = if let ignored = marker { mut second } else { 3 }
+}
+
+fn known_if_let_match_rebind() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if let KnownChoice::Second = KnownChoice::Second {
+        mut second
+    } else {
+        3
+    }
+}
+
+fn known_if_let_miss_rebind() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if let KnownChoice::Payload = KnownChoice::Second {
+        3
+    } else {
+        mut second
+    }
+}
+
+fn irrefutable_while_let_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let marker: u256 = 0
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        while let ignored = marker {}
+        3
+    }
+}
+
+fn irrefutable_let_and_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let marker: u256 = 0
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        if let ignored = marker && abort() { 3 } else { 4 }
+    }
+}
+
+fn dynamic_if_let_write(choice: KnownChoice) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if let KnownChoice::Second = choice { mut second } else { 3 }
+}
+
+fn absorbing_and_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag && false { 3 } else { mut second }
+}
+
+fn absorbing_or_rebind(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag || true { mut second } else { 3 }
+}
+
+fn escape_normal_true_rebind(escape: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if {
+        if escape {
+            return
+        }
+        true
+    } {
+        mut second
+    } else {
+        3
+    }
+}
+
+fn literal_if_let_match_rebind() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if let true = true { mut second } else { 3 }
+}
+
+fn literal_if_let_miss_rebind() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if let false = true { 3 } else { mut second }
+}
+
+fn known_literal_match_rebind() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = match true {
+        true => mut second,
+        false => 3,
+    }
+}
+
+fn completing_short_circuit_write(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        false && abort()
+        3
+    }
+}
+
+fn completing_loop_write(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        while true {
+            break
+        }
+        3
+    }
+}
+
+fn mixed_live_write(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { 3 }
+}
+
+fn aggregate_write() {
+    let mut first = Cell { value: 1 }
+    let mut handle = CellHandle { target: mut first }
+    handle.target = Cell { value: 4 }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let store_shapes = |name: &str| {
+        let instance = top_mod
+            .all_items(&db)
+            .iter()
+            .find_map(|item| match item {
+                ItemKind::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|ident| ident.data(&db) == name) =>
+                {
+                    Some(get_or_build_semantic_instance(
+                        &db,
+                        identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+                    ))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{name} instance"));
+        let normalized = normalize_semantic_body(&db, instance).expect("normalized body");
+        check_semantic_borrows(&db, instance)
+            .unwrap_or_else(|diag| panic!("{name} should borrow-check: {diag:#?}"));
+        normalized
+            .blocks
+            .iter()
+            .flat_map(|block| &block.stmts)
+            .filter_map(|stmt| {
+                let NSStmtKind::Store { dst, src } = &stmt.kind else {
+                    return None;
+                };
+                Some((
+                    matches!(dst.root, NSPlaceRoot::Root(_)),
+                    matches!(dst.root, NSPlaceRoot::CarrierDerefLocal(_)),
+                    dst.path.len(),
+                    normalized
+                        .place_ty(&db, dst)
+                        .is_some_and(|ty| ty.as_capability(&db).is_some()),
+                    normalized
+                        .local(src.local)
+                        .is_some_and(|local| local.ty.as_capability(&db).is_some()),
+                ))
+            })
+            .collect::<Vec<_>>()
+    };
+
+    for name in [
+        "if_rebind",
+        "match_block_rebind",
+        "method_rebind",
+        "call_receiver_rebind",
+        "record_receiver_rebind",
+        "block_receiver_rebind",
+        "if_receiver_rebind",
+        "mutable_receiver_rebind",
+        "aggregate_wrapped_rebind",
+        "eager_prefix_rebind",
+        "forced_and_rebind",
+        "forced_or_rebind",
+        "constant_if_rebind",
+        "infinite_loop_rebind",
+        "assert_false_rebind",
+        "known_match_rebind",
+        "block_tail_condition_rebind",
+        "with_body_condition_rebind",
+        "nested_if_condition_rebind",
+        "irrefutable_if_let_rebind",
+        "known_if_let_match_rebind",
+        "known_if_let_miss_rebind",
+        "irrefutable_while_let_rebind",
+        "irrefutable_let_and_rebind",
+        "absorbing_and_rebind",
+        "absorbing_or_rebind",
+        "escape_normal_true_rebind",
+        "literal_if_let_match_rebind",
+        "literal_if_let_miss_rebind",
+        "known_literal_match_rebind",
+    ] {
+        let shapes = store_shapes(name);
+        assert!(
+            shapes
+                .iter()
+                .any(|shape| { shape.0 && !shape.1 && shape.2 == 1 && shape.3 && shape.4 }),
+            "{name} must store a carrier in the capability slot: {shapes:#?}",
+        );
+    }
+    for name in [
+        "mixed_live_write",
+        "aggregate_write",
+        "completing_short_circuit_write",
+        "completing_loop_write",
+        "dynamic_if_let_write",
+    ] {
+        let shapes = store_shapes(name);
+        assert!(
+            shapes
+                .iter()
+                .any(|shape| { !shape.0 && shape.1 && shape.2 == 0 && !shape.3 && !shape.4 }),
+            "{name} must remain a payload write through the carrier: {shapes:#?}",
+        );
+    }
+}
+
+#[test]
+fn divergent_capability_arms_rebind_borrow_provenance() {
+    let diags = borrow_diags(
+        r#"
+struct Handle {
+    target: mut u256,
+}
+
+enum Choice {
+    Second,
+    Abort,
+}
+
+struct Diverger {}
+
+struct NeverWrapper {
+    value: u256,
+}
+
+impl Diverger {
+    fn fail(self) -> ! {
+        core::panic()
+    }
+
+    fn fail_mut(mut self) -> ! {
+        core::panic()
+    }
+}
+
+fn make_diverger() -> Diverger {
+    Diverger {}
+}
+
+fn abort() -> ! {
+    core::panic()
+}
+
+fn if_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { abort() }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn match_probe(choice: Choice) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = match choice {
+        Choice::Second => { mut second }
+        Choice::Abort => {
+            abort()
+        }
+    }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn method_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    let diverger = Diverger {}
+    handle.target = if flag { mut second } else { diverger.fail() }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn call_receiver_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { make_diverger().fail() }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn record_receiver_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { (Diverger {}).fail() }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn block_receiver_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { ({ make_diverger() }).fail() }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn if_receiver_probe(flag: bool, choose_call: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        (if choose_call { make_diverger() } else { Diverger {} }).fail()
+    }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn mutable_receiver_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    let mut diverger = Diverger {}
+    handle.target = if flag { mut second } else { diverger.fail_mut() }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn aggregate_wrapped_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        NeverWrapper { value: abort() }
+    }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn eager_prefix_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        assert!(abort())
+        let fallback: u256 = 3
+        fallback
+    }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+"#,
+    );
+    for name in [
+        "if_probe",
+        "match_probe",
+        "method_probe",
+        "call_receiver_probe",
+        "record_receiver_probe",
+        "block_receiver_probe",
+        "if_receiver_probe",
+        "mutable_receiver_probe",
+        "aggregate_wrapped_probe",
+        "eager_prefix_probe",
+    ] {
+        assert!(
+            diags.contains(&format!("borrow conflict in `fn {name}`")),
+            "missing new-target conflict for {name}: {diags}",
+        );
+    }
+}
+
+#[test]
+fn statically_unreachable_payload_results_rebind_borrow_provenance() {
+    let diags = borrow_diags(
+        r#"
+struct Handle {
+    target: mut u256,
+}
+
+enum KnownChoice {
+    Second,
+    Payload,
+}
+
+fn abort() -> ! {
+    core::panic()
+}
+
+fn forced_and_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { true && abort() }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn forced_or_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { false || abort() }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn constant_if_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { if true { abort() } else { 3 } }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn infinite_loop_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        while true {}
+        3
+    }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn assert_false_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        assert!(false)
+        3
+    }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn known_match_probe() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = match KnownChoice::Second {
+        KnownChoice::Second => mut second,
+        KnownChoice::Payload => 3,
+    }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn block_tail_condition_probe() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if { true } { mut second } else { 3 }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn with_body_condition_probe() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let marker: bool = false
+    let mut handle = Handle { target: mut first }
+    handle.target = if with (marker) { true } { mut second } else { 3 }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn nested_if_condition_probe() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if (if true { true } else { false }) {
+        mut second
+    } else {
+        3
+    }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn irrefutable_if_let_probe() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let marker: u256 = 0
+    let mut handle = Handle { target: mut first }
+    handle.target = if let ignored = marker { mut second } else { 3 }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn known_if_let_match_probe() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if let KnownChoice::Second = KnownChoice::Second {
+        mut second
+    } else {
+        3
+    }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn known_if_let_miss_probe() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if let KnownChoice::Payload = KnownChoice::Second {
+        3
+    } else {
+        mut second
+    }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn irrefutable_while_let_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let marker: u256 = 0
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        while let ignored = marker {}
+        3
+    }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn irrefutable_let_and_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let marker: u256 = 0
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag {
+        mut second
+    } else {
+        if let ignored = marker && abort() { 3 } else { 4 }
+    }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn absorbing_and_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag && false { 3 } else { mut second }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn absorbing_or_probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag || true { mut second } else { 3 }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn escape_normal_true_probe(escape: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if {
+        if escape {
+            return
+        }
+        true
+    } {
+        mut second
+    } else {
+        3
+    }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn literal_if_let_match_probe() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if let true = true { mut second } else { 3 }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn literal_if_let_miss_probe() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if let false = true { 3 } else { mut second }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+
+fn known_literal_match_probe() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = match true {
+        true => mut second,
+        false => 3,
+    }
+    let rebound = handle.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+"#,
+    );
+    for name in [
+        "forced_and_probe",
+        "forced_or_probe",
+        "constant_if_probe",
+        "infinite_loop_probe",
+        "assert_false_probe",
+        "known_match_probe",
+        "block_tail_condition_probe",
+        "with_body_condition_probe",
+        "nested_if_condition_probe",
+        "irrefutable_if_let_probe",
+        "known_if_let_match_probe",
+        "known_if_let_miss_probe",
+        "irrefutable_while_let_probe",
+        "irrefutable_let_and_probe",
+        "absorbing_and_probe",
+        "absorbing_or_probe",
+        "escape_normal_true_probe",
+        "literal_if_let_match_probe",
+        "literal_if_let_miss_probe",
+        "known_literal_match_probe",
+    ] {
+        assert!(
+            diags.contains(&format!("borrow conflict in `fn {name}`")),
+            "missing new-target conflict for {name}: {diags}",
+        );
+    }
+}
+
+#[test]
+fn live_mixed_capability_and_payload_arms_keep_old_borrow_provenance() {
+    let diags = borrow_diags(
+        r#"
+struct Handle {
+    target: mut u256,
+}
+
+fn probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { 3 }
+    let stored = handle.target
+    let alias = mut first
+    alias = 4
+    stored = 5
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn dynamic_refutable_if_let_keeps_old_borrow_provenance() {
+    let diags = borrow_diags(
+        r#"
+struct Handle {
+    target: mut u256,
+}
+
+enum Choice {
+    Second,
+    Payload,
+}
+
+fn probe(choice: Choice) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if let Choice::Second = choice { mut second } else { 3 }
+    let stored = handle.target
+    let alias = mut first
+    alias = 4
+    stored = 5
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn temporary_receiver_divergent_rebind_releases_old_borrow_provenance() {
+    let diags = borrow_diags(
+        r#"
+struct Handle {
+    target: mut u256,
+}
+
+struct Diverger {}
+
+impl Diverger {
+    fn fail(self) -> ! {
+        core::panic()
+    }
+}
+
+fn make_diverger() -> Diverger {
+    Diverger {}
+}
+
+fn probe(flag: bool) {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = if flag { mut second } else { make_diverger().fail() }
+    let rebound = handle.target
+    let old = mut first
+    old = 3
+    rebound = 4
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn nested_capability_field_rebind_tracks_the_new_target() {
+    let diags = borrow_diags(
+        r#"
+struct Handle {
+    target: mut u256,
+}
+
+struct NestedHandle {
+    target: mut Handle,
+}
+
+fn probe() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut inner = Handle { target: mut first }
+    let outer = NestedHandle { target: mut inner }
+
+    outer.target.target = mut second
+    let rebound = outer.target.target
+    let alias = mut second
+    alias = 3
+    rebound = 4
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn nested_capability_field_rebind_releases_the_old_target() {
+    let diags = borrow_diags(
+        r#"
+struct Handle {
+    target: mut u256,
+}
+
+struct NestedHandle {
+    target: mut Handle,
+}
+
+fn probe() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut inner = Handle { target: mut first }
+    let outer = NestedHandle { target: mut inner }
+
+    outer.target.target = mut second
+    let rebound = outer.target.target
+    let old = mut first
+    old = 3
+    rebound = 4
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn nested_capability_field_without_rebind_retains_the_original_target() {
+    let diags = borrow_diags(
+        r#"
+struct Handle {
+    target: mut u256,
+}
+
+struct NestedHandle {
+    target: mut Handle,
+}
+
+fn probe() {
+    let mut first: u256 = 1
+    let mut inner = Handle { target: mut first }
+    let outer = NestedHandle { target: mut inner }
+
+    let stored = outer.target.target
+    let alias = mut first
+    alias = 3
+    stored = 4
+}
+"#,
+    );
+    assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
 fn contract_field_mut_borrow_matrix_fixture_borrowchecks() {
     for_each_fixture_instance(
         include_str!("../../fe/tests/fixtures/fe_test/contract_field_mut_borrow_matrix.fe"),
@@ -2414,33 +5189,65 @@ pub contract C {
 }
 
 #[test]
-fn invalid_closure_effect_does_not_reach_borrow_lowering() {
-    let direct_effect = r#"
+fn closures_can_capture_effect_bindings_and_forward_them_to_effectful_calls() {
+    let direct_mutation = r#"
 fn probe() uses (target: mut u256) {
-    let invalid = || {
-        let borrowed = mut target
+    let update = || {
+        target += 1
     }
 }
 "#;
-    let effectful_call = r#"
+    let direct_read = r#"
+fn probe() uses (target: u256) {
+    let read = || target
+}
+"#;
+    let immutable_effectful_call = r#"
 fn read() -> u256 uses (target: u256) {
     target
 }
 
 fn probe() uses (target: u256) {
-    let invalid = || read()
+    let read_target = || read()
+}
+"#;
+    let mutable_effectful_call = r#"
+fn increment() uses (target: mut u256) {
+    target += 1
+}
+
+fn probe() uses (target: mut u256) {
+    let update = || increment()
+}
+"#;
+    let projected_effectful_call = r#"
+struct Pair {
+    value: u256,
+}
+
+fn increment() uses (target: mut u256) {
+    target += 1
+}
+
+fn probe() uses (pair: mut Pair) {
+    with (mut pair.value) {
+        let update = || increment()
+    }
 }
 "#;
 
-    for src in [direct_effect, effectful_call] {
+    for src in [
+        direct_mutation,
+        direct_read,
+        immutable_effectful_call,
+        mutable_effectful_call,
+        projected_effectful_call,
+    ] {
+        let diags = analysis_diags(src);
+        assert!(diags.is_empty(), "{diags:?}");
+
         let borrow_diags = borrow_diags(src);
         assert!(borrow_diags.is_empty(), "{borrow_diags:?}");
-
-        let diags = analysis_diags(src);
-        assert!(
-            diags.contains("effects cannot be used inside a closure"),
-            "{diags:?}"
-        );
     }
 }
 
@@ -2688,6 +5495,10 @@ fn mixed_returned_borrow_provenance_poison_normalization() {
     assert_eq!(
         err.primary.message,
         "effect argument may come from multiple address spaces: memory, storage"
+    );
+    assert!(
+        !instance.known_never_returns(&db),
+        "normalization failure must conservatively preserve a possible normal return"
     );
 }
 
@@ -6944,7 +9755,7 @@ fn probe() {
 }
 
 #[test]
-fn inferred_noncopy_view_control_flow_join_cannot_return_a_temporary_view() {
+fn inferred_noncopy_view_known_control_flow_ignores_unreachable_temporary_views() {
     for body in [
         "if true { value } else { Boxed { value: 0 } }",
         "match true { true => value, false => Boxed { value: 0 } }",
@@ -6958,6 +9769,28 @@ struct Boxed {{
 fn probe() {{
     let branch = |value| {body}
     branch.call(Boxed {{ value: 42 }})
+}}
+"#,
+        ));
+        assert!(diags.is_empty(), "{body}: {diags}");
+    }
+}
+
+#[test]
+fn inferred_noncopy_view_dynamic_control_flow_cannot_return_a_temporary_view() {
+    for body in [
+        "if flag { value } else { Boxed { value: 0 } }",
+        "match flag { true => value, false => Boxed { value: 0 } }",
+    ] {
+        let diags = borrow_diags(&format!(
+            r#"
+struct Boxed {{
+    value: u256,
+}}
+
+fn probe(_ flag: bool) {{
+    let branch = |value, flag: own| {body}
+    branch.call(Boxed {{ value: 42 }}, flag)
 }}
 "#,
         ));
@@ -7638,6 +10471,29 @@ fn probe() {
 }
 
 #[test]
+fn capability_rebind_diagnostic_does_not_suggest_an_invalid_mutable_binding() {
+    let diags = analysis_diags(
+        r#"
+fn probe() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let target: mut u256 = mut first
+    target = mut second
+}
+"#,
+    );
+    assert!(
+        diags.contains("the capability handle `target` cannot be rebound"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("handle bindings stay attached to their original borrow provider"),
+        "{diags}"
+    );
+    assert!(!diags.contains("try changing to `mut target`"), "{diags}");
+}
+
+#[test]
 fn array_element_capabilities_determine_projection_mutability() {
     let mutable_diags = analysis_diags(
         r#"
@@ -7764,6 +10620,291 @@ fn probe(_ flag: bool) {
 "#,
     );
     assert!(diags.contains("borrow conflict in `fn probe`"), "{diags}");
+}
+
+#[test]
+fn closure_mixed_fresh_and_forwarded_aggregate_returns_retain_borrow_sources() {
+    let cases = [
+        (
+            "empty enum variant",
+            r#"
+use core::option::Option::{self, Some}
+
+fn probe(_ flag: bool) {
+    let maybe = |target: mut u256, flag: own bool| -> Option<mut u256> {
+        if flag {
+            Some(target)
+        } else {
+            Option::None
+        }
+    }
+    let mut value = 0
+    let held = maybe.call(mut value, flag)
+    let conflicting = mut value
+    if let Some(mut returned) = held {
+        returned = 1
+    }
+    conflicting = 2
+}
+"#,
+        ),
+        (
+            "forwarded local initialized by control flow",
+            r#"
+use core::option::Option::{self, Some}
+
+fn probe(_ flag: bool) {
+    let maybe = |target: mut u256, flag: own bool| -> Option<mut u256> {
+        let result = if flag {
+            Some(target)
+        } else {
+            Option::None
+        }
+        result
+    }
+    let mut value = 0
+    let held = maybe.call(mut value, flag)
+    let conflicting = mut value
+    if let Some(mut returned) = held {
+        returned = 1
+    }
+    conflicting = 2
+}
+"#,
+        ),
+        (
+            "mutable local replaced with a fresh variant",
+            r#"
+use core::option::Option::{self, Some}
+
+fn probe(_ flag: bool) {
+    let maybe = |target: mut u256, flag: own bool| -> Option<mut u256> {
+        let mut result = Some(target)
+        if flag {
+            result = Option::None
+        }
+        result
+    }
+    let mut value = 0
+    let held = maybe.call(mut value, flag)
+    let conflicting = mut value
+    if let Some(mut returned) = held {
+        returned = 1
+    }
+    conflicting = 2
+}
+"#,
+        ),
+        (
+            "fresh mutable local replaced with a forwarded variant",
+            r#"
+use core::option::Option::{self, Some}
+
+fn probe(_ flag: bool) {
+    let maybe = |target: mut u256, flag: own bool| -> Option<mut u256> {
+        let mut result = Option::None
+        if flag {
+            result = Some(target)
+        }
+        result
+    }
+    let mut value = 0
+    let held = maybe.call(mut value, flag)
+    let conflicting = mut value
+    if let Some(mut returned) = held {
+        returned = 1
+    }
+    conflicting = 2
+}
+"#,
+        ),
+        (
+            "match arm",
+            r#"
+use core::option::Option::{self, Some}
+
+fn probe(_ flag: bool) {
+    let maybe = |target: mut u256, flag: own bool| -> Option<mut u256> {
+        match flag {
+            true => Some(target),
+            false => Option::None,
+        }
+    }
+    let mut value = 0
+    let held = maybe.call(mut value, flag)
+    let conflicting = mut value
+    if let Some(mut returned) = held {
+        returned = 1
+    }
+    conflicting = 2
+}
+"#,
+        ),
+        (
+            "fresh helper callee",
+            r#"
+use core::option::Option::{self, Some}
+
+fn maybe(_ target: mut u256, _ flag: bool) -> Option<mut u256> {
+    if flag {
+        Some(target)
+    } else {
+        Option::None
+    }
+}
+
+fn probe(_ flag: bool) {
+    let indirect = |target: mut u256, flag: own bool| -> Option<mut u256> {
+        maybe(target, flag)
+    }
+    let mut value = 0
+    let held = indirect.call(mut value, flag)
+    let conflicting = mut value
+    if let Some(mut returned) = held {
+        returned = 1
+    }
+    conflicting = 2
+}
+"#,
+        ),
+        (
+            "same enum variant with fresh storage",
+            r#"
+use core::option::Option::Some
+
+fn probe(_ flag: bool) {
+    let choose = |mut owned: own u256, target: mut u256, flag: own bool|
+        -> Option<mut u256>
+    {
+        if flag {
+            Some(target)
+        } else {
+            Some(mut owned)
+        }
+    }
+    let mut value = 0
+    let held = choose.call(0, mut value, flag)
+    let conflicting = mut value
+    if let Some(mut returned) = held {
+        returned = 1
+    }
+    conflicting = 2
+}
+"#,
+        ),
+        (
+            "struct field with fresh storage",
+            r#"
+struct Borrowed {
+    value: mut u256,
+}
+
+fn probe(_ flag: bool) {
+    let choose = |mut owned: own u256, target: mut u256, flag: own bool| -> Borrowed {
+        if flag {
+            Borrowed { value: target }
+        } else {
+            Borrowed { value: mut owned }
+        }
+    }
+    let mut value = 0
+    let held = choose.call(0, mut value, flag)
+    let conflicting = mut value
+    held.value = 1
+    conflicting = 2
+}
+"#,
+        ),
+        (
+            "dynamic and constant projections for one borrow slot",
+            r#"
+use core::option::Option::Some
+
+fn probe(_ index: usize, _ flag: bool) {
+    let choose = |items: view [mut u256; 2], index: own usize, flag: own bool|
+        -> Option<mut u256>
+    {
+        if flag {
+            Some(items[index])
+        } else {
+            Some(items[0])
+        }
+    }
+    let mut left = 0
+    let mut right = 0
+    let handles: [mut u256; 2] = [mut left, mut right]
+    let held = choose.call(handles, index, flag)
+    let conflicting = mut right
+    if let Some(mut returned) = held {
+        returned = 1
+    }
+    conflicting = 2
+}
+"#,
+        ),
+        (
+            "unreplayable mutable index",
+            r#"
+use core::option::Option::{self, Some}
+
+fn probe(_ index: usize, _ flag: bool) {
+    let choose = |items: view [mut u256; 2], mut index: own usize, flag: own bool|
+        -> Option<mut u256>
+    {
+        index = 1
+        if flag {
+            Some(items[index])
+        } else {
+            Option::None
+        }
+    }
+    let mut left = 0
+    let mut right = 0
+    let handles: [mut u256; 2] = [mut left, mut right]
+    let held = choose.call(handles, index, flag)
+    let conflicting = mut right
+    if let Some(mut returned) = held {
+        returned = 1
+    }
+    conflicting = 2
+}
+"#,
+        ),
+        (
+            "returned closure carrying a borrow",
+            r#"
+use core::option::Option::{self, Some}
+use core::functional::Fn
+
+fn probe(_ flag: bool) {
+    let make = |target: mut u256, flag: own bool| {
+        let get = || -> mut u256 { target }
+        if flag {
+            Some(get)
+        } else {
+            Option::None
+        }
+    }
+    let mut value = 0
+    let held = make.call(mut value, flag)
+    let conflicting = mut value
+    if let Some(get) = held {
+        let returned = get.call()
+        returned = 1
+    }
+    conflicting = 2
+}
+"#,
+        ),
+    ];
+
+    for (name, src) in cases {
+        let diags = borrow_diags(src);
+        assert!(
+            diags.contains("borrow conflict in `fn probe`"),
+            "{name}: {diags}"
+        );
+    }
 }
 
 #[test]
