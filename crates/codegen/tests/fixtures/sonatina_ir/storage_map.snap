@@ -185,7 +185,7 @@ func private %encode(v0.i256, v1.objref<@layout_0>) {
         jump block1;
 
     block1:
-        call %write_word v1 v0;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_ec9b v1 v0;
         return;
 }
 
@@ -201,7 +201,7 @@ func private %encode_field(v0.i256, v1.objref<@layout_0>, v2.i256) {
         v8.i256 = call %payload_size v0;
         v9.i256 = mload v2 i256;
         v10.i256 = sub v9 v5;
-        call %write_word v1 v10;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_6fcb v1 v10;
         v12.i256 = call %pos v1;
         v13.i256 = mload v2 i256;
         call %set_base v1 v13;
@@ -528,7 +528,7 @@ func inline(always) private %storagemap_get_word_with_salt(v0.i256, v1.i256) -> 
         jump block1;
 
     block1:
-        v4.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_3954_0 v0 v1;
+        v4.i256 = call %storagemap_storage_slot_with_salt v0 v1;
         v5.i256 = evm_sload v4;
         return v5;
 }
@@ -538,38 +538,12 @@ func inline(always) private %storagemap_set_word_with_salt(v0.i256, v1.i256, v2.
         jump block1;
 
     block1:
-        v5.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_3954 v0 v1;
+        v5.i256 = call %storagemap_storage_slot_with_salt v0 v1;
         evm_sstore v5 v2;
         return;
 }
 
-func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_3954(v0.i256, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.*i8 = evm_malloc 0.i256;
-        v4.i256 = ptr_to_int v3 i256;
-        v6.i256 = call %write_key v4 v0;
-        (v7.i256, v8.i1) = uaddo v4 v6;
-        br v8 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        mstore v7 v1 i256;
-        (v17.i256, v18.i1) = uaddo v6 32.i256;
-        br v18 block2 block4;
-
-    block4:
-        v20.i256 = evm_keccak256 v4 v17;
-        return v20;
-}
-
-func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_3954_0(v0.i256, v1.i256) -> i256 {
+func inline(always) private %storagemap_storage_slot_with_salt(v0.i256, v1.i256) -> i256 {
     block0:
         jump block1;
 
@@ -614,22 +588,19 @@ func private %to_word(v0.i256) -> i256 {
 
 func inline(always) private %validate_runtime_head(v0.i256, v1.i256, v2.i256) {
     block0:
-        v3.*i256 = alloca i256;
         jump block1;
 
     block1:
-        v6.i1 = eq v2 0.i256;
-        v7.i1 = is_zero v6;
-        br v7 block2 block3;
+        v5.i1 = eq v2 0.i256;
+        v6.i1 = is_zero v5;
+        br v6 block2 block3;
 
     block2:
-        v10.i256 = sub v0 v1;
-        v11.i256 = call %impl_trait_i256__from_word v10;
-        v13.i256 = call %impl_trait_i256__from_word v2;
-        mstore v3 v13 i256;
-        v14.i256 = mload v3 i256;
-        v15.i1 = slt v11 v14;
-        br v15 block5 block6;
+        v9.i256 = sub v0 v1;
+        v10.i256 = call %impl_trait_i256__from_word v9;
+        v12.i256 = call %impl_trait_i256__from_word v2;
+        v13.i1 = slt v10 v12;
+        br v13 block5 block6;
 
     block3:
         jump block4;
@@ -656,7 +627,21 @@ func inline(always) private %write_key(v0.i256, v1.i256) -> i256 {
         return 32.i256;
 }
 
-func private %write_word(v0.objref<@layout_0>, v1.i256) {
+func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_6fcb(v0.objref<@layout_0>, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v4.objref<i256> = obj.proj v0 1.i256;
+        v5.i256 = obj.load v4;
+        mstore v5 v1 i256;
+        v9.i256 = add v5 32.i256;
+        v10.objref<i256> = obj.proj v0 1.i256;
+        obj.store v10 v9;
+        return;
+}
+
+func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_ec9b(v0.objref<@layout_0>, v1.i256) {
     block0:
         jump block1;
 
