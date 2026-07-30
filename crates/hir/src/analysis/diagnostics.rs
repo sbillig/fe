@@ -12,9 +12,9 @@ use crate::analysis::{
     ty::{
         ProviderAddressSpace,
         diagnostics::{
-            BodyDiag, CallConstraintDiagInfo, ContractFieldLayoutIssue, DefConflictError,
-            FuncBodyDiag, ImplDiag, MustUseSubject, ReturnTypeContext, TraitConstraintDiag,
-            TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+            BodyDiag, CallArgDefinition, CallConstraintDiagInfo, ContractFieldLayoutIssue,
+            DefConflictError, FuncBodyDiag, ImplDiag, MustUseSubject, ReturnTypeContext,
+            TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
@@ -859,6 +859,7 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 primary,
                 method_name,
                 receiver,
+                callable_field,
             } => {
                 let (recv_name, recv_ty, recv_kind) = match receiver {
                     Either::Left(ty) => (
@@ -879,6 +880,23 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 if let Some(ty) = recv_ty
                     && let Some(field_ty) = RecordLike::Type(*ty).record_field_ty(db, *method_name)
                 {
+                    let notes = callable_field
+                        .as_ref()
+                        .and_then(|hint| {
+                            let span = hint.receiver.resolve(db)?;
+                            let text = span.file.text(db);
+                            let start = usize::from(span.range.start());
+                            let end = usize::from(span.range.end());
+                            let receiver = text.get(start..end)?.trim();
+                            (!receiver.is_empty() && !receiver.contains('\n')).then(|| {
+                                let args = if hint.arg_count == 0 { "()" } else { "(...)" };
+                                format!(
+                                    "to call the value stored in this field, parenthesize the field access: `({receiver}.{method_str}){args}`"
+                                )
+                            })
+                        })
+                        .into_iter()
+                        .collect();
                     return CompleteDiagnostic {
                         severity: Severity::Error,
                         message,
@@ -892,7 +910,7 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                             ),
                             span: primary.resolve(db),
                         }],
-                        notes: vec![],
+                        notes,
                         error_code,
                     };
                 }
@@ -4081,27 +4099,46 @@ impl DiagnosticVoucher for BodyDiag<'_> {
 
             Self::CallArgNumMismatch {
                 primary,
-                def_span,
+                definition,
                 given,
                 expected,
-            } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "argument number mismatch".to_string(),
-                sub_diagnostics: vec![
-                    SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!("expected {expected} arguments, but {given} given"),
-                        span: primary.resolve(db),
-                    },
-                    SubDiagnostic {
-                        style: LabelStyle::Secondary,
-                        message: "function defined here".to_string(),
-                        span: def_span.resolve(db),
-                    },
-                ],
-                notes: vec![],
-                error_code,
-            },
+            } => {
+                let (message, definition_message, definition_span, notes) = match definition {
+                    CallArgDefinition::Function(def_span) => (
+                        "argument number mismatch".to_string(),
+                        "function defined here".to_string(),
+                        def_span.resolve(db),
+                        vec![],
+                    ),
+                    CallArgDefinition::Closure(closure) => {
+                        let def = closure.def(db);
+                        (
+                            "closure argument number mismatch".to_string(),
+                            "closure defined here".to_string(),
+                            def.expr.span(def.body).resolve(db),
+                            vec![format!("closure signature is `{}`", closure.pretty_print(db))],
+                        )
+                    }
+                };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message,
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("expected {expected} arguments, but {given} given"),
+                            span: primary.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: definition_message,
+                            span: definition_span,
+                        },
+                    ],
+                    notes,
+                    error_code,
+                }
+            }
 
             Self::CallArgsMustBeTuple { primary, args_ty } => CompleteDiagnostic {
                 severity: Severity::Error,

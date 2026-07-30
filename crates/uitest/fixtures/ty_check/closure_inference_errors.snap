@@ -49,10 +49,10 @@ error[6-0003]: trait bound is not satisfied
    │     ^^^^^^^^^^^ `|view u256| -> u256` doesn't implement `Fn<(u256, u256), u256>`
 
 error[8-0000]: type mismatch
-   ┌─ closure_inference_errors.fe:39:19
+   ┌─ closure_inference_errors.fe:39:14
    │
-39 │     identity.call(true)
-   │                   ^^^^ expected `u256`, but `bool` is given
+39 │     identity(true)
+   │              ^^^^ expected `u256`, but `bool` is given
 
 error[8-0031]: type annotation is needed
    ┌─ closure_inference_errors.fe:33:9
@@ -70,10 +70,10 @@ error[8-0092]: closure parameter number mismatch
    │                 ^^^^^^^ this context expects 2 closure parameters, but 1 given
 
 error[8-0093]: `Fn` arguments must be a tuple
-   ┌─ closure_inference_errors.fe:10:14
+   ┌─ closure_inference_errors.fe:10:9
    │
-10 │     func.call(1)
-   │              ^^^ the callable uses `u256` as its argument pack
+10 │     func(1)
+   │         ^^^ the callable uses `u256` as its argument pack
    │
    = use `()` for zero parameters, `(T,)` for one parameter, or `(T, U, ...)` for multiple parameters
 

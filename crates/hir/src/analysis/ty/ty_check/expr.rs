@@ -17,14 +17,15 @@ use crate::{
 use super::{
     BodyOwner, ClosureCapture, ClosureCaptureAccess, ClosureCaptureConstruction,
     CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, PatternLayoutContext, PendingPlaceCheck,
-    RecordLike, Typeable, ValueAccess, ValuePathRef,
+    RecordLike, SemanticExprLowering, Typeable, ValueAccess, ValuePathRef,
     effect_env::{
         FamilyKeyedEntry, FrameLookupResult, MatchedForwarder, MatchedKeyedEntry, MatchedWitness,
     },
     env::{
         ClosureInfo, EffectOrigin, EffectParamSite, ExprProp, LateClosureCaptureContribution,
-        LocalBinding, ParamSite, PendingCast, PendingField, PendingMethodLookup,
-        PendingPrimitiveOp, ProvidedEffect, TraitObligation, TraitObligationOrigin, TyCheckEnv,
+        LocalBinding, ParamSite, PendingCallableLookup, PendingCast, PendingField,
+        PendingMethodLookup, PendingPrimitiveOp, ProvidedEffect, TraitObligation,
+        TraitObligationOrigin, TyCheckEnv,
     },
     path::ResolvedPathInBody,
     ty_may_be_code_region_token,
@@ -91,9 +92,11 @@ use crate::analysis::{
     name_resolution::{
         EarlyNameQueryId, ExpectedPathKind, NameDomain, NameResBucket, NameResolutionError,
         PathRes, QueryDirective,
-        diagnostics::PathResDiag,
+        diagnostics::{CallableFieldCallHint, PathResDiag},
         is_scope_visible_from,
-        method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate},
+        method_selection::{
+            MethodCandidate, MethodSelectionError, TraitMethodCand, select_method_candidate,
+        },
         resolve_name_res_with_minter, resolve_query,
     },
     place::resolve_place_field_index,
@@ -144,6 +147,14 @@ enum TraitImplementorSelection<'db> {
     Unique(ImplementorOrigin<'db>),
     Ambiguous(FxHashSet<ImplementorOrigin<'db>>),
 }
+
+type CallableValueSelectionError<'db> = (IdentId<'db>, TyId<'db>, MethodSelectionError<'db>);
+type CallableValueSelection<'db> = (
+    TyId<'db>,
+    Canonicalized<'db, TyId<'db>>,
+    MethodCandidate<'db>,
+);
+type PendingCallableValueSelection<'db> = (TyId<'db>, Vec<super::env::PendingMethodCandidate<'db>>);
 
 impl ClosureReplayOutcome {
     fn include(&mut self, other: Self) {
@@ -1299,11 +1310,18 @@ impl<'db> TyChecker<'db> {
                 }
             }
             Expr::Call(callee, args) => {
+                let callee_is_receiver = matches!(
+                    self.env.semantic_expr_lowering(expr),
+                    Some(SemanticExprLowering::Call {
+                        callee_is_receiver: true,
+                        ..
+                    })
+                );
                 outcome = self.replay_typed_call_with_closure_type_expectations(
                     expr,
                     expected,
-                    Some(*callee),
-                    None,
+                    (!callee_is_receiver).then_some(*callee),
+                    callee_is_receiver.then_some(*callee),
                     args,
                     access_updates,
                 );
@@ -3442,7 +3460,7 @@ impl<'db> TyChecker<'db> {
             return PendingPrimitiveOpResolution::Done;
         }
         let (selected_receiver_ty, canonical_r_ty, candidate) =
-            self.select_method_call_candidate(*receiver, &receiver_prop, pending.method_name);
+            self.select_method_call_candidate(*receiver, &receiver_prop, pending.method_name, None);
         let candidate = match candidate {
             Ok(candidate) => candidate,
             Err(MethodSelectionError::ReceiverTypeMustBeKnown) => {
@@ -3461,6 +3479,7 @@ impl<'db> TyChecker<'db> {
                             inst,
                             method: candidate.cand.method,
                             needs_confirmation: candidate.needs_confirmation,
+                            priority: 0,
                         }
                     })
                     .collect();
@@ -3470,6 +3489,7 @@ impl<'db> TyChecker<'db> {
                     method_name: pending.method_name,
                     candidates,
                     span: pending.span.clone(),
+                    callee_is_receiver: false,
                 });
                 return PendingPrimitiveOpResolution::Resolved;
             }
@@ -3531,6 +3551,157 @@ impl<'db> TyChecker<'db> {
         }
         if let Some(callable) = self.env.callable_expr(pending.expr).cloned() {
             callable.process_constraints(self, pending.expr, pending.span.clone());
+        }
+        PendingPrimitiveOpResolution::Resolved
+    }
+
+    pub(super) fn resolve_pending_callable_lookup(
+        &mut self,
+        pending: PendingCallableLookup,
+    ) -> PendingPrimitiveOpResolution {
+        self.resolve_pending_callable_lookup_inner(pending, true)
+    }
+
+    fn resolve_pending_callable_lookup_inner(
+        &mut self,
+        pending: PendingCallableLookup,
+        allow_contextual_replay: bool,
+    ) -> PendingPrimitiveOpResolution {
+        if self.env.callable_expr(pending.expr).is_some() {
+            return PendingPrimitiveOpResolution::Done;
+        }
+        let Partial::Present(Expr::Call(callee, args)) = pending.expr.data(self.db, self.body())
+        else {
+            return PendingPrimitiveOpResolution::Done;
+        };
+        let Some(expr_prop) = self.env.typed_expr(pending.expr) else {
+            return PendingPrimitiveOpResolution::Done;
+        };
+        let Some(mut callee_prop) = self.env.typed_expr(*callee) else {
+            return PendingPrimitiveOpResolution::Done;
+        };
+        callee_prop.ty = {
+            let mut prober = super::env::Prober::new(&mut self.table, self.env.scope());
+            callee_prop.ty.fold_with(self.db, &mut prober)
+        };
+        if callee_prop.ty.has_invalid(self.db) {
+            return PendingPrimitiveOpResolution::Done;
+        }
+        if !callee_prop.ty.has_var(self.db)
+            && callee_prop
+                .ty
+                .base_ty(self.db)
+                .as_closure(self.db)
+                .is_none()
+        {
+            let resolved =
+                self.defer_callable_value_call(pending.expr, *callee, args, callee_prop, true);
+            return if resolved.ty.has_invalid(self.db) {
+                PendingPrimitiveOpResolution::Done
+            } else {
+                PendingPrimitiveOpResolution::Resolved
+            };
+        }
+
+        let selection = match self.select_callable_value_candidate(*callee, &callee_prop) {
+            Ok(Some(selection)) => selection,
+            Ok(None) if callee_prop.ty.has_var(self.db) => {
+                return PendingPrimitiveOpResolution::Pending;
+            }
+            Ok(None) => {
+                self.push_diag(BodyDiag::NotCallable(
+                    callee.span(self.body()).into(),
+                    callee_prop.ty,
+                ));
+                self.env.type_expr(pending.expr, ExprProp::invalid(self.db));
+                return PendingPrimitiveOpResolution::Done;
+            }
+            Err((_, _, MethodSelectionError::ReceiverTypeMustBeKnown)) => {
+                return PendingPrimitiveOpResolution::Pending;
+            }
+            Err((method_name, selected_receiver_ty, err)) => {
+                self.push_diag(body_diag_from_method_selection_err(
+                    self.db,
+                    err,
+                    Spanned::new(selected_receiver_ty, callee.span(self.body()).into()),
+                    Spanned::new(
+                        method_name,
+                        pending
+                            .expr
+                            .span(self.body())
+                            .into_call_expr()
+                            .callee()
+                            .into(),
+                    ),
+                ));
+                self.env.type_expr(pending.expr, ExprProp::invalid(self.db));
+                return PendingPrimitiveOpResolution::Done;
+            }
+        };
+
+        let transaction = (allow_contextual_replay
+            && self
+                .env
+                .deferred_closure_replay_context(pending.expr)
+                .is_some())
+        .then(|| self.snapshot_closure_replay_transaction());
+        let (selected_receiver_ty, canonical_r_ty, candidate) = selection;
+        let resolved = self.check_selected_callable_value_call(
+            pending.expr,
+            *callee,
+            args,
+            callee_prop,
+            selected_receiver_ty,
+            canonical_r_ty,
+            candidate,
+            expr_prop.ty,
+            true,
+        );
+        if let Some(transaction) = transaction {
+            let (resolved, replay_satisfied) =
+                self.replay_deferred_expr_with_closure_context(pending.expr, resolved);
+            if replay_satisfied
+                && !resolved.ty.has_invalid(self.db)
+                && self.reconcile_deferred_expr_prop(pending.expr, expr_prop, resolved)
+            {
+                if let Some(callable) = self.env.callable_expr(pending.expr).cloned() {
+                    callable.process_constraints(
+                        self,
+                        pending.expr,
+                        pending
+                            .expr
+                            .span(self.body())
+                            .into_call_expr()
+                            .callee()
+                            .into(),
+                    );
+                }
+                self.env
+                    .consume_deferred_closure_replay_context(pending.expr);
+                self.commit_closure_replay_transaction(transaction);
+                return PendingPrimitiveOpResolution::Resolved;
+            }
+            self.rollback_closure_replay_transaction(transaction);
+            let outcome = self.resolve_pending_callable_lookup_inner(pending, false);
+            return self.clear_terminal_deferred_closure_replay_context(pending.expr, outcome);
+        }
+
+        if resolved.ty.has_invalid(self.db)
+            || !self.reconcile_deferred_expr_prop(pending.expr, expr_prop, resolved)
+        {
+            return PendingPrimitiveOpResolution::Done;
+        }
+        if let Some(callable) = self.env.callable_expr(pending.expr).cloned() {
+            callable.process_constraints(
+                self,
+                pending.expr,
+                pending
+                    .expr
+                    .span(self.body())
+                    .into_call_expr()
+                    .callee()
+                    .into(),
+            );
         }
         PendingPrimitiveOpResolution::Resolved
     }
@@ -4243,9 +4414,14 @@ impl<'db> TyChecker<'db> {
                 None,
             ) {
                 Ok(callable) => callable,
-                Err(diag) => {
-                    self.push_diag(diag);
-                    return ExprProp::invalid(self.db);
+                Err(_) => {
+                    return self.check_callable_value_call(
+                        expr,
+                        *callee,
+                        args,
+                        callee_prop,
+                        expected,
+                    );
                 }
             }
         };
@@ -4298,6 +4474,354 @@ impl<'db> TyChecker<'db> {
             }
         }
         result
+    }
+
+    fn check_callable_value_call(
+        &mut self,
+        expr: ExprId,
+        callee: ExprId,
+        args: &[HirCallArg<'db>],
+        callee_prop: ExprProp<'db>,
+        expected: TyId<'db>,
+    ) -> ExprProp<'db> {
+        let call_span = expr.span(self.body()).into_call_expr();
+        if self
+            .normalize_ty(callee_prop.ty)
+            .base_ty(self.db)
+            .as_closure(self.db)
+            .is_none()
+        {
+            return self.defer_callable_value_call(expr, callee, args, callee_prop, false);
+        }
+        let selection = match self.select_callable_value_candidate(callee, &callee_prop) {
+            Ok(selection) => selection,
+            Err((_, _, MethodSelectionError::ReceiverTypeMustBeKnown)) => {
+                let ret_ty = self.fresh_ty();
+                let typed = ExprProp::new(ret_ty, true);
+                self.env.type_expr(expr, typed.clone());
+                self.constrain_pending_direct_closure_call(&callee_prop, args, expected);
+                self.env
+                    .register_pending_callable_lookup(PendingCallableLookup { expr });
+                return typed;
+            }
+            Err((method_name, selected_receiver_ty, err)) => {
+                let diag = body_diag_from_method_selection_err(
+                    self.db,
+                    err,
+                    Spanned::new(selected_receiver_ty, callee.span(self.body()).into()),
+                    Spanned::new(method_name, call_span.clone().callee().into()),
+                );
+                self.push_diag(diag);
+                return ExprProp::invalid(self.db);
+            }
+        };
+
+        let Some((selected_receiver_ty, canonical_r_ty, candidate)) = selection else {
+            self.push_diag(BodyDiag::NotCallable(
+                callee.span(self.body()).into(),
+                callee_prop.ty,
+            ));
+            return ExprProp::invalid(self.db);
+        };
+
+        self.check_selected_callable_value_call(
+            expr,
+            callee,
+            args,
+            callee_prop,
+            selected_receiver_ty,
+            canonical_r_ty,
+            candidate,
+            expected,
+            false,
+        )
+    }
+
+    fn defer_callable_value_call(
+        &mut self,
+        expr: ExprId,
+        callee: ExprId,
+        args: &[HirCallArg<'db>],
+        callee_prop: ExprProp<'db>,
+        already_typed: bool,
+    ) -> ExprProp<'db> {
+        let call_span = expr.span(self.body()).into_call_expr();
+        let (selected_receiver_ty, candidates) =
+            match self.collect_callable_value_candidates(callee, &callee_prop) {
+                Ok(Some(selection)) => selection,
+                Ok(None) if callee_prop.ty.has_var(self.db) => {
+                    let ret_ty = self
+                        .env
+                        .typed_expr(expr)
+                        .map_or_else(|| self.fresh_ty(), |prop| prop.ty);
+                    let typed = ExprProp::new(ret_ty, true);
+                    self.env.type_expr(expr, typed.clone());
+                    if !already_typed {
+                        for arg in args {
+                            self.check_expr_unknown(arg.expr);
+                        }
+                    }
+                    self.env
+                        .register_pending_callable_lookup(PendingCallableLookup { expr });
+                    return typed;
+                }
+                Ok(None) => {
+                    self.push_diag(BodyDiag::NotCallable(
+                        callee.span(self.body()).into(),
+                        callee_prop.ty,
+                    ));
+                    return ExprProp::invalid(self.db);
+                }
+                Err((_, _, MethodSelectionError::ReceiverTypeMustBeKnown)) => {
+                    let ret_ty = self
+                        .env
+                        .typed_expr(expr)
+                        .map_or_else(|| self.fresh_ty(), |prop| prop.ty);
+                    let typed = ExprProp::new(ret_ty, true);
+                    self.env.type_expr(expr, typed.clone());
+                    if !already_typed {
+                        for arg in args {
+                            self.check_expr_unknown(arg.expr);
+                        }
+                    }
+                    self.env
+                        .register_pending_callable_lookup(PendingCallableLookup { expr });
+                    return typed;
+                }
+                Err((method_name, selected_receiver_ty, err)) => {
+                    self.push_diag(body_diag_from_method_selection_err(
+                        self.db,
+                        err,
+                        Spanned::new(selected_receiver_ty, callee.span(self.body()).into()),
+                        Spanned::new(method_name, call_span.clone().callee().into()),
+                    ));
+                    return ExprProp::invalid(self.db);
+                }
+            };
+
+        if let Some(args_ty) = self.definitely_malformed_callable_args_pack(&candidates) {
+            self.push_diag(BodyDiag::CallArgsMustBeTuple {
+                primary: call_span.args().into(),
+                args_ty,
+            });
+            return ExprProp::invalid(self.db);
+        }
+
+        let ret_ty = self
+            .env
+            .typed_expr(expr)
+            .map_or_else(|| self.fresh_ty(), |prop| prop.ty);
+        let typed = ExprProp::new(ret_ty, true);
+        self.env.type_expr(expr, typed.clone());
+        if !already_typed {
+            for arg in args {
+                self.check_expr_unknown(arg.expr);
+            }
+        }
+        self.env.register_pending_method(super::env::PendingMethod {
+            expr,
+            recv_ty: selected_receiver_ty,
+            method_name: IdentId::new(self.db, ClosureCallTrait::Fn.method_name().to_string()),
+            candidates,
+            span: call_span.callee().into(),
+            callee_is_receiver: true,
+        });
+        typed
+    }
+
+    fn definitely_malformed_callable_args_pack(
+        &mut self,
+        candidates: &[super::env::PendingMethodCandidate<'db>],
+    ) -> Option<TyId<'db>> {
+        let mut malformed = None;
+        for candidate in candidates {
+            let pack = candidate.inst.args(self.db).get(1).copied()?;
+            let pack = self.normalize_ty(pack);
+            if pack.has_var(self.db) || pack.is_tuple(self.db) {
+                return None;
+            }
+            malformed.get_or_insert(pack);
+        }
+        malformed
+    }
+
+    fn collect_callable_value_candidates(
+        &mut self,
+        callee: ExprId,
+        callee_prop: &ExprProp<'db>,
+    ) -> Result<Option<PendingCallableValueSelection<'db>>, CallableValueSelectionError<'db>> {
+        let mut selected_ty = None;
+        let mut candidates = Vec::new();
+        for (priority, call_trait) in [ClosureCallTrait::Fn, ClosureCallTrait::FnOnce]
+            .into_iter()
+            .enumerate()
+        {
+            let Some(trait_def) = call_trait.trait_def(self.db, self.env.scope()) else {
+                continue;
+            };
+            let method_name = IdentId::new(self.db, call_trait.method_name().to_string());
+            let (receiver_ty, canonical_r_ty, selection) = self.select_method_call_candidate(
+                callee,
+                callee_prop,
+                method_name,
+                Some(trait_def),
+            );
+            let mut push_candidate = |candidate: TraitMethodCand<'db>, needs_confirmation| {
+                selected_ty.get_or_insert(receiver_ty);
+                let inst = canonical_r_ty.extract_solution(&mut self.table, candidate.inst);
+                candidates.push(super::env::PendingMethodCandidate {
+                    inst,
+                    method: candidate.method,
+                    needs_confirmation,
+                    priority: priority as u8,
+                });
+            };
+            match selection {
+                Ok(MethodCandidate::TraitMethod(candidate)) => push_candidate(candidate, false),
+                Ok(MethodCandidate::NeedsConfirmation(candidate)) => {
+                    push_candidate(candidate, true);
+                }
+                Ok(MethodCandidate::InherentMethod(_)) => {
+                    unreachable!("exact callable-trait lookup cannot select an inherent method")
+                }
+                Err(MethodSelectionError::AmbiguousTraitMethod(ambiguous)) => {
+                    for candidate in ambiguous.candidates {
+                        let needs_confirmation = candidate.needs_confirmation;
+                        push_candidate(candidate.cand, needs_confirmation);
+                    }
+                }
+                Err(MethodSelectionError::NotFound) => {}
+                Err(err) => return Err((method_name, receiver_ty, err)),
+            }
+        }
+        Ok(selected_ty.map(|selected_ty| (selected_ty, candidates)))
+    }
+
+    fn select_callable_value_candidate(
+        &self,
+        callee: ExprId,
+        callee_prop: &ExprProp<'db>,
+    ) -> Result<Option<CallableValueSelection<'db>>, CallableValueSelectionError<'db>> {
+        for call_trait in [ClosureCallTrait::Fn, ClosureCallTrait::FnOnce] {
+            let Some(trait_def) = call_trait.trait_def(self.db, self.env.scope()) else {
+                continue;
+            };
+            let method_name = IdentId::new(self.db, call_trait.method_name().to_string());
+            let (selected_receiver_ty, canonical_r_ty, candidate) = self
+                .select_method_call_candidate(callee, callee_prop, method_name, Some(trait_def));
+            match candidate {
+                Ok(candidate) => {
+                    return Ok(Some((selected_receiver_ty, canonical_r_ty, candidate)));
+                }
+                Err(MethodSelectionError::NotFound) => {}
+                Err(err) => return Err((method_name, selected_receiver_ty, err)),
+            }
+        }
+        Ok(None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn check_selected_callable_value_call(
+        &mut self,
+        expr: ExprId,
+        callee: ExprId,
+        args: &[HirCallArg<'db>],
+        callee_prop: ExprProp<'db>,
+        selected_receiver_ty: TyId<'db>,
+        canonical_r_ty: Canonicalized<'db, TyId<'db>>,
+        candidate: MethodCandidate<'db>,
+        expected: TyId<'db>,
+        already_typed: bool,
+    ) -> ExprProp<'db> {
+        let call_span = expr.span(self.body()).into_call_expr();
+        let needs_confirmation = matches!(candidate, MethodCandidate::NeedsConfirmation(_));
+        let (MethodCandidate::TraitMethod(candidate)
+        | MethodCandidate::NeedsConfirmation(candidate)) = candidate
+        else {
+            unreachable!("callable value dispatch only selects core callable traits")
+        };
+        let inst = canonical_r_ty.extract_solution(&mut self.table, candidate.inst);
+        let func_ty =
+            self.instantiate_trait_method_to_term(candidate.method, selected_receiver_ty, inst);
+        let mut callable = match Callable::new(
+            self.db,
+            func_ty,
+            callee.span(self.body()).into(),
+            Some(inst),
+        ) {
+            Ok(callable) => callable,
+            Err(diag) => {
+                self.push_diag(diag);
+                return ExprProp::invalid(self.db);
+            }
+        };
+        self.constrain_callable_result_from_expected(callable.ret_ty(self.db), expected);
+        callable.check_args(
+            self,
+            args,
+            call_span.clone().args(),
+            Some((callee, callee_prop)),
+            already_typed,
+        );
+        self.specialize_callable_layout_args(&mut callable, Some(callee), args);
+        if self.call_args_include_closure(args) {
+            self.eagerly_process_callable_constraints(
+                &callable,
+                expr,
+                call_span.clone().callee().into(),
+            );
+        }
+        self.check_callable_effects(expr, &mut callable);
+
+        let ret_ty = self.normalize_ty(callable.ret_ty(self.db));
+        self.env.register_semantic_value_call(expr, callable);
+        let mut result = ExprProp::new(ret_ty, true);
+        if !self.closure_type_expectations.is_empty() && self.env.callable_expr(expr).is_some() {
+            self.env.type_expr(expr, result.clone());
+            let (replayed, outcome) =
+                self.replay_typed_expr_with_closure_type_expectations(expr, expected);
+            if outcome == ClosureReplayOutcome::Replayed {
+                result = replayed;
+            }
+        }
+        if needs_confirmation
+            && let Some(goal) = self.env.callable_expr(expr).and_then(Callable::trait_inst)
+        {
+            self.env.register_trait_obligation(TraitObligation {
+                goal,
+                origin: TraitObligationOrigin::GenericConfirmation { expr },
+                span: call_span.callee().into(),
+            });
+        }
+        result
+    }
+
+    fn constrain_pending_direct_closure_call(
+        &mut self,
+        callee_prop: &ExprProp<'db>,
+        args: &[HirCallArg<'db>],
+        expected: TyId<'db>,
+    ) {
+        let Some(closure) = self
+            .normalize_ty(callee_prop.ty)
+            .base_ty(self.db)
+            .as_closure(self.db)
+        else {
+            for arg in args {
+                self.check_expr_unknown(arg.expr);
+            }
+            return;
+        };
+        self.constrain_callable_result_from_expected(closure.ret_ty(self.db), expected);
+        if args.len() != closure.params(self.db).len() {
+            for arg in args {
+                self.check_expr_unknown(arg.expr);
+            }
+            return;
+        }
+        for (arg, &expected) in args.iter().zip(closure.params(self.db)) {
+            self.check_or_constrain_expr_to_expected(arg.expr, expected);
+        }
     }
 
     fn check_assert(&mut self, expr: ExprId, args: &[HirCallArg<'db>]) -> ExprProp<'db> {
@@ -4685,6 +5209,77 @@ impl<'db> TyChecker<'db> {
 
         let body = self.body();
         let exprs = body.exprs(self.db).keys().collect::<Vec<_>>();
+
+        // Direct invocation deliberately selects the strongest available
+        // callable trait, preferring reusable `Fn`. If late effect resolution
+        // changes a concrete closure to consuming, preserve the source-level
+        // call by reselecting its `FnOnce::call_once` implementation.
+        for &expr in &exprs {
+            let Partial::Present(Expr::Call(callee, args)) = expr.data(self.db, body) else {
+                continue;
+            };
+            let Some(SemanticExprLowering::Call {
+                callable: old_callable,
+                callee_is_receiver: true,
+            }) = self.env.semantic_expr_lowering(expr).cloned()
+            else {
+                continue;
+            };
+            let Some(old_inst) = old_callable.trait_inst() else {
+                continue;
+            };
+            if ClosureCallTrait::for_trait(self.db, self.env.scope(), old_inst.def(self.db))
+                != Some(ClosureCallTrait::Fn)
+            {
+                continue;
+            }
+
+            let Some(mut callee_prop) = self.env.typed_expr(*callee) else {
+                continue;
+            };
+            let old_callee_ty = self.normalize_ty(callee_prop.ty);
+            let new_callee_ty = rewrite_types(self.db, old_callee_ty, &normalized_replacements);
+            let (Some(old_closure), Some(new_closure)) = (
+                old_callee_ty.base_ty(self.db).as_closure(self.db),
+                new_callee_ty.base_ty(self.db).as_closure(self.db),
+            ) else {
+                continue;
+            };
+            if old_closure.def(self.db) != new_closure.def(self.db)
+                || !consuming_defs.contains(&new_closure.def(self.db))
+            {
+                continue;
+            }
+
+            callee_prop.ty = new_callee_ty;
+            let Ok(Some((selected_receiver_ty, canonical_r_ty, candidate))) =
+                self.select_callable_value_candidate(*callee, &callee_prop)
+            else {
+                debug_assert!(false, "a consuming closure must implement FnOnce");
+                continue;
+            };
+            let (MethodCandidate::TraitMethod(candidate)
+            | MethodCandidate::NeedsConfirmation(candidate)) = candidate
+            else {
+                unreachable!("callable value dispatch only selects core callable traits")
+            };
+            let inst = canonical_r_ty.extract_solution(&mut self.table, candidate.inst);
+            debug_assert_eq!(
+                ClosureCallTrait::for_trait(self.db, self.env.scope(), inst.def(self.db)),
+                Some(ClosureCallTrait::FnOnce),
+            );
+            let func_ty =
+                self.instantiate_trait_method_to_term(candidate.method, selected_receiver_ty, inst);
+            let Ok(mut callable) =
+                Callable::new(self.db, func_ty, callee.span(body).into(), Some(inst))
+            else {
+                debug_assert!(false, "selected FnOnce method must have a callable type");
+                continue;
+            };
+            self.specialize_callable_layout_args(&mut callable, Some(*callee), args);
+            self.record_owned_value_use(*callee, new_callee_ty);
+            self.env.replace_semantic_callable(expr, callable);
+        }
 
         // A direct `.call` was selected through the reusable `Fn` builtin.
         // Once the receiver becomes consuming only `.call_once` remains.
@@ -6644,7 +7239,7 @@ impl<'db> TyChecker<'db> {
         }
 
         let (selected_receiver_ty, canonical_r_ty, candidate) =
-            self.select_method_call_candidate(*receiver, &receiver_prop, method_name);
+            self.select_method_call_candidate(*receiver, &receiver_prop, method_name, None);
         let candidate = match candidate {
             Ok(candidate) => candidate,
             Err(MethodSelectionError::ReceiverTypeMustBeKnown) => {
@@ -6663,6 +7258,18 @@ impl<'db> TyChecker<'db> {
                 return typed;
             }
             Err(err) => {
+                if matches!(&err, MethodSelectionError::NotFound)
+                    && let Some(diag) = self.callable_field_method_syntax_diag(
+                        *receiver,
+                        &receiver_prop,
+                        method_name,
+                        args.len(),
+                        call_span.clone().method_name().into(),
+                    )
+                {
+                    self.push_diag(diag);
+                    return ExprProp::invalid(self.db);
+                }
                 if let MethodSelectionError::AmbiguousTraitMethod(ambiguous) = err {
                     // Defer resolution using return-type constraints.
                     let ret_ty = self.fresh_ty();
@@ -6684,6 +7291,7 @@ impl<'db> TyChecker<'db> {
                                 inst,
                                 method: candidate.cand.method,
                                 needs_confirmation: candidate.needs_confirmation,
+                                priority: 0,
                             }
                         })
                         .collect();
@@ -6694,6 +7302,7 @@ impl<'db> TyChecker<'db> {
                         method_name,
                         candidates,
                         span: call_span.method_name().into(),
+                        callee_is_receiver: false,
                     });
                     return typed;
                 }
@@ -6886,11 +7495,68 @@ impl<'db> TyChecker<'db> {
         self.capability_fallback_candidates(receiver_prop.ty)
     }
 
+    fn callable_field_method_syntax_diag(
+        &mut self,
+        receiver: ExprId,
+        receiver_prop: &ExprProp<'db>,
+        field_name: IdentId<'db>,
+        arg_count: usize,
+        primary: DynLazySpan<'db>,
+    ) -> Option<PathResDiag<'db>> {
+        let receiver_ty = self.normalize_ty(receiver_prop.ty);
+        let record_ty = receiver_ty
+            .as_capability(self.db)
+            .map_or(receiver_ty, |(_, payload)| payload);
+        let field_ty = RecordLike::from_ty(record_ty).record_field_ty(self.db, field_name)?;
+        if !self.ty_supports_direct_call(field_ty) {
+            return None;
+        }
+
+        Some(PathResDiag::MethodNotFound {
+            primary,
+            method_name: field_name,
+            receiver: Either::Left(record_ty),
+            callable_field: Some(CallableFieldCallHint {
+                receiver: receiver.span(self.body()).into(),
+                arg_count,
+            }),
+        })
+    }
+
+    fn ty_supports_direct_call(&mut self, ty: TyId<'db>) -> bool {
+        let ty = self.normalize_ty(ty);
+        if ty.is_func(self.db) || ty.as_closure(self.db).is_some() {
+            return true;
+        }
+
+        [ClosureCallTrait::Fn, ClosureCallTrait::FnOnce]
+            .into_iter()
+            .any(|call_trait| {
+                let Some(trait_def) = call_trait.trait_def(self.db, self.env.scope()) else {
+                    return false;
+                };
+                let method_name = IdentId::new(self.db, call_trait.method_name().to_string());
+                let canonical_ty = Canonicalized::new(self.db, ty);
+                matches!(
+                    select_method_candidate(
+                        self.db,
+                        &canonical_ty,
+                        method_name,
+                        self.env.scope(),
+                        self.env.assumptions(),
+                        Some(trait_def),
+                    ),
+                    Ok(_) | Err(MethodSelectionError::AmbiguousTraitMethod(_))
+                )
+            })
+    }
+
     fn select_method_call_candidate(
         &self,
         receiver: ExprId,
         receiver_prop: &ExprProp<'db>,
         method_name: IdentId<'db>,
+        trait_: Option<crate::hir_def::Trait<'db>>,
     ) -> (
         TyId<'db>,
         Canonicalized<'db, TyId<'db>>,
@@ -6906,7 +7572,7 @@ impl<'db> TyChecker<'db> {
             method_name,
             self.env.scope(),
             method_assumptions,
-            None,
+            trait_,
         );
         if matches!(
             candidate,
@@ -6920,7 +7586,7 @@ impl<'db> TyChecker<'db> {
                     method_name,
                     self.env.scope(),
                     method_assumptions,
-                    None,
+                    trait_,
                 );
                 if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound)) {
                     selected_receiver_ty = receiver_ty;
@@ -10413,6 +11079,7 @@ fn body_diag_from_method_selection_err<'db>(
                 primary: method.span,
                 method_name: method.data,
                 receiver: Either::Left(base_ty),
+                callable_field: None,
             }
             .into()
         }

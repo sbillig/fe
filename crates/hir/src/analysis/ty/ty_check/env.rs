@@ -821,7 +821,24 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn register_semantic_call(&mut self, expr: ExprId, callable: Callable<'db>) {
         self.register_callable(expr, callable.clone());
-        self.register_semantic_expr_lowering(expr, SemanticExprLowering::Call { callable });
+        self.register_semantic_expr_lowering(
+            expr,
+            SemanticExprLowering::Call {
+                callable,
+                callee_is_receiver: false,
+            },
+        );
+    }
+
+    pub(super) fn register_semantic_value_call(&mut self, expr: ExprId, callable: Callable<'db>) {
+        self.register_callable(expr, callable.clone());
+        self.register_semantic_expr_lowering(
+            expr,
+            SemanticExprLowering::Call {
+                callable,
+                callee_is_receiver: true,
+            },
+        );
     }
 
     pub(super) fn replace_semantic_callable(&mut self, expr: ExprId, callable: Callable<'db>) {
@@ -1219,6 +1236,7 @@ impl<'db> TyCheckEnv<'db> {
                     pending.elem_ty = rewrite_types(self.db, pending.elem_ty, replacements);
                 }
                 DeferredTask::MethodLookup(_)
+                | DeferredTask::CallableLookup(_)
                 | DeferredTask::PrimitiveOp(_)
                 | DeferredTask::Field(_) => {}
             }
@@ -1838,6 +1856,12 @@ impl<'db> TyCheckEnv<'db> {
     pub(super) fn register_pending_method_lookup(&mut self, pending: PendingMethodLookup<'db>) {
         self.record_expr_effect_env(pending.expr);
         self.deferred.push_back(DeferredTask::MethodLookup(pending))
+    }
+
+    pub(super) fn register_pending_callable_lookup(&mut self, pending: PendingCallableLookup) {
+        self.record_expr_effect_env(pending.expr);
+        self.deferred
+            .push_back(DeferredTask::CallableLookup(pending))
     }
 
     pub(super) fn register_pending_primitive_op(&mut self, pending: PendingPrimitiveOp) {
@@ -2765,6 +2789,7 @@ pub(super) struct PendingMethod<'db> {
     pub method_name: crate::core::hir_def::IdentId<'db>,
     pub candidates: Vec<PendingMethodCandidate<'db>>,
     pub span: DynLazySpan<'db>,
+    pub callee_is_receiver: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2775,10 +2800,19 @@ pub(super) struct PendingMethodLookup<'db> {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub(super) struct PendingCallableLookup {
+    pub expr: ExprId,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub(super) struct PendingMethodCandidate<'db> {
     pub inst: TraitInstId<'db>,
     pub method: Func<'db>,
     pub needs_confirmation: bool,
+    /// Lower values are preferred after argument/result viability is known.
+    /// Direct invocation uses this to prefer `Fn` over `FnOnce`; ordinary
+    /// method lookup gives every candidate priority zero.
+    pub priority: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -2839,6 +2873,7 @@ pub(super) enum DeferredTask<'db> {
     Obligation(TraitObligation<'db>),
     Method(PendingMethod<'db>),
     MethodLookup(PendingMethodLookup<'db>),
+    CallableLookup(PendingCallableLookup),
     PrimitiveOp(PendingPrimitiveOp),
     Field(PendingField<'db>),
     Cast(PendingCast<'db>),

@@ -11,11 +11,17 @@
 /// or partially applied types like `Result<E>`.
 
 /// A callable value from the tuple `Args` to `U` that may consume itself.
+///
+/// Ordinary invocation uses function-call syntax, such as `func(value)`.
+/// `call_once` remains available when explicitly selecting the consuming ABI.
 pub trait FnOnce<Args, U> {
     fn call_once(self: own Self, _ args: own Args) -> U
 }
 
 /// A reusable callable value from the tuple `Args` to `U`.
+///
+/// Ordinary invocation prefers this reusable ABI when both `Fn` and `FnOnce`
+/// are available.
 pub trait Fn<Args, U>: FnOnce<Args, U> {
     fn call(self, _ args: own Args) -> U
 }

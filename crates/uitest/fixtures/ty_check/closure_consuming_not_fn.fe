@@ -5,8 +5,8 @@ struct Boxed {
 }
 
 fn call_twice<T, F: Fn<(), T>>(_ func: F) -> T {
-    func.call()
-    func.call()
+    func()
+    func()
 }
 
 pub fn closure_consuming_not_fn() -> Boxed {

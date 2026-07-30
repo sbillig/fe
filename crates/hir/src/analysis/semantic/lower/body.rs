@@ -1022,7 +1022,17 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     },
                 )
             }
-            Expr::Call(_, args) => self.lower_call(expr, None, args, ty),
+            Expr::Call(callee, args) => {
+                let receiver = matches!(
+                    self.typed_body.semantic_expr_lowering(expr),
+                    Some(SemanticExprLowering::Call {
+                        callee_is_receiver: true,
+                        ..
+                    })
+                )
+                .then_some(*callee);
+                self.lower_call(expr, receiver, args, ty)
+            }
             Expr::Assert(args) => self.lower_assert(expr, args),
             Expr::MethodCall(receiver, _, _, args) => {
                 self.lower_call(expr, Some(*receiver), args, ty)
@@ -1605,7 +1615,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 panic!("semantic lowering missing for call-like expression {expr:?}")
             });
         match lowering {
-            SemanticExprLowering::Call { callable } => {
+            SemanticExprLowering::Call { callable, .. } => {
                 self.lower_callable_expr(expr, ty, receiver, args, callable)
             }
             SemanticExprLowering::CodeRegionIntrinsic {
@@ -2649,7 +2659,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 })
             }
             Expr::Call(_, args) => {
-                let SemanticExprLowering::Call { callable } =
+                let SemanticExprLowering::Call { callable, .. } =
                     self.typed_body.semantic_expr_lowering(expr)?
                 else {
                     return None;

@@ -11,7 +11,7 @@ pub contract ClosureContract uses (ctx: Ctx) {
     init() uses (ctx, mut store) {
         let paid = ctx.value()
         let f = || -> u256 { paid + 11 }
-        store.init_value = f.call()
+        store.init_value = f()
     }
 
     recv ClosureMsg {
@@ -22,7 +22,7 @@ pub contract ClosureContract uses (ctx: Ctx) {
         SelfFromClosure -> u256 uses ctx {
             let self_inner = ctx.address().inner
             let f = || -> u256 { self_inner }
-            f.call()
+            f()
         }
     }
 }

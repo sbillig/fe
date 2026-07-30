@@ -7,7 +7,7 @@ fn expects_view<F: Fn<(view u256,), u256>>(_ func: F) {}
 fn expects_two<F: Fn<(view u256, view u256), u256>>(_ func: F) {}
 
 fn non_tuple_args<F: Fn<u256, u256>>(_ func: F) -> u256 {
-    func.call(1)
+    func(1)
 }
 
 fn mode_is_not_inferred() {
@@ -17,11 +17,11 @@ fn mode_is_not_inferred() {
 
 fn mode_is_invariant_after_inference() {
     let owned = |value: own| value
-    owned.call(1 as u256)
+    owned(1 as u256)
     expects_view(owned)
 
     let view = |value| value
-    view.call(1 as u256)
+    view(1 as u256)
     expects_own(view)
 }
 
@@ -35,6 +35,6 @@ fn payload_must_be_constrained() {
 
 fn one_closure_is_monomorphic() {
     let identity = |value| value
-    identity.call(1 as u256)
-    identity.call(true)
+    identity(1 as u256)
+    identity(true)
 }

@@ -20,11 +20,11 @@ struct Boxed {
 #[test]
 fn test_intrinsic_closure_calls_precede_extension_traits() {
     let add_one = |value| value + 1 as u256
-    assert(add_one.call(41 as u256) == 42)
+    assert(add_one(41 as u256) == 42)
 
     let boxed = Boxed { value: 42 }
     let take = || boxed
-    assert(take.call_once().value == 42)
+    assert(take().value == 42)
 
     let explicitly_called = Boxed { value: 42 }
     let explicit_call = || explicitly_called

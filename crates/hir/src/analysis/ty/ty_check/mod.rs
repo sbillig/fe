@@ -1635,7 +1635,7 @@ impl<'db> TyChecker<'db> {
                                pending: &env::PendingMethod<'db>,
                                expr_ty: TyId<'db>,
                                receiver: ExprId,
-                               generic_args: crate::hir_def::GenericArgListId<'db>,
+                               generic_args: Option<crate::hir_def::GenericArgListId<'db>>,
                                call_args: &[crate::hir_def::CallArg<'db>],
                                candidate: env::PendingMethodCandidate<'db>,
                                collect_diagnostics: bool| {
@@ -1674,7 +1674,20 @@ impl<'db> TyChecker<'db> {
                 let call_args_pack = callable.call_trait_args_pack_ty(db, scope).map(|ty| {
                     normalize_ty(db, ty.fold_with(db, &mut this.table), scope, assumptions)
                 });
-                if call_args_pack.is_some_and(|ty| !ty.is_tuple(db)) {
+                if let Some(args_ty) = call_args_pack.filter(|ty| !ty.is_tuple(db)) {
+                    if collect_diagnostics {
+                        let primary = if pending.callee_is_receiver {
+                            pending.expr.span(body).into_call_expr().args().into()
+                        } else {
+                            pending
+                                .expr
+                                .span(body)
+                                .into_method_call_expr()
+                                .args()
+                                .into()
+                        };
+                        this.push_diag(BodyDiag::CallArgsMustBeTuple { primary, args_ty });
+                    }
                     return None;
                 }
                 let expected_arg_tys = if let Some(pack) = call_args_pack {
@@ -1692,19 +1705,21 @@ impl<'db> TyChecker<'db> {
                     return None;
                 }
 
-                match unify_explicit_call_generic_args(
-                    &mut callable,
-                    this,
-                    generic_args,
-                    HoleAnchor::BodySyntax {
-                        body,
-                        site: BodyHoleSite::Expr(pending.expr),
-                    },
-                    |this, _, given, current| this.table.unify(given, *current).is_ok(),
-                ) {
-                    Ok(()) => {}
-                    Err(CallGenericArgUnifyError::ArityMismatch { .. })
-                    | Err(CallGenericArgUnifyError::UnificationFailed) => return None,
+                if let Some(generic_args) = generic_args {
+                    match unify_explicit_call_generic_args(
+                        &mut callable,
+                        this,
+                        generic_args,
+                        HoleAnchor::BodySyntax {
+                            body,
+                            site: BodyHoleSite::Expr(pending.expr),
+                        },
+                        |this, _, given, current| this.table.unify(given, *current).is_ok(),
+                    ) {
+                        Ok(()) => {}
+                        Err(CallGenericArgUnifyError::ArityMismatch { .. })
+                        | Err(CallGenericArgUnifyError::UnificationFailed) => return None,
+                    }
                 }
 
                 let receiver_prop = this.env.typed_expr(receiver)?;
@@ -1744,19 +1759,19 @@ impl<'db> TyChecker<'db> {
                     this.table.unify(given, expected).ok()?;
                 }
 
-                let call_span = pending.expr.span(body).into_method_call_expr();
+                let args_span = if pending.callee_is_receiver {
+                    pending.expr.span(body).into_call_expr().args()
+                } else {
+                    pending.expr.span(body).into_method_call_expr().args()
+                };
                 callable.check_args(
                     this,
                     call_args,
-                    call_span.clone().args(),
+                    args_span,
                     Some((receiver, receiver_prop)),
                     true,
                 );
-                callable.process_constraints(
-                    this,
-                    pending.expr,
-                    call_span.clone().method_name().into(),
-                );
+                callable.process_constraints(this, pending.expr, pending.span.clone());
                 this.specialize_callable_layout_args(&mut callable, Some(receiver), call_args);
                 this.check_callable_effects(pending.expr, &mut callable);
                 if this.diags.len() != diag_len {
@@ -1784,10 +1799,15 @@ impl<'db> TyChecker<'db> {
                         origin: env::TraitObligationOrigin::GenericConfirmation {
                             expr: pending.expr,
                         },
-                        span: call_span.clone().into(),
+                        span: pending.span.clone(),
                     });
                 }
-                this.env.register_semantic_call(pending.expr, callable);
+                if pending.callee_is_receiver {
+                    this.env
+                        .register_semantic_value_call(pending.expr, callable);
+                } else {
+                    this.env.register_semantic_call(pending.expr, callable);
+                }
                 let original_prop = this.env.typed_expr(pending.expr)?;
                 let (replayed, replay_satisfied) = this.replay_deferred_expr_with_closure_context(
                     pending.expr,
@@ -1816,16 +1836,12 @@ impl<'db> TyChecker<'db> {
                         this.diagnose_callable_requirements(
                             &replayed_callable,
                             pending.expr,
-                            call_span.method_name().into(),
+                            pending.span.clone(),
                         );
                     }
                     return None;
                 }
-                replayed_callable.process_constraints(
-                    this,
-                    pending.expr,
-                    call_span.method_name().into(),
-                );
+                replayed_callable.process_constraints(this, pending.expr, pending.span.clone());
 
                 Some(())
             })()
@@ -1868,13 +1884,19 @@ impl<'db> TyChecker<'db> {
                         }
                         env::DeferredTask::Method(pending) => {
                             let (receiver, generic_args, call_args) =
-                                match pending.expr.data(db, body) {
-                                    Partial::Present(Expr::MethodCall(
-                                        receiver,
-                                        _,
-                                        generic_args,
-                                        args,
-                                    )) => (*receiver, *generic_args, args.as_slice()),
+                                match (pending.callee_is_receiver, pending.expr.data(db, body)) {
+                                    (
+                                        false,
+                                        Partial::Present(Expr::MethodCall(
+                                            receiver,
+                                            _,
+                                            generic_args,
+                                            args,
+                                        )),
+                                    ) => (*receiver, Some(*generic_args), args.as_slice()),
+                                    (true, Partial::Present(Expr::Call(receiver, args))) => {
+                                        (*receiver, None, args.as_slice())
+                                    }
                                     _ => continue,
                                 };
 
@@ -1911,12 +1933,17 @@ impl<'db> TyChecker<'db> {
                                 .partition(|(_, viability)| {
                                     *viability == CandidateViability::Viable
                                 });
-                            let viable = if strict.is_empty() {
+                            let mut viable = if strict.is_empty() {
                                 soft.into_iter().map(|(candidate, _)| candidate).collect()
                             } else {
                                 strict.into_iter().map(|(candidate, _)| candidate).collect()
                             };
-                            let viable = self.dedup_equivalent_pending_method_candidates(viable);
+                            viable = self.dedup_equivalent_pending_method_candidates(viable);
+                            if let Some(priority) =
+                                viable.iter().map(|candidate| candidate.priority).min()
+                            {
+                                viable.retain(|candidate| candidate.priority == priority);
+                            }
 
                             if let [candidate] = viable.as_slice() {
                                 if self.env.callable_expr(pending.expr).is_none() {
@@ -1925,7 +1952,6 @@ impl<'db> TyChecker<'db> {
                                         .deferred_closure_replay_context(pending.expr)
                                         .is_some()
                                         .then(|| self.snapshot_closure_replay_transaction());
-                                    let call_span = pending.expr.span(body).into_method_call_expr();
                                     let inst = candidate.inst;
 
                                     let receiver_prop = self
@@ -1969,37 +1995,48 @@ impl<'db> TyChecker<'db> {
                                                 env::TraitObligationOrigin::GenericConfirmation {
                                                     expr: pending.expr,
                                                 },
-                                            span: call_span.clone().into(),
+                                            span: pending.span.clone(),
                                         });
                                     }
 
-                                    if !callable.unify_generic_args(
-                                        self,
-                                        generic_args,
-                                        HoleAnchor::BodySyntax {
-                                            body,
-                                            site: BodyHoleSite::Expr(pending.expr),
-                                        },
-                                        call_span.clone().generic_args(),
-                                    ) {
-                                        if let Some(transaction) = transaction {
-                                            self.rollback_closure_replay_transaction(transaction);
+                                    if let Some(generic_args) = generic_args {
+                                        let call_span =
+                                            pending.expr.span(body).into_method_call_expr();
+                                        if !callable.unify_generic_args(
+                                            self,
+                                            generic_args,
+                                            HoleAnchor::BodySyntax {
+                                                body,
+                                                site: BodyHoleSite::Expr(pending.expr),
+                                            },
+                                            call_span.generic_args(),
+                                        ) {
+                                            if let Some(transaction) = transaction {
+                                                self.rollback_closure_replay_transaction(
+                                                    transaction,
+                                                );
+                                            }
+                                            progressed = true;
+                                            continue;
                                         }
-                                        progressed = true;
-                                        continue;
                                     }
 
+                                    let args_span = if pending.callee_is_receiver {
+                                        pending.expr.span(body).into_call_expr().args()
+                                    } else {
+                                        pending.expr.span(body).into_method_call_expr().args()
+                                    };
                                     callable.check_args(
                                         self,
                                         call_args,
-                                        call_span.clone().args(),
+                                        args_span,
                                         Some((receiver, receiver_prop)),
                                         true,
                                     );
                                     callable.process_constraints(
                                         self,
                                         pending.expr,
-                                        call_span.clone().method_name().into(),
+                                        pending.span.clone(),
                                     );
                                     self.specialize_callable_layout_args(
                                         &mut callable,
@@ -2010,8 +2047,9 @@ impl<'db> TyChecker<'db> {
                                     self.check_callable_effects(pending.expr, &mut callable);
 
                                     let ret_ty = self.normalize_ty(callable.ret_ty(db));
-                                    let code_region_kind = if let Some(kind) =
-                                        self.code_region_method_kind(recv_ty, pending.method_name)
+                                    let code_region_kind = if !pending.callee_is_receiver
+                                        && let Some(kind) = self
+                                            .code_region_method_kind(recv_ty, pending.method_name)
                                         && call_args.len() == 1
                                         && self
                                             .env
@@ -2055,8 +2093,17 @@ impl<'db> TyChecker<'db> {
                                             self.commit_closure_replay_transaction(transaction);
                                         }
                                     } else {
-                                        self.env
-                                            .register_semantic_call(pending.expr, callable.clone());
+                                        if pending.callee_is_receiver {
+                                            self.env.register_semantic_value_call(
+                                                pending.expr,
+                                                callable.clone(),
+                                            );
+                                        } else {
+                                            self.env.register_semantic_call(
+                                                pending.expr,
+                                                callable.clone(),
+                                            );
+                                        }
                                         let resolved = ExprProp::new(ret_ty, true);
                                         if let Some(transaction) = transaction {
                                             let (resolved, replay_satisfied) = self
@@ -2085,7 +2132,7 @@ impl<'db> TyChecker<'db> {
                                             replayed_callable.process_constraints(
                                                 self,
                                                 pending.expr,
-                                                call_span.method_name().into(),
+                                                pending.span.clone(),
                                             );
                                             self.env.consume_deferred_closure_replay_context(
                                                 pending.expr,
@@ -2107,7 +2154,7 @@ impl<'db> TyChecker<'db> {
                                             finalized_callable.process_constraints(
                                                 self,
                                                 pending.expr,
-                                                call_span.method_name().into(),
+                                                pending.span.clone(),
                                             );
                                         }
                                     }
@@ -2122,6 +2169,17 @@ impl<'db> TyChecker<'db> {
                             match self.resolve_pending_method_lookup(&pending) {
                                 expr::PendingPrimitiveOpResolution::Pending => {
                                     self.env.register_pending_method_lookup(pending);
+                                }
+                                expr::PendingPrimitiveOpResolution::Resolved => {
+                                    progressed = true;
+                                }
+                                expr::PendingPrimitiveOpResolution::Done => {}
+                            }
+                        }
+                        env::DeferredTask::CallableLookup(pending) => {
+                            match self.resolve_pending_callable_lookup(pending) {
+                                expr::PendingPrimitiveOpResolution::Pending => {
+                                    self.env.register_pending_callable_lookup(pending);
                                 }
                                 expr::PendingPrimitiveOpResolution::Resolved => {
                                     progressed = true;
@@ -2199,13 +2257,22 @@ impl<'db> TyChecker<'db> {
                             continue;
                         }
 
-                        let (receiver, generic_args, call_args) = match pending.expr.data(db, body)
-                        {
-                            Partial::Present(Expr::MethodCall(receiver, _, generic_args, args)) => {
-                                (*receiver, *generic_args, args.as_slice())
-                            }
-                            _ => continue,
-                        };
+                        let (receiver, generic_args, call_args) =
+                            match (pending.callee_is_receiver, pending.expr.data(db, body)) {
+                                (
+                                    false,
+                                    Partial::Present(Expr::MethodCall(
+                                        receiver,
+                                        _,
+                                        generic_args,
+                                        args,
+                                    )),
+                                ) => (*receiver, Some(*generic_args), args.as_slice()),
+                                (true, Partial::Present(Expr::Call(receiver, args))) => {
+                                    (*receiver, None, args.as_slice())
+                                }
+                                _ => continue,
+                            };
 
                         let probes: Vec<_> = pending
                             .candidates
@@ -2238,12 +2305,17 @@ impl<'db> TyChecker<'db> {
                             });
                         let (strict, soft): (Vec<_>, Vec<_>) = candidates
                             .partition(|(_, viability)| *viability == CandidateViability::Viable);
-                        let viable = if strict.is_empty() {
+                        let mut viable = if strict.is_empty() {
                             soft.into_iter().map(|(candidate, _)| candidate).collect()
                         } else {
                             strict.into_iter().map(|(candidate, _)| candidate).collect()
                         };
-                        let viable = self.dedup_equivalent_pending_method_candidates(viable);
+                        viable = self.dedup_equivalent_pending_method_candidates(viable);
+                        if let Some(priority) =
+                            viable.iter().map(|candidate| candidate.priority).min()
+                        {
+                            viable.retain(|candidate| candidate.priority == priority);
+                        }
                         if viable.len() == 1 {
                             if final_method_restarts.insert(pending.expr) {
                                 self.env.register_pending_method(pending);
@@ -2303,6 +2375,17 @@ impl<'db> TyChecker<'db> {
                             pending.expr.data(db, body)
                         {
                             self.push_diag(BodyDiag::TypeMustBeKnown(receiver.span(body).into()));
+                            self.env.type_expr(pending.expr, ExprProp::invalid(self.db));
+                        }
+                    }
+                    env::DeferredTask::CallableLookup(pending) => {
+                        if matches!(
+                            self.resolve_pending_callable_lookup(pending),
+                            expr::PendingPrimitiveOpResolution::Pending
+                        ) && let Partial::Present(Expr::Call(callee, ..)) =
+                            pending.expr.data(db, body)
+                        {
+                            self.push_diag(BodyDiag::TypeMustBeKnown(callee.span(body).into()));
                             self.env.type_expr(pending.expr, ExprProp::invalid(self.db));
                         }
                     }
@@ -3570,9 +3653,16 @@ fn func_return_provenance_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
-fn call_like_expr_args(expr: &Expr<'_>) -> Option<Vec<ExprId>> {
+fn call_like_expr_args(expr: &Expr<'_>, callee_is_receiver: bool) -> Option<Vec<ExprId>> {
     match expr {
-        Expr::Call(_, args) => Some(args.iter().map(|arg| arg.expr).collect()),
+        Expr::Call(callee, args) => {
+            let mut call_args = Vec::with_capacity(args.len() + usize::from(callee_is_receiver));
+            if callee_is_receiver {
+                call_args.push(*callee);
+            }
+            call_args.extend(args.iter().map(|arg| arg.expr));
+            Some(call_args)
+        }
         Expr::MethodCall(receiver, _, _, args) => {
             let mut call_args = Vec::with_capacity(args.len() + 1);
             call_args.push(*receiver);
@@ -3731,6 +3821,7 @@ pub enum ConstIntrinsicKind {
 pub enum SemanticExprLowering<'db> {
     Call {
         callable: Callable<'db>,
+        callee_is_receiver: bool,
     },
     CodeRegionIntrinsic {
         callable: Callable<'db>,
@@ -3791,7 +3882,7 @@ impl<'db> TyVisitable<'db> for SemanticExprLowering<'db> {
         V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
     {
         match self {
-            Self::Call { callable }
+            Self::Call { callable, .. }
             | Self::CodeRegionIntrinsic { callable, .. }
             | Self::ConstIntrinsic { callable, .. } => callable.visit_with(visitor),
         }
@@ -3804,8 +3895,12 @@ impl<'db> TyFoldable<'db> for SemanticExprLowering<'db> {
         F: crate::analysis::ty::fold::TyFolder<'db>,
     {
         match self {
-            Self::Call { callable } => Self::Call {
+            Self::Call {
+                callable,
+                callee_is_receiver,
+            } => Self::Call {
                 callable: callable.fold_with(db, folder),
+                callee_is_receiver,
             },
             Self::CodeRegionIntrinsic {
                 callable,
@@ -4137,7 +4232,7 @@ impl<'db> TypedBody<'db> {
 
     pub fn callable_expr(&self, expr: ExprId) -> Option<&Callable<'db>> {
         match self.semantic_expr_lowering(expr)? {
-            SemanticExprLowering::Call { callable }
+            SemanticExprLowering::Call { callable, .. }
             | SemanticExprLowering::CodeRegionIntrinsic { callable, .. }
             | SemanticExprLowering::ConstIntrinsic { callable, .. } => Some(callable),
         }
@@ -4440,8 +4535,12 @@ impl<'db> TypedBody<'db> {
             return None;
         };
 
-        if let Some(SemanticExprLowering::Call { callable }) = self.semantic_expr_lowering(expr) {
-            let args = call_like_expr_args(expr_data)?;
+        if let Some(SemanticExprLowering::Call {
+            callable,
+            callee_is_receiver,
+        }) = self.semantic_expr_lowering(expr)
+        {
+            let args = call_like_expr_args(expr_data, *callee_is_receiver)?;
             if let CallableDef::VariantCtor(variant) = callable.callable_def() {
                 let mut sources = Vec::new();
                 for (field, arg) in args.into_iter().enumerate() {

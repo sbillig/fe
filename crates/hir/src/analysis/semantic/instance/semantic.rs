@@ -386,12 +386,13 @@ pub fn instantiated_typed_body<'db>(
 fn receiver_lowering_plan<'db>(
     db: &'db dyn HirAnalysisDb,
     expr_data: &Expr<'db>,
+    callee_is_receiver: bool,
     callable: &crate::analysis::ty::ty_check::Callable<'db>,
     typed_body: &TypedBody<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Option<ReceiverLoweringPlan<'db>> {
-    let receiver = call_like_receiver_expr(expr_data)?;
+    let receiver = call_like_receiver_expr(expr_data, callee_is_receiver)?;
     let borrowed_ty = callable.arg_ty(db, 0)?;
     let borrowed_ty = normalize_ty(db, borrowed_ty, scope, assumptions);
     let receiver_ty = normalize_ty(db, typed_body.expr_ty(db, receiver), scope, assumptions);
@@ -412,14 +413,14 @@ fn receiver_lowering_plan<'db>(
     })
 }
 
-fn call_like_receiver_expr<'db>(expr_data: &Expr<'db>) -> Option<ExprId> {
+fn call_like_receiver_expr<'db>(expr_data: &Expr<'db>, callee_is_receiver: bool) -> Option<ExprId> {
     match expr_data {
         Expr::MethodCall(receiver, ..)
         | Expr::Un(receiver, ..)
         | Expr::Bin(receiver, ..)
         | Expr::AugAssign(receiver, ..) => Some(*receiver),
-        Expr::Call(..)
-        | Expr::Assert(..)
+        Expr::Call(callee, ..) => callee_is_receiver.then_some(*callee),
+        Expr::Assert(..)
         | Expr::Lit(..)
         | Expr::Path(..)
         | Expr::Tuple(..)
@@ -454,7 +455,10 @@ fn provisional_call_sites<'db>(
         let Partial::Present(expr_data) = expr_data else {
             continue;
         };
-        let Some(SemanticExprLowering::Call { callable }) = typed_body.semantic_expr_lowering(expr)
+        let Some(SemanticExprLowering::Call {
+            callable,
+            callee_is_receiver,
+        }) = typed_body.semantic_expr_lowering(expr)
         else {
             continue;
         };
@@ -464,6 +468,7 @@ fn provisional_call_sites<'db>(
             receiver: receiver_lowering_plan(
                 db,
                 expr_data,
+                *callee_is_receiver,
                 callable,
                 typed_body,
                 scope,
@@ -570,7 +575,8 @@ fn final_call_site_data<'db>(
         let Some(site) = call_sites.get_mut(expr.index()).and_then(Option::as_mut) else {
             continue;
         };
-        let Some(SemanticExprLowering::Call { callable }) = typed_body.semantic_expr_lowering(expr)
+        let Some(SemanticExprLowering::Call { callable, .. }) =
+            typed_body.semantic_expr_lowering(expr)
         else {
             continue;
         };
@@ -1934,7 +1940,7 @@ fn source_call_graph_edges<'db>(
             callee_key,
             flow: SourceCallGraphEdgeFlow::Classify,
         });
-        if let Some(SemanticExprLowering::Call { callable }) =
+        if let Some(SemanticExprLowering::Call { callable, .. }) =
             typed_body.semantic_expr_lowering(expr)
         {
             edges.extend(

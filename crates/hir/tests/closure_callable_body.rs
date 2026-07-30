@@ -9,7 +9,7 @@ use fe_hir::{
             normalize_semantic_body, semantic_borrow_summary,
         },
         ty::{
-            closure::implemented_closure_call_trait,
+            closure::{ClosureCallTrait, implemented_closure_call_trait},
             const_ty::CallableInputLayoutHoleOrigin,
             corelib::resolve_core_trait,
             trait_def::TraitInstId,
@@ -1125,6 +1125,24 @@ fn probe() {
     let make = |value: own| {
         let get = || value
         Fn<(), u256>::call(get)
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn direct_call_can_finish_inferred_copy_capture_before_capability_check() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_direct_call_infers_capture.fe"),
+        r#"
+fn probe() {
+    let make = |value: own| {
+        let get = || value
+        let _: u256 = get()
     }
 }
 "#,
@@ -2773,6 +2791,84 @@ fn probe(ptr: own Ptr) -> u256 {
         rendered.matches("trait bound is not satisfied").count(),
         0,
         "direct call revalidation must not also report a generic Fn failure:\n{rendered}"
+    );
+}
+
+#[test]
+fn late_resolved_by_value_effect_reselects_direct_call_as_fn_once() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("closure_late_effectful_direct_call.fe"),
+        r#"
+use core::effect_ref::{EffectHandle, EffectRef}
+
+struct Slot {}
+
+struct Ptr {
+    raw: u256,
+}
+
+impl EffectHandle for Ptr {
+    type Target = Slot
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
+
+    fn from_raw(_ raw: u256) -> Self {
+        Self { raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.raw
+    }
+}
+
+impl EffectRef<Slot> for Ptr {}
+
+struct Apply {}
+
+impl Apply {
+    fn read(self) -> u256 uses (slot: Slot) {
+        42
+    }
+}
+
+fn probe(ptr: own Ptr) -> u256 {
+    with (Slot = ptr) {
+        let outer = |apply: own| {
+            apply.read()
+        }
+        outer(Apply {})
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let probe = find_func(&db, top_mod, "probe");
+    let (_, typed_body) = check_func_body(&db, probe);
+    let body = typed_body.body().expect("missing probe body");
+    let direct_call = body
+        .exprs(&db)
+        .keys()
+        .find(|&expr| {
+            matches!(
+                expr.data(&db, body),
+                fe_hir::hir_def::Partial::Present(fe_hir::hir_def::Expr::Call(..))
+            ) && typed_body
+                .callable_expr(expr)
+                .and_then(|callable| callable.trait_inst())
+                .is_some()
+        })
+        .expect("missing direct closure call");
+    let inst = typed_body
+        .callable_expr(direct_call)
+        .and_then(|callable| callable.trait_inst())
+        .expect("direct closure call must retain its trait instance");
+    assert_eq!(
+        ClosureCallTrait::for_trait(&db, probe.scope(), inst.def(&db)),
+        Some(ClosureCallTrait::FnOnce),
+        "late capture finalization must reselect direct invocation as FnOnce",
     );
 }
 

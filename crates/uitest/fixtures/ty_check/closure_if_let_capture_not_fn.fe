@@ -6,7 +6,7 @@ struct Boxed {
 }
 
 fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
-    func.call(value)
+    func(value)
 }
 
 pub fn closure_if_let_capture_not_fn() -> Boxed {

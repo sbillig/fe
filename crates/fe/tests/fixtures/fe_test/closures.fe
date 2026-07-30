@@ -101,6 +101,14 @@ struct FortyTwo {}
 
 struct AddInto {}
 
+struct TakeBoxed {
+    boxed: Boxed,
+}
+
+struct Overloaded {}
+
+struct ReusableOrOnce {}
+
 impl FnOnce<(u256, u256), u256> for AddPair {
     fn call_once(self: own Self, _ args: own (u256, u256)) -> u256 {
         self.call(args.0, args.1)
@@ -137,6 +145,54 @@ impl Fn<(mut u256, view u256), ()> for AddInto {
     }
 }
 
+impl FnOnce<(), Boxed> for TakeBoxed {
+    fn call_once(self: own Self, _ args: own ()) -> Boxed {
+        self.boxed
+    }
+}
+
+impl FnOnce<(u256,), u256> for Overloaded {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+impl Fn<(u256,), u256> for Overloaded {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+impl FnOnce<(bool,), bool> for Overloaded {
+    fn call_once(self: own Self, _ args: own (bool,)) -> bool {
+        !args.0
+    }
+}
+
+impl Fn<(bool,), bool> for Overloaded {
+    fn call(self, _ args: own (bool,)) -> bool {
+        !args.0
+    }
+}
+
+impl FnOnce<(u256,), u256> for ReusableOrOnce {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+impl Fn<(u256,), u256> for ReusableOrOnce {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+impl FnOnce<(bool,), bool> for ReusableOrOnce {
+    fn call_once(self: own Self, _ args: own (bool,)) -> bool {
+        !args.0
+    }
+}
+
 enum Choice {
     Left,
     Right,
@@ -148,6 +204,14 @@ fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
 
 fn invoke_once<T, U, F: FnOnce<(T,), U>>(_ func: own F, _ value: own T) -> U {
     func.call_once(value)
+}
+
+fn invoke_direct<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
+    func(value)
+}
+
+fn invoke_once_direct<T, U, F: FnOnce<(T,), U>>(_ func: own F, _ value: own T) -> U {
+    func(value)
 }
 
 fn invoke_zero_once<U, F: FnOnce<(), U>>(_ func: own F) -> U {
@@ -829,6 +893,65 @@ fn test_reusable_closure_supports_both_call_abis() {
     let first = read.call(())
     let second = read.call_once(())
     assert(first + second == 42)
+}
+
+#[test]
+fn test_direct_closure_invocation_selects_reusable_and_consuming_abis() {
+    let offset: u256 = 1
+    let increment = |value: own u256| -> u256 { value + offset }
+    assert(increment(20) + increment(20) == 42)
+    let borrowed_increment = ref increment
+    assert(borrowed_increment(41) == 42)
+
+    let boxed = Boxed { value: 42 }
+    let take = || -> Boxed { boxed }
+    assert(take().value == 42)
+}
+
+#[test]
+fn test_direct_generic_callable_invocation() {
+    let offset: u256 = 1
+    let increment = |value: own u256| -> u256 { value + offset }
+    assert(invoke_direct(func: increment, value: 41) == 42)
+
+    let boxed = Boxed { value: 42 }
+    let take = |_ unit: own ()| -> Boxed { boxed }
+    assert(invoke_once_direct(func: take, value: ()).value == 42)
+}
+
+#[test]
+fn test_direct_callable_values_support_zero_multi_and_projection_calls() {
+    let answer = || -> u256 { 42 }
+    let holder = ClosureHolder { function: answer }
+    assert((holder.function)() == 42)
+    let functions = [answer, answer]
+    assert(functions[1]() == 42)
+
+    let add = |left: own u256, right: own u256| -> u256 { left + right }
+    assert(add(20, 22) == 42)
+    assert(AddPair {}(20, 22) == 42)
+    assert(FortyTwo {}() == 42)
+    assert(TakeBoxed { boxed: Boxed { value: 42 } }().value == 42)
+    assert((|value: own u256| -> u256 { value + 1 })(41) == 42)
+    assert(Overloaded {}(41 as u256) == 42)
+    assert(Overloaded {}(false))
+    assert(ReusableOrOnce {}(41 as u256) == 42)
+    assert(ReusableOrOnce {}(false))
+    let add = AddPair {}
+    let borrowed_add = ref add
+    assert(borrowed_add(20, 22) == 42)
+}
+
+#[test]
+fn test_direct_closure_call_preserves_mut_capture_returns() {
+    let mut value = 0
+    let captured = mut value
+    let project = || -> mut u256 { captured }
+    let first = project()
+    first = 20
+    let second = project()
+    second += 22
+    assert(value == 42)
 }
 
 #[test]
@@ -2068,7 +2191,7 @@ fn test_generic_fn_once_preserves_a_borrow_into_the_consumed_environment() {
 fn test_direct_fn_once_preserves_a_borrow_into_a_noncopy_reusable_environment() {
     let boxed = Boxed { value: 42 }
     let borrow_once = || -> ref u256 { ref boxed.value }
-    let returned = borrow_once.call_once()
+    let returned = borrow_once()
 
     assert(returned == 42)
 }

@@ -46,3 +46,16 @@ fn test_result_ap_codegen() {
         Result::Err(_) => assert!(false)
     }
 }
+
+#[test]
+fn test_result_ap_with_closure_codegen() {
+    let a: Result<AddError, u256> = Ok(20)
+    let f = a.map(|left: own u256| {
+        |right: own u256| -> u256 { left + right }
+    })
+    let out: Result<AddError, u256> = f.ap(Ok(22))
+    match out {
+        Result::Ok(value) => assert!(value == 42)
+        Result::Err(_) => assert!(false)
+    }
+}

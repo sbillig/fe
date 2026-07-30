@@ -84,7 +84,11 @@ impl ClosureCallTrait {
             || closure.call_mode_with_assumptions(db, assumptions) == ClosureCallMode::Reusable
     }
 
-    fn trait_def<'db>(self, db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Option<Trait<'db>> {
+    pub(crate) fn trait_def<'db>(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+    ) -> Option<Trait<'db>> {
         resolve_core_trait(db, scope, &["functional", self.trait_name()])
     }
 

@@ -22,7 +22,7 @@ use crate::analysis::{
         closure::ClosureCallTrait,
         const_ty::{CallableInputLayoutHoleOrigin, HoleAnchor, HoleMinter, LayoutHoleArgSite},
         corelib::resolve_lib_func_path,
-        diagnostics::{BodyDiag, FuncBodyDiag},
+        diagnostics::{BodyDiag, CallArgDefinition, FuncBodyDiag},
         fold::{AssocTySubst, TyFoldable, TyFolder},
         normalize::normalize_ty,
         trait_def::TraitInstId,
@@ -527,9 +527,13 @@ impl<'db> Callable<'db> {
         );
         let given_arity = call_args.len();
         if given_arity != expected_arity {
+            let definition = closure_call_ty.map_or_else(
+                || CallArgDefinition::Function(self.callable_def.name_span()),
+                CallArgDefinition::Closure,
+            );
             let diag = BodyDiag::CallArgNumMismatch {
                 primary: span.into(),
-                def_span: self.callable_def.name_span(),
+                definition,
                 given: given_arity,
                 expected: expected_arity,
             };

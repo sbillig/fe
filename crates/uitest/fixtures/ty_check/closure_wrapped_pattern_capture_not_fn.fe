@@ -21,7 +21,7 @@ enum Choice {
 }
 
 fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
-    func.call(value)
+    func(value)
 }
 
 pub fn block_wrapped_pattern_capture_not_fn() -> Boxed {

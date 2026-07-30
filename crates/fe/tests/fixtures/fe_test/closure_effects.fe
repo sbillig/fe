@@ -8,30 +8,30 @@ fn increment_directly() uses (target: mut u256) {
     let update = || {
         target += 1
     }
-    update.call()
+    update()
 }
 
 fn increment_through_call() uses (target: mut u256) {
     let update = || increment()
-    update.call()
+    update()
 }
 
 fn read_directly() -> u256 uses (target: u256) {
     let read = || target
-    read.call()
+    read()
 }
 
 fn read_through_call() -> u256 uses (target: u256) {
     let read = || read_directly()
-    read.call()
+    read()
 }
 
 fn increment_through_nested_closures() uses (target: mut u256) {
     let outer = || {
         let inner = || increment()
-        inner.call()
+        inner()
     }
-    outer.call()
+    outer()
 }
 
 struct Pair {
@@ -43,7 +43,7 @@ fn increment_projected_effect() uses (pair: mut Pair) {
     let update = with (mut pair.right) {
         || increment()
     }
-    update.call()
+    update()
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn test_closure_retains_effect_provider_after_with_scope() {
     let update = with (mut value) {
         || increment()
     }
-    update.call()
+    update()
     assert(value == 42)
 }
 

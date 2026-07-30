@@ -3,7 +3,7 @@ use super::{
     provider::ProviderAddressSpace,
     trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
-    ty_def::{BorrowKind, CapabilityKind, ClosureParamMode, Kind, TyId},
+    ty_def::{BorrowKind, CapabilityKind, ClosureParamMode, ClosureTy, Kind, TyId},
 };
 use crate::visitor::prelude::*;
 use crate::{analysis::HirAnalysisDb, hir_def::Trait};
@@ -344,6 +344,12 @@ pub enum MustUseSubject<'db> {
 pub enum ReturnTypeContext<'db> {
     Function(CallableDef<'db>),
     Closure(ClosureDef<'db>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub enum CallArgDefinition<'db> {
+    Function(DynLazySpan<'db>),
+    Closure(ClosureTy<'db>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -699,7 +705,7 @@ pub enum BodyDiag<'db> {
 
     CallArgNumMismatch {
         primary: DynLazySpan<'db>,
-        def_span: DynLazySpan<'db>,
+        definition: CallArgDefinition<'db>,
         given: usize,
         expected: usize,
     },

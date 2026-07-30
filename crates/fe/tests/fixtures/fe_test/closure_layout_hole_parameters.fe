@@ -11,30 +11,30 @@ fn inferred_identity<const ROOT: u256>(
     _ value: own Rooted<ROOT>,
 ) -> Rooted<ROOT> {
     let identity = |value: own Rooted| value
-    identity.call_once(value)
+    identity(value)
 }
 
 fn captured<const ROOT: u256>(_ value: own Rooted<ROOT>) -> Rooted<ROOT> {
     let take = || value
-    take.call_once()
+    take()
 }
 
 fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
     let make = || Rooted<ROOT> { value: 12 }
-    make.call()
+    make()
 }
 
 fn take_right<const LEFT: u256, const RIGHT: u256>(
     _ value: own Independent<LEFT, RIGHT>,
 ) -> Rooted<RIGHT> {
     let right = |value: own Independent| value.right
-    right.call_once(value)
+    right(value)
 }
 
 #[test]
 fn test_closure_parameter_layout_holes_are_inferred() {
     let identity = |value: own Rooted| value
-    let result = identity.call_once(Rooted<7> { value: 20 })
+    let result = identity(Rooted<7> { value: 20 })
 
     let read = |value: ref Rooted| value.value
     let rooted = Rooted<8> { value: 10 }
@@ -43,15 +43,15 @@ fn test_closure_parameter_layout_holes_are_inferred() {
     let mut mutable = Rooted<9> { value: 5 }
 
     let sum = |value: Independent| value.left.value + value.right.value
-    let total = sum.call(Independent<10, 11> {
+    let total = sum(Independent<10, 11> {
         left: Rooted<10> { value: 3 },
         right: Rooted<11> { value: 4 },
     })
 
     assert(
         result.value
-            + read.call(ref rooted)
-            + read_mut.call(mut mutable)
+            + read(ref rooted)
+            + read_mut(mut mutable)
             + total
             == 42,
     )
