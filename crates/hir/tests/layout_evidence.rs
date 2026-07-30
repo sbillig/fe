@@ -94,6 +94,37 @@ fn assert_layoutizes(name: &str, src: &str) {
 }
 
 #[test]
+fn closure_capture_layout_outputs_cross_the_call_boundary() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+struct Rooted<const ROOT: u256 = _> {
+    value: u256,
+}
+
+fn captured<const ROOT: u256>(_ value: own Rooted<ROOT>) -> Rooted<ROOT> {
+    let take = || value
+    take.call_once()
+}
+"#,
+    );
+    let parent = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "captured"))),
+    );
+    layout_evidence_body(&db, parent).expect("parent layoutization failed");
+    let closure = parent
+        .callees(&db)
+        .iter()
+        .copied()
+        .find(|callee| matches!(callee.key.owner(&db), BodyOwner::Closure { .. }))
+        .expect("missing closure instance");
+    let closure = get_or_build_semantic_instance(&db, closure.key);
+    layout_evidence_body(&db, closure).expect("closure layoutization failed");
+}
+
+#[test]
 fn runtime_const_uses_bind_one_explicit_layout_input_port() {
     parse_ok!(
         db,

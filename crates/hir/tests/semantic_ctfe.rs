@@ -1023,6 +1023,58 @@ fn wraps_after_aug_assign() -> bool {
 }
 
 #[test]
+fn canonicalize_invalidates_const_facts_for_nested_mut_call_args() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_ctfe_nested_mut.fe".into(),
+        r#"
+fn closure_mutates_packed_arg() -> bool {
+    let mut value: u256 = 1
+    let increment = |target: mut u256| {
+        target += 1
+    }
+    increment.call(mut value)
+    value == 2
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    let func = top_mod
+        .all_funcs(&db)
+        .iter()
+        .find(|func| {
+            matches!(
+                func.name(&db),
+                Partial::Present(name) if name.data(&db) == "closure_mutates_packed_arg"
+            )
+        })
+        .expect("expected closure_mutates_packed_arg function");
+    let semantic = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+    );
+    let body = canonicalize_semantic_consts(&db, semantic);
+
+    let post_call_comparison = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .filter_map(|stmt| {
+            let SStmtKind::Assign { dst, expr } = &stmt.kind else {
+                return None;
+            };
+            body.locals[dst.index()].ty.is_bool(&db).then_some(expr)
+        })
+        .next_back()
+        .expect("expected post-call boolean comparison");
+    assert!(
+        matches!(post_call_comparison, SExpr::Call { .. }),
+        "a nested mutable call argument must invalidate the caller constant before the comparison: {post_call_comparison:#?}",
+    );
+}
+
+#[test]
 fn canonicalize_concretizes_negated_min_literal_comparisons() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

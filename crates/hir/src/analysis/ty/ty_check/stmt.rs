@@ -3,7 +3,10 @@ use salsa::Update;
 use crate::analysis::HirAnalysisDb;
 use crate::core::hir_def::{ExprId, IdentId, Partial, Pat, PatId, Stmt, StmtId};
 
-use super::{Callable, LocalBinding, TyChecker, instantiate_trait_method};
+use super::{
+    Callable, LocalBinding, TyChecker, env::PendingForLoopSeq, expr::PendingPrimitiveOpResolution,
+    instantiate_trait_method,
+};
 use crate::analysis::ty::{
     LayoutBundlePathStep,
     canonical::Canonical,
@@ -193,7 +196,9 @@ impl<'db> TyChecker<'db> {
 
         // Resolve Seq implementation and get element type
         let (elem_ty, for_loop_seq) = self.resolve_seq_info(expr_ty, *expr, stmt);
-
+        if let Some(seq_info) = for_loop_seq {
+            self.register_resolved_for_loop_seq(stmt, *expr, elem_ty, seq_info);
+        }
         let layout =
             self.pattern_layout_context_for_projection(*expr, &[LayoutBundlePathStep::Index]);
         let layout = layout.filter(|layout| {
@@ -203,10 +208,6 @@ impl<'db> TyChecker<'db> {
                         == crate::analysis::ty::layout_shape_key(self.db, elem_ty)
                 })
         });
-        if let Some(mut seq_info) = for_loop_seq {
-            seq_info.element_layout_backing_source = layout.is_some();
-            self.env.register_for_loop_seq(stmt, seq_info);
-        }
         self.check_pat_with_layout(*pat, elem_ty, layout.as_ref());
 
         self.env.enter_loop(stmt);
@@ -222,6 +223,41 @@ impl<'db> TyChecker<'db> {
         TyId::unit(self.db)
     }
 
+    fn register_resolved_for_loop_seq(
+        &mut self,
+        stmt: StmtId,
+        expr: ExprId,
+        elem_ty: TyId<'db>,
+        mut seq_info: ForLoopSeq<'db>,
+    ) {
+        let layout =
+            self.pattern_layout_context_for_projection(expr, &[LayoutBundlePathStep::Index]);
+        seq_info.element_layout_backing_source = layout
+            .as_ref()
+            .and_then(|layout| self.projected_pattern_layout_ty(layout, &[]))
+            .is_some_and(|projected| {
+                crate::analysis::ty::layout_shape_key(self.db, projected)
+                    == crate::analysis::ty::layout_shape_key(self.db, elem_ty)
+            });
+        self.env.register_for_loop_seq(stmt, seq_info);
+    }
+
+    fn defer_seq_info(
+        &mut self,
+        iterable_ty: TyId<'db>,
+        expr: ExprId,
+        stmt: StmtId,
+    ) -> (TyId<'db>, Option<ForLoopSeq<'db>>) {
+        let elem_ty = self.fresh_ty();
+        self.env.register_pending_for_loop_seq(PendingForLoopSeq {
+            stmt,
+            expr,
+            iterable_ty,
+            elem_ty,
+        });
+        (elem_ty, None)
+    }
+
     /// Resolve the Seq implementation for an iterable type.
     ///
     /// Returns the element type and optionally the resolved Seq methods.
@@ -230,7 +266,7 @@ impl<'db> TyChecker<'db> {
         &mut self,
         iterable_ty: TyId<'db>,
         expr: ExprId,
-        _stmt: StmtId,
+        stmt: StmtId,
     ) -> (TyId<'db>, Option<ForLoopSeq<'db>>) {
         let (base, _args) = iterable_ty.decompose_ty_app(self.db);
 
@@ -244,9 +280,7 @@ impl<'db> TyChecker<'db> {
             return (TyId::invalid(self.db, InvalidCause::Other), None);
         }
         if base.is_ty_var(self.db) {
-            let diag = BodyDiag::TypeMustBeKnown(expr.span(self.body()).into());
-            self.push_diag(diag);
-            return (TyId::invalid(self.db, InvalidCause::Other), None);
+            return self.defer_seq_info(iterable_ty, expr, stmt);
         }
 
         // Look up Seq trait (if missing, treat as invalid).
@@ -371,6 +405,10 @@ impl<'db> TyChecker<'db> {
             }
         }
 
+        if iterable_ty.has_var(self.db) {
+            return self.defer_seq_info(iterable_ty, expr, stmt);
+        }
+
         // Type doesn't implement Seq
         let diag = BodyDiag::TraitNotImplemented {
             primary: expr.span(self.body()).into(),
@@ -379,6 +417,33 @@ impl<'db> TyChecker<'db> {
         };
         self.push_diag(diag);
         (TyId::invalid(self.db, InvalidCause::Other), None)
+    }
+
+    pub(super) fn resolve_pending_for_loop_seq(
+        &mut self,
+        pending: PendingForLoopSeq<'db>,
+    ) -> PendingPrimitiveOpResolution {
+        let iterable_ty = pending.iterable_ty.fold_with(self.db, &mut self.table);
+        if iterable_ty.has_var(self.db) {
+            return PendingPrimitiveOpResolution::Pending;
+        }
+        let (elem_ty, for_loop_seq) =
+            self.resolve_seq_info(iterable_ty, pending.expr, pending.stmt);
+        if elem_ty.has_invalid(self.db) {
+            return PendingPrimitiveOpResolution::Done;
+        }
+        let elem_ty = self.equate_ty(
+            pending.elem_ty,
+            elem_ty,
+            pending.expr.span(self.body()).into(),
+        );
+        if elem_ty.has_invalid(self.db) {
+            return PendingPrimitiveOpResolution::Done;
+        }
+        if let Some(seq_info) = for_loop_seq {
+            self.register_resolved_for_loop_seq(pending.stmt, pending.expr, elem_ty, seq_info);
+        }
+        PendingPrimitiveOpResolution::Resolved
     }
 
     fn check_while(&mut self, stmt: StmtId, stmt_data: &Stmt<'db>) -> TyId<'db> {

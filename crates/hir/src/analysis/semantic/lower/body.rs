@@ -19,6 +19,7 @@ use crate::{
             sem_const_from_ty, unit_const,
         },
         ty::{
+            adt_def::instantiate_adt_field_shape,
             const_ty::{
                 CallableInputLayoutHoleOrigin, ConstTyData, EvaluatedConstTy,
                 const_ty_or_abstract_from_assoc_const_use,
@@ -31,7 +32,7 @@ use crate::{
                 RecordLike, ReturnIndexSource, ReturnProjectionStep, ReturnProvenance,
                 SemanticExprLowering, TypedBody, TypedCallableBody, ValueAccess, ValuePathRef,
             },
-            ty_def::{BorrowKind, PrimTy, TyBase, TyData, TyId},
+            ty_def::{BorrowKind, CapabilityKind, PrimTy, TyBase, TyData, TyId},
         },
     },
     hir_def::{
@@ -201,6 +202,7 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     pub(super) blocks: Vec<BlockState<'db>>,
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, SLocalId>,
     pub(super) closure_env_local: Option<SLocalId>,
+    pub(super) closure_args_local: Option<SLocalId>,
     pub(super) closure_capture_fields: FxHashMap<LocalBinding<'db>, FieldIndex>,
     pub(super) with_binding_values: FxHashMap<ExprId, SValueId>,
     pub(super) current: SBlockId,
@@ -277,14 +279,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             blocks: Vec::new(),
             binding_locals: FxHashMap::default(),
             closure_env_local: None,
+            closure_args_local: None,
             closure_capture_fields: FxHashMap::default(),
             with_binding_values: FxHashMap::default(),
             current: SBlockId::from_u32(0),
             next_stmt_id: 0,
             loop_stack: Vec::new(),
         };
-        cx.collect_binding_locals();
         cx.current = cx.new_block();
+        cx.collect_binding_locals();
         cx
     }
 
@@ -325,10 +328,54 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 } = binding
                 {
                     self.closure_env_local = Some(local);
+                } else if let LocalBinding::Param {
+                    site: ParamSite::ClosureArgs(_),
+                    ..
+                } = binding
+                {
+                    self.closure_args_local = Some(local);
                 }
             }
 
             if let Some(info) = self.typed_body.closure_info(def.expr).cloned() {
+                let args_local = self
+                    .closure_args_local
+                    .expect("closure body must have an argument-pack local");
+                for (idx, binding) in info.params.iter().copied().enumerate() {
+                    let local = self.alloc_local(
+                        self.binding_ty(binding),
+                        if binding.is_mut() {
+                            Mutability::Mutable
+                        } else {
+                            Mutability::Immutable
+                        },
+                        None,
+                    );
+                    self.binding_locals.insert(binding, local);
+                    let intent = match binding {
+                        LocalBinding::Param {
+                            mode: crate::hir_def::params::FuncParamMode::Own,
+                            ..
+                        } => SOperandIntent::Move,
+                        LocalBinding::Param {
+                            mode: crate::hir_def::params::FuncParamMode::View,
+                            ..
+                        } => SOperandIntent::Read,
+                        LocalBinding::Local { .. } | LocalBinding::EffectParam { .. } => {
+                            unreachable!("closure parameters are parameter bindings")
+                        }
+                    };
+                    self.push_synthetic_stmt(SStmtKind::Assign {
+                        dst: local,
+                        expr: SExpr::Field {
+                            base: SOperand::synthetic(args_local).with_intent(intent),
+                            field: FieldIndex(
+                                u16::try_from(idx)
+                                    .expect("closure argument field index must fit in u16"),
+                            ),
+                        },
+                    });
+                }
                 for (idx, capture) in info.captures.iter().enumerate() {
                     self.closure_capture_fields
                         .insert(capture.binding, FieldIndex(idx as u16));
@@ -500,9 +547,88 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         ty: TyId<'db>,
         expr: SExpr<'db>,
     ) -> SValueId {
+        let expr = self.materialize_enum_view_operands(origin, expr);
         let dst = self.alloc_temp(ty);
         self.push_stmt(origin, SStmtKind::Assign { dst, expr });
         dst
+    }
+
+    fn materialize_enum_view_operands(
+        &mut self,
+        origin: SemOrigin<'db>,
+        expr: SExpr<'db>,
+    ) -> SExpr<'db> {
+        match expr {
+            SExpr::EnumMake {
+                enum_ty,
+                variant,
+                fields,
+            } => {
+                let adt = enum_ty.adt_def(self.db);
+                let fields = fields
+                    .into_vec()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, field)| {
+                        adt.map(|adt| {
+                            instantiate_adt_field_shape(
+                                self.db,
+                                adt,
+                                usize::from(variant.0),
+                                idx,
+                                enum_ty.generic_args(self.db),
+                            )
+                        })
+                        .map_or(field, |expected| {
+                            self.materialize_view_operand(origin, field, expected)
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                SExpr::EnumMake {
+                    enum_ty,
+                    variant,
+                    fields,
+                }
+            }
+            expr => expr,
+        }
+    }
+
+    fn materialize_view_operand(
+        &mut self,
+        origin: SemOrigin<'db>,
+        operand: SOperand,
+        expected: TyId<'db>,
+    ) -> SOperand {
+        let expected = normalize_ty(self.db, expected, self.body.scope(), self.assumptions);
+        let actual = normalize_ty(
+            self.db,
+            self.locals[operand.value.index()].ty,
+            self.body.scope(),
+            self.assumptions,
+        );
+        if !matches!(
+            expected.as_capability(self.db),
+            Some((CapabilityKind::View, _))
+        ) || actual.as_capability(self.db).is_some()
+        {
+            return operand;
+        }
+
+        let value = self.emit_expr_with_origin(
+            operand.sem_origin(origin),
+            expected,
+            SExpr::ReadPlace {
+                place: SPlace::new(operand.value),
+                intent: SOperandIntent::Read,
+            },
+        );
+        SOperand {
+            value,
+            intent: SOperandIntent::Read,
+            ..operand
+        }
     }
 
     pub(super) fn emit_expr(&mut self, ty: TyId<'db>, expr: SExpr<'db>) -> SValueId {
@@ -541,15 +667,35 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     pub(super) fn lower_expr(&mut self, expr: ExprId) -> SValueId {
+        let target_ty = self.expr_ty(expr);
+        let source_ty = self
+            .typed_body
+            .contextual_view_source(expr)
+            .filter(|_| self.typed_body.expr_place(expr).is_none())
+            .unwrap_or(target_ty);
+        let source = self.lower_expr_as(expr, source_ty);
+        if source_ty == target_ty {
+            return source;
+        }
+        self.emit_expr_with_origin(
+            SemOrigin::Expr(expr),
+            target_ty,
+            SExpr::ReadPlace {
+                place: SPlace::new(source),
+                intent: SOperandIntent::Read,
+            },
+        )
+    }
+
+    fn lower_expr_as(&mut self, expr: ExprId, ty: TyId<'db>) -> SValueId {
         let Partial::Present(expr_data) = expr.data(self.db, self.body) else {
             panic!("cannot lower absent expression")
         };
         let origin = SemOrigin::Expr(expr);
-        let ty = self.expr_ty(expr);
 
         match expr_data {
-            Expr::Lit(lit) => self.lower_leaf_literal(expr, lit),
-            Expr::Path(_) => self.lower_path_expr(expr),
+            Expr::Lit(lit) => self.lower_leaf_literal(expr, lit, ty),
+            Expr::Path(_) => self.lower_path_expr(expr, ty),
             Expr::Closure { .. } => {
                 let info = self
                     .typed_body
@@ -580,7 +726,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 let value = self.lower_expr_operand(*elem);
                 self.emit_expr_with_origin(origin, ty, SExpr::ArrayRepeat { ty, value })
             }
-            Expr::RecordInit(path, fields) => self.lower_record_init(expr, *path, fields),
+            Expr::RecordInit(path, fields) => self.lower_record_init(expr, *path, fields, ty),
             Expr::Field(base, _) => {
                 if let Some(place) = self.typed_body.expr_place(expr) {
                     let place = self.lower_place_data(place);
@@ -654,7 +800,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     return self.lower_call_like_expr(expr, ty, Some(*inner), &[]);
                 }
                 if *op == UnOp::Minus
-                    && let Some(value) = self.lower_negated_int_literal(expr, *inner)
+                    && let Some(value) = self.lower_negated_int_literal(expr, *inner, ty)
                 {
                     return value;
                 }
@@ -662,7 +808,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.emit_expr_with_origin(origin, ty, SExpr::Unary { op: *op, value })
             }
             Expr::Bin(lhs, rhs, BinOp::Arith(ArithBinOp::Range)) => {
-                let ty = self.expr_ty(expr);
                 let lhs = self.lower_expr_operand(*lhs);
                 let rhs = self.lower_expr_operand(*rhs);
                 let unit = SOperand::synthetic(self.unit_value());
@@ -712,9 +857,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     },
                 )
             }
-            Expr::Call(_, args) => self.lower_call(expr, None, args),
+            Expr::Call(_, args) => self.lower_call(expr, None, args, ty),
             Expr::Assert(args) => self.lower_assert(expr, args),
-            Expr::MethodCall(receiver, _, _, args) => self.lower_call(expr, Some(*receiver), args),
+            Expr::MethodCall(receiver, _, _, args) => {
+                self.lower_call(expr, Some(*receiver), args, ty)
+            }
             Expr::Assign(dst, src) => {
                 let dst_place = self.lower_place(*dst);
                 let src = self.lower_expr_operand(*src);
@@ -757,9 +904,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Expr::Block(stmts) => self.lower_block_expr(stmts),
             Expr::If(cond, then_expr, else_expr) => {
-                self.lower_if_expr(*cond, *then_expr, *else_expr)
+                self.lower_if_expr(*cond, *then_expr, *else_expr, ty)
             }
-            Expr::Match(scrutinee, arms) => self.lower_match_expr(expr, *scrutinee, arms),
+            Expr::Match(scrutinee, arms) => self.lower_match_expr(*scrutinee, arms, ty),
             Expr::With(bindings, body) => self.lower_with_expr(bindings, *body),
         }
     }
@@ -798,8 +945,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.unit_value()
     }
 
-    fn lower_leaf_literal(&mut self, expr: ExprId, lit: &LitKind<'db>) -> SValueId {
-        let ty = self.expr_ty(expr);
+    fn lower_leaf_literal(&mut self, expr: ExprId, lit: &LitKind<'db>, ty: TyId<'db>) -> SValueId {
         let value = match lit {
             LitKind::Int(int_id) => int_const(self.db, ty, int_id.data(self.db).clone().into()),
             LitKind::String(string_id) => {
@@ -822,12 +968,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         )
     }
 
-    fn lower_negated_int_literal(&mut self, expr: ExprId, inner: ExprId) -> Option<SValueId> {
+    fn lower_negated_int_literal(
+        &mut self,
+        expr: ExprId,
+        inner: ExprId,
+        ty: TyId<'db>,
+    ) -> Option<SValueId> {
         let Partial::Present(Expr::Lit(LitKind::Int(int_id))) = inner.data(self.db, self.body)
         else {
             return None;
         };
-        let ty = self.expr_ty(expr);
         let value = int_const(self.db, ty, -BigInt::from(int_id.data(self.db).clone()));
         Some(self.emit_expr_with_origin(
             SemOrigin::Expr(expr),
@@ -836,8 +986,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         ))
     }
 
-    fn lower_const_ref(&mut self, expr: ExprId, const_ref: ConstRef<'db>) -> SValueId {
-        let ty = self.expr_ty(expr);
+    fn lower_const_ref(
+        &mut self,
+        expr: ExprId,
+        const_ref: ConstRef<'db>,
+        ty: TyId<'db>,
+    ) -> SValueId {
         let mut type_level_fallback = None;
         let symbolic_const_ty = match const_ref {
             ConstRef::TraitConst(assoc) => {
@@ -902,9 +1056,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         panic!("const ref should resolve to a semantic instance: {const_ref:?}");
     }
 
-    fn lower_path_expr(&mut self, expr: ExprId) -> SValueId {
+    fn lower_path_expr(&mut self, expr: ExprId, ty: TyId<'db>) -> SValueId {
         if let Some(binding) = self.typed_body.expr_binding(expr) {
-            if let Some(value) = self.lower_captured_binding_read(expr, binding) {
+            if let Some(value) = self.lower_captured_binding_read(expr, binding, ty) {
                 return value;
             }
             let local = *self
@@ -916,19 +1070,19 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.typed_body
                     .path_expr_read_semantics(expr)
                     .expect("binding path should have typed read semantics"),
-                self.expr_ty(expr),
+                ty,
             ) {
                 PathReadSemantics::ReuseLocal => local,
                 PathReadSemantics::ForwardInterface => self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
-                    self.expr_ty(expr),
+                    ty,
                     SExpr::Forward(
                         SOperand::inherited(local).with_intent(self.expr_operand_intent(expr)),
                     ),
                 ),
                 PathReadSemantics::MaterializeValue => self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
-                    self.expr_ty(expr),
+                    ty,
                     SExpr::UseValue(
                         SOperand::inherited(local).with_intent(self.expr_operand_intent(expr)),
                     ),
@@ -936,12 +1090,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             };
         }
         if let Some(const_ref) = self.typed_body.expr_const_ref(expr) {
-            return self.lower_const_ref(expr, const_ref);
+            return self.lower_const_ref(expr, const_ref, ty);
         }
         if let Some(region) = self.typed_body.expr_code_region_ref(self.db, expr) {
             return self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),
-                self.expr_ty(expr),
+                ty,
                 SExpr::CodeRegionRef { region },
             );
         }
@@ -949,7 +1103,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         match self.typed_body.value_path_ref(expr) {
             Some(ValuePathRef::UnitVariant(variant)) => self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),
-                self.expr_ty(expr),
+                ty,
                 SExpr::EnumMake {
                     enum_ty: variant.ty,
                     variant: VariantIndex(variant.variant.idx),
@@ -958,16 +1112,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             ),
             Some(ValuePathRef::TypeConst(ty)) => {
                 if let Some(value) = sem_const_from_ty(self.db, ty) {
-                    let value = reify_runtime_const_for_ty(
-                        self.db,
-                        self.instance,
-                        self.expr_ty(expr),
-                        value,
-                    )
-                    .unwrap_or(value);
+                    let value = reify_runtime_const_for_ty(self.db, self.instance, ty, value)
+                        .unwrap_or(value);
                     self.emit_expr_with_origin(
                         SemOrigin::Expr(expr),
-                        self.expr_ty(expr),
+                        ty,
                         SExpr::Const(SConst::Value(value)),
                     )
                 } else {
@@ -995,12 +1144,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         &mut self,
         expr: ExprId,
         binding: LocalBinding<'db>,
+        ty: TyId<'db>,
     ) -> Option<SValueId> {
         let field = *self.closure_capture_fields.get(&binding)?;
         let env = self.closure_env_local?;
         Some(self.emit_expr_with_origin(
             SemOrigin::Expr(expr),
-            self.expr_ty(expr),
+            ty,
             SExpr::Field {
                 base: SOperand::inherited(env).with_intent(self.expr_operand_intent(expr)),
                 field,
@@ -1082,6 +1232,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         expr: ExprId,
         _: Partial<PathId<'db>>,
         fields: &[HirField<'db>],
+        ty: TyId<'db>,
     ) -> SValueId {
         match self
             .typed_body
@@ -1101,7 +1252,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
                 self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
-                    self.expr_ty(expr),
+                    ty,
                     SExpr::EnumMake {
                         enum_ty: variant.ty,
                         variant: VariantIndex(variant.variant.idx),
@@ -1113,7 +1264,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 )
             }
             RecordInitLowering::Struct => {
-                let ty = self.expr_ty(expr);
                 let mut values = vec![None; fields.len()];
                 for field in fields {
                     let Some(label) = field.label_eagerly(self.db, self.body) else {
@@ -1144,9 +1294,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         expr: ExprId,
         receiver: Option<ExprId>,
         args: &[CallArg<'db>],
+        ty: TyId<'db>,
     ) -> SValueId {
         let arg_exprs = args.iter().map(|arg| arg.expr).collect::<Vec<_>>();
-        self.lower_call_like_expr(expr, self.expr_ty(expr), receiver, &arg_exprs)
+        self.lower_call_like_expr(expr, ty, receiver, &arg_exprs)
     }
 
     fn lower_call_like_expr(
@@ -1177,7 +1328,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.emit_expr_with_origin(SemOrigin::Expr(expr), ty, lowered)
             }
             SemanticExprLowering::ConstIntrinsic { callable, kind } => {
-                self.lower_const_intrinsic(expr, callable, *kind)
+                self.lower_const_intrinsic(expr, callable, *kind, ty)
             }
         }
     }
@@ -1212,15 +1363,62 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         args: &[ExprId],
         callable: &crate::analysis::ty::ty_check::Callable<'db>,
     ) -> SValueId {
-        let mut values = Vec::with_capacity(args.len() + usize::from(receiver.is_some()));
-        if let Some(receiver) = receiver {
-            values.push(SOperand::expr(
-                self.lower_callable_receiver(expr, receiver),
-                receiver,
-            ));
-        }
-        for arg in args {
-            values.push(self.lower_expr_operand(*arg));
+        let call_args_pack = callable
+            .call_trait_args_pack_ty(self.db, self.body.scope())
+            .map(|ty| self.instance.normalized_ty(self.db, ty));
+        let mut values = Vec::with_capacity(if call_args_pack.is_some() {
+            2
+        } else {
+            args.len() + usize::from(receiver.is_some())
+        });
+        if let Some(pack_ty) = call_args_pack {
+            let logical_args = if let Some(receiver) = receiver {
+                values.push(SOperand::expr(
+                    self.lower_callable_receiver(expr, receiver),
+                    receiver,
+                ));
+                args
+            } else {
+                let (receiver, logical_args) = args
+                    .split_first()
+                    .expect("call trait invocation must include a receiver");
+                values.push(self.lower_expr_operand(*receiver));
+                logical_args
+            };
+            let field_tys = pack_ty.field_types(self.db);
+            debug_assert_eq!(logical_args.len(), field_tys.len());
+            let fields = logical_args
+                .iter()
+                .zip(field_tys)
+                .map(|(arg, ty)| {
+                    self.lower_expr_operand(*arg).with_intent(
+                        if ty.as_capability(self.db).is_some() {
+                            SOperandIntent::Read
+                        } else {
+                            SOperandIntent::Move
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            let pack = self.emit_expr(
+                pack_ty,
+                SExpr::AggregateMake {
+                    ty: pack_ty,
+                    fields,
+                },
+            );
+            values.push(SOperand::synthetic(pack).with_intent(SOperandIntent::Move));
+        } else {
+            if let Some(receiver) = receiver {
+                values.push(SOperand::expr(
+                    self.lower_callable_receiver(expr, receiver),
+                    receiver,
+                ));
+            }
+            for arg in args {
+                values.push(self.lower_expr_operand(*arg));
+            }
         }
 
         match callable.callable_def() {
@@ -1474,6 +1672,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         expr: ExprId,
         callable: &crate::analysis::ty::ty_check::Callable<'db>,
         kind: ConstIntrinsicKind,
+        result_ty: TyId<'db>,
     ) -> SValueId {
         let ty = match kind {
             ConstIntrinsicKind::SizeOf => normalize_ty(
@@ -1494,10 +1693,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         });
         self.emit_expr_with_origin(
             SemOrigin::Expr(expr),
-            self.expr_ty(expr),
+            result_ty,
             SExpr::Const(SConst::Value(int_const(
                 self.db,
-                self.expr_ty(expr),
+                result_ty,
                 BigInt::from(size),
             ))),
         )
@@ -1725,8 +1924,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         cond: CondId,
         then_expr: ExprId,
         else_expr: Option<ExprId>,
+        result_ty: TyId<'db>,
     ) -> SValueId {
-        let result_ty = self.expr_ty(then_expr);
         let result = self.alloc_temp(result_ty);
         let then_bb = self.new_block();
         let else_bb = self.new_block();
@@ -1860,15 +2059,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     fn lower_match_expr(
         &mut self,
-        expr: ExprId,
         scrutinee: ExprId,
         arms: &Partial<Vec<MatchArm>>,
+        result_ty: TyId<'db>,
     ) -> SValueId {
         let Partial::Present(arms) = arms else {
             panic!("match arms missing")
         };
         let value = self.lower_expr(scrutinee);
-        let result = self.alloc_temp(self.expr_ty(expr));
+        let result = self.alloc_temp(result_ty);
         let join_bb = self.new_block();
         self.lower_match_expr_with_decision_tree(
             value,

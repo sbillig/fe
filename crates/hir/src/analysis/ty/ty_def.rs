@@ -304,7 +304,7 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::tuple(n)))
     }
 
-    pub(super) fn tuple_with_elems(db: &'db dyn HirAnalysisDb, elems: &[TyId<'db>]) -> Self {
+    pub(crate) fn tuple_with_elems(db: &'db dyn HirAnalysisDb, elems: &[TyId<'db>]) -> Self {
         let base = TyBase::tuple(elems.len());
         let mut ty = Self::new(db, TyData::TyBase(base));
         for &elem in elems {
@@ -1056,6 +1056,101 @@ impl ClosureCallMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ClosureParamMode {
+    Own,
+    View,
+    Ref,
+    Mut,
+}
+
+impl ClosureParamMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Own => "own",
+            Self::View => "view",
+            Self::Ref => "ref",
+            Self::Mut => "mut",
+        }
+    }
+
+    pub fn try_from_carrier<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<Self> {
+        if let Some((kind, _)) = ty.as_capability(db) {
+            return Some(match kind {
+                CapabilityKind::View => Self::View,
+                CapabilityKind::Ref => Self::Ref,
+                CapabilityKind::Mut => Self::Mut,
+            });
+        }
+
+        match ty.base_ty(db).data(db) {
+            TyData::TyVar(_)
+            | TyData::TyParam(_)
+            | TyData::AssocTy(_)
+            | TyData::QualifiedTy(_)
+            | TyData::Invalid(_) => None,
+            _ => Some(Self::Own),
+        }
+    }
+
+    pub fn carrier<'db>(self, db: &'db dyn HirAnalysisDb, payload: TyId<'db>) -> TyId<'db> {
+        match self {
+            Self::Own => payload,
+            Self::View => TyId::view_of(db, payload),
+            Self::Ref => TyId::borrow_ref_of(db, payload),
+            Self::Mut => TyId::borrow_mut_of(db, payload),
+        }
+    }
+
+    pub fn payload<'db>(self, db: &'db dyn HirAnalysisDb, carrier: TyId<'db>) -> TyId<'db> {
+        match self {
+            Self::Own => carrier,
+            Self::View | Self::Ref | Self::Mut => carrier
+                .as_capability(db)
+                .map(|(_, inner)| inner)
+                .unwrap_or(carrier),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct ClosureSignature<'db> {
+    params: Vec<TyId<'db>>,
+    param_modes: Vec<ClosureParamMode>,
+    ret_ty: TyId<'db>,
+}
+
+impl<'db> ClosureSignature<'db> {
+    pub fn new(
+        params: Vec<TyId<'db>>,
+        param_modes: Vec<ClosureParamMode>,
+        ret_ty: TyId<'db>,
+    ) -> Self {
+        assert_eq!(
+            params.len(),
+            param_modes.len(),
+            "every closure parameter must have an ownership mode"
+        );
+        Self {
+            params,
+            param_modes,
+            ret_ty,
+        }
+    }
+
+    pub fn params(&self) -> &[TyId<'db>] {
+        &self.params
+    }
+
+    pub fn param_modes(&self) -> &[ClosureParamMode] {
+        &self.param_modes
+    }
+
+    pub fn ret_ty(&self) -> TyId<'db> {
+        self.ret_ty
+    }
+}
+
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ClosureTy<'db> {
@@ -1068,17 +1163,39 @@ pub struct ClosureTy<'db> {
     #[return_ref]
     pub captures: Vec<TyId<'db>>,
     #[return_ref]
-    pub params: Vec<TyId<'db>>,
-    pub ret_ty: TyId<'db>,
+    pub signature: ClosureSignature<'db>,
     pub call_mode: ClosureCallMode,
 }
 
 impl<'db> ClosureTy<'db> {
+    pub fn params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
+        self.signature(db).params()
+    }
+
+    pub fn param_modes(self, db: &'db dyn HirAnalysisDb) -> &'db [ClosureParamMode] {
+        self.signature(db).param_modes()
+    }
+
+    pub fn ret_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        self.signature(db).ret_ty()
+    }
+
+    pub fn args_pack_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        TyId::tuple_with_elems(db, self.params(db))
+    }
+
     pub fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
         let params = self
             .params(db)
             .iter()
-            .map(|ty| ty.pretty_print(db).to_string())
+            .zip(self.param_modes(db))
+            .map(|(&ty, &mode)| {
+                format!(
+                    "{} {}",
+                    mode.as_str(),
+                    mode.payload(db, ty).pretty_print(db),
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ");
         format!("fn({params}) -> {}", self.ret_ty(db).pretty_print(db))
@@ -2029,9 +2146,14 @@ fn pretty_print_ty_app<'db>(
             let mut s = ("(").to_string();
             if let Some(first) = args.next() {
                 s.push_str(&first.pretty_print_with_mode(db, mode));
+                let mut has_more = false;
                 for arg in args {
+                    has_more = true;
                     s.push_str(", ");
                     s.push_str(&arg.pretty_print_with_mode(db, mode));
+                }
+                if !has_more {
+                    s.push(',');
                 }
             }
             s.push(')');

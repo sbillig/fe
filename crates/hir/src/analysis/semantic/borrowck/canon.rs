@@ -385,16 +385,23 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
                         );
                         self.propagated_held_loans(*dst, held)
                     }
-                    NExpr::ReadPlace { place, .. } => self
-                        .place_base_local(place)
-                        .map(|base| {
-                            let projection = self.layout_path(&place.path).unwrap_or_default();
-                            self.propagated_held_loans(
-                                *dst,
-                                state.projected_held_loans(base, &projection),
-                            )
-                        })
-                        .unwrap_or_default(),
+                    NExpr::ReadPlace { place, .. } => {
+                        let own = self.own_held_loan_for_local(*dst);
+                        if own.is_empty() {
+                            self.place_base_local(place)
+                                .map(|base| {
+                                    let projection =
+                                        self.layout_path(&place.path).unwrap_or_default();
+                                    self.propagated_held_loans(
+                                        *dst,
+                                        state.projected_held_loans(base, &projection),
+                                    )
+                                })
+                                .unwrap_or_default()
+                        } else {
+                            own
+                        }
+                    }
                     _ => HeldLoans::default(),
                 };
                 state.assign_held_loans(*dst, held);
@@ -522,13 +529,15 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
                 return targets;
             }
         }
-        let resolved =
-            resolved_layout_backing_places(local_data.layout_backing_sources(), &projection);
-        if !resolved.is_empty() {
-            return resolved
-                .iter()
-                .flat_map(|place| self.canonicalize_place_targets(state, place))
-                .collect();
+        if local_data.ty.as_borrow(self.db).is_none() {
+            let resolved =
+                resolved_layout_backing_places(local_data.layout_backing_sources(), &projection);
+            if !resolved.is_empty() {
+                return resolved
+                    .iter()
+                    .flat_map(|place| self.canonicalize_place_targets(state, place))
+                    .collect();
+            }
         }
         if local_data.ty.as_borrow(self.db).is_none()
             && ty_contains_borrow(self.db, local_data.ty)

@@ -37,12 +37,21 @@ impl ClosureCallTrait {
     }
 
     fn is_implemented_by(self, db: &dyn HirAnalysisDb, closure: ClosureTy<'_>) -> bool {
-        matches!(closure.params(db).as_slice(), [param] if param.as_borrow(db).is_none())
-            && (self == Self::FnOnce || closure.call_mode(db) == ClosureCallMode::Reusable)
+        self == Self::FnOnce || closure.call_mode(db) == ClosureCallMode::Reusable
     }
 
     fn trait_def<'db>(self, db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Option<Trait<'db>> {
         resolve_core_trait(db, scope, &["functional", self.trait_name()])
+    }
+
+    pub fn for_trait<'db>(
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        trait_: Trait<'db>,
+    ) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|call_trait| call_trait.trait_def(db, scope) == Some(trait_))
     }
 }
 
@@ -69,7 +78,6 @@ pub fn implemented_closure_call_trait<'db>(
     closure: ClosureTy<'db>,
     trait_: Trait<'db>,
 ) -> Option<ClosureCallTrait> {
-    ClosureCallTrait::ALL.into_iter().find(|call_trait| {
-        call_trait.is_implemented_by(db, closure) && call_trait.trait_def(db, scope) == Some(trait_)
-    })
+    ClosureCallTrait::for_trait(db, scope, trait_)
+        .filter(|call_trait| call_trait.is_implemented_by(db, closure))
 }

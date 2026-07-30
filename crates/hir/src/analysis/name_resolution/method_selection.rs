@@ -284,16 +284,21 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
         else {
             return;
         };
-        let [arg_ty] = closure.params(self.db).as_slice() else {
-            return;
-        };
         let inst = TraitInstId::new(
             self.db,
             call_trait,
-            vec![receiver, *arg_ty, closure.ret_ty(self.db)],
+            vec![
+                receiver,
+                closure.args_pack_ty(self.db),
+                closure.ret_ty(self.db),
+            ],
             IndexMap::new(),
         );
-        self.insert_assumption_trait_method_cand(inst);
+        let Some(&method) = call_trait.method_defs(self.db).get(&self.method_name) else {
+            return;
+        };
+        self.candidates.builtin_closure_call =
+            Some(AssembledTraitMethodCand::Assumption { inst, method });
     }
 
     fn allow_trait(&self, trait_def: Trait<'db>) -> bool {
@@ -342,6 +347,14 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
     fn select(self) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
         if let Some(res) = self.select_inherent_method() {
             return res;
+        }
+
+        // `call` and `call_once` are intrinsic operations on closure values.
+        // Unrelated blanket extension traits with the same method names must
+        // not hijack closure dispatch or prevent call arguments from
+        // constraining an inferred closure signature.
+        if let Some(candidate) = self.candidates.builtin_closure_call {
+            return Self::finalize_sole_check(self.check_trait_cand(candidate));
         }
 
         self.select_trait_methods()
@@ -805,6 +818,7 @@ pub enum MethodSelectionError<'db> {
 #[derive(Default)]
 struct AssembledCandidates<'db> {
     inherent_methods: FxHashSet<ProbedMethod<'db>>,
+    builtin_closure_call: Option<AssembledTraitMethodCand<'db>>,
     traits: IndexSet<AssembledTraitMethodCand<'db>>,
 }
 

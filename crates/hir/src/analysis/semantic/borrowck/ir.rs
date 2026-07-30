@@ -284,7 +284,7 @@ pub(super) fn semantic_projection_for_layout_path<'db>(
     Some(out)
 }
 
-pub(super) fn semantic_projection_ty<'db>(
+pub(crate) fn semantic_projection_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     mut ty: TyId<'db>,
     path: &SemanticProjectionPath<'db>,
@@ -335,13 +335,29 @@ pub struct BorrowResult {
     pub projection: Vec<LayoutBackingProjection>,
 }
 
-pub(super) fn borrow_results_in_ty<'db>(
+pub(crate) fn borrow_results_in_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
+) -> Vec<BorrowResult> {
+    borrow_results_in_ty_impl(db, ty, false)
+}
+
+pub(crate) fn return_borrow_results_in_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Vec<BorrowResult> {
+    borrow_results_in_ty_impl(db, ty, true)
+}
+
+fn borrow_results_in_ty_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    track_views: bool,
 ) -> Vec<BorrowResult> {
     fn collect<'db>(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
+        track_views: bool,
         path: &mut Vec<LayoutBackingProjection>,
         visiting: &mut Vec<TyId<'db>>,
         out: &mut Vec<BorrowResult>,
@@ -354,7 +370,13 @@ pub(super) fn borrow_results_in_ty<'db>(
             return;
         }
         if let Some(inner) = ty.as_view(db) {
-            collect(db, inner, path, visiting, out);
+            if track_views && inner.as_capability(db).is_none() {
+                out.push(BorrowResult {
+                    kind: BorrowKind::Ref,
+                    projection: path.clone(),
+                });
+            }
+            collect(db, inner, track_views, path, visiting, out);
             return;
         }
         if visiting.contains(&ty) {
@@ -367,12 +389,12 @@ pub(super) fn borrow_results_in_ty<'db>(
                 if let Some(len) = ty.array_len(db) {
                     for index in 0..len {
                         path.push(LayoutBackingProjection::Index(Some(index)));
-                        collect(db, elem, path, visiting, out);
+                        collect(db, elem, track_views, path, visiting, out);
                         path.pop();
                     }
                 } else {
                     path.push(LayoutBackingProjection::Index(None));
-                    collect(db, elem, path, visiting, out);
+                    collect(db, elem, track_views, path, visiting, out);
                     path.pop();
                 }
             }
@@ -382,7 +404,7 @@ pub(super) fn borrow_results_in_ty<'db>(
                     continue;
                 };
                 path.push(LayoutBackingProjection::Field(FieldIndex(idx)));
-                collect(db, field_ty, path, visiting, out);
+                collect(db, field_ty, track_views, path, visiting, out);
                 path.pop();
             }
         } else if ty.is_tuple(db)
@@ -395,7 +417,7 @@ pub(super) fn borrow_results_in_ty<'db>(
                     continue;
                 };
                 path.push(LayoutBackingProjection::Field(FieldIndex(idx)));
-                collect(db, field_ty, path, visiting, out);
+                collect(db, field_ty, track_views, path, visiting, out);
                 path.pop();
             }
         } else if let Some(adt) = ty.adt_def(db)
@@ -420,7 +442,7 @@ pub(super) fn borrow_results_in_ty<'db>(
                         variant: VariantIndex(variant_idx),
                         field: FieldIndex(field),
                     });
-                    collect(db, field_ty, path, visiting, out);
+                    collect(db, field_ty, track_views, path, visiting, out);
                     path.pop();
                 }
             }
@@ -430,7 +452,14 @@ pub(super) fn borrow_results_in_ty<'db>(
     }
 
     let mut out = Vec::new();
-    collect(db, ty, &mut Vec::new(), &mut Vec::new(), &mut out);
+    collect(
+        db,
+        ty,
+        track_views,
+        &mut Vec::new(),
+        &mut Vec::new(),
+        &mut out,
+    );
     out.sort_unstable();
     out.dedup();
     out

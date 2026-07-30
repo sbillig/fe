@@ -3,7 +3,7 @@ use super::{
     provider::ProviderAddressSpace,
     trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
-    ty_def::{BorrowKind, CapabilityKind, Kind, TyId},
+    ty_def::{BorrowKind, CapabilityKind, ClosureParamMode, Kind, TyId},
 };
 use crate::visitor::prelude::*;
 use crate::{analysis::HirAnalysisDb, hir_def::Trait};
@@ -625,14 +625,22 @@ pub enum BodyDiag<'db> {
         is_break: bool,
     },
 
-    UnsupportedClosureArity {
+    ClosureParamNumMismatch {
         primary: DynLazySpan<'db>,
-        arity: usize,
+        given: usize,
+        expected: usize,
     },
 
-    UnsupportedClosureBorrowParam {
+    ClosureParamModeMismatch {
         primary: DynLazySpan<'db>,
-        kind: BorrowKind,
+        given: ClosureParamMode,
+        expected: ClosureParamMode,
+    },
+
+    DuplicateClosureParam {
+        primary: DynLazySpan<'db>,
+        conflict_with: DynLazySpan<'db>,
+        name: IdentId<'db>,
     },
 
     AssignToCapturedBinding {
@@ -675,6 +683,11 @@ pub enum BodyDiag<'db> {
         def_span: DynLazySpan<'db>,
         given: usize,
         expected: usize,
+    },
+
+    CallArgsMustBeTuple {
+        primary: DynLazySpan<'db>,
+        args_ty: TyId<'db>,
     },
 
     AssertArgNumMismatch {
@@ -968,8 +981,9 @@ impl<'db> BodyDiag<'db> {
             Self::UnsupportedContractFieldAddressSpace { .. } => 84,
             Self::ImmutableContractFieldMutBinding { .. } => 85,
             Self::LoopControlOutsideOfLoop { .. } => 19,
-            Self::UnsupportedClosureArity { .. } => 87,
-            Self::UnsupportedClosureBorrowParam { .. } => 91,
+            Self::ClosureParamNumMismatch { .. } => 92,
+            Self::ClosureParamModeMismatch { .. } => 94,
+            Self::DuplicateClosureParam { .. } => 95,
             Self::AssignToCapturedBinding { .. } => 88,
             Self::EffectInClosure { .. } => 89,
             Self::ClosureInConstContext { .. } => 90,
@@ -977,6 +991,7 @@ impl<'db> BodyDiag<'db> {
             Self::NotCallable(..) => 21,
             Self::CallGenericArgNumMismatch { .. } => 22,
             Self::CallArgNumMismatch { .. } => 23,
+            Self::CallArgsMustBeTuple { .. } => 93,
             Self::AssertArgNumMismatch { .. } => 82,
             Self::AssertMessageMustBeStringLiteral { .. } => 83,
             Self::CallArgLabelMismatch { .. } => 24,

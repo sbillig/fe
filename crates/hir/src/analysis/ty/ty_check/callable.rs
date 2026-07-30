@@ -11,10 +11,13 @@ use crate::{
 };
 use salsa::Update;
 
-use super::{BodyOwner, ExprProp, LocalBinding, TraitObligationOutcome, TyChecker};
+use super::{
+    BodyOwner, ClosureExpectation, ExprProp, LocalBinding, TraitObligationOutcome, TyChecker,
+};
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
+        closure::ClosureCallTrait,
         const_ty::{CallableInputLayoutHoleOrigin, HoleAnchor, HoleMinter, LayoutHoleArgSite},
         corelib::resolve_lib_func_path,
         diagnostics::{BodyDiag, FuncBodyDiag},
@@ -227,6 +230,65 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
 }
 
 impl<'db> Callable<'db> {
+    fn closure_expectation_for_arg(
+        &self,
+        tc: &mut TyChecker<'db>,
+        arg_idx: usize,
+    ) -> Option<ClosureExpectation<'db>> {
+        let db = tc.db;
+        let constraints = collect_func_decl_constraints(db, self.callable_def, true);
+        let declared = constraints.instantiate_identity();
+        let normalized_generic_args = self
+            .generic_args
+            .iter()
+            .map(|&ty| tc.normalize_ty(ty))
+            .collect::<Vec<_>>();
+        let instantiated = constraints.instantiate(db, &normalized_generic_args);
+        let formal_arg_ty = self
+            .callable_def
+            .arg_tys(db)
+            .get(arg_idx)?
+            .instantiate_identity();
+        let formal_subject_ty = formal_arg_ty
+            .as_capability(db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(formal_arg_ty);
+        let mut found = None;
+
+        for (&declared, &constraint) in declared.list(db).iter().zip(instantiated.list(db)) {
+            if declared.args(db).first() != Some(&formal_subject_ty)
+                || ClosureCallTrait::for_trait(db, tc.env.scope(), declared.def(db)).is_none()
+            {
+                continue;
+            }
+            let constraint = if let Some(inst) = self.trait_inst {
+                let mut subst = AssocTySubst::new(inst);
+                constraint.fold_with(db, &mut subst)
+            } else {
+                constraint
+            };
+            let constraint = tc.normalize_trait_goal(constraint);
+            let args = constraint.args(db);
+            if args.len() != 3 {
+                continue;
+            }
+            let pack = tc.normalize_ty(args[1]);
+            if !pack.is_tuple(db) {
+                continue;
+            }
+            let expected = ClosureExpectation {
+                params: pack.field_types(db),
+                ret_ty: tc.normalize_ty(args[2]),
+            };
+            match &found {
+                Some(previous) if previous != &expected => return None,
+                Some(_) => {}
+                None => found = Some(expected),
+            }
+        }
+        found
+    }
+
     pub fn callable_def(&self) -> CallableDef<'db> {
         self.callable_def
     }
@@ -307,6 +369,16 @@ impl<'db> Callable<'db> {
         self.trait_inst
     }
 
+    pub fn call_trait_args_pack_ty(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    ) -> Option<TyId<'db>> {
+        let inst = self.trait_inst?;
+        ClosureCallTrait::for_trait(db, scope, inst.def(db))?;
+        inst.args(db).get(1).copied()
+    }
+
     pub fn ret_ty(&self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let ret = self
             .callable_def
@@ -378,13 +450,29 @@ impl<'db> Callable<'db> {
     ) {
         let db = tc.db;
 
-        let expected_arity = self.callable_def.arg_tys(db).len();
-        let given_arity = if receiver.is_some() {
-            call_args.len() + 1
-        } else {
-            call_args.len()
-        };
+        let call_args_pack = self
+            .call_trait_args_pack_ty(db, tc.env.scope())
+            .map(|ty| tc.normalize_ty(ty));
+        if let Some(args_ty) = call_args_pack.filter(|ty| !ty.is_tuple(db)) {
+            tc.push_diag(BodyDiag::CallArgsMustBeTuple {
+                primary: span.into(),
+                args_ty,
+            });
+            return;
+        }
+        let call_arg_tys = call_args_pack.map(|ty| ty.field_types(db));
         let has_receiver = receiver.is_some();
+        let expected_arity = call_arg_tys.as_ref().map_or_else(
+            || {
+                self.callable_def
+                    .arg_tys(db)
+                    .len()
+                    .checked_sub(usize::from(has_receiver))
+                    .expect("a method callable must have a receiver parameter")
+            },
+            |args| args.len() + usize::from(!has_receiver),
+        );
+        let given_arity = call_args.len();
         if given_arity != expected_arity {
             let diag = BodyDiag::CallArgNumMismatch {
                 primary: span.into(),
@@ -396,14 +484,13 @@ impl<'db> Callable<'db> {
             return;
         }
 
-        let expected_arg_tys = self.callable_def.arg_tys(db);
-        let func_params: Option<Vec<_>> = match self.callable_def {
+        let physical_params: Option<Vec<_>> = match self.callable_def {
             CallableDef::Func(func) => {
                 let params: Vec<_> = func.params(db).collect();
-                if params.len() != expected_arg_tys.len() {
+                if params.len() != self.callable_def.arg_tys(db).len() {
                     panic!(
                         "callable param length mismatch: expected {} param tys but have {} params",
-                        expected_arg_tys.len(),
+                        self.callable_def.arg_tys(db).len(),
                         params.len()
                     );
                 }
@@ -411,6 +498,76 @@ impl<'db> Callable<'db> {
             }
             CallableDef::VariantCtor(_) => None,
         };
+        let expected_arg_tys = if let Some(call_arg_tys) = call_arg_tys {
+            let mut expected = Vec::with_capacity(call_arg_tys.len() + 1);
+            expected.push(
+                self.arg_ty(db, 0)
+                    .expect("call trait method must have a receiver"),
+            );
+            expected.extend(call_arg_tys);
+            expected
+        } else {
+            (0..self.callable_def.arg_tys(db).len())
+                .map(|idx| {
+                    self.arg_ty(db, idx)
+                        .expect("callable argument index must be valid")
+                })
+                .collect()
+        };
+        let arg_modes = physical_params.as_ref().map(|params| {
+            if call_args_pack.is_some() {
+                let mut modes = Vec::with_capacity(expected_arg_tys.len());
+                modes.push(params[0].mode(db));
+                modes.extend(expected_arg_tys[1..].iter().map(|ty| {
+                    if ty.as_capability(db).is_some() {
+                        FuncParamMode::View
+                    } else {
+                        FuncParamMode::Own
+                    }
+                }));
+                modes
+            } else {
+                params.iter().map(|param| param.mode(db)).collect()
+            }
+        });
+        let expected_labels = (0..expected_arg_tys.len())
+            .map(|idx| {
+                if call_args_pack.is_some() && idx > 0 {
+                    None
+                } else {
+                    self.callable_def.param_label(db, idx)
+                }
+            })
+            .collect::<Vec<_>>();
+        let has_closure_arg = call_args.iter().any(|arg| {
+            matches!(
+                arg.expr.data(db, tc.body()),
+                Partial::Present(Expr::Closure { .. })
+            )
+        });
+        if has_closure_arg && call_args_pack.is_none() {
+            for (idx, arg) in call_args.iter().enumerate() {
+                if matches!(
+                    arg.expr.data(db, tc.body()),
+                    Partial::Present(Expr::Closure { .. })
+                ) || tc.env.typed_expr(arg.expr).is_some()
+                {
+                    continue;
+                }
+                let arg_idx = idx + usize::from(has_receiver);
+                let actual = tc.check_expr_unknown(arg.expr).ty;
+                let expected = tc.normalize_ty(expected_arg_tys[arg_idx]);
+                let actual_payload = actual
+                    .as_capability(db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(actual);
+                let expected_payload = expected
+                    .as_capability(db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(expected);
+                tc.table.unify(actual_payload, expected_payload).ok();
+            }
+        }
         let layout_input_origins = match self.callable_def {
             CallableDef::Func(func) => {
                 specialized_callable_layout_bundle_signature(db, func, &self.generic_args)
@@ -439,17 +596,29 @@ impl<'db> Callable<'db> {
 
         for (i, hir_arg) in call_args.iter().enumerate() {
             let arg_idx = if has_receiver { i + 1 } else { i };
-            let layout_origin = match self.callable_def {
-                CallableDef::Func(_) => Some(CallableInputLayoutHoleOrigin::ValueParam(arg_idx)),
-                CallableDef::VariantCtor(_) => None,
+            let closure_expectation = (call_args_pack.is_none()
+                && matches!(
+                    hir_arg.expr.data(db, tc.body()),
+                    Partial::Present(Expr::Closure { .. })
+                ))
+            .then(|| self.closure_expectation_for_arg(tc, arg_idx))
+            .flatten();
+            let layout_origin = match (self.callable_def, call_args_pack) {
+                (_, Some(_)) => None,
+                (CallableDef::Func(_), None) => {
+                    Some(CallableInputLayoutHoleOrigin::ValueParam(arg_idx))
+                }
+                (CallableDef::VariantCtor(_), None) => None,
             };
             // Constructors for layout-bearing inputs must see the callee's specialized type so
             // their inferred roots are anchored to the value being passed. Keep this contextual
             // typing selective: applying it to every call argument changes ordinary inference and
             // compile-time evaluation. `view` is an interface capability, not the type of the value
             // constructed at the call boundary, so use its inner type as the hint.
-            let expected_hint = self
-                .compile_time_string_literal_arg_expected(tc, hir_arg.expr, arg_idx)
+            let expected_hint = call_args_pack
+                .is_none()
+                .then(|| self.compile_time_string_literal_arg_expected(tc, hir_arg.expr, arg_idx))
+                .flatten()
                 .or_else(|| {
                     (matches!(self.callable_def, CallableDef::VariantCtor(_))
                         || layout_origin
@@ -465,8 +634,9 @@ impl<'db> Callable<'db> {
                 tc,
                 hir_arg,
                 span.clone().arg(i),
-                already_typed,
+                already_typed || tc.env.typed_expr(hir_arg.expr).is_some(),
                 expected_hint,
+                closure_expectation,
             ));
         }
 
@@ -478,13 +648,13 @@ impl<'db> Callable<'db> {
             )
         };
 
-        for (i, (given, expected)) in args.into_iter().zip(expected_arg_tys.iter()).enumerate() {
+        for (i, (given, expected)) in args.into_iter().zip(expected_arg_tys).enumerate() {
             // Call labels are either explicit (`f(x: value)`) or inferred from a bare
             // identifier argument (`f(x)`), but not from arbitrary expressions (`f(10)`).
             // If the callee parameter has an unsuppressed label, the call must provide
             // one of those labels. Do not disable this check or guard it on explicit
             // syntax only; that would silently allow missing labels.
-            if let Some(expected_label) = self.callable_def.param_label(db, i)
+            if let Some(expected_label) = expected_labels[i]
                 && !expected_label.is_self(db)
                 && Some(expected_label) != given.label
             {
@@ -497,16 +667,8 @@ impl<'db> Callable<'db> {
                 tc.push_diag(diag);
             }
 
-            let mut expected = expected.instantiate(db, &self.generic_args);
-            if let Some(inst) = self.trait_inst {
-                let mut subst = AssocTySubst::new(inst);
-                expected = expected.fold_with(db, &mut subst);
-            }
             let mut expected = tc.normalize_ty(expected);
-            let mode = func_params
-                .as_ref()
-                .and_then(|params| params.get(i).copied())
-                .map(|param| param.mode(db));
+            let mode = arg_modes.as_ref().and_then(|modes| modes.get(i).copied());
             let given_ty = tc.normalize_ty(given.expr_prop.ty);
             let given_string_source_ty = given
                 .expr_prop
@@ -589,7 +751,7 @@ impl<'db> Callable<'db> {
             // Borrow handles are copyable values, and `own` parameters consume their argument.
             // Requiring explicit `ref`/`mut` on *place* arguments makes aliasing visible at the
             // call site, and ensures MIR borrow checking sees the right loan operations.
-            if let Some(params) = func_params.as_ref() {
+            if let Some(modes) = arg_modes.as_ref() {
                 let arg_is_place = tc.env.expr_place(given.expr).is_some();
 
                 let given_capability = tc
@@ -641,17 +803,13 @@ impl<'db> Callable<'db> {
                     expected = tc.normalize_ty(expected);
                 }
 
-                let mode = match mode {
-                    Some(m) => m,
-                    None => match params.get(i).copied() {
-                        Some(p) => p.mode(db),
-                        None => {
-                            unreachable!(
-                                "missing func param at index {i} — length check above should have caught this"
-                            );
-                        }
-                    },
-                };
+                let mode = mode.unwrap_or_else(|| {
+                    *modes.get(i).unwrap_or_else(|| {
+                        unreachable!(
+                            "missing func param at index {i} — length check above should have caught this"
+                        )
+                    })
+                });
                 if mode == FuncParamMode::Own {
                     if expected.as_borrow(db).is_some() {
                         tc.push_diag(BodyDiag::OwnParamCannotBeBorrow {
@@ -825,8 +983,12 @@ impl<'db> CallArg<'db> {
         span: LazyCallArgSpan<'db>,
         already_typed: bool,
         expected_hint: Option<TyId<'db>>,
+        closure_expectation: Option<ClosureExpectation<'db>>,
     ) -> Self {
-        let expr_prop = if already_typed && expected_hint.is_none() {
+        let expr_prop = if let Some(closure_expectation) = closure_expectation {
+            let ty = expected_hint.unwrap_or_else(|| tc.fresh_ty());
+            tc.check_expr_with_closure_expectation(arg.expr, ty, closure_expectation)
+        } else if already_typed && expected_hint.is_none() {
             let db = tc.db;
             tc.env
                 .typed_expr(arg.expr)

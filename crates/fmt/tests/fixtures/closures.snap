@@ -17,4 +17,11 @@ fn run() {
         inner.call(1)
     }
     inc.call(nested.call(40))
+
+    let inferred = |a, b| a + b
+    let zero = || 42
+    let modes = |a: own, b: ref, c: mut, d: view| a
+    let typed = |a: own u256, b: view u256| -> u256 {
+        a + b
+    }
 }

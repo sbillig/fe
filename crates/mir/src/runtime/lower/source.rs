@@ -66,6 +66,18 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
         local: SLocalId,
     ) -> Option<SemanticPlaceValueSource<'db>> {
         let local_data = self.env.body().locals.get(local.index())?;
+        if matches!(local_data.facts.interface, SemanticLocalKind::PlaceCarrier)
+            && self.local_has_transport_carrier(local)
+            && let Some(source) = self.place_value_source(
+                NSPlace {
+                    root: NSPlaceRoot::CarrierDerefLocal(local),
+                    path: Default::default(),
+                },
+                local_data.ty,
+            )
+        {
+            return Some(source);
+        }
         [
             snapshot_source_place(self.env.body(), local).cloned(),
             nonself_backing_value_place(self.env.body(), local).cloned(),

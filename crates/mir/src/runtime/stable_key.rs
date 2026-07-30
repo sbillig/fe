@@ -437,7 +437,7 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
             },
             TyBase::Closure(closure) => {
                 let def = closure.def(db);
-                let type_ids = |tys: &Vec<TyId<'db>>| {
+                let type_ids = |tys: &[TyId<'db>]| {
                     tys.iter()
                         .map(|ty| type_identity(db, *ty))
                         .collect::<Vec<_>>()

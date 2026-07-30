@@ -8,10 +8,14 @@ use crate::analysis::{
     semantic::{
         SBlock, SBlockId, SConst, SExpr, SStmt, SStmtKind, STerminatorKind, SemConstId,
         SemConstValue, SemanticBody, SemanticCalleeRef, array_const,
-        consts::demand_concrete_const_ty, enum_const, instance::SemanticInstance,
-        reify_runtime_const_for_ty, sem_const_from_ty, struct_const, tuple_const,
+        borrowck::borrow_results_in_ty, consts::demand_concrete_const_ty, enum_const,
+        instance::SemanticInstance, reify_runtime_const_for_ty, sem_const_from_ty, struct_const,
+        tuple_const,
     },
-    ty::ty_def::{BorrowKind, CapabilityKind, TyId},
+    ty::{
+        const_ty::CallableInputLayoutHoleOrigin,
+        ty_def::{BorrowKind, TyId},
+    },
 };
 
 use super::{eval_const_ref, machine::try_eval_expr_to_const};
@@ -201,7 +205,7 @@ fn invalidate_mutated_call_locals<'db>(
     let mut memo = vec![None; body.locals.len()];
     let mut visiting = FxHashSet::default();
     for (idx, arg) in args.iter().enumerate() {
-        if !callee_arg_is_mutable(db, *callee, idx) {
+        if !callee_arg_contains_mut_borrow(db, *callee, idx) {
             continue;
         }
         for root in writable_local_roots(arg.value, local_defs, &mut memo, &mut visiting) {
@@ -210,7 +214,7 @@ fn invalidate_mutated_call_locals<'db>(
     }
 }
 
-fn callee_arg_is_mutable<'db>(
+fn callee_arg_contains_mut_borrow<'db>(
     db: &'db dyn HirAnalysisDb,
     callee: SemanticCalleeRef<'db>,
     idx: usize,
@@ -220,11 +224,11 @@ fn callee_arg_is_mutable<'db>(
         .key(db)
         .callable_body(db)
         .param_binding(db, idx)
-        .is_some_and(|binding| {
-            matches!(
-                callee.binding_ty(db, binding).as_capability(db),
-                Some((CapabilityKind::Mut, _))
-            )
+        .map(|binding| callee.normalized_binding_ty(db, binding))
+        .is_some_and(|ty| {
+            borrow_results_in_ty(db, ty)
+                .iter()
+                .any(|result| result.kind == BorrowKind::Mut)
         })
 }
 
@@ -254,24 +258,62 @@ fn writable_local_roots<'db>(
             SExpr::Forward(src) | SExpr::UseValue(src) => {
                 roots.extend(writable_local_roots(src.value, local_defs, memo, visiting));
             }
+            SExpr::ArrayRepeat { value, .. } => {
+                roots.extend(writable_local_roots(
+                    value.value,
+                    local_defs,
+                    memo,
+                    visiting,
+                ));
+            }
+            SExpr::AggregateMake { fields, .. } | SExpr::EnumMake { fields, .. } => {
+                for field in fields {
+                    roots.extend(writable_local_roots(
+                        field.value,
+                        local_defs,
+                        memo,
+                        visiting,
+                    ));
+                }
+            }
+            SExpr::Field { base, .. } | SExpr::Index { base, .. } => {
+                roots.extend(writable_local_roots(base.value, local_defs, memo, visiting));
+            }
+            SExpr::ExtractEnumField { value, .. } => {
+                roots.extend(writable_local_roots(
+                    value.value,
+                    local_defs,
+                    memo,
+                    visiting,
+                ));
+            }
+            SExpr::Call {
+                args,
+                return_sources,
+                ..
+            } => {
+                for source in return_sources {
+                    let arg = match source.origin {
+                        CallableInputLayoutHoleOrigin::Receiver => args.first(),
+                        CallableInputLayoutHoleOrigin::ValueParam(idx) => args.get(idx),
+                        CallableInputLayoutHoleOrigin::Effect(_) => None,
+                    };
+                    if let Some(arg) = arg {
+                        roots.extend(writable_local_roots(arg.value, local_defs, memo, visiting));
+                    }
+                }
+            }
             SExpr::ReadPlace { .. } => {}
             SExpr::CodeRegionRef { .. }
             | SExpr::Const(_)
             | SExpr::Unary { .. }
             | SExpr::Binary { .. }
             | SExpr::Cast { .. }
-            | SExpr::ArrayRepeat { .. }
-            | SExpr::AggregateMake { .. }
-            | SExpr::EnumMake { .. }
-            | SExpr::Field { .. }
-            | SExpr::Index { .. }
             | SExpr::Borrow { .. }
             | SExpr::GetEnumTag { .. }
             | SExpr::IsEnumVariant { .. }
-            | SExpr::ExtractEnumField { .. }
             | SExpr::CodeRegionOffset { .. }
-            | SExpr::CodeRegionLen { .. }
-            | SExpr::Call { .. } => {}
+            | SExpr::CodeRegionLen { .. } => {}
         }
     }
 

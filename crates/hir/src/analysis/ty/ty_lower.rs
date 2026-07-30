@@ -1,10 +1,10 @@
 use std::iter;
 
 use crate::core::hir_def::{
-    Body, CallableDef, ConstGenericArgValue, Expr, GenericArg, GenericArgListId, GenericParam,
-    GenericParamOwner, GenericParamView, IdentId, KindBound as HirKindBound, Partial, PathId, Stmt,
-    TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind, TypeMode,
-    scope_graph::ScopeId,
+    Body, CallableDef, ClosureDef, ConstGenericArgValue, Expr, GenericArg, GenericArgListId,
+    GenericParam, GenericParamOwner, GenericParamView, IdentId, KindBound as HirKindBound, Partial,
+    PathId, Stmt, TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind,
+    TypeMode, scope_graph::ScopeId,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
@@ -93,6 +93,7 @@ fn lower_hir_ty_impl<'db>(
                 TypeMode::Mut => TyId::borrow_mut_of(db, inner),
                 TypeMode::Ref => TyId::borrow_ref_of(db, inner),
                 TypeMode::Own => inner,
+                TypeMode::View => TyId::view_of(db, inner),
             }
         }
 
@@ -728,6 +729,9 @@ enum CallableLayoutSchemaSite<'db> {
     Output {
         func: crate::hir_def::Func<'db>,
     },
+    ClosureOutput {
+        def: ClosureDef<'db>,
+    },
     Value {
         body: crate::hir_def::Body<'db>,
         local: u32,
@@ -738,6 +742,7 @@ impl<'db> CallableLayoutSchemaSite<'db> {
     fn func(self, db: &'db dyn HirAnalysisDb) -> Option<crate::hir_def::Func<'db>> {
         match self {
             Self::Input { func, .. } | Self::Output { func } => Some(func),
+            Self::ClosureOutput { def } => def.body.containing_func(db),
             Self::Value { body, .. } => body.containing_func(db),
         }
     }
@@ -778,6 +783,7 @@ impl<'db> CallableLayoutSchemaSite<'db> {
     fn scope(self) -> ScopeId<'db> {
         match self {
             Self::Input { func, .. } | Self::Output { func } => func.scope(),
+            Self::ClosureOutput { def } => def.body.scope(),
             Self::Value { body, .. } => body.scope(),
         }
     }
@@ -934,6 +940,7 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                     ),
                 ),
                 CallableLayoutSchemaSite::Output { .. }
+                | CallableLayoutSchemaSite::ClosureOutput { .. }
                 | CallableLayoutSchemaSite::Value { .. } => TyId::const_ty(
                     db,
                     ConstTyId::hole_with_id(db, hole_ty, HoleId::Structural(hole)),
@@ -979,6 +986,20 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                 evidence_path.push(LayoutEvidencePathStep::Field(idx));
                 self.record_ty(path, field, index_lengths);
                 self.walk(field, parent, path, evidence_path, index_lengths);
+                evidence_path.pop();
+                path.pop();
+            }
+            return;
+        }
+        if let Some(closure) = ty.as_closure(self.db) {
+            for (idx, &capture) in closure.captures(self.db).iter().enumerate() {
+                let Ok(idx) = u16::try_from(idx) else {
+                    continue;
+                };
+                path.push(LayoutBundlePathStep::Field(idx));
+                evidence_path.push(LayoutEvidencePathStep::Field(idx));
+                self.record_ty(path, capture, index_lengths);
+                self.walk(capture, parent, path, evidence_path, index_lengths);
                 evidence_path.pop();
                 path.pop();
             }
@@ -1456,6 +1477,10 @@ fn callable_layout_projections_for_ty_with_effect_targets<'db>(
         CallableLayoutSchemaSite::Output { func } => (
             HoleAnchor::CallableOutput { func },
             LayoutBoundaryIdentity::CallableOutput(func),
+        ),
+        CallableLayoutSchemaSite::ClosureOutput { def } => (
+            HoleAnchor::ClosureOutput { def },
+            LayoutBoundaryIdentity::ClosureOutput(def),
         ),
         CallableLayoutSchemaSite::Value { body, local } => (
             HoleAnchor::SemanticValue { body, local },
@@ -2125,6 +2150,28 @@ pub(crate) fn specialized_callable_layout_bundle_signature_with_normalizer<'db>(
     let output = LayoutBundleInterface {
         schema: output_schema,
         transport: output_transport,
+    };
+    let output_witnesses = output_witness_layout_interface(&inputs, &output);
+    CallableLayoutBundleSignature {
+        inputs,
+        output_witnesses,
+        output,
+    }
+}
+
+pub(crate) fn closure_layout_bundle_signature<'db>(
+    db: &'db dyn HirAnalysisDb,
+    def: ClosureDef<'db>,
+    inputs: Vec<CallableLayoutBundleInput<'db>>,
+    output_ty: TyId<'db>,
+) -> CallableLayoutBundleSignature<'db> {
+    let site = CallableLayoutSchemaSite::ClosureOutput { def };
+    let mut output = callable_layout_projections_for_ty(db, site, output_ty);
+    bind_direct_layout_const_params(db, &mut output.schema);
+    bind_projected_component_const_metadata(db, site, &mut output.schema, &output.port_tys);
+    let output = LayoutBundleInterface {
+        schema: output.schema,
+        transport: output.transport,
     };
     let output_witnesses = output_witness_layout_interface(&inputs, &output);
     CallableLayoutBundleSignature {

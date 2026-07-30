@@ -1456,13 +1456,13 @@ impl<'db> RmirEmitter<'db> {
                 self.coerce_value(bb, value, target)
             };
         }
-        if let Some(scalar) = const_scalar_from_value(self.db, self.env, value) {
-            return self.lower_sem_const_scalar(bb, ty, scalar);
-        }
         if let RuntimeClass::Scalar(class) = target
             && let SemConstValue::Scalar { value, .. } = value.value(self.db)
             && let Some(scalar) = const_scalar_for_class(&value, class)
         {
+            return self.lower_sem_const_scalar_with_class(bb, ty, target.clone(), scalar);
+        }
+        if let Some(scalar) = const_scalar_from_value(self.db, self.env, value) {
             return self.lower_sem_const_scalar(bb, ty, scalar);
         }
         match target {
@@ -1878,7 +1878,13 @@ impl<'db> RmirEmitter<'db> {
     ) -> RLocalId {
         let class = self
             .top_level_class_for_ty(ty, AddressSpaceKind::Memory)
-            .unwrap_or_else(|| panic!("scalar const should have a runtime class: {ty:?}"));
+            .unwrap_or_else(|| {
+                panic!(
+                    "scalar const should have a runtime class: owner={:?}, ty={} ({ty:?})",
+                    self.current_semantic_key(),
+                    ty.pretty_print(self.db),
+                )
+            });
         self.lower_sem_const_scalar_with_class(bb, ty, class, scalar)
     }
 
@@ -6068,6 +6074,45 @@ fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
         assert!(
             package.is_ok(),
             "poseidon_mock should lower through range consts with runtime-zst fields: {package:#?}"
+        );
+    }
+
+    #[test]
+    fn closure_const_generic_lowers_into_runtime_package() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("closure_const_generic_runtime_lowering.fe"),
+        )
+        .expect("fixture path should be absolute");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use core::functional::Fn
+
+fn closure_const<const N: u256>() -> u256 {
+    let value = |_ unit: own ()| -> u256 { N }
+    value.call(())
+}
+
+#[test]
+fn test_closure_const_generic() {
+    assert(closure_const<11>() == 11)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let package = build_test_runtime_package(&db, top_mod, Some("test_closure_const_generic"));
+        assert!(
+            package.is_ok(),
+            "const-generic closures should lower into a runtime package: {package:#?}"
         );
     }
 }

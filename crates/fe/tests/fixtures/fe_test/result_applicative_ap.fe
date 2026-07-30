@@ -12,27 +12,27 @@ struct AddRight {
     left: u256,
 }
 
-impl FnOnce<u256, AddRight> for MakeAdder {
-    fn call_once(self: own Self, _ value: own u256) -> AddRight {
-        self.call(value)
+impl FnOnce<(u256,), AddRight> for MakeAdder {
+    fn call_once(self: own Self, _ args: own (u256,)) -> AddRight {
+        self.call(args.0)
     }
 }
 
-impl Fn<u256, AddRight> for MakeAdder {
-    fn call(self, _ value: own u256) -> AddRight {
-        AddRight { left: value }
+impl Fn<(u256,), AddRight> for MakeAdder {
+    fn call(self, _ args: own (u256,)) -> AddRight {
+        AddRight { left: args.0 }
     }
 }
 
-impl FnOnce<u256, u256> for AddRight {
-    fn call_once(self: own Self, _ right: own u256) -> u256 {
-        self.call(right)
+impl FnOnce<(u256,), u256> for AddRight {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        self.call(args.0)
     }
 }
 
-impl Fn<u256, u256> for AddRight {
-    fn call(self, _ right: own u256) -> u256 {
-        self.left + right
+impl Fn<(u256,), u256> for AddRight {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        self.left + args.0
     }
 }
 

@@ -4,100 +4,124 @@ expression: res
 input_file: test_files/ty_check/result_map_chain.fe
 ---
 note:
-   ┌─ result_map_chain.fe:10:57
+   ┌─ result_map_chain.fe:10:63
    │
-10 │       fn call_once(self: own Self, _ x: own u256) -> Wrap {
-   │ ╭─────────────────────────────────────────────────────────^
-11 │ │         self.call(x)
+10 │       fn call_once(self: own Self, _ args: own (u256,)) -> Wrap {
+   │ ╭───────────────────────────────────────────────────────────────^
+11 │ │         self.call(args.0)
 12 │ │     }
    │ ╰─────^ Wrap
 
 note:
    ┌─ result_map_chain.fe:11:9
    │
-11 │         self.call(x)
+11 │         self.call(args.0)
    │         ^^^^ ToWrap
 
 note:
    ┌─ result_map_chain.fe:11:9
    │
-11 │         self.call(x)
-   │         ^^^^^^^^^^^^ Wrap
+11 │         self.call(args.0)
+   │         ^^^^^^^^^^^^^^^^^ Wrap
 
 note:
    ┌─ result_map_chain.fe:11:19
    │
-11 │         self.call(x)
-   │                   ^ u256
+11 │         self.call(args.0)
+   │                   ^^^^ (u256,)
 
 note:
-   ┌─ result_map_chain.fe:16:42
+   ┌─ result_map_chain.fe:11:19
    │
-16 │       fn call(self, _ x: own u256) -> Wrap {
-   │ ╭──────────────────────────────────────────^
-17 │ │         Wrap { val: x }
+11 │         self.call(args.0)
+   │                   ^^^^^^ u256
+
+note:
+   ┌─ result_map_chain.fe:16:48
+   │
+16 │       fn call(self, _ args: own (u256,)) -> Wrap {
+   │ ╭────────────────────────────────────────────────^
+17 │ │         Wrap { val: args.0 }
 18 │ │     }
    │ ╰─────^ Wrap
 
 note:
    ┌─ result_map_chain.fe:17:9
    │
-17 │         Wrap { val: x }
-   │         ^^^^^^^^^^^^^^^ Wrap
+17 │         Wrap { val: args.0 }
+   │         ^^^^^^^^^^^^^^^^^^^^ Wrap
 
 note:
    ┌─ result_map_chain.fe:17:21
    │
-17 │         Wrap { val: x }
-   │                     ^ u256
+17 │         Wrap { val: args.0 }
+   │                     ^^^^ (u256,)
 
 note:
-   ┌─ result_map_chain.fe:23:57
+   ┌─ result_map_chain.fe:17:21
    │
-23 │       fn call_once(self: own Self, _ w: own Wrap) -> u256 {
-   │ ╭─────────────────────────────────────────────────────────^
-24 │ │         self.call(w)
+17 │         Wrap { val: args.0 }
+   │                     ^^^^^^ u256
+
+note:
+   ┌─ result_map_chain.fe:23:63
+   │
+23 │       fn call_once(self: own Self, _ args: own (Wrap,)) -> u256 {
+   │ ╭───────────────────────────────────────────────────────────────^
+24 │ │         self.call(args.0)
 25 │ │     }
    │ ╰─────^ u256
 
 note:
    ┌─ result_map_chain.fe:24:9
    │
-24 │         self.call(w)
+24 │         self.call(args.0)
    │         ^^^^ FromWrap
 
 note:
    ┌─ result_map_chain.fe:24:9
    │
-24 │         self.call(w)
-   │         ^^^^^^^^^^^^ u256
+24 │         self.call(args.0)
+   │         ^^^^^^^^^^^^^^^^^ u256
 
 note:
    ┌─ result_map_chain.fe:24:19
    │
-24 │         self.call(w)
-   │                   ^ Wrap
+24 │         self.call(args.0)
+   │                   ^^^^ (Wrap,)
 
 note:
-   ┌─ result_map_chain.fe:29:42
+   ┌─ result_map_chain.fe:24:19
    │
-29 │       fn call(self, _ w: own Wrap) -> u256 {
-   │ ╭──────────────────────────────────────────^
-30 │ │         w.val
+24 │         self.call(args.0)
+   │                   ^^^^^^ Wrap
+
+note:
+   ┌─ result_map_chain.fe:29:48
+   │
+29 │       fn call(self, _ args: own (Wrap,)) -> u256 {
+   │ ╭────────────────────────────────────────────────^
+30 │ │         args.0.val
 31 │ │     }
    │ ╰─────^ u256
 
 note:
    ┌─ result_map_chain.fe:30:9
    │
-30 │         w.val
-   │         ^ Wrap
+30 │         args.0.val
+   │         ^^^^ (Wrap,)
 
 note:
    ┌─ result_map_chain.fe:30:9
    │
-30 │         w.val
-   │         ^^^^^ u256
+30 │         args.0.val
+   │         ^^^^^^ Wrap
+
+note:
+   ┌─ result_map_chain.fe:30:9
+   │
+30 │         args.0.val
+   │         ^^^^^^^^^^ u256
 
 note:
    ┌─ result_map_chain.fe:34:23

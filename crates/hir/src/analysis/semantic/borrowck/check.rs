@@ -17,9 +17,9 @@ use crate::{
             get_or_build_semantic_instance, identity_semantic_instance_key,
         },
         ty::{
-            ty_check::{BodyOwner, EffectParamSite, LocalBinding},
-            ty_contains_borrow,
-            ty_def::{BorrowKind, TyId},
+            ty_check::{BodyOwner, CLOSURE_ARGS_PARAM_IDX, EffectParamSite, LocalBinding},
+            ty_def::{BorrowKind, ClosureParamMode, TyId},
+            ty_is_borrow,
         },
     },
     core::semantic::EffectEnvView,
@@ -45,7 +45,7 @@ use super::{
         NormalizedSemanticBody, ReadMode, SemanticBorrowCheckResult, SemanticBorrowDiagKind,
         SemanticBorrowDiagnostic, SemanticBorrowDiagnosticSpan, SemanticBorrowSummaryResult,
         borrow_results_in_ty, layout_path_for_semantic_projection,
-        local_has_runtime_move_semantics,
+        local_has_runtime_move_semantics, return_borrow_results_in_ty, semantic_projection_ty,
     },
     normalize::{normalize_provisional_semantic_body, normalize_semantic_body_for_analysis},
     verify::verify_normalized_semantic_body,
@@ -499,7 +499,8 @@ impl<'db> Borrowck<'db> {
 
     fn borrow_summary(mut self) -> Result<Option<BorrowSummary>, SemanticBorrowDiagnostic<'db>> {
         let key = self.instance.key(self.db);
-        if !ty_contains_borrow(self.db, key.callable_body(self.db).result_ty(self.db))
+        if return_borrow_results_in_ty(self.db, key.callable_body(self.db).result_ty(self.db))
+            .is_empty()
             || key.owner(self.db).body(self.db).is_none()
         {
             return Ok(None);
@@ -516,7 +517,9 @@ impl<'db> Borrowck<'db> {
         self.compute_liveness();
         self.check_conflicts()?;
         let key = self.instance.key(self.db);
-        if ty_contains_borrow(self.db, key.callable_body(self.db).result_ty(self.db)) {
+        if !return_borrow_results_in_ty(self.db, key.callable_body(self.db).result_ty(self.db))
+            .is_empty()
+        {
             let _ = self.compute_return_summary()?;
         }
         Ok(())
@@ -569,7 +572,7 @@ impl<'db> Borrowck<'db> {
             let Some(local) = self.body.local(local_id) else {
                 continue;
             };
-            if let Some((kind, _)) = local.ty.as_borrow(self.db)
+            if let Some((kind, _)) = ty_is_borrow(self.db, local.ty)
                 && let Some(&param_idx) = self.param_index_of_local.get(&local_id)
                 && !matches!(
                     local.lowering,
@@ -605,17 +608,27 @@ impl<'db> Borrowck<'db> {
             let Some(result_ty) = self.body.local(*dst).map(|local| local.ty) else {
                 continue;
             };
-            if let Some((kind, _)) = result_ty.as_borrow(self.db)
+            if let Some((kind, _)) = ty_is_borrow(self.db, result_ty)
                 && matches!(
                     expr,
-                    NExpr::Borrow { .. } | NExpr::Call { .. } | NExpr::Use(_)
+                    NExpr::Borrow { .. }
+                        | NExpr::Call { .. }
+                        | NExpr::ReadPlace { .. }
+                        | NExpr::Use(_)
+                )
+                && !matches!(
+                    expr,
+                    NExpr::ReadPlace { place, .. }
+                        if self.read_place_copies_capability(place)
                 )
             {
                 let loan = self.allocate_loan(Loan {
                     kind,
                     activation: match expr {
                         NExpr::Borrow { activation, .. } => *activation,
-                        NExpr::Call { .. } | NExpr::Use(_) => BorrowActivation::Immediate,
+                        NExpr::Call { .. } | NExpr::ReadPlace { .. } | NExpr::Use(_) => {
+                            BorrowActivation::Immediate
+                        }
                         _ => unreachable!(),
                     },
                     targets: FxHashSet::default(),
@@ -635,7 +648,7 @@ impl<'db> Borrowck<'db> {
             let NExpr::Call { callee, args, .. } = expr else {
                 continue;
             };
-            if !ty_contains_borrow(self.db, result_ty) {
+            if return_borrow_results_in_ty(self.db, result_ty).is_empty() {
                 continue;
             }
             let Some(summary) = self.call_borrow_summary(callee.key)? else {
@@ -672,6 +685,13 @@ impl<'db> Borrowck<'db> {
         Ok(())
     }
 
+    fn read_place_copies_capability(&self, place: &NSPlace<'db>) -> bool {
+        self.body
+            .place_root_ty(&place.root)
+            .and_then(|ty| semantic_projection_ty(self.db, ty, &place.path))
+            .is_some_and(|(ty, _)| ty.as_capability(self.db).is_some())
+    }
+
     fn allocate_loan(&mut self, loan: Loan<'db>) -> LoanId {
         let id = LoanId(self.loans.len() as u32);
         self.loans.push(loan);
@@ -698,7 +718,7 @@ impl<'db> Borrowck<'db> {
         summary: &[BorrowTransform],
         origin: SemOrigin<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
-        let results = borrow_results_in_ty(self.db, result_ty);
+        let results = return_borrow_results_in_ty(self.db, result_ty);
         if let Some(transform) = summary
             .iter()
             .find(|transform| !results.contains(&transform.result))
@@ -813,9 +833,11 @@ impl<'db> Borrowck<'db> {
                     }
                     NExpr::Borrow { place, kind, .. } => {
                         let targets = self.canon().canonicalize_place(state, place, stmt.origin)?;
+                        let authorized = self.canon().loans_for_place(state, place);
                         self.check_moved_overlap(
                             moved,
                             &targets,
+                            &authorized,
                             stmt.origin,
                             "cannot borrow a moved value",
                         )?;
@@ -833,18 +855,19 @@ impl<'db> Borrowck<'db> {
                     } => {
                         let targets =
                             self.extract_enum_field_move_targets(state, *value, *variant, *field);
+                        let authorized =
+                            self.canon()
+                                .loans_for_value_targets(state, value.local, &targets);
                         self.check_moved_overlap(
                             moved,
                             &targets,
+                            &authorized,
                             stmt.origin,
                             "cannot use a value after it was moved",
                         )?;
                         if value.mode == ReadMode::Move {
                             self.check_move_targets_out(&active, &targets, stmt.origin)?;
                         } else {
-                            let authorized =
-                                self.canon()
-                                    .loans_for_value_targets(state, value.local, &targets);
                             self.check_read_targets(&active, &authorized, &targets, stmt.origin)?;
                         }
                     }
@@ -878,8 +901,8 @@ impl<'db> Borrowck<'db> {
                     "cannot use a value after it was moved",
                 )?;
                 let targets = self.canon().canonicalize_place(state, dst, stmt.origin)?;
-                self.check_moved_parent(moved, &targets, stmt.origin)?;
                 let authorized = self.canon().mut_loans_for_place(state, dst);
+                self.check_moved_parent(moved, &targets, &authorized, stmt.origin)?;
                 self.check_write_targets(&active, &authorized, &targets, stmt.origin)?;
             }
         }
@@ -915,16 +938,17 @@ impl<'db> Borrowck<'db> {
         origin: SemOrigin<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         let targets = self.canon().canonicalize_place(state, place, origin)?;
+        let authorized = self.canon().loans_for_place(state, place);
         self.check_moved_overlap(
             moved,
             &targets,
+            &authorized,
             origin,
             "cannot use a value after it was moved",
         )?;
         if mode == ReadMode::Move {
             self.check_move_out(active, place, &targets, origin)
         } else {
-            let authorized = self.canon().loans_for_place(state, place);
             self.check_read_targets(active, &authorized, &targets, origin)
         }
     }
@@ -949,17 +973,18 @@ impl<'db> Borrowck<'db> {
             let (targets, authorized, arg_origin) = match &effect_arg.arg {
                 NEffectArgValue::Place(place) => {
                     let targets = self.canon().canonicalize_place(state, place, origin)?;
-                    self.check_moved_overlap(
-                        moved,
-                        &targets,
-                        origin,
-                        "cannot use a value after it was moved",
-                    )?;
                     let authorized = if effect_arg.required_mut {
                         self.canon().mut_loans_for_place(state, place)
                     } else {
                         self.canon().loans_for_place(state, place)
                     };
+                    self.check_moved_overlap(
+                        moved,
+                        &targets,
+                        &authorized,
+                        origin,
+                        "cannot use a value after it was moved",
+                    )?;
                     (targets, authorized, origin)
                 }
                 NEffectArgValue::Value(value) => {
@@ -1304,7 +1329,7 @@ impl<'db> Borrowck<'db> {
             && self
                 .body
                 .local(value.local)
-                .is_some_and(|local| local.ty.as_borrow(self.db).is_some())
+                .is_some_and(|local| ty_is_borrow(self.db, local.ty).is_some())
             && self
                 .canon()
                 .borrow_local_targets(state, value.local)
@@ -1319,11 +1344,12 @@ impl<'db> Borrowck<'db> {
             && self
                 .body
                 .local(value.local)
-                .is_some_and(|local| local.ty.as_borrow(self.db).is_none())
+                .is_some_and(|local| ty_is_borrow(self.db, local.ty).is_none())
         {
             for loan_id in state.loans_in(value.local) {
                 let loan = &self.loans[loan_id.0 as usize];
-                if let Some(local) = loan.targets.iter().find_map(|target| match target.root {
+                let targets = self.resolve_return_targets(state, &loan.targets, term.origin)?;
+                if let Some(local) = targets.iter().find_map(|target| match target.root {
                     BorrowRoot::Local(local) => Some(local),
                     BorrowRoot::Param(_) | BorrowRoot::Provider(_) => None,
                 }) {
@@ -1344,6 +1370,51 @@ impl<'db> Borrowck<'db> {
         Ok(())
     }
 
+    fn resolve_return_targets(
+        &self,
+        state: &State,
+        targets: &FxHashSet<CanonPlace<'db>>,
+        origin: SemOrigin<'db>,
+    ) -> Result<FxHashSet<CanonPlace<'db>>, SemanticBorrowDiagnostic<'db>> {
+        let mut pending = targets.iter().cloned().collect::<VecDeque<_>>();
+        let mut seen = FxHashSet::default();
+        let mut resolved = FxHashSet::default();
+        while let Some(target) = pending.pop_front() {
+            if !seen.insert(target.clone()) {
+                continue;
+            }
+            let BorrowRoot::Local(local) = &target.root else {
+                resolved.insert(target);
+                continue;
+            };
+            let Some(local) = self.body.local(*local) else {
+                resolved.insert(target);
+                continue;
+            };
+            // Snapshot provenance describes a value's physical source. Layout
+            // backing is deliberately not used here: it can point at the
+            // argument that supplied a fresh aggregate field's layout without
+            // making that freshly allocated field an alias of the argument.
+            let Some(mut source) = local.snapshot_source_place().cloned() else {
+                resolved.insert(target);
+                continue;
+            };
+            source.path = source.path.concat(&target.proj);
+            let mut advanced = false;
+            for source in self.canon().canonicalize_place(state, &source, origin)? {
+                if source == target {
+                    continue;
+                }
+                advanced = true;
+                pending.push_back(source);
+            }
+            if !advanced {
+                resolved.insert(target);
+            }
+        }
+        Ok(resolved)
+    }
+
     fn compute_return_summary(&self) -> Result<BorrowSummary, SemanticBorrowDiagnostic<'db>> {
         let mut out = Vec::new();
         for (bb_idx, block) in self.body.blocks.iter().enumerate() {
@@ -1357,7 +1428,7 @@ impl<'db> Borrowck<'db> {
             let Some(return_local) = self.body.local(value.local) else {
                 continue;
             };
-            for result in borrow_results_in_ty(self.db, return_local.ty) {
+            for result in return_borrow_results_in_ty(self.db, return_local.ty) {
                 let targets = self.canon().canonicalize_value_layout_projection(
                     &state,
                     value.local,
@@ -1379,6 +1450,8 @@ impl<'db> Borrowck<'db> {
                         ),
                     ));
                 }
+                let targets =
+                    self.resolve_return_targets(&state, &targets, block.terminator.origin)?;
                 for target in targets {
                     match &target.root {
                         BorrowRoot::Param(idx) => {
@@ -1490,6 +1563,12 @@ impl<'db> Borrowck<'db> {
         origin: crate::analysis::semantic::SemOrigin<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         if let NSPlaceRoot::CarrierDerefLocal(local) = place.root {
+            if let Some(message) = self
+                .logical_closure_param_mode_for_local(local)
+                .and_then(Self::logical_param_move_message)
+            {
+                return Err(self.move_conflict_diag(origin, message.to_string()));
+            }
             if self.body.locals[local.index()]
                 .source
                 .is_some_and(|binding| {
@@ -1523,6 +1602,12 @@ impl<'db> Borrowck<'db> {
         origin: crate::analysis::semantic::SemOrigin<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         for target in targets {
+            if let Some(message) = self
+                .logical_closure_param_mode_for_target(target)
+                .and_then(Self::logical_param_move_message)
+            {
+                return Err(self.move_conflict_diag(origin, message.to_string()));
+            }
             if let BorrowRoot::Param(idx) = target.root
                 && self
                     .param_modes
@@ -1548,6 +1633,62 @@ impl<'db> Borrowck<'db> {
             ));
         }
         Ok(())
+    }
+
+    fn logical_closure_param_mode_for_local(
+        &self,
+        local: crate::analysis::semantic::SLocalId,
+    ) -> Option<ClosureParamMode> {
+        let source = self
+            .body
+            .local(local)?
+            .facts
+            .snapshot_source_place
+            .as_ref()?;
+        let NSPlaceRoot::Root(root) = source.root else {
+            return None;
+        };
+        let NBorrowRoot::Param { param_idx, .. } = self.body.root(root)? else {
+            return None;
+        };
+        self.logical_closure_param_mode(*param_idx, &source.path)
+    }
+
+    fn logical_closure_param_mode_for_target(
+        &self,
+        target: &CanonPlace<'db>,
+    ) -> Option<ClosureParamMode> {
+        let BorrowRoot::Param(param_idx) = target.root else {
+            return None;
+        };
+        self.logical_closure_param_mode(param_idx, &target.proj)
+    }
+
+    fn logical_closure_param_mode(
+        &self,
+        param_idx: u32,
+        projection: &NSProjectionPath<'db>,
+    ) -> Option<ClosureParamMode> {
+        let BodyOwner::Closure { ty, .. } = self.instance.key(self.db).owner(self.db) else {
+            return None;
+        };
+        if usize::try_from(param_idx).ok()? != CLOSURE_ARGS_PARAM_IDX {
+            return None;
+        }
+        let Projection::Field(field_idx) = projection.iter().next()? else {
+            return None;
+        };
+        ty.param_modes(self.db).get(*field_idx).copied()
+    }
+
+    fn logical_param_move_message(mode: ClosureParamMode) -> Option<&'static str> {
+        match mode {
+            ClosureParamMode::Own => None,
+            ClosureParamMode::View => Some("cannot move out of a view parameter"),
+            ClosureParamMode::Ref | ClosureParamMode::Mut => {
+                Some("cannot move out through a borrow handle")
+            }
+        }
     }
 
     pub(super) fn update_moved_for_stmt(
@@ -1670,13 +1811,13 @@ impl<'db> Borrowck<'db> {
         if targets.is_empty() {
             return Ok(());
         }
-        self.check_moved_overlap(moved, &targets, origin, message)?;
+        let authorized = self
+            .canon()
+            .loans_for_value_targets(state, operand.local, &targets);
+        self.check_moved_overlap(moved, &targets, &authorized, origin, message)?;
         if operand.mode == ReadMode::Move && self.local_has_runtime_move_semantics(operand.local) {
             self.check_move_targets_out(active, &targets, origin)
         } else {
-            let authorized = self
-                .canon()
-                .loans_for_value_targets(state, operand.local, &targets);
             self.check_read_targets(active, &authorized, &targets, origin)
         }
     }
@@ -1740,13 +1881,15 @@ impl<'db> Borrowck<'db> {
         &self,
         moved: &MovedPlaces<'db>,
         accessed: &FxHashSet<CanonPlace<'db>>,
+        authorized: &FxHashSet<LoanId>,
         origin: crate::analysis::semantic::SemOrigin<'db>,
         message: &str,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         if let Some((_, site)) = moved.iter().find(|(moved, _)| {
-            accessed
-                .iter()
-                .any(|accessed| places_overlap(moved, accessed))
+            accessed.iter().any(|accessed| {
+                places_overlap(moved, accessed)
+                    && !self.loan_authorizes_access(authorized, accessed)
+            })
         }) {
             let mut diag = self.move_conflict_diag(origin, message.to_string());
             self.push_secondary_origin(&mut diag, site.origin, site.note.clone());
@@ -1759,6 +1902,7 @@ impl<'db> Borrowck<'db> {
         &self,
         moved: &MovedPlaces<'db>,
         written: &FxHashSet<CanonPlace<'db>>,
+        authorized: &FxHashSet<LoanId>,
         origin: crate::analysis::semantic::SemOrigin<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         if let Some((_, site)) = moved.iter().find(|(moved, _)| {
@@ -1766,6 +1910,7 @@ impl<'db> Borrowck<'db> {
                 written.root == moved.root
                     && moved.proj.is_prefix_of(&written.proj)
                     && moved.proj != written.proj
+                    && !self.loan_authorizes_access(authorized, written)
             })
         }) {
             let mut diag =
@@ -1774,6 +1919,18 @@ impl<'db> Borrowck<'db> {
             return Err(diag);
         }
         Ok(())
+    }
+
+    fn loan_authorizes_access(
+        &self,
+        authorized: &FxHashSet<LoanId>,
+        accessed: &CanonPlace<'db>,
+    ) -> bool {
+        authorized.iter().any(|loan| {
+            self.loans[loan.0 as usize].targets.iter().any(|target| {
+                target.root == accessed.root && target.proj.is_prefix_of(&accessed.proj)
+            })
+        })
     }
 
     fn local_root(&self, local: crate::analysis::semantic::SLocalId) -> Option<NBorrowRootId> {
@@ -1948,7 +2105,7 @@ fn instance_returns_borrowing_value<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> bool {
-    ty_contains_borrow(db, instance.normalized_result_ty(db))
+    !return_borrow_results_in_ty(db, instance.normalized_result_ty(db)).is_empty()
 }
 
 fn conservative_signature_borrow_summary<'db>(
@@ -1970,7 +2127,7 @@ fn conservative_signature_borrow_summary<'db>(
         })
         .collect::<Vec<_>>();
     let mut summary = Vec::new();
-    for result in borrow_results_in_ty(db, instance.normalized_result_ty(db)) {
+    for result in return_borrow_results_in_ty(db, instance.normalized_result_ty(db)) {
         for (idx, ty, is_mut) in inputs.iter().copied() {
             if signature_input_is_unresolved(db, ty) {
                 summary.push(BorrowTransform {

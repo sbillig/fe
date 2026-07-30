@@ -7,7 +7,7 @@ use crate::{
             FieldIndex, LayoutBackingPlace, LayoutBackingProjection, LayoutBackingSource,
             PlaceProvenance, SCallReturnProjectionStep, SCallReturnSource, SEffectArgValue, SExpr,
             SLocalId, SOperandIntent, SPlace, SStmtKind, SemanticLocalRole, SemanticProjectionPath,
-            ValueOwnershipSource, ValueProvenance, VariantIndex,
+            ValueOwnershipSource, ValueProvenance, VariantIndex, borrowck::semantic_projection_ty,
         },
         ty::{
             adt_def::instantiate_adt_field_shape,
@@ -16,6 +16,7 @@ use crate::{
             provider::{ProviderLayoutEvidence, provider_semantics},
             ty_check::{LocalBinding, ParamSite},
             ty_def::TyId,
+            ty_is_copy,
         },
     },
     projection::{IndexSource, Projection},
@@ -39,7 +40,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .as_ref()
             .map(|_| self.classify_expr_local_role(self.locals[dst_idx].ty, expr));
         let next_snapshot = self.classify_expr_snapshot_source(expr);
-        let next_ownership_sources = self.classify_expr_ownership_sources(expr);
+        let next_ownership_sources =
+            self.classify_expr_ownership_sources(self.locals[dst_idx].ty, expr);
         let next_layout_backing_sources = self.classify_expr_layout_backing_sources(expr);
 
         if let Some((next_role, fallback)) = next_role.zip(fallback) {
@@ -191,7 +193,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
     }
 
-    fn classify_expr_ownership_sources(&self, expr: &SExpr<'db>) -> Vec<ValueOwnershipSource<'db>> {
+    fn classify_expr_ownership_sources(
+        &self,
+        dst_ty: TyId<'db>,
+        expr: &SExpr<'db>,
+    ) -> Vec<ValueOwnershipSource<'db>> {
+        if dst_ty.as_capability(self.db).is_none()
+            && ty_is_copy(self.db, self.body.scope(), dst_ty, self.assumptions)
+        {
+            return vec![ValueOwnershipSource::Local];
+        }
         let place = match expr {
             SExpr::Forward(value) | SExpr::UseValue(value)
                 if value.intent == SOperandIntent::Read =>
@@ -258,15 +269,24 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 return_sources,
                 ..
             } => self.classify_call_layout_backing_sources(args, effect_args, return_sources),
-            SExpr::ArrayRepeat { value, .. } => {
-                let mut sources = self.local_layout_backing_sources(value.value);
+            SExpr::ArrayRepeat { ty, value } => {
+                let element_ty = ty.generic_args(self.db).first().copied();
+                let mut sources = self.layout_backing_sources_for_operand(*value, element_ty);
                 prefix_layout_backing_sources(&mut sources, LayoutBackingProjection::Index(None));
                 sources
             }
             SExpr::AggregateMake { ty, fields } => {
                 let mut sources = Vec::new();
+                let field_tys = ty.field_types(self.db);
+                let array_element_ty = ty.generic_args(self.db).first().copied();
                 for (idx, field) in fields.iter().enumerate() {
-                    let mut field_sources = self.local_layout_backing_sources(field.value);
+                    let field_ty = if ty.is_array(self.db) {
+                        array_element_ty
+                    } else {
+                        field_tys.get(idx).copied()
+                    };
+                    let mut field_sources =
+                        self.layout_backing_sources_for_operand(*field, field_ty);
                     let projection = if ty.is_array(self.db) {
                         LayoutBackingProjection::Index(Some(idx))
                     } else {
@@ -281,16 +301,27 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 dedup_layout_backing_sources(sources)
             }
             SExpr::EnumMake {
-                enum_ty: _,
+                enum_ty,
                 variant,
                 fields,
             } => {
                 let mut sources = Vec::new();
+                let adt = enum_ty.adt_def(self.db);
                 for (idx, field) in fields.iter().enumerate() {
                     let Ok(idx) = u16::try_from(idx) else {
                         continue;
                     };
-                    let mut field_sources = self.local_layout_backing_sources(field.value);
+                    let field_ty = adt.map(|adt| {
+                        instantiate_adt_field_shape(
+                            self.db,
+                            adt,
+                            usize::from(variant.0),
+                            usize::from(idx),
+                            enum_ty.generic_args(self.db),
+                        )
+                    });
+                    let mut field_sources =
+                        self.layout_backing_sources_for_operand(*field, field_ty);
                     prefix_layout_backing_sources(
                         &mut field_sources,
                         LayoutBackingProjection::VariantField {
@@ -311,6 +342,23 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             | SExpr::IsEnumVariant { .. }
             | SExpr::CodeRegionOffset { .. }
             | SExpr::CodeRegionLen { .. } => Vec::new(),
+        }
+    }
+
+    fn layout_backing_sources_for_operand(
+        &self,
+        operand: crate::analysis::semantic::SOperand,
+        expected_ty: Option<TyId<'db>>,
+    ) -> Vec<LayoutBackingSource<'db>> {
+        let is_capability = expected_ty.is_some_and(|ty| {
+            normalize_ty(self.db, ty, self.body.scope(), self.assumptions)
+                .as_capability(self.db)
+                .is_some()
+        });
+        if is_capability {
+            self.layout_backing_sources_for_place(&SPlace::new(operand.value))
+        } else {
+            self.local_layout_backing_sources(operand.value)
         }
     }
 
@@ -567,6 +615,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     ) -> SemanticLocalRole<'db> {
         let fallback = self.fallback_local_role(dst_ty);
         let base_role = self.locals[place.local.index()].role.clone();
+        let projected_ty =
+            semantic_projection_ty(self.db, self.locals[place.local.index()].ty, &place.path)
+                .map(|(ty, _)| normalize_ty(self.db, ty, self.body.scope(), self.assumptions));
         let base_value_ty = match &base_role {
             SemanticLocalRole::PlaceCarrier { value_ty, .. }
             | SemanticLocalRole::PlaceBoundValue { value_ty, .. } => Some(*value_ty),
@@ -584,6 +635,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 // backing place to bind. Keep it as its own zero-sized
                 // carrier while layout-backing provenance retains the exact
                 // physical origin that borrow normalization must keep rooted.
+                fallback
+            }
+            SemanticLocalRole::PlaceCarrier { .. }
+                if projected_ty.is_some_and(|ty| ty.as_capability(self.db).is_some()) =>
+            {
+                // A projected field whose stored type is itself a capability
+                // carries the pointee address as its value. It is distinct
+                // from an ordinary field reached through a capability, whose
+                // backing place directly contains the projected value.
                 fallback
             }
             SemanticLocalRole::PlaceCarrier { value_ty, .. }

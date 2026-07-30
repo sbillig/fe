@@ -99,7 +99,7 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
             return Ok(false);
         };
         match expr {
-            NExpr::Borrow { place, .. } => {
+            NExpr::Borrow { place, .. } | NExpr::ReadPlace { place, .. } => {
                 let Some(&loan_id) = self.loan_for_local.get(dst) else {
                     return Ok(false);
                 };

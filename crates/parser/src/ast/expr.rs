@@ -87,7 +87,7 @@ impl BlockExpr {
 }
 
 ast_node! {
-    /// `|arg: Type| -> Type { expr }`
+    /// `|arg: Type| -> Type expr`
     pub struct ClosureExpr,
     SK::ClosureExpr
 }
@@ -103,7 +103,7 @@ impl ClosureExpr {
     }
 
     /// Returns the body.
-    pub fn body(&self) -> Option<BlockExpr> {
+    pub fn body(&self) -> Option<Expr> {
         support::child(self.syntax())
     }
 

@@ -47,12 +47,7 @@ impl<'db> Expr<'db> {
                 let ret_ty = closure
                     .ret_ty()
                     .map(|ret_ty| TypeId::lower_ast(ctxt.f_ctxt, ret_ty));
-                let body = Self::push_to_body_opt(
-                    ctxt,
-                    closure
-                        .body()
-                        .and_then(|body| ast::Expr::cast(body.syntax().clone())),
-                );
+                let body = Self::push_to_body_opt(ctxt, closure.body());
                 Self::Closure {
                     params,
                     ret_ty,

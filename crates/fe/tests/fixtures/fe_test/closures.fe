@@ -5,6 +5,14 @@ struct Boxed {
     value: u256,
 }
 
+struct Borrowed {
+    value: ref u256,
+}
+
+struct view {
+    value: u256,
+}
+
 enum Mixed {
     Value(u256, Boxed),
 }
@@ -15,21 +23,71 @@ struct MarkerImpl {}
 
 impl Marker for MarkerImpl {}
 
+struct AddPair {}
+
+struct FortyTwo {}
+
+struct AddInto {}
+
+impl FnOnce<(u256, u256), u256> for AddPair {
+    fn call_once(self: own Self, _ args: own (u256, u256)) -> u256 {
+        self.call(args.0, args.1)
+    }
+}
+
+impl Fn<(u256, u256), u256> for AddPair {
+    fn call(self, _ args: own (u256, u256)) -> u256 {
+        args.0 + args.1
+    }
+}
+
+impl FnOnce<(), u256> for FortyTwo {
+    fn call_once(self: own Self, _ args: own ()) -> u256 {
+        42
+    }
+}
+
+impl Fn<(), u256> for FortyTwo {
+    fn call(self, _ args: own ()) -> u256 {
+        42
+    }
+}
+
+impl FnOnce<(mut u256, view u256), ()> for AddInto {
+    fn call_once(self: own Self, _ args: own (mut u256, view u256)) {
+        self.call(args.0, args.1)
+    }
+}
+
+impl Fn<(mut u256, view u256), ()> for AddInto {
+    fn call(self, mut _ args: own (mut u256, view u256)) {
+        args.0 += args.1
+    }
+}
+
 enum Choice {
     Left,
     Right,
 }
 
-fn invoke<T, U, F: Fn<T, U>>(_ func: F, _ value: own T) -> U {
+fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
     func.call(value)
 }
 
-fn invoke_once<T, U, F: FnOnce<T, U>>(_ func: own F, _ value: own T) -> U {
+fn invoke_once<T, U, F: FnOnce<(T,), U>>(_ func: own F, _ value: own T) -> U {
     func.call_once(value)
 }
 
-fn invoke_reusable_once<T, U, F: Fn<T, U>>(_ func: own F, _ value: own T) -> U {
+fn invoke_reusable_once<T, U, F: Fn<(T,), U>>(_ func: own F, _ value: own T) -> U {
     func.call_once(value)
+}
+
+fn apply_view<T, F: Fn<(view T,), T>>(_ func: F, _ value: own T) -> T {
+    func.call(value)
+}
+
+fn read_named_view(_ value: view) -> u256 {
+    value.value
 }
 
 fn call_with_owned_capture(_ boxed: own Boxed) -> u256 {
@@ -356,6 +414,31 @@ fn test_ref_and_owned_capture_call() {
 }
 
 #[test]
+fn test_ref_capture_and_ref_parameter() {
+    let captured_value = 20
+    let argument_value = 22
+    let captured = ref captured_value
+    let add = |argument: ref u256| -> u256 { captured + argument }
+    assert(add.call(ref argument_value) == 42)
+}
+
+#[test]
+fn test_consuming_closure_returns_borrow_from_owned_argument() {
+    let borrow = |value: own Boxed| -> ref u256 { ref value.value }
+    let returned = borrow.call_once(Boxed { value: 42 })
+    assert(returned == 42)
+}
+
+#[test]
+fn test_consuming_closure_returns_aggregate_borrow_from_owned_argument() {
+    let borrow = |value: own Boxed| -> Borrowed {
+        Borrowed { value: ref value.value }
+    }
+    let returned = borrow.call_once(Boxed { value: 42 })
+    assert(returned.value == 42)
+}
+
+#[test]
 fn test_closure_parent_type_substitution() {
     let value: u256 = closure_passthrough(42)
     assert(value == 42)
@@ -391,4 +474,156 @@ fn test_closure_inherits_checked_function_mode_under_unchecked_module() {
 fn test_aggregate_identity_cast_preserves_value() {
     let Mixed::Value(value, boxed) = Mixed::Value(1, Boxed { value: 41 }) as Mixed
     assert(value + boxed.value == 42)
+}
+
+#[test]
+fn test_zero_and_multiple_inferred_closure_params() {
+    let answer = || 42 as u256
+    assert(answer.call() == 42)
+
+    let zero_logic = || true || false
+    assert(zero_logic.call())
+
+    let add = |left, right| left + right
+    assert(add.call(20 as u256, 22 as u256) == 42)
+
+    let trailing = |left, right,| left + right
+    assert(trailing.call(20 as u256, 22 as u256) == 42)
+
+    let bitwise = |left, right| left | right
+    assert(bitwise.call(40 as u256, 2 as u256) == 42)
+
+    let suppressed = |_ value, _: own,| value
+    assert(suppressed.call(42 as u256, 0 as u256) == 42)
+}
+
+#[test]
+fn test_mixed_inferred_closure_param_modes() {
+    let read: u256 = 20
+    let mut written: u256 = 1
+    let combine = |viewed, shared: ref, write: mut, boxed: own| -> u256 {
+        write += viewed
+        shared + write + boxed.value
+    }
+    let result = combine.call(
+        1 as u256,
+        ref read,
+        mut written,
+        Boxed { value: 20 },
+    )
+    assert(result == 42)
+    assert(written == 2)
+}
+
+#[test]
+fn test_contextual_and_later_use_closure_inference() {
+    assert(apply_view(|value| value, 42 as u256) == 42)
+
+    assert((|value| value + 1 as u256).call(41 as u256) == 42)
+
+    let add_to = |value| 1 as u256 + value
+    assert(add_to.call(41 as u256) == 42)
+
+    let equals_sum = |value| value == 20 + 22
+    assert(equals_sum.call(42 as u256))
+
+    let equals_negative_one = |value| value == -1
+    assert(equals_negative_one.call(-1 as i8))
+
+    let field = |value| value.value
+    assert(field.call(Boxed { value: 42 }) == 42)
+
+    let cast = |value| value as u256
+    assert(cast.call(42 as u8) == 42)
+
+    let invert = |value| !value
+    assert(invert.call(false))
+
+    let at = |values| values[0]
+    assert(at.call([42 as u256, 0]) == 42)
+
+    let captured = Boxed { value: 1 }
+    let increment = |value| value + captured.value
+    let call_with = |function, value| function.call(value)
+    assert(call_with.call(increment, 41 as u256) == 42)
+
+    let sum_values = |values| -> u256 {
+        let mut total: u256 = 0
+        for value in values {
+            total += value
+        }
+        total
+    }
+    assert(sum_values.call([20 as u256, 22 as u256]) == 42)
+
+    let branch = |value| -> u256 { if true { value } else { 0 as u256 } }
+    assert(branch.call(42 as u256) == 42)
+
+    let match_branch = |value| -> u256 {
+        match true {
+            true => value
+            false => 0 as u256
+        }
+    }
+    assert(match_branch.call(42 as u256) == 42)
+
+    let named_view = |value: view view| value.value
+    assert(named_view.call(view { value: 42 }) == 42)
+    assert(read_named_view(view { value: 42 }) == 42)
+
+    let unpack = |pair| {
+        let (left, right) = pair
+        left + right
+    }
+    assert(unpack.call((20 as u256, 22 as u256)) == 42)
+
+    let increment = |mut value: own| {
+        value += 1
+        value
+    }
+    assert(increment.call_once(41 as u256) == 42)
+
+    let outer = |left| {
+        let inner = |right| left + right
+        inner.call(22 as u256)
+    }
+    assert(outer.call(20 as u256) == 42)
+}
+
+#[test]
+fn test_tuple_value_remains_one_logical_closure_argument() {
+    let first = |pair: own (u256, u256)| pair.0
+    assert(first.call_once((42, 0)) == 42)
+
+    let first_of_two = |left: own u256, right: own u256| left
+    assert(first_of_two.call_once(42, 0) == 42)
+
+    let sum_boxed = |left: own Boxed, right: own Boxed| left.value + right.value
+    assert(
+        sum_boxed.call_once(
+            Boxed { value: 20 },
+            Boxed { value: 22 },
+        ) == 42,
+    )
+
+    assert(AddPair {}.call(20, 22) == 42)
+    assert(FortyTwo {}.call() == 42)
+    assert(FortyTwo {}.call_once() == 42)
+}
+
+#[test]
+fn test_user_defined_callable_mixed_capability_pack() {
+    let mut left = 20
+    let right = 22
+    AddInto {}.call(mut left, right)
+    assert(left == 42)
+}
+
+#[test]
+fn test_inferred_higher_order_consuming_closure() {
+    let call_once_with = |function: own, value: own| function.call_once(value)
+    let boxed = Boxed { value: 42 }
+    let take = |_ unit: own| boxed
+    let result = call_once_with.call_once(take, ())
+    assert(result.value == 42)
 }

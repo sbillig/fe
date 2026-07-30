@@ -35,7 +35,7 @@ use crate::{
             },
             ty_def::{BorrowKind, CapabilityKind, TyId},
             ty_lower::{
-                layout_bundle_schema_for_semantic_value,
+                closure_layout_bundle_signature, layout_bundle_schema_for_semantic_value,
                 specialized_callable_layout_bundle_signature_with_normalizer,
             },
         },
@@ -127,9 +127,13 @@ pub fn semantic_layout_bundle_signature<'db>(
                     })
                 })
                 .collect();
-            CallableLayoutBundleSignature {
-                inputs,
-                ..CallableLayoutBundleSignature::default()
+            if let BodyOwner::Closure { def, .. } = owner {
+                closure_layout_bundle_signature(db, def, inputs, instance.normalized_result_ty(db))
+            } else {
+                CallableLayoutBundleSignature {
+                    inputs,
+                    ..CallableLayoutBundleSignature::default()
+                }
             }
         }
     }

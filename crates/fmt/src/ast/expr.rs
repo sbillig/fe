@@ -1418,7 +1418,7 @@ impl ToDoc for ast::ClosureExpr {
                 } else if let Some(ty) = ast::Type::cast(node.clone()) {
                     Some(TokenPiece::new(ty.to_doc(ctx)))
                 } else {
-                    ast::BlockExpr::cast(node).map(|body| TokenPiece::new(body.to_doc(ctx)))
+                    ast::Expr::cast(node).map(|body| TokenPiece::new(body.to_doc(ctx)))
                 }
             },
             |token| match token.kind() {

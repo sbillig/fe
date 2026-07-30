@@ -2184,7 +2184,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                     path.push(LayoutEvidencePathStep::Field(
                         u16::try_from(*field).map_err(|_| LayoutEvidenceError::InvalidPlace)?,
                     ));
-                    ty = if ty.is_tuple(self.db) {
+                    ty = if ty.is_tuple(self.db) || ty.as_closure(self.db).is_some() {
                         ty.field_types(self.db)
                             .get(*field)
                             .copied()

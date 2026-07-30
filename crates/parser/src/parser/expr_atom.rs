@@ -98,12 +98,7 @@ impl super::Parse for ClosureExprScope {
             parse_type(parser, None)?;
         }
 
-        if parser.find(
-            SyntaxKind::LBrace,
-            ExpectedKind::Body(SyntaxKind::ClosureExpr),
-        )? {
-            parser.parse(BlockExprScope::default())?;
-        }
+        parse_expr(parser)?;
         Ok(())
     }
 }

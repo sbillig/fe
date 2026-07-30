@@ -2,7 +2,7 @@ use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, ToPrimitive, Zero};
 
 use crate::core::hir_def::{
-    BinOp, Body, Const, Contract, EnumVariant, Expr, ExprId, Func, GenericArgListId,
+    BinOp, Body, ClosureDef, Const, Contract, EnumVariant, Expr, ExprId, Func, GenericArgListId,
     GenericParamOwner, IdentId, IntegerId, LitKind, Partial, PatId, PathId, Stmt,
     TypeAlias as HirTypeAlias, TypeId as HirTypeId,
 };
@@ -241,6 +241,9 @@ pub enum HoleAnchor<'db> {
     /// The declared result position of one callable. Output evidence is a
     /// signature property and must never be keyed by a lowered body.
     CallableOutput { func: Func<'db> },
+    /// The result position of one closure. Like a named callable output, this
+    /// is keyed by the closure definition rather than a lowered return local.
+    ClosureOutput { def: ClosureDef<'db> },
     /// A canonical parent for nested evidence landings in one semantic value.
     /// This identity is local to schema derivation and is never an allocation
     /// identity in a contract root graph.
@@ -270,6 +273,7 @@ pub enum LayoutBoundaryIdentity<'db> {
         origin: CallableInputLayoutHoleOrigin,
     },
     CallableOutput(Func<'db>),
+    ClosureOutput(ClosureDef<'db>),
     SemanticValue {
         body: Body<'db>,
         local: u32,

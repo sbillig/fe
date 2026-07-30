@@ -625,6 +625,7 @@ fn lower_self_fallback_param_ty<'db>(
                 TypeMode::Mut => TyId::borrow_mut_of(db, inner),
                 TypeMode::Ref => TyId::borrow_ref_of(db, inner),
                 TypeMode::Own => inner,
+                TypeMode::View => TyId::view_of(db, inner),
             }
         }
         _ => lower_hir_ty(db, hir_ty, func.scope(), assumptions),

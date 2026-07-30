@@ -2910,6 +2910,40 @@ mod tests {
         get_or_build_semantic_instance(db, key)
     }
 
+    #[test]
+    fn aggregate_param_with_nested_view_uses_source_transport() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///aggregate_param_with_nested_view_uses_source_transport.fe")
+                .unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Boxed {
+    value: u256
+}
+
+fn consume(_ args: own (view Boxed,)) {}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let semantic = semantic_instance_for_named_func(&db, top_mod, "consume");
+
+        assert_eq!(
+            runtime_param_plans(&db, semantic),
+            &[RuntimeParamPlan::PassActual],
+            "an owned argument pack containing an aggregate view must preserve its source-selected transport",
+        );
+    }
+
     fn contract_by_name<'db>(
         db: &'db DriverDataBase,
         top_mod: hir::hir_def::TopLevelMod<'db>,

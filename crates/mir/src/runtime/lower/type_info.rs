@@ -585,8 +585,16 @@ pub(super) fn runtime_transport_sensitive_aggregate<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    runtime_type_model(db, ty, scope, assumptions)
-        .transport_sensitive_aggregate(db, RuntimeTypeEnv::new(scope, assumptions))
+    let env = RuntimeTypeEnv::new(scope, assumptions);
+    let interface_ty = runtime_interface_ty_in_env(db, env, ty);
+    if let Some(inner) = interface_ty.as_view(db)
+        && stored_class_for_ty_in_env(db, env, inner)
+            .aggregate_layout()
+            .is_some()
+    {
+        return true;
+    }
+    runtime_type_model(db, ty, scope, assumptions).transport_sensitive_aggregate(db, env)
 }
 
 fn runtime_zero_sized_ty_cycle_initial<'db>(

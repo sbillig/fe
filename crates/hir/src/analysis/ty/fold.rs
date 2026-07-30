@@ -8,7 +8,7 @@ use super::{
     trait_def::{ImplementorId, TraitInstId},
     trait_resolution::{PredicateListId, TraitGoalSolution, TraitSolverQuery},
     ty_check::{ClosureCapture, ClosureInfo, EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
-    ty_def::{ClosureTy, TyBase as TyBaseData, TyData, TyId},
+    ty_def::{ClosureSignature, ClosureTy, TyBase as TyBaseData, TyData, TyId},
     visitor::TyVisitable,
 };
 use crate::analysis::{
@@ -151,7 +151,7 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
             }
 
             TyBase(TyBaseData::Closure(closure)) => {
-                let fold_tys = |folder: &mut F, tys: &Vec<TyId<'db>>| -> Vec<TyId<'db>> {
+                let fold_tys = |folder: &mut F, tys: &[TyId<'db>]| -> Vec<TyId<'db>> {
                     tys.iter()
                         .copied()
                         .map(|ty| folder.fold_ty(db, ty))
@@ -168,8 +168,7 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         closure.def(db),
                         parent_args,
                         captures,
-                        params,
-                        ret_ty,
+                        ClosureSignature::new(params, closure.param_modes(db).to_vec(), ret_ty),
                         closure.call_mode(db),
                     ),
                 )

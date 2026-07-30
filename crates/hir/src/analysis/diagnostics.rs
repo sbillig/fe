@@ -3785,13 +3785,17 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::UnsupportedClosureArity { primary, arity } => CompleteDiagnostic {
+            Self::ClosureParamNumMismatch {
+                primary,
+                given,
+                expected,
+            } => CompleteDiagnostic {
                 severity: Severity::Error,
-                message: "closures must take exactly one parameter".to_string(),
+                message: "closure parameter number mismatch".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: format!(
-                        "this closure takes {arity} parameters; only single-parameter closures implement `Fn`"
+                        "this context expects {expected} closure parameters, but {given} given"
                     ),
                     span: primary.resolve(db),
                 }],
@@ -3799,28 +3803,51 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
-            Self::UnsupportedClosureBorrowParam { primary, kind } => {
-                let kind = match kind {
-                    crate::analysis::ty::ty_def::BorrowKind::Mut => "mut",
-                    crate::analysis::ty::ty_def::BorrowKind::Ref => "ref",
-                };
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: "closures cannot take borrow parameters".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
+            Self::ClosureParamModeMismatch {
+                primary,
+                given,
+                expected,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "closure parameter ownership mode mismatch".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "this context requires `{}`, but the closure declares `{}`",
+                        expected.as_str(),
+                        given.as_str(),
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "closure parameter ownership modes are explicit and are never inferred or coerced"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
+            Self::DuplicateClosureParam {
+                primary,
+                conflict_with,
+                name,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: format!("duplicate closure parameter `{}`", name.data(db)),
+                sub_diagnostics: vec![
+                    SubDiagnostic {
                         style: LabelStyle::Primary,
-                        message: format!(
-                            "`{kind}` parameters cannot be represented by the current `Fn`/`FnOnce` interface"
-                        ),
+                        message: format!("`{}` is defined again here", name.data(db)),
                         span: primary.resolve(db),
-                    }],
-                    notes: vec![
-                        "use an ordinary function when the callable must accept a borrow"
-                            .to_string(),
-                    ],
-                    error_code,
-                }
-            }
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("first definition of `{}`", name.data(db)),
+                        span: conflict_with.resolve(db),
+                    },
+                ],
+                notes: vec![],
+                error_code,
+            },
 
             Self::AssignToCapturedBinding { primary, binding } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
@@ -3962,6 +3989,23 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     },
                 ],
                 notes: vec![],
+                error_code,
+            },
+
+            Self::CallArgsMustBeTuple { primary, args_ty } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "`Fn` arguments must be a tuple".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "the callable uses `{}` as its argument pack",
+                        args_ty.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "use `()` for zero parameters, `(T,)` for one parameter, or `(T, U, ...)` for multiple parameters".to_string(),
+                ],
                 error_code,
             },
 

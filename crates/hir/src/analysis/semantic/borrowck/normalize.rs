@@ -787,11 +787,6 @@ impl<'db> NormalizeCtxt<'db> {
     ) -> NBorrowRootId {
         let root = NBorrowRootId::from_u32(self.borrow_roots.len() as u32);
         let param_idx = source.and_then(|binding| match binding {
-            LocalBinding::Param {
-                site: ParamSite::Closure(_),
-                idx,
-                ..
-            } => Some(idx as u32 + 1),
             LocalBinding::Param { idx, .. } => Some(idx as u32),
             _ => None,
         });

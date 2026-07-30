@@ -14,6 +14,9 @@ pub fn parse_type<S: TokenStream>(
     parser: &mut Parser<S>,
     checkpoint: Option<Checkpoint>,
 ) -> Result<Checkpoint, Recovery<ErrProof>> {
+    if starts_view_mode_type(parser) {
+        return parser.parse_cp(ModeTypeScope::default(), checkpoint);
+    }
     match parser.current_kind() {
         Some(SyntaxKind::Star) => parser.parse_cp(PtrTypeScope::default(), checkpoint),
         Some(SyntaxKind::MutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw) => {
@@ -26,6 +29,45 @@ pub fn parse_type<S: TokenStream>(
             .map_err(|e| e.into()),
         _ => parser.parse_cp(PathTypeScope::default(), checkpoint),
     }
+}
+
+pub(crate) fn parse_closure_param_type<S: TokenStream>(
+    parser: &mut Parser<S>,
+) -> Result<(), Recovery<ErrProof>> {
+    let bare_view_mode = parser.is_ident("view")
+        && matches!(
+            parser.peek_n_non_trivia(2).get(1),
+            Some(SyntaxKind::Comma | SyntaxKind::Pipe)
+        );
+    if starts_view_mode_type(parser)
+        || bare_view_mode
+        || matches!(
+            parser.current_kind(),
+            Some(SyntaxKind::MutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw)
+        )
+    {
+        parser.parse(ModeTypeScope::new(true))
+    } else {
+        parse_type(parser, None).map(|_| ())
+    }
+}
+
+fn starts_view_mode_type<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    if !parser.is_ident("view") {
+        return false;
+    }
+    let Some(next) = parser.peek_n_non_trivia(2).get(1).copied() else {
+        return false;
+    };
+    if next == SyntaxKind::Lt
+        && parser.dry_run(|parser| {
+            parser.bump();
+            parser.parses_without_error(GenericArgListScope::default())
+        })
+    {
+        return false;
+    }
+    is_type_start(next)
 }
 
 pub(crate) fn is_type_start(kind: SyntaxKind) -> bool {
@@ -49,16 +91,31 @@ impl super::Parse for PtrTypeScope {
     }
 }
 
-define_scope!(ModeTypeScope, ModeType);
+define_scope!(
+    ModeTypeScope {
+        allow_missing_inner: bool
+    },
+    ModeType
+);
 impl super::Parse for ModeTypeScope {
     type Error = Recovery<ErrProof>;
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.set_newline_as_trivia(false);
-        parser.expect(
-            &[SyntaxKind::MutKw, SyntaxKind::RefKw, SyntaxKind::OwnKw],
-            None,
-        )?;
+        if !parser.is_ident("view") {
+            parser.expect(
+                &[SyntaxKind::MutKw, SyntaxKind::RefKw, SyntaxKind::OwnKw],
+                None,
+            )?;
+        }
         parser.bump();
+        if self.allow_missing_inner
+            && matches!(
+                parser.current_kind(),
+                Some(SyntaxKind::Comma | SyntaxKind::Pipe)
+            )
+        {
+            return Ok(());
+        }
         parse_type(parser, None).map(|_| ())
     }
 }

@@ -835,6 +835,9 @@ impl ToDoc for ast::ModeType {
                     SyntaxKind::MutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw => {
                         Some(TokenPiece::new(alloc.text(ctx.token(&token))).space_after())
                     }
+                    SyntaxKind::Ident if token.text() == "view" => {
+                        Some(TokenPiece::new(alloc.text(ctx.token(&token))).space_after())
+                    }
                     _ => None,
                 },
             );

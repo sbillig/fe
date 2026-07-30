@@ -1,0 +1,261 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/view_contextual.fe
+---
+Root@0..366
+  ItemList@0..365
+    Item@0..14
+      Struct@0..14
+        StructKw@0..6 "struct"
+        WhiteSpace@6..7 " "
+        Ident@7..11 "view"
+        WhiteSpace@11..12 " "
+        RecordFieldDefList@12..14
+          LBrace@12..13 "{"
+          RBrace@13..14 "}"
+    Newline@14..16 "\n\n"
+    Item@16..43
+      Func@16..43
+        FnKw@16..18 "fn"
+        WhiteSpace@18..19 " "
+        FuncSignature@19..40
+          Ident@19..27 "ordinary"
+          FuncParamList@27..40
+            LParen@27..28 "("
+            FnParam@28..39
+              Ident@28..33 "value"
+              Colon@33..34 ":"
+              WhiteSpace@34..35 " "
+              PathType@35..39
+                Path@35..39
+                  PathSegment@35..39
+                    Ident@35..39 "view"
+            RParen@39..40 ")"
+        WhiteSpace@40..41 " "
+        BlockExpr@41..43
+          LBrace@41..42 "{"
+          RBrace@42..43 "}"
+    Newline@43..45 "\n\n"
+    Item@45..82
+      Func@45..82
+        FnKw@45..47 "fn"
+        WhiteSpace@47..48 " "
+        FuncSignature@48..79
+          Ident@48..61 "explicit_mode"
+          FuncParamList@61..79
+            LParen@61..62 "("
+            FnParam@62..78
+              Ident@62..67 "value"
+              Colon@67..68 ":"
+              WhiteSpace@68..69 " "
+              ModeType@69..78
+                Ident@69..73 "view"
+                WhiteSpace@73..74 " "
+                PathType@74..78
+                  Path@74..78
+                    PathSegment@74..78
+                      Ident@74..78 "view"
+            RParen@78..79 ")"
+        WhiteSpace@79..80 " "
+        BlockExpr@80..82
+          LBrace@80..81 "{"
+          RBrace@81..82 "}"
+    Newline@82..84 "\n\n"
+    Item@84..146
+      Func@84..146
+        FnKw@84..86 "fn"
+        WhiteSpace@86..87 " "
+        FuncSignature@87..143
+          Ident@87..101 "qualified_mode"
+          GenericParamList@101..111
+            Lt@101..102 "<"
+            TypeGenericParam@102..110
+              Ident@102..103 "T"
+              TypeBoundList@103..110
+                Colon@103..104 ":"
+                WhiteSpace@104..105 " "
+                TypeBound@105..110
+                  TraitRef@105..110
+                    Path@105..110
+                      PathSegment@105..110
+                        Ident@105..110 "Trait"
+            Gt@110..111 ">"
+          FuncParamList@111..143
+            LParen@111..112 "("
+            FnParam@112..142
+              Ident@112..117 "value"
+              Colon@117..118 ":"
+              WhiteSpace@118..119 " "
+              ModeType@119..142
+                Ident@119..123 "view"
+                WhiteSpace@123..124 " "
+                PathType@124..142
+                  Path@124..142
+                    PathSegment@124..136
+                      QualifiedType@124..136
+                        Lt@124..125 "<"
+                        PathType@125..126
+                          Path@125..126
+                            PathSegment@125..126
+                              Ident@125..126 "T"
+                        WhiteSpace@126..127 " "
+                        AsKw@127..129 "as"
+                        WhiteSpace@129..130 " "
+                        TraitRef@130..135
+                          Path@130..135
+                            PathSegment@130..135
+                              Ident@130..135 "Trait"
+                        Gt@135..136 ">"
+                    Colon2@136..138 "::"
+                    PathSegment@138..142
+                      Ident@138..142 "Item"
+            RParen@142..143 ")"
+        WhiteSpace@143..144 " "
+        BlockExpr@144..146
+          LBrace@144..145 "{"
+          RBrace@145..146 "}"
+    Newline@146..148 "\n\n"
+    Item@148..365
+      Func@148..365
+        FnKw@148..150 "fn"
+        WhiteSpace@150..151 " "
+        FuncSignature@151..166
+          Ident@151..164 "closure_modes"
+          FuncParamList@164..166
+            LParen@164..165 "("
+            RParen@165..166 ")"
+        WhiteSpace@166..167 " "
+        BlockExpr@167..365
+          LBrace@167..168 "{"
+          Newline@168..169 "\n"
+          WhiteSpace@169..173 "    "
+          LetStmt@173..212
+            LetKw@173..176 "let"
+            WhiteSpace@176..177 " "
+            PathPat@177..190
+              Path@177..190
+                PathSegment@177..190
+                  Ident@177..190 "inferred_mode"
+            WhiteSpace@190..191 " "
+            Eq@191..192 "="
+            WhiteSpace@192..193 " "
+            ClosureExpr@193..212
+              FuncParamList@193..206
+                Pipe@193..194 "|"
+                FnParam@194..205
+                  Ident@194..199 "value"
+                  Colon@199..200 ":"
+                  WhiteSpace@200..201 " "
+                  ModeType@201..205
+                    Ident@201..205 "view"
+                Pipe@205..206 "|"
+              WhiteSpace@206..207 " "
+              PathExpr@207..212
+                Path@207..212
+                  PathSegment@207..212
+                    Ident@207..212 "value"
+          Newline@212..213 "\n"
+          WhiteSpace@213..217 "    "
+          LetStmt@217..261
+            LetKw@217..220 "let"
+            WhiteSpace@220..221 " "
+            PathPat@221..234
+              Path@221..234
+                PathSegment@221..234
+                  Ident@221..234 "explicit_mode"
+            WhiteSpace@234..235 " "
+            Eq@235..236 "="
+            WhiteSpace@236..237 " "
+            ClosureExpr@237..261
+              FuncParamList@237..255
+                Pipe@237..238 "|"
+                FnParam@238..254
+                  Ident@238..243 "value"
+                  Colon@243..244 ":"
+                  WhiteSpace@244..245 " "
+                  ModeType@245..254
+                    Ident@245..249 "view"
+                    WhiteSpace@249..250 " "
+                    PathType@250..254
+                      Path@250..254
+                        PathSegment@250..254
+                          Ident@250..254 "view"
+                Pipe@254..255 "|"
+              WhiteSpace@255..256 " "
+              PathExpr@256..261
+                Path@256..261
+                  PathSegment@256..261
+                    Ident@256..261 "value"
+          Newline@261..262 "\n"
+          WhiteSpace@262..266 "    "
+          LetStmt@266..310
+            LetKw@266..269 "let"
+            WhiteSpace@269..270 " "
+            PathPat@270..282
+              Path@270..282
+                PathSegment@270..282
+                  Ident@270..282 "generic_type"
+            WhiteSpace@282..283 " "
+            Eq@283..284 "="
+            WhiteSpace@284..285 " "
+            ClosureExpr@285..310
+              FuncParamList@285..304
+                Pipe@285..286 "|"
+                FnParam@286..303
+                  Ident@286..291 "value"
+                  Colon@291..292 ":"
+                  WhiteSpace@292..293 " "
+                  PathType@293..303
+                    Path@293..303
+                      PathSegment@293..303
+                        Ident@293..297 "view"
+                        GenericArgList@297..303
+                          Lt@297..298 "<"
+                          TypeGenericArg@298..302
+                            PathType@298..302
+                              Path@298..302
+                                PathSegment@298..302
+                                  Ident@298..302 "u256"
+                          Gt@302..303 ">"
+                Pipe@303..304 "|"
+              WhiteSpace@304..305 " "
+              PathExpr@305..310
+                Path@305..310
+                  PathSegment@305..310
+                    Ident@305..310 "value"
+          Newline@310..311 "\n"
+          WhiteSpace@311..315 "    "
+          LetStmt@315..363
+            LetKw@315..318 "let"
+            WhiteSpace@318..319 " "
+            PathPat@319..333
+              Path@319..333
+                PathSegment@319..333
+                  Ident@319..333 "qualified_type"
+            WhiteSpace@333..334 " "
+            Eq@334..335 "="
+            WhiteSpace@335..336 " "
+            ClosureExpr@336..363
+              FuncParamList@336..357
+                Pipe@336..337 "|"
+                FnParam@337..356
+                  Ident@337..342 "value"
+                  Colon@342..343 ":"
+                  WhiteSpace@343..344 " "
+                  PathType@344..356
+                    Path@344..356
+                      PathSegment@344..348
+                        Ident@344..348 "view"
+                      Colon2@348..350 "::"
+                      PathSegment@350..356
+                        Ident@350..356 "Nested"
+                Pipe@356..357 "|"
+              WhiteSpace@357..358 " "
+              PathExpr@358..363
+                Path@358..363
+                  PathSegment@358..363
+                    Ident@358..363 "value"
+          Newline@363..364 "\n"
+          RBrace@364..365 "}"
+  Newline@365..366 "\n"

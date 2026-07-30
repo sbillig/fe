@@ -1,8 +1,8 @@
 use crate::{
     analysis::place::Place,
     hir_def::{
-        BinOp, Body, ClosureDef, Contract, Expr, ExprId, Func, IdentId, ItemKind, Partial, Pat,
-        PatId, PathId, Stmt, StmtId, UnOp, scope_graph::ScopeId,
+        ArithBinOp, BinOp, Body, ClosureDef, Contract, Expr, ExprId, FieldIndex, Func, IdentId,
+        ItemKind, Partial, Pat, PatId, PathId, Stmt, StmtId, UnOp, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
@@ -59,6 +59,7 @@ pub(crate) struct TyCheckEnv<'db> {
 
     pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
     expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
+    contextual_view_sources: SecondaryMap<ExprId, Option<TyId<'db>>>,
     const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
     value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
     callables: SecondaryMap<ExprId, Option<Callable<'db>>>,
@@ -242,6 +243,7 @@ impl<'db> TyCheckEnv<'db> {
             body,
             pat_ty: SecondaryMap::new(),
             expr_ty: SecondaryMap::new(),
+            contextual_view_sources: SecondaryMap::new(),
             const_refs: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),
             callables: SecondaryMap::new(),
@@ -595,6 +597,10 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
+    pub(super) fn closure_info(&self, expr: ExprId) -> Option<&ClosureInfo<'db>> {
+        self.closure_infos[expr].as_ref()
+    }
+
     pub(super) fn register_resolved_field_index(&mut self, expr: ExprId, field_index: u16) {
         if self.resolved_field_index[expr]
             .replace(field_index)
@@ -892,6 +898,10 @@ impl<'db> TyCheckEnv<'db> {
         self.expr_ty[expr] = Some(typed);
     }
 
+    pub(super) fn register_contextual_view_source(&mut self, expr: ExprId, source_ty: TyId<'db>) {
+        self.contextual_view_sources[expr] = Some(source_ty);
+    }
+
     pub(super) fn binding_is_capture(&self, binding: LocalBinding<'db>) -> bool {
         let Some(active) = self.closure_stack.last() else {
             return false;
@@ -1026,8 +1036,24 @@ impl<'db> TyCheckEnv<'db> {
         self.deferred.push(DeferredTask::Method(pending))
     }
 
+    pub(super) fn register_pending_method_lookup(&mut self, pending: PendingMethodLookup<'db>) {
+        self.deferred.push(DeferredTask::MethodLookup(pending))
+    }
+
     pub(super) fn register_pending_primitive_op(&mut self, pending: PendingPrimitiveOp) {
         self.deferred.push(DeferredTask::PrimitiveOp(pending))
+    }
+
+    pub(super) fn register_pending_field(&mut self, pending: PendingField<'db>) {
+        self.deferred.push(DeferredTask::Field(pending))
+    }
+
+    pub(super) fn register_pending_cast(&mut self, pending: PendingCast<'db>) {
+        self.deferred.push(DeferredTask::Cast(pending))
+    }
+
+    pub(super) fn register_pending_for_loop_seq(&mut self, pending: PendingForLoopSeq<'db>) {
+        self.deferred.push(DeferredTask::ForLoopSeq(pending))
     }
 
     pub(super) fn set_expr_value_access(&mut self, expr: ExprId, access: ValueAccess) {
@@ -1069,6 +1095,10 @@ impl<'db> TyCheckEnv<'db> {
             .values_mut()
             .flatten()
             .for_each(|ty| *ty = ty.clone().fold_with(self.db, &mut prober));
+        self.contextual_view_sources
+            .values_mut()
+            .flatten()
+            .for_each(|ty| *ty = ty.fold_with(self.db, &mut prober));
 
         self.pat_ty
             .values_mut()
@@ -1143,6 +1173,7 @@ impl<'db> TyCheckEnv<'db> {
             assumptions,
             pat_ty: self.pat_ty,
             expr_ty: self.expr_ty,
+            contextual_view_sources: self.contextual_view_sources,
             const_refs: self.const_refs,
             value_path_refs: self.value_path_refs,
             semantic_expr_lowering: self.semantic_expr_lowering,
@@ -1375,9 +1406,12 @@ pub enum ParamSite<'db> {
     ContractInit(Contract<'db>),
     Closure(ClosureDef<'db>),
     ClosureEnv(ClosureDef<'db>),
+    ClosureArgs(ClosureDef<'db>),
     /// Effect param that resolves to a contract field.
     EffectField(EffectParamSite<'db>),
 }
+
+pub const CLOSURE_ARGS_PARAM_IDX: usize = 1;
 
 fn param_span(site: ParamSite<'_>, idx: usize) -> DynLazySpan<'_> {
     match site {
@@ -1398,6 +1432,7 @@ fn param_span(site: ParamSite<'_>, idx: usize) -> DynLazySpan<'_> {
             .name()
             .into(),
         ParamSite::ClosureEnv(def) => def.expr.span(def.body).into(),
+        ParamSite::ClosureArgs(def) => def.expr.span(def.body).into(),
         ParamSite::EffectField(effect_site) => effect_param_span(effect_site, idx),
     }
 }
@@ -1422,6 +1457,7 @@ fn param_name<'db>(
             params.data(db).get(idx).and_then(|param| param.name())
         }
         ParamSite::ClosureEnv(_) => Some(IdentId::new(db, "%closure".to_string())),
+        ParamSite::ClosureArgs(_) => Some(IdentId::new(db, "%args".to_string())),
         ParamSite::EffectField(effect_site) => effect_param_name(db, effect_site, idx),
     }
 }
@@ -1609,6 +1645,16 @@ impl<'db> LocalBinding<'db> {
         }
     }
 
+    pub fn closure_args(db: &'db dyn HirAnalysisDb, ty: ClosureTy<'db>) -> Self {
+        Self::Param {
+            site: ParamSite::ClosureArgs(ty.def(db)),
+            idx: CLOSURE_ARGS_PARAM_IDX,
+            mode: FuncParamMode::Own,
+            ty: ty.args_pack_ty(db),
+            is_mut: false,
+        }
+    }
+
     pub fn is_mut(&self) -> bool {
         match self {
             LocalBinding::Local { is_mut, .. }
@@ -1642,10 +1688,13 @@ impl<'db> LocalBinding<'db> {
                 ..
             } => Some(CallableInputLayoutHoleOrigin::Receiver),
             Self::Param {
-                site: ParamSite::Closure(_),
-                idx,
+                site: ParamSite::ClosureArgs(_),
                 ..
-            } => Some(CallableInputLayoutHoleOrigin::ValueParam(idx + 1)),
+            } => Some(CallableInputLayoutHoleOrigin::ValueParam(1)),
+            Self::Param {
+                site: ParamSite::Closure(_),
+                ..
+            } => None,
             Self::Local { .. }
             | Self::Param {
                 site: ParamSite::ContractInit(_),
@@ -1794,6 +1843,13 @@ pub(super) struct PendingMethod<'db> {
     pub span: DynLazySpan<'db>,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct PendingMethodLookup<'db> {
+    pub expr: ExprId,
+    pub method_name: IdentId<'db>,
+    pub span: DynLazySpan<'db>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PendingMethodCandidate<'db> {
     pub inst: TraitInstId<'db>,
@@ -1814,12 +1870,42 @@ pub(super) enum PendingPrimitiveOp {
         rhs: ExprId,
         op: BinOp,
     },
+    AugAssign {
+        expr: ExprId,
+        lhs: ExprId,
+        rhs: ExprId,
+        op: ArithBinOp,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PendingField<'db> {
+    pub expr: ExprId,
+    pub lhs: ExprId,
+    pub field: FieldIndex<'db>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PendingCast<'db> {
+    pub expr: ExprId,
+    pub inner: ExprId,
+    pub target: TyId<'db>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PendingForLoopSeq<'db> {
+    pub stmt: StmtId,
+    pub expr: ExprId,
+    pub iterable_ty: TyId<'db>,
+    pub elem_ty: TyId<'db>,
 }
 
 impl PendingPrimitiveOp {
     pub(super) fn expr(&self) -> ExprId {
         match self {
-            Self::Unary { expr, .. } | Self::Binary { expr, .. } => *expr,
+            Self::Unary { expr, .. } | Self::Binary { expr, .. } | Self::AugAssign { expr, .. } => {
+                *expr
+            }
         }
     }
 }
@@ -1828,7 +1914,11 @@ impl PendingPrimitiveOp {
 pub(super) enum DeferredTask<'db> {
     Obligation(TraitObligation<'db>),
     Method(PendingMethod<'db>),
+    MethodLookup(PendingMethodLookup<'db>),
     PrimitiveOp(PendingPrimitiveOp),
+    Field(PendingField<'db>),
+    Cast(PendingCast<'db>),
+    ForLoopSeq(PendingForLoopSeq<'db>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -20,7 +20,7 @@ enum Choice {
     Right,
 }
 
-fn invoke<T, U, F: Fn<T, U>>(_ func: F, _ value: own T) -> U {
+fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
     func.call(value)
 }
 

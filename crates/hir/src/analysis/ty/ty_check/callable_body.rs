@@ -38,12 +38,13 @@ impl<'db> TypedCallableBody<'db> {
             ty, receiver_mode, ..
         } = self.owner
         {
-            let Some(info) = self.closure_info(db, ty) else {
+            let Some(_) = self.closure_info(db, ty) else {
                 return Vec::new();
             };
-            let mut bindings = vec![LocalBinding::closure_env(db, ty, receiver_mode)];
-            bindings.extend(info.params.iter().copied());
-            return bindings;
+            return vec![
+                LocalBinding::closure_env(db, ty, receiver_mode),
+                LocalBinding::closure_args(db, ty),
+            ];
         }
 
         self.typed_body.param_bindings.clone()
@@ -58,11 +59,13 @@ impl<'db> TypedCallableBody<'db> {
             ty, receiver_mode, ..
         } = self.owner
         {
-            let info = self.closure_info(db, ty)?;
+            self.closure_info(db, ty)?;
             return if idx == 0 {
                 Some(LocalBinding::closure_env(db, ty, receiver_mode))
+            } else if idx == 1 {
+                Some(LocalBinding::closure_args(db, ty))
             } else {
-                info.params.get(idx - 1).copied()
+                None
             };
         }
 

@@ -6,8 +6,8 @@ input_file: fixtures/ty_check/closure_consuming_not_fn.fe
 error[6-0003]: trait bound is not satisfied
    ┌─ closure_consuming_not_fn.fe:14:5
    │
- 7 │ fn invoke<T, U, F: Fn<T, U>>(_ func: F, _ value: own T) -> U {
-   │                    -------- required by this bound on `invoke`
+ 7 │ fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
+   │                    ----------- required by this bound on `invoke`
    ·
 14 │     invoke(func: take, value: ())
-   │     ^^^^^^ `fn(()) -> Boxed` doesn't implement `Fn<(), Boxed>`
+   │     ^^^^^^ `fn(own ()) -> Boxed` doesn't implement `Fn<((),), Boxed>`
