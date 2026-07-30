@@ -31,3 +31,6 @@ protobuf = { version = "=3.7.2", optional = true }
 wasm-bindgen-test.workspace = true
 insta = { version = "1.42", features = ["json"] }
 schemars = "0.8"
+
+[build-dependencies]
+tree-sitter-fe = { path = "../tree-sitter-fe" }

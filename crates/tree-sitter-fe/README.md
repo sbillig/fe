@@ -28,8 +28,7 @@ requires a `tree-sitter` CLI:
   `package-lock.json` into `node_modules/`:
 
   ```sh
-  npm ci --ignore-scripts      # installs deps without the unused Node addon build
-  npm rebuild tree-sitter-cli  # fetches the pinned tree-sitter CLI binary
+  npm ci
   ```
 
   `build.rs` prefers `node_modules/.bin/tree-sitter` when present.

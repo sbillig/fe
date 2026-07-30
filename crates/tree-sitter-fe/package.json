@@ -38,7 +38,6 @@
     }
   },
   "scripts": {
-    "install": "node-gyp-build",
     "prestart": "tree-sitter build --wasm",
     "start": "tree-sitter playground",
     "test": "tree-sitter test"
