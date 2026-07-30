@@ -1,5 +1,6 @@
 use ingot::Default
 use ingot::Fn
+use ingot::FnOnce
 use ingot::Functor
 use ingot::Applicative
 use ingot::Monad
@@ -60,31 +61,31 @@ impl<E, T> Result<E, T> {
         }
     }
 
-    pub fn map<U, F: Fn<T, U>>(own self, _ func: F) -> Result<E, U> {
+    pub fn map<U, F: FnOnce<T, U>>(own self, _ func: own F) -> Result<E, U> {
         match self {
-            Self::Ok(value) => Result::Ok(func.call(value))
+            Self::Ok(value) => Result::Ok(func.call_once(value))
             Self::Err(error) => Result::Err(error)
         }
     }
 
-    pub fn map_err<FError, F: Fn<E, FError>>(own self, _ func: F) -> Result<FError, T> {
+    pub fn map_err<FError, F: FnOnce<E, FError>>(own self, _ func: own F) -> Result<FError, T> {
         match self {
             Self::Ok(value) => Result::Ok(value)
-            Self::Err(error) => Result::Err(func.call(error))
+            Self::Err(error) => Result::Err(func.call_once(error))
         }
     }
 
-    pub fn and_then<U, F: Fn<T, Result<E, U>>>(own self, _ func: F) -> Result<E, U> {
+    pub fn and_then<U, F: FnOnce<T, Result<E, U>>>(own self, _ func: own F) -> Result<E, U> {
         match self {
-            Self::Ok(value) => func.call(value)
+            Self::Ok(value) => func.call_once(value)
             Self::Err(error) => Result::Err(error)
         }
     }
 
-    pub fn or_else<E2, F: Fn<E, Result<E2, T>>>(own self, _ func: F) -> Result<E2, T> {
+    pub fn or_else<E2, F: FnOnce<E, Result<E2, T>>>(own self, _ func: own F) -> Result<E2, T> {
         match self {
             Self::Ok(value) => Result::Ok(value)
-            Self::Err(error) => func.call(error)
+            Self::Err(error) => func.call_once(error)
         }
     }
 }

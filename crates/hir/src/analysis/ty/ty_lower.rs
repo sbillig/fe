@@ -2752,6 +2752,10 @@ where
         fn visit_const_param(&mut self, param: &TyParam<'db>, _: TyId<'db>) {
             self.visit_param(param);
         }
+
+        fn visit_closure(&mut self, closure: super::ty_def::ClosureTy<'db>) {
+            closure.captures(self.db).visit_with(self);
+        }
     }
 
     let mut finder = Finder {
@@ -2802,6 +2806,25 @@ fn layout_projection_paths_in_ty<'db>(
                     found_descendant = true;
                     path.push(LayoutBundlePathStep::Field(idx));
                     self.walk(field, path, index_lengths);
+                    path.pop();
+                }
+                if !found_descendant {
+                    self.out.push((path.clone(), index_lengths.clone()));
+                }
+                return;
+            }
+            if let Some(closure) = ty.as_closure(self.db) {
+                let mut found_descendant = false;
+                for (idx, capture) in closure.captures(self.db).iter().copied().enumerate() {
+                    if !self.contains(capture) {
+                        continue;
+                    }
+                    let Ok(idx) = u16::try_from(idx) else {
+                        continue;
+                    };
+                    found_descendant = true;
+                    path.push(LayoutBundlePathStep::Field(idx));
+                    self.walk(capture, path, index_lengths);
                     path.pop();
                 }
                 if !found_descendant {
@@ -4187,4 +4210,89 @@ pub(super) fn lower_kind_in_bounds<'db>(bounds: &[TypeBound<'db>]) -> Option<Kin
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use camino::Utf8PathBuf;
+
+    use crate::{
+        analysis::ty::{const_ty::ConstTyData, ty_check::check_func_body, ty_def::TyData},
+        hir_def::ItemKind,
+        test_db::HirAnalysisTestDb,
+    };
+
+    use super::{LayoutBundlePathStep, TyId, layout_projection_paths_in_ty};
+
+    #[test]
+    fn closure_layout_paths_only_include_physical_captures() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("closure_layout_paths.fe"),
+            r#"
+struct Root<const N: u256> {
+    value: u256,
+}
+
+fn make<const N: u256>() {
+    let root: Root<N> = Root { value: 42 }
+    let parameter_only = |value: own Root<N>| -> Root<N> { value }
+    let captured = |_ unit: own ()| -> Root<N> { root }
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let func = top_mod
+            .all_items(&db)
+            .iter()
+            .find_map(|item| match item {
+                ItemKind::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "make") =>
+                {
+                    Some(*func)
+                }
+                _ => None,
+            })
+            .expect("missing make function");
+        let (_, typed_body) = check_func_body(&db, func);
+
+        let mut saw_parameter_only = false;
+        let mut saw_captured = false;
+        for (_, info) in typed_body.closure_infos() {
+            let generic_ty = info
+                .captures
+                .first()
+                .map(|capture| capture.ty)
+                .or_else(|| info.ty.params(&db).first().copied())
+                .expect("closure should mention Root<N>");
+            let TyData::ConstTy(const_ty) = generic_ty.generic_args(&db)[0].data(&db) else {
+                panic!("Root<N> should retain its const parameter");
+            };
+            let ConstTyData::TyParam(param, _) = const_ty.data(&db) else {
+                panic!("Root<N> should retain its const parameter");
+            };
+            let paths = layout_projection_paths_in_ty(&db, TyId::closure(&db, info.ty), param.idx);
+            if info.captures.is_empty() {
+                assert!(paths.is_empty());
+                saw_parameter_only = true;
+            } else {
+                assert_eq!(
+                    paths,
+                    vec![(
+                        vec![
+                            LayoutBundlePathStep::Field(0),
+                            LayoutBundlePathStep::ConstParam(0),
+                        ],
+                        Vec::new(),
+                    )]
+                );
+                saw_captured = true;
+            }
+        }
+        assert!(saw_parameter_only && saw_captured);
+    }
 }

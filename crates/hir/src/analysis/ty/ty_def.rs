@@ -1041,15 +1041,36 @@ pub enum TyData<'db> {
     Invalid(InvalidCause<'db>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ClosureCallMode {
+    Reusable,
+    Consuming,
+}
+
+impl ClosureCallMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reusable => "reusable",
+            Self::Consuming => "consuming",
+        }
+    }
+}
+
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ClosureTy<'db> {
     pub def: ClosureDef<'db>,
+    /// Generic arguments of the item whose body defines the closure. Closure
+    /// semantic instances substitute the parent's typed-body template with
+    /// these arguments.
+    #[return_ref]
+    pub parent_args: Vec<TyId<'db>>,
     #[return_ref]
     pub captures: Vec<TyId<'db>>,
     #[return_ref]
     pub params: Vec<TyId<'db>>,
     pub ret_ty: TyId<'db>,
+    pub call_mode: ClosureCallMode,
 }
 
 impl<'db> ClosureTy<'db> {
@@ -1748,7 +1769,7 @@ pub enum PrimTy {
     BorrowRef,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BorrowKind {
     Mut,
     Ref,

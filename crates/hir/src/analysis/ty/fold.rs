@@ -151,22 +151,27 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
             }
 
             TyBase(TyBaseData::Closure(closure)) => {
-                let captures: Vec<TyId<'db>> = closure
-                    .captures(db)
-                    .iter()
-                    .copied()
-                    .map(|ty| folder.fold_ty(db, ty))
-                    .collect();
-                let params: Vec<TyId<'db>> = closure
-                    .params(db)
-                    .iter()
-                    .copied()
-                    .map(|ty| folder.fold_ty(db, ty))
-                    .collect();
+                let fold_tys = |folder: &mut F, tys: &Vec<TyId<'db>>| -> Vec<TyId<'db>> {
+                    tys.iter()
+                        .copied()
+                        .map(|ty| folder.fold_ty(db, ty))
+                        .collect()
+                };
+                let parent_args = fold_tys(folder, closure.parent_args(db));
+                let captures = fold_tys(folder, closure.captures(db));
+                let params = fold_tys(folder, closure.params(db));
                 let ret_ty = folder.fold_ty(db, closure.ret_ty(db));
                 TyId::closure(
                     db,
-                    ClosureTy::new(db, closure.def(db), captures, params, ret_ty),
+                    ClosureTy::new(
+                        db,
+                        closure.def(db),
+                        parent_args,
+                        captures,
+                        params,
+                        ret_ty,
+                        closure.call_mode(db),
+                    ),
                 )
             }
 
@@ -424,6 +429,8 @@ impl<'db> TyFoldable<'db> for ClosureCapture<'db> {
         Self {
             binding: self.binding.fold_with(db, folder),
             ty: self.ty.fold_with(db, folder),
+            construction: self.construction,
+            access: self.access,
         }
     }
 }
@@ -442,6 +449,7 @@ impl<'db> TyFoldable<'db> for ClosureInfo<'db> {
                 .fold_with(db, folder)
                 .as_closure(db)
                 .unwrap_or(self.ty),
+            return_borrow_provider: self.return_borrow_provider,
         }
     }
 }

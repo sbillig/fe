@@ -2844,7 +2844,7 @@ impl<'db> RmirEmitter<'db> {
 
     fn current_arithmetic_mode(&self) -> ArithmeticMode {
         self.current_semantic_key()
-            .owner(self.db)
+            .callable_body(self.db)
             .arithmetic_mode(self.db)
     }
 
@@ -3273,7 +3273,7 @@ impl<'db> RmirEmitter<'db> {
         callee: SemanticInstance<'db>,
         args: &[NOperand],
     ) {
-        let typed_body = callee.key(self.db).typed_body(self.db);
+        let callable_body = callee.key(self.db).callable_body(self.db);
         for (idx, (arg, plan)) in args
             .iter()
             .copied()
@@ -3283,7 +3283,7 @@ impl<'db> RmirEmitter<'db> {
             if !matches!(plan, crate::runtime::RuntimeParamPlan::Erased) {
                 continue;
             }
-            let Some(binding) = typed_body.param_binding(idx) else {
+            let Some(binding) = callable_body.param_binding(self.db, idx) else {
                 continue;
             };
             let handle_ty = callee.binding_ty(self.db, binding);

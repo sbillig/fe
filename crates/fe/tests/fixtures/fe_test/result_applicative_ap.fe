@@ -1,4 +1,4 @@
-use core::functional::{Applicative, Fn, Functor}
+use core::functional::{Applicative, Fn, FnOnce, Functor}
 use core::result::Result::{self, Ok}
 
 enum AddError {
@@ -12,9 +12,21 @@ struct AddRight {
     left: u256,
 }
 
+impl FnOnce<u256, AddRight> for MakeAdder {
+    fn call_once(self: own Self, _ value: own u256) -> AddRight {
+        self.call(value)
+    }
+}
+
 impl Fn<u256, AddRight> for MakeAdder {
     fn call(self, _ value: own u256) -> AddRight {
         AddRight { left: value }
+    }
+}
+
+impl FnOnce<u256, u256> for AddRight {
+    fn call_once(self: own Self, _ right: own u256) -> u256 {
+        self.call(right)
     }
 }
 

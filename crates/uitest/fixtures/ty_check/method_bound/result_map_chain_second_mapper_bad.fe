@@ -1,4 +1,4 @@
-use core::functional::Fn
+use core::functional::{Fn, FnOnce}
 use core::result::Result::{self, Ok}
 
 struct Wrap {
@@ -6,6 +6,12 @@ struct Wrap {
 }
 
 struct ToWrap {}
+impl FnOnce<u256, Wrap> for ToWrap {
+    fn call_once(self: own Self, _ x: own u256) -> Wrap {
+        self.call(x)
+    }
+}
+
 impl Fn<u256, Wrap> for ToWrap {
     fn call(self, _ x: own u256) -> Wrap {
         Wrap { val: x }
@@ -13,6 +19,12 @@ impl Fn<u256, Wrap> for ToWrap {
 }
 
 struct StillNeedsU256 {}
+impl FnOnce<u256, u256> for StillNeedsU256 {
+    fn call_once(self: own Self, _ x: own u256) -> u256 {
+        self.call(x)
+    }
+}
+
 impl Fn<u256, u256> for StillNeedsU256 {
     fn call(self, _ x: own u256) -> u256 {
         x

@@ -7,22 +7,24 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        SBlockId, SLocalId, SemanticInstance,
+        SBlockId, SLocalId, SStmtId,
         borrowck::ir::{NExpr, NSStmtKind},
-        get_or_build_semantic_instance,
     },
-    ty::ty_is_noesc,
 };
 
 use super::{
     canon::{BorrowCanonCx, CanonPlace, CfgAdjacency, Loan, LoanId, MovedPlaces, State},
-    check::{Borrowck, provisional_borrow_summary_voucher, semantic_borrow_summary_voucher},
-    ir::{BorrowInputRef, NormalizedSemanticBody, SemanticBorrowDiagnostic},
+    check::Borrowck,
+    ir::{
+        BorrowInput, BorrowResult, BorrowTransform, NormalizedSemanticBody,
+        SemanticBorrowDiagnostic,
+    },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BorrowSummaryMode {
-    Final,
+    FinalCheck,
+    FinalSummary,
     Provisional,
 }
 
@@ -32,39 +34,43 @@ pub(super) struct BorrowLoanTargetState<'a, 'db> {
 
 pub(super) struct BorrowLoanTargetAnalysis<'a, 'db> {
     db: &'db dyn HirAnalysisDb,
-    instance: SemanticInstance<'db>,
     body: &'a NormalizedSemanticBody<'db>,
     entry_state: &'a SecondaryMap<SBlockId, State>,
     loan_for_local: &'a FxHashMap<SLocalId, LoanId>,
-    summary_mode: BorrowSummaryMode,
+    constant_indices: &'a SecondaryMap<SLocalId, Option<usize>>,
+    call_result_loans: &'a FxHashMap<SStmtId, Vec<(BorrowResult, LoanId)>>,
+    call_loan_transforms: &'a FxHashMap<LoanId, Vec<BorrowTransform>>,
 }
 
 impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
     pub(super) fn new(
         db: &'db dyn HirAnalysisDb,
-        instance: SemanticInstance<'db>,
         body: &'a NormalizedSemanticBody<'db>,
         entry_state: &'a SecondaryMap<SBlockId, State>,
         loan_for_local: &'a FxHashMap<SLocalId, LoanId>,
-        summary_mode: BorrowSummaryMode,
+        constant_indices: &'a SecondaryMap<SLocalId, Option<usize>>,
+        call_result_loans: &'a FxHashMap<SStmtId, Vec<(BorrowResult, LoanId)>>,
+        call_loan_transforms: &'a FxHashMap<LoanId, Vec<BorrowTransform>>,
     ) -> Self {
         Self {
             db,
-            instance,
             body,
             entry_state,
             loan_for_local,
-            summary_mode,
+            constant_indices,
+            call_result_loans,
+            call_loan_transforms,
         }
     }
 
     fn canon<'b>(&'b self, loans: &'b [Loan<'db>]) -> BorrowCanonCx<'b, 'db> {
         BorrowCanonCx::new(
             self.db,
-            self.instance,
+            self.body.owner,
             self.body,
             loans,
             self.loan_for_local,
+            self.constant_indices,
         )
     }
 
@@ -92,11 +98,11 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
         let NSStmtKind::Assign { dst, expr } = &stmt.kind else {
             return Ok(false);
         };
-        let Some(&loan_id) = self.loan_for_local.get(dst) else {
-            return Ok(false);
-        };
         match expr {
             NExpr::Borrow { place, .. } => {
+                let Some(&loan_id) = self.loan_for_local.get(dst) else {
+                    return Ok(false);
+                };
                 let (targets, parents) = {
                     let canon = self.canon(loans);
                     (
@@ -106,71 +112,58 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
                 };
                 Ok(self.extend_loan(loans, loan_id, targets, parents))
             }
-            NExpr::ReadPlace { place, .. } => {
-                let targets = {
-                    let canon = self.canon(loans);
-                    canon.canonicalize_place(state, place, stmt.origin)?
-                };
-                Ok(self.extend_loan(loans, loan_id, targets, FxHashSet::default()))
-            }
-            NExpr::Call { callee, args, .. } => {
-                let callee_instance = get_or_build_semantic_instance(self.db, callee.key);
-                let summary = match self.summary_mode {
-                    BorrowSummaryMode::Final => {
-                        semantic_borrow_summary_voucher(self.db, callee_instance)
-                    }
-                    BorrowSummaryMode::Provisional => {
-                        provisional_borrow_summary_voucher(self.db, callee_instance)
-                    }
-                }?;
-                let Some(summary) = summary else {
-                    return Ok(false);
-                };
-                let (targets, parents) = {
-                    let canon = self.canon(loans);
+            NExpr::Call { args, .. } => {
+                let mut loan_ids = self
+                    .loan_for_local
+                    .get(dst)
+                    .copied()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                loan_ids.extend(
+                    self.call_result_loans
+                        .get(&stmt.id)
+                        .into_iter()
+                        .flatten()
+                        .map(|(_, loan)| *loan),
+                );
+                let mut changed = false;
+                for loan_id in loan_ids {
+                    let Some(transforms) = self.call_loan_transforms.get(&loan_id) else {
+                        continue;
+                    };
                     let mut targets = FxHashSet::default();
                     let mut parents = FxHashSet::default();
-                    for transform in &summary {
-                        let BorrowInputRef::Param(idx) = transform.input;
-                        if let Some(arg) = args.get(idx as usize) {
-                            for base in canon.canonicalize_value_base(state, arg.local) {
-                                targets.insert(CanonPlace {
-                                    root: base.root,
-                                    proj: base.proj.concat(&transform.proj),
-                                });
-                            }
-                            parents.extend(canon.mut_loans_for_value(state, arg.local));
-                        }
-                    }
-                    (targets, parents)
-                };
-                Ok(self.extend_loan(loans, loan_id, targets, parents))
-            }
-            NExpr::AggregateMake { fields, .. } => {
-                let (targets, parents) = {
                     let canon = self.canon(loans);
-                    let mut targets = FxHashSet::default();
-                    let mut parents = FxHashSet::default();
-                    for field in fields {
-                        if self
-                            .body
-                            .local(field.local)
-                            .is_some_and(|local| ty_is_noesc(self.db, local.ty))
-                        {
-                            targets.extend(canon.borrow_local_targets(state, field.local));
-                            parents.extend(canon.mut_loans_for_value(state, field.local));
-                        }
+                    for transform in transforms {
+                        let param = transform.input.param();
+                        let Some(arg) = args.get(param as usize) else {
+                            continue;
+                        };
+                        let arg_targets = match &transform.input {
+                            BorrowInput::Place { projection, .. } => canon
+                                .canonicalize_value_layout_projection(state, arg.local, projection),
+                            BorrowInput::AnyInParam(_) => canon.all_value_targets(state, arg.local),
+                        };
+                        parents.extend(canon.mut_loans_for_value_targets(
+                            state,
+                            arg.local,
+                            &arg_targets,
+                        ));
+                        targets.extend(arg_targets);
                     }
-                    (targets, parents)
-                };
-                Ok(self.extend_loan(loans, loan_id, targets, parents))
+                    changed |= self.extend_loan(loans, loan_id, targets, parents);
+                }
+                Ok(changed)
             }
             NExpr::Use(value) => {
+                let Some(&loan_id) = self.loan_for_local.get(dst) else {
+                    return Ok(false);
+                };
                 let canon = self.canon(loans);
                 Ok(self.extend_loan(
                     loans,
                     loan_id,
-                    canon.canonicalize_value_base(state, value.local),
+                    canon.borrow_local_targets(state, value.local),
                     canon.mut_loans_for_value(state, value.local),
                 ))
             }
@@ -197,8 +190,11 @@ impl<'a, 'db> SparseAnalysis for BorrowLoanTargetAnalysis<'a, 'db> {
         let mut changed = false;
         for stmt in &self.body.blocks[node.index()].stmts {
             changed |= self.update_loan_from_stmt(&mut *state.loans, &local_state, stmt)?;
-            self.canon(state.loans)
-                .apply_stmt_state(&mut local_state, stmt);
+            self.canon(state.loans).apply_stmt_state_with_call_loans(
+                &mut local_state,
+                stmt,
+                self.call_result_loans.get(&stmt.id).map(Vec::as_slice),
+            );
         }
         Ok(changed)
     }
@@ -262,7 +258,7 @@ impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
     ) -> Result<Self::State, Self::Error> {
         let mut state = in_state.clone();
         for stmt in &self.borrowck.body.blocks[block.index()].stmts {
-            self.borrowck.canon().apply_stmt_state(&mut state, stmt);
+            self.borrowck.apply_stmt_state(&mut state, stmt);
         }
         Ok(state)
     }
@@ -329,7 +325,7 @@ impl<'db> ForwardCfgAnalysis for BorrowMovedStateAnalysis<'_, 'db> {
         for stmt in &self.borrowck.body.blocks[block.index()].stmts {
             self.borrowck
                 .update_moved_for_stmt(&state, &mut moved, stmt)?;
-            self.borrowck.canon().apply_stmt_state(&mut state, stmt);
+            self.borrowck.apply_stmt_state(&mut state, stmt);
         }
         Ok(MovedState(moved))
     }

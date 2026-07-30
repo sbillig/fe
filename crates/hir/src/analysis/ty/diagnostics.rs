@@ -630,6 +630,11 @@ pub enum BodyDiag<'db> {
         arity: usize,
     },
 
+    UnsupportedClosureBorrowParam {
+        primary: DynLazySpan<'db>,
+        kind: BorrowKind,
+    },
+
     AssignToCapturedBinding {
         primary: DynLazySpan<'db>,
         binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
@@ -964,6 +969,7 @@ impl<'db> BodyDiag<'db> {
             Self::ImmutableContractFieldMutBinding { .. } => 85,
             Self::LoopControlOutsideOfLoop { .. } => 19,
             Self::UnsupportedClosureArity { .. } => 87,
+            Self::UnsupportedClosureBorrowParam { .. } => 91,
             Self::AssignToCapturedBinding { .. } => 88,
             Self::EffectInClosure { .. } => 89,
             Self::ClosureInConstContext { .. } => 90,

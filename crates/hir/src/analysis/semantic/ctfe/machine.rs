@@ -1326,7 +1326,7 @@ impl<'db> CtfeMachine<'db> {
                     result_ty, variant, fields,
                 )))
             }
-            SExpr::ReadPlace { place } => {
+            SExpr::ReadPlace { place, .. } => {
                 let place = self.resolve_place(frame_idx, &place, origin)?;
                 let r#ref = CtfeRef {
                     frame: place.frame,

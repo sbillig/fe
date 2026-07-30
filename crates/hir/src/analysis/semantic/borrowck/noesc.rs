@@ -6,7 +6,13 @@ use crate::analysis::{
     HirAnalysisDb,
     diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
     semantic::{SemOrigin, SemanticCalleeRef, SemanticInstance},
-    ty::{ProviderAddressSpace, ty_check::BodyOwner, ty_def::TyId, ty_is_noesc},
+    ty::{
+        ProviderAddressSpace,
+        ty_check::{BodyOwner, ClosureCapture, ClosureCaptureConstruction},
+        ty_contains_borrow,
+        ty_def::{ClosureTy, TyId},
+        ty_is_noesc,
+    },
 };
 
 use super::{
@@ -14,8 +20,9 @@ use super::{
     check::Borrowck,
     diagnostics::{normalized_body_internal_diag, operand_origin},
     ir::{
-        BorrowDiagnosticId, NExpr, NOperand, NSStmt, NSStmtKind, SemanticBorrowCheckResult,
-        SemanticBorrowDiagKind, SemanticBorrowDiagnostic, SemanticBorrowDiagnosticSpan,
+        BorrowDiagnosticId, NExpr, NOperand, NSStmt, NSStmtKind, ReadMode,
+        SemanticBorrowCheckResult, SemanticBorrowDiagKind, SemanticBorrowDiagnostic,
+        SemanticBorrowDiagnosticSpan,
     },
 };
 
@@ -64,7 +71,7 @@ impl<'db> NoEsc<'db> {
                 self.borrowck.entry_state[crate::analysis::semantic::SBlockId::new(bb_idx)].clone();
             for stmt in &block.stmts {
                 self.check_stmt(&state, stmt)?;
-                self.borrowck.canon().apply_stmt_state(&mut state, stmt);
+                self.borrowck.apply_stmt_state(&mut state, stmt);
             }
         }
         Ok(())
@@ -80,9 +87,113 @@ impl<'db> NoEsc<'db> {
                 expr: NExpr::Call { callee, args, .. },
                 ..
             } => self.check_call_args(state, stmt.origin, *callee, args),
+            NSStmtKind::Assign {
+                dst,
+                expr: NExpr::AggregateMake { fields, .. },
+            } => {
+                let Some(closure) = self
+                    .borrowck
+                    .body
+                    .local(*dst)
+                    .and_then(|local| local.ty.as_closure(self.borrowck.db))
+                else {
+                    return Ok(());
+                };
+                let plan = self
+                    .borrowck
+                    .instance
+                    .key(self.borrowck.db)
+                    .callable_body(self.borrowck.db)
+                    .closure_capture_plan(self.borrowck.db, closure)
+                    .ok_or_else(|| {
+                        self.internal_diag(
+                            stmt.origin,
+                            format!(
+                                "missing capture plan for closure {:?}",
+                                closure.def(self.borrowck.db)
+                            ),
+                        )
+                    })?;
+                self.check_closure_captures(state, stmt.origin, closure, fields, &plan)
+            }
             NSStmtKind::Store { dst, src } => self.check_store(state, stmt.origin, dst, *src),
             NSStmtKind::Assign { .. } => Ok(()),
         }
+    }
+
+    fn check_closure_captures(
+        &self,
+        state: &State,
+        origin: SemOrigin<'db>,
+        closure: ClosureTy<'db>,
+        captures: &[NOperand],
+        plan: &[ClosureCapture<'db>],
+    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+        let field_tys = closure.captures(self.borrowck.db);
+        if captures.len() != plan.len() || plan.len() != field_tys.len() {
+            return Err(self.internal_diag(
+                origin,
+                format!(
+                    "closure capture arity mismatch: plan={}, fields={}, operands={}",
+                    plan.len(),
+                    field_tys.len(),
+                    captures.len()
+                ),
+            ));
+        }
+        for ((capture, capture_plan), field_ty) in captures.iter().copied().zip(plan).zip(field_tys)
+        {
+            let capture_origin = operand_origin(capture, origin);
+            let mode_matches_plan = match capture_plan.construction {
+                ClosureCaptureConstruction::Copy => capture.mode != ReadMode::Move,
+                ClosureCaptureConstruction::Move => capture.mode == ReadMode::Move,
+            };
+            if !mode_matches_plan {
+                return Err(self.internal_diag(
+                    capture_origin,
+                    format!(
+                        "closure capture {:?} has {:?} construction but {:?} operand mode",
+                        capture_plan.binding, capture_plan.construction, capture.mode
+                    ),
+                ));
+            }
+            let ty = self.operand_ty(capture, capture_origin)?;
+            let planned_ty = self
+                .borrowck
+                .instance
+                .normalized_ty(self.borrowck.db, capture_plan.ty);
+            let field_ty = self
+                .borrowck
+                .instance
+                .normalized_ty(self.borrowck.db, *field_ty);
+            if ty != planned_ty || planned_ty != field_ty {
+                return Err(self.internal_diag(
+                    capture_origin,
+                    format!(
+                        "closure capture {:?} type mismatch: operand={}, plan={}, field={}",
+                        capture_plan.binding,
+                        ty.pretty_print(self.borrowck.db),
+                        planned_ty.pretty_print(self.borrowck.db),
+                        field_ty.pretty_print(self.borrowck.db),
+                    ),
+                ));
+            }
+            if !ty_is_noesc(self.borrowck.db, ty) {
+                continue;
+            }
+            let Some(space) = self.non_memory_operand_space(state, capture, capture_origin)? else {
+                continue;
+            };
+            return Err(self.noesc_diag(
+                capture_origin,
+                format!(
+                    "cannot capture `{}` from {} in closure",
+                    ty.pretty_print(self.borrowck.db),
+                    space.pretty()
+                ),
+            ));
+        }
+        Ok(())
     }
 
     fn check_store(
@@ -134,21 +245,16 @@ impl<'db> NoEsc<'db> {
         args: &[NOperand],
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         for arg in args.iter().copied().skip(self.receiver_arg_count(callee)) {
-            let ty = self.operand_ty(arg, origin)?;
-            if ty.as_borrow(self.borrowck.db).is_none() {
+            let arg_origin = operand_origin(arg, origin);
+            let ty = self.operand_ty(arg, arg_origin)?;
+            if !ty_contains_borrow(self.borrowck.db, ty) {
                 continue;
             }
-            let targets = self.borrowck.canon().borrow_local_targets(state, arg.local);
-            let spaces = self.address_spaces_for_targets(&targets, operand_origin(arg, origin))?;
-            let Some(space) = spaces
-                .iter()
-                .copied()
-                .find(|space| *space != ProviderAddressSpace::Memory)
-            else {
+            let Some(space) = self.non_memory_operand_space(state, arg, arg_origin)? else {
                 continue;
             };
             return Err(self.noesc_diag(
-                operand_origin(arg, origin),
+                arg_origin,
                 format!(
                     "cannot pass `{}` from {} as function argument",
                     ty.pretty_print(self.borrowck.db),
@@ -157,6 +263,22 @@ impl<'db> NoEsc<'db> {
             ));
         }
         Ok(())
+    }
+
+    fn non_memory_operand_space(
+        &self,
+        state: &State,
+        operand: NOperand,
+        origin: SemOrigin<'db>,
+    ) -> Result<Option<ProviderAddressSpace>, SemanticBorrowDiagnostic<'db>> {
+        let targets = self
+            .borrowck
+            .canon()
+            .borrow_local_targets(state, operand.local);
+        let spaces = self.address_spaces_for_targets(&targets, origin)?;
+        Ok(spaces
+            .into_iter()
+            .find(|space| *space != ProviderAddressSpace::Memory))
     }
 
     fn receiver_arg_count(&self, callee: SemanticCalleeRef<'db>) -> usize {

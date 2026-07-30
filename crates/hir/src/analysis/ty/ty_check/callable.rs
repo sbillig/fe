@@ -659,14 +659,14 @@ impl<'db> Callable<'db> {
                             ty: expected,
                         });
                     } else {
-                        tc.record_implicit_move_for_owned_expr(given.expr, expected);
+                        tc.record_owned_value_use(given.expr, expected);
                     }
                 }
             } else {
                 tc.equate_ty(actual, expected, given.expr_span.clone());
                 expected = tc.normalize_ty(expected);
                 // Variant constructors materialize their fields immediately (owned context).
-                tc.record_implicit_move_for_owned_expr(given.expr, expected);
+                tc.record_owned_value_use(given.expr, expected);
             }
         }
     }

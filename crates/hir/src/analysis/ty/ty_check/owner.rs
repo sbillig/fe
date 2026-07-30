@@ -1,4 +1,4 @@
-use crate::analysis::ty::ty_def::{ClosureTy, TyId};
+use crate::analysis::ty::ty_def::{ClosureCallMode, ClosureTy, TyId};
 use crate::hir_def::{ClosureDef, Expr, ItemKind, Partial, attr::ArithmeticMode};
 use crate::span::DynLazySpan;
 use crate::{
@@ -9,8 +9,6 @@ use crate::{
     span::item::{LazyContractRecvSpan, LazyRecvArmSpan},
 };
 use salsa::Update;
-
-use super::TypedBody;
 
 /// Identifies the HIR owner of a [`Body`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
@@ -32,7 +30,24 @@ pub enum BodyOwner<'db> {
     Closure {
         ty: ClosureTy<'db>,
         def: ClosureDef<'db>,
+        receiver_mode: ClosureReceiverMode,
     },
+}
+
+/// How a closure body receives its environment for a particular call ABI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum ClosureReceiverMode {
+    View,
+    Own,
+}
+
+impl ClosureReceiverMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::View => "view",
+            Self::Own => "own",
+        }
+    }
 }
 
 /// Identifies the HIR owner of an effect parameter list (`uses (...)`).
@@ -109,13 +124,10 @@ impl<'db> BodyOwner<'db> {
         Self::Closure {
             def: ty.def(db),
             ty,
-        }
-    }
-
-    pub fn result_ty(self, db: &'db dyn HirAnalysisDb, typed_body: &TypedBody<'db>) -> TyId<'db> {
-        match self {
-            Self::Closure { ty, .. } => ty.ret_ty(db),
-            _ => typed_body.result_ty(),
+            receiver_mode: match ty.call_mode(db) {
+                ClosureCallMode::Reusable => ClosureReceiverMode::View,
+                ClosureCallMode::Consuming => ClosureReceiverMode::Own,
+            },
         }
     }
 
@@ -164,6 +176,11 @@ impl<'db> BodyOwner<'db> {
     }
 
     pub fn arithmetic_mode(self, db: &'db dyn HirAnalysisDb) -> ArithmeticMode {
+        if let Self::Closure { def, .. } = self
+            && let Some(parent) = Self::from_body(db, def.body)
+        {
+            return parent.arithmetic_mode(db);
+        }
         if let Self::Func(func) = self {
             return func.arithmetic_mode(db);
         }

@@ -1440,7 +1440,6 @@ pub(crate) fn runtime_instance_for_semantic_with_visible_param_overrides<'db>(
     semantic: SemanticInstance<'db>,
     mut override_class: impl FnMut(&RuntimeVisibleBindingPlan<'db>) -> Option<RuntimeClass<'db>>,
 ) -> RuntimeInstance<'db> {
-    let typed_body = semantic.key(db).typed_body(db);
     let owner = semantic.key(db).owner(db);
     if let BodyOwner::Func(func) = owner
         && func.body(db).is_none()
@@ -1455,7 +1454,7 @@ pub(crate) fn runtime_instance_for_semantic_with_visible_param_overrides<'db>(
         .iter()
         .map(|entry| {
             override_class(entry).unwrap_or_else(|| {
-                runtime_class_for_visible_binding_entry(db, semantic, typed_body, owner, env, entry)
+                runtime_class_for_visible_binding_entry(db, semantic, owner, env, entry)
             })
         })
         .collect();
@@ -1466,7 +1465,6 @@ pub(crate) fn runtime_instance_for_semantic_with_visible_param_overrides<'db>(
 fn runtime_class_for_visible_binding_entry<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
-    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
     owner: BodyOwner<'db>,
     env: RuntimeTypeEnv<'db>,
     entry: &RuntimeVisibleBindingPlan<'db>,
@@ -1492,7 +1490,7 @@ fn runtime_class_for_visible_binding_entry<'db>(
             });
     }
     runtime_visible_binding_class(db, semantic, entry.binding)
-        .map(|class| runtime_param_class(db, typed_body, entry.binding, env, class))
+        .map(|class| runtime_param_class(db, entry.semantic_ty, entry.binding, env, class))
         .unwrap_or_else(|| {
             panic!(
                 "runtime-visible typed binding has no runtime class: {:?}",
@@ -2383,9 +2381,12 @@ fn symbol_base_for_semantic_instance<'db>(
             recv_idx,
             arm_idx
         ),
-        BodyOwner::Closure { ty, .. } => format!(
-            "__closure_{}",
-            stable_identity_hash(&type_identity(db, TyId::closure(db, ty)))
+        BodyOwner::Closure {
+            ty, receiver_mode, ..
+        } => format!(
+            "__closure_{}_{}",
+            stable_identity_hash(&type_identity(db, TyId::closure(db, ty))),
+            receiver_mode.as_str()
         ),
         BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => "__const".to_string(),
     }

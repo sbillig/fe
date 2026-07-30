@@ -9,8 +9,8 @@ use crate::{
         semantic::{SemOrigin, SemanticConstRef},
         ty::{
             assoc_const::{AssocConstUse, InherentConstUse},
+            closure::{ClosureCallTrait, implemented_closure_call_trait},
             const_ty::inherent_const_body_and_impl_args,
-            corelib::resolve_core_trait,
             effects::place_effect_provider_param_index_map,
             trait_def::{
                 assoc_const_body_and_impl_args_for_trait_inst, complete_resolved_trait_method_args,
@@ -18,7 +18,8 @@ use crate::{
             },
             trait_resolution::{PredicateListId, TraitSolveCx},
             ty_check::{
-                BodyOwner, Callable, ConstRef, EffectParamSite, EffectProviderSpecialization,
+                BodyOwner, Callable, ClosureReceiverMode, ConstRef, EffectParamSite,
+                EffectProviderSpecialization,
             },
             ty_def::{TyBase, TyData, TyId},
             ty_lower::instantiate_callable_effect_layout_args,
@@ -82,20 +83,29 @@ fn semantic_callee_key_with_assumptions<'db>(
     let (owner, mut subst_args) = match callable.callable_def() {
         CallableDef::Func(func) => {
             let mut subst_args = callable.generic_args().to_vec();
-            let owner = if let Some(inst) = callable.trait_inst()
-                && func
-                    .name(db)
-                    .to_opt()
-                    .is_some_and(|name| name.data(db) == "call")
-                && resolve_core_trait(db, func.scope(), &["functional", "Fn"])
-                    .is_some_and(|fn_trait| inst.def(db) == fn_trait)
-                && let TyData::TyBase(TyBase::Closure(closure)) =
+            let builtin_closure = callable.trait_inst().and_then(|inst| {
+                let TyData::TyBase(TyBase::Closure(closure)) =
                     inst.self_ty(db).base_ty(db).data(db)
-            {
-                subst_args.clear();
+                else {
+                    return None;
+                };
+                let call_trait =
+                    implemented_closure_call_trait(db, func.scope(), *closure, inst.def(db))?;
+                if func.name(db).to_opt()?.data(db).as_str() != call_trait.method_name() {
+                    return None;
+                }
+                let receiver_mode = match call_trait {
+                    ClosureCallTrait::Fn => ClosureReceiverMode::View,
+                    ClosureCallTrait::FnOnce => ClosureReceiverMode::Own,
+                };
+                Some((*closure, receiver_mode))
+            });
+            let owner = if let Some((closure, receiver_mode)) = builtin_closure {
+                subst_args = closure.parent_args(db).clone();
                 BodyOwner::Closure {
-                    ty: *closure,
+                    ty: closure,
                     def: closure.def(db),
+                    receiver_mode,
                 }
             } else if let Some(inst) = callable.trait_inst()
                 && let Some(name) = func.name(db).to_opt()
@@ -105,7 +115,8 @@ fn semantic_callee_key_with_assumptions<'db>(
                         .with_assumptions(assumptions),
                     inst,
                     name,
-                ) {
+                )
+            {
                 subst_args = complete_resolved_trait_method_args(
                     db,
                     impl_func,

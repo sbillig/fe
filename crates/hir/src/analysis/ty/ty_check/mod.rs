@@ -1,4 +1,5 @@
 mod callable;
+mod callable_body;
 mod contract;
 mod effect_env;
 pub(crate) mod env;
@@ -26,7 +27,7 @@ use crate::analysis::ty::trait_lower::lower_impl_trait;
 use crate::analysis::ty::trait_resolution::constraint::{
     PredicateSource, collect_func_decl_constraint_pairs,
 };
-use crate::analysis::ty::visitor::TyVisitable;
+use crate::analysis::ty::visitor::{TyVisitable, TyVisitor};
 use crate::hir_def::{CallableDef, ImplTrait, Trait};
 use crate::{
     hir_def::{
@@ -41,18 +42,18 @@ use crate::{
 };
 use callable::{CallGenericArgUnifyError, unify_explicit_call_generic_args};
 pub use callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization};
+pub use callable_body::TypedCallableBody;
 use common::indexmap::IndexMap;
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
 use ena::unify::InPlace;
 use env::TyCheckEnv;
 pub use env::{
-    ClosureCapture, ClosureInfo, EffectParamSite, ExprProp, LocalBinding, ParamSite,
-    PatBindingMode, PathReadSemantics,
+    ClosureCapture, ClosureCaptureAccess, ClosureCaptureConstruction, ClosureInfo, EffectParamSite,
+    ExprProp, LocalBinding, ParamSite, PatBindingMode, PathReadSemantics, ValueAccess,
 };
 pub(super) use expr::TraitOps;
 use num_traits::ToPrimitive;
-pub use owner::BodyOwner;
-pub use owner::EffectParamOwner;
+pub use owner::{BodyOwner, ClosureReceiverMode, EffectParamOwner};
 pub use stmt::ForLoopSeq;
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -73,8 +74,8 @@ use super::{
     trait_def::{TraitInstId, resolve_trait_method_instance},
     trait_resolution::{
         CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
-        constraint::collect_func_decl_constraints,
-        goal_query_has_no_distinct_solution, is_goal_query_satisfiable, is_goal_satisfiable,
+        constraint::collect_func_decl_constraints, goal_query_has_no_distinct_solution,
+        is_goal_query_satisfiable, is_goal_satisfiable,
     },
     ty_contains_const_hole,
     ty_def::{
@@ -83,8 +84,8 @@ use super::{
     },
     ty_lower::{
         CallableInputLayoutBackingSource, callable_input_layout_backing_index_lengths,
-        callable_input_layout_backing_sources, collect_generic_params,
-        layout_param_projection_paths_in_ty, lower_hir_ty, resolve_callable_input_effect_key,
+        callable_input_layout_backing_sources, layout_param_projection_paths_in_ty, lower_hir_ty,
+        resolve_callable_input_effect_key,
     },
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
@@ -521,7 +522,6 @@ fn typed_body_for_bodyless_func<'db>(
         assumptions,
         pat_ty: SecondaryMap::new(),
         expr_ty: SecondaryMap::new(),
-        implicit_moves: FxHashSet::default(),
         const_refs: SecondaryMap::new(),
         value_path_refs: SecondaryMap::new(),
         semantic_expr_lowering: SecondaryMap::new(),
@@ -637,7 +637,7 @@ impl<'db> TyChecker<'db> {
             .root_expr(self.db)
             .unwrap_or_else(|| self.env.body().expr(self.db));
         self.check_expr(root_expr, self.expected);
-        self.record_implicit_move_for_owned_expr(root_expr, self.expected);
+        self.record_owned_value_use(root_expr, self.expected);
     }
 
     fn check_own_param_types(&mut self) {
@@ -2108,14 +2108,43 @@ impl<'db> TyChecker<'db> {
     /// In "owned" contexts, non-`Copy` values are implicitly moved from places.
     ///
     /// `Copy` values may be duplicated implicitly.
-    fn record_implicit_move_for_owned_expr(&mut self, expr: ExprId, ty: TyId<'db>) {
-        self.record_implicit_move_for_owned_expr_inner(expr, Some(ty));
+    fn record_owned_value_use(&mut self, expr: ExprId, ty: TyId<'db>) {
+        let mut ty = self.normalize_ty(ty);
+        if ty.has_invalid(self.db) {
+            let Some(prop) = self.env.typed_expr(expr) else {
+                return;
+            };
+            ty = self.normalize_ty(prop.ty);
+        }
+        if ty.has_invalid(self.db) || ty == TyId::unit(self.db) || ty.is_never(self.db) {
+            return;
+        }
+
+        let access = if self.ty_is_copy(ty) {
+            ValueAccess::Read
+        } else {
+            ValueAccess::Move
+        };
+        let capture_access = if access == ValueAccess::Move {
+            ClosureCaptureAccess::Move
+        } else {
+            ClosureCaptureAccess::Read
+        };
+        self.record_expr_value_use(expr, access, capture_access);
     }
 
-    fn record_implicit_move_for_owned_expr_inner(
+    /// Records the ownership semantics of a value-producing expression at its
+    /// underlying place sources.
+    ///
+    /// Blocks, effect scopes, casts, and control-flow expressions merely
+    /// forward a value. Recursing through them here gives type checking,
+    /// capture planning, semantic lowering, and borrow checking one shared
+    /// account of which source places are read or moved.
+    fn record_expr_value_use(
         &mut self,
         expr: ExprId,
-        expected_ty: Option<TyId<'db>>,
+        access: ValueAccess,
+        capture_access: ClosureCaptureAccess,
     ) {
         let db = self.db;
         let body = self.body();
@@ -2125,6 +2154,7 @@ impl<'db> TyChecker<'db> {
 
         match expr_data {
             Expr::Block(stmts) => {
+                self.env.set_expr_value_access(expr, access);
                 let Some(last) = stmts.last() else {
                     return;
                 };
@@ -2134,54 +2164,34 @@ impl<'db> TyChecker<'db> {
                 let crate::hir_def::Stmt::Expr(tail) = stmt else {
                     return;
                 };
-                self.record_implicit_move_for_owned_expr_inner(*tail, expected_ty);
+                self.record_expr_value_use(*tail, access, capture_access);
             }
             Expr::With(_, body_expr) | Expr::Cast(body_expr, _) | Expr::If(_, body_expr, None) => {
-                self.record_implicit_move_for_owned_expr_inner(*body_expr, expected_ty);
+                self.env.set_expr_value_access(expr, access);
+                self.record_expr_value_use(*body_expr, access, capture_access);
             }
             Expr::If(_, then_expr, Some(else_expr)) => {
-                self.record_implicit_move_for_owned_expr_inner(*then_expr, expected_ty);
-                self.record_implicit_move_for_owned_expr_inner(*else_expr, expected_ty);
+                self.env.set_expr_value_access(expr, access);
+                self.record_expr_value_use(*then_expr, access, capture_access);
+                self.record_expr_value_use(*else_expr, access, capture_access);
             }
             Expr::Match(_, arms) => {
+                self.env.set_expr_value_access(expr, access);
                 let Partial::Present(arms) = arms else {
                     return;
                 };
                 for arm in arms {
-                    self.record_implicit_move_for_owned_expr_inner(arm.body, expected_ty);
+                    self.record_expr_value_use(arm.body, access, capture_access);
                 }
             }
             _ => {
                 if self.env.expr_place(expr).is_none() {
                     return;
                 }
-
-                let Some(prop) = self.env.typed_expr(expr) else {
-                    return;
-                };
-                let expr_ty = prop.ty.fold_with(self.db, &mut self.table);
-                let expr_ty = self.normalize_ty(expr_ty);
-                if expr_ty.has_invalid(self.db)
-                    || expr_ty == TyId::unit(self.db)
-                    || expr_ty.is_never(self.db)
-                {
-                    return;
+                self.env.set_expr_value_access(expr, access);
+                if let Some(binding) = self.find_base_binding(expr) {
+                    self.env.record_capture_access(binding, capture_access);
                 }
-
-                let expected_ty = expected_ty
-                    .map(|ty| self.normalize_ty(ty))
-                    .filter(|ty| {
-                        !ty.has_invalid(self.db)
-                            && *ty != TyId::unit(self.db)
-                            && !ty.is_never(self.db)
-                    })
-                    .unwrap_or(expr_ty);
-
-                if self.ty_is_copy(expected_ty) {
-                    return;
-                }
-
-                self.env.record_implicit_move(expr);
             }
         }
     }
@@ -2355,6 +2365,53 @@ impl<'db> TyChecker<'db> {
             Pat::Record(_, fields) => fields.iter().any(|field| self.pattern_binds_any(field.pat)),
             Pat::Or(lhs, rhs) => self.pattern_binds_any(*lhs) || self.pattern_binds_any(*rhs),
         }
+    }
+
+    fn pattern_moves_non_copy_value(&mut self, pat: PatId) -> bool {
+        let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
+            return false;
+        };
+        match pat_data {
+            Pat::WildCard | Pat::Rest | Pat::Lit(_) => false,
+            Pat::Path(..) => {
+                let Some(binding) = self.env.pat_binding(pat) else {
+                    return false;
+                };
+                let ty = self.normalize_ty(self.env.lookup_binding_ty(&binding));
+                !ty.has_invalid(self.db) && !self.ty_is_copy(ty)
+            }
+            Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
+                for pat in pats {
+                    if self.pattern_moves_non_copy_value(*pat) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Pat::Record(_, fields) => {
+                for field in fields {
+                    if self.pattern_moves_non_copy_value(field.pat) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Pat::Or(lhs, rhs) => {
+                self.pattern_moves_non_copy_value(*lhs) || self.pattern_moves_non_copy_value(*rhs)
+            }
+        }
+    }
+
+    fn record_pattern_value_use(&mut self, expr: ExprId, moves_value: bool) {
+        self.record_expr_value_use(
+            expr,
+            ValueAccess::Read,
+            if moves_value {
+                ClosureCaptureAccess::Move
+            } else {
+                ClosureCaptureAccess::Read
+            },
+        );
     }
 
     fn destructure_source_mode(&self, ty: TyId<'db>) -> (TyId<'db>, PatternDestructureMode) {
@@ -2761,7 +2818,6 @@ pub struct TypedBody<'db> {
     assumptions: PredicateListId<'db>,
     pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
     expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
-    implicit_moves: FxHashSet<ExprId>,
     const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
     value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
     semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
@@ -2790,12 +2846,18 @@ pub struct BindingSource {
     pub projection: Vec<ReturnProjectionStep>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ReturnIndexSource {
+    pub origin: CallableInputLayoutHoleOrigin,
+    pub projection: Vec<ReturnProjectionStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ReturnProjectionStep {
     Field(u16),
     VariantField { variant: u16, field: u16 },
     ConstantIndex(usize),
-    ParamIndex(usize),
+    DynamicIndex(ReturnIndexSource),
     AnyIndex,
 }
 
@@ -2813,6 +2875,27 @@ pub enum ReturnProvenance {
     Unknown,
 }
 
+struct ReturnProvenanceCx<'db> {
+    owner: BodyOwner<'db>,
+    seen_funcs: FxHashSet<Func<'db>>,
+}
+
+struct ReturnProjectionCall<'a, 'db> {
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expr: ExprId,
+    args: &'a [ExprId],
+}
+
+impl<'db> ReturnProvenanceCx<'db> {
+    fn new(owner: BodyOwner<'db>) -> Self {
+        Self {
+            owner,
+            seen_funcs: FxHashSet::default(),
+        }
+    }
+}
+
 #[salsa::tracked(
     return_ref,
     cycle_fn=func_return_provenance_cycle_recover,
@@ -2823,7 +2906,7 @@ fn func_return_provenance<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> R
     if !diags.is_empty() {
         return ReturnProvenance::Unknown;
     }
-    typed_body.return_provenance_for_func(db, func, &mut FxHashSet::default())
+    typed_body.return_provenance_for_func(db, func)
 }
 
 fn func_return_provenance_cycle_initial<'db>(
@@ -2945,6 +3028,40 @@ fn degenerate_return_projection(
         }
     }
     (length_idx == index_lengths.len()).then_some(projection)
+}
+
+fn layout_param_indices_in_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<usize> {
+    struct Collector<'db> {
+        db: &'db dyn HirAnalysisDb,
+        indices: FxHashSet<usize>,
+    }
+
+    impl<'db> TyVisitor<'db> for Collector<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_const_param(
+            &mut self,
+            param: &super::ty_def::TyParam<'db>,
+            _const_ty_ty: TyId<'db>,
+        ) {
+            self.indices.insert(param.idx);
+        }
+
+        fn visit_closure(&mut self, closure: super::ty_def::ClosureTy<'db>) {
+            closure.captures(self.db).visit_with(self);
+        }
+    }
+
+    let mut collector = Collector {
+        db,
+        indices: FxHashSet::default(),
+    };
+    ty.visit_with(&mut collector);
+    let mut indices = collector.indices.into_iter().collect::<Vec<_>>();
+    indices.sort_unstable();
+    indices
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
@@ -3283,8 +3400,8 @@ impl<'db> TypedBody<'db> {
             .unwrap_or_else(|| ExprProp::invalid(db))
     }
 
-    pub fn is_implicit_move(&self, expr: ExprId) -> bool {
-        self.implicit_moves.contains(&expr)
+    pub fn expr_value_access(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> ValueAccess {
+        self.expr_prop(db, expr).value_access
     }
 
     /// All const references registered in this body, in arbitrary order.
@@ -3326,28 +3443,6 @@ impl<'db> TypedBody<'db> {
         self.closure_infos
             .iter()
             .filter_map(|(expr, info)| info.as_ref().map(|info| (expr, info)))
-    }
-
-    pub fn owner_param_bindings(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        owner: BodyOwner<'db>,
-    ) -> Vec<LocalBinding<'db>> {
-        if let BodyOwner::Closure { ty, def } = owner {
-            let mut bindings = vec![LocalBinding::closure_env(db, ty)];
-            if let Some(info) = self.closure_info(def.expr) {
-                bindings.extend(info.params.iter().copied());
-            }
-            return bindings;
-        }
-
-        let mut bindings = Vec::new();
-        let mut idx = 0;
-        while let Some(binding) = self.param_binding(idx) {
-            bindings.push(binding);
-            idx += 1;
-        }
-        bindings
     }
 
     pub fn resolved_field_index(&self, expr: ExprId) -> Option<u16> {
@@ -3522,38 +3617,63 @@ impl<'db> TypedBody<'db> {
         }
     }
 
-    pub fn return_provenance(&self, db: &'db dyn HirAnalysisDb) -> ReturnProvenance {
-        let Some(body) = self.body() else {
-            return ReturnProvenance::Unknown;
+    pub(super) fn callable_return_provenance(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+    ) -> ReturnProvenance {
+        let provenance = match owner {
+            BodyOwner::Func(func) => func_return_provenance(db, func).clone(),
+            BodyOwner::Closure { .. } => {
+                let mut context = ReturnProvenanceCx::new(owner);
+                self.collect_return_sources_for_owner(db, owner, &mut context)
+                    .map_or(ReturnProvenance::Unknown, |(sources, saw_non_param)| {
+                        if saw_non_param {
+                            ReturnProvenance::Fresh
+                        } else {
+                            ReturnProvenance::Forwarded(sources)
+                        }
+                    })
+            }
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::ContractInit { .. }
+            | BodyOwner::ContractRecvArm { .. } => ReturnProvenance::Unknown,
         };
-        let Some(func) = body.containing_func(db) else {
-            return ReturnProvenance::Unknown;
-        };
-        match func_return_provenance(db, func) {
+        match provenance {
             ReturnProvenance::Forwarded(sources) if sources.is_empty() => ReturnProvenance::Fresh,
-            provenance => provenance.clone(),
+            provenance => provenance,
         }
     }
 
-    pub fn forwarded_return_sources(&self, db: &'db dyn HirAnalysisDb) -> Vec<ReturnSource> {
-        let Some(body) = self.body() else {
-            return Vec::new();
-        };
-        let Some(func) = body.containing_func(db) else {
-            return Vec::new();
-        };
-        self.collect_return_sources_for_func(db, func, &mut FxHashSet::default())
-            .map(|(sources, _)| sources)
-            .unwrap_or_default()
+    pub(super) fn callable_forwarded_return_sources(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+    ) -> Vec<ReturnSource> {
+        let mut context = ReturnProvenanceCx::new(owner);
+        match owner {
+            BodyOwner::Func(func) => self.collect_return_sources_for_func(db, func, &mut context),
+            BodyOwner::Closure { .. } => {
+                self.collect_return_sources_for_owner(db, owner, &mut context)
+            }
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::ContractInit { .. }
+            | BodyOwner::ContractRecvArm { .. } => None,
+        }
+        .map(|(sources, _)| sources)
+        .unwrap_or_default()
     }
 
     fn return_provenance_for_func(
         &self,
         db: &'db dyn HirAnalysisDb,
         func: Func<'db>,
-        seen: &mut FxHashSet<Func<'db>>,
     ) -> ReturnProvenance {
-        let Some((sources, saw_non_param)) = self.collect_return_sources_for_func(db, func, seen)
+        let mut context = ReturnProvenanceCx::new(BodyOwner::Func(func));
+        let Some((sources, saw_non_param)) =
+            self.collect_return_sources_for_func(db, func, &mut context)
         else {
             return ReturnProvenance::Unknown;
         };
@@ -3568,47 +3688,51 @@ impl<'db> TypedBody<'db> {
         &self,
         db: &'db dyn HirAnalysisDb,
         func: Func<'db>,
-        seen: &mut FxHashSet<Func<'db>>,
+        context: &mut ReturnProvenanceCx<'db>,
     ) -> Option<(Vec<ReturnSource>, bool)> {
-        if !seen.insert(func) {
+        if !context.seen_funcs.insert(func) {
             return None;
         }
 
         let (diags, typed_body) = check_func_body(db, func);
         if !diags.is_empty() {
-            seen.remove(&func);
+            context.seen_funcs.remove(&func);
             return None;
         }
-        let Some(body) = typed_body.body() else {
-            seen.remove(&func);
-            return None;
-        };
-        let Some(func_body) = func.body(db) else {
-            seen.remove(&func);
-            return None;
-        };
-        let root_expr = func_body.expr(db);
+        let sources =
+            typed_body.collect_return_sources_for_owner(db, BodyOwner::Func(func), context);
+        context.seen_funcs.remove(&func);
+        sources
+    }
+
+    fn collect_return_sources_for_owner(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+        context: &mut ReturnProvenanceCx<'db>,
+    ) -> Option<(Vec<ReturnSource>, bool)> {
+        let body = self.body()?;
+        let root_expr = owner.root_expr(db)?;
         let mut out = FxHashSet::default();
         let mut saw_non_param = false;
-        typed_body.collect_explicit_return_param_sources_in_expr(
+        self.collect_explicit_return_param_sources_in_expr(
             db,
             body,
             root_expr,
             &mut out,
             &mut saw_non_param,
-            seen,
+            context,
         );
-        typed_body.collect_implicit_return_param_sources_from_expr(
+        self.collect_implicit_return_param_sources_from_expr(
             db,
             body,
             root_expr,
             &mut out,
             &mut saw_non_param,
-            seen,
+            context,
         );
         let mut sources = out.into_iter().collect::<Vec<_>>();
         sources.sort_unstable();
-        seen.remove(&func);
         Some((sources, saw_non_param))
     }
 
@@ -3617,7 +3741,7 @@ impl<'db> TypedBody<'db> {
         db: &'db dyn HirAnalysisDb,
         body: Body<'db>,
         expr: ExprId,
-        seen: &mut FxHashSet<Func<'db>>,
+        seen: &mut ReturnProvenanceCx<'db>,
         visited_locals: &mut FxHashSet<PatId>,
     ) -> Option<Vec<ReturnSource>> {
         let Partial::Present(expr_data) = expr.data(db, body) else {
@@ -3649,7 +3773,7 @@ impl<'db> TypedBody<'db> {
                 }
                 return (!sources.is_empty())
                     .then_some(sources)
-                    .or_else(|| self.inferred_fresh_layout_return_sources(db, body, expr));
+                    .or_else(|| self.inferred_fresh_layout_return_sources(db, expr, seen));
             }
             return self.forwarded_return_param_sources_from_call(
                 db,
@@ -3818,30 +3942,19 @@ impl<'db> TypedBody<'db> {
             Expr::Call(..) | Expr::MethodCall(..) => None,
             _ => None,
         };
-        forwarded.or_else(|| self.inferred_fresh_layout_return_sources(db, body, expr))
+        forwarded.or_else(|| self.inferred_fresh_layout_return_sources(db, expr, seen))
     }
 
     fn inferred_fresh_layout_return_sources(
         &self,
         db: &'db dyn HirAnalysisDb,
-        body: Body<'db>,
         expr: ExprId,
+        context: &ReturnProvenanceCx<'db>,
     ) -> Option<Vec<ReturnSource>> {
-        let func = body.containing_func(db)?;
         let result_ty = self.expr_ty(db, expr);
         let mut out = FxHashSet::default();
         let mut found_result_root = false;
-        for param_idx in collect_generic_params(db, func.into())
-            .params(db)
-            .iter()
-            .filter_map(|param| match param.data(db) {
-                TyData::ConstTy(const_ty) => match const_ty.data(db) {
-                    ConstTyData::TyParam(param, _) => Some(param.idx),
-                    _ => None,
-                },
-                _ => None,
-            })
-        {
+        for param_idx in layout_param_indices_in_ty(db, result_ty) {
             let output_paths = layout_param_projection_paths_in_ty(db, result_ty, param_idx);
             if output_paths.is_empty() {
                 continue;
@@ -3852,8 +3965,9 @@ impl<'db> TypedBody<'db> {
                 .map(|(path, lengths)| degenerate_return_projection(path, lengths))
                 .collect::<Option<Vec<_>>>()?;
             let mut input_groups = FxHashMap::default();
-            for source in callable_input_layout_backing_sources(db, func, param_idx) {
-                let lengths = callable_input_layout_backing_index_lengths(db, func, &source)?;
+            for (source, lengths) in
+                self.return_layout_backing_sources(db, context.owner, param_idx)?
+            {
                 let Some(projection) = degenerate_return_projection(&source.projection, &lengths)
                 else {
                     continue;
@@ -3885,25 +3999,87 @@ impl<'db> TypedBody<'db> {
         Some(out)
     }
 
+    fn return_layout_backing_sources(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+        param_idx: usize,
+    ) -> Option<Vec<(CallableInputLayoutBackingSource, Vec<usize>)>> {
+        match owner {
+            BodyOwner::Func(func) => callable_input_layout_backing_sources(db, func, param_idx)
+                .into_iter()
+                .map(|source| {
+                    let lengths = callable_input_layout_backing_index_lengths(db, func, &source)?;
+                    Some((source, lengths))
+                })
+                .collect(),
+            BodyOwner::Closure { ty, def, .. } => {
+                let info = self.closure_info(def.expr)?;
+                if info.captures.len() != ty.captures(db).len() {
+                    return None;
+                }
+
+                let mut sources = Vec::new();
+                for (idx, capture_ty) in ty.captures(db).iter().enumerate() {
+                    let field = u16::try_from(idx).ok()?;
+                    for (mut projection, lengths) in
+                        layout_param_projection_paths_in_ty(db, *capture_ty, param_idx)
+                    {
+                        projection.insert(0, LayoutBundlePathStep::Field(field));
+                        sources.push((
+                            CallableInputLayoutBackingSource {
+                                origin: CallableInputLayoutHoleOrigin::Receiver,
+                                projection,
+                            },
+                            lengths,
+                        ));
+                    }
+                }
+                for (idx, ty) in ty.params(db).iter().copied().enumerate() {
+                    for (projection, lengths) in
+                        layout_param_projection_paths_in_ty(db, ty, param_idx)
+                    {
+                        sources.push((
+                            CallableInputLayoutBackingSource {
+                                origin: CallableInputLayoutHoleOrigin::ValueParam(idx + 1),
+                                projection,
+                            },
+                            lengths,
+                        ));
+                    }
+                }
+                Some(sources)
+            }
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::ContractInit { .. }
+            | BodyOwner::ContractRecvArm { .. } => None,
+        }
+    }
+
     fn forwarded_return_param_sources_from_call(
         &self,
         db: &'db dyn HirAnalysisDb,
         body: Body<'db>,
         expr: ExprId,
         call_args: &[ExprId],
-        seen: &mut FxHashSet<Func<'db>>,
+        seen: &mut ReturnProvenanceCx<'db>,
         visited_locals: &mut FxHashSet<PatId>,
     ) -> Option<Vec<ReturnSource>> {
         let callable = self.callable_expr(expr)?;
         let (func, _) = resolved_callable_instance(db, self, body, callable)?;
         let callee_sources = self.forwarded_return_param_sources_from_callable(db, func)?;
+        let call = ReturnProjectionCall {
+            db,
+            body,
+            expr,
+            args: call_args,
+        };
         let mut merged = FxHashSet::default();
         for callee_source in callee_sources {
             for source in self.forwarded_return_sources_from_call_source(
-                db,
-                expr,
+                &call,
                 &callee_source,
-                call_args,
                 seen,
                 visited_locals,
             )? {
@@ -3920,123 +4096,168 @@ impl<'db> TypedBody<'db> {
         db: &'db dyn HirAnalysisDb,
         body: Body<'db>,
         place: &Place<'db>,
-        seen: &mut FxHashSet<Func<'db>>,
+        seen: &mut ReturnProvenanceCx<'db>,
         visited_locals: &mut FxHashSet<PatId>,
     ) -> Option<Vec<ReturnSource>> {
         let PlaceBase::Binding(binding) = place.base;
-        let sources = match binding {
-            LocalBinding::Param {
-                site: ParamSite::Func(func),
-                idx,
-                ..
-            } => vec![ReturnSource {
-                result_projection: Vec::new(),
-                origin: if func.is_method(db) && idx == 0 {
-                    CallableInputLayoutHoleOrigin::Receiver
-                } else {
-                    CallableInputLayoutHoleOrigin::ValueParam(idx)
-                },
-                projection: Vec::new(),
-            }],
-            LocalBinding::Param {
-                site: ParamSite::EffectField(_),
-                idx,
-                ..
+        if binding.is_mut() {
+            return None;
+        }
+        let sources = if let binding @ LocalBinding::Local { pat, .. } = binding {
+            if !visited_locals.insert(pat) {
+                return None;
             }
-            | LocalBinding::EffectParam { idx, .. } => vec![ReturnSource {
-                result_projection: Vec::new(),
-                origin: CallableInputLayoutHoleOrigin::Effect(idx),
-                projection: Vec::new(),
-            }],
-            binding @ LocalBinding::Local { pat, .. } => {
-                if !visited_locals.insert(pat) {
-                    return None;
-                }
-                let sources = self.binding_source(db, binding).and_then(|binding_source| {
-                    let sources = self.forwarded_return_param_sources_from_expr(
-                        db,
-                        body,
-                        binding_source.init_expr,
-                        seen,
-                        visited_locals,
-                    )?;
-                    project_return_sources(sources, &binding_source.projection)
-                });
-                visited_locals.remove(&pat);
-                sources?
-            }
-            LocalBinding::Param {
-                site: ParamSite::ContractInit(_),
-                ..
-            }
-            | LocalBinding::Param {
-                site: ParamSite::Closure(_) | ParamSite::ClosureEnv(_),
-                ..
-            } => return None,
+            let sources = self.binding_source(db, binding).and_then(|binding_source| {
+                let sources = self.forwarded_return_param_sources_from_expr(
+                    db,
+                    body,
+                    binding_source.init_expr,
+                    seen,
+                    visited_locals,
+                )?;
+                project_return_sources(sources, &binding_source.projection)
+            });
+            visited_locals.remove(&pat);
+            sources?
+        } else {
+            vec![self.return_source_for_binding(db, seen.owner, binding)?]
         };
-        let projection = place
-            .projections
-            .iter()
-            .map(|projection| match projection {
-                PlaceProjection::Field { index, .. } => Some(ReturnProjectionStep::Field(*index)),
+        let mut projection = Vec::with_capacity(place.projections.len());
+        for place_projection in &place.projections {
+            projection.push(match place_projection {
+                PlaceProjection::Field { index, .. } => ReturnProjectionStep::Field(*index),
                 PlaceProjection::Index { index_expr, .. } => {
-                    self.return_index_projection(db, body, *index_expr)
+                    self.return_index_projection(db, body, *index_expr, seen, visited_locals)?
                 }
-            })
-            .collect::<Option<Vec<_>>>()?;
+            });
+        }
         project_return_sources(sources, &projection)
+    }
+
+    fn return_source_for_binding(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+        binding: LocalBinding<'db>,
+    ) -> Option<ReturnSource> {
+        if binding.is_mut() {
+            return None;
+        }
+        let (origin, projection) = match owner {
+            BodyOwner::Func(owner_func) => match binding {
+                LocalBinding::Param {
+                    site: ParamSite::Func(func),
+                    idx,
+                    ..
+                } if func == owner_func => (
+                    if func.is_method(db) && idx == 0 {
+                        CallableInputLayoutHoleOrigin::Receiver
+                    } else {
+                        CallableInputLayoutHoleOrigin::ValueParam(idx)
+                    },
+                    Vec::new(),
+                ),
+                LocalBinding::Param {
+                    site: ParamSite::EffectField(_),
+                    idx,
+                    ..
+                }
+                | LocalBinding::EffectParam { idx, .. } => {
+                    (CallableInputLayoutHoleOrigin::Effect(idx), Vec::new())
+                }
+                LocalBinding::Local { .. } | LocalBinding::Param { .. } => return None,
+            },
+            BodyOwner::Closure { def, .. } => {
+                if let Some(field) = self
+                    .closure_info(def.expr)?
+                    .captures
+                    .iter()
+                    .position(|capture| capture.binding == binding)
+                    .and_then(|field| u16::try_from(field).ok())
+                {
+                    (
+                        CallableInputLayoutHoleOrigin::Receiver,
+                        vec![ReturnProjectionStep::Field(field)],
+                    )
+                } else {
+                    match binding {
+                        LocalBinding::Param {
+                            site: ParamSite::Closure(site),
+                            idx,
+                            ..
+                        } if site == def => (
+                            CallableInputLayoutHoleOrigin::ValueParam(idx + 1),
+                            Vec::new(),
+                        ),
+                        LocalBinding::Param {
+                            site: ParamSite::ClosureEnv(site),
+                            ..
+                        } if site == def => (CallableInputLayoutHoleOrigin::Receiver, Vec::new()),
+                        LocalBinding::Local { .. }
+                        | LocalBinding::Param { .. }
+                        | LocalBinding::EffectParam { .. } => return None,
+                    }
+                }
+            }
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::ContractInit { .. }
+            | BodyOwner::ContractRecvArm { .. } => return None,
+        };
+        Some(ReturnSource {
+            result_projection: Vec::new(),
+            origin,
+            projection,
+        })
     }
 
     fn forwarded_return_sources_from_call_source(
         &self,
-        db: &'db dyn HirAnalysisDb,
-        call_expr: ExprId,
+        call: &ReturnProjectionCall<'_, 'db>,
         callee_source: &ReturnSource,
-        call_args: &[ExprId],
-        seen: &mut FxHashSet<Func<'db>>,
+        seen: &mut ReturnProvenanceCx<'db>,
         visited_locals: &mut FxHashSet<PatId>,
     ) -> Option<Vec<ReturnSource>> {
-        let body = self.body()?;
         let sources = match callee_source.origin {
             CallableInputLayoutHoleOrigin::Receiver => self
                 .forwarded_return_param_sources_from_expr(
-                    db,
-                    body,
-                    *call_args.first()?,
+                    call.db,
+                    call.body,
+                    *call.args.first()?,
                     seen,
                     visited_locals,
                 ),
             CallableInputLayoutHoleOrigin::ValueParam(param_idx) => self
                 .forwarded_return_param_sources_from_expr(
-                    db,
-                    body,
-                    *call_args.get(param_idx)?,
+                    call.db,
+                    call.body,
+                    *call.args.get(param_idx)?,
                     seen,
                     visited_locals,
                 ),
             CallableInputLayoutHoleOrigin::Effect(effect_idx) => {
                 let effect_arg = self
-                    .call_effect_args(call_expr)?
+                    .call_effect_args(call.expr)?
                     .iter()
                     .find(|arg| arg.binding_idx as usize == effect_idx)?;
                 match &effect_arg.arg {
                     EffectArg::Place(place) => self.forwarded_return_sources_from_place(
-                        db,
-                        body,
+                        call.db,
+                        call.body,
                         place,
                         seen,
                         visited_locals,
                     ),
                     EffectArg::Value(expr) => self.forwarded_return_param_sources_from_expr(
-                        db,
-                        body,
+                        call.db,
+                        call.body,
                         *expr,
                         seen,
                         visited_locals,
                     ),
                     EffectArg::Binding(binding) => self.forwarded_return_sources_from_place(
-                        db,
-                        body,
+                        call.db,
+                        call.body,
                         &Place::new(PlaceBase::Binding(*binding)),
                         seen,
                         visited_locals,
@@ -4045,8 +4266,12 @@ impl<'db> TypedBody<'db> {
                 }
             }
         }?;
-        let projection =
-            self.instantiate_return_projection(db, body, &callee_source.projection, call_args)?;
+        let projection = self.instantiate_return_projection(
+            call,
+            &callee_source.projection,
+            seen,
+            visited_locals,
+        )?;
         let mut sources = project_return_sources(sources, &projection)?;
         prefix_return_sources(&mut sources, &callee_source.result_projection);
         Some(sources)
@@ -4057,6 +4282,8 @@ impl<'db> TypedBody<'db> {
         db: &'db dyn HirAnalysisDb,
         body: Body<'db>,
         expr: ExprId,
+        seen: &mut ReturnProvenanceCx<'db>,
+        visited_locals: &mut FxHashSet<PatId>,
     ) -> Option<ReturnProjectionStep> {
         if let Partial::Present(Expr::Lit(LitKind::Int(value))) = expr.data(db, body) {
             return value
@@ -4064,37 +4291,204 @@ impl<'db> TypedBody<'db> {
                 .to_usize()
                 .map(ReturnProjectionStep::ConstantIndex);
         }
-        match self.expr_binding(expr)? {
-            LocalBinding::Param {
-                site: ParamSite::Func(_),
-                idx,
-                ..
-            } => Some(ReturnProjectionStep::ParamIndex(idx)),
-            LocalBinding::Local { .. }
-            | LocalBinding::Param { .. }
-            | LocalBinding::EffectParam { .. } => None,
+        let mut sources =
+            self.forwarded_return_param_sources_from_expr(db, body, expr, seen, visited_locals)?;
+        let source = sources.pop()?;
+        if !sources.is_empty()
+            || !source.result_projection.is_empty()
+            || !self.return_index_source_is_stable(db, seen.owner, &source)
+        {
+            return None;
         }
+        Some(ReturnProjectionStep::DynamicIndex(ReturnIndexSource {
+            origin: source.origin,
+            projection: source.projection,
+        }))
     }
 
     fn instantiate_return_projection(
         &self,
-        db: &'db dyn HirAnalysisDb,
-        body: Body<'db>,
+        call: &ReturnProjectionCall<'_, 'db>,
         projection: &[ReturnProjectionStep],
-        call_args: &[ExprId],
+        seen: &mut ReturnProvenanceCx<'db>,
+        visited_locals: &mut FxHashSet<PatId>,
     ) -> Option<Vec<ReturnProjectionStep>> {
         projection
             .iter()
-            .map(|step| match *step {
-                ReturnProjectionStep::ParamIndex(param_idx) => {
-                    self.return_index_projection(db, body, *call_args.get(param_idx)?)
+            .map(|step| match step {
+                ReturnProjectionStep::DynamicIndex(source) => {
+                    self.instantiate_return_index_projection(call, source, seen, visited_locals)
                 }
                 ReturnProjectionStep::AnyIndex => Some(ReturnProjectionStep::AnyIndex),
-                step => Some(step),
+                step => Some(step.clone()),
             })
             .collect()
     }
 
+    fn instantiate_return_index_projection(
+        &self,
+        call: &ReturnProjectionCall<'_, 'db>,
+        source: &ReturnIndexSource,
+        seen: &mut ReturnProvenanceCx<'db>,
+        visited_locals: &mut FxHashSet<PatId>,
+    ) -> Option<ReturnProjectionStep> {
+        if source.projection.is_empty() {
+            let expr = match source.origin {
+                CallableInputLayoutHoleOrigin::Receiver => *call.args.first()?,
+                CallableInputLayoutHoleOrigin::ValueParam(param_idx) => {
+                    *call.args.get(param_idx)?
+                }
+                CallableInputLayoutHoleOrigin::Effect(_) => {
+                    return self.instantiate_projected_return_index_source(
+                        call,
+                        source,
+                        seen,
+                        visited_locals,
+                    );
+                }
+            };
+            return self.return_index_projection(call.db, call.body, expr, seen, visited_locals);
+        }
+        self.instantiate_projected_return_index_source(call, source, seen, visited_locals)
+    }
+
+    fn instantiate_projected_return_index_source(
+        &self,
+        call: &ReturnProjectionCall<'_, 'db>,
+        source: &ReturnIndexSource,
+        seen: &mut ReturnProvenanceCx<'db>,
+        visited_locals: &mut FxHashSet<PatId>,
+    ) -> Option<ReturnProjectionStep> {
+        let index_source = ReturnSource {
+            result_projection: Vec::new(),
+            origin: source.origin,
+            projection: source.projection.clone(),
+        };
+        let mut sources = self.forwarded_return_sources_from_call_source(
+            call,
+            &index_source,
+            seen,
+            visited_locals,
+        )?;
+        let source = sources.pop()?;
+        if !sources.is_empty()
+            || !source.result_projection.is_empty()
+            || !self.return_index_source_is_stable(call.db, seen.owner, &source)
+        {
+            return None;
+        }
+        Some(ReturnProjectionStep::DynamicIndex(ReturnIndexSource {
+            origin: source.origin,
+            projection: source.projection,
+        }))
+    }
+
+    fn return_index_source_is_stable(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+        source: &ReturnSource,
+    ) -> bool {
+        if source.projection.iter().any(|step| {
+            !matches!(
+                step,
+                ReturnProjectionStep::Field(_) | ReturnProjectionStep::ConstantIndex(_)
+            )
+        }) {
+            return false;
+        }
+
+        let (binding, ty, projection) = match (owner, source.origin) {
+            (_, CallableInputLayoutHoleOrigin::Effect(_)) => return false,
+            (BodyOwner::Func(_), origin) => {
+                let binding = self
+                    .param_bindings
+                    .iter()
+                    .copied()
+                    .find(|binding| binding.callable_input_origin(db) == Some(origin));
+                let Some(binding) = binding else {
+                    return false;
+                };
+                (
+                    binding,
+                    self.binding_ty(db, binding),
+                    source.projection.as_slice(),
+                )
+            }
+            (BodyOwner::Closure { ty, def, .. }, CallableInputLayoutHoleOrigin::Receiver) => {
+                let Some((ReturnProjectionStep::Field(field), projection)) =
+                    source.projection.split_first()
+                else {
+                    return false;
+                };
+                let Some((capture, capture_ty)) = self.closure_info(def.expr).and_then(|info| {
+                    info.captures
+                        .get(usize::from(*field))
+                        .zip(ty.captures(db).get(usize::from(*field)))
+                }) else {
+                    return false;
+                };
+                (capture.binding, *capture_ty, projection)
+            }
+            (
+                BodyOwner::Closure { ty, def, .. },
+                CallableInputLayoutHoleOrigin::ValueParam(param_idx),
+            ) => {
+                let Some((binding, param_ty)) = param_idx.checked_sub(1).and_then(|idx| {
+                    self.closure_info(def.expr)?
+                        .params
+                        .get(idx)
+                        .copied()
+                        .zip(ty.params(db).get(idx).copied())
+                }) else {
+                    return false;
+                };
+                (binding, param_ty, source.projection.as_slice())
+            }
+            (
+                BodyOwner::Const(_)
+                | BodyOwner::AnonConstBody { .. }
+                | BodyOwner::ContractInit { .. }
+                | BodyOwner::ContractRecvArm { .. },
+                _,
+            ) => return false,
+        };
+        !binding.is_mut() && return_index_projection_is_immutable(db, ty, projection)
+    }
+}
+
+fn return_index_projection_is_immutable<'db>(
+    db: &'db dyn HirAnalysisDb,
+    mut ty: TyId<'db>,
+    projection: &[ReturnProjectionStep],
+) -> bool {
+    for step in projection {
+        if matches!(ty.as_capability(db), Some((CapabilityKind::Mut, _))) {
+            return false;
+        }
+        ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
+        ty = match step {
+            ReturnProjectionStep::Field(field) => {
+                let Some(field_ty) = ty.field_types(db).get(usize::from(*field)).copied() else {
+                    return false;
+                };
+                field_ty
+            }
+            ReturnProjectionStep::ConstantIndex(_) => {
+                let Some(element_ty) = ty.generic_args(db).first() else {
+                    return false;
+                };
+                *element_ty
+            }
+            ReturnProjectionStep::VariantField { .. }
+            | ReturnProjectionStep::DynamicIndex(_)
+            | ReturnProjectionStep::AnyIndex => return false,
+        };
+    }
+    !matches!(ty.as_capability(db), Some((CapabilityKind::Mut, _)))
+}
+
+impl<'db> TypedBody<'db> {
     fn forwarded_return_param_sources_from_callable(
         &self,
         db: &'db dyn HirAnalysisDb,
@@ -4113,7 +4507,7 @@ impl<'db> TypedBody<'db> {
         stmt: StmtId,
         out: &mut FxHashSet<ReturnSource>,
         saw_non_param: &mut bool,
-        seen: &mut FxHashSet<Func<'db>>,
+        seen: &mut ReturnProvenanceCx<'db>,
     ) {
         let Partial::Present(stmt_data) = stmt.data(db, body) else {
             return;
@@ -4202,7 +4596,7 @@ impl<'db> TypedBody<'db> {
         expr: ExprId,
         out: &mut FxHashSet<ReturnSource>,
         saw_non_param: &mut bool,
-        seen: &mut FxHashSet<Func<'db>>,
+        seen: &mut ReturnProvenanceCx<'db>,
     ) {
         let Partial::Present(expr_data) = expr.data(db, body) else {
             return;
@@ -4403,9 +4797,10 @@ impl<'db> TypedBody<'db> {
                     seen,
                 );
             }
-            Expr::Closure { .. } => {
-                *saw_non_param = true;
-            }
+            // Returns inside a nested closure belong to that closure. The
+            // enclosing callable's implicit-return walk classifies the
+            // closure expression itself if it is actually returned.
+            Expr::Closure { .. } => {}
             Expr::Lit(_) | Expr::Path(_) => {}
         }
     }
@@ -4417,7 +4812,7 @@ impl<'db> TypedBody<'db> {
         expr: ExprId,
         out: &mut FxHashSet<ReturnSource>,
         saw_non_param: &mut bool,
-        seen: &mut FxHashSet<Func<'db>>,
+        seen: &mut ReturnProvenanceCx<'db>,
     ) {
         let Partial::Present(expr_data) = expr.data(db, body) else {
             return;
@@ -4505,7 +4900,7 @@ impl<'db> TypedBody<'db> {
         cond: crate::hir_def::CondId,
         out: &mut FxHashSet<ReturnSource>,
         saw_non_param: &mut bool,
-        seen: &mut FxHashSet<Func<'db>>,
+        seen: &mut ReturnProvenanceCx<'db>,
     ) {
         let Partial::Present(cond_data) = cond.data(db, body) else {
             return;
@@ -4637,7 +5032,6 @@ impl<'db> TypedBody<'db> {
             assumptions: PredicateListId::empty_list(db),
             pat_ty: SecondaryMap::new(),
             expr_ty: SecondaryMap::new(),
-            implicit_moves: FxHashSet::default(),
             const_refs: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),
             semantic_expr_lowering: SecondaryMap::new(),
@@ -4784,8 +5178,8 @@ fn merge_forwarded_param_sets(
 }
 
 fn return_projection_step_matches(
-    pattern: ReturnProjectionStep,
-    candidate: ReturnProjectionStep,
+    pattern: &ReturnProjectionStep,
+    candidate: &ReturnProjectionStep,
 ) -> bool {
     pattern == candidate
         || matches!(
@@ -4794,7 +5188,7 @@ fn return_projection_step_matches(
                 ReturnProjectionStep::AnyIndex,
                 ReturnProjectionStep::AnyIndex
                     | ReturnProjectionStep::ConstantIndex(_)
-                    | ReturnProjectionStep::ParamIndex(_)
+                    | ReturnProjectionStep::DynamicIndex(_)
             )
         )
 }
@@ -4806,8 +5200,7 @@ fn return_projection_is_prefix(
     prefix.len() <= path.len()
         && prefix
             .iter()
-            .copied()
-            .zip(path.iter().copied())
+            .zip(path)
             .all(|(pattern, candidate)| return_projection_step_matches(pattern, candidate))
 }
 

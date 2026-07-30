@@ -1,8 +1,35 @@
-use core::functional::Fn
+use core::functional::{Fn, FnOnce}
 use core::option::Option::{self, Some}
 
 struct Boxed {
     value: u256,
+}
+
+enum Mixed {
+    Value(u256, Boxed),
+}
+
+trait Marker {}
+
+struct MarkerImpl {}
+
+impl Marker for MarkerImpl {}
+
+enum Choice {
+    Left,
+    Right,
+}
+
+fn invoke<T, U, F: Fn<T, U>>(_ func: F, _ value: own T) -> U {
+    func.call(value)
+}
+
+fn invoke_once<T, U, F: FnOnce<T, U>>(_ func: own F, _ value: own T) -> U {
+    func.call_once(value)
+}
+
+fn invoke_reusable_once<T, U, F: Fn<T, U>>(_ func: own F, _ value: own T) -> U {
+    func.call_once(value)
 }
 
 fn call_with_owned_capture(_ boxed: own Boxed) -> u256 {
@@ -15,6 +42,38 @@ fn call_with_ref_and_owned_capture(_ boxed: own Boxed) -> u256 {
     let r = ref x
     let add_both = |value: own u256| -> u256 { value + r + boxed.value }
     add_both.call(40)
+}
+
+fn closure_passthrough<T>(_ value: T) -> T {
+    let passthrough = |_ unit: own ()| -> T { value }
+    passthrough.call_once(())
+}
+
+fn generic_identity_closure<T>(_ value: own T) -> T {
+    let identity = |value: own T| -> T { value }
+    identity.call_once(value)
+}
+
+fn closure_const<const N: u256>() -> u256 {
+    let value = |_ unit: own ()| -> u256 { N }
+    value.call(())
+}
+
+fn call_closure_before_diverging() -> ! {
+    let answer = |_ unit: own ()| -> u256 { 42 }
+    assert(answer.call(()) == 42)
+    core::panic_with_value(0 as u256)
+}
+
+#[arithmetic(unchecked)]
+mod unchecked_parent {
+    use core::functional::Fn
+
+    #[arithmetic(checked)]
+    pub fn checked_closure_overflow() -> u8 {
+        let add_one = |value: own u8| -> u8 { value + 1 }
+        add_one.call(255)
+    }
 }
 
 #[test]
@@ -33,6 +92,230 @@ fn test_option_map_closure_capture() {
 }
 
 #[test]
+fn test_readonly_noncopy_capture_is_reusable() {
+    let boxed = Boxed { value: 20 }
+    let read = |_ unit: own ()| -> u256 { boxed.value }
+    let first = invoke(func: read, value: ())
+    let second = read.call(())
+    assert(first + second == 40)
+}
+
+#[test]
+fn test_consuming_capture_call_once() {
+    let boxed = Boxed { value: 42 }
+    let take = |_ unit: own ()| -> Boxed { boxed }
+    let result = take.call_once(())
+    assert(result.value == 42)
+}
+
+#[test]
+fn test_consuming_capture_generic_call_once() {
+    let boxed = Boxed { value: 42 }
+    let take = |_ unit: own ()| -> Boxed { boxed }
+    let result = invoke_once(func: take, value: ())
+    assert(result.value == 42)
+}
+
+#[test]
+fn test_match_consuming_capture_call_once() {
+    let wrapped: Option<Boxed> = Some(Boxed { value: 42 })
+    let take = |_ unit: own ()| -> Boxed {
+        match wrapped {
+            Some(value) => value,
+            Option::None => Boxed { value: 0 },
+        }
+    }
+    assert(take.call_once(()).value == 42)
+}
+
+#[test]
+fn test_match_consuming_capture_generic_call_once() {
+    let wrapped: Option<Boxed> = Some(Boxed { value: 42 })
+    let take = |_ unit: own ()| -> Boxed {
+        match wrapped {
+            Some(value) => value,
+            Option::None => Boxed { value: 0 },
+        }
+    }
+    assert(invoke_once(func: take, value: ()).value == 42)
+}
+
+#[test]
+fn test_if_let_consuming_capture_call_once() {
+    let wrapped: Option<Boxed> = Some(Boxed { value: 42 })
+    let take = |_ unit: own ()| -> Boxed {
+        if let Some(value) = wrapped {
+            value
+        } else {
+            Boxed { value: 0 }
+        }
+    }
+    assert(take.call_once(()).value == 42)
+}
+
+#[test]
+fn test_match_without_payload_binding_is_reusable() {
+    let wrapped: Option<Boxed> = Some(Boxed { value: 42 })
+    let is_some = |_ unit: own ()| -> bool {
+        match wrapped {
+            Some(_) => true,
+            Option::None => false,
+        }
+    }
+    assert(is_some.call(()))
+    assert(is_some.call(()))
+}
+
+#[test]
+fn test_match_borrowed_capture_is_reusable() {
+    let wrapped: Option<Boxed> = Some(Boxed { value: 21 })
+    let read = |_ unit: own ()| -> u256 {
+        match ref wrapped {
+            Some(value) => value.value,
+            Option::None => 0,
+        }
+    }
+    assert(read.call(()) + read.call(()) == 42)
+}
+
+#[test]
+fn test_match_copy_scrutinee_capture_is_reusable() {
+    let wrapped: (u256,) = (21,)
+    let take = |_ unit: own ()| -> u256 {
+        match wrapped {
+            (value,) => value,
+        }
+    }
+    assert(take.call(()) + take.call(()) == 42)
+}
+
+#[test]
+fn test_inferred_copy_capture_is_reusable() {
+    let value = 21
+    let read = |_ unit: own ()| -> u256 { value }
+    assert(read.call(()) + read.call(()) == 42)
+}
+
+#[test]
+fn test_copy_pattern_binding_from_noncopy_capture_is_reusable() {
+    let mixed = Mixed::Value(21, Boxed { value: 1 })
+    let read = |_ unit: own ()| -> u256 {
+        match mixed {
+            Mixed::Value(value, _) => value,
+        }
+    }
+    let first = invoke(func: read, value: ())
+    let second = read.call(())
+    assert(first + second == 42)
+}
+
+#[test]
+fn test_block_wrapped_pattern_capture_call_once() {
+    let mixed = Mixed::Value(0, Boxed { value: 42 })
+    let take = |_ unit: own ()| -> Boxed {
+        let Mixed::Value(_, owned) = { mixed }
+        owned
+    }
+    assert(take.call_once(()).value == 42)
+}
+
+#[test]
+fn test_block_wrapped_pattern_capture_generic_call_once() {
+    let mixed = Mixed::Value(0, Boxed { value: 42 })
+    let take = |_ unit: own ()| -> Boxed {
+        let Mixed::Value(_, owned) = { mixed }
+        owned
+    }
+    assert(invoke_once(func: take, value: ()).value == 42)
+}
+
+#[test]
+fn test_with_wrapped_pattern_capture_generic_call_once() {
+    let mixed = Mixed::Value(0, Boxed { value: 42 })
+    let take = |_ unit: own ()| -> Boxed {
+        let Mixed::Value(_, owned) = with (Marker = MarkerImpl {}) { mixed }
+        owned
+    }
+    assert(invoke_once(func: take, value: ()).value == 42)
+}
+
+#[test]
+fn test_cast_wrapped_pattern_capture_generic_call_once() {
+    let mixed = Mixed::Value(0, Boxed { value: 42 })
+    let take = |_ unit: own ()| -> Boxed {
+        let Mixed::Value(_, owned) = mixed as Mixed
+        owned
+    }
+    assert(invoke_once(func: take, value: ()).value == 42)
+}
+
+#[test]
+fn test_if_wrapped_pattern_capture_generic_call_once() {
+    let mixed = Mixed::Value(0, Boxed { value: 42 })
+    let take = |pick_left: own bool| -> Boxed {
+        let Mixed::Value(_, owned) = if pick_left { mixed } else { mixed }
+        owned
+    }
+    assert(invoke_once(func: take, value: true).value == 42)
+}
+
+#[test]
+fn test_match_wrapped_pattern_capture_generic_call_once() {
+    let mixed = Mixed::Value(0, Boxed { value: 42 })
+    let take = |choice: own Choice| -> Boxed {
+        let Mixed::Value(_, owned) = match choice {
+            Choice::Left => mixed,
+            Choice::Right => mixed,
+        }
+        owned
+    }
+    assert(invoke_once(func: take, value: Choice::Left).value == 42)
+}
+
+#[test]
+fn test_block_wrapped_copy_pattern_capture_is_reusable() {
+    let mixed = Mixed::Value(21, Boxed { value: 1 })
+    let read = |_ unit: own ()| -> u256 {
+        let Mixed::Value(value, _) = { mixed }
+        value
+    }
+    let first = invoke(func: read, value: ())
+    let second = read.call(())
+    assert(first + second == 42)
+}
+
+#[test]
+fn test_option_map_consuming_closure() {
+    let boxed = Boxed { value: 42 }
+    let result: Boxed = Some(()).map(|_ unit: own ()| -> Boxed { boxed }).unwrap()
+    assert(result.value == 42)
+}
+
+#[test]
+fn test_option_map_readonly_noncopy_closure() {
+    let boxed = Boxed { value: 42 }
+    let result: u256 = Some(()).map(|_ unit: own ()| -> u256 { boxed.value }).unwrap()
+    assert(result == 42)
+}
+
+#[test]
+fn test_reusable_closure_supports_both_call_abis() {
+    let boxed = Boxed { value: 21 }
+    let read = |_ unit: own ()| -> u256 { boxed.value }
+    let first = read.call(())
+    let second = read.call_once(())
+    assert(first + second == 42)
+}
+
+#[test]
+fn test_fn_bound_exposes_fn_once_supertrait() {
+    let boxed = Boxed { value: 42 }
+    let read = |_ unit: own ()| -> u256 { boxed.value }
+    let result = invoke_reusable_once(func: read, value: ())
+    assert(result == 42)
+}
+
+#[test]
 fn test_nested_closure_capture() {
     let base: u256 = 40
     let outer = |value: own u256| -> u256 {
@@ -43,6 +326,26 @@ fn test_nested_closure_capture() {
 }
 
 #[test]
+fn test_nested_noncopy_capture_propagates_construction_move() {
+    let boxed = Boxed { value: 42 }
+    let outer = |_ unit: own ()| -> Boxed {
+        let inner = |_ unit: own ()| -> Boxed { boxed }
+        inner.call_once(())
+    }
+    assert(invoke_once(func: outer, value: ()).value == 42)
+}
+
+#[test]
+fn test_discarded_noncopy_capture_call_once() {
+    let boxed = Boxed { value: 42 }
+    let consume = |_ unit: own ()| -> () {
+        boxed
+        ()
+    }
+    invoke_once(func: consume, value: ())
+}
+
+#[test]
 fn test_owned_capture_call() {
     assert(call_with_owned_capture(Boxed { value: 41 }) == 42)
 }
@@ -50,4 +353,42 @@ fn test_owned_capture_call() {
 #[test]
 fn test_ref_and_owned_capture_call() {
     assert(call_with_ref_and_owned_capture(Boxed { value: 1 }) == 42)
+}
+
+#[test]
+fn test_closure_parent_type_substitution() {
+    let value: u256 = closure_passthrough(42)
+    assert(value == 42)
+    assert(closure_passthrough(true))
+    assert(generic_identity_closure(42 as u256) == 42)
+    assert(generic_identity_closure(true))
+}
+
+#[test]
+fn test_closure_parent_const_substitution() {
+    assert(closure_const<11>() == 11)
+    assert(closure_const<22>() == 22)
+}
+
+#[test(should_revert)]
+fn test_closure_result_does_not_inherit_never_parent_result() {
+    call_closure_before_diverging()
+}
+
+#[arithmetic(unchecked)]
+#[test]
+fn test_closure_inherits_function_arithmetic_mode() {
+    let add_one = |value: own u8| -> u8 { value + 1 }
+    assert(add_one.call(255) == 0)
+}
+
+#[test(should_revert)]
+fn test_closure_inherits_checked_function_mode_under_unchecked_module() {
+    unchecked_parent::checked_closure_overflow()
+}
+
+#[test]
+fn test_aggregate_identity_cast_preserves_value() {
+    let Mixed::Value(value, boxed) = Mixed::Value(1, Boxed { value: 41 }) as Mixed
+    assert(value + boxed.value == 42)
 }

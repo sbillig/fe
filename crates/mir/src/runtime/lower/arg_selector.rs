@@ -449,7 +449,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             })
             .or_else(|| {
                 self.env
-                    .source_locals(local)
+                    .value_source_locals(local)
                     .iter()
                     .copied()
                     .find_map(|source| {

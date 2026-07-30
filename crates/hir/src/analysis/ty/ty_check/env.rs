@@ -11,12 +11,12 @@ use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
 use common::indexmap::IndexMap;
 use cranelift_entity::{PrimaryMap, SecondaryMap};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use salsa::Update;
 use thin_vec::ThinVec;
 
 use super::effect_env as keyed_effect_env;
-use super::owner::BodyOwner;
+use super::owner::{BodyOwner, ClosureReceiverMode};
 use super::{
     Callable, ConstIntrinsicKind, ConstRef, SemanticExprLowering, TyChecker, TypedBody,
     ValuePathRef, stmt::ForLoopSeq,
@@ -59,7 +59,6 @@ pub(crate) struct TyCheckEnv<'db> {
 
     pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
     expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
-    implicit_moves: FxHashSet<ExprId>,
     const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
     value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
     callables: SecondaryMap<ExprId, Option<Callable<'db>>>,
@@ -106,12 +105,42 @@ pub struct ClosureInfo<'db> {
     pub params: Vec<LocalBinding<'db>>,
     pub captures: Vec<ClosureCapture<'db>>,
     pub ty: ClosureTy<'db>,
+    pub return_borrow_provider: Option<ProviderAddressSpace>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub struct ClosureCapture<'db> {
     pub binding: LocalBinding<'db>,
     pub ty: TyId<'db>,
+    pub construction: ClosureCaptureConstruction,
+    pub access: ClosureCaptureAccess,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ClosureCaptureConstruction {
+    Copy,
+    Move,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ClosureCaptureAccess {
+    Read,
+    Move,
+}
+
+impl ClosureCaptureAccess {
+    fn include(&mut self, access: Self) {
+        if access == Self::Move {
+            *self = Self::Move;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PendingClosureCapture<'db> {
+    pub binding: LocalBinding<'db>,
+    pub ty: TyId<'db>,
+    pub access: ClosureCaptureAccess,
 }
 
 #[derive(Debug, Clone)]
@@ -119,12 +148,20 @@ struct ActiveClosure<'db> {
     def: ClosureDef<'db>,
     boundary_block_idx: usize,
     params: Vec<LocalBinding<'db>>,
-    captures: IndexMap<LocalBinding<'db>, TyId<'db>>,
+    captures: IndexMap<LocalBinding<'db>, PendingClosureCapture<'db>>,
 }
 
 pub(super) struct BodyCtxSnapshot<'db> {
     loop_stack: Vec<StmtId>,
     first_return_borrow_provider: Option<(DynLazySpan<'db>, ProviderAddressSpace)>,
+}
+
+impl BodyCtxSnapshot<'_> {
+    pub(super) fn return_borrow_provider(&self) -> Option<ProviderAddressSpace> {
+        self.first_return_borrow_provider
+            .as_ref()
+            .map(|(_, provider)| *provider)
+    }
 }
 
 impl<'db> TyCheckEnv<'db> {
@@ -205,7 +242,6 @@ impl<'db> TyCheckEnv<'db> {
             body,
             pat_ty: SecondaryMap::new(),
             expr_ty: SecondaryMap::new(),
-            implicit_moves: FxHashSet::default(),
             const_refs: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),
             callables: SecondaryMap::new(),
@@ -801,18 +837,22 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
-    pub(super) fn leave_closure(&mut self) -> (Vec<LocalBinding<'db>>, Vec<ClosureCapture<'db>>) {
+    pub(super) fn leave_closure(
+        &mut self,
+    ) -> (Vec<LocalBinding<'db>>, Vec<PendingClosureCapture<'db>>) {
         let active = self
             .closure_stack
             .pop()
             .expect("closure stack is non-empty");
         debug_assert_eq!(active.def.body, self.body);
-        let captures = active
-            .captures
-            .into_iter()
-            .map(|(binding, ty)| ClosureCapture { binding, ty })
-            .collect();
-        (active.params, captures)
+        (
+            active.params,
+            active
+                .captures
+                .into_iter()
+                .map(|(_, capture)| capture)
+                .collect(),
+        )
     }
 
     pub(super) fn leave_scope(&mut self) {
@@ -843,7 +883,12 @@ impl<'db> TyCheckEnv<'db> {
         self.expr_stack.iter().nth_back(1).copied()
     }
 
-    pub(super) fn type_expr(&mut self, expr: ExprId, typed: ExprProp<'db>) {
+    pub(super) fn type_expr(&mut self, expr: ExprId, mut typed: ExprProp<'db>) {
+        if let Some(previous) = self.expr_ty[expr].as_ref()
+            && typed.value_access == ValueAccess::Infer
+        {
+            typed.value_access = previous.value_access;
+        }
         self.expr_ty[expr] = Some(typed);
     }
 
@@ -866,7 +911,31 @@ impl<'db> TyCheckEnv<'db> {
         };
         for active in self.closure_stack.iter_mut().rev() {
             if binding_block_idx <= active.boundary_block_idx {
-                active.captures.entry(binding).or_insert(ty);
+                active
+                    .captures
+                    .entry(binding)
+                    .or_insert(PendingClosureCapture {
+                        binding,
+                        ty,
+                        access: ClosureCaptureAccess::Read,
+                    });
+            }
+        }
+    }
+
+    pub(super) fn record_capture_access(
+        &mut self,
+        binding: LocalBinding<'db>,
+        access: ClosureCaptureAccess,
+    ) {
+        let Some(binding_block_idx) = self.binding_block_idx.get(&binding).copied() else {
+            return;
+        };
+        for active in self.closure_stack.iter_mut().rev() {
+            if binding_block_idx <= active.boundary_block_idx
+                && let Some(capture) = active.captures.get_mut(&binding)
+            {
+                capture.access.include(access);
             }
         }
     }
@@ -961,8 +1030,17 @@ impl<'db> TyCheckEnv<'db> {
         self.deferred.push(DeferredTask::PrimitiveOp(pending))
     }
 
-    pub(super) fn record_implicit_move(&mut self, expr: ExprId) {
-        self.implicit_moves.insert(expr);
+    pub(super) fn set_expr_value_access(&mut self, expr: ExprId, access: ValueAccess) {
+        let Some(prop) = self.expr_ty[expr].as_mut() else {
+            panic!("expression must be typed before assigning value access: {expr:?}");
+        };
+        prop.value_access = match (prop.value_access, access) {
+            (ValueAccess::Infer, access) | (access, ValueAccess::Infer) => access,
+            (current, access) if current == access => current,
+            (current, access) => {
+                panic!("conflicting value access for {expr:?}: {current:?} and {access:?}")
+            }
+        };
     }
 
     /// Completes the type checking environment by finalizing pending trait
@@ -1065,7 +1143,6 @@ impl<'db> TyCheckEnv<'db> {
             assumptions,
             pat_ty: self.pat_ty,
             expr_ty: self.expr_ty,
-            implicit_moves: self.implicit_moves,
             const_refs: self.const_refs,
             value_path_refs: self.value_path_refs,
             semantic_expr_lowering: self.semantic_expr_lowering,
@@ -1434,6 +1511,7 @@ pub struct ExprProp<'db> {
     pub binding: Option<LocalBinding<'db>>,
     pub borrow_provider: Option<ProviderAddressSpace>,
     pub path_read_semantics: Option<PathReadSemantics>,
+    pub value_access: ValueAccess,
 }
 
 impl<'db> ExprProp<'db> {
@@ -1444,6 +1522,7 @@ impl<'db> ExprProp<'db> {
             binding: None,
             borrow_provider: None,
             path_read_semantics: None,
+            value_access: ValueAccess::Infer,
         }
     }
 
@@ -1454,8 +1533,17 @@ impl<'db> ExprProp<'db> {
             binding: None,
             borrow_provider: None,
             path_read_semantics: None,
+            value_access: ValueAccess::Infer,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Update)]
+pub enum ValueAccess {
+    #[default]
+    Infer,
+    Read,
+    Move,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -1499,13 +1587,25 @@ impl<'db> LocalBinding<'db> {
         Self::Local { pat, is_mut }
     }
 
-    pub fn closure_env(db: &'db dyn HirAnalysisDb, ty: ClosureTy<'db>) -> Self {
+    pub fn closure_env(
+        db: &'db dyn HirAnalysisDb,
+        ty: ClosureTy<'db>,
+        receiver_mode: ClosureReceiverMode,
+    ) -> Self {
+        let (mode, binding_ty, is_mut) = match receiver_mode {
+            ClosureReceiverMode::View => (
+                FuncParamMode::View,
+                TyId::view_of(db, TyId::closure(db, ty)),
+                false,
+            ),
+            ClosureReceiverMode::Own => (FuncParamMode::Own, TyId::closure(db, ty), true),
+        };
         Self::Param {
             site: ParamSite::ClosureEnv(ty.def(db)),
             idx: 0,
-            mode: FuncParamMode::Own,
-            ty: TyId::closure(db, ty),
-            is_mut: true,
+            mode,
+            ty: binding_ty,
+            is_mut,
         }
     }
 
@@ -1537,13 +1637,18 @@ impl<'db> LocalBinding<'db> {
                 ..
             }
             | Self::EffectParam { idx, .. } => Some(CallableInputLayoutHoleOrigin::Effect(idx)),
+            Self::Param {
+                site: ParamSite::ClosureEnv(_),
+                ..
+            } => Some(CallableInputLayoutHoleOrigin::Receiver),
+            Self::Param {
+                site: ParamSite::Closure(_),
+                idx,
+                ..
+            } => Some(CallableInputLayoutHoleOrigin::ValueParam(idx + 1)),
             Self::Local { .. }
             | Self::Param {
                 site: ParamSite::ContractInit(_),
-                ..
-            }
-            | Self::Param {
-                site: ParamSite::Closure(_) | ParamSite::ClosureEnv(_),
                 ..
             } => None,
         }

@@ -113,15 +113,13 @@ impl<'db> TyChecker<'db> {
                     .set_local_borrow_provider(pat, prop.borrow_provider);
             }
 
-            match mode {
-                super::PatternDestructureMode::Owned => {
-                    if self.pattern_binds_any(*pat) {
-                        self.record_implicit_move_for_owned_expr(*expr, prop.ty);
-                    }
-                }
-                super::PatternDestructureMode::Borrow(kind) => {
-                    self.retype_pattern_bindings_for_borrow(*pat, kind);
-                }
+            let moves_value = mode == super::PatternDestructureMode::Owned
+                && self.pattern_moves_non_copy_value(*pat);
+            if mode == super::PatternDestructureMode::Owned {
+                self.record_pattern_value_use(*expr, moves_value);
+            }
+            if let super::PatternDestructureMode::Borrow(kind) = mode {
+                self.retype_pattern_bindings_for_borrow(*pat, kind);
             }
         } else {
             let ascription = ascription.unwrap_or_else(|| self.fresh_ty());
@@ -476,7 +474,7 @@ impl<'db> TyChecker<'db> {
 
             self.push_diag(diag);
         } else if ret_ty_ok && let Some(expr) = returned_expr {
-            self.record_implicit_move_for_owned_expr(expr, self.expected);
+            self.record_owned_value_use(expr, self.expected);
         }
 
         if ret_ty_ok

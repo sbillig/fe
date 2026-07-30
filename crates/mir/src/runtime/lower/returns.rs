@@ -122,7 +122,7 @@ impl<'db> RuntimeReturnSummary<'db> {
             if !needed_locals.insert(local) {
                 continue;
             }
-            for dependency in facts.source_locals(local).iter().copied() {
+            for dependency in facts.dependency_locals(local).iter().copied() {
                 pending.push_back(dependency);
             }
             for assign_id in facts.assignments_defining_local(local).iter().copied() {
@@ -156,7 +156,7 @@ impl<'db> RuntimeReturnSummary<'db> {
 
         let mut slice_dynamic_dependents_by_local = vec![Vec::new(); semantic_body.locals.len()];
         for local in needed_locals.iter().copied() {
-            for dependency in facts.source_locals(local).iter().copied() {
+            for dependency in facts.dependency_locals(local).iter().copied() {
                 slice_dynamic_dependents_by_local[dependency.index()].push(local);
             }
         }

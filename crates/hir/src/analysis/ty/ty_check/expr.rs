@@ -12,8 +12,9 @@ use crate::core::hir_def::{
 use crate::span::DynLazySpan;
 
 use super::{
-    BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, PatternLayoutContext,
-    RecordLike, Typeable, ValuePathRef,
+    BodyOwner, ClosureCapture, ClosureCaptureAccess, ClosureCaptureConstruction,
+    CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, PatternLayoutContext, RecordLike,
+    Typeable, ValueAccess, ValuePathRef,
     effect_env::{
         FamilyKeyedEntry, FrameLookupResult, MatchedForwarder, MatchedKeyedEntry, MatchedWitness,
     },
@@ -64,7 +65,7 @@ use crate::analysis::ty::{
     },
     ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
     ty_contains_const_hole,
-    ty_def::{CapabilityKind, ClosureTy, PrimTy, TyBase, TyData, prim_int_bits},
+    ty_def::{CapabilityKind, ClosureCallMode, ClosureTy, PrimTy, TyBase, TyData, prim_int_bits},
     unify::UnificationTable,
 };
 use crate::analysis::{
@@ -322,6 +323,7 @@ impl<'db> TyChecker<'db> {
         expected: TyId<'db>,
     ) -> ExprProp<'db> {
         let prop = self.check_expr_with_result_context(expr, expected, true);
+        self.record_owned_value_use(expr, prop.ty);
         if !self.expr_propagates_discarded_result(expr) {
             self.check_unused_must_use(expr, prop.clone());
         }
@@ -531,6 +533,18 @@ impl<'db> TyChecker<'db> {
                 || TyId::invalid(self.db, InvalidCause::ParseError),
                 |hir_ty| lower_hir_ty(self.db, hir_ty, self.env.scope(), assumptions),
             );
+            if let Some((kind, _)) = ty.as_borrow(self.db) {
+                self.push_diag(BodyDiag::UnsupportedClosureBorrowParam {
+                    primary: expr
+                        .span(self.body())
+                        .into_closure_expr()
+                        .params()
+                        .param(idx)
+                        .ty()
+                        .into(),
+                    kind,
+                });
+            }
             if param.mode == crate::hir_def::params::FuncParamMode::View
                 && ty.as_capability(self.db).is_none()
             {
@@ -566,16 +580,74 @@ impl<'db> TyChecker<'db> {
         let saved_expected = std::mem::replace(&mut self.expected, ret_expected);
         let body_prop = self.check_expr(*body, ret_expected);
         self.expected = saved_expected;
+        if let Some(provider) = body_prop.borrow_provider {
+            if let Some((previous_span, previous_provider)) =
+                self.env.first_return_borrow_provider.clone()
+            {
+                self.merge_concrete_borrow_providers(
+                    previous_span,
+                    Some(previous_provider),
+                    body.span(self.body()).into(),
+                    Some(provider),
+                );
+            } else {
+                self.env.first_return_borrow_provider =
+                    Some((body.span(self.body()).into(), provider));
+            }
+        }
+        let closure_body_ctx = self.env.take_body_ctx();
         self.env.restore_body_ctx(saved_body_ctx);
         let ret_ty = self.normalize_ty(body_prop.ty);
+        self.record_owned_value_use(*body, ret_ty);
 
         self.env.leave_scope();
-        let (param_bindings, captures) = self.env.leave_closure();
+        let (param_bindings, pending_captures) = self.env.leave_closure();
+        let captures = pending_captures
+            .into_iter()
+            .map(|capture| ClosureCapture {
+                binding: capture.binding,
+                ty: capture.ty,
+                construction: if capture.ty.as_capability(self.db).is_some()
+                    || self.ty_is_copy(capture.ty)
+                {
+                    ClosureCaptureConstruction::Copy
+                } else {
+                    ClosureCaptureConstruction::Move
+                },
+                access: capture.access,
+            })
+            .collect::<Vec<_>>();
+        for capture in &captures {
+            if capture.construction == ClosureCaptureConstruction::Move {
+                self.env
+                    .record_capture_access(capture.binding, ClosureCaptureAccess::Move);
+            }
+        }
+        let call_mode = if captures
+            .iter()
+            .any(|capture| capture.access == ClosureCaptureAccess::Move)
+        {
+            ClosureCallMode::Consuming
+        } else {
+            ClosureCallMode::Reusable
+        };
         let capture_tys = captures
             .iter()
             .map(|capture| capture.ty)
             .collect::<Vec<_>>();
-        let closure_ty = ClosureTy::new(self.db, def, capture_tys, param_tys, ret_ty);
+        let parent_args = match self.env.owner() {
+            BodyOwner::Func(func) => CallableDef::Func(func).params(self.db).to_vec(),
+            _ => Vec::new(),
+        };
+        let closure_ty = ClosureTy::new(
+            self.db,
+            def,
+            parent_args,
+            capture_tys,
+            param_tys,
+            ret_ty,
+            call_mode,
+        );
         self.env.register_closure_info(
             expr,
             ClosureInfo {
@@ -584,6 +656,7 @@ impl<'db> TyChecker<'db> {
                 params: param_bindings,
                 captures,
                 ty: closure_ty,
+                return_borrow_provider: closure_body_ctx.return_borrow_provider(),
             },
         );
         ExprProp::new(TyId::closure(self.db, closure_ty), false)
@@ -636,6 +709,7 @@ impl<'db> TyChecker<'db> {
                     binding: None,
                     borrow_provider,
                     path_read_semantics: None,
+                    value_access: ValueAccess::Infer,
                 },
                 UnOp::Mut => {
                     if !prop.is_mut {
@@ -654,6 +728,7 @@ impl<'db> TyChecker<'db> {
                         binding: None,
                         borrow_provider,
                         path_read_semantics: None,
+                        value_access: ValueAccess::Infer,
                     }
                 }
                 _ => unreachable!(),
@@ -1184,6 +1259,11 @@ impl<'db> TyChecker<'db> {
         self.check_pat_with_layout(pat, pat_expected, layout.as_ref());
         if let super::PatternDestructureMode::Borrow(kind) = mode {
             self.retype_pattern_bindings_for_borrow(pat, kind);
+        }
+        let moves_value =
+            mode == super::PatternDestructureMode::Owned && self.pattern_moves_non_copy_value(pat);
+        if mode == super::PatternDestructureMode::Owned {
+            self.record_pattern_value_use(scrutinee, moves_value);
         }
 
         ExprProp::new(TyId::bool(self.db), true)
@@ -3576,6 +3656,7 @@ impl<'db> TyChecker<'db> {
                     binding: Some(binding),
                     borrow_provider: self.concrete_borrow_provider_for_binding(binding),
                     path_read_semantics: None,
+                    value_access: ValueAccess::Infer,
                 }
             }
             ResolvedPathInBody::NewBinding(ident) => {
@@ -4058,9 +4139,7 @@ impl<'db> TyChecker<'db> {
             };
 
             let prop = rec_checker.tc.check_expr(field.expr, expected);
-            rec_checker
-                .tc
-                .record_implicit_move_for_owned_expr(field.expr, prop.ty);
+            rec_checker.tc.record_owned_value_use(field.expr, prop.ty);
         }
 
         if let Err(diag) = rec_checker.finalize(span.into(), false) {
@@ -4602,7 +4681,7 @@ impl<'db> TyChecker<'db> {
 
         for (elem, elem_ty) in elems.iter().zip(elem_tys.iter()) {
             let prop = self.check_expr(*elem, *elem_ty);
-            self.record_implicit_move_for_owned_expr(*elem, prop.ty);
+            self.record_owned_value_use(*elem, prop.ty);
         }
 
         let ty = TyId::tuple_with_elems(self.db, &elem_tys);
@@ -4627,7 +4706,7 @@ impl<'db> TyChecker<'db> {
         for elem in elems {
             let prop = self.check_expr(*elem, expected_elem_ty);
             expected_elem_ty = prop.ty;
-            self.record_implicit_move_for_owned_expr(*elem, expected_elem_ty);
+            self.record_owned_value_use(*elem, expected_elem_ty);
         }
 
         let ty = TyId::array_with_len(self.db, expected_elem_ty, elems.len());
@@ -4756,6 +4835,7 @@ impl<'db> TyChecker<'db> {
                     binding: None,
                     borrow_provider,
                     path_read_semantics: None,
+                    value_access: ValueAccess::Infer,
                 }
             }
 
@@ -4798,6 +4878,7 @@ impl<'db> TyChecker<'db> {
         let mut provider_unknown = false;
         let mut provider_conflict = false;
         let mut arm_statuses = Vec::with_capacity(arms.len());
+        let mut moves_value = false;
 
         for arm in arms.iter() {
             let pat_result =
@@ -4805,6 +4886,8 @@ impl<'db> TyChecker<'db> {
             if let super::PatternDestructureMode::Borrow(kind) = mode {
                 self.retype_pattern_bindings_for_borrow(arm.pat, kind);
             }
+            moves_value |= mode == super::PatternDestructureMode::Owned
+                && self.pattern_moves_non_copy_value(arm.pat);
             arm_statuses.push(pat_result.analysis);
 
             self.env.enter_scope(arm.body);
@@ -4835,6 +4918,9 @@ impl<'db> TyChecker<'db> {
                     provider_unknown = true;
                 }
             }
+        }
+        if mode == super::PatternDestructureMode::Owned {
+            self.record_pattern_value_use(*scrutinee, moves_value);
         }
 
         if !scrutinee_pat_ty.has_invalid(self.db)
@@ -4899,6 +4985,7 @@ impl<'db> TyChecker<'db> {
                 first_provider.map(|(_, provider)| provider)
             },
             path_read_semantics: None,
+            value_access: ValueAccess::Infer,
         }
     }
 
@@ -4925,7 +5012,7 @@ impl<'db> TyChecker<'db> {
         rhs_prop.ty = self.unify_ty(Typeable::Expr(*rhs, rhs_prop.clone()), rhs_prop.ty, lhs_ty);
 
         let lhs_status = self.check_assign_lhs(*lhs, &typed_lhs);
-        self.record_implicit_move_for_owned_expr(*rhs, rhs_prop.ty);
+        self.record_owned_value_use(*rhs, rhs_prop.ty);
 
         if lhs_status == AssignLhsStatus::Assignable
             && typed_lhs.ty.as_capability(self.db).is_some()
@@ -5299,7 +5386,7 @@ impl<'db> TyChecker<'db> {
     ///
     /// An `Option` containing the `LocalBinding` if a base binding is found,
     /// or `None` if there is no base binding.
-    fn find_base_binding(&self, expr: ExprId) -> Option<LocalBinding<'db>> {
+    pub(super) fn find_base_binding(&self, expr: ExprId) -> Option<LocalBinding<'db>> {
         let Partial::Present(expr_data) = self.env.expr_data(expr) else {
             return None;
         };

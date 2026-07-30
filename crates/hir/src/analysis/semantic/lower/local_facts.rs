@@ -5,15 +5,16 @@ use crate::{
     analysis::{
         semantic::{
             FieldIndex, LayoutBackingPlace, LayoutBackingProjection, LayoutBackingSource,
-            PlaceProvenance, SEffectArgValue, SExpr, SLocalId, SPlace, SStmtKind,
-            SemanticLocalRole, SemanticProjectionPath, ValueProvenance, VariantIndex,
+            PlaceProvenance, SCallReturnProjectionStep, SCallReturnSource, SEffectArgValue, SExpr,
+            SLocalId, SOperandIntent, SPlace, SStmtKind, SemanticLocalRole, SemanticProjectionPath,
+            ValueOwnershipSource, ValueProvenance, VariantIndex,
         },
         ty::{
             adt_def::instantiate_adt_field_shape,
             const_ty::CallableInputLayoutHoleOrigin,
             normalize::normalize_ty,
             provider::{ProviderLayoutEvidence, provider_semantics},
-            ty_check::{LocalBinding, ParamSite, ReturnProjectionStep, ReturnProvenance},
+            ty_check::{LocalBinding, ParamSite},
             ty_def::TyId,
         },
     },
@@ -38,6 +39,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .as_ref()
             .map(|_| self.classify_expr_local_role(self.locals[dst_idx].ty, expr));
         let next_snapshot = self.classify_expr_snapshot_source(expr);
+        let next_ownership_sources = self.classify_expr_ownership_sources(expr);
         let next_layout_backing_sources = self.classify_expr_layout_backing_sources(expr);
 
         if let Some((next_role, fallback)) = next_role.zip(fallback) {
@@ -46,10 +48,19 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
         if self.assigned_snapshots[dst_idx] {
             self.locals[dst_idx].snapshot_source =
-                merge_snapshot_sources(self.locals[dst_idx].snapshot_source.clone(), next_snapshot);
+                merge_place_provenance(self.locals[dst_idx].snapshot_source.clone(), next_snapshot);
         } else {
             self.locals[dst_idx].snapshot_source = next_snapshot;
             self.assigned_snapshots[dst_idx] = true;
+        }
+        if self.assigned_ownership_sources[dst_idx] {
+            merge_ownership_sources(
+                &mut self.locals[dst_idx].ownership_sources,
+                next_ownership_sources,
+            );
+        } else {
+            self.locals[dst_idx].ownership_sources = next_ownership_sources;
+            self.assigned_ownership_sources[dst_idx] = true;
         }
         if self.assigned_layout_backing_sources[dst_idx] {
             self.locals[dst_idx].layout_backing_sources = merge_layout_backing_sources(
@@ -92,7 +103,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             SExpr::UseValue(_) | SExpr::Borrow { .. } | SExpr::Call { .. } => {
                 self.fallback_local_role(dst_ty)
             }
-            SExpr::ReadPlace { place } => {
+            SExpr::ReadPlace { place, .. } => {
                 self.classify_projection_local_role(dst_ty, place.clone())
             }
             SExpr::Field { base, field } => {
@@ -144,7 +155,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             SExpr::Forward(value) | SExpr::UseValue(value) => {
                 self.locals[value.value.index()].snapshot_source.clone()
             }
-            SExpr::ReadPlace { place } => self.classify_projection_snapshot_source(place.clone()),
+            SExpr::ReadPlace { place, .. } => {
+                self.classify_projection_snapshot_source(place.clone())
+            }
             SExpr::Field { base, field } => {
                 self.classify_projection_snapshot_source(SPlace::field(base.value, *field))
             }
@@ -178,6 +191,41 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
     }
 
+    fn classify_expr_ownership_sources(&self, expr: &SExpr<'db>) -> Vec<ValueOwnershipSource<'db>> {
+        let place = match expr {
+            SExpr::Forward(value) | SExpr::UseValue(value)
+                if value.intent == SOperandIntent::Read =>
+            {
+                SPlace::new(value.value)
+            }
+            SExpr::ReadPlace {
+                place,
+                intent: SOperandIntent::Read,
+            } => place.clone(),
+            SExpr::Field { base, field } if base.intent == SOperandIntent::Read => {
+                SPlace::field(base.value, *field)
+            }
+            SExpr::Index { base, index } if base.intent == SOperandIntent::Read => {
+                SPlace::dynamic_index(base.value, index.value)
+            }
+            SExpr::ExtractEnumField {
+                value,
+                variant,
+                field,
+            } if value.intent == SOperandIntent::Read => SPlace::variant_field(
+                value.value,
+                *variant,
+                self.locals[value.value.index()].ty,
+                *field,
+            ),
+            _ => return vec![ValueOwnershipSource::Local],
+        };
+        self.classify_projection_snapshot_source(place).map_or_else(
+            || vec![ValueOwnershipSource::Local],
+            |source| vec![ValueOwnershipSource::Place(source)],
+        )
+    }
+
     fn classify_expr_layout_backing_sources(
         &self,
         expr: &SExpr<'db>,
@@ -186,7 +234,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             SExpr::Forward(value) | SExpr::UseValue(value) => {
                 self.local_layout_backing_sources(value.value)
             }
-            SExpr::ReadPlace { place } | SExpr::Borrow { place, .. } => {
+            SExpr::ReadPlace { place, .. } | SExpr::Borrow { place, .. } => {
                 self.layout_backing_sources_for_place(place)
             }
             SExpr::Field { base, field } => {
@@ -205,11 +253,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 *field,
             )),
             SExpr::Call {
-                callee,
                 args,
                 effect_args,
+                return_sources,
                 ..
-            } => self.classify_call_layout_backing_sources(*callee, args, effect_args),
+            } => self.classify_call_layout_backing_sources(args, effect_args, return_sources),
             SExpr::ArrayRepeat { value, .. } => {
                 let mut sources = self.local_layout_backing_sources(value.value);
                 prefix_layout_backing_sources(&mut sources, LayoutBackingProjection::Index(None));
@@ -268,15 +316,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     fn classify_call_layout_backing_sources(
         &self,
-        callee: crate::analysis::semantic::SemanticCalleeRef<'db>,
         args: &[crate::analysis::semantic::SOperand],
         effect_args: &[crate::analysis::semantic::SEffectArg<'db>],
+        return_sources: &[SCallReturnSource],
     ) -> Vec<LayoutBackingSource<'db>> {
-        let ReturnProvenance::Forwarded(return_sources) =
-            callee.key.typed_body(self.db).return_provenance(self.db)
-        else {
-            return Vec::new();
-        };
         let mut out = Vec::new();
         for return_source in return_sources {
             let (base_ty, base_sources) = match return_source.origin {
@@ -323,7 +366,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
             };
             let Some((target, path)) =
-                self.return_projection_path(base_ty, &return_source.projection, args)
+                self.return_projection_path(base_ty, &return_source.projection)
             else {
                 continue;
             };
@@ -341,8 +384,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     fn return_projection_path(
         &self,
         base_ty: TyId<'db>,
-        projection: &[ReturnProjectionStep],
-        args: &[crate::analysis::semantic::SOperand],
+        projection: &[SCallReturnProjectionStep],
     ) -> Option<(Vec<LayoutBackingProjection>, SemanticProjectionPath<'db>)> {
         let mut target = Vec::new();
         let mut path = SemanticProjectionPath::new();
@@ -351,12 +393,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .map_or(base_ty, |(_, inner)| inner);
         for step in projection {
             match *step {
-                ReturnProjectionStep::Field(field) => {
+                SCallReturnProjectionStep::Field(field) => {
                     target.push(LayoutBackingProjection::Field(FieldIndex(field)));
                     path.push(Projection::Field(field as usize));
                     ty = *ty.field_types(self.db).get(field as usize)?;
                 }
-                ReturnProjectionStep::VariantField { variant, field } => {
+                SCallReturnProjectionStep::VariantField { variant, field } => {
                     target.push(LayoutBackingProjection::VariantField {
                         variant: VariantIndex(variant),
                         field: FieldIndex(field),
@@ -376,19 +418,17 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         ty.generic_args(self.db),
                     );
                 }
-                ReturnProjectionStep::ConstantIndex(index) => {
+                SCallReturnProjectionStep::ConstantIndex(index) => {
                     target.push(LayoutBackingProjection::Index(Some(index)));
                     path.push(Projection::Index(IndexSource::Constant(index)));
                     ty = *ty.generic_args(self.db).first()?;
                 }
-                ReturnProjectionStep::ParamIndex(param_idx) => {
+                SCallReturnProjectionStep::DynamicIndex(index) => {
                     target.push(LayoutBackingProjection::Index(None));
-                    path.push(Projection::Index(IndexSource::Dynamic(
-                        args.get(param_idx)?.value,
-                    )));
+                    path.push(Projection::Index(IndexSource::Dynamic(index)));
                     ty = *ty.generic_args(self.db).first()?;
                 }
-                ReturnProjectionStep::AnyIndex => {
+                SCallReturnProjectionStep::AnyIndex => {
                     target.push(LayoutBackingProjection::Index(None));
                     path.push(Projection::Index(IndexSource::Constant(0)));
                     ty = *ty.generic_args(self.db).first()?;
@@ -400,25 +440,25 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     fn return_result_target(
         &self,
-        projection: &[ReturnProjectionStep],
+        projection: &[SCallReturnProjectionStep],
     ) -> Option<Vec<LayoutBackingProjection>> {
         projection
             .iter()
             .map(|step| match *step {
-                ReturnProjectionStep::Field(field) => {
+                SCallReturnProjectionStep::Field(field) => {
                     Some(LayoutBackingProjection::Field(FieldIndex(field)))
                 }
-                ReturnProjectionStep::VariantField { variant, field } => {
+                SCallReturnProjectionStep::VariantField { variant, field } => {
                     Some(LayoutBackingProjection::VariantField {
                         variant: VariantIndex(variant),
                         field: FieldIndex(field),
                     })
                 }
-                ReturnProjectionStep::ConstantIndex(index) => {
+                SCallReturnProjectionStep::ConstantIndex(index) => {
                     Some(LayoutBackingProjection::Index(Some(index)))
                 }
-                ReturnProjectionStep::AnyIndex => Some(LayoutBackingProjection::Index(None)),
-                ReturnProjectionStep::ParamIndex(_) => None,
+                SCallReturnProjectionStep::AnyIndex => Some(LayoutBackingProjection::Index(None)),
+                SCallReturnProjectionStep::DynamicIndex(_) => None,
             })
             .collect()
     }
@@ -846,7 +886,18 @@ fn merge_direct_value_role<'db>(
     Some(SemanticLocalRole::DirectValue { provenance })
 }
 
-fn merge_snapshot_sources<'db>(
+fn merge_ownership_sources<'db>(
+    current: &mut Vec<ValueOwnershipSource<'db>>,
+    next: Vec<ValueOwnershipSource<'db>>,
+) {
+    for source in next {
+        if !current.contains(&source) {
+            current.push(source);
+        }
+    }
+}
+
+fn merge_place_provenance<'db>(
     current: Option<PlaceProvenance<'db>>,
     next: Option<PlaceProvenance<'db>>,
 ) -> Option<PlaceProvenance<'db>> {

@@ -107,6 +107,14 @@ impl<'db> PatternStore<'db> {
         &self.nodes[id.index()]
     }
 
+    pub fn has_binding(&self, id: ValidatedPatId) -> bool {
+        match self.node(id).kind() {
+            ValidatedPatKind::Wildcard { binding } => binding.is_some(),
+            ValidatedPatKind::Constructor { fields, .. } | ValidatedPatKind::Or(fields) => {
+                fields.iter().any(|field| self.has_binding(*field))
+            }
+        }
+    }
     pub fn set_root(&mut self, pat: PatId, root: ValidatedPatId) {
         self.roots_by_pat.insert(pat, root);
     }

@@ -134,7 +134,7 @@ impl<'db> InferClassCache<'db> {
         carriers: &[RuntimeCarrier<'db>],
     ) -> Option<LocalDynamicFacts<'db>> {
         env.local_facts(local)?;
-        let source_locals = env.facts.source_locals(local);
+        let source_locals = env.facts.dependency_locals(local);
         let self_version = *self.local_versions.get(local.index())?;
         let entry = self
             .local_dynamic_facts
@@ -331,8 +331,12 @@ impl<'db> BodyStaticFacts<'db> {
         &self.assignments
     }
 
-    pub(super) fn source_locals(&self, local: SLocalId) -> &[SLocalId] {
-        self.normalized_facts.local_source_uses(local)
+    pub(super) fn value_source_locals(&self, local: SLocalId) -> &[SLocalId] {
+        self.normalized_facts.local_value_source_uses(local)
+    }
+
+    pub(super) fn dependency_locals(&self, local: SLocalId) -> &[SLocalId] {
+        self.normalized_facts.local_dependency_uses(local)
     }
 
     fn assignments_using_local(&self, local: SLocalId) -> &[AssignmentId] {
@@ -447,8 +451,8 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         self.facts.dynamic_dependents(local)
     }
 
-    pub(super) fn source_locals(self, local: SLocalId) -> &'a [SLocalId] {
-        self.facts.source_locals(local)
+    pub(super) fn value_source_locals(self, local: SLocalId) -> &'a [SLocalId] {
+        self.facts.value_source_locals(local)
     }
 
     fn actual_runtime_visible_root_provider_local(
@@ -2039,7 +2043,7 @@ fn binding_forwards_runtime_transport<'db>(
     }
     semantic
         .key(db)
-        .typed_body(db)
+        .callable_body(db)
         .forwarded_return_sources(db)
         .iter()
         .any(|source| source.origin == origin)
@@ -2048,7 +2052,6 @@ fn binding_forwards_runtime_transport<'db>(
 pub(crate) fn desired_runtime_binding_plan<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
-    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
     binding: LocalBinding<'db>,
 ) -> RuntimeParamPlan<'db> {
     let binding_ty = semantic.binding_ty(db, binding);
@@ -2076,7 +2079,7 @@ pub(crate) fn desired_runtime_binding_plan<'db>(
             })
             .map(|boundary| {
                 RuntimeParamPlan::Boundary(runtime_param_boundary(
-                    db, typed_body, binding, env, boundary,
+                    db, binding_ty, binding, env, boundary,
                 ))
             })
             .unwrap_or(RuntimeParamPlan::Erased);
@@ -2086,7 +2089,7 @@ pub(crate) fn desired_runtime_binding_plan<'db>(
     {
         return RuntimeParamPlan::Boundary(runtime_param_boundary(
             db,
-            typed_body,
+            binding_ty,
             binding,
             env,
             RuntimeBoundarySpec::default_exact_boundary_for_class(class),
@@ -2114,14 +2117,14 @@ pub(crate) fn desired_runtime_binding_plan<'db>(
         }
     ) && binding_ty.as_capability(db).is_none()
     {
-        desired_read_only_view_param_plan(db, typed_body, binding, env, binding_ty)
+        desired_read_only_view_param_plan(db, binding_ty, binding, env, binding_ty)
     } else if let Some((CapabilityKind::View, inner)) = interface_ty.as_capability(db) {
-        desired_read_only_view_param_plan(db, typed_body, binding, env, inner)
+        desired_read_only_view_param_plan(db, binding_ty, binding, env, inner)
     } else if interface_ty.as_capability(db).is_some() {
         boundary_spec_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory)
             .map(|boundary| {
                 RuntimeParamPlan::Boundary(runtime_param_boundary(
-                    db, typed_body, binding, env, boundary,
+                    db, binding_ty, binding, env, boundary,
                 ))
             })
             .unwrap_or(RuntimeParamPlan::Erased)
@@ -2132,7 +2135,7 @@ pub(crate) fn desired_runtime_binding_plan<'db>(
     {
         RuntimeParamPlan::Boundary(runtime_param_boundary(
             db,
-            typed_body,
+            binding_ty,
             binding,
             env,
             RuntimeBoundarySpec::default_exact_boundary_for_class(class),
@@ -2152,7 +2155,7 @@ pub(crate) fn desired_runtime_binding_plan<'db>(
             RuntimeParamPlan::PassActual
         } else {
             RuntimeParamPlan::Boundary(runtime_param_boundary(
-                db, typed_body, binding, env, boundary,
+                db, binding_ty, binding, env, boundary,
             ))
         }
     }
@@ -2160,28 +2163,24 @@ pub(crate) fn desired_runtime_binding_plan<'db>(
 
 fn desired_read_only_view_param_plan<'db>(
     db: &'db dyn MirDb,
-    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
+    binding_ty: TyId<'db>,
     binding: LocalBinding<'db>,
     env: RuntimeTypeEnv<'db>,
     inner: TyId<'db>,
 ) -> RuntimeParamPlan<'db> {
-    let Some(boundary) = boundary_spec_for_ty_in_env(
-        db,
-        env,
-        typed_body.binding_ty(db, binding),
-        AddressSpaceKind::Memory,
-    ) else {
+    let Some(boundary) = boundary_spec_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory)
+    else {
         return RuntimeParamPlan::Erased;
     };
     if binding.is_mut() {
         return RuntimeParamPlan::Boundary(runtime_param_boundary(
-            db, typed_body, binding, env, boundary,
+            db, binding_ty, binding, env, boundary,
         ));
     }
     let value = stored_class_for_ty_in_env(db, env, inner);
     if value.aggregate_layout().is_none() {
         return RuntimeParamPlan::Boundary(runtime_param_boundary(
-            db, typed_body, binding, env, boundary,
+            db, binding_ty, binding, env, boundary,
         ));
     }
     let borrow = match boundary {
@@ -2193,7 +2192,7 @@ fn desired_read_only_view_param_plan<'db>(
         },
     };
     RuntimeParamPlan::ReadOnlyView {
-        value: runtime_param_class(db, typed_body, binding, env, value),
+        value: runtime_param_class(db, binding_ty, binding, env, value),
         borrow,
     }
 }
@@ -2674,21 +2673,18 @@ fn intrinsic_numeric_name_parts(name: &str) -> Option<(&str, &str)> {
 
 pub(crate) fn runtime_param_class<'db>(
     db: &'db dyn MirDb,
-    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
+    binding_ty: TyId<'db>,
     binding: hir::analysis::ty::ty_check::LocalBinding<'db>,
     env: RuntimeTypeEnv<'db>,
     actual: RuntimeClass<'db>,
 ) -> RuntimeClass<'db> {
-    let ty = runtime_repr_ty_in_env(db, env, typed_body.binding_ty(db, binding));
-    if runtime_abstract_param_ty(
-        db,
-        typed_body.binding_ty(db, binding),
-        env.scope,
-        env.assumptions,
-    ) || matches!(
-        ty.base_ty(db).data(db),
-        TyData::TyParam(param) if param.is_effect() || param.is_effect_provider()
-    ) {
+    let ty = runtime_repr_ty_in_env(db, env, binding_ty);
+    if runtime_abstract_param_ty(db, binding_ty, env.scope, env.assumptions)
+        || matches!(
+            ty.base_ty(db).data(db),
+            TyData::TyParam(param) if param.is_effect() || param.is_effect_provider()
+        )
+    {
         return actual;
     }
     if binding.is_mut() && ty.as_enum(db).is_some() {
@@ -2699,24 +2695,24 @@ pub(crate) fn runtime_param_class<'db>(
 
 pub(crate) fn runtime_param_boundary<'db>(
     db: &'db dyn MirDb,
-    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
+    binding_ty: TyId<'db>,
     binding: hir::analysis::ty::ty_check::LocalBinding<'db>,
     env: RuntimeTypeEnv<'db>,
     boundary: RuntimeBoundarySpec<'db>,
 ) -> RuntimeBoundarySpec<'db> {
     match boundary {
         RuntimeBoundarySpec::ExactTransport(actual) => RuntimeBoundarySpec::ExactTransport(
-            runtime_param_class(db, typed_body, binding, env, actual),
+            runtime_param_class(db, binding_ty, binding, env, actual),
         ),
         RuntimeBoundarySpec::ExactShape(actual) => RuntimeBoundarySpec::ExactShape(
-            runtime_param_class(db, typed_body, binding, env, actual),
+            runtime_param_class(db, binding_ty, binding, env, actual),
         ),
         RuntimeBoundarySpec::BorrowLike {
             pointee,
             access,
             allow,
         } => {
-            let ty = runtime_repr_ty_in_env(db, env, typed_body.binding_ty(db, binding));
+            let ty = runtime_repr_ty_in_env(db, env, binding_ty);
             if binding.is_mut() && ty.as_enum(db).is_some() {
                 return RuntimeBoundarySpec::ExactTransport(RuntimeClass::object_ref(
                     layout_for_ty_in_env(db, env, ty),
@@ -2735,20 +2731,19 @@ pub(crate) fn semantic_return_ty<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> TyId<'db> {
-    let key = semantic.key(db);
-    key.owner(db).result_ty(db, key.typed_body(db))
+    semantic.key(db).callable_body(db).result_ty(db)
 }
 
 pub(crate) fn default_return_class<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> Option<RuntimeClass<'db>> {
-    let typed_body = semantic.key(db).typed_body(db);
+    let callable_body = semantic.key(db).callable_body(db);
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
     let result_ty = semantic_return_ty(db, semantic);
     let return_borrow_provider = result_ty
         .as_borrow(db)
-        .and(typed_body.return_borrow_provider());
+        .and(callable_body.return_borrow_provider(db));
     let default_space =
         return_borrow_provider.map_or(AddressSpaceKind::Memory, address_space_from_provider);
     if return_borrow_provider.is_some() {
@@ -2766,10 +2761,12 @@ pub(crate) fn desired_runtime_return_plan<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> RuntimeVisibleReturnPlan<'db> {
-    let typed_body = semantic.key(db).typed_body(db);
+    let callable_body = semantic.key(db).callable_body(db);
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
     let ty = semantic_return_ty(db, semantic);
-    let return_borrow_provider = ty.as_borrow(db).and(typed_body.return_borrow_provider());
+    let return_borrow_provider = ty
+        .as_borrow(db)
+        .and(callable_body.return_borrow_provider(db));
     let default_space =
         return_borrow_provider.map_or(AddressSpaceKind::Memory, address_space_from_provider);
     if return_borrow_provider.is_some() {
@@ -3551,7 +3548,7 @@ uses (slot: Slot<u256>)
             .expect("Protected should call Mutex::try_lock");
         let try_lock_return_sources = try_lock
             .key(&db)
-            .typed_body(&db)
+            .callable_body(&db)
             .forwarded_return_sources(&db);
         assert!(
             try_lock_return_sources.iter().any(|source| {

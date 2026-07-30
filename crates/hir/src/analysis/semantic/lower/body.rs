@@ -10,25 +10,28 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            CallSiteId, FieldIndex, LayoutBackingPlace, LayoutBackingSource, Mutability, SBlock,
-            SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind,
-            STerminator, STerminatorKind, SValueId, SemConstValue, SemOrigin, SemanticBody,
-            SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex, bool_const, bytes_const,
-            int_const, reify_runtime_const_for_ty, runtime_size_bytes, sem_const_from_ty,
-            unit_const,
+            BorrowActivation, CallSiteId, FieldIndex, LayoutBackingPlace, LayoutBackingSource,
+            Mutability, SBlock, SBlockId, SCallReturnProjectionStep, SCallReturnSource, SConst,
+            SEffectArg, SEffectArgValue, SExpr, SLocal, SLocalId, SOperand, SOperandIntent, SPlace,
+            SStmt, SStmtId, SStmtKind, STerminator, STerminatorKind, SValueId, SemConstValue,
+            SemOrigin, SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex,
+            bool_const, bytes_const, int_const, reify_runtime_const_for_ty, runtime_size_bytes,
+            sem_const_from_ty, unit_const,
         },
         ty::{
             const_ty::{
-                ConstTyData, EvaluatedConstTy, const_ty_or_abstract_from_assoc_const_use,
+                CallableInputLayoutHoleOrigin, ConstTyData, EvaluatedConstTy,
+                const_ty_or_abstract_from_assoc_const_use,
                 const_ty_or_abstract_from_inherent_const_use,
             },
             normalize::normalize_ty,
             ty_check::{
-                BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, LocalBinding,
-                ParamSite, PathReadSemantics, RecordInitLowering, RecordLike, SemanticExprLowering,
-                TypedBody, ValuePathRef,
+                BodyOwner, ClosureCaptureConstruction, CodeRegionIntrinsicKind, ConstIntrinsicKind,
+                ConstRef, LocalBinding, ParamSite, PathReadSemantics, RecordInitLowering,
+                RecordLike, ReturnIndexSource, ReturnProjectionStep, ReturnProvenance,
+                SemanticExprLowering, TypedBody, TypedCallableBody, ValueAccess, ValuePathRef,
             },
-            ty_def::{BorrowKind, TyData, TyId},
+            ty_def::{BorrowKind, PrimTy, TyBase, TyData, TyId},
         },
     },
     hir_def::{
@@ -36,6 +39,7 @@ use crate::{
         LitKind, MatchArm, Partial, PatId, PathId, Stmt, StmtId,
         expr::{BinOp, CompBinOp, LogicalBinOp, UnOp},
     },
+    projection::{IndexSource, Projection},
 };
 
 use super::{
@@ -110,6 +114,7 @@ pub(crate) fn lower_to_smir_with_call_sites<'a, 'db>(
                 source: Some(binding),
                 role,
                 snapshot_source,
+                ownership_sources: Vec::new(),
                 layout_backing_sources,
             });
             entry_locals.push(local);
@@ -149,9 +154,8 @@ pub(crate) fn lower_to_smir_with_call_sites<'a, 'db>(
             binding_role_mode,
         },
     );
-    let root_expr = template_owner
-        .root_expr(db)
-        .unwrap_or_else(|| body.expr(db));
+    let callable_body = TypedCallableBody::new(template_owner, typed_body);
+    let root_expr = callable_body.root_expr(db).unwrap_or_else(|| body.expr(db));
     let result = cx.lower_expr(root_expr);
     if !cx.is_terminated(cx.current) {
         let result = SOperand::expr(result, root_expr);
@@ -192,6 +196,7 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     pub(super) entry_locals: Vec<SLocalId>,
     pub(super) locals: Vec<SLocal<'db>>,
     pub(super) assigned_snapshots: Vec<bool>,
+    pub(super) assigned_ownership_sources: Vec<bool>,
     pub(super) assigned_layout_backing_sources: Vec<bool>,
     pub(super) blocks: Vec<BlockState<'db>>,
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, SLocalId>,
@@ -267,6 +272,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             entry_locals: Vec::new(),
             locals: Vec::new(),
             assigned_snapshots: Vec::new(),
+            assigned_ownership_sources: Vec::new(),
             assigned_layout_backing_sources: Vec::new(),
             blocks: Vec::new(),
             binding_locals: FxHashMap::default(),
@@ -307,8 +313,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     fn collect_binding_locals(&mut self) {
         if let BodyOwner::Closure { def, .. } = self.template_owner {
             for binding in self
-                .typed_body
-                .owner_param_bindings(self.db, self.template_owner)
+                .instance
+                .key(self.db)
+                .callable_body(self.db)
+                .param_bindings(self.db)
             {
                 let local = self.alloc_entry_binding_local(binding);
                 if let LocalBinding::Param {
@@ -405,6 +413,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .into_iter()
             .collect::<Vec<_>>();
         self.assigned_snapshots.push(snapshot_source.is_some());
+        self.assigned_ownership_sources.push(false);
         self.assigned_layout_backing_sources
             .push(!layout_backing_sources.is_empty());
         self.locals.push(SLocal {
@@ -413,6 +422,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             source,
             role,
             snapshot_source,
+            ownership_sources: Vec::new(),
             layout_backing_sources,
         });
         id
@@ -500,7 +510,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     pub(super) fn lower_expr_operand(&mut self, expr: ExprId) -> SOperand {
-        SOperand::expr(self.lower_expr(expr), expr)
+        SOperand::expr(self.lower_expr(expr), expr).with_intent(self.expr_operand_intent(expr))
+    }
+
+    pub(super) fn expr_operand_intent(&self, expr: ExprId) -> SOperandIntent {
+        match self.typed_body.expr_value_access(self.db, expr) {
+            ValueAccess::Infer => SOperandIntent::Infer,
+            ValueAccess::Read => SOperandIntent::Read,
+            ValueAccess::Move => SOperandIntent::Move,
+        }
     }
 
     pub(super) fn push_synthetic_stmt(&mut self, kind: SStmtKind<'db>) {
@@ -541,7 +559,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 let fields = info
                     .captures
                     .iter()
-                    .map(|capture| self.lower_binding_capture_operand(capture.binding, capture.ty))
+                    .map(|capture| {
+                        self.lower_binding_capture_operand(
+                            capture.binding,
+                            capture.ty,
+                            capture.construction,
+                        )
+                    })
                     .collect();
                 self.emit_expr_with_origin(origin, ty, SExpr::AggregateMake { ty, fields })
             }
@@ -560,7 +584,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Expr::Field(base, _) => {
                 if let Some(place) = self.typed_body.expr_place(expr) {
                     let place = self.lower_place_data(place);
-                    return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
+                    return self.emit_expr_with_origin(
+                        origin,
+                        ty,
+                        SExpr::ReadPlace {
+                            place,
+                            intent: self.expr_operand_intent(expr),
+                        },
+                    );
                 }
                 let base_expr = *base;
                 let base = self.lower_expr(base_expr);
@@ -573,7 +604,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     origin,
                     ty,
                     SExpr::Field {
-                        base: SOperand::expr(base, base_expr),
+                        base: SOperand::expr(base, base_expr)
+                            .with_intent(self.expr_operand_intent(expr)),
                         field,
                     },
                 )
@@ -584,9 +616,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
                 if let Some(place) = self.typed_body.expr_place(expr) {
                     let place = self.lower_place_data(place);
-                    return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
+                    return self.emit_expr_with_origin(
+                        origin,
+                        ty,
+                        SExpr::ReadPlace {
+                            place,
+                            intent: self.expr_operand_intent(expr),
+                        },
+                    );
                 }
-                let base = self.lower_expr_operand(*base);
+                let base = self
+                    .lower_expr_operand(*base)
+                    .with_intent(self.expr_operand_intent(expr));
                 let index = self.lower_expr_operand(*index);
                 self.emit_expr_with_origin(origin, ty, SExpr::Index { base, index })
             }
@@ -604,6 +645,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         place,
                         kind,
                         provider: self.typed_body.expr_prop(self.db, expr).borrow_provider,
+                        activation: BorrowActivation::Immediate,
                     },
                 )
             }
@@ -654,7 +696,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.emit_expr_with_origin(origin, ty, SExpr::Binary { op: *op, lhs, rhs })
             }
             Expr::Cast(value, to) => {
+                let value_ty = self.expr_ty(*value);
                 let value = self.lower_expr_operand(*value);
+                let value_ty = normalize_ty(self.db, value_ty, self.body.scope(), self.assumptions);
+                let ty = normalize_ty(self.db, ty, self.body.scope(), self.assumptions);
+                if value_ty == ty {
+                    return self.emit_expr_with_origin(origin, ty, SExpr::UseValue(value));
+                }
                 self.emit_expr_with_origin(
                     origin,
                     ty,
@@ -687,6 +735,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                             self.expr_ty(*dst),
                             SExpr::ReadPlace {
                                 place: dst_place.clone(),
+                                intent: SOperandIntent::Read,
                             },
                         ),
                         *dst,
@@ -873,12 +922,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 PathReadSemantics::ForwardInterface => self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
                     self.expr_ty(expr),
-                    SExpr::Forward(SOperand::inherited(local)),
+                    SExpr::Forward(
+                        SOperand::inherited(local).with_intent(self.expr_operand_intent(expr)),
+                    ),
                 ),
                 PathReadSemantics::MaterializeValue => self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
                     self.expr_ty(expr),
-                    SExpr::UseValue(SOperand::inherited(local)),
+                    SExpr::UseValue(
+                        SOperand::inherited(local).with_intent(self.expr_operand_intent(expr)),
+                    ),
                 ),
             };
         }
@@ -949,7 +1002,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             SemOrigin::Expr(expr),
             self.expr_ty(expr),
             SExpr::Field {
-                base: SOperand::inherited(env),
+                base: SOperand::inherited(env).with_intent(self.expr_operand_intent(expr)),
                 field,
             },
         ))
@@ -959,9 +1012,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         &mut self,
         binding: LocalBinding<'db>,
         ty: TyId<'db>,
+        construction: ClosureCaptureConstruction,
     ) -> SOperand {
+        let intent = match construction {
+            ClosureCaptureConstruction::Copy => SOperandIntent::Read,
+            ClosureCaptureConstruction::Move => SOperandIntent::Move,
+        };
         if let Some(local) = self.binding_locals.get(&binding).copied() {
-            return SOperand::inherited(local);
+            return SOperand::inherited(local).with_intent(intent);
         }
 
         let field = *self
@@ -975,11 +1033,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             SemOrigin::Synthetic,
             ty,
             SExpr::Field {
-                base: SOperand::inherited(env),
+                base: SOperand::inherited(env).with_intent(intent),
                 field,
             },
         );
-        SOperand::synthetic(value)
+        SOperand::synthetic(value).with_intent(intent)
     }
 
     fn binding_path_read_semantics(
@@ -1187,6 +1245,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     .callee
                     .unwrap_or_else(|| panic!("call lowering plan missing callee for {expr:?}"));
                 let effect_args = self.lower_effect_arg_slice(&call_site.effect_args);
+                let return_sources = self.lower_call_return_sources(callee, &values, &effect_args);
                 self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
                     ty,
@@ -1195,10 +1254,170 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         callee,
                         args: values.into_boxed_slice(),
                         effect_args,
+                        return_sources,
                     },
                 )
             }
         }
+    }
+
+    fn lower_call_return_sources(
+        &mut self,
+        callee: crate::analysis::semantic::SemanticCalleeRef<'db>,
+        args: &[SOperand],
+        effect_args: &[SEffectArg<'db>],
+    ) -> Box<[SCallReturnSource]> {
+        let ReturnProvenance::Forwarded(sources) =
+            callee.key.callable_body(self.db).return_provenance(self.db)
+        else {
+            return Box::default();
+        };
+        let mut index_values = FxHashMap::default();
+        sources
+            .into_iter()
+            .map(|source| {
+                let result_projection = self
+                    .lower_call_return_projection(
+                        &source.result_projection,
+                        args,
+                        effect_args,
+                        &mut index_values,
+                    )
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "callable result provenance contains an unlowerable result projection: callee={callee:?} source={source:?}"
+                        )
+                    });
+                let projection = self
+                    .lower_call_return_projection(
+                        &source.projection,
+                        args,
+                        effect_args,
+                        &mut index_values,
+                    )
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "callable result provenance contains an unlowerable input projection: callee={callee:?} source={source:?}"
+                        )
+                    });
+                SCallReturnSource {
+                    result_projection,
+                    origin: source.origin,
+                    projection,
+                }
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+    }
+
+    fn lower_call_return_projection(
+        &mut self,
+        projection: &[ReturnProjectionStep],
+        args: &[SOperand],
+        effect_args: &[SEffectArg<'db>],
+        index_values: &mut FxHashMap<ReturnIndexSource, SLocalId>,
+    ) -> Option<Vec<SCallReturnProjectionStep>> {
+        projection
+            .iter()
+            .map(|step| {
+                Some(match step {
+                    ReturnProjectionStep::Field(field) => SCallReturnProjectionStep::Field(*field),
+                    ReturnProjectionStep::VariantField { variant, field } => {
+                        SCallReturnProjectionStep::VariantField {
+                            variant: *variant,
+                            field: *field,
+                        }
+                    }
+                    ReturnProjectionStep::ConstantIndex(index) => {
+                        SCallReturnProjectionStep::ConstantIndex(*index)
+                    }
+                    ReturnProjectionStep::DynamicIndex(source) => {
+                        SCallReturnProjectionStep::DynamicIndex(
+                            self.lower_call_return_index_source(
+                                source,
+                                args,
+                                effect_args,
+                                index_values,
+                            )?,
+                        )
+                    }
+                    ReturnProjectionStep::AnyIndex => SCallReturnProjectionStep::AnyIndex,
+                })
+            })
+            .collect()
+    }
+
+    fn lower_call_return_index_source(
+        &mut self,
+        source: &ReturnIndexSource,
+        args: &[SOperand],
+        effect_args: &[SEffectArg<'db>],
+        index_values: &mut FxHashMap<ReturnIndexSource, SLocalId>,
+    ) -> Option<SLocalId> {
+        if let Some(value) = index_values.get(source).copied() {
+            return Some(value);
+        }
+        let (mut ty, mut place) = self.call_return_input_place(source.origin, args, effect_args)?;
+        for step in &source.projection {
+            ty = ty.as_capability(self.db).map_or(ty, |(_, inner)| inner);
+            match step {
+                ReturnProjectionStep::Field(field) => {
+                    place.path.push(Projection::Field(usize::from(*field)));
+                    ty = *ty.field_types(self.db).get(usize::from(*field))?;
+                }
+                ReturnProjectionStep::ConstantIndex(index) => {
+                    place
+                        .path
+                        .push(Projection::Index(IndexSource::Constant(*index)));
+                    ty = *ty.generic_args(self.db).first()?;
+                }
+                ReturnProjectionStep::VariantField { .. }
+                | ReturnProjectionStep::DynamicIndex(_)
+                | ReturnProjectionStep::AnyIndex => return None,
+            }
+        }
+        let index_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+        let value = self.emit_expr(
+            index_ty,
+            SExpr::ReadPlace {
+                place,
+                intent: SOperandIntent::Read,
+            },
+        );
+        index_values.insert(source.clone(), value);
+        Some(value)
+    }
+
+    fn call_return_input_place(
+        &self,
+        origin: CallableInputLayoutHoleOrigin,
+        args: &[SOperand],
+        effect_args: &[SEffectArg<'db>],
+    ) -> Option<(TyId<'db>, SPlace<'db>)> {
+        let value = match origin {
+            CallableInputLayoutHoleOrigin::Receiver => args.first()?.value,
+            CallableInputLayoutHoleOrigin::ValueParam(param_idx) => args.get(param_idx)?.value,
+            CallableInputLayoutHoleOrigin::Effect(effect_idx) => {
+                let effect_arg = effect_args
+                    .iter()
+                    .find(|arg| arg.binding_idx as usize == effect_idx)?;
+                return match &effect_arg.arg {
+                    SEffectArgValue::Place(place) => Some((
+                        effect_arg
+                            .target_ty
+                            .unwrap_or(self.locals[place.local.index()].ty),
+                        place.clone(),
+                    )),
+                    SEffectArgValue::Value(value) => Some((
+                        effect_arg
+                            .target_ty
+                            .unwrap_or(self.locals[value.value.index()].ty),
+                        SPlace::new(value.value),
+                    )),
+                };
+            }
+        };
+        Some((self.locals[value.index()].ty, SPlace::new(value)))
     }
 
     fn lower_callable_receiver(&mut self, call_expr: ExprId, receiver: ExprId) -> SValueId {
@@ -1238,6 +1457,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     place,
                     kind: plan.kind,
                     provider: receiver_prop.borrow_provider,
+                    activation: if plan.kind == BorrowKind::Mut {
+                        BorrowActivation::AtCall
+                    } else {
+                        BorrowActivation::Immediate
+                    },
                 },
             );
         }
@@ -1310,7 +1534,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Stmt::Let(pat, _, init) => {
                 if let Some(init) = init {
                     let value = self.lower_expr(*init);
-                    self.bind_pattern(*pat, value);
+                    self.bind_pattern(*pat, value, SemOrigin::Expr(*init));
                 }
             }
             Stmt::While(cond, body_expr) => self.lower_while(*cond, *body_expr),
@@ -1396,16 +1620,21 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             ))),
         });
         let len_effect_args = self.lower_effect_arg_slice(&for_loop_call_sites.len.effect_args);
+        let len_callee = for_loop_call_sites
+            .len
+            .callee
+            .expect("Seq::len should lower to a semantic callee");
+        let len_args = [iter_operand];
+        let len_return_sources =
+            self.lower_call_return_sources(len_callee, &len_args, &len_effect_args);
         let len_value = self.emit_expr(
             usize_ty,
             SExpr::Call {
                 call_site: CallSiteId::ForLoopLen(stmt),
-                callee: for_loop_call_sites
-                    .len
-                    .callee
-                    .expect("Seq::len should lower to a semantic callee"),
-                args: vec![iter_operand].into_boxed_slice(),
+                callee: len_callee,
+                args: Box::new(len_args),
                 effect_args: len_effect_args,
+                return_sources: len_return_sources,
             },
         );
 
@@ -1438,16 +1667,21 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         });
         self.switch_to(body_bb);
         let get_effect_args = self.lower_effect_arg_slice(&for_loop_call_sites.get.effect_args);
+        let get_callee = for_loop_call_sites
+            .get
+            .callee
+            .expect("Seq::get should lower to a semantic callee");
+        let get_args = [iter_operand, SOperand::synthetic(idx_local)];
+        let get_return_sources =
+            self.lower_call_return_sources(get_callee, &get_args, &get_effect_args);
         let elem = self.emit_expr(
             elem_ty,
             SExpr::Call {
                 call_site: CallSiteId::ForLoopGet(stmt),
-                callee: for_loop_call_sites
-                    .get
-                    .callee
-                    .expect("Seq::get should lower to a semantic callee"),
-                args: vec![iter_operand, SOperand::synthetic(idx_local)].into_boxed_slice(),
+                callee: get_callee,
+                args: Box::new(get_args),
                 effect_args: get_effect_args,
+                return_sources: get_return_sources,
             },
         );
         if seq.element_layout_backing_source {
@@ -1457,7 +1691,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }];
             self.assigned_layout_backing_sources[elem.index()] = true;
         }
-        self.bind_pattern(pat, elem);
+        self.bind_pattern(pat, elem, SemOrigin::Stmt(stmt));
         let _ = self.lower_expr(body_expr);
         if !self.is_terminated(self.current) {
             let one = self.emit_expr(
@@ -1507,14 +1741,17 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             join_reachable = true;
             self.push_synthetic_stmt(SStmtKind::Assign {
                 dst: result,
-                expr: SExpr::Forward(SOperand::expr(then_value, then_expr)),
+                expr: SExpr::Forward(
+                    SOperand::expr(then_value, then_expr)
+                        .with_intent(self.expr_operand_intent(then_expr)),
+                ),
             });
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
         }
 
         self.switch_to(else_bb);
         let else_value = if let Some(expr) = else_expr {
-            SOperand::expr(self.lower_expr(expr), expr)
+            SOperand::expr(self.lower_expr(expr), expr).with_intent(self.expr_operand_intent(expr))
         } else {
             SOperand::synthetic(self.unit_value())
         };
@@ -1633,7 +1870,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let value = self.lower_expr(scrutinee);
         let result = self.alloc_temp(self.expr_ty(expr));
         let join_bb = self.new_block();
-        self.lower_match_expr_with_decision_tree(value, result, join_bb, arms)
+        self.lower_match_expr_with_decision_tree(
+            value,
+            SemOrigin::Expr(scrutinee),
+            result,
+            join_bb,
+            arms,
+        )
     }
 
     fn lower_cond_branch(&mut self, cond: CondId, then_bb: SBlockId, else_bb: SBlockId) {
@@ -1668,10 +1911,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Cond::Let(pat, expr) => {
                 let value = self.lower_expr(*expr);
                 if self.pattern_is_irrefutable(*pat) {
-                    self.bind_pattern(*pat, value);
+                    self.bind_pattern(*pat, value, SemOrigin::Expr(*expr));
                     self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
                 } else {
-                    self.lower_pattern_branch(*pat, value, then_bb, else_bb);
+                    self.lower_pattern_branch(
+                        *pat,
+                        value,
+                        SemOrigin::Expr(*expr),
+                        then_bb,
+                        else_bb,
+                    );
                 }
             }
         }

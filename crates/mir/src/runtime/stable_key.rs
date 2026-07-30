@@ -79,9 +79,13 @@ fn body_owner_identity<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -
             "contract_recv${}${recv_idx}${arm_idx}",
             item_identity(db, contract.into())
         ),
-        BodyOwner::Closure { ty, .. } => {
-            format!("closure_body${}", type_identity(db, TyId::closure(db, ty)))
-        }
+        BodyOwner::Closure {
+            ty, receiver_mode, ..
+        } => format!(
+            "closure_body${}${}",
+            type_identity(db, TyId::closure(db, ty)),
+            receiver_mode.as_str()
+        ),
     }
 }
 
@@ -433,20 +437,18 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
             },
             TyBase::Closure(closure) => {
                 let def = closure.def(db);
-                let captures = closure
-                    .captures(db)
-                    .iter()
-                    .map(|ty| type_identity(db, *ty))
-                    .collect::<Vec<_>>()
-                    .join("$");
-                let params = closure
-                    .params(db)
-                    .iter()
-                    .map(|ty| type_identity(db, *ty))
-                    .collect::<Vec<_>>()
-                    .join("$");
+                let type_ids = |tys: &Vec<TyId<'db>>| {
+                    tys.iter()
+                        .map(|ty| type_identity(db, *ty))
+                        .collect::<Vec<_>>()
+                        .join("$")
+                };
+                let parent_args = type_ids(closure.parent_args(db));
+                let captures = type_ids(closure.captures(db));
+                let params = type_ids(closure.params(db));
+                let call_mode = closure.call_mode(db).as_str();
                 format!(
-                    "closure${}${}$captures${captures}$params${params}$ret${}",
+                    "closure${}${}$args${parent_args}$captures${captures}$params${params}$ret${}$mode${call_mode}",
                     item_identity(db, def.body.into()),
                     expr_id(def.expr),
                     type_identity(db, closure.ret_ty(db))

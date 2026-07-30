@@ -5,8 +5,9 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            FieldIndex, SBlockId, SConst, SExpr, SLocalId, SOperand, SPlace, SStmtKind,
-            STerminatorKind, SValueId, VariantIndex, bool_const, bytes_const, int_const,
+            FieldIndex, SBlockId, SConst, SExpr, SLocalId, SOperand, SOperandIntent, SPlace,
+            SStmtKind, STerminatorKind, SValueId, SemOrigin, SemanticLocalRole, ValueProvenance,
+            VariantIndex, bool_const, bytes_const, int_const,
         },
         ty::{
             decision_tree::{
@@ -22,6 +23,7 @@ use crate::{
             },
             ty_check::PatBindingMode,
             ty_def::{PrimTy, TyBase, TyData, TyId},
+            ty_is_copy,
         },
     },
     hir_def::{
@@ -41,6 +43,10 @@ pub(super) struct PatternValue<'db> {
     // Runtime/source type threaded through pattern lowering. This intentionally
     // stays separate from validated-pattern match types and final binding types.
     pub(super) carrier_ty: PatternCarrierTy<'db>,
+    // Source operation represented by synthetic decision-tree projections and
+    // binding assignments. Keeping it on the pattern value preserves both
+    // implicit-move semantics and user-facing diagnostic spans.
+    pub(super) origin: SemOrigin<'db>,
 }
 
 #[derive(Clone)]
@@ -216,9 +222,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .is_none_or(|root| self.validated_pattern_is_irrefutable(root))
     }
 
-    pub(super) fn bind_pattern(&mut self, pat: PatId, value: SValueId) {
+    pub(super) fn bind_pattern(&mut self, pat: PatId, value: SValueId, origin: SemOrigin<'db>) {
         if let Some(root) = self.typed_body.pattern_root(pat) {
-            let value = self.owned_pattern_value(value, self.locals[value.index()].ty);
+            let value = self.owned_pattern_value(value, self.locals[value.index()].ty, origin);
             self.bind_validated_pattern(root, value);
         }
     }
@@ -229,6 +235,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         &mut self,
         pat: PatId,
         value: SValueId,
+        origin: SemOrigin<'db>,
         then_bb: SBlockId,
         else_bb: SBlockId,
     ) {
@@ -236,7 +243,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
             return;
         };
-        let value = self.owned_pattern_value(value, self.locals[value.index()].ty);
+        let value = self.owned_pattern_value(value, self.locals[value.index()].ty, origin);
         let pattern_store = self.typed_body.pattern_store();
         let tree = build_pattern_branch_decision_tree(self.db, pattern_store, root);
         let mut projections =
@@ -248,10 +255,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         );
     }
 
-    fn owned_pattern_value(&self, value: SValueId, carrier_ty: TyId<'db>) -> PatternValue<'db> {
+    fn owned_pattern_value(
+        &self,
+        value: SValueId,
+        carrier_ty: TyId<'db>,
+        origin: SemOrigin<'db>,
+    ) -> PatternValue<'db> {
         PatternValue {
             value,
             carrier_ty: PatternCarrierTy(carrier_ty),
+            origin,
         }
     }
 
@@ -268,16 +281,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 PatternProjectionStep::Field(field_idx),
             )
         });
-        let value = self.emit_expr(
+        let value = self.emit_expr_with_origin(
+            base.origin,
             ty,
             SExpr::Field {
-                base: SOperand::synthetic(base.value),
+                base: SOperand::synthetic(base.value).with_intent(SOperandIntent::Read),
                 field: FieldIndex(field_idx as u16),
             },
         );
         PatternValue {
             value,
             carrier_ty: PatternCarrierTy(ty),
+            origin: base.origin,
         }
     }
 
@@ -295,10 +310,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 PatternProjectionStep::VariantField { variant, field_idx },
             )
         });
-        let value = self.emit_expr(
+        let value = self.emit_expr_with_origin(
+            base.origin,
             ty,
             SExpr::ExtractEnumField {
-                value: SOperand::synthetic(base.value),
+                value: SOperand::synthetic(base.value).with_intent(SOperandIntent::Read),
                 variant: VariantIndex(variant.idx),
                 field: FieldIndex(field_idx as u16),
             },
@@ -306,6 +322,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         PatternValue {
             value,
             carrier_ty: PatternCarrierTy(ty),
+            origin: base.origin,
         }
     }
 
@@ -355,6 +372,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     fn bind_validated_pattern(&mut self, pat: ValidatedPatId, value: PatternValue<'db>) {
+        if !self.typed_body.pattern_store().has_binding(pat) {
+            return;
+        }
         let kind = self.typed_body.pattern_store().node(pat).kind().clone();
         match kind {
             ValidatedPatKind::Wildcard {
@@ -376,27 +396,35 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         PatternValue {
                             value: value.value,
                             carrier_ty: PatternCarrierTy(dst_ty),
+                            origin: value.origin,
                         }
                     } else {
                         value
                     };
                     self.debug_assert_pattern_binding_ty_matches(dst, binding_value);
-                    self.push_synthetic_stmt(SStmtKind::Assign {
-                        dst,
-                        expr: if needs_borrow_read {
-                            SExpr::ReadPlace {
-                                place: SPlace::new(value.value),
-                            }
-                        } else {
-                            SExpr::UseValue(SOperand::synthetic(value.value))
+                    self.push_stmt(
+                        value.origin,
+                        SStmtKind::Assign {
+                            dst,
+                            expr: if needs_borrow_read {
+                                SExpr::ReadPlace {
+                                    place: SPlace::new(value.value),
+                                    intent: SOperandIntent::Read,
+                                }
+                            } else {
+                                SExpr::UseValue(self.pattern_binding_operand(value.value, dst_ty))
+                            },
                         },
-                    });
+                    );
                 }
             }
             ValidatedPatKind::Wildcard { binding: None } => {}
             ValidatedPatKind::Constructor { ctor, fields } => match ctor {
                 ConstructorKind::Variant(variant, _) => {
                     for (idx, field_pat) in fields.into_iter().enumerate() {
+                        if !self.typed_body.pattern_store().has_binding(field_pat) {
+                            continue;
+                        }
                         let assigned_ty = self.validated_pattern_child_carrier_ty(
                             value,
                             field_pat,
@@ -416,6 +444,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
                 ConstructorKind::Type(_) => {
                     for (idx, field_pat) in fields.into_iter().enumerate() {
+                        if !self.typed_body.pattern_store().has_binding(field_pat) {
+                            continue;
+                        }
                         let assigned_ty = self.validated_pattern_child_carrier_ty(
                             value,
                             field_pat,
@@ -438,11 +469,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     pub(super) fn lower_match_expr_with_decision_tree(
         &mut self,
         value: SValueId,
+        origin: SemOrigin<'db>,
         result: crate::analysis::semantic::SLocalId,
         join_bb: SBlockId,
         arms: &[MatchArm],
     ) -> SValueId {
-        let value = self.owned_pattern_value(value, self.locals[value.index()].ty);
+        let value = self.owned_pattern_value(value, self.locals[value.index()].ty, origin);
         let roots = arms
             .iter()
             .map(|arm| self.typed_body.pattern_root(arm.pat))
@@ -504,7 +536,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     } else {
                         self.push_synthetic_stmt(SStmtKind::Assign {
                             dst: result,
-                            expr: SExpr::Forward(SOperand::expr(arm_value, arm.body)),
+                            expr: SExpr::Forward(
+                                SOperand::expr(arm_value, arm.body)
+                                    .with_intent(self.expr_operand_intent(arm.body)),
+                            ),
                         });
                         self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
                         true
@@ -562,8 +597,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
 
         if is_enum_switch && let Some(enum_ty) = enum_ty {
-            self.set_synthetic_terminator(
+            self.set_terminator(
                 self.current,
+                occurrence.origin,
                 STerminatorKind::MatchEnum {
                     value: SOperand::synthetic(occurrence.value),
                     enum_ty,
@@ -611,9 +647,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                             ConstructorKind::Type(_) => unreachable!(),
                         };
                         let next_bb = self.new_block();
-                        let cond = self.emit_expr(TyId::bool(self.db), test);
-                        self.set_synthetic_terminator(
+                        let cond = self.emit_expr_with_origin(
+                            occurrence.origin,
+                            TyId::bool(self.db),
+                            test,
+                        );
+                        self.set_terminator(
                             self.current,
+                            occurrence.origin,
                             STerminatorKind::Branch {
                                 cond: SOperand::synthetic(cond),
                                 then_bb: *case_bb,
@@ -645,11 +686,37 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 let dst = self.alloc_binding_local(binding);
                 let src = self.project_decision_tree_path(projections, path);
                 self.debug_assert_pattern_binding_ty_matches(dst, src);
-                self.push_synthetic_stmt(SStmtKind::Assign {
-                    dst,
-                    expr: SExpr::UseValue(SOperand::synthetic(src.value)),
-                });
+                self.push_stmt(
+                    src.origin,
+                    SStmtKind::Assign {
+                        dst,
+                        expr: SExpr::UseValue(
+                            self.pattern_binding_operand(src.value, self.locals[dst.index()].ty),
+                        ),
+                    },
+                );
             }
+        }
+    }
+
+    fn pattern_binding_operand(&self, value: SValueId, ty: TyId<'db>) -> SOperand {
+        let local = &self.locals[value.index()];
+        if !ty_is_copy(self.db, self.body.scope(), ty, self.assumptions)
+            && matches!(
+                &local.role,
+                SemanticLocalRole::DirectValue {
+                    provenance: ValueProvenance::Ordinary
+                }
+            )
+            && local
+                .snapshot_source
+                .as_ref()
+                .and_then(|source| source.root_provider(&self.locals))
+                .is_none()
+        {
+            SOperand::synthetic(value).with_intent(SOperandIntent::Move)
+        } else {
+            SOperand::synthetic(value)
         }
     }
 
@@ -695,7 +762,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     self.db,
                     pattern_match_expected_ty(self.db, base.carrier_ty.0),
                 );
-                let value = self.emit_expr(
+                let value = self.emit_expr_with_origin(
+                    base.origin,
                     ty,
                     SExpr::GetEnumTag {
                         value: SOperand::synthetic(base.value),
@@ -704,6 +772,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 PatternValue {
                     value,
                     carrier_ty: PatternCarrierTy(ty),
+                    origin: base.origin,
                 }
             }
             Projection::Deref => {

@@ -1,9 +1,6 @@
 use hir::analysis::{
     semantic::{SemanticInstance, owner_effect_bindings, same_owner_effect_binding},
-    ty::{
-        ty_check::{BodyOwner, LocalBinding, ParamSite},
-        ty_def::TyId,
-    },
+    ty::ty_check::{BodyOwner, LocalBinding},
 };
 
 use crate::{
@@ -52,34 +49,17 @@ pub(crate) fn runtime_param_locals<'db>(
     entries.iter().map(|entry| entry.local).collect()
 }
 
-fn runtime_visible_binding_semantic_ty<'db>(
-    db: &'db dyn MirDb,
-    semantic: SemanticInstance<'db>,
-    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
-    binding: LocalBinding<'db>,
-) -> TyId<'db> {
-    match binding {
-        LocalBinding::EffectParam { .. }
-        | LocalBinding::Param {
-            site: ParamSite::EffectField(_),
-            ..
-        } => semantic.binding_ty(db, binding),
-        LocalBinding::Local { .. } | LocalBinding::Param { .. } => {
-            typed_body.binding_ty(db, binding)
-        }
-    }
-}
-
 #[salsa::tracked(return_ref)]
 pub(crate) fn runtime_param_plans<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> Vec<RuntimeParamPlan<'db>> {
-    let typed_body = semantic.key(db).typed_body(db);
-    typed_body
-        .owner_param_bindings(db, semantic.key(db).owner(db))
+    semantic
+        .key(db)
+        .callable_body(db)
+        .param_bindings(db)
         .into_iter()
-        .map(|binding| desired_runtime_binding_plan(db, semantic, typed_body, binding))
+        .map(|binding| desired_runtime_binding_plan(db, semantic, binding))
         .collect()
 }
 
@@ -89,7 +69,6 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
     semantic: SemanticInstance<'db>,
 ) -> Vec<RuntimeVisibleBindingPlan<'db>> {
     let owner = semantic.key(db).owner(db);
-    let typed_body = semantic.key(db).typed_body(db);
     let param_plans = runtime_param_plans(db, semantic);
     let mut entries = Vec::new();
     let mut push = |binding, plan| {
@@ -97,14 +76,16 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
             entries.push(RuntimeVisibleBindingPlan {
                 binding,
                 local: runtime_visible_binding_local(db, semantic, binding),
-                semantic_ty: runtime_visible_binding_semantic_ty(db, semantic, typed_body, binding),
+                semantic_ty: semantic.binding_ty(db, binding),
                 plan,
             });
         }
     };
 
-    for (idx, binding) in typed_body
-        .owner_param_bindings(db, owner)
+    for (idx, binding) in semantic
+        .key(db)
+        .callable_body(db)
+        .param_bindings(db)
         .into_iter()
         .enumerate()
     {
@@ -126,6 +107,7 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
         let recv = hir::semantic::RecvView::new(db, contract, recv_idx);
         let arm = hir::semantic::RecvArmView::new(db, recv, arm_idx);
         let env = RuntimeTypeEnv::for_semantic(db, semantic);
+        let typed_body = semantic.key(db).typed_body(db);
         for arg_binding in arm.arg_bindings(db) {
             let Some(binding) = typed_body.pat_binding(arg_binding.pat) else {
                 continue;

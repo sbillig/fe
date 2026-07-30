@@ -1,5 +1,6 @@
 use ingot::Default
 use ingot::Fn
+use ingot::FnOnce
 use ingot::Functor
 use ingot::Applicative
 use ingot::Monad
@@ -23,16 +24,16 @@ impl<T> Option<T> {
         !self.is_some()
     }
 
-    pub fn map<U, F: Fn<T, U>>(own self, _ func: F) -> Option<U> {
+    pub fn map<U, F: FnOnce<T, U>>(own self, _ func: own F) -> Option<U> {
         match self {
-            Self::Some(value) => Option::Some(func.call(value))
+            Self::Some(value) => Option::Some(func.call_once(value))
             Self::None => Option::None
         }
     }
 
-    pub fn and_then<U, F: Fn<T, Option<U>>>(own self, _ func: F) -> Option<U> {
+    pub fn and_then<U, F: FnOnce<T, Option<U>>>(own self, _ func: own F) -> Option<U> {
         match self {
-            Self::Some(value) => func.call(value)
+            Self::Some(value) => func.call_once(value)
             Self::None => Option::None
         }
     }
@@ -44,10 +45,10 @@ impl<T> Option<T> {
         }
     }
 
-    pub fn ok_or_else<E, F: Fn<(), E>>(own self, _ err_func: F) -> Result<E, T> {
+    pub fn ok_or_else<E, F: FnOnce<(), E>>(own self, _ err_func: own F) -> Result<E, T> {
         match self {
             Self::Some(value) => Result::Ok(value)
-            Self::None => Result::Err(err_func.call(()))
+            Self::None => Result::Err(err_func.call_once(()))
         }
     }
 
@@ -65,10 +66,10 @@ impl<T> Option<T> {
         }
     }
 
-    pub fn unwrap_or_else<F: Fn<(), T>>(own self, _ default_func: F) -> T {
+    pub fn unwrap_or_else<F: FnOnce<(), T>>(own self, _ default_func: own F) -> T {
         match self {
             Self::Some(value) => value
-            Self::None => default_func.call(())
+            Self::None => default_func.call_once(())
         }
     }
 }

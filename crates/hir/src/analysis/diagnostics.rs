@@ -3799,6 +3799,29 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::UnsupportedClosureBorrowParam { primary, kind } => {
+                let kind = match kind {
+                    crate::analysis::ty::ty_def::BorrowKind::Mut => "mut",
+                    crate::analysis::ty::ty_def::BorrowKind::Ref => "ref",
+                };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "closures cannot take borrow parameters".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{kind}` parameters cannot be represented by the current `Fn`/`FnOnce` interface"
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![
+                        "use an ordinary function when the callable must accept a borrow"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
             Self::AssignToCapturedBinding { primary, binding } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,

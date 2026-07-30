@@ -151,7 +151,7 @@ fn read(boxed: Boxed) -> u256 {
         .find_map(|stmt| match &stmt.kind {
             SStmtKind::Assign {
                 dst,
-                expr: SExpr::ReadPlace { place },
+                expr: SExpr::ReadPlace { place, .. },
             } if place.path.is_empty() => Some((*dst, place)),
             _ => None,
         })

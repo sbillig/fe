@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_borrow_params.fe
+---
+error[8-0091]: closures cannot take borrow parameters
+  ┌─ closure_borrow_params.fe:2:26
+  │
+2 │     let mutate = |value: mut u256| -> () {
+  │                          ^^^^^^^^ `mut` parameters cannot be represented by the current `Fn`/`FnOnce` interface
+  │
+  = use an ordinary function when the callable must accept a borrow
+
+error[8-0091]: closures cannot take borrow parameters
+  ┌─ closure_borrow_params.fe:5:24
+  │
+5 │     let read = |value: ref u256| -> u256 {
+  │                        ^^^^^^^^ `ref` parameters cannot be represented by the current `Fn`/`FnOnce` interface
+  │
+  = use an ordinary function when the callable must accept a borrow

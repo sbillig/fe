@@ -115,6 +115,7 @@ pub fn walk_closure_ty<'db, V>(visitor: &mut V, closure: ClosureTy<'db>)
 where
     V: TyVisitor<'db> + ?Sized,
 {
+    closure.parent_args(visitor.db()).visit_with(visitor);
     closure.captures(visitor.db()).visit_with(visitor);
     closure.params(visitor.db()).visit_with(visitor);
     closure.ret_ty(visitor.db()).visit_with(visitor);

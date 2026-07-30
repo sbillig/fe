@@ -31,6 +31,7 @@ use crate::{
             ty_check::{
                 BodyOwner, EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
                 LocalBinding, ParamSite, ResolvedEffectArg, SemanticExprLowering, TypedBody,
+                TypedCallableBody,
             },
             ty_def::{BorrowKind, CapabilityKind, TyId},
             ty_lower::{
@@ -72,6 +73,10 @@ impl<'db> SemanticInstanceKey<'db> {
 
     pub fn instantiate_typed_body(self, db: &'db dyn HirAnalysisDb) -> TypedBody<'db> {
         self.typed_body(db).clone()
+    }
+
+    pub fn callable_body(self, db: &'db dyn HirAnalysisDb) -> TypedCallableBody<'db> {
+        TypedCallableBody::new(self.owner(db), self.typed_body(db))
     }
 
     pub fn layout_bundle_signature(
@@ -816,7 +821,7 @@ impl<'db> SemanticInstance<'db> {
 
     #[salsa::tracked]
     pub fn normalized_result_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        self.normalized_ty(db, self.key(db).typed_body(db).result_ty())
+        self.normalized_ty(db, self.key(db).callable_body(db).result_ty(db))
     }
 
     #[salsa::tracked(
