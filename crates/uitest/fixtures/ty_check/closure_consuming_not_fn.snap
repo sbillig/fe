@@ -10,4 +10,4 @@ error[6-0003]: trait bound is not satisfied
    │                     --------- required by this bound on `call_twice`
    ·
 15 │     call_twice(take)
-   │     ^^^^^^^^^^ `fn() -> Boxed` doesn't implement `Fn<(), Boxed>`
+   │     ^^^^^^^^^^ `|| -> Boxed` doesn't implement `Fn<(), Boxed>`

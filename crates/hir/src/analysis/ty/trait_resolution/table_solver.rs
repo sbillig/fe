@@ -653,21 +653,59 @@ pub(super) fn has_solution<'db>(
 
 #[salsa::tracked]
 pub(crate) fn ty_depth_impl<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> usize {
-    match ty.data(db) {
-        TyData::ConstTy(cty) => ty_depth_impl(db, cty.ty(db)),
-        TyData::Invalid(_)
-        | TyData::Never
-        | TyData::TyBase(_)
-        | TyData::TyParam(_)
-        | TyData::AssocTy { .. }
-        | TyData::TyVar(_) => 1,
-        TyData::QualifiedTy(trait_inst) => ty_depth_impl(db, trait_inst.self_ty(db)) + 1,
-        TyData::TyApp(lhs, rhs) => {
-            let lhs_depth = ty_depth_impl(db, *lhs);
-            let rhs_depth = ty_depth_impl(db, *rhs);
-            std::cmp::max(lhs_depth, rhs_depth) + 1
+    // Each recursive call to a tracked function adds a comparatively large
+    // Salsa query frame. Legitimately deep finite input types can therefore
+    // exhaust the thread stack before this guard gets a chance to inspect
+    // them. Compute the same structural depth in post-order with an explicit
+    // worklist instead. The local cache also preserves the old tracked-query
+    // behavior of evaluating shared type subgraphs only once.
+    let mut depths = FxHashMap::default();
+    let mut worklist = vec![(ty, false)];
+    while let Some((current, expanded)) = worklist.pop() {
+        if depths.contains_key(&current) {
+            continue;
+        }
+
+        match current.data(db) {
+            TyData::Invalid(_)
+            | TyData::Never
+            | TyData::TyBase(_)
+            | TyData::TyParam(_)
+            | TyData::AssocTy { .. }
+            | TyData::TyVar(_) => {
+                depths.insert(current, 1);
+            }
+            TyData::ConstTy(cty) => {
+                let inner = cty.ty(db);
+                if expanded {
+                    depths.insert(current, depths[&inner]);
+                } else {
+                    worklist.push((current, true));
+                    worklist.push((inner, false));
+                }
+            }
+            TyData::QualifiedTy(trait_inst) => {
+                let self_ty = trait_inst.self_ty(db);
+                if expanded {
+                    depths.insert(current, depths[&self_ty] + 1);
+                } else {
+                    worklist.push((current, true));
+                    worklist.push((self_ty, false));
+                }
+            }
+            TyData::TyApp(lhs, rhs) => {
+                if expanded {
+                    depths.insert(current, depths[lhs].max(depths[rhs]) + 1);
+                } else {
+                    worklist.push((current, true));
+                    worklist.push((*lhs, false));
+                    worklist.push((*rhs, false));
+                }
+            }
         }
     }
+
+    depths[&ty]
 }
 
 fn potential_builtin_closure_call<'db>(db: &'db dyn HirAnalysisDb, goal: TraitInstId<'db>) -> bool {
@@ -696,10 +734,14 @@ fn apply_builtin_closure_call<'db>(
     let TyData::TyBase(TyBase::Closure(closure)) = self_ty.base_ty(db).data(db) else {
         return None;
     };
-    implemented_closure_call_trait(db, scope, assumptions, *closure, goal.def(db))?;
     let arg_ty = arg_ty.fold_with(db, table);
     table.unify(closure.args_pack_ty(db), arg_ty).ok()?;
     table.unify(closure.ret_ty(db), ret_ty).ok()?;
+    let self_ty = self_ty.fold_with(db, table);
+    let TyData::TyBase(TyBase::Closure(closure)) = self_ty.base_ty(db).data(db) else {
+        return None;
+    };
+    implemented_closure_call_trait(db, scope, assumptions, *closure, goal.def(db))?;
     Some(())
 }
 
@@ -729,10 +771,61 @@ where
 
 #[cfg(test)]
 mod tests {
+    use common::indexmap::IndexMap;
+
     use super::{
         Completion, MAXIMUM_TYPE_GROWTH, StopReason, TraitSolveCompletion, map_completion,
-        type_depth_growth_exceeded,
+        ty_depth_impl, type_depth_growth_exceeded,
     };
+    use crate::{
+        analysis::ty::{
+            const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
+            trait_def::TraitInstId,
+            ty_def::{TyData, TyId},
+        },
+        test_db::HirAnalysisTestDb,
+    };
+
+    #[test]
+    fn type_depth_handles_deep_finite_types_without_recursion() {
+        const DEPTH: usize = 4_096;
+
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "type_depth_handles_deep_finite_types_without_recursion.fe".into(),
+            "trait Marker {}",
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let marker = top_mod.all_traits(&db)[0];
+        let leaf = TyId::bool(&db);
+
+        let mut left_nested = leaf;
+        let mut right_nested = leaf;
+        for _ in 0..DEPTH {
+            left_nested = TyId::new(&db, TyData::TyApp(left_nested, leaf));
+            right_nested = TyId::new(&db, TyData::TyApp(leaf, right_nested));
+        }
+
+        assert_eq!(ty_depth_impl(&db, left_nested), DEPTH + 1);
+        assert_eq!(ty_depth_impl(&db, right_nested), DEPTH + 1);
+
+        let const_ty = ConstTyId::new(
+            &db,
+            ConstTyData::Evaluated(EvaluatedConstTy::LitBool(true), right_nested),
+        );
+        assert_eq!(
+            ty_depth_impl(&db, TyId::const_ty(&db, const_ty)),
+            DEPTH + 1,
+            "const types have the depth of their expected type",
+        );
+
+        let marker_inst = TraitInstId::new(&db, marker, vec![right_nested], IndexMap::default());
+        assert_eq!(
+            ty_depth_impl(&db, TyId::qualified_ty(&db, marker_inst)),
+            DEPTH + 2,
+            "qualified types add one level to their self type",
+        );
+    }
 
     #[test]
     fn completion_mapping_preserves_engine_stop_reasons() {

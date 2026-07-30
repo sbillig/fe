@@ -2972,6 +2972,20 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::ClosureEffectProviderMustBeBound { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "effect provider used by a closure must be bound".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this provider is created outside the closure".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "bind the provider to a local before the `with` expression so the closure can capture its value".to_string(),
+                ],
+                error_code,
+            },
+
             Self::EffectMutabilityMismatch {
                 primary,
                 func,
@@ -3723,7 +3737,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
-            Self::ImmutableAssignment { primary, binding } => {
+            Self::ImmutableAssignment {
+                primary,
+                binding,
+                capability_rebind,
+            } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: "immutable assignment".to_string(),
@@ -3733,7 +3751,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 if let Some((name, span)) = binding {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("try changing to `mut {}`", name.data(db)),
+                        message: if *capability_rebind {
+                            format!("the capability handle `{}` cannot be rebound", name.data(db))
+                        } else {
+                            format!("try changing to `mut {}`", name.data(db))
+                        },
                         span: span.resolve(db),
                     });
                 }
@@ -3742,7 +3764,16 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     severity: Severity::Error,
                     message: "left-hand side of assignment is immutable".to_string(),
                     sub_diagnostics,
-                    notes: vec![],
+                    notes: if *capability_rebind {
+                        vec![
+                            "`mut` and `ref` handle bindings stay attached to their original borrow provider"
+                                .to_string(),
+                            "assign an owned value through the handle instead of replacing the handle"
+                                .to_string(),
+                        ]
+                    } else {
+                        Vec::new()
+                    },
                     error_code,
                 }
             }
@@ -3852,6 +3883,31 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::ClosureFieldLimitExceeded {
+                primary,
+                captures,
+                given,
+                max,
+            } => {
+                let fields = if *captures { "captures" } else { "parameters" };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("closure has too many {fields}"),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "closure has {given} {fields}, but at most {max} are supported"
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![
+                        "closure environments and argument packs use 16-bit field indices"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
             Self::ClosureParamNumMismatch {
                 primary,
                 given,
@@ -3940,18 +3996,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 }
             }
-
-            Self::EffectInClosure { primary } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "effects cannot be used inside a closure".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "this requires an effect from the enclosing function".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
-                error_code,
-            },
 
             Self::ClosureInConstContext { primary } => CompleteDiagnostic {
                 severity: Severity::Error,

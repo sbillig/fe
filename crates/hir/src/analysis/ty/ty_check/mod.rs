@@ -32,9 +32,10 @@ use crate::analysis::ty::visitor::{TyVisitable, TyVisitor};
 use crate::hir_def::{CallableDef, ImplTrait, Trait};
 use crate::{
     hir_def::{
-        BinOp, Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParamOwner,
-        LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId, StaticAssert,
-        StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId, WhereClauseOwner,
+        BinOp, Body, ClosureDef, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func,
+        GenericParamOwner, LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId,
+        StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId,
+        WhereClauseOwner,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -43,7 +44,9 @@ use crate::{
 };
 use callable::{CallGenericArgUnifyError, unify_explicit_call_generic_args};
 pub use callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization};
-pub use callable_body::{TypedCallableBody, TypedClosureBody, TypedClosureCapture};
+pub use callable_body::{
+    TypedCallableBody, TypedClosureBody, TypedClosureCapture, TypedClosureParam,
+};
 use common::indexmap::IndexMap;
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
 use ena::unify::InPlace;
@@ -128,7 +131,11 @@ pub fn check_func_body<'db>(
     check_body(db, BodyOwner::Func(func))
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked(
+    return_ref,
+    cycle_initial=check_const_body_cycle_initial,
+    cycle_fn=check_const_body_cycle_recover
+)]
 pub fn check_const_body<'db>(
     db: &'db dyn HirAnalysisDb,
     const_: Const<'db>,
@@ -136,13 +143,56 @@ pub fn check_const_body<'db>(
     check_body(db, BodyOwner::Const(const_))
 }
 
-#[salsa::tracked(return_ref)]
+fn check_const_body_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _const_: Const<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    (Vec::new(), TypedBody::empty(db))
+}
+
+fn check_const_body_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    value: &(Vec<FuncBodyDiag<'db>>, TypedBody<'db>),
+    _count: u32,
+    _const_: Const<'db>,
+) -> salsa::CycleRecoveryAction<(Vec<FuncBodyDiag<'db>>, TypedBody<'db>)> {
+    // Value evaluation owns recursive-constant diagnostics. A provisional
+    // empty body only breaks its dependency cycle with body type checking.
+    salsa::CycleRecoveryAction::Fallback(value.clone())
+}
+
+#[salsa::tracked(
+    return_ref,
+    cycle_initial=check_anon_const_body_cycle_initial,
+    cycle_fn=check_anon_const_body_cycle_recover
+)]
 pub fn check_anon_const_body<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
     expected: TyId<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
     check_body(db, BodyOwner::AnonConstBody { body, expected })
+}
+
+fn check_anon_const_body_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _body: Body<'db>,
+    _expected: TyId<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    (Vec::new(), TypedBody::empty(db))
+}
+
+fn check_anon_const_body_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    value: &(Vec<FuncBodyDiag<'db>>, TypedBody<'db>),
+    _count: u32,
+    _body: Body<'db>,
+    _expected: TyId<'db>,
+) -> salsa::CycleRecoveryAction<(Vec<FuncBodyDiag<'db>>, TypedBody<'db>)> {
+    // Const bodies can participate in signature/trait-environment cycles.
+    // Keep the provisional body result as the fixpoint candidate instead of
+    // repeatedly expanding a specialization-dependent cycle.
+    salsa::CycleRecoveryAction::Fallback(value.clone())
 }
 
 /// Type-checks the value bodies of an `impl Trait` block's associated consts.
@@ -524,6 +574,10 @@ fn typed_body_for_bodyless_func<'db>(
         assumptions,
         pat_ty: SecondaryMap::new(),
         expr_ty: SecondaryMap::new(),
+        expr_normal_completion: SecondaryMap::new(),
+        expr_normal_bool_value: SecondaryMap::new(),
+        cond_normal_bool_value: SecondaryMap::new(),
+        assignment_rebinds_capability: SecondaryMap::new(),
         contextual_view_sources: SecondaryMap::new(),
         const_refs: SecondaryMap::new(),
         value_path_refs: SecondaryMap::new(),
@@ -579,7 +633,10 @@ pub struct TyChecker<'db> {
     pub(crate) table: UnificationTable<'db>,
     expected: TyId<'db>,
     closure_expectations: FxHashMap<ExprId, ClosureExpectation<'db>>,
+    closure_type_expectations: Vec<(TyId<'db>, ClosureExpectation<'db>)>,
+    active_closure_replay_defs: FxHashSet<ClosureDef<'db>>,
     pending_place_checks: Vec<PendingPlaceCheck>,
+    pending_array_repeat_copy_checks: Vec<ExprId>,
     effect_provider_keys: FxHashSet<InferenceKey<'db>>,
     diags: Vec<FuncBodyDiag<'db>>,
 }
@@ -593,8 +650,10 @@ pub(super) struct ClosureExpectation<'db> {
 #[derive(Debug, Clone, Copy)]
 enum PendingPlaceCheck {
     Assign {
+        assignment: Option<ExprId>,
         lhs: ExprId,
         captured: bool,
+        rebinds_capability: bool,
     },
     Borrow {
         expr: ExprId,
@@ -608,6 +667,18 @@ pub(crate) struct TyCheckerSnapshot<'db> {
     table: Snapshot<InPlace<InferenceKey<'db>>>,
     deferred_len: usize,
     pending_place_check_len: usize,
+    pending_array_repeat_copy_check_len: usize,
+    effect_provider_keys: FxHashSet<InferenceKey<'db>>,
+    expected: TyId<'db>,
+    closure_expectations: FxHashMap<ExprId, ClosureExpectation<'db>>,
+    closure_type_expectations: Vec<(TyId<'db>, ClosureExpectation<'db>)>,
+    active_closure_replay_defs: FxHashSet<ClosureDef<'db>>,
+}
+
+pub(super) struct ClosureReplayTransaction<'db> {
+    checker: TyCheckerSnapshot<'db>,
+    env: env::ClosureReplayEnvSnapshot<'db>,
+    diag_len: usize,
 }
 
 enum TraitObligationOutcome<'db> {
@@ -902,7 +973,37 @@ impl<'db> TyChecker<'db> {
             table: self.table.snapshot(),
             deferred_len: self.env.deferred_len(),
             pending_place_check_len: self.pending_place_checks.len(),
+            pending_array_repeat_copy_check_len: self.pending_array_repeat_copy_checks.len(),
+            effect_provider_keys: self.effect_provider_keys.clone(),
+            expected: self.expected,
+            closure_expectations: self.closure_expectations.clone(),
+            closure_type_expectations: self.closure_type_expectations.clone(),
+            active_closure_replay_defs: self.active_closure_replay_defs.clone(),
         }
+    }
+
+    pub(super) fn snapshot_closure_replay_transaction(&mut self) -> ClosureReplayTransaction<'db> {
+        ClosureReplayTransaction {
+            checker: self.snapshot_state(),
+            env: self.env.snapshot_closure_replay_state(),
+            diag_len: self.diags.len(),
+        }
+    }
+
+    pub(super) fn rollback_closure_replay_transaction(
+        &mut self,
+        snapshot: ClosureReplayTransaction<'db>,
+    ) {
+        self.env.restore_closure_replay_state(snapshot.env);
+        self.diags.truncate(snapshot.diag_len);
+        self.rollback_state(snapshot.checker);
+    }
+
+    pub(super) fn commit_closure_replay_transaction(
+        &mut self,
+        snapshot: ClosureReplayTransaction<'db>,
+    ) {
+        self.commit_state(snapshot.checker);
     }
 
     pub(crate) fn rollback_state(&mut self, snapshot: TyCheckerSnapshot<'db>) {
@@ -910,6 +1011,13 @@ impl<'db> TyChecker<'db> {
         self.env.truncate_deferred_tasks(snapshot.deferred_len);
         self.pending_place_checks
             .truncate(snapshot.pending_place_check_len);
+        self.pending_array_repeat_copy_checks
+            .truncate(snapshot.pending_array_repeat_copy_check_len);
+        self.effect_provider_keys = snapshot.effect_provider_keys;
+        self.expected = snapshot.expected;
+        self.closure_expectations = snapshot.closure_expectations;
+        self.closure_type_expectations = snapshot.closure_type_expectations;
+        self.active_closure_replay_defs = snapshot.active_closure_replay_defs;
     }
 
     fn commit_state(&mut self, snapshot: TyCheckerSnapshot<'db>) {
@@ -1353,7 +1461,7 @@ impl<'db> TyChecker<'db> {
                                 constraint_idx,
                                 ..
                             } => self.call_constraint_diag_info(callable_def, constraint_idx),
-                            env::TraitObligationOrigin::GenericConfirmation => None,
+                            env::TraitObligationOrigin::GenericConfirmation { .. } => None,
                         };
                         self.push_diag(BodyDiag::AmbiguousTraitInst {
                             primary: obligation.span.clone(),
@@ -1378,7 +1486,7 @@ impl<'db> TyChecker<'db> {
                             constraint_idx,
                             ..
                         } => self.call_constraint_diag_info(callable_def, constraint_idx),
-                        env::TraitObligationOrigin::GenericConfirmation => None,
+                        env::TraitObligationOrigin::GenericConfirmation { .. } => None,
                     };
                     let unsat = subgoal.map(|goal| query.extract_subgoal(&mut self.table, goal));
                     self.push_diag(TyDiagCollection::from(
@@ -1438,195 +1546,648 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    fn callable_requirements_may_be_satisfied(&mut self, callable: &Callable<'db>) -> bool {
+        let db = self.db;
+        let solve_cx =
+            TraitSolveCx::new(db, self.env.scope()).with_assumptions(self.env.assumptions());
+        let mut goals = Vec::new();
+        if let Some(inst) = callable.trait_inst() {
+            goals.push(self.normalize_trait_goal(inst));
+        }
+
+        let constraints = collect_func_decl_constraints(db, callable.callable_def(), true)
+            .instantiate(db, callable.generic_args());
+        for &constraint in constraints.list(db) {
+            let constraint = if let Some(inst) = callable.trait_inst() {
+                let mut subst = AssocTySubst::new(inst);
+                constraint.fold_with(db, &mut subst)
+            } else {
+                constraint
+            };
+            goals.push(self.normalize_trait_goal(constraint));
+        }
+
+        goals.into_iter().all(|goal| {
+            !matches!(
+                is_goal_satisfiable(db, solve_cx, goal),
+                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+            )
+        })
+    }
+
+    fn diagnose_callable_requirements(
+        &mut self,
+        callable: &Callable<'db>,
+        call_expr: ExprId,
+        span: DynLazySpan<'db>,
+    ) {
+        if let Some(inst) = callable.trait_inst() {
+            let goal = self.normalize_trait_goal(inst);
+            let _ = self.process_trait_obligation(
+                env::TraitObligation {
+                    goal,
+                    origin: env::TraitObligationOrigin::GenericConfirmation { expr: call_expr },
+                    span: span.clone(),
+                },
+                true,
+            );
+        }
+
+        let constraints = collect_func_decl_constraints(self.db, callable.callable_def(), true)
+            .instantiate(self.db, callable.generic_args());
+        for (constraint_idx, &constraint) in constraints.list(self.db).iter().enumerate() {
+            let constraint = if let Some(inst) = callable.trait_inst() {
+                let mut subst = AssocTySubst::new(inst);
+                constraint.fold_with(self.db, &mut subst)
+            } else {
+                constraint
+            };
+            let goal = self.normalize_trait_goal(constraint);
+            let _ = self.process_trait_obligation(
+                env::TraitObligation {
+                    goal,
+                    origin: env::TraitObligationOrigin::CallConstraint {
+                        call_expr,
+                        callable_def: callable.callable_def(),
+                        constraint_idx,
+                    },
+                    span: span.clone(),
+                },
+                true,
+            );
+        }
+    }
+
     fn resolve_deferred(&mut self) {
         let db = self.db;
         let body = self.env.body();
         let scope = self.env.scope();
         let assumptions = self.env.assumptions();
 
-        enum Viability {
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum CandidateViability {
             Viable,
-            Incompatible,
             ReturnTypeMismatch,
+            Incompatible,
         }
 
-        let check_viability =
-            |this: &mut Self,
-             pending: &env::PendingMethod<'db>,
-             expr_ty: TyId<'db>,
-             receiver: ExprId,
-             generic_args: crate::hir_def::GenericArgListId<'db>,
-             call_args: &[crate::hir_def::CallArg<'db>],
-             candidate: env::PendingMethodCandidate<'db>| {
-                let snap = this.snapshot_state();
+        let probe_candidate = |this: &mut Self,
+                               pending: &env::PendingMethod<'db>,
+                               expr_ty: TyId<'db>,
+                               receiver: ExprId,
+                               generic_args: crate::hir_def::GenericArgListId<'db>,
+                               call_args: &[crate::hir_def::CallArg<'db>],
+                               candidate: env::PendingMethodCandidate<'db>,
+                               collect_diagnostics: bool| {
+            let snap = this.snapshot_closure_replay_transaction();
+            let diag_len = this.diags.len();
+            let mut return_type_matches = true;
 
-                let viability = (|| {
-                    let inst = candidate.inst;
-                    let recv_ty = {
-                        let mut prober = env::Prober::new(&mut this.table, scope);
-                        pending.recv_ty.fold_with(db, &mut prober)
-                    };
+            let result = (|| {
+                let inst = candidate.inst;
+                let recv_ty = {
+                    let mut prober = env::Prober::new(&mut this.table, scope);
+                    pending.recv_ty.fold_with(db, &mut prober)
+                };
 
-                    let inst_self = this.table.instantiate_to_term(inst.self_ty(db));
-                    let recv_ty = if this.table.unify(inst_self, recv_ty).is_ok() {
-                        recv_ty
-                    } else {
-                        let Some((_, recv_inner)) = recv_ty.as_capability(db) else {
-                            return Viability::Incompatible;
-                        };
-                        if this.table.unify(inst_self, recv_inner).is_err() {
-                            return Viability::Incompatible;
-                        }
-                        recv_inner
-                    };
+                let inst_self = this.table.instantiate_to_term(inst.self_ty(db));
+                let recv_ty = if this.table.unify(inst_self, recv_ty).is_ok() {
+                    recv_ty
+                } else {
+                    let recv_inner = recv_ty.as_capability(db).map(|(_, inner)| inner)?;
+                    this.table.unify(inst_self, recv_inner).ok()?;
+                    recv_inner
+                };
 
-                    let Ok(func_ty) = try_instantiate_trait_method(
+                let func_ty = try_instantiate_trait_method(
+                    db,
+                    candidate.method,
+                    &mut this.table,
+                    recv_ty,
+                    inst,
+                )
+                .ok()?;
+                let func_ty = this.table.instantiate_to_term(func_ty);
+                let mut callable =
+                    Callable::new(db, func_ty, receiver.span(body).into(), Some(inst)).ok()?;
+
+                let call_args_pack = callable.call_trait_args_pack_ty(db, scope).map(|ty| {
+                    normalize_ty(db, ty.fold_with(db, &mut this.table), scope, assumptions)
+                });
+                if call_args_pack.is_some_and(|ty| !ty.is_tuple(db)) {
+                    return None;
+                }
+                let expected_arg_tys = if let Some(pack) = call_args_pack {
+                    let mut args = vec![callable.arg_ty(db, 0)?];
+                    args.extend(pack.field_types(db));
+                    args
+                } else {
+                    (0..callable.callable_def.arg_tys(db).len())
+                        .map(|idx| callable.arg_ty(db, idx))
+                        .collect::<Option<Vec<_>>>()?
+                };
+                let expected_arity = expected_arg_tys.len();
+                let given_arity = call_args.len() + 1;
+                if expected_arity != given_arity {
+                    return None;
+                }
+
+                match unify_explicit_call_generic_args(
+                    &mut callable,
+                    this,
+                    generic_args,
+                    HoleAnchor::BodySyntax {
+                        body,
+                        site: BodyHoleSite::Expr(pending.expr),
+                    },
+                    |this, _, given, current| this.table.unify(given, *current).is_ok(),
+                ) {
+                    Ok(()) => {}
+                    Err(CallGenericArgUnifyError::ArityMismatch { .. })
+                    | Err(CallGenericArgUnifyError::UnificationFailed) => return None,
+                }
+
+                let receiver_prop = this.env.typed_expr(receiver)?;
+                let mut all_args = Vec::with_capacity(call_args.len() + 1);
+                all_args.push((receiver, receiver_prop.clone()));
+                for arg in call_args.iter() {
+                    let prop = this.env.typed_expr(arg.expr)?;
+                    all_args.push((arg.expr, prop));
+                }
+
+                for ((arg_expr, arg_prop), expected) in all_args.iter().zip(expected_arg_tys) {
+                    let expected = normalize_ty(
                         db,
-                        candidate.method,
-                        &mut this.table,
-                        recv_ty,
-                        inst,
-                    ) else {
-                        return Viability::Incompatible;
-                    };
-                    let func_ty = this.table.instantiate_to_term(func_ty);
-                    let Ok(mut callable) =
-                        Callable::new(db, func_ty, receiver.span(body).into(), Some(inst))
-                    else {
-                        return Viability::Incompatible;
-                    };
-
-                    let call_args_pack = callable.call_trait_args_pack_ty(db, scope).map(|ty| {
-                        normalize_ty(db, ty.fold_with(db, &mut this.table), scope, assumptions)
-                    });
-                    if call_args_pack.is_some_and(|ty| !ty.is_tuple(db)) {
-                        return Viability::Incompatible;
-                    }
-                    let expected_arg_tys = if let Some(pack) = call_args_pack {
-                        let Some(receiver_ty) = callable.arg_ty(db, 0) else {
-                            return Viability::Incompatible;
-                        };
-                        let mut args = vec![receiver_ty];
-                        args.extend(pack.field_types(db));
-                        args
-                    } else {
-                        let Some(args) = (0..callable.callable_def.arg_tys(db).len())
-                            .map(|idx| callable.arg_ty(db, idx))
-                            .collect::<Option<Vec<_>>>()
-                        else {
-                            return Viability::Incompatible;
-                        };
-                        args
-                    };
-                    let expected_arity = expected_arg_tys.len();
-                    let given_arity = call_args.len() + 1;
-                    if expected_arity != given_arity {
-                        return Viability::Incompatible;
-                    }
-
-                    match unify_explicit_call_generic_args(
-                        &mut callable,
-                        this,
-                        generic_args,
-                        HoleAnchor::BodySyntax {
-                            body,
-                            site: BodyHoleSite::Expr(pending.expr),
-                        },
-                        |this, _, given, current| this.table.unify(given, *current).is_ok(),
-                    ) {
-                        Ok(()) => {}
-                        Err(CallGenericArgUnifyError::ArityMismatch { .. })
-                        | Err(CallGenericArgUnifyError::UnificationFailed) => {
-                            return Viability::Incompatible;
-                        }
-                    }
-
-                    let Some(receiver_prop) = this.env.typed_expr(receiver) else {
-                        return Viability::Incompatible;
-                    };
-                    let mut all_arg_tys = Vec::with_capacity(call_args.len() + 1);
-                    all_arg_tys.push(receiver_prop.ty);
-                    for arg in call_args.iter() {
-                        let Some(prop) = this.env.typed_expr(arg.expr) else {
-                            return Viability::Incompatible;
-                        };
-                        all_arg_tys.push(prop.ty);
-                    }
-
-                    for (&given, expected) in all_arg_tys.iter().zip(expected_arg_tys) {
-                        let expected = normalize_ty(
-                            db,
-                            expected.fold_with(db, &mut this.table),
-                            scope,
-                            assumptions,
-                        );
-                        let given = normalize_ty(
-                            db,
-                            given.fold_with(db, &mut this.table),
-                            scope,
-                            assumptions,
-                        );
-                        let given = this
-                            .try_coerce_capability_to_expected(given, expected)
-                            .unwrap_or(given);
-                        if this.table.unify(given, expected).is_err() {
-                            return Viability::Incompatible;
-                        }
-                    }
-
-                    let method_name_span = pending
-                        .expr
-                        .span(body)
-                        .into_method_call_expr()
-                        .method_name()
-                        .into();
-                    callable.process_constraints(this, pending.expr, method_name_span);
-
-                    let ret_ty = normalize_ty(
-                        db,
-                        callable.ret_ty(db).fold_with(db, &mut this.table),
+                        expected.fold_with(db, &mut this.table),
                         scope,
                         assumptions,
                     );
-                    let ret_ty = this
-                        .try_coerce_capability_to_expected(ret_ty, expr_ty)
-                        .unwrap_or(ret_ty);
-
-                    if this.table.unify(ret_ty, expr_ty).is_ok() {
-                        Viability::Viable
-                    } else {
-                        Viability::ReturnTypeMismatch
+                    let given = normalize_ty(
+                        db,
+                        arg_prop.ty.fold_with(db, &mut this.table),
+                        scope,
+                        assumptions,
+                    );
+                    let given = this
+                        .try_coerce_capability_to_expected(given, expected)
+                        .unwrap_or(given);
+                    if !this.ty_unifies(given, expected) {
+                        if collect_diagnostics {
+                            this.unify_ty(
+                                Typeable::Expr(*arg_expr, arg_prop.clone()),
+                                given,
+                                expected,
+                            );
+                        }
+                        return None;
                     }
-                })();
-                this.rollback_state(snap);
-                viability
-            };
+                    this.table.unify(given, expected).ok()?;
+                }
 
-        // Fixed-point pass over deferred tasks.
-        let mut progressed = true;
-        while progressed {
-            progressed = false;
-            let tasks = self.env.take_deferred_tasks();
-            for task in tasks {
-                match task {
-                    env::DeferredTask::Obligation(obligation) => {
-                        match self.process_trait_obligation(obligation, false) {
-                            TraitObligationOutcome::Discharged => {}
-                            TraitObligationOutcome::Progressed => progressed = true,
-                            TraitObligationOutcome::Requeue(obligation) => {
-                                self.env.register_trait_obligation(obligation);
+                let call_span = pending.expr.span(body).into_method_call_expr();
+                callable.check_args(
+                    this,
+                    call_args,
+                    call_span.clone().args(),
+                    Some((receiver, receiver_prop)),
+                    true,
+                );
+                callable.process_constraints(
+                    this,
+                    pending.expr,
+                    call_span.clone().method_name().into(),
+                );
+                this.specialize_callable_layout_args(&mut callable, Some(receiver), call_args);
+                this.check_callable_effects(pending.expr, &mut callable);
+                if this.diags.len() != diag_len {
+                    return None;
+                }
+                let ret_ty = normalize_ty(
+                    db,
+                    callable.ret_ty(db).fold_with(db, &mut this.table),
+                    scope,
+                    assumptions,
+                );
+                let expected_ret_ty = normalize_ty(
+                    db,
+                    expr_ty.fold_with(db, &mut this.table),
+                    scope,
+                    assumptions,
+                );
+                let comparable_ret_ty = this
+                    .try_coerce_capability_to_expected(ret_ty, expected_ret_ty)
+                    .unwrap_or(ret_ty);
+                return_type_matches = this.ty_unifies(comparable_ret_ty, expected_ret_ty);
+                if candidate.needs_confirmation {
+                    this.env.register_trait_obligation(env::TraitObligation {
+                        goal: inst,
+                        origin: env::TraitObligationOrigin::GenericConfirmation {
+                            expr: pending.expr,
+                        },
+                        span: call_span.clone().into(),
+                    });
+                }
+                this.env.register_semantic_call(pending.expr, callable);
+                let original_prop = this.env.typed_expr(pending.expr)?;
+                let (replayed, replay_satisfied) = this.replay_deferred_expr_with_closure_context(
+                    pending.expr,
+                    ExprProp::new(ret_ty, true),
+                );
+                if !replay_satisfied
+                    || (return_type_matches
+                        && !this.reconcile_deferred_expr_prop(
+                            pending.expr,
+                            original_prop.clone(),
+                            replayed.clone(),
+                        ))
+                {
+                    return None;
+                }
+                if !return_type_matches && collect_diagnostics {
+                    this.unify_ty(
+                        Typeable::Expr(pending.expr, original_prop),
+                        replayed.ty,
+                        expected_ret_ty,
+                    );
+                }
+                let replayed_callable = this.env.callable_expr(pending.expr)?.clone();
+                if !this.callable_requirements_may_be_satisfied(&replayed_callable) {
+                    if collect_diagnostics {
+                        this.diagnose_callable_requirements(
+                            &replayed_callable,
+                            pending.expr,
+                            call_span.method_name().into(),
+                        );
+                    }
+                    return None;
+                }
+                replayed_callable.process_constraints(
+                    this,
+                    pending.expr,
+                    call_span.method_name().into(),
+                );
+
+                Some(())
+            })()
+            .is_some()
+                && this.diags.len() == diag_len;
+            let viability = if result {
+                if return_type_matches {
+                    CandidateViability::Viable
+                } else {
+                    CandidateViability::ReturnTypeMismatch
+                }
+            } else {
+                CandidateViability::Incompatible
+            };
+            let diagnostics = this.diags[diag_len..].to_vec();
+            this.rollback_closure_replay_transaction(snap);
+            (viability, diagnostics)
+        };
+
+        let mut final_method_restarts = FxHashSet::default();
+        'scheduler: loop {
+            // Fixed-point pass over deferred tasks.
+            let mut progressed = true;
+            while progressed {
+                progressed = false;
+                let task_count = self.env.deferred_len();
+                for _ in 0..task_count {
+                    let Some(task) = self.env.pop_deferred_task() else {
+                        break;
+                    };
+                    match task {
+                        env::DeferredTask::Obligation(obligation) => {
+                            match self.process_trait_obligation(obligation, false) {
+                                TraitObligationOutcome::Discharged => {}
+                                TraitObligationOutcome::Progressed => progressed = true,
+                                TraitObligationOutcome::Requeue(obligation) => {
+                                    self.env.register_trait_obligation(obligation);
+                                }
+                            }
+                        }
+                        env::DeferredTask::Method(pending) => {
+                            let (receiver, generic_args, call_args) =
+                                match pending.expr.data(db, body) {
+                                    Partial::Present(Expr::MethodCall(
+                                        receiver,
+                                        _,
+                                        generic_args,
+                                        args,
+                                    )) => (*receiver, *generic_args, args.as_slice()),
+                                    _ => continue,
+                                };
+
+                            let Some(expr_prop) = self.env.typed_expr(pending.expr) else {
+                                continue;
+                            };
+                            let expr_ty = {
+                                let mut prober = env::Prober::new(&mut self.table, scope);
+                                expr_prop.ty.fold_with(db, &mut prober)
+                            };
+                            if expr_ty.has_invalid(db) {
+                                self.env.register_pending_method(pending);
+                                continue;
+                            }
+
+                            let (strict, soft): (Vec<_>, Vec<_>) = pending
+                                .candidates
+                                .iter()
+                                .copied()
+                                .filter_map(|candidate| {
+                                    let (viability, _) = probe_candidate(
+                                        self,
+                                        &pending,
+                                        expr_ty,
+                                        receiver,
+                                        generic_args,
+                                        call_args,
+                                        candidate,
+                                        false,
+                                    );
+                                    (viability != CandidateViability::Incompatible)
+                                        .then_some((candidate, viability))
+                                })
+                                .partition(|(_, viability)| {
+                                    *viability == CandidateViability::Viable
+                                });
+                            let viable = if strict.is_empty() {
+                                soft.into_iter().map(|(candidate, _)| candidate).collect()
+                            } else {
+                                strict.into_iter().map(|(candidate, _)| candidate).collect()
+                            };
+                            let viable = self.dedup_equivalent_pending_method_candidates(viable);
+
+                            if let [candidate] = viable.as_slice() {
+                                if self.env.callable_expr(pending.expr).is_none() {
+                                    let transaction = self
+                                        .env
+                                        .deferred_closure_replay_context(pending.expr)
+                                        .is_some()
+                                        .then(|| self.snapshot_closure_replay_transaction());
+                                    let call_span = pending.expr.span(body).into_method_call_expr();
+                                    let inst = candidate.inst;
+
+                                    let receiver_prop = self
+                                        .env
+                                        .typed_expr(receiver)
+                                        .unwrap_or_else(|| ExprProp::invalid(db));
+                                    let recv_ty = {
+                                        let mut prober = env::Prober::new(&mut self.table, scope);
+                                        pending.recv_ty.fold_with(db, &mut prober)
+                                    };
+
+                                    let func_ty = self.instantiate_trait_method_to_term(
+                                        candidate.method,
+                                        recv_ty,
+                                        inst,
+                                    );
+
+                                    let mut callable = match Callable::new(
+                                        db,
+                                        func_ty,
+                                        receiver.span(body).into(),
+                                        Some(inst),
+                                    ) {
+                                        Ok(callable) => callable,
+                                        Err(diag) => {
+                                            if let Some(transaction) = transaction {
+                                                self.rollback_closure_replay_transaction(
+                                                    transaction,
+                                                );
+                                            }
+                                            self.push_diag(diag);
+                                            progressed = true;
+                                            continue;
+                                        }
+                                    };
+
+                                    if candidate.needs_confirmation {
+                                        self.env.register_trait_obligation(env::TraitObligation {
+                                            goal: inst,
+                                            origin:
+                                                env::TraitObligationOrigin::GenericConfirmation {
+                                                    expr: pending.expr,
+                                                },
+                                            span: call_span.clone().into(),
+                                        });
+                                    }
+
+                                    if !callable.unify_generic_args(
+                                        self,
+                                        generic_args,
+                                        HoleAnchor::BodySyntax {
+                                            body,
+                                            site: BodyHoleSite::Expr(pending.expr),
+                                        },
+                                        call_span.clone().generic_args(),
+                                    ) {
+                                        if let Some(transaction) = transaction {
+                                            self.rollback_closure_replay_transaction(transaction);
+                                        }
+                                        progressed = true;
+                                        continue;
+                                    }
+
+                                    callable.check_args(
+                                        self,
+                                        call_args,
+                                        call_span.clone().args(),
+                                        Some((receiver, receiver_prop)),
+                                        true,
+                                    );
+                                    callable.process_constraints(
+                                        self,
+                                        pending.expr,
+                                        call_span.clone().method_name().into(),
+                                    );
+                                    self.specialize_callable_layout_args(
+                                        &mut callable,
+                                        Some(receiver),
+                                        call_args,
+                                    );
+
+                                    self.check_callable_effects(pending.expr, &mut callable);
+
+                                    let ret_ty = self.normalize_ty(callable.ret_ty(db));
+                                    let code_region_kind = if let Some(kind) =
+                                        self.code_region_method_kind(recv_ty, pending.method_name)
+                                        && call_args.len() == 1
+                                        && self
+                                            .env
+                                            .typed_expr(call_args[0].expr)
+                                            .map(|prop| {
+                                                ty_may_be_code_region_token(
+                                                    db,
+                                                    normalize_ty(db, prop.ty, scope, assumptions),
+                                                )
+                                            })
+                                            .unwrap_or(false)
+                                    {
+                                        Some(kind)
+                                    } else {
+                                        None
+                                    };
+                                    if let Some(kind) = code_region_kind {
+                                        if !self.reconcile_deferred_expr_ty(
+                                            pending.expr,
+                                            expr_prop,
+                                            ret_ty,
+                                        ) {
+                                            if let Some(transaction) = transaction {
+                                                self.rollback_closure_replay_transaction(
+                                                    transaction,
+                                                );
+                                            }
+                                            progressed = true;
+                                            continue;
+                                        }
+                                        self.env.register_code_region_intrinsic(
+                                            pending.expr,
+                                            callable.clone(),
+                                            call_args[0].expr,
+                                            kind,
+                                        );
+                                        if let Some(transaction) = transaction {
+                                            self.env.consume_deferred_closure_replay_context(
+                                                pending.expr,
+                                            );
+                                            self.commit_closure_replay_transaction(transaction);
+                                        }
+                                    } else {
+                                        self.env
+                                            .register_semantic_call(pending.expr, callable.clone());
+                                        let resolved = ExprProp::new(ret_ty, true);
+                                        if let Some(transaction) = transaction {
+                                            let (resolved, replay_satisfied) = self
+                                                .replay_deferred_expr_with_closure_context(
+                                                    pending.expr,
+                                                    resolved,
+                                                );
+                                            if !replay_satisfied
+                                                || !self.reconcile_deferred_expr_prop(
+                                                    pending.expr,
+                                                    expr_prop.clone(),
+                                                    resolved,
+                                                )
+                                            {
+                                                self.rollback_closure_replay_transaction(
+                                                    transaction,
+                                                );
+                                                self.env.register_pending_method(pending.clone());
+                                                continue;
+                                            }
+                                            let replayed_callable = self
+                                            .env
+                                            .callable_expr(pending.expr)
+                                            .cloned()
+                                            .expect("replayed method callable must remain registered");
+                                            replayed_callable.process_constraints(
+                                                self,
+                                                pending.expr,
+                                                call_span.method_name().into(),
+                                            );
+                                            self.env.consume_deferred_closure_replay_context(
+                                                pending.expr,
+                                            );
+                                            self.commit_closure_replay_transaction(transaction);
+                                        } else if !self.reconcile_deferred_expr_prop(
+                                            pending.expr,
+                                            expr_prop.clone(),
+                                            resolved,
+                                        ) {
+                                            progressed = true;
+                                            continue;
+                                        } else {
+                                            let finalized_callable = self
+                                            .env
+                                            .callable_expr(pending.expr)
+                                            .cloned()
+                                            .expect("finalized method callable must remain registered");
+                                            finalized_callable.process_constraints(
+                                                self,
+                                                pending.expr,
+                                                call_span.method_name().into(),
+                                            );
+                                        }
+                                    }
+                                }
+
+                                progressed = true;
+                            } else {
+                                self.env.register_pending_method(pending);
+                            }
+                        }
+                        env::DeferredTask::MethodLookup(pending) => {
+                            match self.resolve_pending_method_lookup(&pending) {
+                                expr::PendingPrimitiveOpResolution::Pending => {
+                                    self.env.register_pending_method_lookup(pending);
+                                }
+                                expr::PendingPrimitiveOpResolution::Resolved => {
+                                    progressed = true;
+                                }
+                                expr::PendingPrimitiveOpResolution::Done => {}
+                            }
+                        }
+                        env::DeferredTask::PrimitiveOp(pending) => {
+                            match self.resolve_pending_primitive_op(&pending) {
+                                expr::PendingPrimitiveOpResolution::Pending => {
+                                    self.env.register_pending_primitive_op(pending);
+                                }
+                                expr::PendingPrimitiveOpResolution::Resolved => {
+                                    progressed = true;
+                                }
+                                expr::PendingPrimitiveOpResolution::Done => {}
+                            }
+                        }
+                        env::DeferredTask::Field(pending) => {
+                            match self.resolve_pending_field(&pending) {
+                                expr::PendingPrimitiveOpResolution::Pending => {
+                                    self.env.register_pending_field(pending);
+                                }
+                                expr::PendingPrimitiveOpResolution::Resolved => {
+                                    progressed = true;
+                                }
+                                expr::PendingPrimitiveOpResolution::Done => {}
+                            }
+                        }
+                        env::DeferredTask::Cast(pending) => {
+                            match self.resolve_pending_cast(&pending) {
+                                expr::PendingPrimitiveOpResolution::Pending => {
+                                    self.env.register_pending_cast(pending);
+                                }
+                                expr::PendingPrimitiveOpResolution::Resolved => {
+                                    progressed = true;
+                                }
+                                expr::PendingPrimitiveOpResolution::Done => {}
+                            }
+                        }
+                        env::DeferredTask::ForLoopSeq(pending) => {
+                            match self.resolve_pending_for_loop_seq(pending) {
+                                expr::PendingPrimitiveOpResolution::Pending => {
+                                    self.env.register_pending_for_loop_seq(pending);
+                                }
+                                expr::PendingPrimitiveOpResolution::Resolved => {
+                                    progressed = true;
+                                }
+                                expr::PendingPrimitiveOpResolution::Done => {}
                             }
                         }
                     }
-                    env::DeferredTask::Method(pending) => {
-                        let (receiver, generic_args, call_args) = match pending.expr.data(db, body)
-                        {
-                            Partial::Present(Expr::MethodCall(receiver, _, generic_args, args)) => {
-                                (*receiver, *generic_args, args.as_slice())
-                            }
-                            _ => continue,
-                        };
+                }
+            }
 
+            // Emit diagnostics for remaining tasks. Resolving a final
+            // obligation can enqueue new work, so keep draining the live
+            // queue. If that work leaves exactly one viable method, return it
+            // to the fixed-point phase once so it is finalized rather than
+            // silently discarded.
+            while let Some(task) = self.env.pop_deferred_task() {
+                match task {
+                    env::DeferredTask::Obligation(obligation) => {
+                        let _ = self.process_trait_obligation(obligation, true);
+                    }
+                    env::DeferredTask::Method(pending) => {
                         let Some(expr_prop) = self.env.typed_expr(pending.expr) else {
                             continue;
                         };
@@ -1635,16 +2196,23 @@ impl<'db> TyChecker<'db> {
                             expr_prop.ty.fold_with(db, &mut prober)
                         };
                         if expr_ty.has_invalid(db) {
-                            self.env.register_pending_method(pending);
                             continue;
                         }
 
-                        let (strict, soft): (Vec<_>, Vec<_>) = pending
+                        let (receiver, generic_args, call_args) = match pending.expr.data(db, body)
+                        {
+                            Partial::Present(Expr::MethodCall(receiver, _, generic_args, args)) => {
+                                (*receiver, *generic_args, args.as_slice())
+                            }
+                            _ => continue,
+                        };
+
+                        let probes: Vec<_> = pending
                             .candidates
                             .iter()
                             .copied()
-                            .filter_map(|candidate| {
-                                let viability = check_viability(
+                            .map(|candidate| {
+                                let (viable, diagnostics) = probe_candidate(
                                     self,
                                     &pending,
                                     expr_ty,
@@ -1652,277 +2220,121 @@ impl<'db> TyChecker<'db> {
                                     generic_args,
                                     call_args,
                                     candidate,
+                                    true,
                                 );
-                                if matches!(viability, Viability::Incompatible) {
-                                    None
-                                } else {
-                                    Some((candidate, viability))
-                                }
+                                (candidate, viable, diagnostics)
                             })
-                            .partition(|(_, viability)| matches!(viability, Viability::Viable));
+                            .collect();
+                        let failure_diagnostics =
+                            probes.iter().find_map(|(_, viability, diagnostics)| {
+                                (*viability == CandidateViability::Incompatible
+                                    && !diagnostics.is_empty())
+                                .then(|| diagnostics.clone())
+                            });
+                        let candidates =
+                            probes.into_iter().filter_map(|(candidate, viability, _)| {
+                                (viability != CandidateViability::Incompatible)
+                                    .then_some((candidate, viability))
+                            });
+                        let (strict, soft): (Vec<_>, Vec<_>) = candidates
+                            .partition(|(_, viability)| *viability == CandidateViability::Viable);
                         let viable = if strict.is_empty() {
                             soft.into_iter().map(|(candidate, _)| candidate).collect()
                         } else {
                             strict.into_iter().map(|(candidate, _)| candidate).collect()
                         };
                         let viable = self.dedup_equivalent_pending_method_candidates(viable);
-
-                        if let [candidate] = viable.as_slice() {
-                            if self.env.callable_expr(pending.expr).is_none() {
-                                let call_span = pending.expr.span(body).into_method_call_expr();
-                                let inst = candidate.inst;
-
-                                let receiver_prop = self
-                                    .env
-                                    .typed_expr(receiver)
-                                    .unwrap_or_else(|| ExprProp::invalid(db));
-                                let recv_ty = {
-                                    let mut prober = env::Prober::new(&mut self.table, scope);
-                                    pending.recv_ty.fold_with(db, &mut prober)
-                                };
-
-                                let func_ty = self.instantiate_trait_method_to_term(
-                                    candidate.method,
-                                    recv_ty,
-                                    inst,
-                                );
-
-                                let mut callable = match Callable::new(
-                                    db,
-                                    func_ty,
-                                    receiver.span(body).into(),
-                                    Some(inst),
-                                ) {
-                                    Ok(callable) => callable,
-                                    Err(diag) => {
-                                        self.push_diag(diag);
-                                        progressed = true;
-                                        continue;
-                                    }
-                                };
-
-                                if candidate.needs_confirmation {
-                                    self.env.register_trait_obligation(env::TraitObligation {
-                                        goal: inst,
-                                        origin: env::TraitObligationOrigin::GenericConfirmation,
-                                        span: call_span.clone().into(),
-                                    });
-                                }
-
-                                if !callable.unify_generic_args(
-                                    self,
-                                    generic_args,
-                                    HoleAnchor::BodySyntax {
-                                        body,
-                                        site: BodyHoleSite::Expr(pending.expr),
-                                    },
-                                    call_span.clone().generic_args(),
-                                ) {
-                                    progressed = true;
-                                    continue;
-                                }
-
-                                callable.check_args(
-                                    self,
-                                    call_args,
-                                    call_span.clone().args(),
-                                    Some((receiver, receiver_prop)),
-                                    true,
-                                );
-
-                                callable.process_constraints(
-                                    self,
-                                    pending.expr,
-                                    call_span.method_name().into(),
-                                );
-
-                                let ret_ty = self.normalize_ty(callable.ret_ty(db));
-                                if !self.reconcile_deferred_expr_ty(pending.expr, expr_prop, ret_ty)
-                                {
-                                    progressed = true;
-                                    continue;
-                                }
-
-                                self.specialize_callable_layout_args(
-                                    &mut callable,
-                                    Some(receiver),
-                                    call_args,
-                                );
-
-                                self.check_callable_effects(pending.expr, &mut callable);
-
-                                if let Some(kind) =
-                                    self.code_region_method_kind(recv_ty, pending.method_name)
-                                    && call_args.len() == 1
-                                    && self
-                                        .env
-                                        .typed_expr(call_args[0].expr)
-                                        .map(|prop| {
-                                            ty_may_be_code_region_token(
-                                                db,
-                                                normalize_ty(db, prop.ty, scope, assumptions),
-                                            )
-                                        })
-                                        .unwrap_or(false)
-                                {
-                                    self.env.register_code_region_intrinsic(
-                                        pending.expr,
-                                        callable,
-                                        call_args[0].expr,
-                                        kind,
-                                    );
-                                } else {
-                                    self.env.register_semantic_call(pending.expr, callable);
-                                }
+                        if viable.len() == 1 {
+                            if final_method_restarts.insert(pending.expr) {
+                                self.env.register_pending_method(pending);
+                                continue 'scheduler;
                             }
-
-                            progressed = true;
+                            // The candidate was viable in both diagnostic
+                            // probes but could not commit during a complete
+                            // fixed-point pass. Treat that as unresolved
+                            // inference state; it is neither an ambiguity nor
+                            // evidence that the concrete trait is absent.
+                            self.push_diag(BodyDiag::TypeMustBeKnown(
+                                pending.expr.span(body).into(),
+                            ));
+                            self.env.type_expr(pending.expr, ExprProp::invalid(self.db));
+                        } else if viable.len() > 1 {
+                            self.push_diag(BodyDiag::AmbiguousTrait {
+                                primary: pending.span.clone(),
+                                method_name: pending.method_name,
+                                traits: viable
+                                    .into_iter()
+                                    .map(|candidate| candidate.inst)
+                                    .collect(),
+                            });
+                        } else if let Some(diagnostics) = failure_diagnostics {
+                            self.diags.extend(diagnostics);
+                            self.env.type_expr(pending.expr, ExprProp::invalid(self.db));
+                        } else if expr_ty.has_var(db) {
+                            self.push_diag(BodyDiag::TypeMustBeKnown(
+                                pending.expr.span(body).into(),
+                            ));
+                            self.env.type_expr(pending.expr, ExprProp::invalid(self.db));
                         } else {
-                            self.env.register_pending_method(pending);
+                            // A concrete candidate can still fail before it
+                            // produces a richer local diagnostic (for example,
+                            // at an explicit generic argument). Preserve a
+                            // deterministic method-level error instead of
+                            // dropping the call silently or claiming that its
+                            // receiver type is unknown.
+                            let trait_name = pending
+                                .candidates
+                                .first()
+                                .and_then(|candidate| candidate.inst.def(db).name(db).to_opt())
+                                .unwrap_or(pending.method_name);
+                            self.push_diag(BodyDiag::TraitNotImplemented {
+                                primary: pending.span.clone(),
+                                ty: expr_ty.pretty_print(db).to_string(),
+                                trait_name,
+                            });
+                            self.env.type_expr(pending.expr, ExprProp::invalid(self.db));
                         }
                     }
                     env::DeferredTask::MethodLookup(pending) => {
-                        match self.resolve_pending_method_lookup(&pending) {
-                            expr::PendingPrimitiveOpResolution::Pending => {
-                                self.env.register_pending_method_lookup(pending);
-                            }
-                            expr::PendingPrimitiveOpResolution::Resolved => {
-                                progressed = true;
-                            }
-                            expr::PendingPrimitiveOpResolution::Done => {}
+                        if matches!(
+                            self.resolve_pending_method_lookup(&pending),
+                            expr::PendingPrimitiveOpResolution::Pending
+                        ) && let Partial::Present(Expr::MethodCall(receiver, ..)) =
+                            pending.expr.data(db, body)
+                        {
+                            self.push_diag(BodyDiag::TypeMustBeKnown(receiver.span(body).into()));
+                            self.env.type_expr(pending.expr, ExprProp::invalid(self.db));
                         }
                     }
                     env::DeferredTask::PrimitiveOp(pending) => {
-                        match self.resolve_pending_primitive_op(&pending) {
-                            expr::PendingPrimitiveOpResolution::Pending => {
-                                self.env.register_pending_primitive_op(pending);
-                            }
-                            expr::PendingPrimitiveOpResolution::Resolved => {
-                                progressed = true;
-                            }
-                            expr::PendingPrimitiveOpResolution::Done => {}
-                        }
+                        let _ = self.resolve_pending_primitive_op(&pending);
                     }
                     env::DeferredTask::Field(pending) => {
-                        match self.resolve_pending_field(&pending) {
-                            expr::PendingPrimitiveOpResolution::Pending => {
-                                self.env.register_pending_field(pending);
-                            }
-                            expr::PendingPrimitiveOpResolution::Resolved => {
-                                progressed = true;
-                            }
-                            expr::PendingPrimitiveOpResolution::Done => {}
+                        if matches!(
+                            self.resolve_pending_field(&pending),
+                            expr::PendingPrimitiveOpResolution::Pending
+                        ) {
+                            self.push_diag(BodyDiag::TypeMustBeKnown(
+                                pending.lhs.span(body).into(),
+                            ));
                         }
                     }
-                    env::DeferredTask::Cast(pending) => match self.resolve_pending_cast(&pending) {
-                        expr::PendingPrimitiveOpResolution::Pending => {
-                            self.env.register_pending_cast(pending);
+                    env::DeferredTask::Cast(pending) => {
+                        if matches!(
+                            self.resolve_pending_cast(&pending),
+                            expr::PendingPrimitiveOpResolution::Pending
+                        ) {
+                            self.push_diag(BodyDiag::TypeMustBeKnown(
+                                pending.inner.span(body).into(),
+                            ));
                         }
-                        expr::PendingPrimitiveOpResolution::Resolved => {
-                            progressed = true;
-                        }
-                        expr::PendingPrimitiveOpResolution::Done => {}
-                    },
+                    }
                     env::DeferredTask::ForLoopSeq(pending) => {
-                        match self.resolve_pending_for_loop_seq(pending) {
-                            expr::PendingPrimitiveOpResolution::Pending => {
-                                self.env.register_pending_for_loop_seq(pending);
-                            }
-                            expr::PendingPrimitiveOpResolution::Resolved => {
-                                progressed = true;
-                            }
-                            expr::PendingPrimitiveOpResolution::Done => {}
-                        }
+                        self.push_diag(BodyDiag::TypeMustBeKnown(pending.expr.span(body).into()));
                     }
                 }
             }
-        }
-
-        // Emit diagnostics for remaining tasks.
-        for task in self.env.take_deferred_tasks() {
-            match task {
-                env::DeferredTask::Obligation(obligation) => {
-                    let _ = self.process_trait_obligation(obligation, true);
-                }
-                env::DeferredTask::Method(pending) => {
-                    let Some(expr_prop) = self.env.typed_expr(pending.expr) else {
-                        continue;
-                    };
-                    let expr_ty = {
-                        let mut prober = env::Prober::new(&mut self.table, scope);
-                        expr_prop.ty.fold_with(db, &mut prober)
-                    };
-                    if expr_ty.has_invalid(db) {
-                        continue;
-                    }
-
-                    let (receiver, generic_args, call_args) = match pending.expr.data(db, body) {
-                        Partial::Present(Expr::MethodCall(receiver, _, generic_args, args)) => {
-                            (*receiver, *generic_args, args.as_slice())
-                        }
-                        _ => continue,
-                    };
-
-                    let viable: Vec<_> = pending
-                        .candidates
-                        .iter()
-                        .copied()
-                        .filter(|&candidate| {
-                            let viability = check_viability(
-                                self,
-                                &pending,
-                                expr_ty,
-                                receiver,
-                                generic_args,
-                                call_args,
-                                candidate,
-                            );
-                            !matches!(viability, Viability::Incompatible)
-                        })
-                        .collect();
-                    let viable = self.dedup_equivalent_pending_method_candidates(viable);
-                    if viable.len() > 1 {
-                        self.push_diag(BodyDiag::AmbiguousTrait {
-                            primary: pending.span.clone(),
-                            method_name: pending.method_name,
-                            traits: viable.into_iter().map(|candidate| candidate.inst).collect(),
-                        });
-                    }
-                }
-                env::DeferredTask::MethodLookup(pending) => {
-                    if matches!(
-                        self.resolve_pending_method_lookup(&pending),
-                        expr::PendingPrimitiveOpResolution::Pending
-                    ) && let Partial::Present(Expr::MethodCall(receiver, ..)) =
-                        pending.expr.data(db, body)
-                    {
-                        self.push_diag(BodyDiag::TypeMustBeKnown(receiver.span(body).into()));
-                        self.env.type_expr(pending.expr, ExprProp::invalid(self.db));
-                    }
-                }
-                env::DeferredTask::PrimitiveOp(pending) => {
-                    let _ = self.resolve_pending_primitive_op(&pending);
-                }
-                env::DeferredTask::Field(pending) => {
-                    if matches!(
-                        self.resolve_pending_field(&pending),
-                        expr::PendingPrimitiveOpResolution::Pending
-                    ) {
-                        self.push_diag(BodyDiag::TypeMustBeKnown(pending.lhs.span(body).into()));
-                    }
-                }
-                env::DeferredTask::Cast(pending) => {
-                    if matches!(
-                        self.resolve_pending_cast(&pending),
-                        expr::PendingPrimitiveOpResolution::Pending
-                    ) {
-                        self.push_diag(BodyDiag::TypeMustBeKnown(pending.inner.span(body).into()));
-                    }
-                }
-                env::DeferredTask::ForLoopSeq(pending) => {
-                    self.push_diag(BodyDiag::TypeMustBeKnown(pending.expr.span(body).into()));
-                }
-            }
+            break;
         }
     }
 
@@ -1934,7 +2346,10 @@ impl<'db> TyChecker<'db> {
             table,
             expected,
             closure_expectations: FxHashMap::default(),
+            closure_type_expectations: Vec::new(),
+            active_closure_replay_defs: FxHashSet::default(),
             pending_place_checks: Vec::new(),
+            pending_array_repeat_copy_checks: Vec::new(),
             effect_provider_keys: FxHashSet::default(),
             diags: Vec::new(),
         }
@@ -2263,6 +2678,18 @@ impl<'db> TyChecker<'db> {
     ///
     /// `Copy` values may be duplicated implicitly.
     fn record_owned_value_use(&mut self, expr: ExprId, ty: TyId<'db>) {
+        self.record_value_use(expr, ty, false);
+    }
+
+    /// Records the final consumer of a value returned from the innermost
+    /// active closure. Return consumers are tracked separately from ordinary
+    /// body uses because a deferred callable expectation can refine an owned
+    /// return into a borrowed capability after the closure body was checked.
+    fn record_return_value_use(&mut self, expr: ExprId, ty: TyId<'db>) {
+        self.record_value_use(expr, ty, true);
+    }
+
+    fn record_value_use(&mut self, expr: ExprId, ty: TyId<'db>, closure_return: bool) {
         let mut ty = self.normalize_ty(ty);
         if ty.has_invalid(self.db) {
             let Some(prop) = self.env.typed_expr(expr) else {
@@ -2284,7 +2711,7 @@ impl<'db> TyChecker<'db> {
         } else {
             (ValueAccess::Move, ClosureCaptureAccess::Move)
         };
-        self.record_expr_value_use(expr, access, capture_access);
+        self.record_expr_value_use_kind(expr, access, capture_access, closure_return);
     }
 
     /// Records the ownership semantics of a value-producing expression at its
@@ -2299,6 +2726,16 @@ impl<'db> TyChecker<'db> {
         expr: ExprId,
         access: ValueAccess,
         capture_access: ClosureCaptureAccess,
+    ) {
+        self.record_expr_value_use_kind(expr, access, capture_access, false);
+    }
+
+    fn record_expr_value_use_kind(
+        &mut self,
+        expr: ExprId,
+        access: ValueAccess,
+        capture_access: ClosureCaptureAccess,
+        closure_return: bool,
     ) {
         let db = self.db;
         let body = self.body();
@@ -2318,16 +2755,16 @@ impl<'db> TyChecker<'db> {
                 let crate::hir_def::Stmt::Expr(tail) = stmt else {
                     return;
                 };
-                self.record_expr_value_use(*tail, access, capture_access);
+                self.record_expr_value_use_kind(*tail, access, capture_access, closure_return);
             }
             Expr::With(_, body_expr) | Expr::Cast(body_expr, _) | Expr::If(_, body_expr, None) => {
                 self.env.set_expr_value_access(expr, access);
-                self.record_expr_value_use(*body_expr, access, capture_access);
+                self.record_expr_value_use_kind(*body_expr, access, capture_access, closure_return);
             }
             Expr::If(_, then_expr, Some(else_expr)) => {
                 self.env.set_expr_value_access(expr, access);
-                self.record_expr_value_use(*then_expr, access, capture_access);
-                self.record_expr_value_use(*else_expr, access, capture_access);
+                self.record_expr_value_use_kind(*then_expr, access, capture_access, closure_return);
+                self.record_expr_value_use_kind(*else_expr, access, capture_access, closure_return);
             }
             Expr::Match(_, arms) => {
                 self.env.set_expr_value_access(expr, access);
@@ -2335,7 +2772,12 @@ impl<'db> TyChecker<'db> {
                     return;
                 };
                 for arm in arms {
-                    self.record_expr_value_use(arm.body, access, capture_access);
+                    self.record_expr_value_use_kind(
+                        arm.body,
+                        access,
+                        capture_access,
+                        closure_return,
+                    );
                 }
             }
             _ => {
@@ -2344,7 +2786,13 @@ impl<'db> TyChecker<'db> {
                 }
                 self.env.set_expr_value_access(expr, access);
                 if let Some(binding) = self.find_base_binding(expr) {
-                    self.env.record_capture_access(binding, capture_access);
+                    if closure_return {
+                        self.env
+                            .record_return_capture_access(binding, expr, capture_access);
+                    } else {
+                        self.env
+                            .record_capture_expr_access(binding, expr, capture_access);
+                    }
                 }
             }
         }
@@ -2918,6 +3366,10 @@ pub struct ResolvedEffectArg<'db> {
     pub key: PathId<'db>,
     pub arg: EffectArg<'db>,
     pub pass_mode: EffectPassMode,
+    /// Lexical closure depth at which the selected provider's source binding
+    /// was declared.
+    pub provider_closure_depth: usize,
+    pub provider_is_external_to_closure: bool,
     pub required_mut: bool,
     pub key_kind: EffectKeyKind,
     pub instantiated_key_ty: Option<TyId<'db>>,
@@ -2970,6 +3422,15 @@ pub struct TypedBody<'db> {
     assumptions: PredicateListId<'db>,
     pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
     expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
+    expr_normal_completion: SecondaryMap<ExprId, Option<bool>>,
+    /// Boolean value shared by all normal completions of an expression.
+    ///
+    /// Escape paths may coexist with this fact; `None` means both values remain
+    /// possible (or no finalized fact was recorded).
+    expr_normal_bool_value: SecondaryMap<ExprId, Option<bool>>,
+    /// Boolean value shared by all normal completions of a condition.
+    cond_normal_bool_value: SecondaryMap<CondId, Option<bool>>,
+    assignment_rebinds_capability: SecondaryMap<ExprId, Option<bool>>,
     contextual_view_sources: SecondaryMap<ExprId, Option<TyId<'db>>>,
     const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
     value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
@@ -3031,6 +3492,17 @@ pub enum ReturnProvenance {
 struct ReturnProvenanceCx<'db> {
     owner: BodyOwner<'db>,
     seen_funcs: FxHashSet<Func<'db>>,
+    // Exact provenance must fail when any return path cannot be replayed from
+    // callable inputs. The separate source query is a conservative may-analysis
+    // used to retain input-derived borrow sources from those mixed paths.
+    allow_partial_sources: bool,
+    /// Whether partial collection has skipped any return-value alternative or
+    /// aggregate component that could not be represented by an input source.
+    ///
+    /// The collected sources remain a useful MAY set, but consumers may only
+    /// treat it as exhaustive while this remains true.
+    return_sources_complete: bool,
+    visited_mutable_bindings: FxHashSet<LocalBinding<'db>>,
 }
 
 struct ReturnProjectionCall<'a, 'db> {
@@ -3046,6 +3518,25 @@ impl<'db> ReturnProvenanceCx<'db> {
         Self {
             owner,
             seen_funcs: FxHashSet::default(),
+            allow_partial_sources: false,
+            return_sources_complete: true,
+            visited_mutable_bindings: FxHashSet::default(),
+        }
+    }
+
+    fn for_forwarded_sources(owner: BodyOwner<'db>) -> Self {
+        Self {
+            owner,
+            seen_funcs: FxHashSet::default(),
+            allow_partial_sources: true,
+            return_sources_complete: true,
+            visited_mutable_bindings: FxHashSet::default(),
+        }
+    }
+
+    fn note_unrepresented_return_source(&mut self) {
+        if self.allow_partial_sources {
+            self.return_sources_complete = false;
         }
     }
 }
@@ -3222,6 +3713,7 @@ fn layout_param_indices_in_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) ->
 pub enum ValuePathRef<'db> {
     UnitVariant(ResolvedVariant<'db>),
     TypeConst(TyId<'db>),
+    FunctionItem,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -3265,6 +3757,7 @@ impl<'db> TyVisitable<'db> for ValuePathRef<'db> {
         match self {
             Self::UnitVariant(variant) => variant.ty.visit_with(visitor),
             Self::TypeConst(ty) => ty.visit_with(visitor),
+            Self::FunctionItem => {}
         }
     }
 }
@@ -3287,6 +3780,7 @@ impl<'db> TyFoldable<'db> for ValuePathRef<'db> {
             // Folding it here would retain only the actual value and erase
             // which formal const parameter the expression referenced.
             Self::TypeConst(ty) => Self::TypeConst(ty),
+            Self::FunctionItem => Self::FunctionItem,
         }
     }
 }
@@ -3475,7 +3969,7 @@ impl<'db> TypedBody<'db> {
         self.result_ty
     }
 
-    pub(crate) fn has_smir_lowering_blocker(&self, db: &'db dyn HirAnalysisDb) -> bool {
+    pub fn has_smir_lowering_blocker(&self, db: &'db dyn HirAnalysisDb) -> bool {
         let Some(body) = self.body else {
             return false;
         };
@@ -3552,6 +4046,30 @@ impl<'db> TypedBody<'db> {
             .cloned()
             .flatten()
             .unwrap_or_else(|| ExprProp::invalid(db))
+    }
+
+    pub fn expr_can_complete_normally(&self, expr: ExprId) -> bool {
+        self.expr_normal_completion
+            .get(expr)
+            .copied()
+            .flatten()
+            .unwrap_or(true)
+    }
+
+    pub fn expr_normal_bool_value(&self, expr: ExprId) -> Option<bool> {
+        self.expr_normal_bool_value.get(expr).copied().flatten()
+    }
+
+    pub fn cond_normal_bool_value(&self, cond: CondId) -> Option<bool> {
+        self.cond_normal_bool_value.get(cond).copied().flatten()
+    }
+
+    pub fn assignment_rebinds_capability(&self, expr: ExprId) -> bool {
+        self.assignment_rebinds_capability
+            .get(expr)
+            .copied()
+            .flatten()
+            .unwrap_or(false)
     }
 
     pub fn contextual_view_source(&self, expr: ExprId) -> Option<TyId<'db>> {
@@ -3809,8 +4327,17 @@ impl<'db> TypedBody<'db> {
         db: &'db dyn HirAnalysisDb,
         owner: BodyOwner<'db>,
     ) -> Vec<ReturnSource> {
-        let mut context = ReturnProvenanceCx::new(owner);
-        match owner {
+        self.callable_forwarded_return_sources_with_completeness(db, owner)
+            .0
+    }
+
+    pub(super) fn callable_forwarded_return_sources_with_completeness(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+    ) -> (Vec<ReturnSource>, bool) {
+        let mut context = ReturnProvenanceCx::for_forwarded_sources(owner);
+        let sources = match owner {
             BodyOwner::Func(func) => self.collect_return_sources_for_func(db, func, &mut context),
             BodyOwner::Closure { .. } => {
                 self.collect_return_sources_for_owner(db, owner, &mut context)
@@ -3819,9 +4346,12 @@ impl<'db> TypedBody<'db> {
             | BodyOwner::AnonConstBody { .. }
             | BodyOwner::ContractInit { .. }
             | BodyOwner::ContractRecvArm { .. } => None,
-        }
-        .map(|(sources, _)| sources)
-        .unwrap_or_default()
+        };
+        sources
+            .map(|(sources, saw_non_param)| {
+                (sources, !saw_non_param && context.return_sources_complete)
+            })
+            .unwrap_or_else(|| (Vec::new(), false))
     }
 
     fn return_provenance_for_func(
@@ -3851,14 +4381,18 @@ impl<'db> TypedBody<'db> {
         if !context.seen_funcs.insert(func) {
             return None;
         }
+        let previous_owner = context.owner;
+        context.owner = BodyOwner::Func(func);
 
         let (diags, typed_body) = check_func_body(db, func);
         if !diags.is_empty() {
+            context.owner = previous_owner;
             context.seen_funcs.remove(&func);
             return None;
         }
         let sources =
             typed_body.collect_return_sources_for_owner(db, BodyOwner::Func(func), context);
+        context.owner = previous_owner;
         context.seen_funcs.remove(&func);
         sources
     }
@@ -3918,6 +4452,7 @@ impl<'db> TypedBody<'db> {
                         seen,
                         visited_locals,
                     ) else {
+                        seen.note_unrepresented_return_source();
                         continue;
                     };
                     prefix_return_sources(
@@ -3982,15 +4517,15 @@ impl<'db> TypedBody<'db> {
                     _ => None,
                 }
             }
-            Expr::If(_, then_expr, else_expr) => merge_forwarded_param_sets(
-                self.forwarded_return_param_sources_from_expr(
+            Expr::If(_, then_expr, else_expr) => {
+                let then_sources = self.forwarded_return_param_sources_from_expr(
                     db,
                     body,
                     *then_expr,
                     seen,
                     visited_locals,
-                ),
-                else_expr.and_then(|else_expr| {
+                );
+                let else_sources = else_expr.and_then(|else_expr| {
                     self.forwarded_return_param_sources_from_expr(
                         db,
                         body,
@@ -3998,27 +4533,46 @@ impl<'db> TypedBody<'db> {
                         seen,
                         visited_locals,
                     )
-                }),
-            ),
+                });
+                if seen.allow_partial_sources {
+                    if then_sources.is_none() || else_sources.is_none() {
+                        seen.note_unrepresented_return_source();
+                    }
+                    merge_partial_forwarded_param_sets(then_sources, else_sources)
+                } else {
+                    merge_forwarded_param_sets(then_sources, else_sources)
+                }
+            }
             Expr::Match(_, arms) => {
                 let Partial::Present(arms) = arms else {
                     return None;
                 };
                 let mut merged = FxHashSet::default();
                 for arm in arms {
-                    for idx in self.forwarded_return_param_sources_from_expr(
+                    let arm_sources = self.forwarded_return_param_sources_from_expr(
                         db,
                         body,
                         arm.body,
                         seen,
                         visited_locals,
-                    )? {
-                        merged.insert(idx);
+                    );
+                    if seen.allow_partial_sources {
+                        if let Some(arm_sources) = arm_sources {
+                            merged.extend(arm_sources);
+                        } else {
+                            seen.note_unrepresented_return_source();
+                        }
+                    } else {
+                        merged.extend(arm_sources?);
                     }
                 }
                 let mut out = merged.into_iter().collect::<Vec<_>>();
                 out.sort_unstable();
-                Some(out)
+                if seen.allow_partial_sources {
+                    (!out.is_empty()).then_some(out)
+                } else {
+                    Some(out)
+                }
             }
             Expr::With(_, with_body) => self.forwarded_return_param_sources_from_expr(
                 db,
@@ -4048,6 +4602,7 @@ impl<'db> TypedBody<'db> {
                         seen,
                         visited_locals,
                     ) else {
+                        seen.note_unrepresented_return_source();
                         continue;
                     };
                     let projection =
@@ -4073,6 +4628,7 @@ impl<'db> TypedBody<'db> {
                         seen,
                         visited_locals,
                     ) else {
+                        seen.note_unrepresented_return_source();
                         continue;
                     };
                     let projection = if is_array {
@@ -4095,6 +4651,27 @@ impl<'db> TypedBody<'db> {
                 )?;
                 prefix_return_sources(&mut sources, &[ReturnProjectionStep::AnyIndex]);
                 Some(sources)
+            }
+            Expr::Closure { .. } => {
+                let mut sources = Vec::new();
+                for (field, capture) in self.closure_info(expr)?.captures.iter().enumerate() {
+                    let Some(mut capture_sources) = self.forwarded_return_sources_from_place(
+                        db,
+                        body,
+                        &Place::new(PlaceBase::Binding(capture.binding)),
+                        seen,
+                        visited_locals,
+                    ) else {
+                        seen.note_unrepresented_return_source();
+                        continue;
+                    };
+                    prefix_return_sources(
+                        &mut capture_sources,
+                        &[ReturnProjectionStep::Field(u16::try_from(field).ok()?)],
+                    );
+                    sources.extend(capture_sources);
+                }
+                (!sources.is_empty()).then_some(sources)
             }
             Expr::Path(_) => None,
             Expr::Call(..) | Expr::MethodCall(..) => None,
@@ -4227,7 +4804,7 @@ impl<'db> TypedBody<'db> {
     ) -> Option<Vec<ReturnSource>> {
         let callable = self.callable_expr(expr)?;
         let (func, _) = resolved_callable_instance(db, self, body, callable)?;
-        let callee_sources = self.forwarded_return_param_sources_from_callable(db, func)?;
+        let callee_sources = self.forwarded_return_param_sources_from_callable(db, func, seen)?;
         let call = ReturnProjectionCall {
             db,
             body,
@@ -4237,18 +4814,29 @@ impl<'db> TypedBody<'db> {
         };
         let mut merged = FxHashSet::default();
         for callee_source in callee_sources {
-            for source in self.forwarded_return_sources_from_call_source(
+            let mapped = self.forwarded_return_sources_from_call_source(
                 &call,
                 &callee_source,
                 seen,
                 visited_locals,
-            )? {
-                merged.insert(source);
+            );
+            if seen.allow_partial_sources {
+                if let Some(mapped) = mapped {
+                    merged.extend(mapped);
+                } else {
+                    seen.note_unrepresented_return_source();
+                }
+            } else {
+                merged.extend(mapped?);
             }
         }
         let mut out = merged.into_iter().collect::<Vec<_>>();
         out.sort_unstable();
-        Some(out)
+        if seen.allow_partial_sources {
+            (!out.is_empty()).then_some(out)
+        } else {
+            Some(out)
+        }
     }
 
     fn forwarded_return_sources_from_place(
@@ -4260,14 +4848,14 @@ impl<'db> TypedBody<'db> {
         visited_locals: &mut FxHashSet<PatId>,
     ) -> Option<Vec<ReturnSource>> {
         let PlaceBase::Binding(binding) = place.base;
-        if binding.is_mut() {
+        if binding.is_mut() && !seen.allow_partial_sources {
             return None;
         }
         let sources = if let binding @ LocalBinding::Local { pat, .. } = binding {
             if !visited_locals.insert(pat) {
                 return None;
             }
-            let sources = self.binding_source(db, binding).and_then(|binding_source| {
+            let initial_sources = self.binding_source(db, binding).and_then(|binding_source| {
                 let sources = self.forwarded_return_param_sources_from_expr(
                     db,
                     body,
@@ -4277,10 +4865,36 @@ impl<'db> TypedBody<'db> {
                 )?;
                 project_return_sources(sources, &binding_source.projection)
             });
+            if initial_sources.is_none() {
+                seen.note_unrepresented_return_source();
+            }
+            let mut sources = initial_sources.unwrap_or_default();
+            if binding.is_mut() {
+                sources.extend(self.mutable_binding_assignment_sources(
+                    db,
+                    body,
+                    binding,
+                    seen,
+                    visited_locals,
+                ));
+            }
             visited_locals.remove(&pat);
-            sources?
+            if sources.is_empty() {
+                return None;
+            }
+            sources
         } else {
-            vec![self.return_source_for_binding(db, seen.owner, binding)?]
+            let mut sources = vec![self.return_source_for_binding(db, seen.owner, binding)?];
+            if binding.is_mut() {
+                sources.extend(self.mutable_binding_assignment_sources(
+                    db,
+                    body,
+                    binding,
+                    seen,
+                    visited_locals,
+                ));
+            }
+            sources
         };
         let mut projection = Vec::with_capacity(place.projections.len());
         for place_projection in &place.projections {
@@ -4294,15 +4908,78 @@ impl<'db> TypedBody<'db> {
         project_return_sources(sources, &projection)
     }
 
+    fn mutable_binding_assignment_sources(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        binding: LocalBinding<'db>,
+        seen: &mut ReturnProvenanceCx<'db>,
+        visited_locals: &mut FxHashSet<PatId>,
+    ) -> Vec<ReturnSource> {
+        // This is deliberately path-insensitive: for may-provenance, every
+        // syntactic assignment is a possible source. Exact provenance rejects
+        // mutable bindings before reaching this helper.
+        if !seen.visited_mutable_bindings.insert(binding) {
+            return Vec::new();
+        }
+        let mut out = FxHashSet::default();
+        for (_, expr) in body.exprs(db).iter() {
+            let Partial::Present(Expr::Assign(lhs, rhs)) = expr else {
+                continue;
+            };
+            let Some(place) = self.expr_place(*lhs) else {
+                continue;
+            };
+            let PlaceBase::Binding(assigned) = place.base;
+            if assigned != binding {
+                continue;
+            }
+            let Some(mut sources) =
+                self.forwarded_return_param_sources_from_expr(db, body, *rhs, seen, visited_locals)
+            else {
+                seen.note_unrepresented_return_source();
+                continue;
+            };
+            let mut result_projection = Vec::with_capacity(place.projections.len());
+            let mut valid_projection = true;
+            for projection in &place.projections {
+                let step = match projection {
+                    PlaceProjection::Field { index, .. } => ReturnProjectionStep::Field(*index),
+                    PlaceProjection::Index { index_expr, .. } => {
+                        let Some(step) = self.return_index_projection(
+                            db,
+                            body,
+                            *index_expr,
+                            seen,
+                            visited_locals,
+                        ) else {
+                            valid_projection = false;
+                            break;
+                        };
+                        step
+                    }
+                };
+                result_projection.push(step);
+            }
+            if !valid_projection {
+                seen.note_unrepresented_return_source();
+                continue;
+            }
+            prefix_return_sources(&mut sources, &result_projection);
+            out.extend(sources);
+        }
+        seen.visited_mutable_bindings.remove(&binding);
+        let mut out = out.into_iter().collect::<Vec<_>>();
+        out.sort_unstable();
+        out
+    }
+
     fn return_source_for_binding(
         &self,
         db: &'db dyn HirAnalysisDb,
         owner: BodyOwner<'db>,
         binding: LocalBinding<'db>,
     ) -> Option<ReturnSource> {
-        if binding.is_mut() {
-            return None;
-        }
         let (origin, projection) = match owner {
             BodyOwner::Func(owner_func) => match binding {
                 LocalBinding::Param {
@@ -4384,13 +5061,20 @@ impl<'db> TypedBody<'db> {
         {
             let mut merged = Vec::new();
             for (idx, expr) in call.args.iter().copied().skip(1).enumerate() {
-                let mut sources = self.forwarded_return_param_sources_from_expr(
+                let sources = self.forwarded_return_param_sources_from_expr(
                     call.db,
                     call.body,
                     expr,
                     seen,
                     visited_locals,
-                )?;
+                );
+                let Some(mut sources) = sources else {
+                    if seen.allow_partial_sources {
+                        seen.note_unrepresented_return_source();
+                        continue;
+                    }
+                    return None;
+                };
                 let mut result_projection = callee_source.result_projection.clone();
                 result_projection.push(ReturnProjectionStep::Field(u16::try_from(idx).ok()?));
                 prefix_return_sources(&mut sources, &result_projection);
@@ -4492,16 +5176,31 @@ impl<'db> TypedBody<'db> {
             return value
                 .data(db)
                 .to_usize()
-                .map(ReturnProjectionStep::ConstantIndex);
+                .map(ReturnProjectionStep::ConstantIndex)
+                .or_else(|| {
+                    seen.allow_partial_sources
+                        .then_some(ReturnProjectionStep::AnyIndex)
+                });
         }
-        let mut sources =
-            self.forwarded_return_param_sources_from_expr(db, body, expr, seen, visited_locals)?;
-        let source = sources.pop()?;
+        let Some(mut sources) =
+            self.forwarded_return_param_sources_from_expr(db, body, expr, seen, visited_locals)
+        else {
+            return seen
+                .allow_partial_sources
+                .then_some(ReturnProjectionStep::AnyIndex);
+        };
+        let Some(source) = sources.pop() else {
+            return seen
+                .allow_partial_sources
+                .then_some(ReturnProjectionStep::AnyIndex);
+        };
         if !sources.is_empty()
             || !source.result_projection.is_empty()
             || !self.return_index_source_is_stable(db, seen.owner, &source)
         {
-            return None;
+            return seen
+                .allow_partial_sources
+                .then_some(ReturnProjectionStep::AnyIndex);
         }
         Some(ReturnProjectionStep::DynamicIndex(ReturnIndexSource {
             origin: source.origin,
@@ -4519,9 +5218,12 @@ impl<'db> TypedBody<'db> {
         projection
             .iter()
             .map(|step| match step {
-                ReturnProjectionStep::DynamicIndex(source) => {
-                    self.instantiate_return_index_projection(call, source, seen, visited_locals)
-                }
+                ReturnProjectionStep::DynamicIndex(source) => self
+                    .instantiate_return_index_projection(call, source, seen, visited_locals)
+                    .or_else(|| {
+                        seen.allow_partial_sources
+                            .then_some(ReturnProjectionStep::AnyIndex)
+                    }),
                 ReturnProjectionStep::AnyIndex => Some(ReturnProjectionStep::AnyIndex),
                 step => Some(step.clone()),
             })
@@ -4704,7 +5406,14 @@ impl<'db> TypedBody<'db> {
         &self,
         db: &'db dyn HirAnalysisDb,
         func: Func<'db>,
+        seen: &mut ReturnProvenanceCx<'db>,
     ) -> Option<Vec<ReturnSource>> {
+        if seen.allow_partial_sources {
+            return self
+                .collect_return_sources_for_func(db, func, seen)
+                .map(|(sources, _)| sources)
+                .filter(|sources| !sources.is_empty());
+        }
         match func_return_provenance(db, func) {
             ReturnProvenance::Forwarded(sources) => Some(sources.clone()),
             ReturnProvenance::Fresh | ReturnProvenance::Unknown => None,
@@ -5243,6 +5952,10 @@ impl<'db> TypedBody<'db> {
             assumptions: PredicateListId::empty_list(db),
             pat_ty: SecondaryMap::new(),
             expr_ty: SecondaryMap::new(),
+            expr_normal_completion: SecondaryMap::new(),
+            expr_normal_bool_value: SecondaryMap::new(),
+            cond_normal_bool_value: SecondaryMap::new(),
+            assignment_rebinds_capability: SecondaryMap::new(),
             contextual_view_sources: SecondaryMap::new(),
             const_refs: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),
@@ -5387,6 +6100,18 @@ fn merge_forwarded_param_sets(
     let mut out = merged.into_iter().collect::<Vec<_>>();
     out.sort_unstable();
     Some(out)
+}
+
+fn merge_partial_forwarded_param_sets(
+    lhs: Option<Vec<ReturnSource>>,
+    rhs: Option<Vec<ReturnSource>>,
+) -> Option<Vec<ReturnSource>> {
+    let mut merged = FxHashSet::default();
+    merged.extend(lhs.into_iter().flatten());
+    merged.extend(rhs.into_iter().flatten());
+    let mut out = merged.into_iter().collect::<Vec<_>>();
+    out.sort_unstable();
+    (!out.is_empty()).then_some(out)
 }
 
 fn return_projection_step_matches(
@@ -5588,7 +6313,12 @@ impl<'db> TyCheckerFinalizer<'db> {
     fn new(mut checker: TyChecker<'db>) -> Self {
         let assumptions = checker.env.assumptions();
         checker.resolve_deferred();
+        let closure_ty_replacements = checker.finalize_late_closure_captures();
+        checker.finalize_deferred_assignment_modes();
+        checker.finalize_array_repeat_copy_checks();
         checker.resolve_pending_place_checks();
+        checker.revalidate_late_closure_capability_changes(&closure_ty_replacements);
+        checker.refresh_assignment_flow_metadata();
         let return_borrow_provider = checker
             .env
             .first_return_borrow_provider
@@ -5668,5 +6398,109 @@ impl<'db> TyCheckerFinalizer<'db> {
         if let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span) {
             self.diags.push(diag.into());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        hir_def::ItemKind,
+        test_db::{HirAnalysisTestDb, find_func},
+    };
+
+    #[test]
+    fn closure_replay_transaction_restores_all_rewritten_type_state() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "closure_replay_transaction_snapshot.fe".into(),
+            r#"
+trait Marker {}
+
+fn probe() {
+    let first = || 1 as u256
+    let second = || 2 as u256
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let probe = find_func(&db, top_mod, "probe");
+        let marker = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Trait(trait_)
+                    if trait_
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "Marker") =>
+                {
+                    Some(trait_)
+                }
+                _ => None,
+            })
+            .expect("missing Marker trait");
+        let (_, typed_body) = check_func_body(&db, probe);
+        let mut closures = typed_body
+            .closure_infos()
+            .map(|(_, info)| (info.def.expr, TyId::closure(&db, info.ty)))
+            .collect::<Vec<_>>();
+        closures.sort_by_key(|(expr, _)| *expr);
+        let [(expr, old), (_, new)] = closures.as_slice() else {
+            panic!("expected exactly two closure types");
+        };
+        assert_ne!(old, new);
+
+        let mut checker =
+            TyChecker::new(&db, BodyOwner::Func(probe)).expect("type checker construction");
+        let expectation = ClosureExpectation {
+            params: vec![*old],
+            ret_ty: *old,
+        };
+        checker.expected = *old;
+        checker
+            .closure_expectations
+            .insert(*expr, expectation.clone());
+        checker
+            .closure_type_expectations
+            .push((*old, expectation.clone()));
+        let old_predicate = TraitInstId::new(&db, marker, vec![*old], IndexMap::new());
+        checker
+            .env
+            .seed_closure_replay_predicates_for_test(old_predicate);
+        let old_env_predicates = checker.env.closure_replay_predicates_for_test();
+
+        let transaction = checker.snapshot_closure_replay_transaction();
+        checker.apply_contextual_closure_ty_replacements(&FxHashMap::from_iter([(*old, *new)]));
+
+        let rewritten_expectation = ClosureExpectation {
+            params: vec![*new],
+            ret_ty: *new,
+        };
+        let new_predicate = TraitInstId::new(&db, marker, vec![*new], IndexMap::new());
+        let new_predicate_list = PredicateListId::new(&db, vec![new_predicate]);
+        assert_eq!(checker.expected, *new);
+        assert_eq!(
+            checker.closure_expectations.get(expr),
+            Some(&rewritten_expectation),
+        );
+        assert_eq!(
+            checker.closure_type_expectations,
+            vec![(*new, rewritten_expectation)],
+        );
+        assert_eq!(
+            checker.env.closure_replay_predicates_for_test(),
+            (vec![new_predicate], new_predicate_list, new_predicate_list),
+        );
+
+        checker.rollback_closure_replay_transaction(transaction);
+
+        assert_eq!(checker.expected, *old);
+        assert_eq!(checker.closure_expectations.get(expr), Some(&expectation),);
+        assert_eq!(checker.closure_type_expectations, vec![(*old, expectation)],);
+        assert_eq!(
+            checker.env.closure_replay_predicates_for_test(),
+            old_env_predicates,
+        );
     }
 }

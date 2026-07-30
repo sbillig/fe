@@ -10,4 +10,4 @@ error[6-0003]: trait bound is not satisfied
    │                    ----------- required by this bound on `invoke`
    ·
 20 │     invoke(func: take, value: ())
-   │     ^^^^^^ `fn(own ()) -> Boxed` doesn't implement `Fn<((),), Boxed>`
+   │     ^^^^^^ `|own ()| -> Boxed` doesn't implement `Fn<((),), Boxed>`

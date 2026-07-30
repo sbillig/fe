@@ -330,7 +330,7 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
 /// carrier is transparent so aggregates passed through view parameters retain
 /// their nested borrow classification without making an ordinary viewed value
 /// noesc by itself.
-pub(crate) fn ty_contains_borrow<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+pub fn ty_contains_borrow<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
     ty_contains_capability(db, ty, |kind| kind != CapabilityKind::View, true)
 }
 

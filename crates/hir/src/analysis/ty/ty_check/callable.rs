@@ -1,7 +1,7 @@
 use crate::{
     hir_def::{
-        BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArgListId, IdentId, LitKind,
-        Partial, UnOp,
+        BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArgListId, IdentId,
+        ItemKind, LitKind, Partial, UnOp,
     },
     span::{
         DynLazySpan,
@@ -9,6 +9,7 @@ use crate::{
         params::LazyGenericArgListSpan,
     },
 };
+use common::indexmap::IndexMap;
 use salsa::Update;
 
 use super::{
@@ -32,7 +33,7 @@ use crate::analysis::{
         ty_def::{InvalidCause, TyBase, TyData, TyFlags, TyId},
         ty_is_noesc,
         ty_lower::{lower_generic_arg_list, specialized_callable_layout_bundle_signature},
-        visitor::{TyVisitable, TyVisitor, collect_flags},
+        visitor::{TyVisitable, TyVisitor, collect_flags, walk_ty},
     },
 };
 use crate::core::semantic::{ProviderBinding, ProviderSource, param_env};
@@ -232,11 +233,31 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
 }
 
 impl<'db> Callable<'db> {
-    fn closure_expectation_for_arg(
+    fn closure_expectations_for_arg(
         &self,
         tc: &mut TyChecker<'db>,
         arg_idx: usize,
-    ) -> Option<ClosureExpectation<'db>> {
+    ) -> Vec<(TyId<'db>, ClosureExpectation<'db>)> {
+        struct ContainsTy<'db> {
+            db: &'db dyn HirAnalysisDb,
+            needle: TyId<'db>,
+            found: bool,
+        }
+
+        impl<'db> TyVisitor<'db> for ContainsTy<'db> {
+            fn db(&self) -> &'db dyn HirAnalysisDb {
+                self.db
+            }
+
+            fn visit_ty(&mut self, ty: TyId<'db>) {
+                if ty == self.needle {
+                    self.found = true;
+                } else if !self.found {
+                    walk_ty(self, ty);
+                }
+            }
+        }
+
         let db = tc.db;
         let constraints = collect_func_decl_constraints(db, self.callable_def, true);
         let declared = constraints.instantiate_identity();
@@ -249,16 +270,26 @@ impl<'db> Callable<'db> {
         let formal_arg_ty = self
             .callable_def
             .arg_tys(db)
-            .get(arg_idx)?
+            .get(arg_idx)
+            .expect("call argument index must have a formal type")
             .instantiate_identity();
         let formal_subject_ty = formal_arg_ty
             .as_capability(db)
             .map(|(_, inner)| inner)
             .unwrap_or(formal_arg_ty);
-        let mut found = None;
+        let mut found = Vec::new();
 
         for (&declared, &constraint) in declared.list(db).iter().zip(instantiated.list(db)) {
-            if declared.args(db).first() != Some(&formal_subject_ty)
+            let Some(&declared_subject) = declared.args(db).first() else {
+                continue;
+            };
+            let mut contains = ContainsTy {
+                db,
+                needle: declared_subject,
+                found: false,
+            };
+            contains.visit_ty(formal_subject_ty);
+            if !contains.found
                 || ClosureCallTrait::for_trait(db, tc.env.scope(), declared.def(db)).is_none()
             {
                 continue;
@@ -278,14 +309,13 @@ impl<'db> Callable<'db> {
             if !pack.is_tuple(db) {
                 continue;
             }
+            let subject = tc.normalize_ty(args[0]);
             let expected = ClosureExpectation {
                 params: pack.field_types(db),
                 ret_ty: tc.normalize_ty(args[2]),
             };
-            match &found {
-                Some(previous) if previous != &expected => return None,
-                Some(_) => {}
-                None => found = Some(expected),
+            if !found.contains(&(subject, expected.clone())) {
+                found.push((subject, expected));
             }
         }
         found
@@ -315,6 +345,23 @@ impl<'db> Callable<'db> {
         assert_eq!(params.len(), args.len());
 
         let callable_def = *callable_def;
+        let trait_inst = trait_inst.or_else(|| {
+            let CallableDef::Func(func) = callable_def else {
+                return None;
+            };
+            let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) else {
+                return None;
+            };
+            let trait_arg_count = trait_.params(db).len();
+            (args.len() >= trait_arg_count).then(|| {
+                TraitInstId::new(
+                    db,
+                    trait_,
+                    args[..trait_arg_count].to_vec(),
+                    IndexMap::new(),
+                )
+            })
+        });
 
         Ok(Self {
             callable_def,
@@ -443,7 +490,7 @@ impl<'db> Callable<'db> {
     }
 
     pub(super) fn check_args(
-        &self,
+        &mut self,
         tc: &mut TyChecker<'db>,
         call_args: &[HirCallArg<'db>],
         span: LazyCallArgListSpan<'db>,
@@ -452,6 +499,10 @@ impl<'db> Callable<'db> {
     ) {
         let db = tc.db;
 
+        let closure_call_ty = self.trait_inst().and_then(|inst| {
+            ClosureCallTrait::for_trait(db, tc.env.scope(), inst.def(db))?;
+            tc.normalize_ty(inst.self_ty(db)).base_ty(db).as_closure(db)
+        });
         let call_args_pack = self
             .call_trait_args_pack_ty(db, tc.env.scope())
             .map(|ty| tc.normalize_ty(ty));
@@ -598,13 +649,11 @@ impl<'db> Callable<'db> {
 
         for (i, hir_arg) in call_args.iter().enumerate() {
             let arg_idx = if has_receiver { i + 1 } else { i };
-            let closure_expectation = (call_args_pack.is_none()
-                && matches!(
-                    hir_arg.expr.data(db, tc.body()),
-                    Partial::Present(Expr::Closure { .. })
-                ))
-            .then(|| self.closure_expectation_for_arg(tc, arg_idx))
-            .flatten();
+            let closure_expectations = if call_args_pack.is_none() {
+                self.closure_expectations_for_arg(tc, arg_idx)
+            } else {
+                Default::default()
+            };
             let layout_origin = match (self.callable_def, call_args_pack) {
                 (_, Some(_)) => None,
                 (CallableDef::Func(_), None) => {
@@ -635,6 +684,17 @@ impl<'db> Callable<'db> {
                 let payload = ty.as_capability(db).map_or(ty, |(_, payload)| payload);
                 ty_is_noesc(db, payload)
             });
+            let carries_contextual_closure = !closure_expectations.is_empty()
+                && (tc.expr_contains_closure_syntax(hir_arg.expr)
+                    || tc.expr_can_replay_contextual_closure(hir_arg.expr));
+            // A `view F` forwarded into another default-view `F` parameter must first be
+            // checked through that interface carrier. Feeding the bare closure payload hint to
+            // every `Fn`-bounded argument would instead infer the callee's `F` as `view F`.
+            // Closure syntax and known closure aliases can use the payload immediately; an alias
+            // discovered only while checking is replayed with `deferred_closure_hint` below.
+            let deferred_closure_hint = (!closure_expectations.is_empty())
+                .then_some(expected_arg_ty)
+                .flatten();
             // Aggregate constructors need the logical parameter type when it carries layout
             // evidence or nested capabilities. Layout roots must be anchored to the value being
             // passed, while nested capabilities must reach tuple/array elements before the
@@ -656,6 +716,11 @@ impl<'db> Callable<'db> {
                             || payload_contains_noesc))
                         .then_some(expected_arg_ty)
                         .flatten()
+                })
+                .or_else(|| {
+                    carries_contextual_closure
+                        .then_some(expected_arg_ty)
+                        .flatten()
                 });
             args.push(CallArg::from_hir_arg(
                 tc,
@@ -663,7 +728,8 @@ impl<'db> Callable<'db> {
                 span.clone().arg(i),
                 already_typed || tc.env.typed_expr(hir_arg.expr).is_some(),
                 expected_hint,
-                closure_expectation,
+                deferred_closure_hint,
+                closure_expectations,
             ));
         }
 
@@ -694,9 +760,11 @@ impl<'db> Callable<'db> {
                 tc.push_diag(diag);
             }
 
-            let mut expected = tc.normalize_ty(expected);
+            let expected = tc.normalize_ty(expected);
+            let mut expected = tc.env.rewrite_closure_types(expected);
             let mode = arg_modes.as_ref().and_then(|modes| modes.get(i).copied());
             let given_ty = tc.normalize_ty(given.expr_prop.ty);
+            let given_ty = tc.env.rewrite_closure_types(given_ty);
             let given_string_source_ty = given
                 .expr_prop
                 .binding
@@ -751,12 +819,8 @@ impl<'db> Callable<'db> {
                 tc.equate_ty(given.expr_prop.ty, fixed_string_ty, given.expr_span.clone());
                 fixed_string_ty
             } else {
-                tc.try_coerce_capability_for_expr_to_expected(
-                    given.expr,
-                    given.expr_prop.ty,
-                    expected,
-                )
-                .unwrap_or(given.expr_prop.ty)
+                tc.try_coerce_capability_for_expr_to_expected(given.expr, given_ty, expected)
+                    .unwrap_or(given_ty)
             };
             if has_receiver
                 && i == 0
@@ -861,6 +925,14 @@ impl<'db> Callable<'db> {
                 tc.record_owned_value_use(given.expr, expected);
             }
         }
+
+        if let Some(closure) = closure_call_ty {
+            for (param_idx, arg) in call_args.iter().enumerate() {
+                tc.record_contextual_closure_call_param_origins(closure, param_idx, arg.expr);
+            }
+        }
+        *self = self.clone().fold_with(db, &mut tc.table);
+        *self = tc.env.rewrite_closure_types(self.clone());
     }
 
     fn compile_time_string_literal_arg_expected(
@@ -1017,11 +1089,23 @@ impl<'db> CallArg<'db> {
         span: LazyCallArgSpan<'db>,
         already_typed: bool,
         expected_hint: Option<TyId<'db>>,
-        closure_expectation: Option<ClosureExpectation<'db>>,
+        deferred_closure_hint: Option<TyId<'db>>,
+        closure_expectations: Vec<(TyId<'db>, ClosureExpectation<'db>)>,
     ) -> Self {
-        let expr_prop = if let Some(closure_expectation) = closure_expectation {
+        let expr_prop = if !closure_expectations.is_empty() {
             let ty = expected_hint.unwrap_or_else(|| tc.fresh_ty());
-            tc.check_expr_with_closure_expectation(arg.expr, ty, closure_expectation)
+            let retry_expectations = (expected_hint.is_none() && deferred_closure_hint.is_some())
+                .then(|| closure_expectations.clone());
+            let mut prop =
+                tc.check_expr_with_closure_type_expectations(arg.expr, ty, closure_expectations);
+            if let (Some(expected), Some(expectations)) =
+                (deferred_closure_hint, retry_expectations)
+                && tc.expr_can_replay_contextual_closure(arg.expr)
+            {
+                prop =
+                    tc.check_expr_with_closure_type_expectations(arg.expr, expected, expectations);
+            }
+            prop
         } else if already_typed && expected_hint.is_none() {
             let db = tc.db;
             tc.env

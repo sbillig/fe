@@ -1089,6 +1089,16 @@ pub enum ClosureParamMode {
     Mut,
 }
 
+/// Maximum number of fields in either closure ABI aggregate.
+///
+/// Closure environments and argument packs use `u16` field indices, so indices
+/// `0..=u16::MAX` are representable.
+pub const MAX_CLOSURE_FIELDS: usize = u16::MAX as usize + 1;
+
+pub const fn closure_field_count_is_supported(count: usize) -> bool {
+    count <= MAX_CLOSURE_FIELDS
+}
+
 impl ClosureParamMode {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -1275,7 +1285,7 @@ impl<'db> ClosureTy<'db> {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        format!("fn({params}) -> {}", self.ret_ty(db).pretty_print(db))
+        format!("|{params}| -> {}", self.ret_ty(db).pretty_print(db))
     }
 }
 

@@ -4,7 +4,9 @@ use crate::analysis::HirAnalysisDb;
 use crate::core::hir_def::{ExprId, IdentId, Partial, Pat, PatId, Stmt, StmtId};
 
 use super::{
-    Callable, LocalBinding, TyChecker, env::PendingForLoopSeq, expr::PendingPrimitiveOpResolution,
+    Callable, LocalBinding, TyChecker,
+    env::{PendingForLoopSeq, TraitObligation, TraitObligationOrigin},
+    expr::PendingPrimitiveOpResolution,
     instantiate_trait_method,
 };
 use crate::analysis::ty::{
@@ -14,9 +16,11 @@ use crate::analysis::ty::{
     diagnostics::{BodyDiag, ReturnTypeContext},
     fold::{TyFoldable, TyFolder},
     trait_def::{TraitInstId, impls_for_ty},
-    trait_resolution::TraitSolveCx,
-    ty_def::{InvalidCause, TyId},
-    visitor::TyVisitable,
+    trait_resolution::{
+        CanonicalGoalQuery, GoalSatisfiability, TraitSolveCx, is_goal_query_satisfiable,
+    },
+    ty_def::{InvalidCause, TyFlags, TyId},
+    visitor::{TyVisitable, collect_flags},
 };
 
 /// Resolved Seq trait methods for a for-loop.
@@ -123,6 +127,7 @@ impl<'db> TyChecker<'db> {
             if let super::PatternDestructureMode::Borrow(kind) = mode {
                 self.retype_pattern_bindings_for_borrow(*pat, kind);
             }
+            self.record_contextual_closure_binding_origins(*pat, *expr);
         } else {
             let ascription = ascription.unwrap_or_else(|| self.fresh_ty());
             if let Some(diag) = ascription.emit_wf_diag(
@@ -309,15 +314,57 @@ impl<'db> TyChecker<'db> {
                     }
 
                     // Instantiate the impl's trait instance (with associated type
-                    // bindings) using fresh type variables, then unify to get concrete types
-                    let raw_trait_inst = impl_id.trait_inst(self.db);
-                    let trait_inst = self.table.instantiate_with_fresh_vars(
-                        crate::analysis::ty::binder::Binder::bind(raw_trait_inst),
-                    );
+                    // bindings) and its constraints with the same fresh type variables.
+                    let implementor = self.table.instantiate_with_fresh_vars(*impl_);
+                    let trait_inst = implementor.trait_inst(self.db);
 
                     // Unify the trait's Self type with the iterable type
                     let self_ty = trait_inst.self_ty(self.db);
                     if self.table.unify(self_ty, iterable_lookup_ty).is_err() {
+                        self.rollback_state(snapshot);
+                        continue;
+                    }
+
+                    // Header unification alone is insufficient: array `Seq`, for example,
+                    // is available only when its element implements `Copy`. Runtime trait
+                    // selection enforces these constraints, so for-loop admission must do
+                    // the same to avoid accepting a call that cannot be lowered.
+                    let solve_cx = TraitSolveCx::new(self.db, self.env.scope())
+                        .with_assumptions(self.env.assumptions());
+                    let mut constraints_viable = true;
+                    for &constraint in implementor.constraints(self.db).list(self.db) {
+                        let constraint = constraint.fold_with(self.db, &mut self.table);
+                        let query =
+                            CanonicalGoalQuery::new(self.db, constraint, self.env.assumptions());
+                        match is_goal_query_satisfiable(self.db, solve_cx, &query) {
+                            GoalSatisfiability::Satisfied(solution) => {
+                                let solved = query.extract_solution(&mut self.table, solution).inst;
+                                if self.table.unify(constraint, solved).is_err() {
+                                    constraints_viable = false;
+                                    break;
+                                }
+                            }
+                            GoalSatisfiability::NeedsConfirmation { .. }
+                                if collect_flags(self.db, constraint)
+                                    .contains(TyFlags::HAS_VAR) =>
+                            {
+                                // Preserve the candidate so the loop body can constrain
+                                // its item type, then confirm the bound after inference.
+                                self.env.register_trait_obligation(TraitObligation {
+                                    goal: constraint,
+                                    origin: TraitObligationOrigin::GenericConfirmation { expr },
+                                    span: expr.span(self.body()).into(),
+                                });
+                            }
+                            GoalSatisfiability::NeedsConfirmation { .. }
+                            | GoalSatisfiability::ContainsInvalid
+                            | GoalSatisfiability::UnSat(_) => {
+                                constraints_viable = false;
+                                break;
+                            }
+                        }
+                    }
+                    if !constraints_viable {
                         self.rollback_state(snapshot);
                         continue;
                     }
@@ -543,7 +590,12 @@ impl<'db> TyChecker<'db> {
 
             self.push_diag(diag);
         } else if ret_ty_ok && let Some(expr) = returned_expr {
-            self.record_owned_value_use(expr, self.expected);
+            if self.env.active_closure().is_some() {
+                self.env.record_active_closure_return_expr(expr);
+                self.record_return_value_use(expr, self.expected);
+            } else {
+                self.record_owned_value_use(expr, self.expected);
+            }
         }
 
         if ret_ty_ok
