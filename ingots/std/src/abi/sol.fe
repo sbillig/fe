@@ -152,7 +152,7 @@ impl Abi for Sol {
 
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn validate_runtime_head(_ input_len: u256, _ base: u256, _ head_size: u256) {
+    fn validate_runtime_head(input_len: u256, base: u256, head_size: u256) {
         // Generated runtime wrappers supply selector and static-head sizes below 2^255.
         // Under those invariants, wrapping subtraction plus SLT matches Solidity.
         if head_size != 0 {

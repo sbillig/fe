@@ -7,10 +7,10 @@ use hir::{
             SemConstValue, SemanticInstanceKey, get_or_build_semantic_instance,
         },
         ty::{
-            corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
+            corelib::{resolve_core_trait, resolve_lib_type_path},
             trait_def::{TraitInstId, resolve_trait_method_instance},
             trait_resolution::{PredicateListId, TraitSolveCx},
-            ty_check::BodyOwner,
+            ty_check::{BodyOwner, LocalBinding},
             ty_def::{InvalidCause, TyData, TyId},
         },
     },
@@ -530,22 +530,35 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     len: zero,
                 };
             }
-            RuntimeReturnPlan::Value { ty } => {
+            RuntimeReturnPlan::Value {
+                host, return_value, ..
+            } => {
                 let ret_value = ret.expect("value-returning recv wrapper should produce a value");
-                let scope = plan.contract.scope();
-                let encode_alloc = resolve_sol_encode_single_root_alloc(self.db, scope, ty)
-                    .expect("encode_single_root_alloc");
-                let encoded = self.push_call_result(cont_bb, encode_alloc, vec![ret_value]);
-                let fields = self.extract_tuple_fields(
-                    cont_bb,
-                    encoded,
-                    self.locals[encoded.index()].semantic_ty,
-                    scope,
+                let semantic = return_value
+                    .key(self.db)
+                    .semantic(self.db)
+                    .expect("ContractHost::return_value should be semantic");
+                let mut args = Vec::new();
+                for entry in runtime_visible_binding_plans(self.db, semantic) {
+                    let LocalBinding::Param { idx, .. } = entry.binding else {
+                        panic!("ContractHost::return_value should only have ordinary parameters")
+                    };
+                    args.push(match idx {
+                        0 => self.emit_target_root_provider(cont_bb, &host),
+                        1 => ret_value,
+                        _ => panic!("unexpected ContractHost::return_value parameter {idx}"),
+                    });
+                }
+                let (return_value, _, args) = self.prepare_call(cont_bb, return_value, args);
+                assert_eq!(
+                    return_value.exit_behavior(self.db),
+                    RuntimeExitBehavior::NeverReturns,
+                    "ContractHost::return_value must not return",
                 );
-                let [offset, len]: [RLocalId; 2] = fields
-                    .try_into()
-                    .expect("encoded return should expose ptr/len");
-                self.blocks[cont_bb.index()].terminator = RTerminator::ReturnData { offset, len };
+                self.blocks[cont_bb.index()].terminator = RTerminator::TerminalCall {
+                    callee: return_value,
+                    args: args.into_boxed_slice(),
+                };
             }
         }
     }
@@ -1021,21 +1034,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     .unwrap_or_else(memory_fallback_class)
             },
         )
-    }
-
-    fn extract_tuple_fields(
-        &mut self,
-        bb: RBlockId,
-        tuple: RLocalId,
-        tuple_ty: TyId<'db>,
-        scope: hir::hir_def::scope_graph::ScopeId<'db>,
-    ) -> Vec<RLocalId> {
-        let field_count = tuple_ty.field_types(self.db).len();
-        let env = self.runtime_type_env(scope);
-        extract_runtime_tuple_fields(self, bb, tuple, tuple_ty, 0..field_count, |emitter, ty| {
-            top_level_class_for_ty_in_env(emitter.db(), env, ty, AddressSpaceKind::Memory)
-                .unwrap_or_else(memory_fallback_class)
-        })
     }
 
     fn push_call(
@@ -1741,27 +1739,6 @@ fn resolve_sol_decoder_new<'db>(
     resolve_trait_runtime_instance(db, scope, inst, "decoder_new", vec![input_ty]).ok()
 }
 
-fn resolve_sol_encode_single_root_alloc<'db>(
-    db: &'db dyn MirDb,
-    scope: hir::hir_def::scope_graph::ScopeId<'db>,
-    ty: TyId<'db>,
-) -> Option<RuntimeInstance<'db>> {
-    let assumptions = PredicateListId::empty_list(db);
-    let func = resolve_lib_func_path(db, scope, "core::abi::encode_single_root_alloc")?;
-    let abi_ty = sol_abi_ty(db, scope)?;
-    let key = SemanticInstanceKey::new(
-        db,
-        BodyOwner::Func(func),
-        GenericSubst::new(db, vec![abi_ty, ty]),
-        hir::analysis::semantic::EffectProviderSubst::empty(db),
-        ImplEnv::new(db, scope, assumptions, vec![]),
-    );
-    Some(runtime_instance_for_semantic(
-        db,
-        get_or_build_semantic_instance(db, key),
-    ))
-}
-
 fn resolve_trait_runtime_instance<'db>(
     db: &'db dyn MirDb,
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
@@ -1818,7 +1795,7 @@ mod tests {
     };
 
     #[test]
-    fn contract_recv_abi_encodes_the_declared_return_type() {
+    fn contract_recv_abi_returns_the_declared_type_through_the_host() {
         let mut db = DriverDataBase::default();
         let file_url = Url::parse("file:///contract_recv_abi_declared_return_type.fe").unwrap();
         let file = db.workspace().touch(
@@ -1859,41 +1836,53 @@ pub contract ReturnContract {
         else {
             unreachable!()
         };
-        let RuntimeReturnPlan::Value { ty: declared_ty } = plan.ret else {
+        let RuntimeReturnPlan::Value {
+            ty: declared_ty,
+            return_value,
+            ..
+        } = plan.ret
+        else {
             panic!("recv wrapper should return a value")
         };
+        let return_value_semantic = return_value
+            .key(&db)
+            .semantic(&db)
+            .expect("ContractHost::return_value should be semantic");
+        let return_value_key = return_value_semantic.key(&db);
+        let BodyOwner::Func(return_value_func) = return_value_key.owner(&db) else {
+            panic!("ContractHost::return_value should be a function")
+        };
+        assert_eq!(
+            return_value_func
+                .name(&db)
+                .to_opt()
+                .expect("ContractHost::return_value should be named")
+                .data(&db),
+            "return_value"
+        );
+        let encoded_ty = return_value_key
+            .subst(&db)
+            .generic_args(&db)
+            .last()
+            .copied()
+            .expect("ContractHost::return_value should have a value type argument");
+
         let body = wrapper.instance(&db).body(&db);
-        let encoded_ty = body
+        let terminal_callee = body
             .blocks
             .iter()
-            .flat_map(|block| &block.stmts)
-            .find_map(|stmt| {
-                let RStmt::Assign {
-                    expr: RExpr::Call { callee, .. },
-                    ..
-                } = stmt
-                else {
-                    return None;
-                };
-                let RuntimeInstanceSource::Semantic(semantic) = callee.key(&db).source(&db) else {
-                    return None;
-                };
-                let key = semantic.key(&db);
-                let BodyOwner::Func(func) = key.owner(&db) else {
-                    return None;
-                };
-                if func
-                    .name(&db)
-                    .to_opt()
-                    .is_none_or(|name| name.data(&db) != "encode_single_root_alloc")
-                {
-                    return None;
-                }
-                key.subst(&db).generic_args(&db).get(1).copied()
+            .find_map(|block| match block.terminator {
+                RTerminator::TerminalCall { callee, .. } => Some(callee),
+                _ => None,
             })
-            .expect("recv wrapper should call encode_single_root_alloc");
+            .expect("recv wrapper should terminal-call ContractHost::return_value");
 
         assert_eq!(encoded_ty, declared_ty);
+        assert_eq!(
+            terminal_callee.key(&db).semantic(&db),
+            Some(return_value_semantic),
+            "recv wrapper should terminate through the selected ContractHost::return_value"
+        );
         assert_ne!(
             encoded_ty.pretty_print(&db),
             "String<4>",

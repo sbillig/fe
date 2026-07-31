@@ -809,6 +809,49 @@ mod tests {
     }
 
     #[test]
+    fn optimized_static_contract_return_inlines_the_host_return_policy() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("optimized_static_contract_return.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+
+msg ReturnMsg {
+    #[selector = sol("identity(uint256)")]
+    Identity { value: u256 } -> u256,
+}
+
+pub contract ReturnContract {
+    recv ReturnMsg {
+        Identity { value } -> u256 { value }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("fixture should be loaded");
+        let top_mod = db.top_mod(file);
+        let output = emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O1, None)
+            .expect("static return contract should compile");
+
+        assert!(
+            output.contains("mstore 0.i256") && output.contains("evm_return 0.i256 32.i256"),
+            "optimized static return should encode directly into scratch memory:\n{output}"
+        );
+        assert!(
+            !output.contains("return_value") && !output.contains("encode_single_root_alloc"),
+            "the optimized runtime should inline the host policy and eliminate allocation:\n{output}"
+        );
+    }
+
+    #[test]
     fn result_map_chain_test_runtime_package_retains_value_enum_asserts() {
         let mut db = DriverDataBase::default();
         let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -346,10 +346,8 @@ func inline(always) private %contract_recv_abi_Factory_1() {
         v7.i256 = extract_value v6 0.i256;
         v9.i256 = extract_value v6 1.i256;
         v10.@layout_0 = call %__Factory_recv_0_0 v7 v9;
-        v11.@layout_1 = call %encode_single_root_alloc v10;
-        v12.i256 = extract_value v11 0.i256;
-        v13.i256 = extract_value v11 1.i256;
-        evm_return v12 v13;
+        call %return_value v10;
+        unreachable;
 }
 
 func inline(always) private %contract_recv_abi_Factory_2() {
@@ -372,10 +370,8 @@ func inline(always) private %contract_recv_abi_Factory_2() {
         v9.i256 = extract_value v6 1.i256;
         v11.i256 = extract_value v6 2.i256;
         v12.@layout_0 = call %__Factory_recv_0_1 v7 v9 v11;
-        v13.@layout_1 = call %encode_single_root_alloc v12;
-        v14.i256 = extract_value v13 0.i256;
-        v15.i256 = extract_value v13 1.i256;
-        evm_return v14 v15;
+        call %return_value v12;
+        unreachable;
 }
 
 func private %contract_runtime_root_Child() {
@@ -1492,6 +1488,56 @@ func inline(always) private %read_word(v0.objref<@layout_3>) -> i256 {
         v24.i256 = obj.load v23;
         v25.i1 = lt v15 v24;
         br v25 block2 block5;
+}
+
+func private %return_bytes(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        call %return_data v0 v1;
+        unreachable;
+}
+
+func private %return_data(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        evm_return v0 v1;
+}
+
+func private %return_value(v0.@layout_0) {
+    block0:
+        jump block1;
+
+    block1:
+        br 1.i1 block4 block3;
+
+    block2:
+        br 1.i1 block5 block6;
+
+    block3:
+        v6.@layout_1 = call %encode_single_root_alloc v0;
+        v8.i256 = extract_value v6 0.i256;
+        v10.i256 = extract_value v6 1.i256;
+        call %return_bytes v8 v10;
+        unreachable;
+
+    block4:
+        br 1.i1 block2 block3;
+
+    block5:
+        call %impl_trait_Address__encode_to_ptr__gf13e v0 0.i256;
+        call %return_data 0.i256 32.i256;
+        unreachable;
+
+    block6:
+        v13.*i8 = evm_malloc 32.i256;
+        v14.i256 = ptr_to_int v13 i256;
+        call %impl_trait_Address__encode_to_ptr__gf13e v0 v14;
+        call %return_data v14 32.i256;
+        unreachable;
 }
 
 func private %impl_trait_SolEncoder__set_base(v0.objref<@layout_1>, v1.i256) {

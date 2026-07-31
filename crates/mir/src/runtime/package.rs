@@ -834,10 +834,20 @@ fn contract_recv_wrapper<'db>(
         semantic,
     )?;
     let projected_fields = visible_recv_arg_fields(db, semantic, arm);
+    let host = if abi_info.args_ty != TyId::unit(db) || abi_info.ret_ty.is_some() {
+        Some(contract_recv_host_binding(
+            db,
+            contract,
+            recv.recv_idx(db),
+            arm.arm_idx(db),
+        )?)
+    } else {
+        None
+    };
     let input = if abi_info.args_ty == TyId::unit(db) {
         RuntimeInputPlan::None
     } else {
-        let host = contract_recv_host_binding(db, contract, recv.recv_idx(db), arm.arm_idx(db))?;
+        let host = host.clone().expect("non-unit recv args require a host");
         RuntimeInputPlan::DecodeHostPayload {
             msg_ty: abi_info.args_ty,
             decode_args_fn: resolve_decode_runtime_args_instance(
@@ -852,7 +862,28 @@ fn contract_recv_wrapper<'db>(
         }
     };
     let ret = if let Some(ret_ty) = abi_info.ret_ty {
-        RuntimeReturnPlan::Value { ty: ret_ty }
+        let host = host.expect("value-returning recv requires a host");
+        let contract_host = resolve_core_trait(
+            db,
+            contract.scope(),
+            &["contracts", "ContractHost"],
+        )
+        .ok_or_else(|| {
+            LowerError::Unsupported("missing required core::contracts::ContractHost".to_string())
+        })?;
+        let host_inst = TraitInstId::new_simple(db, contract_host, vec![host.declared_ty]);
+        let return_value = resolve_trait_runtime_instance(
+            db,
+            contract.scope(),
+            host_inst,
+            "return_value",
+            vec![abi_ty, ret_ty],
+        )?;
+        RuntimeReturnPlan::Value {
+            ty: ret_ty,
+            host,
+            return_value,
+        }
     } else {
         RuntimeReturnPlan::Unit
     };
@@ -1902,14 +1933,15 @@ fn runtime_synthetic_spec_key<'db>(
             init_args_plan_key(db, &plan.init_args, mode)
         ),
         RuntimeSyntheticSpec::ContractRecvAbi { plan } => format!(
-            "__synthetic:contract_recv_abi:{}:{}:{}:{}:{}:{}",
+            "__synthetic:contract_recv_abi:{}:{}:{}:{}:{}:{}:{}",
             item_identity(db, plan.contract.into()),
             plan.selector
                 .map_or_else(|| "fallback".to_string(), |selector| selector.to_string()),
             plan.payable,
             instance_key(plan.user_recv),
             entry_semantic_args_sort_key(db, &plan.entry_args),
-            runtime_input_plan_key(db, &plan.input, mode)
+            runtime_input_plan_key(db, &plan.input, mode),
+            runtime_return_plan_key(db, &plan.ret, mode),
         ),
         RuntimeSyntheticSpec::ContractInitRoot {
             contract,
@@ -2076,6 +2108,26 @@ fn runtime_input_plan_key<'db>(
             target_root_provider_binding_sort_key(db, host),
             runtime_instance_key_in_mode(db, *decode_args_fn, mode),
             projected_fields_sort_key(projected_fields),
+        ),
+    }
+}
+
+fn runtime_return_plan_key<'db>(
+    db: &'db dyn MirDb,
+    plan: &RuntimeReturnPlan<'db>,
+    mode: IdentityMode,
+) -> String {
+    match plan {
+        RuntimeReturnPlan::Unit => "unit".to_string(),
+        RuntimeReturnPlan::Value {
+            ty,
+            host,
+            return_value,
+        } => format!(
+            "value:{}:{}:{}",
+            type_identity(db, *ty),
+            target_root_provider_binding_sort_key(db, host),
+            runtime_instance_key_in_mode(db, *return_value, mode),
         ),
     }
 }

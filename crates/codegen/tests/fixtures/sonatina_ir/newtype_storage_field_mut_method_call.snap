@@ -152,10 +152,8 @@ func inline(always) private %contract_recv_abi_NewtypeStorageFieldMutMethodCall_
         v5.objref<@layout_3> = obj.alloc @layout_3;
         call %decode_runtime_args v5;
         v8.i256 = call %__NewtypeStorageFieldMutMethodCall_recv_0_0 1.i256;
-        v9.@layout_0 = call %encode_single_root_alloc v8;
-        v10.i256 = extract_value v9 0.i256;
-        v11.i256 = extract_value v9 1.i256;
-        evm_return v10 v11;
+        call %return_value v8;
+        unreachable;
 }
 
 func private %contract_runtime_root_NewtypeStorageFieldMutMethodCall() {
@@ -420,6 +418,56 @@ func private %pos(v0.objref<@layout_0>) -> i256 {
         v3.objref<i256> = obj.proj v0 1.i256;
         v4.i256 = obj.load v3;
         return v4;
+}
+
+func private %return_bytes(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        call %return_data v0 v1;
+        unreachable;
+}
+
+func private %return_data(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        evm_return v0 v1;
+}
+
+func private %return_value(v0.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        br 1.i1 block4 block3;
+
+    block2:
+        br 1.i1 block5 block6;
+
+    block3:
+        v6.@layout_0 = call %encode_single_root_alloc v0;
+        v8.i256 = extract_value v6 0.i256;
+        v10.i256 = extract_value v6 1.i256;
+        call %return_bytes v8 v10;
+        unreachable;
+
+    block4:
+        br 1.i1 block2 block3;
+
+    block5:
+        call %encode_to_ptr v0 0.i256;
+        call %return_data 0.i256 32.i256;
+        unreachable;
+
+    block6:
+        v13.*i8 = evm_malloc 32.i256;
+        v14.i256 = ptr_to_int v13 i256;
+        call %encode_to_ptr v0 v14;
+        call %return_data v14 32.i256;
+        unreachable;
 }
 
 func private %set_base(v0.objref<@layout_0>, v1.i256) {
