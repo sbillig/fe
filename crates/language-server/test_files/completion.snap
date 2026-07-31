@@ -34,7 +34,6 @@ completions:
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
   - IntDowncast (Interface)
-  - Into (Interface)
   - Log (Interface)
   - MemArray (Struct)
   - MemBuffer (Struct)

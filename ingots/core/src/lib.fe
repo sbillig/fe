@@ -3,7 +3,6 @@ pub use result::Result
 pub use default::Default
 pub use clone::Clone
 pub use marker::Copy
-pub use convert::Into
 pub use abi::{self, *}
 pub use message::MsgVariant
 pub use error::ErrorVariant

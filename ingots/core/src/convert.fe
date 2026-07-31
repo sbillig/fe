@@ -1,3 +1,0 @@
-pub trait Into<T> {
-    fn into(own self) -> T
-}

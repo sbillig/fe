@@ -1,6 +1,5 @@
 pub use super::{
     clone::Clone,
-    convert::Into,
     default::Default,
     marker::Copy,
     error::ErrorVariant,
