@@ -102,15 +102,6 @@ func private %abi_single_root_size(v0.@layout_0) -> i256 {
         return v2;
 }
 
-func private %abort() {
-    block0:
-        jump block1;
-
-    block1:
-        call %revert 0.i256 0.i256;
-        unreachable;
-}
-
 func inline(always) private %at(v0.i256) -> @layout_1 {
     block0:
         jump block1;
@@ -977,62 +968,26 @@ func inline(always) private %decode_payload__g407e(v0.objref<@layout_3>) -> i256
 
 func inline(always) private %decode_runtime_args__gbdfb(v0.objref<@layout_6>) -> @layout_1 {
     block0:
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
         jump block1;
 
     block1:
-        v3.@layout_0 = call %input;
-        v5.i256 = call %impl_trait_CallData__len v3;
-        mstore v1 4.i256 i256;
-        br 0.i1 block2 block5;
-
-    block2:
-        call %abort;
-        unreachable;
-
-    block3:
-        jump block4;
-
-    block4:
-        v12.@layout_1 = call %decode_from_prechecked_head__gbecb v3 4.i256 v5;
-        return v12;
-
-    block5:
-        mstore v2 v5 i256;
-        v15.i256 = mload v2 i256;
-        v16.i1 = gt 68.i256 v15;
-        br v16 block2 block3;
+        v1.@layout_0 = call %input;
+        v3.i256 = call %impl_trait_CallData__len v1;
+        call %validate_runtime_head v3 4.i256 64.i256;
+        v6.@layout_1 = call %decode_from_prechecked_head__gbecb v1 4.i256 v3;
+        return v6;
 }
 
 func inline(always) private %decode_runtime_args__gadcc(v0.objref<@layout_6>) -> @layout_4 {
     block0:
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
         jump block1;
 
     block1:
-        v3.@layout_0 = call %input;
-        v5.i256 = call %impl_trait_CallData__len v3;
-        mstore v1 4.i256 i256;
-        br 0.i1 block2 block5;
-
-    block2:
-        call %abort;
-        unreachable;
-
-    block3:
-        jump block4;
-
-    block4:
-        v12.@layout_4 = call %decode_from_prechecked_head__g4e6c v3 4.i256 v5;
-        return v12;
-
-    block5:
-        mstore v2 v5 i256;
-        v15.i256 = mload v2 i256;
-        v16.i1 = gt 100.i256 v15;
-        br v16 block2 block3;
+        v1.@layout_0 = call %input;
+        v3.i256 = call %impl_trait_CallData__len v1;
+        call %validate_runtime_head v3 4.i256 96.i256;
+        v6.@layout_4 = call %decode_from_prechecked_head__g4e6c v1 4.i256 v3;
+        return v6;
 }
 
 func private %decoder_new(v0.@layout_1) -> @layout_3 {
@@ -1314,6 +1269,14 @@ func private %encoder_new(v0.i256) -> @layout_1 {
         return v2;
 }
 
+func private %from_word(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
 func private %input() -> @layout_0 {
     block0:
         jump block1;
@@ -1531,14 +1494,6 @@ func inline(always) private %read_word(v0.objref<@layout_3>) -> i256 {
         br v25 block2 block5;
 }
 
-func private %revert(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        evm_revert v0 v1;
-}
-
 func private %impl_trait_SolEncoder__set_base(v0.objref<@layout_1>, v1.i256) {
     block0:
         jump block1;
@@ -1587,6 +1542,41 @@ func private %store_word(v0.i256, v1.i256) {
     block1:
         mstore v0 v1 i256;
         return;
+}
+
+func inline(always) private %validate_runtime_head(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v3.*i256 = alloca i256;
+        jump block1;
+
+    block1:
+        v6.i1 = eq v2 0.i256;
+        v7.i1 = is_zero v6;
+        br v7 block2 block3;
+
+    block2:
+        v10.i256 = sub v0 v1;
+        v11.i256 = call %from_word v10;
+        v13.i256 = call %from_word v2;
+        mstore v3 v13 i256;
+        v14.i256 = mload v3 i256;
+        v15.i1 = slt v11 v14;
+        br v15 block5 block6;
+
+    block3:
+        jump block4;
+
+    block4:
+        return;
+
+    block5:
+        evm_revert 0.i256 0.i256;
+
+    block6:
+        jump block7;
+
+    block7:
+        jump block4;
 }
 
 func inline(always) private %impl_trait_CallData__word_at(v0.@layout_0, v1.i256) -> i256 {

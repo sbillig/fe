@@ -560,6 +560,62 @@ pub contract C {
     );
 }
 
+#[test]
+fn runtime_abi_head_guard_matches_modern_solidity_signed_size_check() {
+    let output = with_top_mod_for_source(
+        "runtime_abi_head_guard_matches_modern_solidity_signed_size_check.fe",
+        r#"
+msg Msg {
+    #[selector = 1]
+    Identity { value: u256 } -> u256,
+    #[selector = 2]
+    Ping -> u256,
+}
+
+pub contract Identity {
+    recv Msg {
+        Identity { value } -> u256 {
+            value
+        }
+        Ping -> u256 {
+            1
+        }
+    }
+}
+"#,
+        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit"),
+    );
+
+    assert!(
+        output.lines().any(|line| {
+            line.contains("call %validate_runtime_head") && line.contains("4.i256 32.i256")
+        }),
+        "runtime decoder should validate its one-word head after the selector:\n{output}"
+    );
+    assert!(
+        output.lines().any(|line| {
+            line.contains("call %validate_runtime_head") && line.contains("4.i256 0.i256")
+        }),
+        "zero-argument runtime decoder should retain its empty-head path:\n{output}"
+    );
+
+    let guard = sonatina_function_body(&output, "validate_runtime_head")
+        .expect("Sol ABI should provide runtime head validation");
+    let comparisons = guard
+        .lines()
+        .filter(|line| line.contains(" = lt ") || line.contains(" = slt "))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        comparisons.len(),
+        1,
+        "Sol runtime head validation should use one size comparison:\n{guard}"
+    );
+    assert!(
+        comparisons[0].contains(" = slt "),
+        "Sol runtime head validation should use Solidity's signed size comparison:\n{guard}"
+    );
+}
+
 // NOTE: `dir_test` discovers fixtures at compile time; new fixture files will be picked up on a
 // clean build (e.g. CI) or whenever this test target is recompiled.
 //
