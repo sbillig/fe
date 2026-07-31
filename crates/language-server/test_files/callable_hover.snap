@@ -1,0 +1,98 @@
+---
+source: crates/language-server/src/functionality/hover.rs
+expression: snapshot
+input_file: test_files/callable_hover.fe
+---
+## generic
+range: 21:17..21:25
+
+```fe
+let function: F
+```
+
+### Callable
+
+```fe
+|_: own u256| -> u256
+```
+
+Capability: **reusable**
+
+---
+
+## literal
+range: 26:14..26:58
+
+### Callable
+
+```fe
+|value: own u256| -> u256
+```
+
+Capability: **reusable**
+
+Captures: `u256` (read)
+
+---
+
+## binding
+range: 27:17..27:20
+
+```fe
+let add: |own u256| -> u256
+```
+
+### Callable
+
+```fe
+|value: own u256| -> u256
+```
+
+Capability: **reusable**
+
+Captures: `u256` (read)
+
+---
+
+## projected
+range: 30:27..30:35
+
+```fe
+callable_hover::Holder
+```
+
+```fe
+struct Holder<F> {
+    function: F,
+}
+```
+
+
+### Callable
+
+```fe
+|value: own u256| -> u256
+```
+
+Capability: **reusable**
+
+Captures: `u256` (read)
+
+---
+
+## user_callable
+range: 34:22..34:30
+
+```fe
+let callable: AddOne
+```
+
+### Callable
+
+```fe
+|_: own u256| -> u256
+```
+
+Capability: **reusable**
+
+---

@@ -1,0 +1,36 @@
+use core::functional::{Fn, FnOnce}
+
+struct Holder<F> {
+    function: F,
+}
+
+struct AddOne {}
+
+impl FnOnce<(u256,), u256> for AddOne {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        self.call(args.0)
+    }
+}
+
+impl Fn<(u256,), u256> for AddOne {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+fn generic_hover<F: Fn<(u256,), u256>>(_ function: F) {
+    let result = <|generic|>function(41)
+}
+
+fn callable_hover() {
+    let offset = 1
+    let add = <|literal|>|value: own u256| -> u256 { value + offset }
+    let answer = <|binding|>add(41)
+
+    let holder = Holder { function: add }
+    let projected = holder.<|projected|>function
+    assert(projected(41) == answer)
+
+    let callable = AddOne {}
+    let user_result = <|user_callable|>callable(41)
+}
