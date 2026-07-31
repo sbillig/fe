@@ -14,7 +14,7 @@ pub use ir::*;
 pub use layout_utils::*;
 pub use lower::*;
 pub use package::{
-    LowerError, build_ingot_module_runtime_package, build_runtime_package,
+    LowerError, build_ingot_module_runtime_package, build_library_package, build_runtime_package,
     build_test_runtime_package, runtime_instance_stable_key, runtime_instance_symbol_key,
 };
 pub use pretty::{
