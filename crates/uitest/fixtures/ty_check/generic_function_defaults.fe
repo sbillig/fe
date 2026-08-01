@@ -27,6 +27,14 @@ impl<T> Receiver<T> {
     fn inherited_type_default<U = T>(self) {}
 }
 
+struct PlainReceiver {}
+
+impl PlainReceiver {
+    fn inherent_self_default<T = Self>(self, _ value: T) {}
+
+    fn associated_self_default<T = Self>(_ value: T) {}
+}
+
 trait TraitDefault {
     fn inherited_self_default<U = Self>(self: Self) {}
 }
@@ -35,7 +43,11 @@ struct TraitReceiver {}
 
 impl TraitDefault for TraitReceiver {}
 
-fn exercise_defaults(receiver: Receiver<u256>, trait_receiver: TraitReceiver) {
+fn exercise_defaults(
+    receiver: Receiver<u256>,
+    plain_receiver: PlainReceiver,
+    trait_receiver: TraitReceiver,
+) {
     all_type_defaults()
     all_const_defaults()
     inferred_type_then_default(true)
@@ -45,5 +57,7 @@ fn exercise_defaults(receiver: Receiver<u256>, trait_receiver: TraitReceiver) {
     partial_const_default<1>([0, 1])
     partial_const_default<1, 3>([0, 1, 2])
     receiver.inherited_type_default()
+    plain_receiver.inherent_self_default(PlainReceiver {})
+    PlainReceiver::associated_self_default(PlainReceiver {})
     trait_receiver.inherited_self_default()
 }
