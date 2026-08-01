@@ -1047,7 +1047,11 @@ pub enum RuntimeInputPlan<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RuntimeReturnPlan<'db> {
     Unit,
-    Value { ty: TyId<'db> },
+    Value {
+        ty: TyId<'db>,
+        host: TargetRootProviderBinding<'db>,
+        return_value: RuntimeInstance<'db>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

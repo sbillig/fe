@@ -98,15 +98,6 @@ func private %abi_single_root_size(v0.i256) -> i256 {
         return v2;
 }
 
-func private %abort() {
-    block0:
-        jump block1;
-
-    block1:
-        call %revert 0.i256 0.i256;
-        unreachable;
-}
-
 func inline(always) private %at(v0.i256) -> @layout_0 {
     block0:
         jump block1;
@@ -316,10 +307,8 @@ func inline(always) private %contract_recv_abi_EffectHandleFieldDeref_1() {
         v7.i256 = extract_value v6 0.i256;
         v9.i256 = extract_value v6 1.i256;
         v10.i256 = call %__EffectHandleFieldDeref_recv_0_0 v7 v9;
-        v11.@layout_0 = call %encode_single_root_alloc v10;
-        v12.i256 = extract_value v11 0.i256;
-        v13.i256 = extract_value v11 1.i256;
-        evm_return v12 v13;
+        call %return_value v10;
+        unreachable;
 }
 
 func inline(always) private %contract_recv_abi_EffectHandleFieldDeref_2() {
@@ -340,10 +329,8 @@ func inline(always) private %contract_recv_abi_EffectHandleFieldDeref_2() {
         v6.@layout_2 = call %decode_runtime_args__g01e9 v5;
         v7.i256 = extract_value v6 0.i256;
         v8.i256 = call %__EffectHandleFieldDeref_recv_0_1 v7;
-        v9.@layout_0 = call %encode_single_root_alloc v8;
-        v10.i256 = extract_value v9 0.i256;
-        v12.i256 = extract_value v9 1.i256;
-        evm_return v10 v12;
+        call %return_value v8;
+        unreachable;
 }
 
 func inline(always) private %contract_recv_abi_EffectHandleFieldDeref_3() {
@@ -364,10 +351,8 @@ func inline(always) private %contract_recv_abi_EffectHandleFieldDeref_3() {
         v6.@layout_2 = call %decode_runtime_args__g0392 v5;
         v7.i256 = extract_value v6 0.i256;
         v8.i256 = call %__EffectHandleFieldDeref_recv_0_2 v7 0.i256;
-        v9.@layout_0 = call %encode_single_root_alloc v8;
-        v10.i256 = extract_value v9 0.i256;
-        v12.i256 = extract_value v9 1.i256;
-        evm_return v10 v12;
+        call %return_value v8;
+        unreachable;
 }
 
 func private %contract_runtime_root_EffectHandleFieldDeref() {
@@ -708,92 +693,38 @@ func inline(always) private %core__lib__abi__decode_msg_field_from__g5385_c914(v
 
 func inline(always) private %decode_runtime_args__g5aad(v0.objref<@layout_4>) -> @layout_0 {
     block0:
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
         jump block1;
 
     block1:
-        v3.@layout_2 = call %input;
-        v5.i256 = call %len v3;
-        mstore v1 4.i256 i256;
-        br 0.i1 block2 block5;
-
-    block2:
-        call %abort;
-        unreachable;
-
-    block3:
-        jump block4;
-
-    block4:
-        v12.@layout_0 = call %decode_from_prechecked_head__g1d15 v3 4.i256 v5;
-        return v12;
-
-    block5:
-        mstore v2 v5 i256;
-        v15.i256 = mload v2 i256;
-        v16.i1 = gt 68.i256 v15;
-        br v16 block2 block3;
+        v1.@layout_2 = call %input;
+        v3.i256 = call %len v1;
+        call %validate_runtime_head v3 4.i256 64.i256;
+        v6.@layout_0 = call %decode_from_prechecked_head__g1d15 v1 4.i256 v3;
+        return v6;
 }
 
 func inline(always) private %decode_runtime_args__g01e9(v0.objref<@layout_4>) -> @layout_2 {
     block0:
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
         jump block1;
 
     block1:
-        v3.@layout_2 = call %input;
-        v5.i256 = call %len v3;
-        mstore v1 4.i256 i256;
-        br 0.i1 block2 block5;
-
-    block2:
-        call %abort;
-        unreachable;
-
-    block3:
-        jump block4;
-
-    block4:
-        v12.@layout_2 = call %decode_from_prechecked_head__ge273 v3 4.i256 v5;
-        return v12;
-
-    block5:
-        mstore v2 v5 i256;
-        v15.i256 = mload v2 i256;
-        v16.i1 = gt 36.i256 v15;
-        br v16 block2 block3;
+        v1.@layout_2 = call %input;
+        v3.i256 = call %len v1;
+        call %validate_runtime_head v3 4.i256 32.i256;
+        v6.@layout_2 = call %decode_from_prechecked_head__ge273 v1 4.i256 v3;
+        return v6;
 }
 
 func inline(always) private %decode_runtime_args__g0392(v0.objref<@layout_4>) -> @layout_2 {
     block0:
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
         jump block1;
 
     block1:
-        v3.@layout_2 = call %input;
-        v5.i256 = call %len v3;
-        mstore v1 4.i256 i256;
-        br 0.i1 block2 block5;
-
-    block2:
-        call %abort;
-        unreachable;
-
-    block3:
-        jump block4;
-
-    block4:
-        v12.@layout_2 = call %decode_from_prechecked_head__gdaee v3 4.i256 v5;
-        return v12;
-
-    block5:
-        mstore v2 v5 i256;
-        v15.i256 = mload v2 i256;
-        v16.i1 = gt 36.i256 v15;
-        br v16 block2 block3;
+        v1.@layout_2 = call %input;
+        v3.i256 = call %len v1;
+        call %validate_runtime_head v3 4.i256 32.i256;
+        v6.@layout_2 = call %decode_from_prechecked_head__gdaee v1 4.i256 v3;
+        return v6;
 }
 
 func private %encode(v0.i256, v1.objref<@layout_0>) {
@@ -923,6 +854,14 @@ func private %from_raw(v0.i256) -> @layout_2 {
         return v4;
 }
 
+func private %from_word(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
 func private %input() -> @layout_2 {
     block0:
         jump block1;
@@ -1038,12 +977,54 @@ func private %read_cell(v0.i256) -> i256 {
         return v6;
 }
 
-func private %revert(v0.i256, v1.i256) {
+func private %return_bytes(v0.i256, v1.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_revert v0 v1;
+        call %return_data v0 v1;
+        unreachable;
+}
+
+func private %return_data(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        evm_return v0 v1;
+}
+
+func private %return_value(v0.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        br 1.i1 block4 block3;
+
+    block2:
+        br 1.i1 block5 block6;
+
+    block3:
+        v6.@layout_0 = call %encode_single_root_alloc v0;
+        v8.i256 = extract_value v6 0.i256;
+        v10.i256 = extract_value v6 1.i256;
+        call %return_bytes v8 v10;
+        unreachable;
+
+    block4:
+        br 1.i1 block2 block3;
+
+    block5:
+        call %encode_to_ptr v0 0.i256;
+        call %return_data 0.i256 32.i256;
+        unreachable;
+
+    block6:
+        v13.*i8 = evm_malloc 32.i256;
+        v14.i256 = ptr_to_int v13 i256;
+        call %encode_to_ptr v0 v14;
+        call %return_data v14 32.i256;
+        unreachable;
 }
 
 func private %set_base(v0.objref<@layout_0>, v1.i256) {
@@ -1082,6 +1063,41 @@ func private %store_word(v0.i256, v1.i256) {
     block1:
         mstore v0 v1 i256;
         return;
+}
+
+func inline(always) private %validate_runtime_head(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v3.*i256 = alloca i256;
+        jump block1;
+
+    block1:
+        v6.i1 = eq v2 0.i256;
+        v7.i1 = is_zero v6;
+        br v7 block2 block3;
+
+    block2:
+        v10.i256 = sub v0 v1;
+        v11.i256 = call %from_word v10;
+        v13.i256 = call %from_word v2;
+        mstore v3 v13 i256;
+        v14.i256 = mload v3 i256;
+        v15.i1 = slt v11 v14;
+        br v15 block5 block6;
+
+    block3:
+        jump block4;
+
+    block4:
+        return;
+
+    block5:
+        evm_revert 0.i256 0.i256;
+
+    block6:
+        jump block7;
+
+    block7:
+        jump block4;
 }
 
 func inline(always) private %word_at(v0.@layout_2, v1.i256) -> i256 {

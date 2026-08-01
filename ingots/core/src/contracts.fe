@@ -58,10 +58,7 @@ pub fn decode_runtime_args<H, A, T>(_ host: mut H) -> T
     let input = host.input()
     let base = A::SELECTOR_SIZE
     let len = input.len()
-    let end = base + T::HEAD_SIZE
-    if end < base || end > len {
-        host.abort()
-    }
+    A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
 
     T::decode_from_prechecked_head(input, base, len)
 }
