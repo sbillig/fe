@@ -219,9 +219,9 @@ completions:
   - x (Variable) [x: _]
 
 note: 
-   ┌─ completion.fe:88:17
+   ┌─ completion.fe:89:17
    │
-88 │     let value = 
+89 │     let value = 
    │                 ^ cursor 8
 
 completions:
@@ -234,6 +234,8 @@ completions:
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
   - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
   - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
+  - function (Variable) [function: fn another_func_with_args]
+  - function(…) (Function) -> "function(${1:x}, ${2:y})$0" [|x: i32, y: i32| -> i32]
   - help (Function) -> "help()$0" [use utils::help [fn help() -> i32]] {+0:use utils::help}
   - helper_func (Function) -> "helper_func()$0" [use utils::helper_func [fn helper_func() -> i32]] {+0:use utils::helper_func}
   - holder (Variable) [holder: CallableHolder<|own u256| -> u256>]
@@ -255,19 +257,19 @@ completions:
   - value (Variable) [value: _]
 
 note: 
-   ┌─ completion.fe:91:12
+   ┌─ completion.fe:92:12
    │
-91 │     holder.
+92 │     holder.
    │            ^ cursor 9
 
 completions:
   - function (Field) [function: |own u256| -> u256]
-  - function(…) (Function) -> "function)(${1:value})$0" [|value: own u256| -> u256 [reusable]] {+90:(}
+  - function(…) (Function) -> "function)(${1:value})$0" [|value: own u256| -> u256 [reusable]] {+91:(}
 
 note: 
-   ┌─ completion.fe:95:17
+   ┌─ completion.fe:96:17
    │
-95 │     let value = 
+96 │     let value = 
    │                 ^ cursor 10
 
 completions:
@@ -300,9 +302,9 @@ completions:
   - value (Variable) [value: _]
 
 note: 
-    ┌─ completion.fe:109:16
+    ┌─ completion.fe:110:16
     │
-109 │         let h: 
+110 │         let h: 
     │                ^ cursor 11
 
 completions:
@@ -312,7 +314,7 @@ completions:
   - Evm (Struct)
   - Helper (Struct)
   - Option (Enum)
-  - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+99:use other_stuff::OtherThing}
+  - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+100:use other_stuff::OtherThing}
   - Panic (Struct)
   - Point (Struct)
   - Result (Enum)
@@ -322,9 +324,9 @@ completions:
   - Vec (Class)
 
 note: 
-    ┌─ completion.fe:124:16
+    ┌─ completion.fe:125:16
     │
-124 │         let x: 
+125 │         let x: 
     │                ^ cursor 12
 
 completions:
@@ -332,11 +334,11 @@ completions:
   - Bytes (Struct)
   - CallableHolder (Struct)
   - Evm (Struct)
-  - Helpable (Interface) [use utils::Helpable [Helpable]] {+121:use utils::Helpable}
-  - Helper (Struct) [use utils::Helper [Helper]] {+121:use utils::Helper}
-  - Helper (Struct) [use shadow_test::Helper [Helper]] {+121:use shadow_test::Helper}
+  - Helpable (Interface) [use utils::Helpable [Helpable]] {+122:use utils::Helpable}
+  - Helper (Struct) [use utils::Helper [Helper]] {+122:use utils::Helper}
+  - Helper (Struct) [use shadow_test::Helper [Helper]] {+122:use shadow_test::Helper}
   - Option (Enum)
-  - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+121:use other_stuff::OtherThing}
+  - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+122:use other_stuff::OtherThing}
   - Panic (Struct)
   - Point (Struct)
   - Result (Enum)

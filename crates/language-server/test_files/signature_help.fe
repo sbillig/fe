@@ -32,6 +32,10 @@ fn ordinary(value: own u256, flag: bool) -> u256 {
     if flag { value } else { 0 }
 }
 
+fn apply<F: Fn<(u256, u256), u256>>(function: F, fallback: own u256) -> u256 {
+    function(20, 22) + fallback
+}
+
 fn generic<F: Fn<(u256,), u256>>(_ function: F) -> u256 {
     function(<|generic|>41)
 }
@@ -41,6 +45,13 @@ fn exercise() {
 
     let add = |value: own u256| -> u256 { value + 1 }
     add(<|closure|>41)
+    Fn<(u256,), u256>::call(<|ufcs_receiver|>add, 41)
+    Fn<(u256,), u256>::call(add, <|ufcs_argument|>41)
+
+    apply(
+        |left: own u256, <|closure_parameter_list|>right: own u256| -> u256 { left + right },
+        0,
+    )
 
     let holder = Holder { function: add }
     (holder.function)(<|projected|>41)

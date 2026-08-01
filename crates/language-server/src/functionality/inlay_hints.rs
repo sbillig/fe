@@ -159,12 +159,15 @@ mod tests {
     #[test]
     fn call_parameter_hints_use_logical_closure_parameters() {
         let mut db = DriverDataBase::default();
-        let source = r#"fn ordinary(value: own u256) -> u256 { value }
+        let source = r#"use core::functional::Fn
+
+fn ordinary(value: own u256) -> u256 { value }
 
 fn main() {
     let add = |amount: own u256| -> u256 { amount + 1 }
     ordinary(40)
     add(41)
+    Fn<(u256,), u256>::call(add, 42)
 }
 "#;
         let file = db.workspace().touch(
@@ -183,6 +186,6 @@ fn main() {
                 InlayHintLabel::LabelParts(_) => unreachable!(),
             })
             .collect::<Vec<_>>();
-        assert_eq!(labels, vec!["value:", "amount:"]);
+        assert_eq!(labels, vec!["value:", "amount:", "self:", "amount:"]);
     }
 }

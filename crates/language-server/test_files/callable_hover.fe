@@ -6,6 +6,30 @@ struct Holder<F> {
 
 struct AddOne {}
 
+struct Counter {
+    value: u256,
+}
+
+trait Read {
+    fn read(self, amount: own u256) -> u256
+}
+
+impl Counter {
+    fn add(self, amount: own u256) -> u256 {
+        self.value + amount
+    }
+}
+
+impl Read for Counter {
+    fn read(self, amount: own u256) -> u256 {
+        self.value + amount
+    }
+}
+
+fn increment(amount: own u256) -> u256 {
+    amount + 1
+}
+
 impl FnOnce<(u256,), u256> for AddOne {
     fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
         self.call(args.0)
@@ -33,4 +57,13 @@ fn callable_hover() {
 
     let callable = AddOne {}
     let user_result = <|user_callable|>callable(41)
+
+    let function = increment
+    let function_result = <|function_item|>function(41)
+
+    let method = Counter::add
+    let method_result = <|ufcs_function_item|>method(Counter { value: 1 }, 41)
+
+    let read = Read::read
+    let read_result = <|trait_function_item|>read(Counter { value: 1 }, 41)
 }

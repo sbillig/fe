@@ -4,7 +4,7 @@ expression: snapshot
 input_file: test_files/callable_hover.fe
 ---
 ## generic
-range: 21:17..21:25
+range: 45:17..45:25
 
 ```fe
 let function: F
@@ -21,7 +21,7 @@ Capability: **reusable**
 ---
 
 ## literal
-range: 26:14..26:58
+range: 50:14..50:58
 
 ### Callable
 
@@ -36,7 +36,7 @@ Captures: `u256` (read)
 ---
 
 ## binding
-range: 27:17..27:20
+range: 51:17..51:20
 
 ```fe
 let add: |own u256| -> u256
@@ -55,7 +55,7 @@ Captures: `u256` (read)
 ---
 
 ## projected
-range: 30:27..30:35
+range: 54:27..54:35
 
 ```fe
 callable_hover::Holder
@@ -81,7 +81,7 @@ Captures: `u256` (read)
 ---
 
 ## user_callable
-range: 34:22..34:30
+range: 58:22..58:30
 
 ```fe
 let callable: AddOne
@@ -94,5 +94,56 @@ let callable: AddOne
 ```
 
 Capability: **reusable**
+
+---
+
+## function_item
+range: 61:26..61:34
+
+```fe
+let function: fn increment
+```
+
+### Callable
+
+```fe
+|amount: own u256| -> u256
+```
+
+Capability: **callable**
+
+---
+
+## ufcs_function_item
+range: 64:24..64:30
+
+```fe
+let method: fn add
+```
+
+### Callable
+
+```fe
+|self: Counter, amount: own u256| -> u256
+```
+
+Capability: **callable**
+
+---
+
+## trait_function_item
+range: 67:22..67:26
+
+```fe
+let read: fn read<Counter>
+```
+
+### Callable
+
+```fe
+|self: Counter, amount: own u256| -> u256
+```
+
+Capability: **callable**
 
 ---

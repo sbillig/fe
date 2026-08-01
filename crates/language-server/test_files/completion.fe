@@ -85,6 +85,7 @@ struct CallableHolder<F> {
 
 fn test_callable_completion() {
     let add = |value: own u256| -> u256 { value + 1 }
+    let function = another_func_with_args
     let value = <|>
 
     let holder = CallableHolder { function: add }

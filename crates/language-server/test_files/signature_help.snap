@@ -15,6 +15,18 @@ active: Some(1)
 add(value: own u256) -> u256 [reusable]
 active: Some(0)
 
+## ufcs_receiver
+call(self: |own u256| -> u256, value: own u256) -> u256 [reusable]
+active: Some(0)
+
+## ufcs_argument
+call(self: |own u256| -> u256, value: own u256) -> u256 [reusable]
+active: Some(1)
+
+## closure_parameter_list
+fn apply(function: |own u256, own u256| -> u256, fallback: own u256) -> u256
+active: Some(0)
+
 ## projected
 holder.function(value: own u256) -> u256 [reusable]
 active: Some(0)

@@ -13,7 +13,7 @@ use hir::{
     },
     hir_def::{Expr, ItemKind, Partial, TopLevelMod},
     lower::map_file_to_mod,
-    span::LazySpan,
+    span::{LazySpan, expr::LazyCallArgListSpan},
 };
 
 pub async fn handle_signature_help(
@@ -59,18 +59,29 @@ fn find_signature_at_cursor<'db>(
     cursor: parser::TextSize,
     file_text: &str,
 ) -> Option<SignatureHelp> {
-    let mut best: Option<(parser::TextSize, CallSiteView<'db>, parser::TextRange)> = None;
+    let mut best: Option<(
+        parser::TextSize,
+        CallSiteView<'db>,
+        LazyCallArgListSpan<'db>,
+        parser::TextRange,
+        usize,
+    )> = None;
 
     for item in top_mod.scope_graph(db).items_dfs(db) {
         let ItemKind::Body(body) = item else {
             continue;
         };
         for site in body.call_sites(db) {
-            let args = match site.kind {
-                CallSiteKind::FnCall => site.expr_id.span(body).into_call_expr().args(),
-                CallSiteKind::MethodCall { .. } => {
-                    site.expr_id.span(body).into_method_call_expr().args()
-                }
+            let (args, argument_count) = match site.expr_id.data(db, body) {
+                Partial::Present(Expr::Call(_, arguments)) => (
+                    site.expr_id.span(body).into_call_expr().args(),
+                    arguments.len(),
+                ),
+                Partial::Present(Expr::MethodCall(_, _, _, arguments)) => (
+                    site.expr_id.span(body).into_method_call_expr().args(),
+                    arguments.len(),
+                ),
+                _ => continue,
             };
             let Some(span) = args.resolve(db) else {
                 continue;
@@ -83,15 +94,22 @@ fn find_signature_at_cursor<'db>(
                 .as_ref()
                 .is_none_or(|(best_size, ..)| size < *best_size)
             {
-                best = Some((size, site, span.range));
+                best = Some((size, site, args, span.range, argument_count));
             }
         }
     }
 
-    let (_, site, args_range) = best?;
+    let (_, site, args_span, args_range, argument_count) = best?;
     let signature = LogicalCallableSignature::for_call_site(db, &site)?;
-    let active_parameter =
-        compute_active_parameter(cursor, args_range, file_text, signature.params.len());
+    let active_parameter = compute_active_parameter(
+        db,
+        &args_span,
+        argument_count,
+        cursor,
+        args_range,
+        file_text,
+        signature.params.len(),
+    );
     Some(build_signature_help(
         db,
         &site,
@@ -101,9 +119,14 @@ fn find_signature_at_cursor<'db>(
     ))
 }
 
-/// Count only top-level commas in the exact argument-list span. Unlike the
-/// previous whole-call scan, this remains correct for nested/returned calls.
+/// Select the resolved outer argument containing the cursor. Commas inside an
+/// argument expression, including a closure parameter list, cannot affect the
+/// result. The text scan is retained only for incomplete syntax whose argument
+/// spans cannot all be resolved.
 fn compute_active_parameter(
+    db: &DriverDataBase,
+    args_span: &LazyCallArgListSpan<'_>,
+    argument_count: usize,
     cursor: parser::TextSize,
     args_range: parser::TextRange,
     file_text: &str,
@@ -112,6 +135,41 @@ fn compute_active_parameter(
     if parameter_count == 0 {
         return None;
     }
+    let max_parameter = parameter_count.saturating_sub(1);
+    let argument_ranges = (0..argument_count)
+        .map(|idx| {
+            args_span
+                .clone()
+                .arg(idx)
+                .resolve(db)
+                .map(|span| span.range)
+        })
+        .collect::<Option<Vec<_>>>();
+    if let Some(argument_ranges) = argument_ranges {
+        if argument_ranges.is_empty() {
+            return Some(0);
+        }
+        for (idx, range) in argument_ranges.iter().enumerate() {
+            if cursor < range.start() {
+                return Some(idx.min(max_parameter) as u32);
+            }
+            if cursor <= range.end() {
+                return Some(idx.min(max_parameter) as u32);
+            }
+            let next_start = argument_ranges
+                .get(idx + 1)
+                .map_or(args_range.end(), |range| range.start());
+            if cursor < next_start || idx + 1 == argument_ranges.len() {
+                let gap_start = usize::from(range.end());
+                let gap_end = usize::from(cursor.min(args_range.end()));
+                let after_separator = file_text
+                    .get(gap_start..gap_end)
+                    .is_some_and(|gap| gap.contains(','));
+                return Some((idx + usize::from(after_separator)).min(max_parameter) as u32);
+            }
+        }
+    }
+
     let start = usize::from(args_range.start());
     let end = usize::from(args_range.end());
     let cursor = usize::from(cursor).min(end);
@@ -185,7 +243,7 @@ fn compute_active_parameter(
         }
     }
 
-    Some(commas.min(parameter_count.saturating_sub(1) as u32))
+    Some(commas.min(max_parameter as u32))
 }
 
 fn build_signature_help<'db>(

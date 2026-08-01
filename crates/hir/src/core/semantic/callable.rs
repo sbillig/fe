@@ -16,8 +16,8 @@ use crate::{
             trait_def::TraitInstId,
             trait_lower::lower_impl_trait,
             trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
-            ty_check::{Callable, TypedBody},
-            ty_def::{ClosureCallMode, ClosureParamMode, ClosureTy, TyId},
+            ty_check::{Callable, SemanticExprLowering, TypedBody},
+            ty_def::{ClosureCallMode, ClosureParamMode, ClosureTy, TyBase, TyData, TyId},
             unify::UnificationTable,
         },
     },
@@ -120,12 +120,19 @@ impl<'db> LogicalCallableSignature<'db> {
     pub fn for_call_site(db: &'db dyn HirAnalysisDb, site: &CallSiteView<'db>) -> Option<Self> {
         let typed_body = typed_body_for_body(db, site.body)?;
         let callable = typed_body.callable_expr(site.expr_id)?;
-        Some(Self::from_selected_callable(
+        let receiver_is_implicit = matches!(site.kind, CallSiteKind::MethodCall { .. })
+            || matches!(
+                typed_body.semantic_expr_lowering(site.expr_id),
+                Some(SemanticExprLowering::Call {
+                    callee_is_receiver: true,
+                    ..
+                })
+            );
+        Some(Self::from_callable(
             db,
-            site.body,
-            typed_body,
+            site.body.scope(),
             callable,
-            matches!(site.kind, CallSiteKind::MethodCall { .. }),
+            receiver_is_implicit,
         ))
     }
 
@@ -153,11 +160,21 @@ impl<'db> LogicalCallableSignature<'db> {
         }
     }
 
-    pub fn for_ty(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<Self> {
+    pub fn for_ty(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    ) -> Option<Self> {
         let payload = ty.as_capability(db).map_or(ty, |(_, payload)| payload);
-        payload
-            .as_closure(db)
-            .map(|closure| Self::for_closure(db, closure))
+        if let Some(closure) = payload.as_closure(db) {
+            return Some(Self::for_closure(db, closure));
+        }
+        let (base, _) = payload.decompose_ty_app(db);
+        let TyData::TyBase(TyBase::Func(callable_def)) = base.data(db) else {
+            return None;
+        };
+        let callable = Callable::new(db, payload, callable_def.name_span(), None).ok()?;
+        Some(Self::from_callable(db, scope, &callable, false))
     }
 
     /// Enumerate the logical call signatures supported by a value in this
@@ -169,7 +186,7 @@ impl<'db> LogicalCallableSignature<'db> {
         ty: TyId<'db>,
         scope: crate::hir_def::scope_graph::ScopeId<'db>,
     ) -> Vec<Self> {
-        if let Some(signature) = Self::for_ty(db, ty) {
+        if let Some(signature) = Self::for_ty(db, ty, scope) {
             return vec![signature];
         }
         let payload = ty.as_capability(db).map_or(ty, |(_, payload)| payload);
@@ -237,20 +254,19 @@ impl<'db> LogicalCallableSignature<'db> {
         deduped
     }
 
-    fn from_selected_callable(
+    fn from_callable(
         db: &'db dyn HirAnalysisDb,
-        body: Body<'db>,
-        _typed_body: &TypedBody<'db>,
+        scope: crate::hir_def::scope_graph::ScopeId<'db>,
         callable: &Callable<'db>,
-        is_method_call: bool,
+        receiver_is_implicit: bool,
     ) -> Self {
         let closure = concrete_closure_for_callable(db, callable);
-        if let Some(pack) = callable.call_trait_args_pack_ty(db, body.scope()) {
+        if let Some(pack) = callable.call_trait_args_pack_ty(db, scope) {
             let closure_modes = closure.map(|closure| closure.param_modes(db));
             let closure_names = closure
                 .map(|closure| closure_param_names(db, closure))
                 .unwrap_or_default();
-            let params = pack
+            let mut params = pack
                 .field_types(db)
                 .into_iter()
                 .enumerate()
@@ -265,10 +281,15 @@ impl<'db> LogicalCallableSignature<'db> {
                         ty: mode.payload(db, carrier),
                     }
                 })
-                .collect();
+                .collect::<Vec<_>>();
+            if !receiver_is_implicit
+                && let Some(receiver) = logical_param_from_callable(db, callable, 0)
+            {
+                params.insert(0, receiver);
+            }
             let call_trait = callable
                 .trait_inst()
-                .and_then(|inst| ClosureCallTrait::for_trait(db, body.scope(), inst.def(db)));
+                .and_then(|inst| ClosureCallTrait::for_trait(db, scope, inst.def(db)));
             let capability =
                 closure
                     .map(|closure| closure.call_mode(db).into())
@@ -291,36 +312,9 @@ impl<'db> LogicalCallableSignature<'db> {
         }
 
         let callable_def = callable.callable_def();
-        let skip = usize::from(is_method_call);
+        let skip = usize::from(receiver_is_implicit);
         let params = (skip..callable_def.arg_tys(db).len())
-            .filter_map(|idx| {
-                let carrier = callable.arg_ty(db, idx)?;
-                let mode = match callable_def {
-                    CallableDef::Func(func) => func
-                        .params(db)
-                        .nth(idx)
-                        .map(|param| param.mode(db).into())
-                        .unwrap_or(LogicalCallableParamMode::View),
-                    CallableDef::VariantCtor(_) => ClosureParamMode::try_from_carrier(db, carrier)
-                        .unwrap_or(ClosureParamMode::View)
-                        .into(),
-                };
-                let name = callable_def
-                    .param_label_or_name(db, idx)
-                    .and_then(|name| match name {
-                        FuncParamName::Ident(name) => Some(name),
-                        FuncParamName::Underscore => None,
-                    });
-                let ty = match mode {
-                    LogicalCallableParamMode::Own => carrier,
-                    LogicalCallableParamMode::View
-                    | LogicalCallableParamMode::Ref
-                    | LogicalCallableParamMode::Mut => carrier
-                        .as_capability(db)
-                        .map_or(carrier, |(_, payload)| payload),
-                };
-                Some(LogicalCallableParam { name, mode, ty })
-            })
+            .filter_map(|idx| logical_param_from_callable(db, callable, idx))
             .collect();
 
         Self {
@@ -330,6 +324,40 @@ impl<'db> LogicalCallableSignature<'db> {
             capability: None,
         }
     }
+}
+
+fn logical_param_from_callable<'db>(
+    db: &'db dyn HirAnalysisDb,
+    callable: &Callable<'db>,
+    idx: usize,
+) -> Option<LogicalCallableParam<'db>> {
+    let callable_def = callable.callable_def();
+    let carrier = callable.arg_ty(db, idx)?;
+    let mode = match callable_def {
+        CallableDef::Func(func) => func
+            .params(db)
+            .nth(idx)
+            .map(|param| param.mode(db).into())
+            .unwrap_or(LogicalCallableParamMode::View),
+        CallableDef::VariantCtor(_) => ClosureParamMode::try_from_carrier(db, carrier)
+            .unwrap_or(ClosureParamMode::View)
+            .into(),
+    };
+    let name = callable_def
+        .param_label_or_name(db, idx)
+        .and_then(|name| match name {
+            FuncParamName::Ident(name) => Some(name),
+            FuncParamName::Underscore => None,
+        });
+    let ty = match mode {
+        LogicalCallableParamMode::Own => carrier,
+        LogicalCallableParamMode::View
+        | LogicalCallableParamMode::Ref
+        | LogicalCallableParamMode::Mut => carrier
+            .as_capability(db)
+            .map_or(carrier, |(_, payload)| payload),
+    };
+    Some(LogicalCallableParam { name, mode, ty })
 }
 
 /// Return the source impl blocks that can make `ty` callable in `scope`.
