@@ -1,4 +1,5 @@
 // Test completion in various contexts
+use core::functional::Fn
 
 mod utils {
     pub struct Helper {
@@ -76,6 +77,22 @@ fn test_locals(param: i32) {
     let local_var = 10
     // Should show param, local_var
     let x = <|>
+}
+
+struct CallableHolder<F> {
+    function: F,
+}
+
+fn test_callable_completion() {
+    let add = |value: own u256| -> u256 { value + 1 }
+    let value = <|>
+
+    let holder = CallableHolder { function: add }
+    holder.<|>
+}
+
+fn test_generic_callable_completion<F: Fn<(u256,), u256>>(_ function: F) {
+    let value = <|>
 }
 
 // Test that local definitions shadow glob imports

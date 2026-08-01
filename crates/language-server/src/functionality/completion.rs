@@ -1,4 +1,7 @@
-use crate::{backend::Backend, util::to_offset_from_position};
+use crate::{
+    backend::Backend,
+    util::{to_lsp_range_from_span, to_offset_from_position},
+};
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, InsertTextFormat,
@@ -10,6 +13,7 @@ use hir::{
     analysis::name_resolution::{
         NameDomain, NameResKind, available_traits_in_scope, is_scope_visible_from,
     },
+    core::semantic::{LogicalCallableParamMode, LogicalCallableSignature},
     hir_def::{
         Body, Func, HirIngot, ItemKind, Partial, Pat, Stmt, TopLevelMod, scope_graph::ScopeId,
     },
@@ -756,33 +760,30 @@ fn collect_member_completions<'db>(
     cursor: parser::TextSize,
     items: &mut Vec<CompletionItem>,
 ) {
-    use hir::analysis::ty::ty_check::check_func_body;
     use hir::hir_def::Expr;
     use hir::span::LazySpan;
 
-    // Find the enclosing function
-    let scope_graph = top_mod.scope_graph(db);
-    let mut enclosing_func = None;
-
-    for item in scope_graph.items_dfs(db) {
-        if let ItemKind::Func(func) = item
-            && let Some(span) = func.span().resolve(db)
-            && span.range.contains(cursor)
-        {
-            enclosing_func = Some(func);
-        }
-    }
-
-    let Some(func) = enclosing_func else {
+    let body = top_mod
+        .scope_graph(db)
+        .items_dfs(db)
+        .filter_map(|item| match item {
+            ItemKind::Body(body) => Some(body),
+            _ => None,
+        })
+        .filter_map(|body| Some((body.span().resolve(db)?.range.len(), body)))
+        .filter(|(_, body)| {
+            body.span()
+                .resolve(db)
+                .is_some_and(|span| span.range.contains(cursor))
+        })
+        .min_by_key(|(size, _)| *size)
+        .map(|(_, body)| body);
+    let Some(body) = body else {
         return;
     };
-
-    let Some(body) = func.body(db) else {
+    let Some(typed_body) = body.typed_body(db) else {
         return;
     };
-
-    // Get typed body for type information
-    let (_, typed_body) = check_func_body(db, func);
 
     // Strategy 1: Find Field expressions (field access like `foo.bar` or incomplete `foo.`)
     // that contain the cursor, and use their receiver's type
@@ -805,7 +806,9 @@ fn collect_member_completions<'db>(
                             let ident_str = ident.data(db);
 
                             // Special case: if the path is "self", get the self parameter's type
-                            if ident_str == "self" {
+                            if ident_str == "self"
+                                && let Some(func) = body.containing_func(db)
+                            {
                                 for param in func.params(db) {
                                     if param.is_self_param(db) {
                                         let self_ty = param.ty(db);
@@ -835,8 +838,8 @@ fn collect_member_completions<'db>(
                         }
                     }
 
-                    collect_fields_for_type(db, ty, items);
-                    collect_methods_for_type(db, top_mod, ty, func.scope(), items);
+                    collect_fields_for_type(db, ty, Some((body, *receiver_id)), items);
+                    collect_methods_for_type(db, top_mod, ty, body.scope(), items);
                     return;
                 }
             }
@@ -852,8 +855,8 @@ fn collect_member_completions<'db>(
             && resolved.range.end() == dot_pos
         {
             let ty = typed_body.expr_ty(db, expr_id);
-            collect_fields_for_type(db, ty, items);
-            collect_methods_for_type(db, top_mod, ty, func.scope(), items);
+            collect_fields_for_type(db, ty, Some((body, expr_id)), items);
+            collect_methods_for_type(db, top_mod, ty, body.scope(), items);
             return;
         }
     }
@@ -863,6 +866,7 @@ fn collect_member_completions<'db>(
 fn collect_fields_for_type<'db>(
     db: &'db DriverDataBase,
     ty: hir::analysis::ty::ty_def::TyId<'db>,
+    receiver: Option<(Body<'db>, hir::hir_def::ExprId)>,
     items: &mut Vec<CompletionItem>,
 ) {
     // Use the traversal API to get fields for struct/contract types
@@ -870,11 +874,11 @@ fn collect_fields_for_type<'db>(
         return;
     };
 
-    for field in field_parent.fields(db) {
+    let field_tys = ty.field_types(db);
+    for (field, field_ty) in field_parent.fields(db).zip(field_tys) {
         let Some(name) = field.name(db) else {
             continue;
         };
-        let field_ty = field.ty(db);
         let detail = format!("{}: {}", name.data(db), field_ty.pretty_print(db));
 
         items.push(CompletionItem {
@@ -883,7 +887,105 @@ fn collect_fields_for_type<'db>(
             detail: Some(detail),
             ..Default::default()
         });
+        items.extend(build_value_invocation_completions(
+            db,
+            name.data(db),
+            field_ty,
+            receiver
+                .map(|(body, _)| body.scope())
+                .unwrap_or(field.scope()),
+            receiver,
+        ));
     }
+}
+
+fn build_value_invocation_completions(
+    db: &DriverDataBase,
+    name: &str,
+    ty: hir::analysis::ty::ty_def::TyId<'_>,
+    scope: ScopeId<'_>,
+    field_receiver: Option<(Body<'_>, hir::hir_def::ExprId)>,
+) -> Vec<CompletionItem> {
+    LogicalCallableSignature::for_ty_in_scope(db, ty, scope)
+        .into_iter()
+        .filter_map(|signature| {
+            build_value_invocation_completion(db, name, signature, field_receiver)
+        })
+        .collect()
+}
+
+fn build_value_invocation_completion(
+    db: &DriverDataBase,
+    name: &str,
+    signature: LogicalCallableSignature<'_>,
+    field_receiver: Option<(Body<'_>, hir::hir_def::ExprId)>,
+) -> Option<CompletionItem> {
+    let param_names = signature
+        .params
+        .iter()
+        .enumerate()
+        .map(|(idx, param)| {
+            param
+                .name
+                .map(|name| name.data(db).to_string())
+                .unwrap_or_else(|| format!("arg{}", idx + 1))
+        })
+        .collect::<Vec<_>>();
+    let params = signature
+        .params
+        .iter()
+        .zip(&param_names)
+        .map(|(param, name)| {
+            let mode = match param.mode {
+                LogicalCallableParamMode::View => "",
+                LogicalCallableParamMode::Own => "own ",
+                LogicalCallableParamMode::Ref => "ref ",
+                LogicalCallableParamMode::Mut => "mut ",
+            };
+            format!("{name}: {mode}{}", param.ty.pretty_print(db))
+        })
+        .collect::<Vec<_>>();
+    let args = param_names
+        .iter()
+        .enumerate()
+        .map(|(idx, name)| format!("${{{}:{name}}}", idx + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let ret = signature.ret_ty.pretty_print(db);
+    let ret = if ret == "()" {
+        String::new()
+    } else {
+        format!(" -> {ret}")
+    };
+    let capability = signature
+        .capability
+        .map(|capability| format!(" [{}]", capability.as_str()))
+        .unwrap_or_default();
+
+    let (insert_text, additional_text_edits) = if let Some((body, receiver)) = field_receiver {
+        let span = receiver.span(body).resolve(db)?;
+        let start = to_lsp_range_from_span(span, db).ok()?.start;
+        (
+            format!("{name})({args})$0"),
+            Some(vec![TextEdit {
+                range: Range::new(start, start),
+                new_text: "(".to_string(),
+            }]),
+        )
+    } else {
+        (format!("{name}({args})$0"), None)
+    };
+
+    Some(CompletionItem {
+        label: format!("{name}(…)"),
+        filter_text: Some(name.to_string()),
+        kind: Some(CompletionItemKind::FUNCTION),
+        detail: Some(format!("|{}|{ret}{capability}", params.join(", "))),
+        insert_text: Some(insert_text),
+        insert_text_format: Some(InsertTextFormat::SNIPPET),
+        additional_text_edits,
+        ..Default::default()
+    })
 }
 
 /// Build a completion item for a callable (function or method) with snippet tabstops.
@@ -1117,6 +1219,13 @@ fn collect_func_params<'db>(
                 detail: Some(detail),
                 ..Default::default()
             });
+            items.extend(build_value_invocation_completions(
+                db,
+                name.data(db),
+                ty,
+                func.scope(),
+                None,
+            ));
         }
     }
 }
@@ -1127,13 +1236,9 @@ fn collect_let_bindings<'db>(
     body: Body<'db>,
     items: &mut Vec<CompletionItem>,
 ) {
-    use hir::analysis::ty::ty_check::check_func_body;
-
-    // Get the containing function and type-checked body
-    let Some(func) = body.containing_func(db) else {
+    let Some(typed_body) = body.typed_body(db) else {
         return;
     };
-    let (_, typed_body) = check_func_body(db, func);
 
     let mut collector = LetBindingCollector {
         db,
@@ -1172,11 +1277,18 @@ impl<'a, 'db> Visitor<'db> for LetBindingCollector<'a, 'db> {
                 let detail = format!("{}: {}", name, ty.pretty_print(self.db));
 
                 self.items.push(CompletionItem {
-                    label: name,
+                    label: name.clone(),
                     kind: Some(CompletionItemKind::VARIABLE),
                     detail: Some(detail),
                     ..Default::default()
                 });
+                self.items.extend(build_value_invocation_completions(
+                    self.db,
+                    &name,
+                    ty,
+                    self.body.scope(),
+                    None,
+                ));
             }
         }
         walk_stmt(self, ctxt, _stmt);
@@ -1558,6 +1670,145 @@ mod tests {
         // For top-level modules, we insert at line 0
         let position = find_import_insertion_position(file_text);
         assert_eq!(position.line, 0, "Expected insertion at start of file");
+    }
+
+    #[test]
+    fn callable_completion_lists_distinct_applicable_overloads() {
+        let source = r#"
+use core::functional::{Fn, FnOnce}
+
+struct Overloaded {}
+
+impl FnOnce<(u256,), u256> for Overloaded {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        args.0
+    }
+}
+
+impl Fn<(u256,), u256> for Overloaded {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0
+    }
+}
+
+impl FnOnce<(bool,), bool> for Overloaded {
+    fn call_once(self: own Self, _ args: own (bool,)) -> bool {
+        args.0
+    }
+}
+
+impl Fn<(bool,), bool> for Overloaded {
+    fn call(self, _ args: own (bool,)) -> bool {
+        args.0
+    }
+}
+
+struct Specialized<T> {
+    marker: T,
+}
+
+impl FnOnce<(u256,), u256> for Specialized<u256> {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        args.0
+    }
+}
+
+impl Fn<(u256,), u256> for Specialized<u256> {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0
+    }
+}
+
+impl FnOnce<(bool,), bool> for Specialized<bool> {
+    fn call_once(self: own Self, _ args: own (bool,)) -> bool {
+        args.0
+    }
+}
+
+impl Fn<(bool,), bool> for Specialized<bool> {
+    fn call(self, _ args: own (bool,)) -> bool {
+        args.0
+    }
+}
+
+trait Enabled {}
+struct EnabledValue {}
+struct DisabledValue {}
+
+impl Enabled for EnabledValue {}
+
+struct Bounded<T> {
+    marker: T,
+}
+
+impl<T: Enabled> FnOnce<(u256,), u256> for Bounded<T> {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        args.0
+    }
+}
+
+impl<T: Enabled> Fn<(u256,), u256> for Bounded<T> {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0
+    }
+}
+
+fn exercise() {
+    let overloaded = Overloaded {}
+    let specialized: Specialized<u256> = Specialized { marker: 0 }
+    let accepted: Bounded<EnabledValue> = Bounded { marker: EnabledValue {} }
+    let rejected: Bounded<DisabledValue> = Bounded { marker: DisabledValue {} }
+    let result = <|>
+}
+"#;
+        let (source, positions) = extract_cursor_markers(source);
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            url::Url::parse("file:///callable_completion_overloads.fe").unwrap(),
+            Some(source.clone()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+        let completions = collect_completions_at_cursor(
+            &db,
+            top_mod,
+            &source,
+            parser::TextSize::from(positions[0] as u32),
+        );
+
+        let overloaded = completions
+            .iter()
+            .filter(|completion| completion.starts_with("overloaded(…)"))
+            .collect::<Vec<_>>();
+        assert_eq!(overloaded.len(), 2);
+        assert!(
+            overloaded
+                .iter()
+                .any(|completion| completion.contains("|arg1: own u256| -> u256 [reusable]"))
+        );
+        assert!(
+            overloaded
+                .iter()
+                .any(|completion| completion.contains("|arg1: own bool| -> bool [reusable]"))
+        );
+
+        let specialized = completions
+            .iter()
+            .filter(|completion| completion.starts_with("specialized(…)"))
+            .collect::<Vec<_>>();
+        assert_eq!(specialized.len(), 1);
+        assert!(specialized[0].contains("|arg1: own u256| -> u256 [reusable]"));
+
+        assert!(
+            completions
+                .iter()
+                .any(|completion| completion.starts_with("accepted(…)"))
+        );
+        assert!(
+            completions
+                .iter()
+                .all(|completion| !completion.starts_with("rejected(…)"))
+        );
     }
 
     /// Extract cursor markers (<|>) and their positions from source text.
