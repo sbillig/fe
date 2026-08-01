@@ -3621,9 +3621,6 @@ impl<'db> GenericParamTypeSet<'db> {
     ///
     /// - `provided_explicit`: args corresponding to the explicit params (i.e.,
     ///   skipping implicit ones like trait `Self`).
-    /// - `implicit_bindings`: mapping of (lowered_idx -> TyId) for implicit
-    ///   parameters that should be available when evaluating defaults (e.g.,
-    ///   trait `Self` at index 0).
     pub(crate) fn complete_explicit_args(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -3636,6 +3633,7 @@ impl<'db> GenericParamTypeSet<'db> {
         self.complete_explicit_args_with_defaults_in_mode(
             db,
             trait_self.as_slice(),
+            trait_self.is_some(),
             provided_explicit,
             assumptions,
             completion,
@@ -3653,9 +3651,15 @@ impl<'db> GenericParamTypeSet<'db> {
         completion: ConstDefaultCompletion<'db>,
         minter: Option<&HoleMinter<'db>>,
     ) -> Vec<TyId<'db>> {
+        let Some(GenericParamOwner::Func(func)) =
+            GenericParamOwner::from_item_opt(self.scope(db).item())
+        else {
+            unreachable!("callable generic parameters should belong to a function")
+        };
         self.complete_explicit_args_with_defaults_in_mode(
             db,
             implicit_args,
+            func.is_associated_func(db),
             provided_explicit,
             assumptions,
             completion,
@@ -3676,6 +3680,7 @@ impl<'db> GenericParamTypeSet<'db> {
         self.complete_explicit_args_with_defaults_in_mode(
             db,
             trait_self.as_slice(),
+            trait_self.is_some(),
             provided_explicit,
             assumptions,
             completion,
@@ -3707,6 +3712,7 @@ impl<'db> GenericParamTypeSet<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
         implicit_args: &[TyId<'db>],
+        self_ty_available: bool,
         provided_explicit: &[TyId<'db>],
         assumptions: PredicateListId<'db>,
         completion: ConstDefaultCompletion<'db>,
@@ -3786,7 +3792,7 @@ impl<'db> GenericParamTypeSet<'db> {
             let prec = &self.params_precursor(db)[i];
 
             if let Some(hir_ty) = prec.default_hir_ty {
-                let lowered = if hir_ty.is_self_ty(db) && implicit_args.is_empty() {
+                let lowered = if hir_ty.is_self_ty(db) && !self_ty_available {
                     TyId::invalid(db, InvalidCause::Other)
                 } else if let Some(minter) = minter {
                     // Mint through the application's minter: the memoized
