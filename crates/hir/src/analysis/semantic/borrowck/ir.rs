@@ -364,6 +364,22 @@ pub(crate) fn return_borrow_results_in_ty<'db>(
     borrow_results_in_ty_impl(db, ty, true, &mut BorrowSlotFamilyIds::default())
 }
 
+pub(super) fn borrow_results_in_ty_with_family_ids<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    family_ids: &mut BorrowSlotFamilyIds,
+) -> Vec<BorrowResult> {
+    borrow_results_in_ty_impl(db, ty, false, family_ids)
+}
+
+pub(super) fn return_borrow_results_in_ty_with_family_ids<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    family_ids: &mut BorrowSlotFamilyIds,
+) -> Vec<BorrowResult> {
+    borrow_results_in_ty_impl(db, ty, true, family_ids)
+}
+
 fn borrow_results_in_ty_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,

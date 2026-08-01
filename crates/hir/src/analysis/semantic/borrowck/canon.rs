@@ -355,6 +355,63 @@ pub(super) struct CanonPlace<'db> {
     pub(super) proj: CanonProjectionPath<'db>,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct LoanRegion<'db> {
+    pub(super) targets: FxHashSet<CanonPlace<'db>>,
+    pub(super) exclusions: FxHashSet<CanonPlace<'db>>,
+}
+
+impl<'db> LoanRegion<'db> {
+    pub(super) fn active_targets(&self) -> FxHashSet<CanonPlace<'db>> {
+        self.targets
+            .iter()
+            .filter(|target| {
+                !self
+                    .exclusions
+                    .iter()
+                    .any(|excluded| place_covers(excluded, target))
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub(super) fn covers(&self, target: &CanonPlace<'_>) -> bool {
+        self.targets
+            .iter()
+            .any(|region| place_covers(region, target))
+            && !self
+                .exclusions
+                .iter()
+                .any(|excluded| places_overlap(excluded, target))
+    }
+
+    pub(super) fn overlaps(&self, target: &CanonPlace<'_>) -> bool {
+        self.targets
+            .iter()
+            .any(|region| places_overlap(region, target))
+            && !self
+                .exclusions
+                .iter()
+                .any(|excluded| place_covers(excluded, target))
+    }
+}
+
+fn place_covers(container: &CanonPlace<'_>, target: &CanonPlace<'_>) -> bool {
+    container.root == target.root
+        && container.proj.len() <= target.proj.len()
+        && container
+            .proj
+            .iter()
+            .zip(target.proj.iter())
+            .all(|(container, target)| {
+                container == target
+                    || matches!(
+                        container,
+                        Projection::Index(IndexSource::Dynamic(CanonIndex::Any))
+                    )
+            })
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Loan<'db> {
     pub(super) kind: BorrowKind,
@@ -946,9 +1003,9 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
         local: SLocalId,
         path: &[LayoutBackingProjection],
         held: &HeldLoan,
-    ) -> (FxHashSet<CanonPlace<'db>>, FxHashSet<CanonPlace<'db>>) {
+    ) -> LoanRegion<'db> {
         let targets = self.targets_for_held(held);
-        let overrides = state
+        let exclusions = state
             .definite_overrides
             .get(&local)
             .into_iter()
@@ -970,7 +1027,10 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
             .filter_map(|override_| held.with_match_bindings(path, override_))
             .flat_map(|held| self.targets_for_held(&held))
             .collect();
-        (targets, overrides)
+        LoanRegion {
+            targets,
+            exclusions,
+        }
     }
 
     fn deepest_held_projection_targets(
@@ -997,21 +1057,22 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
             }
             suffix.push(projection.clone());
         }
-        Some(
-            matches
-                .into_iter()
-                .flat_map(|(_, loans)| loans)
-                .flat_map(|held| {
-                    let suffix = canon_projection_from_semantic(&suffix);
-                    self.targets_for_held(&held)
+        let suffix = canon_projection_from_semantic(&suffix);
+        let mut targets = FxHashSet::default();
+        for (path, loans) in matches {
+            for held in loans {
+                targets.extend(
+                    self.active_targets_for_held(state, local, &path, &held)
+                        .active_targets()
                         .into_iter()
-                        .map(move |target| CanonPlace {
+                        .map(|target| CanonPlace {
                             root: target.root,
                             proj: target.proj.concat(&suffix),
-                        })
-                })
-                .collect(),
-        )
+                        }),
+                );
+            }
+        }
+        Some(targets)
     }
 
     pub(super) fn apply_stmt_state_with_call_loans(
@@ -1319,12 +1380,15 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
         let Some(local_data) = self.body.local(local) else {
             return FxHashSet::default();
         };
-        let held_targets = state
-            .deepest_held_loan_matches(local, projection)
-            .into_iter()
-            .flat_map(|(_, loans)| loans)
-            .flat_map(|loan| self.targets_for_held(&loan))
-            .collect::<FxHashSet<_>>();
+        let mut held_targets = FxHashSet::default();
+        for (path, loans) in state.deepest_held_loan_matches(local, projection) {
+            for loan in loans {
+                held_targets.extend(
+                    self.active_targets_for_held(state, local, &path, &loan)
+                        .active_targets(),
+                );
+            }
+        }
         let layout_backing_targets = if state.path_is_definite_override(local, projection) {
             FxHashSet::default()
         } else {

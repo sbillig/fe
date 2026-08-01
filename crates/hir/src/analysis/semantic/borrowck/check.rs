@@ -12,8 +12,8 @@ use crate::{
         analysis_pass::ModuleAnalysisPass,
         diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
         semantic::{
-            BorrowActivation, LayoutBackingProjection, SBlockId, SConst, SStmtId, SemConstScalar,
-            SemConstValue, SemOrigin, SemanticInstance, SemanticInstanceKey,
+            BorrowActivation, LayoutBackingProjection, SBlockId, SConst, SLocalId, SStmtId,
+            SemConstScalar, SemConstValue, SemOrigin, SemanticInstance, SemanticInstanceKey,
             get_or_build_semantic_instance, identity_semantic_instance_key,
         },
         ty::{
@@ -24,7 +24,7 @@ use crate::{
     },
     core::semantic::EffectEnvView,
     hir_def::{Body, Expr, FuncParamMode, ItemKind, Partial, TopLevelMod},
-    projection::{IndexSource, Projection},
+    projection::Projection,
 };
 
 use super::{
@@ -33,20 +33,21 @@ use super::{
         BorrowLoanTargetState, BorrowMovedStateAnalysis, BorrowSummaryMode,
     },
     canon::{
-        BlockAdjacency, BorrowCanonCx, BorrowRoot, CanonIndex, CanonPlace, CfgAdjacency, HeldLoan,
-        HeldLoans, Loan, LoanId, MoveSite, MovedPlaces, State, canon_projection_for_layout_path,
+        BlockAdjacency, BorrowCanonCx, BorrowRoot, CanonPlace, CfgAdjacency, HeldLoan, HeldLoans,
+        Loan, LoanId, LoanRegion, MoveSite, MovedPlaces, State, canon_projection_for_layout_path,
         place_set_overlaps, places_overlap,
     },
     diagnostics::operand_origin,
     facts::NormalizedBodyFacts,
     ir::{
-        BorrowDiagnosticId, BorrowInput, BorrowResult, BorrowSummary, BorrowSummaryId,
-        BorrowTransform, NBorrowRoot, NBorrowRootId, NEffectArgValue, NExpr, NOperand, NSPlace,
-        NSPlaceRoot, NSStmtKind, NSTerminatorKind, NormalizedBindingLowering,
+        BorrowDiagnosticId, BorrowInput, BorrowResult, BorrowSlotFamilyIds, BorrowSummary,
+        BorrowSummaryId, BorrowTransform, NBorrowRoot, NBorrowRootId, NEffectArgValue, NExpr,
+        NOperand, NSPlace, NSPlaceRoot, NSStmtKind, NSTerminatorKind, NormalizedBindingLowering,
         NormalizedSemanticBody, ReadMode, SemanticBorrowCheckResult, SemanticBorrowDiagKind,
         SemanticBorrowDiagnostic, SemanticBorrowDiagnosticSpan, SemanticBorrowSummaryResult,
-        borrow_results_in_ty, local_has_runtime_move_semantics, return_borrow_results_in_ty,
-        semantic_projection_ty,
+        borrow_results_in_ty, borrow_results_in_ty_with_family_ids,
+        local_has_runtime_move_semantics, return_borrow_results_in_ty,
+        return_borrow_results_in_ty_with_family_ids, semantic_projection_ty,
     },
     normalize::{normalize_provisional_semantic_body, normalize_semantic_body},
     verify::verify_normalized_semantic_body,
@@ -343,38 +344,10 @@ struct CallAccess<'db> {
     origin: SemOrigin<'db>,
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct LoanRegion<'db> {
-    targets: FxHashSet<CanonPlace<'db>>,
-    exclusions: FxHashSet<CanonPlace<'db>>,
-}
-
 struct ActiveLoan<'db> {
     id: LoanId,
     region: LoanRegion<'db>,
     suspended: Vec<LoanRegion<'db>>,
-}
-
-impl LoanRegion<'_> {
-    fn covers(&self, target: &CanonPlace<'_>) -> bool {
-        self.targets
-            .iter()
-            .any(|region| place_covers(region, target))
-            && !self
-                .exclusions
-                .iter()
-                .any(|excluded| places_overlap(excluded, target))
-    }
-
-    fn overlaps(&self, target: &CanonPlace<'_>) -> bool {
-        self.targets
-            .iter()
-            .any(|region| places_overlap(region, target))
-            && !self
-                .exclusions
-                .iter()
-                .any(|excluded| place_covers(excluded, target))
-    }
 }
 
 impl ActiveLoan<'_> {
@@ -384,22 +357,6 @@ impl ActiveLoan<'_> {
                 && !self.suspended.iter().any(|region| region.covers(target))
         })
     }
-}
-
-fn place_covers(container: &CanonPlace<'_>, target: &CanonPlace<'_>) -> bool {
-    container.root == target.root
-        && container.proj.len() <= target.proj.len()
-        && container
-            .proj
-            .iter()
-            .zip(target.proj.iter())
-            .all(|(container, target)| {
-                container == target
-                    || matches!(
-                        container,
-                        Projection::Index(IndexSource::Dynamic(CanonIndex::Any))
-                    )
-            })
 }
 
 fn variant_slots_are_mutually_exclusive(
@@ -1432,9 +1389,9 @@ impl<'db> Borrowck<'db> {
                 .local(value.local)
                 .is_some_and(|local| ty_is_borrow(self.db, local.ty).is_none())
         {
-            for loan_id in state.loans_in(value.local) {
-                let loan = &self.loans[loan_id.0 as usize];
-                let targets = self.resolve_return_targets(state, &loan.targets, term.origin)?;
+            for loan in self.active_loans_in(state, value.local) {
+                let targets =
+                    self.resolve_return_targets(state, &loan.region.active_targets(), term.origin)?;
                 if let Some(local) = targets.iter().find_map(|target| match target.root {
                     BorrowRoot::Local(local) => Some(local),
                     BorrowRoot::Param(_) | BorrowRoot::Provider(_) => None,
@@ -1446,7 +1403,7 @@ impl<'db> Borrowck<'db> {
                     );
                     self.push_secondary_origin(
                         &mut diag,
-                        self.loan_origin(loan_id),
+                        self.loan_origin(loan.id),
                         "borrow created here".to_string(),
                     );
                     return Err(diag);
@@ -1636,28 +1593,12 @@ impl<'db> Borrowck<'db> {
         state: &State,
         live: &FxHashSet<crate::analysis::semantic::SLocalId>,
     ) -> Vec<ActiveLoan<'db>> {
-        let canon = self.canon();
-        let mut active = Vec::new();
-        for (local, held_by_path) in state
+        let mut active = state
             .local_loans
             .iter()
             .filter(|(local, _)| live.contains(local))
-        {
-            for (path, held_loans) in held_by_path {
-                for held in held_loans {
-                    let (targets, overrides) =
-                        canon.active_targets_for_held(state, *local, path, held);
-                    active.push(ActiveLoan {
-                        id: held.id,
-                        region: LoanRegion {
-                            targets,
-                            exclusions: overrides,
-                        },
-                        suspended: Vec::new(),
-                    });
-                }
-            }
-        }
+            .flat_map(|(local, _)| self.active_loans_in(state, *local))
+            .collect::<Vec<_>>();
         let mut suspended = FxHashMap::<LoanId, Vec<LoanRegion<'db>>>::default();
         let mut worklist = active
             .iter()
@@ -1677,6 +1618,23 @@ impl<'db> Borrowck<'db> {
         }
         active.sort_by_key(|loan| loan.id.0);
         active
+    }
+
+    fn active_loans_in(&self, state: &State, local: SLocalId) -> Vec<ActiveLoan<'db>> {
+        let canon = self.canon();
+        state
+            .local_loans
+            .get(&local)
+            .into_iter()
+            .flatten()
+            .flat_map(|(path, loans)| {
+                loans.iter().map(|held| ActiveLoan {
+                    id: held.id,
+                    region: canon.active_targets_for_held(state, local, path, held),
+                    suspended: Vec::new(),
+                })
+            })
+            .collect()
     }
 
     fn first_loan_conflict(
@@ -2262,47 +2220,52 @@ fn conservative_signature_borrow_summary<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> BorrowSummary {
+    let mut family_ids = BorrowSlotFamilyIds::default();
+    let results = return_borrow_results_in_ty_with_family_ids(
+        db,
+        instance.normalized_result_ty(db),
+        &mut family_ids,
+    );
     let inputs = match instance.key(db).owner(db) {
         BodyOwner::Func(func) => func
             .params(db)
             .filter_map(|param| {
                 u32::try_from(param.index()).ok().map(|idx| {
-                    (
-                        idx,
-                        instance.normalized_ty(db, param.ty(db)),
-                        param.is_mut(db),
-                    )
+                    let ty = instance.normalized_ty(db, param.ty(db));
+                    let borrow_results =
+                        borrow_results_in_ty_with_family_ids(db, ty, &mut family_ids);
+                    (idx, ty, param.is_mut(db), borrow_results)
                 })
             })
             .collect::<Vec<_>>(),
         _ => Vec::new(),
     };
     let mut summary = Vec::new();
-    for result in return_borrow_results_in_ty(db, instance.normalized_result_ty(db)) {
-        for (idx, ty, is_mut) in inputs.iter().copied() {
-            if signature_input_is_unresolved(db, ty) {
+    for result in results {
+        for (idx, ty, is_mut, input_results) in &inputs {
+            if signature_input_is_unresolved(db, *ty) {
                 summary.push(BorrowTransform {
                     result: result.clone(),
-                    input: BorrowInput::AnyInParam(idx),
+                    input: BorrowInput::AnyInParam(*idx),
                 });
                 continue;
             }
-            if result.kind == BorrowKind::Ref || is_mut {
+            if result.kind == BorrowKind::Ref || *is_mut {
                 summary.push(BorrowTransform {
                     result: result.clone(),
                     input: BorrowInput::Place {
-                        param: idx,
+                        param: *idx,
                         projection: Vec::new(),
                     },
                 });
             }
-            for input in borrow_results_in_ty(db, ty) {
+            for input in input_results {
                 if result.kind == BorrowKind::Ref || input.kind == BorrowKind::Mut {
                     summary.push(BorrowTransform {
                         result: result.clone(),
                         input: BorrowInput::Place {
-                            param: idx,
-                            projection: input.projection,
+                            param: *idx,
+                            projection: input.projection.clone(),
                         },
                     });
                 }

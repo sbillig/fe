@@ -2334,6 +2334,27 @@ fn conditional_replacement_keeps_old(condition: bool) {
     alias = 1
     values[0].handle = 2
 }
+
+fn replace_all_local_members(left: mut u256, right: mut u256) -> [Wrap; 2] {
+    let mut old_left = 0
+    let mut old_right = 0
+    let mut values = forward(
+        [Wrap { handle: mut old_left }, Wrap { handle: mut old_right }],
+    )
+    values[0] = Wrap { handle: left }
+    values[1] = Wrap { handle: right }
+    values
+}
+
+fn retain_one_local_member(left: mut u256) -> [Wrap; 2] {
+    let mut old_left = 0
+    let mut old_right = 0
+    let mut values = forward(
+        [Wrap { handle: mut old_left }, Wrap { handle: mut old_right }],
+    )
+    values[0] = Wrap { handle: left }
+    values
+}
 "#,
     );
 
@@ -2351,6 +2372,14 @@ fn conditional_replacement_keeps_old(condition: bool) {
     );
     assert!(
         diags.contains("borrow conflict in `fn conditional_replacement_keeps_old`"),
+        "{diags}"
+    );
+    assert!(
+        !diags.contains("invalid return borrow in `fn replace_all_local_members`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("invalid return borrow in `fn retain_one_local_member`"),
         "{diags}"
     );
 }
@@ -2636,6 +2665,29 @@ fn bad<T: BorrowValue>(mut value: T) {
     let second = value.borrow_value()
     first.value = 1
     second.value = 2
+}
+"#,
+    );
+
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+}
+
+#[test]
+fn opaque_array_result_does_not_assume_pointwise_family_correlation() {
+    let diags = borrow_diags(
+        r#"
+trait Permute {
+    fn permute(self, values: own [mut u256; 2]) -> [mut u256; 2]
+}
+
+fn bad<T: Permute>(permuter: T) {
+    let mut left = 0
+    let mut right = 0
+    let returned = permuter.permute([mut left, mut right])
+    let selected = returned[0]
+    let alias = mut right
+    alias = 1
+    selected = 2
 }
 "#,
     );
