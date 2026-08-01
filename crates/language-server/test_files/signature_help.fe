@@ -10,6 +10,8 @@ struct Counter {
     value: u256,
 }
 
+trait Unary: Fn<(u256,), u256> {}
+
 impl Counter {
     fn add(self, amount: own u256) -> u256 {
         self.value + amount
@@ -32,6 +34,10 @@ fn ordinary(value: own u256, flag: bool) -> u256 {
     if flag { value } else { 0 }
 }
 
+fn capabilities(shared: ref u256, target: mut u256) -> u256 {
+    shared + target
+}
+
 fn apply<F: Fn<(u256, u256), u256>>(function: F, fallback: own u256) -> u256 {
     function(20, 22) + fallback
 }
@@ -40,8 +46,19 @@ fn generic<F: Fn<(u256,), u256>>(_ function: F) -> u256 {
     function(<|generic|>41)
 }
 
+fn generic_owned<T, U, F: Fn<(T,), U>>(_ function: F, value: own T) -> U {
+    function(<|generic_owned|>value)
+}
+
+fn implied_callable<F: Unary>(_ function: F) -> u256 {
+    function(<|implied_supertrait|>41)
+}
+
 fn exercise() {
     ordinary(41, <|ordinary_second|>true)
+    let shared = 1
+    let mut target = 41
+    capabilities(ref shared, <|ordinary_mut|>mut target)
 
     let add = |value: own u256| -> u256 { value + 1 }
     add(<|closure|>41)

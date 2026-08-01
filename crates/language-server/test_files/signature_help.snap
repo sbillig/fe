@@ -7,8 +7,20 @@ input_file: test_files/signature_help.fe
 function(_: own u256) -> u256 [reusable]
 active: Some(0)
 
+## generic_owned
+function(_: own T) -> U [reusable]
+active: Some(0)
+
+## implied_supertrait
+function(_: own u256) -> u256 [reusable]
+active: Some(0)
+
 ## ordinary_second
 fn ordinary(value: own u256, flag: bool) -> u256
+active: Some(1)
+
+## ordinary_mut
+fn capabilities(shared: ref u256, target: mut u256) -> u256
 active: Some(1)
 
 ## closure

@@ -192,7 +192,10 @@ impl<'db> LogicalCallableSignature<'db> {
         let payload = ty.as_capability(db).map_or(ty, |(_, payload)| payload);
         let mut candidates = Vec::new();
 
-        for &inst in enclosing_assumptions(db, scope).list(db) {
+        for &inst in enclosing_assumptions(db, scope)
+            .extend_all_bounds(db)
+            .list(db)
+        {
             if inst.self_ty(db) != payload {
                 continue;
             }
@@ -274,7 +277,7 @@ impl<'db> LogicalCallableSignature<'db> {
                     let mode = closure_modes
                         .and_then(|modes| modes.get(idx).copied())
                         .or_else(|| ClosureParamMode::try_from_carrier(db, carrier))
-                        .unwrap_or(ClosureParamMode::View);
+                        .unwrap_or(ClosureParamMode::Own);
                     LogicalCallableParam {
                         name: closure_names.get(idx).copied().flatten(),
                         mode: mode.into(),
@@ -334,13 +337,12 @@ fn logical_param_from_callable<'db>(
     let callable_def = callable.callable_def();
     let carrier = callable.arg_ty(db, idx)?;
     let mode = match callable_def {
-        CallableDef::Func(func) => func
-            .params(db)
-            .nth(idx)
-            .map(|param| param.mode(db).into())
+        CallableDef::Func(func) => ClosureParamMode::try_from_carrier(db, carrier)
+            .map(Into::into)
+            .or_else(|| func.params(db).nth(idx).map(|param| param.mode(db).into()))
             .unwrap_or(LogicalCallableParamMode::View),
         CallableDef::VariantCtor(_) => ClosureParamMode::try_from_carrier(db, carrier)
-            .unwrap_or(ClosureParamMode::View)
+            .unwrap_or(ClosureParamMode::Own)
             .into(),
     };
     let name = callable_def
@@ -436,7 +438,7 @@ fn signature_from_trait_inst<'db>(
         .into_iter()
         .map(|carrier| {
             let mode =
-                ClosureParamMode::try_from_carrier(db, carrier).unwrap_or(ClosureParamMode::View);
+                ClosureParamMode::try_from_carrier(db, carrier).unwrap_or(ClosureParamMode::Own);
             LogicalCallableParam {
                 name: None,
                 mode: mode.into(),

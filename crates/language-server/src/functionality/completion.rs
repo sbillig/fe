@@ -13,6 +13,7 @@ use hir::{
     analysis::name_resolution::{
         NameDomain, NameResKind, available_traits_in_scope, is_scope_visible_from,
     },
+    analysis::ty::ty_def::CapabilityKind,
     core::semantic::{LogicalCallableParamMode, LogicalCallableSignature},
     hir_def::{
         Body, Func, HirIngot, ItemKind, Partial, Pat, Stmt, TopLevelMod, scope_graph::ScopeId,
@@ -442,7 +443,7 @@ fn build_func_snippet_and_detail<'db>(
     func: Func<'db>,
     name_str: &str,
 ) -> (String, String) {
-    let mut param_names = Vec::new();
+    let mut param_args = Vec::new();
     let mut param_details = Vec::new();
 
     for param in func.params(db) {
@@ -452,10 +453,15 @@ fn build_func_snippet_and_detail<'db>(
         let param_name = param
             .name(db)
             .map(|n| n.data(db).to_string())
-            .unwrap_or_else(|| format!("arg{}", param_names.len()));
+            .unwrap_or_else(|| format!("arg{}", param_args.len()));
         let param_ty = param.ty(db);
+        let prefix = match param_ty.as_capability(db).map(|(kind, _)| kind) {
+            Some(CapabilityKind::Ref) => "ref ",
+            Some(CapabilityKind::Mut) => "mut ",
+            Some(CapabilityKind::View) | None => "",
+        };
         param_details.push(format!("{}: {}", param_name, param_ty.pretty_print(db)));
-        param_names.push(param_name);
+        param_args.push((prefix, param_name));
     }
 
     let ret_ty = func.return_ty(db);
@@ -469,13 +475,13 @@ fn build_func_snippet_and_detail<'db>(
     };
     let detail = format!("fn {}({}){}", name_str, param_details.join(", "), ret_str);
 
-    let snippet = if param_names.is_empty() {
+    let snippet = if param_args.is_empty() {
         format!("{}()$0", name_str)
     } else {
-        let tabstops: Vec<String> = param_names
+        let tabstops: Vec<String> = param_args
             .iter()
             .enumerate()
-            .map(|(i, p)| format!("${{{}:{}}}", i + 1, p))
+            .map(|(i, (prefix, name))| format!("{prefix}${{{}:{name}}}", i + 1))
             .collect();
         format!("{}({})$0", name_str, tabstops.join(", "))
     };
@@ -945,10 +951,19 @@ fn build_value_invocation_completion(
             format!("{name}: {mode}{}", param.ty.pretty_print(db))
         })
         .collect::<Vec<_>>();
-    let args = param_names
+    let args = signature
+        .params
         .iter()
+        .zip(&param_names)
         .enumerate()
-        .map(|(idx, name)| format!("${{{}:{name}}}", idx + 1))
+        .map(|(idx, (param, name))| {
+            let prefix = match param.mode {
+                LogicalCallableParamMode::Ref => "ref ",
+                LogicalCallableParamMode::Mut => "mut ",
+                LogicalCallableParamMode::View | LogicalCallableParamMode::Own => "",
+            };
+            format!("{prefix}${{{}:{name}}}", idx + 1)
+        })
         .collect::<Vec<_>>()
         .join(", ");
     let ret = signature.ret_ty.pretty_print(db);
@@ -998,7 +1013,7 @@ fn build_callable_completion<'db>(
     let name_str = name.data(db).to_string();
 
     // Build parameter list for detail and snippet
-    let mut param_names = Vec::new();
+    let mut param_args = Vec::new();
     let mut param_details = Vec::new();
 
     for param in func.params(db) {
@@ -1009,11 +1024,16 @@ fn build_callable_completion<'db>(
         let param_name = param
             .name(db)
             .map(|n| n.data(db).to_string())
-            .unwrap_or_else(|| format!("arg{}", param_names.len()));
+            .unwrap_or_else(|| format!("arg{}", param_args.len()));
 
         let param_ty = param.ty(db);
+        let prefix = match param_ty.as_capability(db).map(|(kind, _)| kind) {
+            Some(CapabilityKind::Ref) => "ref ",
+            Some(CapabilityKind::Mut) => "mut ",
+            Some(CapabilityKind::View) | None => "",
+        };
         param_details.push(format!("{}: {}", param_name, param_ty.pretty_print(db)));
-        param_names.push(param_name);
+        param_args.push((prefix, param_name));
     }
 
     // Build detail string: fn name(param1: Type1, param2: Type2) -> ReturnType
@@ -1029,13 +1049,13 @@ fn build_callable_completion<'db>(
     let detail = format!("fn {}({}){}", name_str, param_details.join(", "), ret_str);
 
     // Build snippet with tabstops: name(${1:param1}, ${2:param2})
-    let snippet = if param_names.is_empty() {
+    let snippet = if param_args.is_empty() {
         format!("{}()$0", name_str)
     } else {
-        let tabstops: Vec<String> = param_names
+        let tabstops: Vec<String> = param_args
             .iter()
             .enumerate()
-            .map(|(i, p)| format!("${{{}:{}}}", i + 1, p))
+            .map(|(i, (prefix, name))| format!("{prefix}${{{}:{name}}}", i + 1))
             .collect();
         format!("{}({})$0", name_str, tabstops.join(", "))
     };
@@ -1997,6 +2017,38 @@ fn exercise() {
         assert_eq!(
             detect_completion_context(source, cursor),
             CompletionContext::Expression
+        );
+    }
+
+    #[test]
+    fn callable_completion_includes_capability_argument_prefixes() {
+        use url::Url;
+
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(
+                "fn update(shared: ref u256, target: mut u256) -> u256 { shared + target }"
+                    .to_string(),
+            ),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+        let update = top_mod
+            .all_funcs(&db)
+            .iter()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "update")
+            })
+            .unwrap();
+        let completion =
+            build_callable_completion(&db, *update, CompletionItemKind::FUNCTION).unwrap();
+
+        assert_eq!(
+            completion.insert_text.as_deref(),
+            Some("update(ref ${1:shared}, mut ${2:target})$0")
         );
     }
 }

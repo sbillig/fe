@@ -4,7 +4,24 @@ expression: snapshot
 input_file: test_files/callable_hover.fe
 ---
 ## generic
-range: 45:17..45:25
+range: 51:17..51:25
+
+```fe
+let function: F
+```
+
+### Callable
+
+```fe
+|_: own T| -> U
+```
+
+Capability: **reusable**
+
+---
+
+## implied_supertrait
+range: 55:17..55:25
 
 ```fe
 let function: F
@@ -21,7 +38,7 @@ Capability: **reusable**
 ---
 
 ## literal
-range: 50:14..50:58
+range: 60:14..60:58
 
 ### Callable
 
@@ -36,7 +53,7 @@ Captures: `u256` (read)
 ---
 
 ## binding
-range: 51:17..51:20
+range: 61:17..61:20
 
 ```fe
 let add: |own u256| -> u256
@@ -55,7 +72,7 @@ Captures: `u256` (read)
 ---
 
 ## projected
-range: 54:27..54:35
+range: 64:27..64:35
 
 ```fe
 callable_hover::Holder
@@ -81,7 +98,7 @@ Captures: `u256` (read)
 ---
 
 ## user_callable
-range: 58:22..58:30
+range: 68:22..68:30
 
 ```fe
 let callable: AddOne
@@ -98,7 +115,7 @@ Capability: **reusable**
 ---
 
 ## function_item
-range: 61:26..61:34
+range: 71:26..71:34
 
 ```fe
 let function: fn increment
@@ -115,7 +132,7 @@ Capability: **callable**
 ---
 
 ## ufcs_function_item
-range: 64:24..64:30
+range: 74:24..74:30
 
 ```fe
 let method: fn add
@@ -132,7 +149,7 @@ Capability: **callable**
 ---
 
 ## trait_function_item
-range: 67:22..67:26
+range: 77:22..77:26
 
 ```fe
 let read: fn read<Counter>
@@ -142,6 +159,23 @@ let read: fn read<Counter>
 
 ```fe
 |self: Counter, amount: own u256| -> u256
+```
+
+Capability: **callable**
+
+---
+
+## capability_function_item
+range: 82:18..82:33
+
+```fe
+let update_function: fn update
+```
+
+### Callable
+
+```fe
+|shared: ref u256, target: mut u256| -> u256
 ```
 
 Capability: **callable**
