@@ -197,11 +197,11 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
             };
             param_set.complete_callable_explicit_args(
                 db,
+                func,
                 &callable.generic_args[..offset],
                 provided,
                 tc.env.assumptions(),
-                ConstDefaultCompletion::metadata(None),
-                Some(&minter),
+                ConstDefaultCompletion::metadata_at_application(&minter),
             )
         }
         CallableDef::VariantCtor(_) => given_args
