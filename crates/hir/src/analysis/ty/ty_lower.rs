@@ -3538,6 +3538,13 @@ impl<'db> GenericParamTypeSet<'db> {
             .saturating_sub(self.offset_to_explicit(db))
     }
 
+    pub(crate) fn required_explicit_param_count(self, db: &'db dyn HirAnalysisDb) -> usize {
+        self.params_precursor(db)[self.offset_to_explicit(db)..]
+            .iter()
+            .rposition(|param| param.default_hir_ty.is_none() && param.default_hir_const.is_none())
+            .map_or(0, |idx| idx + 1)
+    }
+
     pub(crate) fn explicit_const_param_default_hole_ty(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -3628,7 +3635,27 @@ impl<'db> GenericParamTypeSet<'db> {
     ) -> Vec<TyId<'db>> {
         self.complete_explicit_args_with_defaults_in_mode(
             db,
-            trait_self,
+            trait_self.as_slice(),
+            provided_explicit,
+            assumptions,
+            completion,
+            false,
+            minter,
+        )
+    }
+
+    pub(crate) fn complete_callable_explicit_args(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        implicit_args: &[TyId<'db>],
+        provided_explicit: &[TyId<'db>],
+        assumptions: PredicateListId<'db>,
+        completion: ConstDefaultCompletion<'db>,
+        minter: Option<&HoleMinter<'db>>,
+    ) -> Vec<TyId<'db>> {
+        self.complete_explicit_args_with_defaults_in_mode(
+            db,
+            implicit_args,
             provided_explicit,
             assumptions,
             completion,
@@ -3648,7 +3675,7 @@ impl<'db> GenericParamTypeSet<'db> {
     ) -> Vec<TyId<'db>> {
         self.complete_explicit_args_with_defaults_in_mode(
             db,
-            trait_self,
+            trait_self.as_slice(),
             provided_explicit,
             assumptions,
             completion,
@@ -3679,7 +3706,7 @@ impl<'db> GenericParamTypeSet<'db> {
     fn complete_explicit_args_with_defaults_in_mode(
         self,
         db: &'db dyn HirAnalysisDb,
-        trait_self: Option<TyId<'db>>,
+        implicit_args: &[TyId<'db>],
         provided_explicit: &[TyId<'db>],
         assumptions: PredicateListId<'db>,
         completion: ConstDefaultCompletion<'db>,
@@ -3690,17 +3717,18 @@ impl<'db> GenericParamTypeSet<'db> {
         let offset = self.offset_to_explicit(db);
 
         // mapping from lowered param idx -> bound arg, used to substitute in defaults
-        let mut mapping = vec![];
+        let mut mapping = vec![None; total];
         let mut result = Vec::with_capacity(provided_explicit.len());
-        if let Some(self_ty) = trait_self {
-            mapping.push(Some(self_ty));
+        for (&arg, slot) in implicit_args.iter().zip(&mut mapping[..offset]) {
+            *slot = Some(arg);
         }
         for (explicit_idx, ty) in provided_explicit.iter().enumerate() {
             let checked = self.checked_explicit_arg(db, explicit_idx, *ty);
-            mapping.push(Some(checked));
+            if let Some(slot) = mapping.get_mut(offset + explicit_idx) {
+                *slot = Some(checked);
+            }
             result.push(if checked_explicit { checked } else { *ty });
         }
-        mapping.resize(total, None);
         let scope = self.scope(db);
 
         let mapped_generic_args = |mapping: &[Option<TyId<'db>>], end: usize| {
@@ -3758,7 +3786,7 @@ impl<'db> GenericParamTypeSet<'db> {
             let prec = &self.params_precursor(db)[i];
 
             if let Some(hir_ty) = prec.default_hir_ty {
-                let lowered = if hir_ty.is_self_ty(db) && trait_self.is_none() {
+                let lowered = if hir_ty.is_self_ty(db) && implicit_args.is_empty() {
                     TyId::invalid(db, InvalidCause::Other)
                 } else if let Some(minter) = minter {
                     // Mint through the application's minter: the memoized

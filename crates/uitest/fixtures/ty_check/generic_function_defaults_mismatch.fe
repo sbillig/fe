@@ -1,0 +1,23 @@
+const fn plus_one(_ value: usize) -> usize {
+    value + 1
+}
+
+fn defaulted_type<T = u256>(_ value: T) {}
+
+fn defaulted_const<const N: usize = 2>(_ value: [u8; N]) {}
+
+fn inferred_const_then_default<
+    const N: usize,
+    const M: usize = plus_one(N),
+>(_ value: [u8; N], _ dependent: [u8; M]) {}
+
+fn two_required_then_default<T, U, V = U>() {}
+
+fn exercise_mismatches() {
+    let default_const_mismatch: [u8; 3] = [0, 1, 2]
+    let dependent_const_mismatch: [u8; 3] = [0, 1, 2]
+    defaulted_type(true)
+    defaulted_const(default_const_mismatch)
+    inferred_const_then_default([0], dependent_const_mismatch)
+    two_required_then_default<u256>()
+}
