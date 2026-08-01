@@ -408,6 +408,434 @@ fn probe(e: E) -> u256 {
     db.assert_no_diags(top_mod);
 }
 
+#[test]
+fn option_map_should_infer_the_inner_type_from_closure() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "option_map_should_infer_the_inner_type_from_closure.fe".into(),
+        r#"
+use core::option
+use core::functional::Fn
+struct Doubler {}
+impl Fn<u256, u256> for Doubler { fn call(self, _ x: own u256) -> u256 { x * 2 } }
+
+fn map_no_annotation() {
+    let n = Option::Some(42)
+    let m = n.map(Doubler {})
+    assert!(m.unwrap() == 84)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn bound_inferred_call_result_is_usable_without_a_binding() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "bound_inferred_call_result_is_usable_without_a_binding.fe".into(),
+        r#"
+trait Pick<T> {}
+
+struct Subject {}
+struct Picker {}
+
+impl Pick<u256> for Subject {}
+
+extern {
+    fn todo() -> !
+}
+
+fn pick<T, U: Pick<T>>(_ value: U) -> T {
+    todo()
+}
+
+impl Picker {
+    fn pick<T, U: Pick<T>>(self, _ value: U) -> T {
+        todo()
+    }
+}
+
+fn probe() -> u256 {
+    let value = pick(Subject {}) + 1
+    assert!(value == 1)
+    let picker = Picker {}
+    picker.pick(Subject {}) + 1
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn eagerly_solved_bound_resolves_the_recorded_projection() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "eagerly_solved_bound_resolves_the_recorded_projection.fe".into(),
+        r#"
+trait Pick<T> {}
+trait HasOutput {
+    type Output
+}
+
+struct Subject {}
+struct A {}
+struct B {}
+struct Picker {}
+
+// Two implementors keep `T: HasOutput` from determining `T` on its own, so
+// `T::Output` is still an unresolved projection when the call is recorded.
+impl HasOutput for A {
+    type Output = u256
+}
+impl HasOutput for B {
+    type Output = bool
+}
+
+impl Pick<A> for Subject {}
+
+extern {
+    fn todo() -> !
+}
+
+fn pick<T: HasOutput, U: Pick<T>>(_ value: U) -> T::Output {
+    todo()
+}
+
+impl Picker {
+    fn pick<T: HasOutput, U: Pick<T>>(self, _ value: U) -> T::Output {
+        todo()
+    }
+}
+
+fn probe() {
+    let _value = pick(Subject {})
+    let picker = Picker {}
+    let _method_value = picker.pick(Subject {})
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let probe = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "probe")
+        })
+        .expect("missing `probe` function");
+    let body = probe.body(&db).expect("missing `probe` body");
+    let call = body
+        .exprs(&db)
+        .keys()
+        .find(|expr| matches!(expr.data(&db, body), Partial::Present(Expr::Call(..))))
+        .expect("missing `pick` call");
+    let method_call = body
+        .exprs(&db)
+        .keys()
+        .find(|expr| matches!(expr.data(&db, body), Partial::Present(Expr::MethodCall(..))))
+        .expect("missing `picker.pick` call");
+    let typed_body = &check_func_body(&db, probe).1;
+
+    assert_eq!(
+        typed_body.expr_ty(&db, call).pretty_print(&db).to_string(),
+        "u256",
+        "solving `Subject: Pick<T>` at the call site must also resolve the recorded \
+         `T::Output`, which folding the unification table alone cannot do",
+    );
+    assert_eq!(
+        typed_body
+            .expr_ty(&db, method_call)
+            .pretty_print(&db)
+            .to_string(),
+        "u256",
+        "a method call resolved without deferral must resolve its recorded \
+         `T::Output` the same way a free function call does",
+    );
+}
+
+#[test]
+fn deferred_method_projection_is_retyped_after_bounds_are_solved() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "deferred_method_projection_is_retyped_after_bounds_are_solved.fe".into(),
+        r#"
+extern {
+    fn todo() -> !
+}
+
+trait Pick<T> {}
+trait HasOutput {
+    type Output
+}
+
+struct A {}
+struct B {}
+struct Subject {}
+
+// Two implementors keep `P: HasOutput` from determining `P` on its own, so
+// `P::Output` is still an unresolved projection when the method resolves.
+impl HasOutput for A {
+    type Output = u256
+}
+impl HasOutput for B {
+    type Output = bool
+}
+
+impl Pick<A> for Subject {}
+
+struct S {}
+
+// Two implementors of `Foo` make `s.foo(..)` ambiguous during the body pass,
+// so the call is deferred until `resolve_deferred`. The marker argument, not
+// the return type, is what picks the candidate: a concrete expected type
+// cannot unify against `P::Output` while `P` is still open.
+trait Foo<M> {
+    fn foo<P: HasOutput, Q: Pick<P>>(self, _ marker: M, _ value: Q) -> P::Output
+}
+
+impl Foo<u8> for S {
+    fn foo<P: HasOutput, Q: Pick<P>>(self, _ marker: u8, _ value: Q) -> P::Output {
+        todo()
+    }
+}
+
+impl Foo<bool> for S {
+    fn foo<P: HasOutput, Q: Pick<P>>(self, _ marker: bool, _ value: Q) -> P::Output {
+        todo()
+    }
+}
+
+fn probe() {
+    let s = S {}
+    let _value = s.foo(true, Subject {})
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let probe = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "probe")
+        })
+        .expect("missing `probe` function");
+    let body = probe.body(&db).expect("missing `probe` body");
+    let call = body
+        .exprs(&db)
+        .keys()
+        .find(|expr| matches!(expr.data(&db, body), Partial::Present(Expr::MethodCall(..))))
+        .expect("missing `foo` call");
+    let call_ty = check_func_body(&db, probe).1.expr_ty(&db, call);
+
+    assert_eq!(
+        call_ty.pretty_print(&db).to_string(),
+        "u256",
+        "bounds solved while resolving a deferred method must also retype the \
+         recorded method call, which folding the unification table alone cannot do",
+    );
+}
+
+#[test]
+fn direct_call_should_not_report_type_mismatch() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "direct_call_should_not_report_type_mismatch.fe".into(),
+        r#"
+trait Pick<T> {}
+
+trait HasOutput {
+    type Output
+}
+
+struct A {}
+struct B {}
+struct Subject {}
+
+impl HasOutput for A {
+    type Output = u256
+}
+
+impl HasOutput for B {
+    type Output = bool
+}
+
+impl Pick<A> for Subject {}
+
+extern {
+    fn todo() -> !
+}
+
+fn pick<T: HasOutput, U: Pick<T>>(_ value: U) -> T::Output {
+    todo()
+}
+
+fn probe() {
+    let _value: u256 = pick(Subject {})
+}
+"#,
+    );
+
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn deferred_method_is_resolved_to_the_expected_type() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "deferred_method_is_resolved_to_the_expected_type.fe".into(),
+        r#"
+trait Pick<T> {}
+
+trait HasOutput {
+    type Output
+}
+
+struct A {}
+struct B {}
+struct Subject {}
+struct S {}
+
+impl HasOutput for A {
+    type Output = u256
+}
+
+impl HasOutput for B {
+    type Output = bool
+}
+
+impl Pick<A> for Subject {}
+
+extern {
+    fn todo() -> !
+}
+
+trait Foo<M> {
+    fn foo<P: HasOutput, Q: Pick<P>>(
+        self,
+        _ marker: M,
+        _ value: Q,
+    ) -> P::Output
+}
+
+impl Foo<u8> for S {
+    fn foo<P: HasOutput, Q: Pick<P>>(
+        self,
+        _ marker: u8,
+        _ value: Q,
+    ) -> P::Output {
+        todo()
+    }
+}
+
+impl Foo<bool> for S {
+    fn foo<P: HasOutput, Q: Pick<P>>(
+        self,
+        _ marker: bool,
+        _ value: Q,
+    ) -> P::Output {
+        todo()
+    }
+}
+
+fn probe() {
+    let s = S {}
+    let value: u256 = s.foo(true, Subject {})
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn deferred_method_return_mismatch_after_bounds_are_solved_is_diagnosed() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "deferred_method_return_mismatch_after_bounds_are_solved_is_diagnosed.fe".into(),
+        r#"
+trait Pick<T> {}
+
+trait HasOutput {
+    type Output
+}
+
+struct A {}
+struct B {}
+struct Subject {}
+struct S {}
+
+impl HasOutput for A {
+    type Output = u256
+}
+
+impl HasOutput for B {
+    type Output = bool
+}
+
+impl Pick<B> for Subject {}
+
+extern {
+    fn todo() -> !
+}
+
+trait Foo<M> {
+    fn foo<P: HasOutput, Q: Pick<P>>(
+        self,
+        _ marker: M,
+        _ value: Q,
+    ) -> P::Output
+}
+
+impl Foo<u8> for S {
+    fn foo<P: HasOutput, Q: Pick<P>>(
+        self,
+        _ marker: u8,
+        _ value: Q,
+    ) -> P::Output {
+        todo()
+    }
+}
+
+impl Foo<bool> for S {
+    fn foo<P: HasOutput, Q: Pick<P>>(
+        self,
+        _ marker: bool,
+        _ value: Q,
+    ) -> P::Output {
+        todo()
+    }
+}
+
+fn probe() -> u256 {
+    let s = S {}
+    s.foo(true, Subject {})
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+
+    assert!(
+        diagnostics_contain(&diags, "expected `u256`, but `bool` is given"),
+        "{diags:#?}",
+    );
+}
+
 fn diagnostics_for<'db>(
     db: &'db HirAnalysisTestDb,
     top_mod: TopLevelMod<'db>,

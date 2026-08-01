@@ -231,6 +231,39 @@ fn caller() {
 }
 
 #[test]
+fn free_function_call_constraints_processed_to_a_fixed_point() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "free_function_call_constraints_processed_to_a_fixed_point.fe".into(),
+        r#"
+extern {
+    fn todo() -> !
+}
+
+trait Link<T> {}
+
+struct Leaf {}
+struct Mid {}
+
+impl Link<Mid> for Leaf {}
+impl Link<u256> for Mid {}
+
+// `U: Link<T>` is declared before `V: Link<U>` but is ambiguous until the
+// latter binds `U`, so a single pass over the bounds leaves `T` unresolved.
+fn chain<T, U: Link<T>, V: Link<U>>(_ value: V) -> T {
+    todo()
+}
+
+fn caller() -> u256 {
+    chain(Leaf {}) + 1
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
 fn method_call_constraints_defer_through_if_join() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -395,4 +428,67 @@ fn caller(tag: u8) {
     let diags = diagnostics_for(&db, top_mod);
     assert_unsatisfied_bound(&diags, "`u8` doesn't implement `Other`");
     assert_required_by_bound(&diags, "make");
+}
+
+#[test]
+fn deferred_method_call_constraint_solution_disambiguates_return_type() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "deferred_method_call_constraint_solution_disambiguates_return_type.fe".into(),
+        r#"
+trait PickA<T> {}
+trait PickB<T> {}
+
+trait HasOutput {
+    type Output
+}
+
+struct A {}
+struct B {}
+struct Subject {}
+struct S {}
+
+impl HasOutput for A {
+    type Output = u256
+}
+
+impl HasOutput for B {
+    type Output = bool
+}
+
+impl PickA<A> for Subject {}
+impl PickB<B> for Subject {}
+
+extern {
+    fn todo() -> !
+}
+
+trait FooA {
+    fn foo<P: HasOutput, Q: PickA<P>>(self, _ value: Q) -> P::Output
+}
+
+trait FooB {
+    fn foo<P: HasOutput, Q: PickB<P>>(self, _ value: Q) -> P::Output
+}
+
+impl FooA for S {
+    fn foo<P: HasOutput, Q: PickA<P>>(self, _ value: Q) -> P::Output {
+        todo()
+    }
+}
+
+impl FooB for S {
+    fn foo<P: HasOutput, Q: PickB<P>>(self, _ value: Q) -> P::Output {
+        todo()
+    }
+}
+
+fn probe() {
+    let s = S {}
+    let value: u256 = s.foo(Subject {})
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
 }

@@ -11,7 +11,7 @@ use crate::{
 };
 use salsa::Update;
 
-use super::{BodyOwner, ExprProp, LocalBinding, TyChecker};
+use super::{BodyOwner, ExprProp, LocalBinding, TraitObligationOutcome, TyChecker};
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
@@ -860,12 +860,13 @@ impl<'db> CallArg<'db> {
 }
 
 impl<'db> Callable<'db> {
-    pub(super) fn enqueue_constraints(
+    pub(super) fn process_constraints(
         &self,
         tc: &mut TyChecker<'db>,
         call_expr: ExprId,
         span: DynLazySpan<'db>,
-    ) {
+    ) -> bool {
+        let mut progressed = false;
         let db = tc.db;
         let constraints = collect_func_decl_constraints(db, self.callable_def, true);
         let declared = constraints.instantiate_identity();
@@ -877,6 +878,7 @@ impl<'db> Callable<'db> {
         let definition_solve_cx = TraitSolveCx::new(db, self.callable_def.scope())
             .with_assumptions(definition_assumptions);
 
+        let mut pending_obligations = Vec::new();
         for (constraint_idx, (&constraint, &declared_constraint)) in instantiated
             .list(db)
             .iter()
@@ -901,16 +903,45 @@ impl<'db> Callable<'db> {
                 continue;
             }
 
-            tc.env
-                .register_trait_obligation(super::env::TraitObligation {
-                    goal: constraint,
-                    origin: super::env::TraitObligationOrigin::CallConstraint {
-                        call_expr,
-                        callable_def: self.callable_def,
-                        constraint_idx,
-                    },
-                    span: span.clone(),
-                });
+            let obligation = super::env::TraitObligation {
+                goal: constraint,
+                origin: super::env::TraitObligationOrigin::CallConstraint {
+                    call_expr,
+                    callable_def: self.callable_def,
+                    constraint_idx,
+                },
+                span: span.clone(),
+            };
+
+            match tc.process_trait_obligation(obligation, false) {
+                TraitObligationOutcome::Discharged => {}
+                TraitObligationOutcome::Progressed => progressed = true,
+                TraitObligationOutcome::Requeue(obligation) => {
+                    pending_obligations.push(obligation);
+                }
+            };
         }
+
+        let mut round_progressed = progressed;
+        while round_progressed && !pending_obligations.is_empty() {
+            round_progressed = false;
+            for obligation in std::mem::take(&mut pending_obligations) {
+                match tc.process_trait_obligation(obligation, false) {
+                    TraitObligationOutcome::Discharged => {}
+                    TraitObligationOutcome::Progressed => {
+                        progressed = true;
+                        round_progressed = true;
+                    }
+                    TraitObligationOutcome::Requeue(obligation) => {
+                        pending_obligations.push(obligation);
+                    }
+                };
+            }
+        }
+
+        for obligation in pending_obligations {
+            tc.env.register_trait_obligation(obligation);
+        }
+        progressed
     }
 }
