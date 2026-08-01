@@ -6,7 +6,9 @@ use crate::analysis::{
     HirAnalysisDb,
     diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
     semantic::{SemOrigin, SemanticCalleeRef, SemanticInstance},
-    ty::{ProviderAddressSpace, ty_check::BodyOwner, ty_def::TyId, ty_is_noesc},
+    ty::{
+        ProviderAddressSpace, ty_check::BodyOwner, ty_contains_borrow, ty_def::TyId, ty_is_noesc,
+    },
 };
 
 use super::{
@@ -136,7 +138,7 @@ impl<'db> NoEsc<'db> {
         for arg in args.iter().copied().skip(self.receiver_arg_count(callee)) {
             let arg_origin = operand_origin(arg, origin);
             let ty = self.operand_ty(arg, arg_origin)?;
-            if !ty_is_noesc(self.borrowck.db, ty) {
+            if !ty_contains_borrow(self.borrowck.db, ty) {
                 continue;
             }
             let Some(space) = self.non_memory_operand_space(state, arg, arg_origin)? else {
