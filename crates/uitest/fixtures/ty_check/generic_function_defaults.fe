@@ -1,0 +1,49 @@
+const fn plus_one(_ value: usize) -> usize {
+    value + 1
+}
+
+fn all_type_defaults<T = u256, U = T>() {}
+
+fn all_const_defaults<const N: usize = 1, const M: usize = plus_one(N)>() {}
+
+fn inferred_type_then_default<T, U = T>(_ value: T) {}
+
+fn inferred_const_then_default<
+    const N: usize,
+    const M: usize = plus_one(N),
+>(_ value: [u8; N], _ dependent: [u8; M]) {}
+
+fn partial_type_default<T, U = T>(_ value: U) {}
+
+fn partial_const_default<const N: usize, const M: usize = plus_one(N)>(
+    _ value: [u8; M],
+) {}
+
+struct Receiver<T> {
+    value: T,
+}
+
+impl<T> Receiver<T> {
+    fn inherited_type_default<U = T>(self) {}
+}
+
+trait TraitDefault {
+    fn inherited_self_default<U = Self>(self: Self) {}
+}
+
+struct TraitReceiver {}
+
+impl TraitDefault for TraitReceiver {}
+
+fn exercise_defaults(receiver: Receiver<u256>, trait_receiver: TraitReceiver) {
+    all_type_defaults()
+    all_const_defaults()
+    inferred_type_then_default(true)
+    inferred_const_then_default([0], [0, 1])
+    partial_type_default<u256>(1)
+    partial_type_default<u256, bool>(true)
+    partial_const_default<1>([0, 1])
+    partial_const_default<1, 3>([0, 1, 2])
+    receiver.inherited_type_default()
+    trait_receiver.inherited_self_default()
+}
