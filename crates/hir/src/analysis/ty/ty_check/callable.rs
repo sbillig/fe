@@ -1150,6 +1150,25 @@ impl<'db> Callable<'db> {
         call_expr: ExprId,
         span: DynLazySpan<'db>,
     ) -> bool {
+        self.handle_constraints(tc, call_expr, span, true)
+    }
+
+    pub(super) fn enqueue_constraints(
+        &self,
+        tc: &mut TyChecker<'db>,
+        call_expr: ExprId,
+        span: DynLazySpan<'db>,
+    ) {
+        self.handle_constraints(tc, call_expr, span, false);
+    }
+
+    fn handle_constraints(
+        &self,
+        tc: &mut TyChecker<'db>,
+        call_expr: ExprId,
+        span: DynLazySpan<'db>,
+        process_immediately: bool,
+    ) -> bool {
         let mut progressed = false;
         let db = tc.db;
         let constraints = collect_func_decl_constraints(db, self.callable_def, true);
@@ -1196,6 +1215,11 @@ impl<'db> Callable<'db> {
                 },
                 span: span.clone(),
             };
+
+            if !process_immediately {
+                pending_obligations.push(obligation);
+                continue;
+            }
 
             match tc.process_trait_obligation(obligation, false) {
                 TraitObligationOutcome::Discharged => {}

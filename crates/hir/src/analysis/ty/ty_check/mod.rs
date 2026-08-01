@@ -1387,7 +1387,7 @@ impl<'db> TyChecker<'db> {
         let query = CanonicalGoalQuery::new(db, goal, assumptions);
         match is_goal_query_satisfiable(db, solve_cx, &query) {
             GoalSatisfiability::Satisfied(solution) => {
-                if goal.self_ty(db).has_var(db) {
+                if goal.self_ty(db).is_ty_var(db) {
                     let outcome = if final_pass {
                         // Don't invent the self type at the end either; leave it alone
                         TraitObligationOutcome::Discharged
@@ -1444,7 +1444,7 @@ impl<'db> TyChecker<'db> {
 
                 if let [solution] = candidates.as_slice()
                     && answers_complete_for_inference
-                    && !goal.self_ty(db).has_var(db)
+                    && !goal.self_ty(db).is_ty_var(db)
                 {
                     if self.table.unify(goal, *solution).is_ok()
                         && self.normalize_trait_goal(goal) != goal
@@ -1841,7 +1841,7 @@ impl<'db> TyChecker<'db> {
                     }
                     return None;
                 }
-                replayed_callable.process_constraints(this, pending.expr, pending.span.clone());
+                replayed_callable.enqueue_constraints(this, pending.expr, pending.span.clone());
 
                 Some(())
             })()
@@ -2125,11 +2125,11 @@ impl<'db> TyChecker<'db> {
                                                 continue;
                                             }
                                             let replayed_callable = self
-                                            .env
-                                            .callable_expr(pending.expr)
-                                            .cloned()
-                                            .expect("replayed method callable must remain registered");
-                                            replayed_callable.process_constraints(
+                                                .env
+                                                .callable_expr(pending.expr)
+                                                .cloned()
+                                                .expect("replayed method callable must remain registered");
+                                            replayed_callable.enqueue_constraints(
                                                 self,
                                                 pending.expr,
                                                 pending.span.clone(),
@@ -2147,11 +2147,11 @@ impl<'db> TyChecker<'db> {
                                             continue;
                                         } else {
                                             let finalized_callable = self
-                                            .env
-                                            .callable_expr(pending.expr)
-                                            .cloned()
-                                            .expect("finalized method callable must remain registered");
-                                            finalized_callable.process_constraints(
+                                                .env
+                                                .callable_expr(pending.expr)
+                                                .cloned()
+                                                .expect("finalized method callable must remain registered");
+                                            finalized_callable.enqueue_constraints(
                                                 self,
                                                 pending.expr,
                                                 pending.span.clone(),

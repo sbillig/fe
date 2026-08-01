@@ -2325,7 +2325,7 @@ impl<'db> TyChecker<'db> {
             Expr::Call(..) => {
                 if let Some(callable) = self.env.callable_expr(expr).cloned() {
                     let span = expr.span(self.body()).into_call_expr().callee().into();
-                    callable.process_constraints(self, expr, span);
+                    callable.enqueue_constraints(self, expr, span);
                 }
             }
             Expr::MethodCall(..) => {
@@ -2335,7 +2335,7 @@ impl<'db> TyChecker<'db> {
                         .into_method_call_expr()
                         .method_name()
                         .into();
-                    callable.process_constraints(self, expr, span);
+                    callable.enqueue_constraints(self, expr, span);
                 }
             }
             _ => {}
@@ -3532,7 +3532,7 @@ impl<'db> TyChecker<'db> {
                 && self.reconcile_deferred_expr_prop(pending.expr, expr_prop, resolved)
             {
                 if let Some(callable) = self.env.callable_expr(pending.expr).cloned() {
-                    callable.process_constraints(self, pending.expr, pending.span.clone());
+                    callable.enqueue_constraints(self, pending.expr, pending.span.clone());
                 }
                 self.env
                     .consume_deferred_closure_replay_context(pending.expr);
@@ -3550,7 +3550,7 @@ impl<'db> TyChecker<'db> {
             return PendingPrimitiveOpResolution::Done;
         }
         if let Some(callable) = self.env.callable_expr(pending.expr).cloned() {
-            callable.process_constraints(self, pending.expr, pending.span.clone());
+            callable.enqueue_constraints(self, pending.expr, pending.span.clone());
         }
         PendingPrimitiveOpResolution::Resolved
     }
@@ -3665,7 +3665,7 @@ impl<'db> TyChecker<'db> {
                 && self.reconcile_deferred_expr_prop(pending.expr, expr_prop, resolved)
             {
                 if let Some(callable) = self.env.callable_expr(pending.expr).cloned() {
-                    callable.process_constraints(
+                    callable.enqueue_constraints(
                         self,
                         pending.expr,
                         pending
@@ -3692,7 +3692,7 @@ impl<'db> TyChecker<'db> {
             return PendingPrimitiveOpResolution::Done;
         }
         if let Some(callable) = self.env.callable_expr(pending.expr).cloned() {
-            callable.process_constraints(
+            callable.enqueue_constraints(
                 self,
                 pending.expr,
                 pending
@@ -4772,6 +4772,7 @@ impl<'db> TyChecker<'db> {
             );
         }
         self.check_callable_effects(expr, &mut callable);
+        callable.process_constraints(self, expr, call_span.clone().callee().into());
 
         let ret_ty = self.normalize_ty(callable.ret_ty(self.db));
         self.env.register_semantic_value_call(expr, callable);

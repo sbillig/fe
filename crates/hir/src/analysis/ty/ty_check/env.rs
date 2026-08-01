@@ -1786,6 +1786,16 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn register_trait_obligation(&mut self, obligation: TraitObligation<'db>) {
+        for task in &mut self.deferred {
+            let DeferredTask::Obligation(existing) = task else {
+                continue;
+            };
+            if existing.origin == obligation.origin {
+                existing.goal = obligation.goal;
+                existing.span = obligation.span;
+                return;
+            }
+        }
         self.deferred
             .push_back(DeferredTask::Obligation(obligation))
     }
