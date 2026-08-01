@@ -220,6 +220,12 @@ enum AssignLhsStatus {
     NonAssignable,
 }
 
+struct MutableIndexTarget<'db> {
+    prop: ExprProp<'db>,
+    target_ty: TyId<'db>,
+    trait_lowered: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub(super) struct EffectCommitPlan<'db> {
     key_match: Option<KeyMatchCommit<'db>>,
@@ -4886,13 +4892,57 @@ impl<'db> TyChecker<'db> {
     }
 
     fn check_index_mut_assign(&mut self, lhs: ExprId, rhs: ExprId) -> Option<ExprProp<'db>> {
+        let target = self.check_index_mut_target(lhs)?;
+        if target.prop.ty.has_invalid(self.db) {
+            return Some(ExprProp::new(TyId::unit(self.db), true));
+        }
+
+        let mut rhs_prop = self.check_expr_unknown(rhs);
+        if let Some(coerced) =
+            self.try_coerce_capability_for_expr_to_expected(rhs, rhs_prop.ty, target.target_ty)
+        {
+            rhs_prop.ty = coerced;
+        }
+        rhs_prop.ty = self.unify_ty(
+            Typeable::Expr(rhs, rhs_prop.clone()),
+            rhs_prop.ty,
+            target.target_ty,
+        );
+
+        if !target.trait_lowered {
+            let lhs_status = self.check_assign_lhs(lhs, &target.prop);
+            if lhs_status == AssignLhsStatus::Assignable
+                && target.prop.ty.as_capability(self.db).is_some()
+                && let Some(place) = self.env.expr_place(lhs)
+                && place.projections.is_empty()
+            {
+                let PlaceBase::Binding(binding) = place.base;
+                self.merge_concrete_borrow_providers(
+                    binding.def_span(&self.env),
+                    self.concrete_borrow_provider_for_binding(binding),
+                    rhs.span(self.body()).into(),
+                    rhs_prop.borrow_provider,
+                );
+            }
+        }
+
+        self.record_implicit_move_for_owned_expr(rhs, rhs_prop.ty);
+
+        Some(ExprProp::new(TyId::unit(self.db), true))
+    }
+
+    fn check_index_mut_target(&mut self, lhs: ExprId) -> Option<MutableIndexTarget<'db>> {
         let Partial::Present(Expr::Bin(base, index, BinOp::Index)) = self.env.expr_data(lhs) else {
             return None;
         };
 
         let base_prop = self.check_expr_unknown(*base);
         if base_prop.ty.has_invalid(self.db) {
-            return Some(ExprProp::new(TyId::unit(self.db), true));
+            return Some(MutableIndexTarget {
+                prop: ExprProp::invalid(self.db),
+                target_ty: TyId::invalid(self.db, InvalidCause::Other),
+                trait_lowered: false,
+            });
         }
 
         let base_place_ty = base_prop
@@ -4922,37 +4972,20 @@ impl<'db> TyChecker<'db> {
                 typed_lhs.ty,
             );
 
-            let mut rhs_prop = self.check_expr_unknown(rhs);
-            if let Some(coerced) =
-                self.try_coerce_capability_for_expr_to_expected(rhs, rhs_prop.ty, lhs_ty)
-            {
-                rhs_prop.ty = coerced;
-            }
-            rhs_prop.ty = self.unify_ty(Typeable::Expr(rhs, rhs_prop.clone()), rhs_prop.ty, lhs_ty);
-
-            let lhs_status = self.check_assign_lhs(lhs, &typed_lhs);
-            self.record_implicit_move_for_owned_expr(rhs, rhs_prop.ty);
-
-            if lhs_status == AssignLhsStatus::Assignable
-                && typed_lhs.ty.as_capability(self.db).is_some()
-                && let Some(place) = self.env.expr_place(lhs)
-                && place.projections.is_empty()
-            {
-                let PlaceBase::Binding(binding) = place.base;
-                self.merge_concrete_borrow_providers(
-                    binding.def_span(&self.env),
-                    self.concrete_borrow_provider_for_binding(binding),
-                    rhs.span(self.body()).into(),
-                    rhs_prop.borrow_provider,
-                );
-            }
-
-            return Some(ExprProp::new(TyId::unit(self.db), true));
+            return Some(MutableIndexTarget {
+                prop: typed_lhs,
+                target_ty: lhs_ty,
+                trait_lowered: false,
+            });
         }
 
         let indexed = self.check_ops_trait(lhs, base_prop.ty, &IndexMutOp, Some(*index));
         if indexed.ty.has_invalid(self.db) {
-            return Some(ExprProp::new(TyId::unit(self.db), true));
+            return Some(MutableIndexTarget {
+                prop: indexed,
+                target_ty: TyId::invalid(self.db, InvalidCause::Other),
+                trait_lowered: true,
+            });
         }
 
         let Some((CapabilityKind::Mut, lhs_ty)) = indexed.ty.as_capability(self.db) else {
@@ -4962,20 +4995,19 @@ impl<'db> TyChecker<'db> {
                 expected,
                 given: indexed.ty,
             });
-            return Some(ExprProp::new(TyId::unit(self.db), true));
+            return Some(MutableIndexTarget {
+                prop: ExprProp::invalid(self.db),
+                target_ty: TyId::invalid(self.db, InvalidCause::Other),
+                trait_lowered: true,
+            });
         };
         self.unify_ty(Typeable::Expr(lhs, indexed.clone()), indexed.ty, indexed.ty);
 
-        let mut rhs_prop = self.check_expr_unknown(rhs);
-        if let Some(coerced) =
-            self.try_coerce_capability_for_expr_to_expected(rhs, rhs_prop.ty, lhs_ty)
-        {
-            rhs_prop.ty = coerced;
-        }
-        rhs_prop.ty = self.unify_ty(Typeable::Expr(rhs, rhs_prop.clone()), rhs_prop.ty, lhs_ty);
-        self.record_implicit_move_for_owned_expr(rhs, rhs_prop.ty);
-
-        Some(ExprProp::new(TyId::unit(self.db), true))
+        Some(MutableIndexTarget {
+            prop: indexed,
+            target_ty: lhs_ty,
+            trait_lowered: true,
+        })
     }
 
     fn check_aug_assign(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
@@ -4985,16 +5017,24 @@ impl<'db> TyChecker<'db> {
 
         let unit = ExprProp::new(TyId::unit(self.db), true);
 
-        let typed_lhs = self.check_expr_unknown(*lhs);
-        let lhs_ty = typed_lhs.ty;
-        let lhs_place_ty = lhs_ty
-            .as_capability(self.db)
-            .map(|(_, inner)| inner)
-            .unwrap_or(lhs_ty);
-        if lhs_ty.has_invalid(self.db) {
+        let (typed_lhs, lhs_place_ty, trait_lowered) =
+            if let Some(target) = self.check_index_mut_target(*lhs) {
+                (target.prop, target.target_ty, target.trait_lowered)
+            } else {
+                let typed_lhs = self.check_expr_unknown(*lhs);
+                let lhs_ty = typed_lhs.ty;
+                let lhs_place_ty = lhs_ty
+                    .as_capability(self.db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(lhs_ty);
+                (typed_lhs, lhs_place_ty, false)
+            };
+        if typed_lhs.ty.has_invalid(self.db) {
             return unit;
         }
-        if self.check_assign_lhs(*lhs, &typed_lhs) == AssignLhsStatus::NonAssignable {
+        if !trait_lowered
+            && self.check_assign_lhs(*lhs, &typed_lhs) == AssignLhsStatus::NonAssignable
+        {
             return unit;
         }
 

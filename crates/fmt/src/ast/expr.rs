@@ -420,6 +420,16 @@ impl ToDoc for ast::UnExpr {
             let op_doc = alloc.text(op_text);
             return if matches!(op, ast::UnOp::Mut(_) | ast::UnOp::Ref(_)) {
                 op_doc.append(alloc.text(" ")).append(expr.to_doc(ctx))
+            } else if matches!(op, ast::UnOp::Deref(_))
+                && matches!(
+                    expr.kind(),
+                    ExprKind::Un(ref inner)
+                        if matches!(inner.op(), Some(ast::UnOp::Deref(_)))
+                )
+            {
+                // Adjacent `*` tokens lex as exponentiation (`**`), which is
+                // not a prefix operator. Keep nested dereferences separate.
+                op_doc.append(alloc.text(" ")).append(expr.to_doc(ctx))
             } else {
                 op_doc.append(expr.to_doc(ctx))
             };

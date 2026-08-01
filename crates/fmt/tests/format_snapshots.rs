@@ -55,3 +55,32 @@ fn calculate() {
         "{syntax:#?}",
     );
 }
+
+#[test]
+fn nested_dereferences_remain_lexically_separate() {
+    let source = r#"
+fn load(pointer: **u256) -> u256 {
+    * *pointer
+}
+"#;
+    let formatted = format_str(source, &Config::default()).expect("format should succeed");
+
+    assert!(formatted.contains("* *pointer"), "{formatted}");
+    assert_eq!(
+        format_str(&formatted, &Config::default()).expect("reformat should succeed"),
+        formatted,
+    );
+
+    let (green, errors) = parse_source_file(&formatted, RecoveryMode::NoRecover);
+    assert!(errors.is_empty(), "{errors:#?}\n{formatted}");
+
+    let syntax = SyntaxNode::new_root(green);
+    assert_eq!(
+        syntax
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::UnExpr)
+            .count(),
+        2,
+        "{syntax:#?}",
+    );
+}
