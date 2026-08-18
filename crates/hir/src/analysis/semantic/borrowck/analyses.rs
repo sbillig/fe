@@ -3,6 +3,7 @@ use std::convert::Infallible;
 use cranelift_entity::{EntityRef, SecondaryMap};
 use dataflow::{BackwardCfgAnalysis, ForwardCfgAnalysis, JoinSemiLattice, SparseAnalysis};
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 
 use crate::analysis::{
     HirAnalysisDb,
@@ -13,13 +14,18 @@ use crate::analysis::{
 };
 
 use super::{
-    canon::{
-        BorrowCanonCx, CanonPlace, CfgAdjacency, Loan, LoanId, MovedPlaces, State,
-        indexed_target_is_excluded,
-    },
+    access::MovedPlaces,
+    canon::BorrowCanonCx,
     check::Borrowck,
-    ir::{BorrowResult, BorrowTransform, NormalizedSemanticBody, SemanticBorrowDiagnostic},
+    ir::{NormalizedSemanticBody, SemanticBorrowDiagnostic},
+    loan::{LoanDef, LoanId, ParentSet},
+    region::RegionSet,
+    summary::{BorrowSourceClause, SummaryPath},
+    transfer::{BorrowState, BorrowTransferCx},
 };
+
+pub(super) type BlockAdjacency = SmallVec<SBlockId, 2>;
+pub(super) type CfgAdjacency = SecondaryMap<SBlockId, BlockAdjacency>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BorrowSummaryMode {
@@ -29,28 +35,28 @@ pub(super) enum BorrowSummaryMode {
 }
 
 pub(super) struct BorrowLoanTargetState<'a, 'db> {
-    pub(super) loans: &'a mut [Loan<'db>],
+    pub(super) loans: &'a mut [LoanDef<'db>],
 }
 
 pub(super) struct BorrowLoanTargetAnalysis<'a, 'db> {
     db: &'db dyn HirAnalysisDb,
     body: &'a NormalizedSemanticBody<'db>,
-    entry_state: &'a SecondaryMap<SBlockId, State>,
+    entry_state: &'a SecondaryMap<SBlockId, BorrowState<'db>>,
     loan_for_local: &'a FxHashMap<SLocalId, LoanId>,
     constant_indices: &'a SecondaryMap<SLocalId, Option<usize>>,
-    call_result_loans: &'a FxHashMap<SStmtId, Vec<(BorrowResult, LoanId)>>,
-    call_loan_transforms: &'a FxHashMap<LoanId, Vec<BorrowTransform>>,
+    call_result_loans: &'a FxHashMap<SStmtId, Vec<(SummaryPath, LoanId)>>,
+    call_loan_sources: &'a FxHashMap<LoanId, Vec<BorrowSourceClause>>,
 }
 
 impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
     pub(super) fn new(
         db: &'db dyn HirAnalysisDb,
         body: &'a NormalizedSemanticBody<'db>,
-        entry_state: &'a SecondaryMap<SBlockId, State>,
+        entry_state: &'a SecondaryMap<SBlockId, BorrowState<'db>>,
         loan_for_local: &'a FxHashMap<SLocalId, LoanId>,
         constant_indices: &'a SecondaryMap<SLocalId, Option<usize>>,
-        call_result_loans: &'a FxHashMap<SStmtId, Vec<(BorrowResult, LoanId)>>,
-        call_loan_transforms: &'a FxHashMap<LoanId, Vec<BorrowTransform>>,
+        call_result_loans: &'a FxHashMap<SStmtId, Vec<(SummaryPath, LoanId)>>,
+        call_loan_sources: &'a FxHashMap<LoanId, Vec<BorrowSourceClause>>,
     ) -> Self {
         Self {
             db,
@@ -59,66 +65,34 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
             loan_for_local,
             constant_indices,
             call_result_loans,
-            call_loan_transforms,
+            call_loan_sources,
         }
     }
 
-    fn canon<'b>(&'b self, loans: &'b [Loan<'db>]) -> BorrowCanonCx<'b, 'db> {
+    fn canon<'b>(&'b self, loans: &'b [LoanDef<'db>]) -> BorrowCanonCx<'b, 'db> {
         BorrowCanonCx::new(
             self.db,
             self.body.owner,
             self.body,
             loans,
-            self.loan_for_local,
             self.constant_indices,
         )
     }
 
     fn extend_loan(
         &self,
-        loans: &mut [Loan<'db>],
+        loans: &mut [LoanDef<'db>],
         loan_id: LoanId,
-        targets: FxHashSet<CanonPlace<'db>>,
-        unconditional_targets: FxHashSet<CanonPlace<'db>>,
-        mut indexed_targets: Vec<super::canon::IndexedLoanTarget<'db>>,
-        parents: FxHashSet<LoanId>,
+        region: RegionSet<'db>,
+        parents: ParentSet,
     ) -> bool {
-        let loan = &mut loans[loan_id.0 as usize];
-        let has_structured_targets =
-            !unconditional_targets.is_empty() || !indexed_targets.is_empty();
-        indexed_targets
-            .retain(|indexed| !indexed_target_is_excluded(indexed, &loan.result_exclusions));
-        let targets = if has_structured_targets {
-            unconditional_targets
-                .iter()
-                .cloned()
-                .chain(indexed_targets.iter().map(|indexed| indexed.target.clone()))
-                .collect()
-        } else {
-            targets
-        };
-        let before_targets = loan.targets.len();
-        let before_unconditional_targets = loan.unconditional_targets.len();
-        let before_indexed_targets = loan.indexed_targets.len();
-        let before_parents = loan.parents.len();
-        loan.targets.extend(targets);
-        loan.unconditional_targets.extend(unconditional_targets);
-        for indexed in indexed_targets {
-            if !loan.indexed_targets.contains(&indexed) {
-                loan.indexed_targets.push(indexed);
-            }
-        }
-        loan.parents.extend(parents);
-        before_targets != loan.targets.len()
-            || before_unconditional_targets != loan.unconditional_targets.len()
-            || before_indexed_targets != loan.indexed_targets.len()
-            || before_parents != loan.parents.len()
+        loans[loan_id.0 as usize].extend(region, parents)
     }
 
     fn update_loan_from_stmt(
         &self,
-        loans: &mut [Loan<'db>],
-        state: &State,
+        loans: &mut [LoanDef<'db>],
+        state: &BorrowState<'db>,
         stmt: &super::ir::NSStmt<'db>,
     ) -> Result<bool, SemanticBorrowDiagnostic<'db>> {
         let NSStmtKind::Assign { dst, expr } = &stmt.kind else {
@@ -129,21 +103,15 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
                 let Some(&loan_id) = self.loan_for_local.get(dst) else {
                     return Ok(false);
                 };
-                let (targets, parents) = {
+                let (region, parents) = {
                     let canon = self.canon(loans);
+                    let region = canon.resolve_place(state, place, stmt.origin)?;
                     (
-                        canon.canonicalize_place(state, place, stmt.origin)?,
-                        canon.mut_loans_for_place(state, place),
+                        region.clone(),
+                        canon.mut_parent_refs_for_place(state, place, &region),
                     )
                 };
-                Ok(self.extend_loan(
-                    loans,
-                    loan_id,
-                    targets.clone(),
-                    targets,
-                    Vec::new(),
-                    parents,
-                ))
+                Ok(self.extend_loan(loans, loan_id, region, parents))
             }
             NExpr::Call { args, .. } => {
                 let mut loan_ids = self
@@ -161,41 +129,19 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
                 );
                 let mut changed = false;
                 for loan_id in loan_ids {
-                    let Some(transforms) = self.call_loan_transforms.get(&loan_id) else {
+                    let Some(sources) = self.call_loan_sources.get(&loan_id) else {
                         continue;
                     };
-                    let mut targets = FxHashSet::default();
-                    let mut unconditional_targets = FxHashSet::default();
-                    let mut indexed_targets = Vec::new();
-                    let mut parents = FxHashSet::default();
+                    let mut region = RegionSet::empty();
+                    let mut parents = ParentSet::default();
                     let canon = self.canon(loans);
-                    for transform in transforms {
-                        let param = transform.input.param();
-                        let Some(arg) = args.get(param as usize) else {
-                            continue;
-                        };
-                        let arg_targets = canon.canonicalize_call_input_with_families(
-                            state,
-                            arg.local,
-                            &transform.input,
-                        );
-                        parents.extend(canon.mut_loans_for_value_targets(
-                            state,
-                            arg.local,
-                            &arg_targets.targets,
-                        ));
-                        targets.extend(arg_targets.targets);
-                        unconditional_targets.extend(arg_targets.unconditional_targets);
-                        indexed_targets.extend(arg_targets.indexed_targets);
+                    for source in sources {
+                        let (source_region, source_parents) =
+                            canon.instantiate_call_source(state, args, source);
+                        region = region.union(&source_region);
+                        parents.union(source_parents);
                     }
-                    changed |= self.extend_loan(
-                        loans,
-                        loan_id,
-                        targets,
-                        unconditional_targets,
-                        indexed_targets,
-                        parents,
-                    );
+                    changed |= self.extend_loan(loans, loan_id, region, parents);
                 }
                 Ok(changed)
             }
@@ -204,14 +150,12 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
                     return Ok(false);
                 };
                 let canon = self.canon(loans);
-                let targets = canon.borrow_local_targets(state, value.local);
+                let region = canon.borrow_local_region(state, value.local);
                 Ok(self.extend_loan(
                     loans,
                     loan_id,
-                    targets.clone(),
-                    targets,
-                    Vec::new(),
-                    canon.mut_loans_for_value(state, value.local),
+                    region.clone(),
+                    canon.mut_parent_refs_for_value(state, value.local, &region),
                 ))
             }
             _ => Ok(false),
@@ -237,7 +181,13 @@ impl<'a, 'db> SparseAnalysis for BorrowLoanTargetAnalysis<'a, 'db> {
         let mut changed = false;
         for stmt in &self.body.blocks[node.index()].stmts {
             changed |= self.update_loan_from_stmt(&mut *state.loans, &local_state, stmt)?;
-            self.canon(state.loans).apply_stmt_state_with_call_loans(
+            BorrowTransferCx::new(
+                self.db,
+                self.body,
+                self.loan_for_local,
+                self.constant_indices,
+            )
+            .apply_stmt(
                 &mut local_state,
                 stmt,
                 self.call_result_loans.get(&stmt.id).map(Vec::as_slice),
@@ -265,9 +215,9 @@ impl<'a, 'db> BorrowEntryStateAnalysis<'a, 'db> {
     }
 }
 
-impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
+impl<'db> ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, 'db> {
     type Block = SBlockId;
-    type State = State;
+    type State = BorrowState<'db>;
     type Error = Infallible;
 
     fn block_count(&self) -> usize {
@@ -282,7 +232,7 @@ impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
     }
 
     fn bottom(&self) -> Self::State {
-        State::default()
+        BorrowState::new(self.borrowck.value_interner.clone())
     }
 
     fn initialize(
@@ -291,8 +241,8 @@ impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
     ) -> Result<(), Self::Error> {
         if !self.borrowck.body.blocks.is_empty() {
             let entry = &mut entry_states[SBlockId::new(0)];
-            for (&local, held) in &self.borrowck.param_loans_for_local {
-                entry.assign_held_loans(local, held.clone());
+            for (&local, value) in &self.borrowck.param_values_for_local {
+                entry.assign(local, *value);
             }
         }
         Ok(())

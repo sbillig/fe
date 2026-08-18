@@ -5,12 +5,12 @@ use fe_hir::test_db::{HirAnalysisTestDb, format_diagnostics};
 use fe_hir::{
     analysis::{
         semantic::{
-            BorrowInput, BorrowResult, BorrowTransform, FieldIndex, LayoutBackingProjection,
-            NBorrowRoot, NExpr, NLocalOrigin, NSPlaceRoot, NSStmtKind, NormalizedBindingLowering,
-            ReadMode, SStmtKind, SemanticBorrowDiagKind, SemanticInstance, SemanticLocalKind,
-            check_semantic_borrows, check_semantic_noesc,
-            collect_semantic_borrow_diagnostic_vouchers, get_or_build_semantic_instance,
-            identity_semantic_instance_key, normalize_semantic_body, semantic_borrow_summary,
+            BorrowSource, FieldIndex, IndexExpr, NBorrowRoot, NExpr, NLocalOrigin, NSPlaceRoot,
+            NSStmtKind, NormalizedBindingLowering, ReadMode, SStmtKind, SemanticBorrowDiagKind,
+            SemanticInstance, SemanticLocalKind, SummaryProjection, check_semantic_borrows,
+            check_semantic_noesc, collect_semantic_borrow_diagnostic_vouchers,
+            get_or_build_semantic_instance, identity_semantic_instance_key,
+            normalize_semantic_body, semantic_borrow_summary,
         },
         ty::{
             ProviderAddressSpace,
@@ -301,31 +301,18 @@ impl Ledger {
     let summary = semantic_borrow_summary(&db, instance)
         .expect("borrow summary")
         .expect("borrow-returning function should produce a summary");
-    assert_eq!(summary.len(), 2, "unexpected summary: {summary:#?}");
-    assert!(summary.iter().any(|transform| {
-        transform.result
-            == BorrowResult {
-                kind: BorrowKind::Mut,
-                projection: Vec::new(),
-            }
-            && transform.input
-                == BorrowInput::Place {
-                    param: 0,
-                    projection: vec![LayoutBackingProjection::Field(FieldIndex(2))],
-                }
-    }));
-    assert!(summary.iter().any(|transform| {
-        transform.result
-            == BorrowResult {
-                kind: BorrowKind::Mut,
-                projection: Vec::new(),
-            }
-            && transform.input
-                == BorrowInput::Place {
-                    param: 0,
-                    projection: vec![LayoutBackingProjection::Field(FieldIndex(0))],
-                }
-    }));
+    assert_eq!(summary.len(), 1, "unexpected summary: {summary:#?}");
+    let sources = &summary.leaves()[0].sources;
+    for field in [FieldIndex(2), FieldIndex(0)] {
+        assert!(
+            sources.iter().any(|clause| matches!(
+                &clause.source,
+                BorrowSource::ParamPlace { param: 0, path }
+                    if path.as_slice() == [SummaryProjection::Field(field)]
+            )),
+            "unexpected sources: {sources:#?}"
+        );
+    }
     check_semantic_borrows(&db, instance).expect("borrowck should accept branch-returned borrow");
 }
 
@@ -368,19 +355,12 @@ impl Holder {
     let summary = semantic_borrow_summary(&db, instance)
         .expect("borrow summary")
         .expect("forward should produce a borrow summary");
-    assert_eq!(
-        summary,
-        vec![BorrowTransform {
-            result: BorrowResult {
-                kind: BorrowKind::Mut,
-                projection: Vec::new(),
-            },
-            input: BorrowInput::Place {
-                param: 1,
-                projection: Vec::new(),
-            },
-        }]
-    );
+    assert_eq!(summary.len(), 1, "unexpected summary: {summary:#?}");
+    assert!(summary.leaves()[0].path.is_empty());
+    assert!(summary.leaves()[0].sources.iter().any(|clause| matches!(
+        &clause.source,
+        BorrowSource::ParamCapability { param: 1, slot } if slot.is_empty()
+    )));
     check_semantic_borrows(&db, instance).expect("borrowck should accept forwarded borrows");
 }
 
@@ -2497,19 +2477,73 @@ fn forward(_ values: own [mut u256; 1000000]) -> [mut u256; 1000000] {
         }
     });
 
-    assert_eq!(
-        summary,
-        Some(vec![BorrowTransform {
-            result: BorrowResult {
-                kind: BorrowKind::Mut,
-                projection: vec![LayoutBackingProjection::IndexFamily(0)],
-            },
-            input: BorrowInput::Place {
-                param: 0,
-                projection: vec![LayoutBackingProjection::IndexFamily(0)],
-            },
-        }])
+    let summary = summary.expect("forward summary");
+    assert_eq!(summary.len(), 1, "unexpected summary: {summary:#?}");
+    let [SummaryProjection::Index(IndexExpr::ResultParam(result))] =
+        summary.leaves()[0].path.as_slice()
+    else {
+        panic!("unexpected result path: {:#?}", summary.leaves()[0].path);
+    };
+    assert!(summary.leaves()[0].sources.iter().any(|clause| matches!(
+        &clause.source,
+        BorrowSource::ParamCapability { param: 0, slot }
+            if matches!(
+                slot.as_slice(),
+                [SummaryProjection::Index(IndexExpr::ResultParam(source))] if source == result
+            )
+    )));
+}
+
+#[test]
+fn reading_a_forwarded_borrow_as_a_value_drops_loan_state() {
+    let diags = borrow_diags(
+        r#"
+struct Holder {
+    tag: u256,
+}
+
+impl Holder {
+    fn forward(mut self, _ value: mut u256) -> mut u256 {
+        value
+    }
+}
+
+fn valid() -> u256 {
+    let mut holder = Holder { tag: 0 }
+    let mut local = 7
+    let value = holder.forward(mut local)
+    value += 5
+    value
+}
+"#,
     );
+
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn moving_a_projected_capability_authorizes_its_overlay_write() {
+    let diags = borrow_diags(
+        r#"
+use std::evm::StorageMap
+
+enum Choice {
+    Left(StorageMap<u256, u256>),
+    Right(StorageMap<u256, u256>),
+}
+
+impl Choice {
+    fn flip(mut self) {
+        match self {
+            Choice::Left(map) => self = Choice::Right(map),
+            Choice::Right(map) => self = Choice::Left(map),
+        }
+    }
+}
+"#,
+    );
+
+    assert!(diags.is_empty(), "{diags}");
 }
 
 #[test]
@@ -2531,15 +2565,15 @@ fn pair(left: mut u256, right: mut u256) -> [mut u256; 2] {
 
     assert_eq!(summary.len(), 2, "{summary:#?}");
     for (index, param) in [(0, 0), (1, 1)] {
-        assert!(summary.contains(&BorrowTransform {
-            result: BorrowResult {
-                kind: BorrowKind::Mut,
-                projection: vec![LayoutBackingProjection::Index(Some(index))],
-            },
-            input: BorrowInput::Place {
-                param,
-                projection: Vec::new(),
-            },
+        assert!(summary.leaves().iter().any(|leaf| {
+            leaf.path.as_slice() == [SummaryProjection::Index(IndexExpr::Const(index))]
+                && leaf.sources.iter().any(|clause| {
+                    matches!(
+                        &clause.source,
+                        BorrowSource::ParamCapability { param: candidate, slot }
+                            if *candidate == param && slot.is_empty()
+                    )
+                })
         }));
     }
 }
