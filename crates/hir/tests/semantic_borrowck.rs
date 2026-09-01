@@ -395,6 +395,63 @@ fn replace_and_return(slot: **u256, value: *u256) -> *u256 {
 }
 
 #[test]
+fn memory_summary_records_raw_mem_separately_from_pointer_read() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+use core::ptr
+use std::evm::RawMem
+
+fn direct_read(p: *u256) -> u256 {
+    *p
+}
+
+fn raw_mem_read(p: *u256) -> u256 uses (mem: RawMem) {
+    mem.mload(ptr::byte_ptr(p))
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let pointee = MemorySummaryTarget::Input {
+        input: BorrowInputRef::Param(0),
+        proj: ProjectionPath::from_projection(Projection::Deref),
+    };
+    let access_for = |func_name| {
+        let instance = func_instance(&db, top_mod, func_name);
+        let summary = semantic_memory_summary(&db, instance).expect("memory summary");
+        summary
+            .items
+            .into_iter()
+            .find_map(|item| match item {
+                MemorySummaryItem::Access {
+                    target,
+                    kind,
+                    authorizers,
+                } if target == pointee => Some((kind, authorizers)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing pointee access for `{func_name}`"))
+    };
+
+    // Both functions read the same pointer. The RawMem version also records
+    // RawMem separately from the memory being read.
+    assert_eq!(access_for("direct_read"), (MemoryAccessKind::Read, vec![]));
+    assert_eq!(
+        access_for("raw_mem_read"),
+        (
+            MemoryAccessKind::Read,
+            vec![MemorySummaryTarget::Effect {
+                binding_idx: 0,
+                proj: ProjectionPath::default(),
+            }],
+        )
+    );
+}
+
+#[test]
 fn branch_return_borrow_summary_flows_through_empty_entry_blocks() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
