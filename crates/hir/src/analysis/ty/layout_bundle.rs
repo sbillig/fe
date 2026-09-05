@@ -259,6 +259,10 @@ impl<'db> LayoutBundleSchema<'db> {
             {
                 return Err(LayoutBundleSchemaError::InvalidViewAlias { alias: idx });
             }
+        }
+        // Establish every rule's decreasing measure before following any rule.
+        // A later malformed rule can otherwise trap an earlier target walk.
+        for (idx, alias) in self.view_aliases.iter().enumerate() {
             if let Some(first) = self.view_aliases[..idx]
                 .iter()
                 .position(|other| other.alias == alias.alias)
@@ -270,7 +274,9 @@ impl<'db> LayoutBundleSchema<'db> {
             }) {
                 return Err(LayoutBundleSchemaError::OverlappingViewAlias { first, second: idx });
             }
-            if self.canonicalize_view_path(&alias.canonical) != alias.canonical {
+        }
+        for (idx, alias) in self.view_aliases.iter().enumerate() {
+            if self.canonicalize_view_path(&alias.canonical)? != alias.canonical {
                 return Err(LayoutBundleSchemaError::InvalidViewAlias { alias: idx });
             }
         }
@@ -305,7 +311,7 @@ impl<'db> LayoutBundleSchema<'db> {
             {
                 return Err(LayoutBundleSchemaError::InvalidSuppliedConstParam { component: id });
             }
-            if self.canonicalize_view_path(&component.port.value_path) != component.port.value_path
+            if self.canonicalize_view_path(&component.port.value_path)? != component.port.value_path
             {
                 return Err(LayoutBundleSchemaError::NonCanonicalComponent { component: id });
             }
@@ -313,20 +319,31 @@ impl<'db> LayoutBundleSchema<'db> {
         Ok(())
     }
 
-    pub fn canonicalize_view_path(&self, path: &[LayoutEvidencePathStep]) -> LayoutEvidencePath {
+    /// Canonicalizes with at most the original path length's worth of rewrites.
+    /// Each selected rule must strictly shorten the path, even for raw schemas.
+    /// Full schema validation remains the publication boundary; this check does
+    /// not revalidate the entire alias table on each projection.
+    pub fn canonicalize_view_path(
+        &self,
+        path: &[LayoutEvidencePathStep],
+    ) -> Result<LayoutEvidencePath, LayoutBundleSchemaError> {
         let mut path = path.to_vec();
         loop {
-            let Some(alias) = self
+            let Some((idx, alias)) = self
                 .view_aliases
                 .iter()
-                .filter(|alias| path.starts_with(&alias.alias))
-                .max_by_key(|alias| alias.alias.len())
+                .enumerate()
+                .filter(|(_, alias)| path.starts_with(&alias.alias))
+                .max_by_key(|(_, alias)| alias.alias.len())
             else {
-                return path;
+                return Ok(path);
             };
-            let mut canonical = alias.canonical.clone();
-            canonical.extend_from_slice(&path[alias.alias.len()..]);
-            path = canonical;
+            if alias.alias.len() <= alias.canonical.len()
+                || !alias.alias.starts_with(&alias.canonical)
+            {
+                return Err(LayoutBundleSchemaError::InvalidViewAlias { alias: idx });
+            }
+            path.drain(alias.canonical.len()..alias.alias.len());
         }
     }
 
@@ -340,8 +357,8 @@ impl<'db> LayoutBundleSchema<'db> {
         &self,
         port: &LayoutPortKey,
         prefix: &[LayoutEvidencePathStep],
-    ) -> Option<LayoutPortKey> {
-        let prefix = self.canonicalize_view_path(prefix);
+    ) -> Result<Option<LayoutPortKey>, LayoutBundleSchemaError> {
+        let prefix = self.canonicalize_view_path(prefix)?;
         let direct = port.value_path.strip_prefix(prefix.as_slice());
         let aliased = self
             .view_aliases
@@ -353,20 +370,23 @@ impl<'db> LayoutBundleSchema<'db> {
                 path.strip_prefix(prefix.as_slice()).map(<[_]>::to_vec)
             })
             .min_by_key(Vec::len);
-        direct
+        Ok(direct
             .map(<[_]>::to_vec)
             .or(aliased)
             .map(|value_path| LayoutPortKey {
                 value_path,
                 root: port.root,
-            })
+            }))
     }
 
-    pub fn canonicalize_port(&self, port: &LayoutPortKey) -> LayoutPortKey {
-        LayoutPortKey {
-            value_path: self.canonicalize_view_path(&port.value_path),
+    pub fn canonicalize_port(
+        &self,
+        port: &LayoutPortKey,
+    ) -> Result<LayoutPortKey, LayoutBundleSchemaError> {
+        Ok(LayoutPortKey {
+            value_path: self.canonicalize_view_path(&port.value_path)?,
             root: port.root,
-        }
+        })
     }
 
     pub fn indexed_components(
@@ -529,24 +549,25 @@ impl<'db> LayoutBundleInterface<'db> {
         source: &LayoutBundleSchema<'db>,
         view: &[LayoutEvidencePathStep],
         mut compatible: impl FnMut(&LayoutBundleComponent<'db>, &LayoutBundleComponent<'db>) -> bool,
-    ) -> Option<LayoutBundleViewMapping> {
+    ) -> Result<Option<LayoutBundleViewMapping>, LayoutBundleSchemaError> {
         let mut sources = vec![None; self.schema.components.len()];
         for (target, component) in self.runtime_components() {
-            let mut candidates = source
-                .indexed_components()
-                .filter(|(_, candidate)| {
-                    compatible(component, candidate)
-                        && source.projected_port(&candidate.port, view).as_ref()
-                            == Some(&component.port)
-                })
-                .map(|(source, _)| source);
-            let source = candidates.next()?;
-            if candidates.next().is_some() {
-                return None;
+            let mut selected = None;
+            for (id, candidate) in source.indexed_components() {
+                if compatible(component, candidate)
+                    && source.projected_port(&candidate.port, view)?.as_ref()
+                        == Some(&component.port)
+                    && selected.replace(id).is_some()
+                {
+                    return Ok(None);
+                }
             }
-            sources[target.index()] = Some(source);
+            if selected.is_none() {
+                return Ok(None);
+            }
+            sources[target.index()] = selected;
         }
-        Some(LayoutBundleViewMapping { sources })
+        Ok(Some(LayoutBundleViewMapping { sources }))
     }
 
     /// Maps a type-checked value projection to a specialized callable input.
@@ -559,7 +580,7 @@ impl<'db> LayoutBundleInterface<'db> {
         &self,
         source: &LayoutBundleSchema<'db>,
         view: &[LayoutEvidencePathStep],
-    ) -> Option<LayoutBundleViewMapping> {
+    ) -> Result<Option<LayoutBundleViewMapping>, LayoutBundleSchemaError> {
         self.runtime_mapping(source, view, |target, candidate| target.ty == candidate.ty)
     }
 
@@ -573,7 +594,7 @@ impl<'db> LayoutBundleInterface<'db> {
         &self,
         source: &LayoutBundleSchema<'db>,
         view: &[LayoutEvidencePathStep],
-    ) -> Option<LayoutBundleViewMapping> {
+    ) -> Result<Option<LayoutBundleViewMapping>, LayoutBundleSchemaError> {
         self.runtime_mapping(source, view, |target, candidate| {
             target.ty == candidate.ty && target.formally_derivable_from(candidate)
         })

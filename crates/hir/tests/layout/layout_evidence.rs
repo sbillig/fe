@@ -781,6 +781,7 @@ fn take_right(value: Right) {}
         right
             .interface
             .runtime_view_mapping(&left.interface.schema, &[])
+            .expect("valid schema")
             .is_none()
     );
 }
@@ -1348,6 +1349,7 @@ fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
     );
     let mapping = input
         .runtime_view_mapping(&input.schema, &[])
+        .expect("valid schema")
         .expect("identity view must map the runtime component");
     assert_eq!(mapping.source(LayoutBundleComponentId(0)), None);
     assert_eq!(

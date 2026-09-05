@@ -259,6 +259,12 @@ impl<'db> LayoutEvidenceError<'db> {
     }
 }
 
+impl From<LayoutBundleSchemaError> for LayoutEvidenceError<'_> {
+    fn from(error: LayoutBundleSchemaError) -> Self {
+        Self::InvalidSchema { local: None, error }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum LayoutEvidenceVerifyError {
     OwnerMismatch,

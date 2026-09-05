@@ -546,7 +546,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         for (component_idx, component) in value.schema.components.iter().enumerate() {
             let Some(port) = value
                 .schema
-                .projected_port(&component.port, &projection.path)
+                .projected_port(&component.port, &projection.path)?
                 .filter(|_| !projection.array_element)
             else {
                 continue;
@@ -576,7 +576,12 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             .semantic_values
             .get(local.index())
             .ok_or(LayoutEvidenceError::InvalidPlace)?;
-        let port = value.schema.canonicalize_port(port);
+        let port = value.schema.canonicalize_port(port).map_err(|error| {
+            LayoutEvidenceError::InvalidSchema {
+                local: Some(local),
+                error,
+            }
+        })?;
         let (component, source) = value.schema.component_by_port(&port).ok_or_else(|| {
             LayoutEvidenceError::MissingPort {
                 local,
@@ -602,18 +607,18 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             .semantic_values
             .get(local.index())
             .ok_or(LayoutEvidenceError::InvalidPlace)?;
-        let candidates = value
-            .schema
-            .indexed_components()
-            .filter(|(_, component)| {
-                !projection.array_element
-                    && component.ty == target.ty
-                    && value
-                        .schema
-                        .projected_port(&component.port, &projection.path)
-                        .is_some_and(|port| port == target.port)
-            })
-            .collect::<Vec<_>>();
+        let mut candidates = Vec::new();
+        for (id, component) in value.schema.indexed_components() {
+            if !projection.array_element
+                && component.ty == target.ty
+                && value
+                    .schema
+                    .projected_port(&component.port, &projection.path)?
+                    .is_some_and(|port| port == target.port)
+            {
+                candidates.push((id, component));
+            }
+        }
         let [(source, _)] = candidates.as_slice() else {
             return Err(LayoutEvidenceError::ShapeMismatch {
                 dst: local,
@@ -673,7 +678,9 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                             local,
                             component: source_id,
                         })?;
-                if source.projected_port(&source_component.port, path).as_ref()
+                if source
+                    .projected_port(&source_component.port, path)?
+                    .as_ref()
                     != Some(&component.port)
                     || source_component.ty != component.ty
                 {
@@ -775,7 +782,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         let target =
             LayoutBundleInterface::all_runtime(self.semantic_values[dst.index()].schema.clone());
         let mapping = target
-            .runtime_call_mapping(&self.semantic_values[source.index()].schema, &[])
+            .runtime_call_mapping(&self.semantic_values[source.index()].schema, &[])?
             .ok_or(LayoutEvidenceError::InvalidPlace)?;
         self.mapped_transfer_bundle(source, &[], &target, &mapping)
     }
@@ -1027,7 +1034,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             source_ty = self.normalized.owner.normalized_ty(self.db, next_ty);
         }
         let mapping = expected
-            .runtime_call_mapping(source_schema, &path)
+            .runtime_call_mapping(source_schema, &path)?
             .ok_or(LayoutEvidenceError::InvalidPlace)?;
         self.mapped_transfer_bundle(local, &path, expected, &mapping)
     }
@@ -1042,7 +1049,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         let direct = |local: SLocalId| {
             let source = &self.semantic_values[local.index()].schema;
             let mapping = interface
-                .runtime_call_mapping(source, &[])
+                .runtime_call_mapping(source, &[])?
                 .ok_or(LayoutEvidenceError::InvalidPlace)?;
             self.mapped_transfer_bundle(local, &[], interface, &mapping)
         };
@@ -1205,7 +1212,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                     value,
                 })
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, LayoutEvidenceError<'db>>>()?;
         let value = self.call_result_transfer_bundle(dst, &signature.output)?;
         Ok((
             value,
@@ -1234,10 +1241,13 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         target
             .indexed_components()
             .filter_map(|(target_id, component)| {
-                let port = target.projected_port(&component.port, &projection.path)?;
-                Some((target_id, component, port))
+                target
+                    .projected_port(&component.port, &projection.path)
+                    .transpose()
+                    .map(|port| port.map(|port| (target_id, component, port)))
             })
-            .map(|(target_id, component, port)| {
+            .map(|projected| {
+                let (target_id, component, port) = projected?;
                 Ok(LayoutTransferComponent::new(
                     target_id,
                     component,
