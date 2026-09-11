@@ -25,6 +25,7 @@ completions:
   - Decode (Interface)
   - Default (Interface)
   - Drawable (Interface)
+  - DynArrayAccess (Interface)
   - Encode (Interface)
   - Err (EnumMember)
   - ErrorVariant (Interface)
@@ -39,6 +40,7 @@ completions:
   - MemBuffer (Struct)
   - MemSlice (Struct)
   - MemSpan (Class)
+  - MemVec (Struct)
   - MsgVariant (Interface)
   - None (EnumMember)
   - Ok (EnumMember)
@@ -112,6 +114,7 @@ completions:
   - MemBuffer (Struct)
   - MemSlice (Struct)
   - MemSpan (Class)
+  - MemVec (Struct)
   - Option (Enum)
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+0:use other_stuff::OtherThing}
   - Panic (Struct)
@@ -187,6 +190,7 @@ completions:
   - MemBuffer (Struct)
   - MemSlice (Struct)
   - MemSpan (Class)
+  - MemVec (Struct)
   - Option (Enum)
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+0:use other_stuff::OtherThing}
   - Panic (Struct)
@@ -250,6 +254,7 @@ completions:
   - MemBuffer (Struct)
   - MemSlice (Struct)
   - MemSpan (Class)
+  - MemVec (Struct)
   - Option (Enum)
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+82:use other_stuff::OtherThing}
   - Panic (Struct)
@@ -278,6 +283,7 @@ completions:
   - MemBuffer (Struct)
   - MemSlice (Struct)
   - MemSpan (Class)
+  - MemVec (Struct)
   - Option (Enum)
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+104:use other_stuff::OtherThing}
   - Panic (Struct)
