@@ -51,10 +51,10 @@ tracing-tree = "0.4.0"
 wasm-bindgen-test = "0.3"
 semver = "1.0.26"
 petgraph = "0.8"
-sonatina-ir = { path = "../../sonatina/cranelift/crates/ir" }
-sonatina-triple = { path = "../../sonatina/cranelift/crates/triple" }
-sonatina-codegen = { path = "../../sonatina/cranelift/crates/codegen" }
-sonatina-verifier = { path = "../../sonatina/cranelift/crates/verifier" }
+sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "362903c" }
+sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "362903c" }
+sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "362903c" }
+sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "362903c" }
 
 [profile.dev]
 # Set to 0 to make the build faster and debugging more difficult.
