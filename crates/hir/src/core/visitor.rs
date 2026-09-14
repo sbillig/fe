@@ -2103,6 +2103,9 @@ pub fn walk_where_clause<'db, V>(
             |ctxt| visitor.visit_where_predicate(ctxt, predicate),
         );
     }
+    for &body in predicates.const_predicates(ctxt.db) {
+        visitor.visit_body(&mut VisitorCtxt::with_body(ctxt.db, body), body);
+    }
 }
 
 pub fn walk_where_predicate<'db, V>(
