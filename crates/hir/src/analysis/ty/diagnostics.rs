@@ -519,6 +519,12 @@ pub enum BodyDiag<'db> {
         ty: TyId<'db>,
     },
     ConstValueMustBeKnown(DynLazySpan<'db>),
+    ConstEvaluationFailed {
+        primary: DynLazySpan<'db>,
+        const_name: String,
+        origin: String,
+        reason: String,
+    },
     StaticAssertFailed {
         primary: DynLazySpan<'db>,
         comparison: Option<StaticAssertComparisonValues>,
@@ -945,6 +951,7 @@ impl<'db> BodyDiag<'db> {
             Self::TypeSizeOverflow { .. } => 88,
             Self::InvalidCast { .. } => 55,
             Self::ConstValueMustBeKnown(..) => 64,
+            Self::ConstEvaluationFailed { .. } => 89,
             Self::StaticAssertFailed { .. } => 81,
             Self::AccessedFieldNotFound { .. } => 15,
             Self::OpsTraitNotImplemented { .. } => 16,
