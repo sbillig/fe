@@ -3036,6 +3036,7 @@ fn degenerate_return_projection(
 pub enum ValuePathRef<'db> {
     UnitVariant(ResolvedVariant<'db>),
     TypeConst(TyId<'db>),
+    FunctionItem,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -3079,6 +3080,7 @@ impl<'db> TyVisitable<'db> for ValuePathRef<'db> {
         match self {
             Self::UnitVariant(variant) => variant.ty.visit_with(visitor),
             Self::TypeConst(ty) => ty.visit_with(visitor),
+            Self::FunctionItem => {}
         }
     }
 }
@@ -3101,6 +3103,7 @@ impl<'db> TyFoldable<'db> for ValuePathRef<'db> {
             // Folding it here would retain only the actual value and erase
             // which formal const parameter the expression referenced.
             Self::TypeConst(ty) => Self::TypeConst(ty),
+            Self::FunctionItem => Self::FunctionItem,
         }
     }
 }

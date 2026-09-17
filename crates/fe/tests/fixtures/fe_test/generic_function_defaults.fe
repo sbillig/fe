@@ -1,0 +1,37 @@
+fn selected<const A: usize, const B: usize, const C: usize = B>() -> usize { C }
+
+fn forwarded<const X: usize, const Y: usize>() -> usize { selected<Y, X>() }
+
+trait Length {
+    const LEN: usize
+    fn value<const N: usize = Self::LEN>() -> usize { N }
+}
+
+impl Length for bool {
+    const LEN: usize = 2
+}
+
+fn trait_value<T: Length, const N: usize = T::LEN>() -> usize { N }
+
+struct Size<const N: usize> {}
+
+impl<const N: usize> Size<N> {
+    const LEN: usize = N
+}
+
+fn inherent_value<const N: usize, const M: usize = Size<N>::LEN>() -> usize { M }
+
+fn identity<T = u256>(_ value: own T) -> T { value }
+
+#[test]
+fn generic_function_defaults() {
+    assert!(forwarded<2, 3>() == 2)
+    assert!(trait_value<bool>() == 2)
+    assert!(inherent_value<3>() == 3)
+    let defaulted = identity
+    let overridden = identity<bool>
+    let trait_item = <bool as Length>::value
+    assert!(defaulted(7) == 7)
+    assert!(overridden(true))
+    assert!(trait_item() == 2)
+}

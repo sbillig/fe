@@ -3586,6 +3586,8 @@ impl<'db> TyChecker<'db> {
                         return ExprProp::invalid(self.db);
                     }
 
+                    self.env
+                        .register_value_path_ref(expr, ValuePathRef::FunctionItem);
                     ExprProp::new(callable.ty(self.db), true)
                 }
                 PathRes::Trait(trait_) => {
@@ -3604,6 +3606,8 @@ impl<'db> TyChecker<'db> {
                             variant.ty
                         }
                         VariantKind::Tuple(_) => {
+                            self.env
+                                .register_value_path_ref(expr, ValuePathRef::FunctionItem);
                             let ty = variant.constructor_func_ty(self.db).unwrap();
                             self.instantiate_to_term(ty)
                         }
@@ -3696,6 +3700,8 @@ impl<'db> TyChecker<'db> {
 
                     let method_ty = callable.ty(self.db);
                     self.env.register_callable(expr, callable);
+                    self.env
+                        .register_value_path_ref(expr, ValuePathRef::FunctionItem);
                     ExprProp::new(method_ty, true)
                 }
                 PathRes::TraitMethod(trait_inst, method) => {
@@ -3776,6 +3782,8 @@ impl<'db> TyChecker<'db> {
 
                     let func_ty = callable.ty(self.db);
                     self.env.register_callable(expr, callable);
+                    self.env
+                        .register_value_path_ref(expr, ValuePathRef::FunctionItem);
                     ExprProp::new(func_ty, true)
                 }
                 PathRes::TraitConst(recv_ty, inst, name) => {

@@ -1,7 +1,7 @@
 use crate::{
     hir_def::{
-        BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArgListId, IdentId, LitKind,
-        Partial, UnOp,
+        BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArgListId, IdentId,
+        ItemKind, LitKind, Partial, UnOp,
     },
     span::{
         DynLazySpan,
@@ -9,6 +9,7 @@ use crate::{
         params::LazyGenericArgListSpan,
     },
 };
+use common::indexmap::IndexMap;
 use salsa::Update;
 
 use super::{BodyOwner, ExprProp, LocalBinding, TraitObligationOutcome, TyChecker};
@@ -302,6 +303,25 @@ impl<'db> Callable<'db> {
         assert_eq!(params.len(), args.len());
 
         let callable_def = *callable_def;
+        // Function items retain their trait arguments in the type even when
+        // stored in a local; reconstruct the witness needed for later dispatch.
+        let trait_inst = trait_inst.or_else(|| {
+            let CallableDef::Func(func) = callable_def else {
+                return None;
+            };
+            let ItemKind::Trait(trait_) = func.scope().parent_item(db)? else {
+                return None;
+            };
+            let trait_arg_count = trait_.params(db).len();
+            (args.len() >= trait_arg_count).then(|| {
+                TraitInstId::new(
+                    db,
+                    trait_,
+                    args[..trait_arg_count].to_vec(),
+                    IndexMap::new(),
+                )
+            })
+        });
 
         Ok(Self {
             callable_def,
