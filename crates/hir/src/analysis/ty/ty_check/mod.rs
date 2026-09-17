@@ -3289,7 +3289,7 @@ impl<'db> TypedBody<'db> {
         self.has_diagnostics && self.has_smir_lowering_blocker(db)
     }
 
-    fn has_smir_lowering_blocker(&self, db: &'db dyn HirAnalysisDb) -> bool {
+    pub(crate) fn has_smir_lowering_blocker(&self, db: &'db dyn HirAnalysisDb) -> bool {
         let Some(body) = self.body else {
             return false;
         };
