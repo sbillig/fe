@@ -63,6 +63,12 @@ error[8-0000]: type mismatch
 72 │     <TraitReceiver as TraitDefault>::associated_projection_default(true)
    │                                                                    ^^^^ expected `u256`, but `bool` is given
 
+error[8-0000]: type mismatch
+   ┌─ generic_function_defaults_mismatch.fe:87:36
+   │
+87 │     associated_const_default<bool>(value)
+   │                                    ^^^^^ expected `[u8; 2]`, but `[u8; 3]` is given
+
 error[8-0022]: given generic argument number mismatch
    ┌─ generic_function_defaults_mismatch.fe:64:30
    │

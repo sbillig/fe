@@ -2,9 +2,9 @@ use std::iter;
 
 use crate::core::hir_def::{
     Body, CallableDef, ConstGenericArgValue, Expr, Func, GenericArg, GenericArgListId,
-    GenericParam, GenericParamOwner, GenericParamView, IdentId, KindBound as HirKindBound, Partial,
-    PathId, Stmt, TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind,
-    TypeMode, scope_graph::ScopeId,
+    GenericParam, GenericParamOwner, GenericParamView, IdentId, ItemKind,
+    KindBound as HirKindBound, Partial, PathId, Stmt, TypeAlias as HirTypeAlias, TypeBound,
+    TypeId as HirTyId, TypeKind as HirTyKind, TypeMode, scope_graph::ScopeId,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
@@ -3743,34 +3743,42 @@ impl<'db> GenericParamTypeSet<'db> {
 
         // Helper folder to substitute known params when lowering defaults
         struct ParamSubst<'a, 'db> {
-            db: &'db dyn HirAnalysisDb,
+            scope: ScopeId<'db>,
+            inherited_scope: Option<ScopeId<'db>>,
             mapping: &'a [Option<TyId<'db>>],
         }
         impl<'a, 'db> TyFolder<'db> for ParamSubst<'a, 'db> {
             fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-                match ty.data(self.db) {
-                    TyData::TyParam(param) => {
-                        if let Some(Some(rep)) = self.mapping.get(param.idx) {
-                            return *rep;
-                        }
-                        ty.super_fold_with(db, self)
-                    }
-                    TyData::ConstTy(const_ty) => {
-                        if let super::const_ty::ConstTyData::TyParam(param, _) =
-                            const_ty.data(self.db)
-                            && let Some(Some(rep)) = self.mapping.get(param.idx)
-                        {
-                            return *rep;
-                        }
-                        ty.super_fold_with(db, self)
-                    }
-                    _ => ty.super_fold_with(db, self),
+                let param = match ty.data(db) {
+                    TyData::TyParam(param) => Some(param),
+                    TyData::ConstTy(const_ty) => match const_ty.data(db) {
+                        ConstTyData::TyParam(param, _) => Some(param),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(param) = param
+                    && (param.owner == self.scope || Some(param.owner) == self.inherited_scope)
+                    && let Some(Some(rep)) = self.mapping.get(param.idx)
+                {
+                    return *rep;
                 }
+                ty.super_fold_with(db, self)
             }
         }
 
+        let inherited_scope = scope.parent(db).filter(|parent| {
+            matches!(
+                parent.item(),
+                ItemKind::Impl(_) | ItemKind::ImplTrait(_) | ItemKind::Trait(_)
+            )
+        });
         let substitute_known_params = |mapping: &[Option<TyId<'db>>], ty: TyId<'db>| {
-            let mut subst = ParamSubst { db, mapping };
+            let mut subst = ParamSubst {
+                scope,
+                inherited_scope,
+                mapping,
+            };
             ty.fold_with(db, &mut subst)
         };
 
@@ -3796,7 +3804,9 @@ impl<'db> GenericParamTypeSet<'db> {
             }
 
             if let Some(default) = prec.default_hir_const {
-                let expected = prec.declared_const_ty(db, scope);
+                let expected = prec
+                    .declared_const_ty(db, scope)
+                    .map(|ty| substitute_known_params(&mapping, ty));
                 let lowered = match default {
                     ConstGenericArgValue::Expr(default) => {
                         let generic_args = mapped_generic_args(&mapping, i);
@@ -3849,8 +3859,9 @@ impl<'db> GenericParamTypeSet<'db> {
                     ),
                 };
 
-                let lowered = substitute_known_params(&mapping, lowered);
-
+                // Const bodies capture the already-bound prefix. Substituting
+                // it again would reinterpret caller params as callee params,
+                // including in recursive calls where both owners are identical.
                 mapping[i] = Some(lowered);
                 result.push(lowered);
                 continue;

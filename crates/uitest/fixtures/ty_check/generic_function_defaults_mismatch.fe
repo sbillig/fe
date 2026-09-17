@@ -71,3 +71,18 @@ fn exercise_mismatches(
     <TraitReceiver as TraitDefault>::associated_self_default(true)
     <TraitReceiver as TraitDefault>::associated_projection_default(true)
 }
+
+trait Length {
+    const LEN: usize
+}
+
+impl Length for bool {
+    const LEN: usize = 2
+}
+
+fn associated_const_default<T: Length, const N: usize = T::LEN>(_ value: [u8; N]) {}
+
+fn associated_const_mismatch() {
+    let value: [u8; 3] = [0, 1, 2]
+    associated_const_default<bool>(value)
+}

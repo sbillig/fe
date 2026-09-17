@@ -1363,10 +1363,7 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
         } => {
             let normalized = const_ty.evaluate(db, Some(*expected_ty));
             if normalized.ty(db).invalid_cause(db).is_none()
-                && matches!(
-                    normalized.data(db),
-                    ConstTyData::Hole(..) | ConstTyData::Evaluated(..) | ConstTyData::Abstract(..)
-                )
+                && !matches!(normalized.data(db), ConstTyData::UnEvaluated { .. })
             {
                 if let ConstTyData::Abstract(expr, expected_ty) = normalized.data(db) {
                     evaluate_abstract_int_const_expr(db, *expr, *expected_ty).map_or_else(
@@ -1968,6 +1965,8 @@ pub(crate) fn evaluate_const_ty<'db>(
                         args,
                         inst.assoc_type_bindings(db).clone(),
                     );
+                    let inst = instantiate_with_generic_args(db, inst, &generic_args);
+                    let assumptions = instantiate_with_generic_args(db, assumptions, &generic_args);
 
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let expr = ConstExprId::new(
@@ -1997,6 +1996,8 @@ pub(crate) fn evaluate_const_ty<'db>(
                     }
                 }
                 PathRes::InherentConst(recv_ty, impl_, name) => {
+                    let recv_ty = instantiate_with_generic_args(db, recv_ty, &generic_args);
+                    let assumptions = instantiate_with_generic_args(db, assumptions, &generic_args);
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let use_ = super::assoc_const::InherentConstUse::new(
                             body.scope(),
@@ -2334,34 +2335,31 @@ pub(crate) fn assumptions_for_body<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
 ) -> PredicateListId<'db> {
-    let containing_func = match body.scope().parent_item(db) {
-        Some(ItemKind::Func(func)) => Some(func),
-        Some(ItemKind::Body(parent)) => parent.containing_func(db),
-        _ => None,
-    };
-    if let Some(func) = containing_func {
-        return crate::semantic::func_body_assumptions(db, func).extend_all_bounds(db);
-    }
+    const_body_assumptions(db, body.scope()).extend_all_bounds(db)
+}
 
-    let mut enclosing = body.scope();
-    let mut parent_item = enclosing.parent_item(db);
+/// Base predicates available to a const body, shared by type checking and CTFE.
+pub(crate) fn const_body_assumptions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+) -> PredicateListId<'db> {
+    let mut parent_item = scope.parent_item(db);
     while let Some(ItemKind::Body(parent)) = parent_item {
-        enclosing = parent.scope();
-        parent_item = enclosing.parent_item(db);
+        parent_item = parent.scope().parent_item(db);
     }
 
     match parent_item {
+        Some(ItemKind::Func(func)) => crate::semantic::func_body_assumptions(db, func),
         Some(ItemKind::Trait(trait_)) => {
-            PredicateListId::new(db, vec![crate::semantic::trait_self_predicate(db, trait_)])
-                .extend_all_bounds(db)
+            let declared = collect_constraints(db, trait_.into()).instantiate_identity();
+            let self_predicate =
+                PredicateListId::new(db, vec![crate::semantic::trait_self_predicate(db, trait_)]);
+            declared.merge(db, self_predicate)
         }
-        Some(ItemKind::ImplTrait(impl_trait)) => collect_constraints(db, impl_trait.into())
-            .instantiate_identity()
-            .extend_all_bounds(db),
-        Some(ItemKind::Impl(impl_)) => collect_constraints(db, impl_.into())
-            .instantiate_identity()
-            .extend_all_bounds(db),
-        _ => PredicateListId::empty_list(db),
+        item => item.and_then(GenericParamOwner::from_item_opt).map_or_else(
+            || PredicateListId::empty_list(db),
+            |owner| collect_constraints(db, owner).instantiate_identity(),
+        ),
     }
 }
 
