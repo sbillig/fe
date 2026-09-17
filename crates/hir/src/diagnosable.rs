@@ -9,20 +9,19 @@ use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::name_resolution::{self, PathRes};
+use crate::analysis::name_resolution;
 use crate::analysis::ty;
 use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
+use crate::analysis::ty::generic_defaults::default_dependencies;
 use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::trait_lower::lower_impl_trait;
-use crate::analysis::ty::ty_def::{InvalidCause, TyId, TyParam};
+use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::analysis::ty::ty_error::collect_ty_lower_errors;
-use crate::analysis::ty::ty_lower::lower_hir_ty;
-use crate::analysis::ty::visitor::{TyVisitable, TyVisitor};
 use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{
-    ConstGenericArgValue, Contract, Enum, EnumVariant, FieldParent, Func, GenericParam,
-    GenericParamOwner, GenericParamView, IdentId, Impl, ImplTrait, ItemKind, Partial, PathId,
-    Struct, Trait, TypeAlias, TypeBound, VariantKind, WhereClauseOwner,
+    Contract, Enum, EnumVariant, FieldParent, Func, GenericParam, GenericParamOwner,
+    GenericParamView, IdentId, Impl, ImplTrait, ItemKind, Partial, PathId, Struct, Trait,
+    TypeAlias, TypeBound, VariantKind, WhereClauseOwner,
 };
 use crate::span::DynLazySpan;
 
@@ -33,35 +32,12 @@ use crate::semantic::{
     FieldView, FuncParamView, ImplAssocTypeView, InherentImplAdmissibility, SuperTraitRefView,
     VariantView, WherePredicateBoundView, WherePredicateView, constraints_for,
     header_constraints_for, lower_hir_kind_local, param_env,
-    reference::{ReferenceView, body_references},
 };
 
 /// Unified "pull" diagnostics surface for HIR items and views.
 pub trait Diagnosable<'db> {
     type Diagnostic;
     fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic>;
-}
-
-struct GenericDefaultReferences<'db> {
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    indices: Vec<usize>,
-}
-
-impl<'db> TyVisitor<'db> for GenericDefaultReferences<'db> {
-    fn db(&self) -> &'db dyn HirAnalysisDb {
-        self.db
-    }
-
-    fn visit_param(&mut self, param: &TyParam<'db>) {
-        if !param.is_trait_self() && param.owner == self.scope {
-            self.indices.push(param.original_idx(self.db));
-        }
-    }
-
-    fn visit_const_param(&mut self, param: &TyParam<'db>, _: TyId<'db>) {
-        self.visit_param(param);
-    }
 }
 
 /// Shared helper for duplicate name diagnostics.
@@ -1448,64 +1424,11 @@ impl<'db> GenericParamOwner<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<TyDiagCollection<'db>> {
         let mut out = Vec::new();
-        // Forward-ref checking only needs parameter occurrences in defaults.
-        // Full assumptions can create non-converging cycles on malformed defaults
-        // (e.g. `T = Self`) and should not panic diagnostics collection.
-        let assumptions = ty::trait_resolution::PredicateListId::empty_list(db);
-        let scope = self.scope();
-
         for view in self.params(db) {
-            let mut referenced = GenericDefaultReferences {
-                db,
-                scope,
-                indices: Vec::new(),
-            };
-            match view.param {
-                GenericParam::Type(tp) => {
-                    let Some(default_ty) = tp.default_ty else {
-                        continue;
-                    };
-                    if default_ty.is_self_ty(db) {
-                        continue;
-                    }
-
-                    let lowered = lower_hir_ty(db, default_ty, scope, assumptions);
-                    lowered.visit_with(&mut referenced);
-                }
-                GenericParam::Const(param) => {
-                    let Some(ConstGenericArgValue::Expr(Partial::Present(body))) = param.default
-                    else {
-                        continue;
-                    };
-                    for reference in body_references(db, body) {
-                        let ReferenceView::Path(path) = reference else {
-                            continue;
-                        };
-                        // Resolve prefixes too: an associated path may fail to
-                        // resolve without bounds, but its generic root is still
-                        // a reference to a parameter in this declaration.
-                        for segment in
-                            std::iter::successors(Some(path.path), |path| path.parent(db))
-                        {
-                            if let Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) =
-                                name_resolution::resolve_path(
-                                    db,
-                                    segment,
-                                    path.scope,
-                                    assumptions,
-                                    true,
-                                )
-                            {
-                                ty.visit_with(&mut referenced);
-                            }
-                        }
-                    }
-                }
-            }
-
-            referenced.indices.sort_unstable();
-            referenced.indices.dedup();
-            for j in referenced.indices.into_iter().filter(|j| *j >= view.idx) {
+            for &j in default_dependencies(db, self, view.idx)
+                .iter()
+                .filter(|&&j| j >= view.idx)
+            {
                 if let Some(name) = self.param_view(db, j).param.name().to_opt() {
                     let span = view.span();
                     out.push(TyLowerDiag::GenericDefaultForwardRef { span, name }.into());
