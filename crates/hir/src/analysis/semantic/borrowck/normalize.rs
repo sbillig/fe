@@ -17,7 +17,7 @@ use crate::{
         },
         ty::{
             normalize::normalize_ty,
-            ty_check::{EffectPassMode, LocalBinding, ParamSite},
+            ty_check::{LocalBinding, ParamSite},
             ty_def::{BorrowKind, TyId},
             ty_is_copy,
         },
@@ -533,15 +533,6 @@ impl<'db> NormalizeCtxt<'db> {
                                 }
                             });
                         }
-                        NEffectArgValue::Value(value)
-                            if arg.required_mut
-                                && matches!(arg.pass_mode, EffectPassMode::ByTempPlace) =>
-                        {
-                            if let Some(demand) = self.root_demands.get_mut(value.local.index()) {
-                                demand.passed_by_place = true;
-                                demand.mut_borrowed_or_addr_taken = true;
-                            }
-                        }
                         NEffectArgValue::Value(_) => {}
                     }
                 }
@@ -1043,11 +1034,6 @@ impl<'db> NormalizeCtxt<'db> {
             arg: match &arg.arg {
                 crate::analysis::semantic::SEffectArgValue::Place(place) => {
                     NEffectArgValue::Place(self.normalize_place(place)?)
-                }
-                crate::analysis::semantic::SEffectArgValue::Value(value)
-                    if matches!(arg.pass_mode, EffectPassMode::ByTempPlace) =>
-                {
-                    NEffectArgValue::Value(self.normalize_copy_operand(*value, origin))
                 }
                 crate::analysis::semantic::SEffectArgValue::Value(value) => {
                     NEffectArgValue::Value(self.normalize_operand(*value, origin))

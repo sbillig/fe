@@ -3,7 +3,11 @@ use cranelift_entity::EntityRef;
 use crate::{
     analysis::{
         HirAnalysisDb,
-        semantic::{NOperand, NSLocal, SLocalId, SemOrigin, SemanticInstance, SemanticLocalKind},
+        semantic::{
+            NEffectArgValue, NOperand, NSLocal, SLocalId, SemOrigin, SemanticInstance,
+            SemanticLocalKind,
+        },
+        ty::ty_check::EffectPassMode,
     },
     projection::{IndexSource, Projection},
 };
@@ -193,6 +197,25 @@ fn verify_expr<'db>(
     origin: SemOrigin<'db>,
     expr: &NExpr<'db>,
 ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+    if let NExpr::Call { effect_args, .. } = expr {
+        for arg in effect_args {
+            let valid = match arg.pass_mode {
+                EffectPassMode::ByPlace => matches!(arg.arg, NEffectArgValue::Place(_)),
+                EffectPassMode::ByValue => matches!(arg.arg, NEffectArgValue::Value(_)),
+                EffectPassMode::ByTempPlace => false,
+                EffectPassMode::Unknown => true,
+            };
+            if !valid {
+                return Err(normalized_body_internal_diag(
+                    db,
+                    instance,
+                    body,
+                    origin,
+                    "effect argument must use its canonical place or value transport".to_string(),
+                ));
+            }
+        }
+    }
     expr.try_for_each_value_operand(|value| verify_operand(db, instance, body, origin, value))?;
     expr.try_for_each_place_operand(|place| verify_place(db, instance, body, origin, place))?;
     if let NExpr::ReadPlace {

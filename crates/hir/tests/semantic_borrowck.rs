@@ -6,16 +6,17 @@ use fe_hir::{
     analysis::{
         semantic::{
             BorrowInputRef, BorrowTransform, MemoryAccessKind, MemorySummaryItem,
-            MemorySummaryTarget, NBorrowRoot, NExpr, NLocalOrigin, NSPlaceRoot, NSProjectionPath,
-            NSStmtKind, NormalizedBindingLowering, ReadMode, SStmtKind, SemanticBorrowDiagKind,
-            SemanticInstance, SemanticLocalKind, check_semantic_borrows, check_semantic_noesc,
-            collect_semantic_borrow_diagnostic_vouchers, get_or_build_semantic_instance,
-            identity_semantic_instance_key, normalize_semantic_body, semantic_borrow_summary,
-            semantic_memory_summary, verify_normalized_semantic_body,
+            MemorySummaryTarget, NBorrowRoot, NEffectArgValue, NExpr, NLocalOrigin, NSPlaceRoot,
+            NSProjectionPath, NSStmtKind, NormalizedBindingLowering, ReadMode, SStmtKind,
+            SemanticBorrowDiagKind, SemanticInstance, SemanticLocalKind, check_semantic_borrows,
+            check_semantic_noesc, collect_semantic_borrow_diagnostic_vouchers,
+            get_or_build_semantic_instance, identity_semantic_instance_key,
+            normalize_semantic_body, semantic_borrow_summary, semantic_memory_summary,
+            verify_normalized_semantic_body,
         },
         ty::{
             ProviderAddressSpace,
-            ty_check::{BodyOwner, LocalBinding},
+            ty_check::{BodyOwner, EffectPassMode, LocalBinding},
             ty_def::{BorrowKind, TyData},
         },
     },
@@ -46,6 +47,139 @@ fn assert_no_borrow_conflict(src: &str) {
         !diags.contains("internal borrow checking error"),
         "{diags:?}"
     );
+}
+
+#[test]
+fn repeated_trait_provider_calls_borrow_the_same_noncopy_binding() {
+    for binding in [
+        "Tick = counter()",
+        "Tick = Counter { value: 0 }",
+        "Tick = local",
+        "local",
+    ] {
+        let source = format!(
+            r#"
+trait Tick {{ fn next(mut self) -> i32 }}
+struct Counter {{ value: i32 }}
+impl Tick for Counter {{
+    fn next(mut self) -> i32 {{
+        self.value += 1
+        self.value
+    }}
+}}
+fn counter() -> Counter {{ Counter {{ value: 0 }} }}
+fn next() -> i32 uses (tick: mut Tick) {{ tick.next() }}
+fn run() -> i32 {{
+    let mut local = counter()
+    with ({binding}) {{ next() + next() }}
+}}
+"#
+        );
+        let diagnostics = borrow_diags(&source);
+        assert!(diagnostics.is_empty(), "{binding}: {diagnostics}");
+    }
+}
+
+#[test]
+fn trait_provider_calls_preserve_real_moves_and_alias_conflicts() {
+    let prefix = r#"
+trait Tick { fn next(mut self) -> i32 }
+struct Counter { value: i32 }
+impl Tick for Counter {
+    fn next(mut self) -> i32 {
+        self.value += 1
+        self.value
+    }
+}
+fn next() -> i32 uses (tick: mut Tick) { tick.next() }
+fn consume(_ value: own Counter) {}
+"#;
+    for (body, message) in [
+        (
+            "next()\n consume(value)\n next()",
+            "cannot access a value after it was moved",
+        ),
+        (
+            "let borrowed = mut value\n next()\n borrowed.value = 9",
+            "borrow conflict",
+        ),
+    ] {
+        let source = format!(
+            "{prefix}\nfn bad() {{\n let mut value = Counter {{ value: 0 }}\n with (Tick = value) {{ {body} }}\n}}"
+        );
+        let diagnostics = borrow_diags(&source);
+        assert!(diagnostics.contains(message), "{message}: {diagnostics}");
+    }
+}
+
+#[test]
+fn trait_provider_borrows_cannot_escape() {
+    let diagnostics = borrow_diags(
+        r#"
+trait View { fn view(ref self) -> ref i32 }
+struct Counter { value: i32 }
+impl View for Counter {
+    fn view(ref self) -> ref i32 { ref self.value }
+}
+fn bad() -> ref i32 uses (value: View) { value.view() }
+fn root() {
+    with (View = Counter { value: 0 }) { bad() }
+}
+"#,
+    );
+    assert!(
+        diagnostics.contains("cannot return a borrow derived from an effect parameter"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn normalized_effect_places_have_coherent_transport() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+trait Tick { fn next(mut self) -> i32 }
+struct Counter { value: i32 }
+impl Tick for Counter {
+    fn next(mut self) -> i32 {
+        self.value += 1
+        self.value
+    }
+}
+fn next() -> i32 uses (tick: mut Tick) { tick.next() }
+fn run() -> i32 {
+    with (Tick = Counter { value: 0 }) { next() + next() }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let instance = func_instance(&db, top_mod, "run");
+    let mut normalized = normalize_semantic_body(&db, instance).expect("normalized body");
+    let arguments = normalized
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.stmts)
+        .filter_map(|stmt| match &mut stmt.kind {
+            NSStmtKind::Assign {
+                expr: NExpr::Call { effect_args, .. },
+                ..
+            } => Some(effect_args),
+            _ => None,
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    assert_eq!(arguments.len(), 2);
+    assert_eq!(arguments[0].arg, arguments[1].arg);
+    for arg in arguments {
+        assert!(matches!(arg.arg, NEffectArgValue::Place(_)));
+        assert_eq!(arg.pass_mode, EffectPassMode::ByPlace);
+        assert!(arg.required_mut);
+        arg.pass_mode = EffectPassMode::ByValue;
+    }
+    let diagnostic = verify_normalized_semantic_body(&db, instance, &normalized)
+        .expect_err("place/value transport mismatch should be rejected");
+    assert!(format!("{diagnostic:#?}").contains("canonical place or value transport"));
 }
 
 #[test]

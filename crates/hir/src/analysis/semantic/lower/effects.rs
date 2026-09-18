@@ -1,6 +1,7 @@
 use crate::{
     analysis::{
         HirAnalysisDb,
+        place::PlaceBase,
         semantic::{
             SEffectArg, SEffectArgValue, SOperand, SPlace, SValueId,
             provisional_provider_binding_for_instance_effect,
@@ -8,8 +9,9 @@ use crate::{
             resolved_provider_binding_for_instance_effect,
         },
         ty::{
-            ProviderAddressSpace,
+            ProviderAddressSpace, ProviderKind,
             effects::EffectKeyKind,
+            provider::provider_semantics,
             ty_check::{
                 BodyOwner, EffectArg, EffectParamSite, EffectPassMode, LocalBinding,
                 ResolvedEffectArg,
@@ -17,10 +19,20 @@ use crate::{
         },
     },
     hir_def::ExprId,
-    semantic::{EffectEnvSite, EffectEnvView, resolved_effect_binding_infos_for_site},
+    semantic::{
+        EffectEnvSite, EffectEnvView, ProviderBinding, resolved_effect_binding_infos_for_site,
+    },
 };
 
 use super::body::SmirLowerCtxt;
+
+/// A root object is borrowed from this place on each call. Handle values retain
+/// their explicit transport and are evaluated once when entering the block.
+#[derive(Clone)]
+pub(super) enum WithBindingSource<'db> {
+    Place(SPlace<'db>),
+    Value(SOperand),
+}
 
 impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     pub(super) fn lower_with_expr(
@@ -31,19 +43,29 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let mut saved = Vec::with_capacity(bindings.len());
         for binding in bindings {
             let value_expr = binding.value;
-            let value = self.lower_expr(value_expr);
+            let source = if self.is_root_provider_expr(value_expr) {
+                let place = if let Some(place) = self.typed_body.expr_place(value_expr) {
+                    self.capture_place(place)
+                } else {
+                    SPlace::new(self.lower_expr(value_expr))
+                };
+                WithBindingSource::Place(place)
+            } else {
+                let value = self.lower_expr(value_expr);
+                WithBindingSource::Value(SOperand::expr(value, value_expr))
+            };
             saved.push((
                 value_expr,
-                self.with_binding_values.insert(value_expr, value),
+                self.with_binding_sources.insert(value_expr, source),
             ));
         }
 
         let body_value = self.lower_expr(body);
         for (expr, previous) in saved.into_iter().rev() {
             if let Some(previous) = previous {
-                self.with_binding_values.insert(expr, previous);
+                self.with_binding_sources.insert(expr, previous);
             } else {
-                self.with_binding_values.remove(&expr);
+                self.with_binding_sources.remove(&expr);
             }
         }
         body_value
@@ -55,15 +77,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     ) -> Option<ProviderAddressSpace> {
         arg.provider.or_else(|| match &arg.arg {
             EffectArg::Place(place) => {
-                let crate::analysis::place::PlaceBase::Binding(binding) = place.base;
-                self.binding_provider_space(binding)
+                let PlaceBase::Binding(binding) = place.base;
+                self.binding_provider(binding)
+                    .and_then(|provider| provider.semantics.address_space)
             }
-            EffectArg::Binding(binding) => self.binding_provider_space(*binding),
+            EffectArg::Binding(binding) => self
+                .binding_provider(*binding)
+                .and_then(|provider| provider.semantics.address_space),
             EffectArg::Value(_) | EffectArg::Unknown => None,
         })
     }
 
-    fn binding_provider_space(&self, binding: LocalBinding<'db>) -> Option<ProviderAddressSpace> {
+    fn binding_provider(&self, binding: LocalBinding<'db>) -> Option<ProviderBinding<'db>> {
         match self.binding_role_mode {
             super::body::BindingRoleMode::Final => {
                 resolved_provider_binding_for_instance_effect(self.db, self.instance, binding)
@@ -72,7 +97,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 provisional_provider_binding_for_instance_effect(self.db, self.instance, binding)
             }
         }
-        .and_then(|provider| provider.semantics.address_space)
     }
 
     pub(super) fn lower_effect_arg_slice(
@@ -82,31 +106,72 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         args.iter().map(|arg| self.lower_effect_arg(arg)).collect()
     }
 
+    fn is_root_provider_expr(&self, expr: ExprId) -> bool {
+        if let Some(place) = self.typed_body.expr_place(expr)
+            && place.projections.is_empty()
+        {
+            let PlaceBase::Binding(binding) = place.base;
+            if let Some(provider) = self.binding_provider(binding) {
+                return provider.semantics.kind == ProviderKind::RootObject;
+            }
+        }
+        provider_semantics(
+            self.db,
+            self.body.scope(),
+            self.assumptions,
+            self.expr_ty(expr),
+        )
+        .kind
+            == ProviderKind::RootObject
+    }
+
     fn lower_effect_arg(&mut self, arg: &ResolvedEffectArg<'db>) -> SEffectArg<'db> {
-        SEffectArg {
-            binding_idx: arg.binding_idx,
-            arg: match &arg.arg {
+        let source = arg.with_source.map(|expr| {
+            self.with_binding_sources
+                .get(&expr)
+                .expect("effect provider should be captured by its with binding")
+                .clone()
+        });
+        let value = match source {
+            Some(WithBindingSource::Place(place)) => SEffectArgValue::Place(place),
+            Some(WithBindingSource::Value(value)) => {
+                if matches!(
+                    arg.pass_mode,
+                    EffectPassMode::ByPlace | EffectPassMode::ByTempPlace
+                ) {
+                    SEffectArgValue::Place(SPlace::new(value.value))
+                } else {
+                    SEffectArgValue::Value(value)
+                }
+            }
+            None => match &arg.arg {
                 EffectArg::Place(place) => SEffectArgValue::Place(self.lower_place_data(place)),
-                EffectArg::Value(expr) => SEffectArgValue::Value(SOperand::expr(
-                    self.with_binding_values
-                        .get(expr)
-                        .copied()
-                        .unwrap_or_else(|| self.lower_expr(*expr)),
-                    *expr,
-                )),
                 EffectArg::Binding(binding) => {
                     let local = self.alloc_binding_local(*binding);
-                    if matches!(arg.pass_mode, EffectPassMode::ByPlace) {
+                    if matches!(arg.pass_mode, EffectPassMode::ByPlace)
+                        || self.binding_provider(*binding).is_some_and(|provider| {
+                            provider.semantics.kind == ProviderKind::RootObject
+                        })
+                    {
                         SEffectArgValue::Place(SPlace::new(local))
                     } else {
                         SEffectArgValue::Value(SOperand::inherited(local))
                     }
                 }
+                EffectArg::Value(_) => unreachable!("with provider is missing its source"),
                 EffectArg::Unknown => {
                     SEffectArgValue::Value(SOperand::synthetic(self.unit_value()))
                 }
             },
-            pass_mode: arg.pass_mode,
+        };
+        SEffectArg {
+            binding_idx: arg.binding_idx,
+            pass_mode: if matches!(value, SEffectArgValue::Place(_)) {
+                EffectPassMode::ByPlace
+            } else {
+                arg.pass_mode
+            },
+            arg: value,
             layout_view: arg.layout_view,
             required_mut: arg.required_mut,
             provider_target_ty: arg.provider_target_ty,
