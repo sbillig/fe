@@ -12,7 +12,8 @@ use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
 use crate::analysis::ty;
 use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
-use crate::analysis::ty::generic_defaults::default_dependencies;
+use crate::analysis::ty::generic_defaults::{default_dependencies, type_default_diags};
+use crate::analysis::ty::method_table::{MethodProbe, probe_method};
 use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::trait_lower::lower_impl_trait;
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
@@ -513,8 +514,9 @@ impl<'db> Impl<'db> {
                 return out;
             }
             InherentImplAdmissibility::InvalidTy { ty } => {
-                if let Some(diag) =
-                    ty::ty_error::emit_invalid_ty_error(db, ty, self.span().target_ty().into())
+                if out.is_empty()
+                    && let Some(diag) =
+                        ty::ty_error::emit_invalid_ty_error(db, ty, self.span().target_ty().into())
                 {
                     out.push(diag);
                 }
@@ -1625,6 +1627,7 @@ impl<'db> Diagnosable<'db> for GenericParamOwner<'db> {
         out.extend(self.diags_trait_bounds(db));
         out.extend(self.diags_non_trailing_defaults(db));
         out.extend(self.diags_default_forward_refs(db));
+        out.extend(type_default_diags(db, self));
         out
     }
 }
@@ -1633,9 +1636,6 @@ impl<'db> Diagnosable<'db> for Func<'db> {
     type Diagnostic = TyDiagCollection<'db>;
 
     fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
-        use ty::canonical::Canonical;
-        use ty::method_table::probe_method;
-
         let mut out = Vec::new();
         out.extend(self.diags_const_fn(db));
         out.extend(self.diags_parameters(db));
@@ -1653,10 +1653,14 @@ impl<'db> Diagnosable<'db> for Func<'db> {
             && let Some(self_ty) = impl_.admissible_inherent_impl_ty(db)
         {
             let ingot = self.top_mod(db).ingot(db);
-            for &cand in probe_method(
+            for cand in probe_method(
                 db,
                 ingot,
-                Canonical::new(db, self_ty),
+                MethodProbe {
+                    receiver: self_ty,
+                    assumptions: param_env(db, impl_.into()),
+                },
+                self.scope(),
                 func_def.name(db).expect("impl methods have names"),
             ) {
                 if cand.def != func_def {

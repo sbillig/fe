@@ -15,12 +15,13 @@ use super::{
     binder::Binder,
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{AssocTySubst, TyFoldable},
+    generic_defaults::DefaultApplication,
     normalize::normalize_ty,
     trait_def::{ImplementorId, ImplementorOrigin, ResolvedImplInstance, TraitInstId},
     trait_resolution::{Selection, TraitSolveCx, constraint::collect_constraints},
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
-    ty_lower::{ConstDefaultCompletion, collect_generic_params},
+    ty_lower::collect_generic_params,
     unify::UnificationTable,
 };
 use crate::analysis::{
@@ -203,6 +204,11 @@ pub enum BodyHoleSite {
 /// template holes at a genuinely unique item position (added in later phases).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum HoleAnchor<'db> {
+    /// A default template is owned by a declaration position, not by a caller.
+    GenericDefault {
+        owner: GenericParamOwner<'db>,
+        param_idx: usize,
+    },
     /// Minted while lowering a HIR type (the `lower_hir_ty` memo key).
     TemplateTy {
         ty: HirTypeId<'db>,
@@ -362,6 +368,7 @@ pub(crate) enum ConstBodyLowering {
 pub(crate) struct HoleMinter<'db> {
     anchor: HoleAnchor<'db>,
     const_bodies: ConstBodyLowering,
+    source_params: Option<GenericParamOwner<'db>>,
     counter: std::cell::Cell<u32>,
     instantiation_counter: std::cell::Cell<u32>,
 }
@@ -371,6 +378,7 @@ impl<'db> HoleMinter<'db> {
         Self {
             anchor,
             const_bodies: ConstBodyLowering::Eager,
+            source_params: None,
             counter: std::cell::Cell::new(0),
             instantiation_counter: std::cell::Cell::new(0),
         }
@@ -383,6 +391,7 @@ impl<'db> HoleMinter<'db> {
         Self {
             anchor,
             const_bodies: ConstBodyLowering::Deferred,
+            source_params: None,
             counter: std::cell::Cell::new(0),
             instantiation_counter: std::cell::Cell::new(0),
         }
@@ -390,6 +399,17 @@ impl<'db> HoleMinter<'db> {
 
     pub(crate) fn const_bodies(&self) -> ConstBodyLowering {
         self.const_bodies
+    }
+
+    /// Slot discovery uses declaration indices, before hidden callable slots
+    /// exist. The same basis must be used for both paths and their predicates.
+    pub(crate) fn with_source_params(mut self, owner: Option<GenericParamOwner<'db>>) -> Self {
+        self.source_params = owner;
+        self
+    }
+
+    pub(crate) fn source_params(&self) -> Option<GenericParamOwner<'db>> {
+        self.source_params
     }
 
     pub(crate) fn anchor(&self) -> HoleAnchor<'db> {
@@ -1062,19 +1082,18 @@ fn canonicalize_const_ty_for_display<'db>(
 pub fn complete_default_const_args_for_identity<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
-    assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
     let (base, args) = ty.decompose_ty_app(db);
     let TyData::TyBase(base_ty) = base.data(db) else {
         return ty;
     };
-    let (param_set, callable) = match base_ty {
+    let param_set = match base_ty {
         TyBase::Adt(adt) => match adt.as_generic_param_owner(db) {
-            Some(owner) => (collect_generic_params(db, owner), None),
+            Some(owner) => collect_generic_params(db, owner),
             None => return ty,
         },
         TyBase::Func(func) => match *func {
-            CallableDef::Func(def) => (collect_generic_params(db, def.into()), Some(def)),
+            CallableDef::Func(def) => collect_generic_params(db, def.into()),
             CallableDef::VariantCtor(_) => return ty,
         },
         _ => return ty,
@@ -1083,24 +1102,14 @@ pub fn complete_default_const_args_for_identity<'db>(
     if args.len() <= explicit_offset {
         return ty;
     }
-    let completion = ConstDefaultCompletion::evaluate_for_identity();
-    let completed_args = if let Some(func) = callable {
-        param_set.complete_callable_explicit_args(
-            db,
-            func,
-            &args[..explicit_offset],
-            &args[explicit_offset..],
-            assumptions,
-            completion,
-        )
-    } else {
-        param_set.complete_explicit_args(
-            db,
-            None,
-            &args[explicit_offset..],
-            assumptions,
-            completion,
-        )
+    let completed_args = match param_set.complete_args(
+        db,
+        &args[..explicit_offset],
+        &args[explicit_offset..],
+        DefaultApplication::Identity,
+    ) {
+        Ok(args) => args,
+        Err(error) => return TyId::invalid(db, error.cause),
     };
     if completed_args.len() == args.len().saturating_sub(explicit_offset) {
         return ty;
@@ -1267,7 +1276,7 @@ pub fn canonicalize_ty_for_mode<'db>(
         };
 
         if finalize_self && !matches!(mode, ConstCanonMode::Stored) {
-            ty = complete_default_const_args_for_identity(db, ty, env.assumptions);
+            ty = complete_default_const_args_for_identity(db, ty);
             ty = normalize_ty(db, ty, env.scope, env.assumptions);
         }
 

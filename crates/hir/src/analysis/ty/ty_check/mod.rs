@@ -27,7 +27,7 @@ use crate::analysis::ty::trait_resolution::constraint::{
     PredicateSource, collect_func_decl_constraint_pairs,
 };
 use crate::analysis::ty::visitor::TyVisitable;
-use crate::hir_def::{CallableDef, ConstGenericArgValue, GenericParam, ImplTrait, Trait};
+use crate::hir_def::{CallableDef, ConstGenericArgValue, ImplTrait, Trait};
 use crate::{
     hir_def::{
         BinOp, Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParamOwner,
@@ -62,12 +62,13 @@ use crate::analysis::place::{Place, PlaceBase, PlaceProjection};
 use super::{
     LayoutBundlePath, LayoutBundlePathStep,
     assoc_const::{AssocConstUse, InherentConstUse},
-    canonical::{Canonical, Canonicalized},
+    canonical::Canonical,
     diagnostics::{
         BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, StaticAssertComparisonValues,
         TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key},
+    generic_defaults::{GenericDefault, generic_default},
     layout_holes::merge_equated_layout_holes,
     trait_def::{TraitInstId, resolve_trait_method_instance},
     trait_resolution::{
@@ -270,22 +271,17 @@ pub fn check_generic_const_default_bodies<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
-    let param_set = collect_generic_params(db, owner);
     let mut diags = Vec::new();
     for view in owner.params(db) {
-        let GenericParam::Const(param) = view.param else {
+        let Ok(Some(GenericDefault::Const {
+            value: ConstGenericArgValue::Expr(Partial::Present(body)),
+            expected,
+        })) = generic_default(db, owner, view.idx)
+        else {
             continue;
         };
-        let Some(ConstGenericArgValue::Expr(Partial::Present(body))) = param.default else {
-            continue;
-        };
-        let Some(param_ty) = param_set.param_by_original_idx(db, view.idx) else {
-            continue;
-        };
-        let TyData::ConstTy(param_ty) = param_ty.data(db) else {
-            continue;
-        };
-        let expected = param_ty.ty(db);
+        let body = *body;
+        let expected = expected.instantiate_identity();
         if expected.has_invalid(db) {
             continue;
         }
@@ -1567,7 +1563,8 @@ impl<'db> TyChecker<'db> {
                     ) {
                         Ok(()) => {}
                         Err(CallGenericArgUnifyError::ArityMismatch { .. })
-                        | Err(CallGenericArgUnifyError::UnificationFailed) => {
+                        | Err(CallGenericArgUnifyError::UnificationFailed)
+                        | Err(CallGenericArgUnifyError::InvalidArgument(_)) => {
                             return Viability::Incompatible;
                         }
                     }
@@ -2684,14 +2681,23 @@ impl<'db> TyChecker<'db> {
     /// lives in the method-table probe; nothing is re-derived here.
     fn extract_inherent_method_to_term(
         &mut self,
-        canonical_receiver: &Canonicalized<'db, TyId<'db>>,
         cand: ProbedMethod<'db>,
         receiver_ty: TyId<'db>,
     ) -> TyId<'db> {
-        let bound = canonical_receiver.extract_solution(&mut self.table, cand.bound);
+        let bound = cand.extract(&mut self.table);
         self.register_effect_provider_args(cand.def, bound.func_ty);
         let snapshot = self.table.snapshot();
-        if self.table.unify(bound.key_ty, receiver_ty).is_err() {
+        let matched = self.table.unify(bound.key_ty, receiver_ty).is_ok()
+            && cand
+                .query
+                .assumptions
+                .list(self.db)
+                .iter()
+                .zip(bound.assumptions.list(self.db))
+                .all(|(&original, &solved)| self.table.unify(original, solved).is_ok());
+        if matched {
+            self.table.commit(snapshot);
+        } else {
             self.table.rollback_to(snapshot);
         }
         bound.func_ty
