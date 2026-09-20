@@ -4,7 +4,7 @@ use crate::analysis::semantic::diagnostics::{
     BlockedSemanticBody, SemanticDiagnostic, SemanticDiagnosticKind, SemanticDiagnosticSpan,
     SemanticNormalizationFailure, normalized_body_internal_diag,
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, slice};
 
 use cranelift_entity::EntityRef;
 use num_traits::ToPrimitive;
@@ -14,6 +14,7 @@ use crate::analysis::{
     semantic::{
         FieldIndex, SConst, SemConstScalar, SemConstValue, SemOrigin, SemanticInstance,
         capability::{
+            birth::AllocationBirth,
             external::ExternalSource,
             guard::{ChoiceKey, Guard, ValueOccurrence},
             handle::{AddressOccurrence, OpaqueHandleContract, OpaqueHandleRef, OpaqueWriteSite},
@@ -607,6 +608,38 @@ impl<'db> Borrowck<'db> {
         }
     }
 
+    /// Recognized allocating constants share one source identity between
+    /// provenance transfer and resolved lifetime actions, including on replay.
+    pub(super) fn literal_birth(
+        &self,
+        result: NValueId,
+        constant: &SConst<'db>,
+    ) -> Option<(FieldIndex, AllocationBirth<'db>)> {
+        let (field, contract) =
+            literal_allocation(self.db, self.body.values[result.index()].ty, constant)?;
+        Some((
+            field,
+            AllocationBirth {
+                allocation: OpaqueHandleRef {
+                    contract,
+                    occurrence: AddressOccurrence::Value {
+                        instance: self.instance,
+                        value: result,
+                        choice: 0,
+                    },
+                    arguments: self
+                        .inventory
+                        .loops
+                        .for_value(&self.body, result)
+                        .map(IndexExpr::Iteration)
+                        .into_iter()
+                        .collect(),
+                },
+                guard: Guard::always(&BinderScope::default()),
+            },
+        ))
+    }
+
     fn transfer(
         &mut self,
         state: &mut BorrowState<'db>,
@@ -855,29 +888,16 @@ impl<'db> Borrowck<'db> {
             NExpr::Call { .. } => self.transfer_call(state, *result, statement)?,
             NExpr::Const(constant) => {
                 let empty = self.inventory.values.empty(shape, &scope);
-                if let Some((field, contract)) =
-                    literal_allocation(self.db, self.body.values[result.index()].ty, constant)
-                {
-                    let pointer_shape = self.shape(contract.handle_ty)?;
-                    let pointer = self.inventory.values.empty(pointer_shape, &scope);
-                    let source = ExternalSource::allocation(
-                        self.db,
-                        OpaqueHandleRef {
-                            contract,
-                            occurrence: AddressOccurrence::Value {
-                                instance: self.instance,
-                                value: *result,
-                                choice: 0,
-                            },
-                            arguments: self
-                                .inventory
-                                .loops
-                                .for_value(&self.body, *result)
-                                .map(IndexExpr::Iteration)
-                                .into_iter()
-                                .collect(),
-                        },
+                if let Some((field, birth)) = self.literal_birth(*result, constant) {
+                    state.birth_allocations(
+                        &mut self.inventory.values,
+                        &self.inventory.entry,
+                        &self.inventory.allocation_cells,
+                        slice::from_ref(&birth),
                     );
+                    let pointer_shape = self.shape(birth.allocation.contract.handle_ty)?;
+                    let pointer = self.inventory.values.empty(pointer_shape, &scope);
+                    let source = ExternalSource::allocation(self.db, birth.allocation);
                     let pointer = self.inventory.values.with_direct(
                         &pointer,
                         vec![Guarded {

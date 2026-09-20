@@ -3,7 +3,7 @@ use super::validity::NativeValidity;
 use crate::analysis::semantic::diagnostics::{
     SemanticDiagnostic, SemanticDiagnosticKind, SemanticDiagnosticSpan,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cranelift_entity::EntityRef;
 
@@ -17,14 +17,17 @@ use crate::analysis::{
     semantic::{
         SemOrigin,
         capability::{
+            birth::AllocationBirth,
             external::ExternalOrigin,
             footprint::{AccessExtent, AccessFootprint},
             guard::{Guard, ValueOccurrence},
+            handle::AddressOccurrence,
             index::{BinderScope, IndexExpr},
             path::RegionPath,
             region::{OverlapResult, RegionRoot, RegionSet},
             source::{InputOrigin, SourceExpr},
             state::BorrowState,
+            value::Guarded,
         },
         normalized::{NBlockId, NStatementKind, NTerminatorKind, NValueId, access::AccessPhase},
     },
@@ -64,6 +67,9 @@ struct MoveFact<'db> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AvailabilityState<'db> {
     moved: BTreeMap<(usize, usize, usize), MoveFact<'db>>,
+    // Candidate sites only: cleared facts may leave an entry, and every lookup
+    // rechecks the current region with the shared physical-family selector.
+    families: BTreeMap<AddressOccurrence<'db>, BTreeSet<(usize, usize, usize)>>,
     initialized: RegionSet<'db>,
     guard: Guard<'db>,
 }
@@ -73,6 +79,7 @@ impl<'db> AvailabilityState<'db> {
         let scope = BinderScope::default();
         Self {
             moved: BTreeMap::new(),
+            families: BTreeMap::new(),
             initialized: RegionSet::empty(&scope),
             guard: Guard::always(&scope),
         }
@@ -99,6 +106,9 @@ impl<'db> AvailabilityState<'db> {
         }
         self.initialized = initialized;
         self.guard = self.guard.or(&other.guard);
+        for (family, sites) in other.families {
+            self.families.entry(family).or_default().extend(sites);
+        }
         for (site, fact) in other.moved {
             self.moved
                 .entry(site)
@@ -115,6 +125,35 @@ impl<'db> AvailabilityState<'db> {
         self.initialized = self.initialized.union(exported);
     }
 
+    fn birth_allocations(&mut self, births: &[AllocationBirth<'db>]) {
+        for birth in births {
+            let Some(sites) = self.families.get(&birth.allocation.occurrence) else {
+                continue;
+            };
+            for site in sites {
+                let Some(fact) = self.moved.get_mut(site) else {
+                    continue;
+                };
+                fact.region = RegionSet::new(
+                    fact.region.scope(),
+                    fact.region.clauses().iter().filter_map(|clause| {
+                        let guard = if let Some(born) =
+                            birth.selector(&clause.payload.root, clause.guard.scope())
+                        {
+                            clause.guard.difference(&born)?
+                        } else {
+                            clause.guard.clone()
+                        };
+                        Some(Guarded {
+                            guard,
+                            payload: clause.payload.clone(),
+                        })
+                    }),
+                );
+            }
+        }
+    }
+
     fn consume(
         &mut self,
         site: (usize, usize, usize),
@@ -123,6 +162,16 @@ impl<'db> AvailabilityState<'db> {
     ) {
         let region = region.with_guard(&self.guard);
         if !region.is_empty() {
+            for clause in region.clauses() {
+                if let RegionRoot::External(source) = &clause.payload.root
+                    && let Some(allocation) = source.fresh_allocation()
+                {
+                    self.families
+                        .entry(allocation.occurrence)
+                        .or_default()
+                        .insert(site);
+                }
+            }
             self.moved
                 .entry(site)
                 .and_modify(|fact| fact.region = fact.region.union(&region))
@@ -576,6 +625,7 @@ impl<'db> Borrowck<'db> {
                 }
             }
         }
+        state.birth_allocations(&operation.births);
         for access in &operation.accesses {
             if access.phase == AccessPhase::Write {
                 debug_assert_eq!(access.kind, MemoryAccessKind::Write);
@@ -742,16 +792,238 @@ mod tests {
     use crate::{
         analysis::{
             semantic::{
-                FieldIndex,
+                FieldIndex, VariantIndex,
                 borrowck::solver::BorrowSummaryMode,
-                capability::{path::Projection, source::InputSource, test_roots},
+                capability::{
+                    external::ExternalSource,
+                    guard::ChoiceKey,
+                    handle::{
+                        AddressOccurrence, HandleAddressSpace, OpaqueHandleContract,
+                        OpaqueHandleRef,
+                    },
+                    path::{Projection, StructuralPath},
+                    source::InputSource,
+                    test_roots,
+                },
                 get_or_build_semantic_instance, identity_semantic_instance_key,
                 normalized::{NExpr, normalize_semantic_body, verify_normalized_body},
             },
-            ty::ty_check::BodyOwner,
+            ty::{ProviderAddressSpace, ty_check::BodyOwner, ty_def::TyId},
         },
         test_db::{HirAnalysisTestDb, find_func},
     };
+    use std::slice;
+
+    #[test]
+    fn birth_composition_preserves_histories_choices_and_exit_moves() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("birth_composition.fe".into(), "fn anchor() {}");
+        let (module, _) = db.top_mod(file);
+        let origin = SemOrigin::Body(BodyOwner::Func(find_func(&db, module, "anchor")));
+        let scope = BinderScope::default();
+        let generation = IndexExpr::Runtime(NValueId::new(0));
+        let word = TyId::u256(&db);
+        for outer in 0..2 {
+            for choice in 0..2 {
+                for variant in 0..2 {
+                    let allocation = OpaqueHandleRef {
+                        contract: OpaqueHandleContract {
+                            handle_ty: TyId::ptr_to(&db, word),
+                            target_ty: word,
+                            address_space: HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+                        },
+                        occurrence: AddressOccurrence::Summary(choice),
+                        arguments: Box::new([IndexExpr::Const(outer), generation]),
+                    };
+                    let guard = Guard::always(&scope)
+                        .with_variant(
+                            ChoiceKey::new(ValueOccurrence::Summary, StructuralPath::default()),
+                            VariantIndex(variant),
+                        )
+                        .unwrap();
+                    let source = ExternalSource::allocation(&db, allocation.clone());
+                    let current = RegionSet::singleton(
+                        &scope,
+                        RegionRoot::External(source.clone()),
+                        RegionPath::default(),
+                    )
+                    .with_guard(&guard);
+                    let previous =
+                        current.forget_iteration(&db, |index| index == generation, |_| false);
+                    let birth = AllocationBirth::from_source(&source, guard.clone()).unwrap();
+                    let mut different_choice = allocation.clone();
+                    different_choice.occurrence = AddressOccurrence::Summary(1 - choice);
+                    let mut different_outer = allocation;
+                    different_outer.arguments[0] = IndexExpr::Const(1 - outer);
+                    let others: Vec<_> = [different_choice, different_outer]
+                        .into_iter()
+                        .map(|allocation| {
+                            RegionSet::singleton(
+                                &scope,
+                                RegionRoot::External(ExternalSource::allocation(&db, allocation)),
+                                RegionPath::default(),
+                            )
+                            .with_guard(&guard)
+                        })
+                        .collect();
+                    let mut state = AvailabilityState::new();
+                    state.consume((0, 0, 0), previous.clone(), origin);
+                    for (index, region) in others.iter().enumerate() {
+                        state.consume((0, index + 1, 0), region.clone(), origin);
+                    }
+                    state.birth_allocations(slice::from_ref(&birth));
+                    assert_eq!(
+                        state.moved[&(0, 0, 0)].region.overlap(&db, &current),
+                        OverlapResult::Disjoint
+                    );
+                    assert_ne!(
+                        state.moved[&(0, 0, 0)].region.overlap(&db, &previous),
+                        OverlapResult::Disjoint
+                    );
+                    for (index, region) in others.iter().enumerate() {
+                        assert_eq!(&state.moved[&(0, index + 1, 0)].region, region);
+                    }
+                    let once = state.clone();
+                    state.birth_allocations(slice::from_ref(&birth));
+                    assert_eq!(state, once);
+                    assert!(state.initialized.is_empty());
+                    assert_eq!(
+                        state.moved[&(0, 0, 0)].region.forget_iteration(
+                            &db,
+                            |index| index == generation,
+                            |_| false
+                        ),
+                        previous
+                    );
+                    state.consume((1, 0, 0), current.clone(), origin);
+                    assert_ne!(
+                        state.moved[&(1, 0, 0)].region.overlap(&db, &current),
+                        OverlapResult::Disjoint
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn allocation_feedback_can_overlap_the_next_current_member() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "allocation_feedback.fe".into(),
+            "struct Item { n: u256 }\nfn factory() -> *Item { core::ptr::alloc<Item>() }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "factory"))),
+        );
+        let body = normalize_semantic_body(&db, instance).unwrap().body;
+        let result = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| {
+                if let NStatementKind::Define {
+                    result,
+                    expr: NExpr::Call { .. },
+                } = statement.kind
+                {
+                    Some(result)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        assert!(
+            checker.inventory.allocation_cells.is_empty(),
+            "capability-free Item has no inventoried capability contents"
+        );
+        assert!(
+            checker
+                .operations
+                .iter()
+                .flatten()
+                .any(|operation| !operation.births.is_empty()),
+            "births exist independently of capability-cell inventory"
+        );
+        let iteration = IndexExpr::Iteration(body.entry);
+        let pointer = instance.normalized_result_ty(&db);
+        let allocation = ExternalSource::allocation(
+            &db,
+            OpaqueHandleRef {
+                contract: OpaqueHandleContract {
+                    handle_ty: pointer,
+                    target_ty: pointer.as_ptr(&db).unwrap(),
+                    address_space: HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+                },
+                occurrence: AddressOccurrence::Value {
+                    instance,
+                    value: result,
+                    choice: 0,
+                },
+                arguments: Box::new([iteration]),
+            },
+        );
+        let current = RegionSet::singleton(
+            &BinderScope::default(),
+            RegionRoot::External(allocation.clone()),
+            RegionPath::default(),
+        );
+        let previous = current.forget_iteration(&db, |index| index == iteration, |_| true);
+        assert_ne!(previous, current);
+        assert!(!matches!(
+            previous.overlap(&db, &current),
+            OverlapResult::Disjoint
+        ));
+        let birth =
+            AllocationBirth::from_source(&allocation, Guard::always(current.scope())).unwrap();
+        let mut state = AvailabilityState::new();
+        state.consume(
+            (0, 0, 0),
+            previous.clone(),
+            SemOrigin::Body(body.template_owner),
+        );
+        state.birth_allocations(std::slice::from_ref(&birth));
+        let remaining = &state.moved[&(0, 0, 0)].region;
+        assert!(matches!(
+            remaining.overlap(&db, &current),
+            OverlapResult::Disjoint
+        ));
+        assert!(!matches!(
+            remaining.overlap(&db, &previous),
+            OverlapResult::Disjoint
+        ));
+        assert!(
+            state.initialized.is_empty(),
+            "birth is not typed initialization"
+        );
+        let once = state.clone();
+        state.birth_allocations(std::slice::from_ref(&birth));
+        assert_eq!(state, once, "reapplying a birth is idempotent");
+        // Feedback projects the now-unobserved previous current-generation
+        // witness, rather than accumulating a longer disequality history.
+        let forgotten = state.moved[&(0, 0, 0)].region.forget_iteration(
+            &db,
+            |index| index == iteration,
+            |_| true,
+        );
+        assert_eq!(forgotten, previous);
+        state.consume(
+            (0, 1, 0),
+            current.clone(),
+            SemOrigin::Body(body.template_owner),
+        );
+        assert!(
+            !matches!(
+                state.moved[&(0, 1, 0)].region.overlap(&db, &current),
+                OverlapResult::Disjoint
+            ),
+            "callee exit consumption must survive birth"
+        );
+    }
 
     #[test]
     fn operation_operands_reject_duplicate_moves_in_verified_normalized_ir() {

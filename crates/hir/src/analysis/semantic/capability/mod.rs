@@ -2,6 +2,7 @@
 //!
 //! The structural solver and boundary policies consume this module; runtime layout does not
 //! participate in index identity, capability slots, or guarded value equality.
+pub mod birth;
 mod decision;
 pub mod external;
 pub mod footprint;

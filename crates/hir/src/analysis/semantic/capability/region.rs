@@ -192,6 +192,21 @@ impl<'db> RegionSet<'db> {
     ) -> Self {
         let mut canonical = BTreeMap::<(BinderScope, SymbolicPlace<'db>), Guard<'db>>::new();
         for mut clause in clauses {
+            // A clause owns its extra existential witnesses. Keeping witnesses
+            // used only in guards accumulates an unbounded history of previous
+            // generations (old != previous != ...), despite denoting the same
+            // region. Project them before alpha-normalizing the remaining ones.
+            if clause.guard.scope() != scope {
+                let observed: BTreeSet<_> = clause
+                    .payload
+                    .root
+                    .indices()
+                    .chain(clause.payload.path.indices())
+                    .collect();
+                clause.guard = clause.guard.project_witnesses(|index| {
+                    scope.validate(index).is_err() && !observed.contains(&index)
+                });
+            }
             let substitution = clause.guard.scope().canonical_existentials(
                 scope,
                 clause

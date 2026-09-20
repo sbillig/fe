@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
+    birth::AllocationBirth,
     footprint::AccessFootprint,
     guard::{Guard, ValueOccurrence},
     handle::AddressOccurrence,
@@ -18,13 +19,7 @@ use super::{
     shape::ShapeId,
     value::{Guarded, IndexPayload, ValueId, ValueInterner, ValueLimits},
 };
-use crate::analysis::{
-    HirAnalysisDb,
-    semantic::{
-        SemanticInstance,
-        normalized::{NBlockId, NValueId},
-    },
-};
+use crate::analysis::{HirAnalysisDb, semantic::normalized::NValueId};
 
 pub type CapabilityValue<'db> = ValueId<'db, CapabilityRef<'db>>;
 pub type CapabilityValues<'db> = ValueInterner<'db, CapabilityRef<'db>>;
@@ -102,39 +97,24 @@ impl<'db> BorrowState<'db> {
         &mut self,
         values: &mut CapabilityValues<'db>,
         inventory: &Self,
-        instance: SemanticInstance<'db>,
-        result: NValueId,
-        iteration: Option<NBlockId>,
+        families: &BTreeMap<AddressOccurrence<'db>, Vec<RegionRoot<'db>>>,
+        births: &[AllocationBirth<'db>],
     ) {
-        for (root, initial) in &inventory.contents {
-            let RegionRoot::External(source) = root else {
+        for birth in births {
+            let Some(roots) = families.get(&birth.allocation.occurrence) else {
                 continue;
             };
-            let Some(allocation) = source.fresh_allocation() else {
-                continue;
-            };
-            if !matches!(allocation.occurrence, AddressOccurrence::Value { instance: owner, value, .. }
-                if owner == instance && value == result)
-            {
-                continue;
+            for root in roots {
+                let initial = &inventory.contents[root];
+                let Some(born) = birth.selector(root, initial.scope()) else {
+                    continue;
+                };
+                let old = self.contents.get_mut(root).expect("inventoried allocation");
+                let kept =
+                    values.map_guards(old, |guard| guard.difference(&born.in_scope(guard.scope())));
+                let initial = values.with_guard(initial, &born);
+                *old = values.join(&kept, &initial);
             }
-            let mut born = Guard::always(initial.scope());
-            if let Some(iteration) = iteration {
-                // Instantiation appends this call's iteration after the callee's
-                // family arguments. Canonical inventory preserves that order.
-                let parameter = *allocation
-                    .arguments
-                    .last()
-                    .expect("allocation iteration argument");
-                born = born
-                    .with_equality(parameter, IndexExpr::Iteration(iteration))
-                    .expect("allocation family contains the current iteration");
-            }
-            let old = self.contents.get_mut(root).expect("inventoried allocation");
-            let kept =
-                values.map_guards(old, |guard| guard.difference(&born.in_scope(guard.scope())));
-            let initial = values.with_guard(initial, &born);
-            *old = values.join(&kept, &initial);
         }
     }
 

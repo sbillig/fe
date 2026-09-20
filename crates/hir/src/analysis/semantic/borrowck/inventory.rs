@@ -66,6 +66,9 @@ pub(super) struct Inventory<'db> {
     pub definitions: BTreeMap<NValueId, CapabilityValue<'db>>,
     pub inputs: Vec<InputTarget<'db>>,
     pub entry: BorrowState<'db>,
+    /// Rebuilt with entry storage after discovery; call transfer visits only
+    /// the physical cells belonging to its allocation occurrences.
+    pub allocation_cells: BTreeMap<AddressOccurrence<'db>, Vec<RegionRoot<'db>>>,
     external_loans: BTreeMap<(ExternalSource<'db>, bool), LoanId>,
 }
 
@@ -307,6 +310,7 @@ impl<'db> Inventory<'db> {
             inputs: inputs.targets.into_values().collect(),
             external_loans: inputs.input_loans,
             entry,
+            allocation_cells: BTreeMap::new(),
         };
         for (id, value) in entry_values {
             result.entry.set_value(id, value);
@@ -443,6 +447,18 @@ impl<'db> Inventory<'db> {
         self.loans = builder.loans;
         self.inputs = builder.targets.into_values().collect();
         self.external_loans = builder.input_loans;
+        self.allocation_cells.clear();
+        for (root, value) in self.entry.storage() {
+            if value.shape().contains_capability(db)
+                && let RegionRoot::External(source) = root
+                && let Some(allocation) = source.fresh_allocation()
+            {
+                self.allocation_cells
+                    .entry(allocation.occurrence)
+                    .or_default()
+                    .push(root.clone());
+            }
+        }
         Ok(())
     }
 }

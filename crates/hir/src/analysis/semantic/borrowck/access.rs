@@ -14,6 +14,7 @@ use crate::analysis::{
     semantic::{
         SemOrigin,
         capability::{
+            birth::AllocationBirth,
             guard::ValueOccurrence,
             index::BinderScope,
             loan::{CapabilityRef, LoanRef},
@@ -47,6 +48,7 @@ pub(super) struct ResolvedOperation<'db> {
     pub accesses: Vec<ResolvedAccess<'db>>,
     pub calls: Vec<ResolvedMemoryAccess<'db>>,
     pub availability: Option<ResolvedAvailability<'db>>,
+    pub births: Vec<AllocationBirth<'db>>,
     pub native_validity: NativeValidity<'db>,
     pub active: Vec<CapabilityOccurrence<'db>>,
     pub arguments: Vec<(usize, CapabilityOccurrence<'db>)>,
@@ -192,31 +194,48 @@ impl<'db> Borrowck<'db> {
                         }
                     }
                 }
-                let (calls, availability, native_validity) = if let NStatementKind::Define {
-                    result,
-                    expr:
-                        NExpr::Call {
-                            args, effect_args, ..
-                        },
-                } = &statement.kind
-                {
-                    let inputs = CallInputs {
-                        args,
-                        effects: effect_args,
-                        origin: statement.origin,
+                let (calls, availability, native_validity, births) =
+                    if let NStatementKind::Define {
+                        result,
+                        expr:
+                            NExpr::Call {
+                                args, effect_args, ..
+                            },
+                    } = &statement.kind
+                    {
+                        let inputs = CallInputs {
+                            args,
+                            effects: effect_args,
+                            origin: statement.origin,
+                        };
+                        (
+                            self.call_memory_accesses(&state, *result, inputs)?,
+                            self.call_availability(&state, *result, inputs)?,
+                            self.call_native_validity(&state, *result, inputs)?,
+                            self.call_births(*result, inputs)?,
+                        )
+                    } else if let NStatementKind::Define {
+                        result,
+                        expr: NExpr::Const(constant),
+                    } = &statement.kind
+                    {
+                        (
+                            Vec::new(),
+                            None,
+                            NativeValidity::default(),
+                            self.literal_birth(*result, constant)
+                                .map(|(_, birth)| birth)
+                                .into_iter()
+                                .collect(),
+                        )
+                    } else {
+                        (Vec::new(), None, NativeValidity::default(), Vec::new())
                     };
-                    (
-                        self.call_memory_accesses(&state, *result, inputs)?,
-                        self.call_availability(&state, *result, inputs)?,
-                        self.call_native_validity(&state, *result, inputs)?,
-                    )
-                } else {
-                    (Vec::new(), None, NativeValidity::default())
-                };
                 operations.push(ResolvedOperation {
                     accesses,
                     calls,
                     availability,
+                    births,
                     native_validity,
                     ..Default::default()
                 });
@@ -224,5 +243,136 @@ impl<'db> Borrowck<'db> {
             self.operations[block] = operations;
         }
         self.resolve_conflict_facts()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        analysis::{
+            semantic::{
+                capability::{
+                    external::ExternalSource, guard::Guard, handle::AddressOccurrence,
+                    index::IndexExpr,
+                },
+                get_or_build_semantic_instance, identity_semantic_instance_key,
+                normalized::literal_allocation,
+            },
+            ty::ty_check::BodyOwner,
+        },
+        test_db::{HirAnalysisTestDb, find_func},
+    };
+
+    #[test]
+    fn literal_birth_actions_match_the_explicit_constant_contract() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "literal_actions.fe".into(),
+            r#"
+fn inspect(_ count: u256) {
+    let mut i: u256 = 0
+    while i < count {
+        let text: Text = "hello"
+        let inline: String<5> = "hello"
+        let number: u256 = 7
+        i += 1
+    }
+}
+"#,
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "inspect"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        assert!(
+            checker.inventory.allocation_cells.is_empty(),
+            "byte-only literal allocation has no capability contents"
+        );
+        let mut allocating = 0;
+        let mut ordinary = 0;
+        let mut inline_strings = 0;
+        for (block_index, block) in checker.body.blocks.iter().enumerate() {
+            for (index, statement) in block.statements.iter().enumerate() {
+                let NStatementKind::Define {
+                    result,
+                    expr: NExpr::Const(constant),
+                } = &statement.kind
+                else {
+                    continue;
+                };
+                let births = &checker.operations[block_index][index].births;
+                if let Some((_, contract)) =
+                    literal_allocation(&db, checker.body.values[result.index()].ty, constant)
+                {
+                    allocating += 1;
+                    let [birth] = births.as_slice() else {
+                        panic!("allocating constant must publish one birth: {births:?}")
+                    };
+                    assert_eq!(birth.allocation.contract, contract);
+                    assert_eq!(
+                        birth.allocation.occurrence,
+                        AddressOccurrence::Value {
+                            instance,
+                            value: *result,
+                            choice: 0
+                        }
+                    );
+                    assert_eq!(
+                        birth.allocation.arguments.as_ref(),
+                        &[IndexExpr::Iteration(
+                            checker
+                                .inventory
+                                .loops
+                                .for_value(&checker.body, *result)
+                                .unwrap()
+                        )]
+                    );
+                    assert_eq!(birth.guard, Guard::always(&BinderScope::default()));
+                    let state = checker.before[block_index].get(index + 1).unwrap();
+                    let leaves = checker
+                        .inventory
+                        .values
+                        .leaves(state.value(*result), ValueOccurrence::Value(*result));
+                    assert!(
+                        leaves.iter().any(|leaf| leaf
+                            .payload
+                            .region(&db, &checker.inventory.loans, leaf.guard.scope())
+                            .clauses()
+                            .iter()
+                            .any(|clause| {
+                                clause.payload.root
+                                    == RegionRoot::External(ExternalSource::allocation(
+                                        &db,
+                                        birth.allocation.clone(),
+                                    ))
+                            })),
+                        "resolved birth must match the source published by transfer"
+                    );
+                } else {
+                    ordinary += 1;
+                    if checker.body.values[result.index()].ty.is_string(&db) {
+                        inline_strings += 1;
+                    }
+                    assert!(births.is_empty());
+                }
+            }
+        }
+        assert!(
+            allocating > 0,
+            "the recognized allocation contract is exercised"
+        );
+        assert!(
+            inline_strings > 0,
+            "inline string constants are checked separately"
+        );
+        assert!(
+            ordinary >= 3,
+            "scalar and inline string constants are covered"
+        );
     }
 }

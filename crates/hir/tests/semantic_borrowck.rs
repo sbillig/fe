@@ -385,10 +385,25 @@ fn external_call_intrinsic_summaries_include_current_state_effects() {
         );
         // Query the trusted contract before diagnostics or a caller body runs.
         let summary = semantic_borrow_summary(&db, instance).unwrap().unwrap();
+        assert!(
+            summary.availability.reinitialized.is_empty(),
+            "external may-writes cannot certify typed initialization: {name}"
+        );
         for space in [
             ProviderAddressSpace::Storage,
             ProviderAddressSpace::Transient,
         ] {
+            for access in summary.accesses.iter().filter(|access| {
+                access.region.clauses().iter().any(|clause| {
+                    clause.payload.root.address_space() == HandleAddressSpace::Known(space)
+                })
+            }) {
+                assert_eq!(access.extent, AccessExtent::Unknown);
+                assert!(
+                    access.authorizers.is_empty(),
+                    "whole-space effects carry no native authority"
+                );
+            }
             for kind in [MemoryAccessKind::Read, MemoryAccessKind::Write] {
                 let found = summary.accesses.iter().any(|access| {
                     access.kind == kind
@@ -727,6 +742,351 @@ fn inspect() {{
         {store}
         let loaded: u256 = *slot
         index += 1
+    }}
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        if valid {
+            assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+        } else {
+            assert!(
+                diagnostics.contains("cannot use a native borrow"),
+                "{source}\n{diagnostics}"
+            );
+        }
+    }
+}
+
+fn allocation_birth_loop_source(allocation: &str) -> String {
+    format!(
+        r#"
+struct Item {{ n: u256 }}
+fn consume(_ value: own Item) {{}}
+fn initialized(_ n: u256) -> *Item {{
+    let p = core::ptr::alloc<Item>()
+    *p = Item {{ n }}
+    p
+}}
+fn forward(_ n: u256) -> *Item {{ initialized(n) }}
+fn check(_ count: u256) {{
+    let mut i: u256 = 0
+    while i < count {{
+        {allocation}
+        consume(*p)
+        i += 1
+    }}
+}}
+"#
+    )
+}
+
+#[test]
+fn allocation_birth_inline_loop_is_available() {
+    let source =
+        allocation_birth_loop_source("let p = core::ptr::alloc<Item>()\n*p = Item { n: i }");
+    let diagnostics = checked_borrow_diags(&source);
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn allocation_birth_factory_loop_is_available() {
+    let diagnostics = checked_borrow_diags(&allocation_birth_loop_source("let p = initialized(i)"));
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn allocation_birth_forwarded_factory_loop_is_available() {
+    let diagnostics = checked_borrow_diags(&allocation_birth_loop_source("let p = forward(i)"));
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn allocation_birth_preserves_duplicate_and_callee_exit_moves() {
+    for allocation in [
+        "let p = initialized(i)\nconsume(*p)",
+        "let p = moved(i)",
+        "let pair = aliased(i)\nconsume(*pair.left)\nlet p = pair.right",
+    ] {
+        let source = allocation_birth_loop_source(allocation)
+            + r#"
+struct Pair { left: *Item, right: *Item }
+fn moved(_ n: u256) -> *Item {
+    let p = initialized(n)
+    consume(*p)
+    p
+}
+fn aliased(_ n: u256) -> Pair {
+    let p = initialized(n)
+    Pair { left: p, right: p }
+}
+"#;
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(
+            diagnostics.contains("move conflict"),
+            "{source}\n{diagnostics}"
+        );
+        assert!(!diagnostics.contains("internal"), "{diagnostics}");
+    }
+}
+
+#[test]
+fn allocation_birth_distinguishes_multiple_factory_results() {
+    let source = allocation_birth_loop_source(
+        "let pair = distinct(i)\nconsume(*pair.left)\nlet p = pair.right",
+    ) + r#"
+struct Pair { left: *Item, right: *Item }
+fn distinct(_ n: u256) -> Pair {
+    Pair { left: initialized(n), right: initialized(n) }
+}
+"#;
+    let diagnostics = checked_borrow_diags(&source);
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn allocation_birth_retains_older_moved_pointers_before_the_next_move() {
+    for (declaration, old, retain) in [
+        ("let mut old = initialized(0)", "old", "old = p"),
+        (
+            "let mut old = Holder { ptr: initialized(0) }",
+            "old.ptr",
+            "old.ptr = p",
+        ),
+        ("let mut old = [initialized(0)]", "old[0]", "old[0] = p"),
+    ] {
+        let source = allocation_birth_loop_source(&format!(
+            "let p = forward(i)\nif i > 0 {{ consume(*{old}) }}\n{retain}",
+        ))
+        .replace(
+            "let mut i: u256 = 0",
+            &format!("{declaration}\nlet mut i: u256 = 0"),
+        ) + "\nstruct Holder { ptr: *Item }\n";
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(
+            diagnostics.contains("move conflict"),
+            "{source}\n{diagnostics}"
+        );
+        assert!(!diagnostics.contains("internal"), "{diagnostics}");
+    }
+}
+
+#[test]
+fn boolean_selected_factory_loops_retain_conservative_move_diagnostics() {
+    // Boolean predicates are not represented by the existing edge guards. This
+    // precision limit is separate from allocation lifetime transfer.
+    let source =
+        allocation_birth_loop_source("let p = if i == 0 { initialized(i) } else { forward(i) }");
+    let diagnostics = checked_borrow_diags(&source);
+    assert!(diagnostics.contains("move conflict"), "{diagnostics}");
+    assert!(!diagnostics.contains("internal"), "{diagnostics}");
+}
+
+#[test]
+fn recursive_fresh_allocation_returns_fail_closed_on_nonconvergence() {
+    // Existing summary choices can grow through recursive allocation returns.
+    // Keep the bounded diagnostic instead of accepting an opaque fallback.
+    let source = allocation_birth_loop_source("let p = recursive(i, depth: 2)")
+        + r#"
+fn recursive(_ n: u256, depth: u256) -> *Item {
+    if depth == 0 { initialized(n) } else { recursive(n, depth: depth - 1) }
+}
+"#;
+    let diagnostics = checked_borrow_diags(&source);
+    assert!(
+        diagnostics.contains("recursive boundary requirements did not converge"),
+        "{diagnostics}"
+    );
+    assert!(diagnostics.contains("transport violation"), "{diagnostics}");
+    assert!(!diagnostics.contains("internal"), "{diagnostics}");
+}
+
+#[test]
+fn allocation_birth_does_not_initialize_native_bytes_in_a_factory() {
+    let source = r#"
+fn uninitialized() -> *ref u256 { core::ptr::alloc<ref u256>() }
+fn check(_ count: u256) {
+    let mut i: u256 = 0
+    while i < count {
+        let slot = uninitialized()
+        let loaded: u256 = *slot
+        i += 1
+    }
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(
+        diagnostics.contains("cannot use a native borrow"),
+        "{diagnostics}"
+    );
+    assert!(!diagnostics.contains("move conflict"), "{diagnostics}");
+}
+
+#[test]
+fn allocation_birth_cast_views_and_query_order_preserve_ownership() {
+    let source = allocation_birth_loop_source("let p = typed(bytes(i))")
+        + r#"
+fn bytes(_ n: u256) -> *u8 { core::ptr::cast<Item, u8>(initialized(n)) }
+fn typed(_ p: *u8) -> *Item { core::ptr::cast<u8, Item>(p) }
+"#;
+    for first in ["check", "typed", "bytes", "initialized"] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("birth_query_order.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        semantic_borrow_summary(&db, func_instance(&db, module, first)).unwrap();
+        let diagnostics = format_diagnostics(
+            &db,
+            &collect_semantic_borrow_diagnostic_vouchers(&db, module),
+        );
+        assert!(diagnostics.is_empty(), "{first}: {diagnostics}");
+        // Repeated queries exercise the cached closed operation facts.
+        let again = format_diagnostics(
+            &db,
+            &collect_semantic_borrow_diagnostic_vouchers(&db, module),
+        );
+        assert_eq!(diagnostics, again);
+    }
+}
+
+#[test]
+fn allocation_birth_does_not_revive_an_input_pointer_or_its_loaded_referent() {
+    for allocation in [
+        "let old = initialized(i)\nconsume(*old)\nlet p = identity(old)",
+        "let old = initialized(i)\nconsume(*old)\nlet slot = container(old)\nlet p = *slot",
+    ] {
+        let source = allocation_birth_loop_source(allocation)
+            + r#"
+fn identity(_ p: *Item) -> *Item { p }
+fn container(_ p: *Item) -> **Item {
+    let slot = core::ptr::alloc<*Item>()
+    *slot = p
+    slot
+}
+"#;
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(
+            diagnostics.contains("move conflict"),
+            "{source}\n{diagnostics}"
+        );
+        assert!(!diagnostics.contains("internal"), "{diagnostics}");
+    }
+}
+
+#[test]
+fn allocation_birth_nested_loops_and_recursive_pointer_forwarding() {
+    for allocation in [
+        "let p = recursive_pointer(forward(i), 2)",
+        "let mut j: u256 = 0\nwhile j < 2 { let q = forward(j)\nconsume(*q)\nj += 1 }\nlet p = forward(i)",
+    ] {
+        let source = allocation_birth_loop_source(allocation)
+            + r#"
+fn recursive_pointer(_ p: *Item, _ depth: u256) -> *Item {
+    if depth == 0 { p } else { recursive_pointer(p, depth - 1) }
+}
+fn zero() { check(0) }
+fn multiple() { check(3) }
+"#;
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+    }
+}
+
+#[test]
+fn allocation_birth_enum_selected_factories_keep_their_guards() {
+    let source = allocation_birth_loop_source(
+        "let p = match pick { Choice::First => initialized(i), Choice::Second => forward(i) }",
+    )
+    .replace(
+        "fn check(_ count: u256)",
+        "fn check(_ count: u256, _ pick: Choice)",
+    ) + "\nenum Choice { First, Second }\nimpl Copy for Choice {}\n";
+    let diagnostics = checked_borrow_diags(&source);
+    assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+}
+
+#[test]
+fn allocation_birth_fresh_or_old_return_does_not_revive_old_alternative() {
+    let source = allocation_birth_loop_source(
+        "let old = initialized(i)\nconsume(*old)\nlet p = maybe(Choice::Old, old, i)",
+    ) + r#"
+enum Choice { Fresh, Old }
+fn maybe(_ pick: Choice, _ old: *Item, _ n: u256) -> *Item {
+    match pick { Choice::Fresh => initialized(n), Choice::Old => old }
+}
+"#;
+    let diagnostics = checked_borrow_diags(&source);
+    assert!(diagnostics.contains("move conflict"), "{diagnostics}");
+    assert!(!diagnostics.contains("internal"), "{diagnostics}");
+}
+
+#[test]
+fn allocation_birth_nonreturning_calls_have_no_return_state() {
+    let source = allocation_birth_loop_source("let p = allocate_then_stop(i)")
+        + r#"
+fn allocate_then_stop(_ n: u256) -> *Item {
+    let p = initialized(n)
+    core::panic()
+}
+"#;
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("birth_nonreturning.fe".into(), &source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let summary = semantic_borrow_summary(&db, func_instance(&db, module, "allocate_then_stop"))
+        .unwrap()
+        .unwrap();
+    assert!(!summary.may_return);
+    assert!(summary.availability.reinitialized.is_empty());
+    assert!(summary.availability.unavailable.is_empty());
+    let diagnostics = format_diagnostics(
+        &db,
+        &collect_semantic_borrow_diagnostic_vouchers(&db, module),
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn allocation_birth_repeated_pointer_arrays_have_one_identity() {
+    for (allocation, valid) in [
+        ("let values = repeated(i)\nlet p = values[0]", true),
+        (
+            "let values = repeated(i)\nconsume(*values[0])\nlet p = values[1]",
+            false,
+        ),
+    ] {
+        let source = allocation_birth_loop_source(allocation)
+            + "\nfn repeated(_ n: u256) -> [*Item; 2] { [initialized(n); 2] }\n";
+        let diagnostics = checked_borrow_diags(&source);
+        if valid {
+            assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+        } else {
+            assert!(
+                diagnostics.contains("move conflict"),
+                "{source}\n{diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
+fn allocation_birth_repeated_native_slots_keep_fresh_invalid_seeds() {
+    for (store, valid) in [
+        ("*slots[0] = ref *owner", true),
+        ("if i == 0 { *slots[0] = ref *owner }", false),
+    ] {
+        let source = format!(
+            r#"
+fn repeated() -> [*ref u256; 2] {{ [core::ptr::alloc<ref u256>(); 2] }}
+fn check(_ count: u256) {{
+    let owner = core::ptr::alloc<u256>()
+    *owner = 7
+    let mut i: u256 = 0
+    while i < count {{
+        let slots = repeated()
+        {store}
+        let loaded: u256 = *slots[1]
+        i += 1
     }}
 }}
 "#
@@ -9266,6 +9626,173 @@ fn invalid_cast_is_blocked_before_semantic_lowering() {
     assert!(!diags.contains("internal"), "{diags}");
 }
 
+fn literal_birth_loop_source(allocation: &str) -> String {
+    format!(
+        r#"
+use core::ptr
+struct Item {{ n: u256 }}
+fn consume(_ value: own Item) {{}}
+fn wrapped() -> Text {{ "hello" }}
+fn check(_ count: u256) {{
+    let mut i: u256 = 0
+    while i < count {{
+        {allocation}
+        let p = ptr::cast<u8, Item>(text.encoded_span().ptr())
+        consume(*p)
+        i += 1
+    }}
+}}
+"#
+    )
+}
+
+#[test]
+fn literal_birth_direct_and_wrapped_loops_are_available() {
+    for allocation in ["let text: Text = \"hello\"", "let text = wrapped()"] {
+        let source = literal_birth_loop_source(allocation);
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+    }
+}
+
+#[test]
+fn literal_birth_preserves_duplicate_and_retained_old_moves() {
+    for (setup, read) in [
+        ("", "consume(*p)"),
+        (
+            "let mut old = ptr::cast<u8, Item>(wrapped().encoded_span().ptr())",
+            "if i > 0 { consume(*old) }\nold = p",
+        ),
+        (
+            "let mut old = [ptr::cast<u8, Item>(wrapped().encoded_span().ptr())]",
+            "if i > 0 { consume(*old[0]) }\nold[0] = p",
+        ),
+    ] {
+        let source = literal_birth_loop_source("let text: Text = \"hello\"")
+            .replace(
+                "let mut i: u256 = 0",
+                &format!("{setup}\nlet mut i: u256 = 0"),
+            )
+            .replace("consume(*p)", &format!("{read}\nconsume(*p)"));
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(
+            diagnostics.contains("move conflict"),
+            "{source}\n{diagnostics}"
+        );
+        assert!(!diagnostics.contains("internal"), "{diagnostics}");
+    }
+}
+
+#[test]
+fn literal_birth_distinguishes_evaluations_but_preserves_copied_aliases() {
+    for (allocation, uses, valid) in [
+        (
+            "let text: Text = \"hello\"\nlet other: Text = \"hello\"",
+            "consume(*ptr::cast<u8, Item>(other.encoded_span().ptr()))",
+            true,
+        ),
+        (
+            "let text: Text = \"hello\"",
+            "let alias = p\nconsume(*alias)",
+            false,
+        ),
+        (
+            "let text: Text = \"hello\"",
+            "let aliases = [p; 2]\nconsume(*aliases[1])",
+            false,
+        ),
+    ] {
+        let source = literal_birth_loop_source(allocation)
+            .replace("consume(*p)", &format!("{uses}\nconsume(*p)"));
+        let diagnostics = checked_borrow_diags(&source);
+        if valid {
+            assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+        } else {
+            assert!(
+                diagnostics.contains("move conflict"),
+                "{source}\n{diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
+fn literal_birth_native_views_require_each_iterations_typed_initialization() {
+    for native in ["ref", "mut"] {
+        for (store, valid) in [
+            ("", false),
+            ("*slot = BORROW *owner", true),
+            ("if i == 0 { *slot = BORROW *owner }", false),
+        ] {
+            let source = format!(
+                r#"
+use core::ptr
+fn check(_ count: u256) {{
+    let owner = ptr::alloc<u256>()
+    *owner = 7
+    let mut i: u256 = 0
+    while i < count {{
+        let text: Text = "hello"
+        let slot = ptr::cast<u8, {native} u256>(text.encoded_span().ptr())
+        {store}
+        let loaded: u256 = *slot
+        i += 1
+    }}
+}}
+"#
+            )
+            .replace("BORROW", native);
+            let diagnostics = checked_borrow_diags(&source);
+            if valid {
+                assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+            } else {
+                assert!(
+                    diagnostics.contains("cannot use a native borrow"),
+                    "{source}\n{diagnostics}"
+                );
+            }
+            assert!(!diagnostics.contains("internal"), "{diagnostics}");
+        }
+    }
+}
+
+#[test]
+fn literal_birth_nested_loops_and_late_views_are_query_order_independent() {
+    let source = literal_birth_loop_source(
+        r#"
+let mut j: u256 = 0
+while j < count {
+    let inner: Text = "inner"
+    consume(*typed(inner.encoded_span().ptr()))
+    j += 1
+}
+let text: Text = "outer"
+"#,
+    )
+    .replace(
+        "let p = ptr::cast<u8, Item>(text.encoded_span().ptr())",
+        "let p = typed(text.encoded_span().ptr())",
+    ) + r#"
+fn typed(_ p: *u8) -> *Item { ptr::cast<u8, Item>(p) }
+fn zero() { check(0) }
+fn multiple() { check(3) }
+"#;
+    for first in ["typed", "check", "wrapped", "multiple"] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("literal_query_order.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        semantic_borrow_summary(&db, func_instance(&db, module, first)).unwrap();
+        for _ in 0..2 {
+            let diagnostics = format_diagnostics(
+                &db,
+                &collect_semantic_borrow_diagnostic_vouchers(&db, module),
+            );
+            assert!(diagnostics.is_empty(), "{first}: {diagnostics}");
+        }
+    }
+}
+
 #[test]
 fn dynamic_string_literals_export_distinct_allocations() {
     with_borrow_summary(
@@ -9275,6 +9802,7 @@ fn literals() -> (Text, Text) {
     let second: Text = "second"
     (first, second)
 }
+
 "#,
         "literals",
         |db, summary| {

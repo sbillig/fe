@@ -11,6 +11,7 @@ use crate::{
         semantic::{
             BorrowActivation, FieldIndex, SemOrigin, SemanticInstance,
             capability::{
+                birth::AllocationBirth,
                 external::{ClobberCondition, ExternalOrigin, ExternalSource, ReferentContract},
                 footprint::{AccessExtent, AccessFootprint},
                 guard::{Guard, ValueOccurrence},
@@ -92,6 +93,7 @@ pub(super) struct CallSummary<'db> {
     pub summary: BorrowSummary<'db>,
     pub pending: bool,
     updates: Vec<CapabilityValue<'db>>,
+    births: Vec<AllocationBirth<'db>>,
 }
 
 impl<'db> Borrowck<'db> {
@@ -224,13 +226,18 @@ impl<'db> Borrowck<'db> {
                 .chain(summary.mutable_inputs.iter().map(|update| &update.value))
             {
                 for leaf in sources.leaves(value, ValueOccurrence::Summary) {
-                    external.push((leaf.payload.source, leaf.guard.scope().clone()));
+                    external.push((
+                        leaf.payload.source,
+                        leaf.guard.scope().clone(),
+                        Some(leaf.guard),
+                    ));
                 }
             }
             external.extend(summary.mutable_inputs.iter().map(|update| {
                 (
                     update.destination.source.clone(),
                     update.value.scope().clone(),
+                    None,
                 )
             }));
             external.extend(summary.requirements.iter().flat_map(|requirement| {
@@ -238,8 +245,13 @@ impl<'db> Borrowck<'db> {
                     .chain(requirement.populated.iter())
                     .flat_map(|region| region.clauses())
                     .filter_map(|clause| {
-                        SourceExpr::from_place(&clause.payload)
-                            .map(|source| (source.source, clause.guard.scope().clone()))
+                        SourceExpr::from_place(&clause.payload).map(|source| {
+                            (
+                                source.source,
+                                clause.guard.scope().clone(),
+                                Some(clause.guard.clone()),
+                            )
+                        })
                     })
             }));
             external.extend(
@@ -249,8 +261,13 @@ impl<'db> Borrowck<'db> {
                     .flat_map(|access| [&access.region, &access.authorizers])
                     .flat_map(|region| region.clauses())
                     .filter_map(|clause| {
-                        SourceExpr::from_place(&clause.payload)
-                            .map(|source| (source.source, clause.guard.scope().clone()))
+                        SourceExpr::from_place(&clause.payload).map(|source| {
+                            (
+                                source.source,
+                                clause.guard.scope().clone(),
+                                Some(clause.guard.clone()),
+                            )
+                        })
                     }),
             );
             external.extend(
@@ -266,11 +283,23 @@ impl<'db> Borrowck<'db> {
                     ])
                     .flat_map(|region| region.clauses())
                     .filter_map(|clause| {
-                        SourceExpr::from_place(&clause.payload)
-                            .map(|source| (source.source, clause.guard.scope().clone()))
+                        SourceExpr::from_place(&clause.payload).map(|source| {
+                            (
+                                source.source,
+                                clause.guard.scope().clone(),
+                                Some(clause.guard.clone()),
+                            )
+                        })
                     }),
             );
-            for (source, scope) in external {
+            let mut births = Vec::new();
+            for (source, scope, guard) in external {
+                if let Some(guard) = guard
+                    && let Some(birth) = AllocationBirth::from_source(&source, guard)
+                    && !births.contains(&birth)
+                {
+                    births.push(birth);
+                }
                 let base = if let Some(base) = source.address_base(self.db) {
                     self.instantiate_address_base(base, result, origin)?
                 } else {
@@ -305,6 +334,7 @@ impl<'db> Borrowck<'db> {
                     summary,
                     pending,
                     updates,
+                    births,
                 },
             );
         }
@@ -1386,6 +1416,46 @@ impl<'db> Borrowck<'db> {
         Ok(())
     }
 
+    pub(super) fn call_births(
+        &self,
+        result: NValueId,
+        inputs: CallInputs<'_, 'db>,
+    ) -> Result<Vec<AllocationBirth<'db>>, SemanticDiagnostic<'db>> {
+        let Some(call) = self
+            .calls
+            .get(&result)
+            .filter(|call| call.summary.may_return)
+        else {
+            return Ok(Vec::new());
+        };
+        let mut births = Vec::new();
+        for template in &call.births {
+            let Some(guard) = self.instantiate_guard(&template.guard, result, inputs)? else {
+                continue;
+            };
+            let subst = IndexSubst::new(
+                template.guard.scope(),
+                guard.scope(),
+                inputs.args.iter().enumerate().map(|(param, arg)| {
+                    (
+                        IndexExpr::FormalValue(param.try_into().expect("parameter count")),
+                        self.index(arg.value),
+                    )
+                }),
+            )
+            .expect("birth scalar substitution");
+            let source = ExternalSource::allocation(self.db, template.allocation.clone())
+                .substitute(self.db, &subst);
+            let source = self.instantiate_address_base(source, result, inputs.origin)?;
+            let birth =
+                AllocationBirth::from_source(&source, guard).expect("allocation birth origin");
+            if !births.contains(&birth) {
+                births.push(birth);
+            }
+        }
+        Ok(births)
+    }
+
     pub fn transfer_call(
         &mut self,
         state: &mut BorrowState<'db>,
@@ -1411,13 +1481,6 @@ impl<'db> Borrowck<'db> {
             }
             return Ok(self.inventory.values.empty(shape, &BinderScope::default()));
         };
-        state.birth_allocations(
-            &mut self.inventory.values,
-            &self.inventory.entry,
-            self.instance,
-            result,
-            self.inventory.loops.for_value(&self.body, result),
-        );
         let template = self.inventory.definitions[&result].clone();
         let inputs = CallInputs {
             args,
@@ -1450,6 +1513,15 @@ impl<'db> Borrowck<'db> {
             .collect::<Vec<_>>();
         let accesses = self.call_memory_accesses(state, result, inputs)?;
         self.ensure_storage(state, storage, statement.origin)?;
+        // Every source above was substituted against the same pre-call state.
+        // Birth seeds precede final poststates, never caller-source reads.
+        let births = self.call_births(result, inputs)?;
+        state.birth_allocations(
+            &mut self.inventory.values,
+            &self.inventory.entry,
+            &self.inventory.allocation_cells,
+            &births,
+        );
         let overwrite = self.opaque_write(statement.id);
         for access in accesses {
             if access.access.kind == MemoryAccessKind::Write {

@@ -165,9 +165,32 @@ restore authority. Pointer/handle leaves contain stable unknown addresses and do
 not inherit the containing allocation's freshness. Scalar initialization is not
 tracked by this capability analysis.
 
-Inventory presence is separate from runtime birth. A fresh allocation occurrence
-resets its current loop-family member to the byte seed before applying a call's
-typed poststates; earlier members retain their contents. A definite valid typed
+Inventory presence is separate from runtime birth. Immutable call birth templates
+come from trusted Allocation sources in existing summaries, including results
+with capability-free non-Copy pointees. Instantiation preserves occurrence,
+allocation choice, family arguments, and guards. Returning an input pointer or
+manufacturing an opaque address does not establish a birth. The resolved operation
+publishes these same events after provenance/discovery closure.
+
+Recognized allocating constants, currently dynamic string literals, also publish
+births using their normalized result occurrence and loop generation. Their
+provenance transfer applies the same event before publishing the literal value;
+late-discovered typed views participate through the existing inventory replay.
+Literal emission initializes raw ABI bytes, which do not construct native loans.
+Scalar constants and inline static strings have no allocation event. Copying a
+literal-derived pointer preserves its identity; evaluating a separate allocating
+literal creates a distinct occurrence.
+
+One shared selector identifies the allocation's own physical bytes, including
+casts, offsets, and projections. Following a stored pointer does not select its
+referent. Provenance resets selected current members to their byte seeds;
+availability keeps each earlier move under its guard minus the birth selector.
+Older moved members and unrelated choices remain unavailable. Birth grants neither
+a native loan nor a definite initialization fact. Callee source substitutions all
+use the pre-call snapshot; byte seeding precedes final structural poststates.
+Inventory cells and candidate moved sites are indexed by allocation occurrence,
+and the cell index is rebuilt when discovery grows the inventory. Earlier members
+retain their contents. A definite valid typed
 store establishes native contents, while weak stores retain invalid alternatives.
 On late discovery the fixed point replays earlier stores against the correct
 seed. Reads and native transport, including discarded loads, use the same native
@@ -319,9 +342,16 @@ The availability transformer is:
 
 ```text
 unavailable_after =
-    (unavailable_before minus certified definite reinitialization)
+    ((unavailable_before minus proved born members)
+        minus certified definite reinitialization)
     union possibly unavailable on normal return
 ```
+
+Arguments and callee incoming requirements are checked before birth. Certified
+reinitializations and then callee exit moves follow birth; result-holder
+initialization comes last. Thus an allocating helper that consumes its new Item
+and returns the pointer leaves that Item unavailable. Nonreturning calls have no
+normal-return successor state.
 
 Incoming requirements include accesses that a preceding guaranteed initialization
 has not discharged. Read, view, borrow, and move require available contents. A
@@ -338,7 +368,26 @@ Possible moves join by union. Definite initialization must hold on all feasible
 normal-return paths. Disjoint representable guards preserve conditional facts;
 overlapping paths require common coverage. The entry edge of a loop prevents its
 body from being assumed to execute. Prior-iteration witnesses cannot establish a
-definite write for the next iteration.
+definite write for the next iteration. Clause-local existential witnesses that
+occur only in scalar guards are projected away before alpha-normalization. This
+prevents an unbounded chain of historical generation disequalities without
+forgetting the older object named by the region or witnesses indexing enum choices.
+Allocation selectors also project scalar traversal witnesses (such as the member
+index in an array of repeated pointers) that do not identify a distinct object.
+Feedback is identified by DFS cycle-closing edges from the actual entry, rather
+than block-number order: an acyclic branch join must preserve the generation in
+which its selected pointer was allocated.
+Every cyclic region has a repeated-value set, including an empty set when the
+verified normalized cycle defines no values. Such cycles still participate in
+feedback and no-normal-return analysis.
+
+Boolean branch predicates currently have no edge guards. Selecting between
+allocating factories with a boolean in a loop can therefore remain conservatively
+rejected, although enum-selected factories retain their correlation. Recursive
+pointer forwarding converges, but recursively returning newly allocated pointers
+can grow summary allocation choices and reach the existing bounded convergence
+diagnostic. These are tracked precision limitations; nonconvergence never grants
+validation through an opaque fallback.
 
 The must-initialization set contains caller-visible external storage whose type
 can become moved or contain native validity obligations. Local moved facts still

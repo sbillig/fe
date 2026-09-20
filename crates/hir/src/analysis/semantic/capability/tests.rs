@@ -2,6 +2,7 @@ use crate::analysis::semantic::capability::test_roots;
 use std::{collections::BTreeSet, iter::empty};
 
 use super::{
+    birth::AllocationBirth,
     external::{ExternalOrigin, ExternalSource, ReferentContract},
     guard::{ChoiceKey, Guard, ValueOccurrence},
     handle::{
@@ -2092,4 +2093,240 @@ fn inspect<T, const N: usize>(
         })
         .collect();
     assert_eq!(abstract_inputs, [false, true, false, false, false, true]);
+}
+
+#[test]
+fn allocation_birth_selects_guarded_full_families_and_only_their_own_bytes() {
+    let db = HirAnalysisTestDb::default();
+    let word = TyId::u256(&db);
+    let (template_scope, parameter) = scope().bind(IndexNamespace::Existential);
+    let condition = runtime(20);
+    let guard = Guard::always(&template_scope)
+        .with_equality(condition, IndexExpr::Const(1))
+        .unwrap();
+    let birth = AllocationBirth {
+        allocation: OpaqueHandleRef {
+            contract: OpaqueHandleContract {
+                handle_ty: TyId::ptr_to(&db, word),
+                target_ty: word,
+                address_space: HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+            },
+            occurrence: AddressOccurrence::Summary(0),
+            arguments: Box::new([IndexExpr::Const(3), parameter, runtime(4)]),
+        },
+        guard,
+    };
+    let mut candidate = birth.allocation.clone();
+    candidate.arguments = Box::new([IndexExpr::Const(3), IndexExpr::Const(99), runtime(4)]);
+    let source = ExternalSource::allocation(&db, candidate.clone());
+    let root = RegionRoot::External(source.clone());
+    let selected = birth.selector(&root, &scope()).unwrap();
+    assert!(selected.proves_equal(condition, IndexExpr::Const(1)));
+    assert!(
+        selected
+            .with_equality(condition, IndexExpr::Const(0))
+            .is_none()
+    );
+    let viewed = ExternalSource::memory(
+        &db,
+        SourceExpr {
+            source: source.clone(),
+            path: RegionPath::default(),
+            views: Default::default(),
+            invalidated: false,
+        },
+        TyId::u8(&db),
+        Some((TyId::u8(&db), IndexExpr::Const(1))),
+    );
+    assert_eq!(
+        birth.selector(&RegionRoot::External(viewed), &scope()),
+        Some(selected.clone())
+    );
+    let followed = source.follow(RegionPath::default(), source.contract, false);
+    assert!(
+        birth
+            .selector(&RegionRoot::External(followed), &scope())
+            .is_none()
+    );
+    // Neither another allocation choice nor a different outer family member is
+    // reset just because its final (current invocation) argument matches.
+    candidate.occurrence = AddressOccurrence::Summary(1);
+    assert!(
+        birth
+            .selector(
+                &RegionRoot::External(ExternalSource::allocation(&db, candidate.clone())),
+                &scope()
+            )
+            .is_none()
+    );
+    candidate.occurrence = birth.allocation.occurrence;
+    candidate.arguments[0] = IndexExpr::Const(4);
+    assert!(
+        birth
+            .selector(
+                &RegionRoot::External(ExternalSource::allocation(&db, candidate)),
+                &scope()
+            )
+            .is_none()
+    );
+    let unknown =
+        ExternalSource::unknown(source.contract, AddressOccurrence::Summary(0), Box::new([]));
+    assert!(AllocationBirth::from_source(&unknown, Guard::always(&scope())).is_none());
+    assert!(
+        birth
+            .selector(&RegionRoot::External(unknown), &scope())
+            .is_none()
+    );
+}
+
+#[test]
+fn region_projection_keeps_witnesses_observed_by_indexed_choices() {
+    let (nested, witness) = scope().bind(IndexNamespace::Existential);
+    let guard = Guard::always(&nested)
+        .with_variant(
+            ChoiceKey::new(ValueOccurrence::Summary, path(witness)),
+            VariantIndex(0),
+        )
+        .unwrap()
+        .with_disequality(witness, runtime(0))
+        .unwrap();
+    assert_eq!(guard.project_witnesses(|index| index == witness), guard);
+    let scalar = Guard::always(&nested)
+        .with_disequality(witness, runtime(0))
+        .unwrap();
+    assert_eq!(
+        scalar.project_witnesses(|index| index == witness),
+        Guard::always(&nested)
+    );
+}
+
+#[test]
+fn allocation_birth_selection_commutes_with_index_substitution() {
+    let db = HirAnalysisTestDb::default();
+    let word = TyId::u256(&db);
+    let (template_scope, parameter) = scope().bind(IndexNamespace::Existential);
+    let (candidate_scope, candidate_index) = template_scope.bind(IndexNamespace::Existential);
+    let template = AllocationBirth {
+        allocation: OpaqueHandleRef {
+            contract: OpaqueHandleContract {
+                handle_ty: TyId::ptr_to(&db, word),
+                target_ty: word,
+                address_space: HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+            },
+            occurrence: AddressOccurrence::Summary(0),
+            arguments: Box::new([runtime(0), parameter]),
+        },
+        guard: Guard::always(&template_scope)
+            .with_equality(runtime(2), IndexExpr::Const(1))
+            .unwrap()
+            .with_variant(
+                ChoiceKey::new(ValueOccurrence::Summary, path(parameter)),
+                VariantIndex(0),
+            )
+            .unwrap(),
+    };
+    for born in 0..3 {
+        for observed in 0..3 {
+            for enabled in 0..2 {
+                let entries = [
+                    (runtime(0), IndexExpr::Const(born)),
+                    (runtime(1), IndexExpr::Const(observed)),
+                    (runtime(2), IndexExpr::Const(enabled)),
+                ];
+                let template_subst =
+                    IndexSubst::new(&template_scope, &template_scope, entries).unwrap();
+                let candidate_subst =
+                    IndexSubst::new(&candidate_scope, &candidate_scope, entries).unwrap();
+                let substituted = template
+                    .guard
+                    .substitute(&template_subst)
+                    .and_then(|guard| {
+                        AllocationBirth::from_source(
+                            &ExternalSource::allocation(&db, template.allocation.clone())
+                                .substitute(&db, &template_subst),
+                            guard,
+                        )
+                    });
+                for choice in 0..2 {
+                    let mut allocation = template.allocation.clone();
+                    allocation.occurrence = AddressOccurrence::Summary(choice);
+                    allocation.arguments = Box::new([runtime(1), candidate_index]);
+                    let direct = ExternalSource::allocation(&db, allocation);
+                    let viewed = ExternalSource::memory(
+                        &db,
+                        SourceExpr {
+                            source: direct.clone(),
+                            path: RegionPath::default(),
+                            views: Default::default(),
+                            invalidated: false,
+                        },
+                        TyId::u8(&db),
+                        Some((TyId::u8(&db), IndexExpr::Const(1))),
+                    );
+                    let followed = direct.follow(RegionPath::default(), direct.contract, false);
+                    for source in [direct, viewed, followed] {
+                        let root = RegionRoot::External(source);
+                        let before = template
+                            .selector(&root, &candidate_scope)
+                            .and_then(|guard| guard.substitute(&candidate_subst));
+                        let after = substituted.as_ref().and_then(|birth| {
+                            birth
+                                .selector(&root.substitute(&db, &candidate_subst), &candidate_scope)
+                        });
+                        assert_eq!(
+                            before, after,
+                            "born {born}, observed {observed}, enabled {enabled}, root {root:?}"
+                        );
+                        if let Some(selected) = after {
+                            assert!(
+                                selected.indices().contains(&candidate_index),
+                                "indexed enum witness must survive selection and substitution"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn guard_projection_agrees_with_finite_witness_enumeration() {
+    let (nested, hidden) = scope().bind(IndexNamespace::Existential);
+    let (nested, indexed) = nested.bind(IndexNamespace::Existential);
+    for length in 1..=4 {
+        for excluded in [
+            runtime(0),
+            IndexExpr::Const(0),
+            IndexExpr::Const(1),
+            IndexExpr::Const(3),
+        ] {
+            for variant in 0..2 {
+                let guard = Guard::always(&nested)
+                    .with_variant(
+                        ChoiceKey::new(ValueOccurrence::Summary, path(indexed)),
+                        VariantIndex(variant),
+                    )
+                    .unwrap()
+                    .with_bound(hidden, IndexExpr::Const(length))
+                    .unwrap()
+                    .with_disequality(hidden, excluded);
+                let Some(guard) = guard else { continue };
+                let enumerated = (0..length)
+                    .filter_map(|value| {
+                        guard.substitute(
+                            &IndexSubst::new(&nested, &nested, [(hidden, IndexExpr::Const(value))])
+                                .unwrap(),
+                        )
+                    })
+                    .reduce(|left, right| left.or(&right))
+                    .unwrap();
+                let projected =
+                    guard.project_witnesses(|index| matches!(index, IndexExpr::Bound(_)));
+                assert_eq!(projected, enumerated);
+                assert!(projected.indices().contains(&indexed));
+                assert!(!projected.indices().contains(&hidden));
+            }
+        }
+    }
 }

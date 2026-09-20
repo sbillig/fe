@@ -448,6 +448,31 @@ impl<'db> Guard<'db> {
         )
     }
 
+    /// Eliminate clause-local witnesses that are observable only through scalar
+    /// constraints. A witness indexing an enum choice remains observable: its
+    /// quantification would require also quantifying that indexed choice.
+    pub fn project_witnesses(&self, hidden: impl Fn(IndexExpr<'db>) -> bool) -> Self {
+        let indexed: BTreeSet<_> = self
+            .condition
+            .variables()
+            .into_iter()
+            .flat_map(|bit| bit.choice.path.indices().collect::<Vec<_>>())
+            .collect();
+        Self::canonical(
+            &self.scope,
+            self.condition.map(
+                |bit| Variable::Symbol(bit.clone()),
+                |condition| {
+                    IndexCondition(condition.0.exists(
+                        |bit| hidden(bit.index) && !indexed.contains(&bit.index),
+                        |left, right| *left || *right,
+                    ))
+                },
+            ),
+        )
+        .expect("existential projection preserves feasibility")
+    }
+
     pub fn implies(&self, other: &Self) -> bool {
         assert_eq!(self.scope, other.scope, "guard scopes must match");
         self.condition
