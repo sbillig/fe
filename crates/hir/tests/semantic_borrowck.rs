@@ -9,7 +9,7 @@ use fe_hir::{
             BorrowSummary, CtfeError, FieldIndex, LayoutEvidenceError, NDataProjection, NExpr,
             NIndex, NPlace, NPlaceBase, NRootKind, NStatementKind, NValueDefinition,
             NormalizedArtifacts, ReadMode, SExpr, SStmtKind, STerminatorKind,
-            SemanticAnalysisError, SemanticBodyAdmission, SemanticBorrowDiagKind, SemanticInstance,
+            SemanticAnalysisError, SemanticBodyAdmission, SemanticDiagnosticKind, SemanticInstance,
             SemanticNormalizationFailure, canonicalize_semantic_consts,
             capability::{
                 external::ExternalOrigin,
@@ -71,6 +71,945 @@ fn checked_trusted_borrow_diags(src: &str) -> String {
         &db,
         &collect_semantic_borrow_diagnostic_vouchers(&db, top_mod),
     )
+}
+
+#[test]
+fn implicit_views_require_available_owners() {
+    for setup in [
+        "fn bad(item: own Item) -> u256 {",
+        "fn bad(n: u256) -> u256 { let item = Item { n }",
+        "fn bad(n: u256) -> u256 { let mut item = Item { n }",
+    ] {
+        let source = format!(
+            "struct Item {{ n: u256 }}\n\
+             fn consume(_ item: own Item) {{}}\n\
+             fn read(_ item: Item) -> u256 {{ item.n }}\n\
+             {setup}\nconsume(item)\nread(item)\n}}"
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(
+            diagnostics.contains("move conflict in `fn bad`"),
+            "{source}\n{diagnostics}"
+        );
+    }
+}
+
+#[test]
+fn ownership_moves_conflict_with_live_shared_loans() {
+    for kind in ["ref", "mut"] {
+        let diagnostics = checked_borrow_diags(&format!(
+            "struct Item {{ n: u256 }}\n\
+             fn consume(_ item: own Item) {{}}\n\
+             fn read(_ item: {kind} Item) -> u256 {{ item.n }}\n\
+             fn bad(mut item: own Item) -> u256 {{\n\
+                 let borrowed = {kind} item\n\
+                 consume(item)\n\
+                 read(borrowed)\n\
+             }}"
+        ));
+        assert!(
+            diagnostics.contains("borrow conflict in `fn bad`"),
+            "{kind}: {diagnostics}"
+        );
+    }
+}
+
+#[test]
+fn owned_temporary_pointer_places_consume_the_selected_value() {
+    for (declaration, expression) in [
+        ("", "*identity(pointer)"),
+        (
+            "struct Pair { item: Item, other: u256 }",
+            "(*identity(pointer)).item",
+        ),
+        ("", "pointer[0]"),
+    ] {
+        let pointee = if declaration.is_empty() {
+            "Item"
+        } else {
+            "Pair"
+        };
+        let pointee = if expression.contains("[0]") {
+            "[Item; 2]"
+        } else {
+            pointee
+        };
+        for copy in [false, true] {
+            let copy_impl = if copy {
+                "impl core::Copy for Item {}"
+            } else {
+                ""
+            };
+            let diagnostics = checked_borrow_diags(&format!(
+                r#"
+struct Item {{ n: u256 }}
+{copy_impl}
+{declaration}
+fn identity(pointer: *{pointee}) -> *{pointee} {{ pointer }}
+fn consume(_ item: own Item) {{}}
+fn check(pointer: *{pointee}) {{
+    consume({expression})
+    consume({expression})
+}}
+"#
+            ));
+            if copy {
+                assert!(diagnostics.is_empty(), "{expression}: {diagnostics}");
+            } else {
+                assert!(
+                    diagnostics.contains("move conflict in `fn check`"),
+                    "{expression}: {diagnostics}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn pointee_moves_survive_call_boundaries() {
+    for access in ["*pointer", "take(pointer)", "forward(pointer)"] {
+        let diagnostics = checked_borrow_diags(&format!(
+            "struct Item {{ n: u256 }}\n\
+             fn consume(_ item: own Item) {{}}\n\
+             fn take(pointer: *Item) -> Item {{ *pointer }}\n\
+             fn forward(pointer: *Item) -> Item {{ take(pointer) }}\n\
+             fn bad(pointer: *Item) {{\n\
+                 let first = {access}\n\
+                 let second = {access}\n\
+                 consume(first)\n\
+                 consume(second)\n\
+             }}"
+        ));
+        assert!(
+            diagnostics.contains("move conflict in `fn bad`"),
+            "{access}: {diagnostics}"
+        );
+    }
+}
+
+#[test]
+fn pointee_availability_is_required_by_read_and_view_calls() {
+    for access in ["(*pointer).n", "read(pointer)", "forward(pointer)"] {
+        let diagnostics = checked_borrow_diags(&format!(
+            "struct Item {{ n: u256 }}\n\
+             fn consume(_ item: own Item) {{}}\n\
+             fn view(_ item: Item) -> u256 {{ item.n }}\n\
+             fn read(pointer: *Item) -> u256 {{ view(*pointer) }}\n\
+             fn forward(pointer: *Item) -> u256 {{ read(pointer) }}\n\
+             fn bad(pointer: *Item) -> u256 {{\n\
+                 consume(*pointer)\n\
+                 {access}\n\
+             }}"
+        ));
+        assert!(
+            diagnostics.contains("move conflict in `fn bad`"),
+            "{access}: {diagnostics}"
+        );
+    }
+}
+
+#[test]
+fn repeated_views_and_pointer_copies_preserve_ownership() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+struct Item { n: u256 }
+fn view(_ item: Item) -> u256 { item.n }
+fn read(pointer: *Item) -> u256 { view(*pointer) }
+fn forward(pointer: *Item) -> u256 { read(pointer) }
+fn valid(pointer: *Item) -> u256 {
+    let copied = pointer
+    let first = forward(pointer)
+    first + read(pointer: copied)
+}
+fn local(item: own Item) -> u256 { view(item) + view(item) }
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn raw_copy_poststates_cannot_restore_entry_pointer_provenance() {
+    for copy in [
+        "*target = first\nptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)",
+        "copy_slot(target, source, first)",
+        "forward(target, source, first)",
+        "overwrite_word(target, source, first)",
+        "loop_copy_slot(target, source, first)",
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+use core::ptr
+fn copy_slot(target: **u256, source: **u256, first: *u256) {{
+    *target = first
+    ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)
+}}
+fn forward(target: **u256, source: **u256, first: *u256) {{
+    copy_slot(target, source, first)
+}}
+fn loop_copy_slot(target: **u256, source: **u256, first: *u256) {{
+    *target = first
+    let mut index: usize = 0
+    while index < 2 {{
+        ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)
+        index += 1
+    }}
+}}
+fn overwrite_word(target: **u256, source: **u256, first: *u256) {{
+    *target = first
+    let destination_word = ptr::cast<*u256, u256>(target)
+    let source_word = ptr::cast<*u256, u256>(source)
+    *destination_word = *source_word
+}}
+fn bad() {{
+    let first = ptr::alloc<u256>()
+    let second = ptr::alloc<u256>()
+    let source = ptr::alloc<*u256>()
+    let target = ptr::alloc<*u256>()
+    *source = second
+    *target = first
+    {copy}
+    let borrowed = mut *second
+    let alias = mut *(*target)
+    borrowed = 1
+    alias = 2
+}}
+"#
+        ));
+        assert!(
+            diagnostics.contains("borrow conflict in `fn bad`"),
+            "{copy}: {diagnostics}"
+        );
+    }
+}
+
+#[test]
+fn definite_pointer_store_after_raw_copy_recovers_precise_contents() {
+    // A further forwarding summary can conservatively join possibly aliased
+    // source/target poststates. It is not an ordered trace of these stores.
+    for copy in [
+        "ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)\n*target = first",
+        "copy_slot(target, source, first)",
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+use core::ptr
+fn copy_slot(target: **u256, source: **u256, first: *u256) {{
+    ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)
+    *target = first
+}}
+fn valid() {{
+    let first = ptr::alloc<u256>()
+    let second = ptr::alloc<u256>()
+    let source = ptr::alloc<*u256>()
+    let target = ptr::alloc<*u256>()
+    *source = second
+    *target = first
+    {copy}
+    let borrowed = mut *second
+    let independent = mut *(*target)
+    borrowed = 1
+    independent = 2
+}}
+"#
+        ));
+        assert!(diagnostics.is_empty(), "{copy}: {diagnostics}");
+    }
+}
+
+#[test]
+fn raw_overwrites_do_not_manufacture_native_borrow_authority() {
+    for (reinitialize, access) in [false, true].into_iter().flat_map(|reinitialize| {
+        ["*slot", "load(slot)", "forward(slot)"].map(|access| (reinitialize, access))
+    }) {
+        let restoration = if reinitialize {
+            "*slot = mut *owner"
+        } else {
+            ""
+        };
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+use core::ptr
+fn load(slot: *mut u256) -> mut u256 {{ *slot }}
+fn forward(slot: *mut u256) -> mut u256 {{ load(slot) }}
+fn inspect() {{
+    let owner = ptr::alloc<u256>()
+    let source = ptr::alloc<u256>()
+    let slot = ptr::alloc<mut u256>()
+    *source = 0
+    *slot = mut *owner
+    ptr::copy_raw(ptr::byte_ptr(slot), source: ptr::byte_ptr(source), len: 32)
+    {restoration}
+    let borrowed = {access}
+    borrowed = 1
+}}
+"#
+        ));
+        if reinitialize {
+            assert!(diagnostics.is_empty(), "{diagnostics}");
+        } else {
+            assert!(
+                diagnostics.contains("invalidated by a raw write"),
+                "{diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
+fn overlapping_same_shape_stores_cannot_preserve_native_authority() {
+    for overwrite in [
+        "*shifted = mut *second",
+        "store(slot: shifted)",
+        "forward(slot: shifted)",
+    ] {
+        for restore in [false, true] {
+            let restoration = if restore { "*slot = mut *first" } else { "" };
+            let source = format!(
+                r#"
+use core::ptr
+fn store(slot: *mut u256) {{
+    let source = ptr::alloc<u256>()
+    *source = 2
+    *slot = mut *source
+}}
+fn forward(slot: *mut u256) {{ store(slot) }}
+fn inspect() {{
+    let first = ptr::alloc<u256>()
+    let second = ptr::alloc<u256>()
+    *first = 1
+    *second = 2
+    let slot = ptr::alloc<mut u256>()
+    *slot = mut *first
+    let shifted = ptr::cast<u8, mut u256>(ptr::offset_bytes(ptr::byte_ptr(slot), 1))
+    {overwrite}
+    {restoration}
+    let restored = *slot
+    restored = 3
+}}
+"#
+            );
+            let diagnostics = checked_borrow_diags(&source);
+            if restore {
+                assert!(diagnostics.is_empty(), "{overwrite}: {diagnostics}");
+            } else {
+                assert!(
+                    diagnostics.contains("invalidated by a raw write")
+                        && diagnostics.contains("let restored = *slot"),
+                    "{overwrite}: {diagnostics}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn ambiguous_writes_do_not_reinitialize_moved_owners() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+fn bad(first: *Item, second: *Item, flag: bool) {
+    let old = *first
+    let destination = if flag { first } else { second }
+    *destination = Item { n: 7 }
+    let reused = *first
+    consume(old)
+    consume(reused)
+}
+"#,
+    );
+    assert!(
+        diagnostics.contains("move conflict in `fn bad`"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn exact_and_dynamic_index_writes_have_distinct_reinitialization_guarantees() {
+    for destination in ["0", "index"] {
+        let source = format!(
+            r#"
+struct Item {{ n: u256 }}
+fn consume(_ item: own Item) {{}}
+fn inspect(array: *[Item; 2], index: usize) {{
+    let old = (*array)[0]
+    (*array)[{destination}] = Item {{ n: 7 }}
+    let reused = (*array)[0]
+    consume(old)
+    consume(reused)
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        if destination == "0" {
+            assert!(diagnostics.is_empty(), "{diagnostics}");
+        } else {
+            assert!(
+                diagnostics.contains("move conflict in `fn inspect`"),
+                "{diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_field_write_cannot_reinitialize_a_moved_whole_aggregate() {
+    for replacement in [
+        "(*pointer).left = Item { n: 7 }",
+        "*pointer = Pair { left: Item { n: 7 }, right: Item { n: 8 } }",
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ n: u256 }}
+struct Pair {{ left: Item, right: Item }}
+fn consume(_ pair: own Pair) {{}}
+fn inspect(pointer: *Pair) {{
+    let old = *pointer
+    {replacement}
+    let reused = *pointer
+    consume(old)
+    consume(reused)
+}}
+"#
+        ));
+        if replacement.starts_with("(*pointer).left") {
+            assert!(
+                diagnostics.contains("move conflict in `fn inspect`"),
+                "{diagnostics}"
+            );
+        } else {
+            assert!(diagnostics.is_empty(), "{diagnostics}");
+        }
+    }
+}
+
+#[test]
+fn call_availability_preserves_move_then_reinitialize_order() {
+    for replace in ["replace(pointer)", "forward(pointer)"] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ n: u256 }}
+fn consume(_ item: own Item) {{}}
+fn replace(pointer: *Item) -> Item {{
+    let old = *pointer
+    *pointer = Item {{ n: 7 }}
+    old
+}}
+fn forward(pointer: *Item) -> Item {{ replace(pointer) }}
+fn valid(pointer: *Item) {{
+    let previous = {replace}
+    let fresh = *pointer
+    consume(previous)
+    consume(fresh)
+}}
+"#
+        ));
+        assert!(diagnostics.is_empty(), "{replace}: {diagnostics}");
+    }
+}
+
+#[test]
+fn call_initialization_discharges_incoming_availability_requirements() {
+    for action in [
+        "initialize(pointer)\nlet fresh = *pointer",
+        "let fresh = initialize_then_take(pointer)",
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ n: u256 }}
+fn consume(_ item: own Item) {{}}
+fn initialize(pointer: *Item) {{ *pointer = Item {{ n: 7 }} }}
+fn initialize_then_take(pointer: *Item) -> Item {{
+    *pointer = Item {{ n: 7 }}
+    *pointer
+}}
+fn valid(pointer: *Item) {{
+    let previous = *pointer
+    {action}
+    consume(previous)
+    consume(fresh)
+}}
+"#
+        ));
+        assert!(diagnostics.is_empty(), "{action}: {diagnostics}");
+    }
+}
+
+#[test]
+fn call_reinitialization_requires_every_normal_return_path() {
+    for (body, initialized) in [
+        (
+            "if flag { *pointer = Item { n: 1 } } else { *pointer = Item { n: 2 } }",
+            true,
+        ),
+        ("if flag { *pointer = Item { n: 1 } }", false),
+        (
+            "if flag { *pointer = Item { n: 1 }\nreturn\n}\n*pointer = Item { n: 2 }",
+            true,
+        ),
+        ("if flag { return }\n*pointer = Item { n: 2 }", false),
+        ("while flag { *pointer = Item { n: 1 } }", false),
+        (
+            "while flag { *pointer = Item { n: 1 } }\n*pointer = Item { n: 2 }",
+            true,
+        ),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ n: u256 }}
+fn consume(_ item: own Item) {{}}
+fn initialize(pointer: *Item, flag: bool) {{ {body} }}
+fn forward(pointer: *Item, flag: bool) {{ initialize(pointer, flag) }}
+fn inspect(pointer: *Item, flag: bool) {{
+    let old = *pointer
+    forward(pointer, flag)
+    let fresh = *pointer
+    consume(old)
+    consume(fresh)
+}}
+"#
+        ));
+        if initialized {
+            assert!(diagnostics.is_empty(), "{body}: {diagnostics}");
+        } else {
+            assert!(
+                diagnostics.contains("move conflict in `fn inspect`"),
+                "{body}: {diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
+fn recursive_availability_keeps_base_case_initialization_and_consumption() {
+    for (body, available) in [
+        ("*pointer = Item { n: 7 }", true),
+        ("consume(*pointer)", false),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ n: u256 }}
+fn consume(_ item: own Item) {{}}
+fn recurse(pointer: *Item, again: bool) {{
+    if again {{ recurse(pointer, again: false) }} else {{ {body} }}
+}}
+fn inspect(pointer: *Item) {{
+    recurse(pointer, again: true)
+    let remaining = *pointer
+    consume(remaining)
+}}
+"#
+        ));
+        if available {
+            assert!(diagnostics.is_empty(), "{diagnostics}");
+        } else {
+            assert!(
+                diagnostics.contains("move conflict in `fn inspect`"),
+                "{diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
+fn initialization_before_consumption_leaves_the_caller_unavailable() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+fn initialize_then_take(pointer: *Item) -> Item {
+    *pointer = Item { n: 7 }
+    *pointer
+}
+fn forward(pointer: *Item) -> Item { initialize_then_take(pointer) }
+fn bad(pointer: *Item) {
+    let first = forward(pointer)
+    let second = *pointer
+    consume(first)
+    consume(second)
+}
+"#,
+    );
+    assert!(
+        diagnostics.contains("move conflict in `fn bad`"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn restored_call_moves_still_conflict_with_shared_loans() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+struct Item { n: u256 }
+fn replace(pointer: *Item) -> Item {
+    let old = *pointer
+    *pointer = Item { n: 7 }
+    old
+}
+fn read(_ item: ref Item) -> u256 { item.n }
+fn bad(pointer: *Item) -> u256 {
+    let held = ref *pointer
+    let old = replace(pointer)
+    read(held) + old.n
+}
+"#,
+    );
+    assert!(
+        diagnostics.contains("borrow conflict in `fn bad`"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn call_availability_is_independent_of_the_owned_value_shape() {
+    for (definition, replacement) in [
+        ("struct Item { value: u256 }", "Item { value: 7 }"),
+        (
+            "struct Item { value: (u256, u256) }",
+            "Item { value: (7, 8) }",
+        ),
+        ("struct Item { value: [u256; 2] }", "Item { value: [7, 8] }"),
+        (
+            "struct Item { value: *u256 }",
+            "Item { value: core::ptr::alloc<u256>() }",
+        ),
+        ("enum Item { Value(u256), Empty }", "Item::Value(7)"),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+{definition}
+fn consume(_ item: own Item) {{}}
+fn replace(pointer: *Item) -> Item {{
+    let old = *pointer
+    *pointer = {replacement}
+    old
+}}
+fn forward(pointer: *Item) -> Item {{ replace(pointer) }}
+fn valid(pointer: *Item) {{
+    let old = forward(pointer)
+    let fresh = *pointer
+    consume(old)
+    consume(fresh)
+}}
+"#
+        ));
+        assert!(diagnostics.is_empty(), "{definition}: {diagnostics}");
+    }
+}
+
+#[test]
+fn opaque_pointer_operations_conservatively_consume_noncopy_pointees() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+struct Item { n: u256 }
+trait Operation { fn apply(pointer: *Item) }
+fn consume(_ item: own Item) {}
+fn bad<T: Operation>(pointer: *Item) {
+    T::apply(pointer)
+    let reused = *pointer
+    consume(reused)
+}
+"#,
+    );
+    assert!(
+        diagnostics.contains("move conflict in `fn bad`"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn availability_summaries_do_not_depend_on_diagnostic_queries() {
+    let source = r#"
+struct Item { n: u256 }
+fn replace(pointer: *Item) -> Item {
+    let old = *pointer
+    *pointer = Item { n: 7 }
+    old
+}
+fn initialize_then_take(pointer: *Item) -> Item {
+    *pointer = Item { n: 7 }
+    *pointer
+}
+fn forward(pointer: *Item) -> Item { replace(pointer) }
+"#;
+    for function in ["replace", "forward", "initialize_then_take"] {
+        with_borrow_summary(source, function, |_, summary| {
+            assert!(
+                summary
+                    .accesses
+                    .iter()
+                    .any(|access| access.kind == MemoryAccessKind::Move)
+            );
+            assert!(!summary.availability.reinitialized.is_empty());
+            if function == "initialize_then_take" {
+                assert!(!summary.availability.unavailable.is_empty());
+                assert!(
+                    summary
+                        .availability
+                        .incoming
+                        .iter()
+                        .all(|requirement| requirement.kind == MemoryAccessKind::Write)
+                );
+            } else {
+                assert!(summary.availability.unavailable.is_empty());
+                assert!(
+                    summary
+                        .availability
+                        .incoming
+                        .iter()
+                        .any(|requirement| requirement.kind == MemoryAccessKind::Read)
+                );
+            }
+        });
+    }
+}
+
+#[test]
+fn borrowed_aggregate_availability_survives_forwarding() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::ptr
+struct Item { value: ref u256 }
+fn consume(_ item: own Item) {}
+fn replace(pointer: *Item, owner: ref u256) -> Item {
+    let old = *pointer
+    *pointer = Item { value: owner }
+    old
+}
+fn forward(pointer: *Item, owner: ref u256) -> Item { replace(pointer, owner) }
+fn valid() {
+    let owner = ptr::alloc<u256>()
+    let pointer = ptr::alloc<Item>()
+    *pointer = Item { value: ref *owner }
+    let old = forward(pointer, owner: ref *owner)
+    let fresh = *pointer
+    consume(old)
+    consume(fresh)
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn typed_call_restoration_precedes_native_contents_requirements() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::ptr
+fn restore(slot: *mut u256) -> mut u256 {
+    let owner = ptr::alloc<u256>()
+    *owner = 0
+    *slot = mut *owner
+    *slot
+}
+fn forward(slot: *mut u256) -> mut u256 { restore(slot) }
+fn valid() {
+    let owner = ptr::alloc<u256>()
+    let source = ptr::alloc<u256>()
+    let slot = ptr::alloc<mut u256>()
+    *source = 0
+    *slot = mut *owner
+    ptr::copy_raw(ptr::byte_ptr(slot), source: ptr::byte_ptr(source), len: 32)
+    let borrowed = forward(slot)
+    borrowed = 1
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn native_validity_obligations_distinguish_disjoint_and_aliased_callers() {
+    for call in [
+        "clobber(slot, destination)",
+        "forward(slot, destination)",
+        "recursive(slot, destination, again: true)",
+    ] {
+        for aliases in [false, true] {
+            let destination = if aliases {
+                "ptr::byte_ptr(slot)"
+            } else {
+                "ptr::alloc_bytes(32)"
+            };
+            let diagnostics = checked_borrow_diags(&format!(
+                r#"
+use core::ptr
+fn read(_ value: ref u256) -> u256 {{ value }}
+fn clobber(slot: *ref u256, destination: *u8) -> ref u256 {{
+    ptr::zero_bytes(destination, 32)
+    *slot
+}}
+fn forward(slot: *ref u256, destination: *u8) -> ref u256 {{ clobber(slot, destination) }}
+fn recursive(slot: *ref u256, destination: *u8, again: bool) -> ref u256 {{
+    if again {{ return recursive(slot, destination, again: false) }}
+    clobber(slot, destination)
+}}
+fn check() -> u256 {{
+    let owner = ptr::alloc<u256>()
+    *owner = 1
+    let slot = ptr::alloc<ref u256>()
+    *slot = ref *owner
+    let destination = {destination}
+    let borrowed = {call}
+    read(borrowed)
+}}
+"#
+            ));
+            if aliases {
+                assert!(
+                    diagnostics.contains("borrow conflict in `fn check`"),
+                    "{call}: {diagnostics}"
+                );
+            } else {
+                assert!(diagnostics.is_empty(), "{call}: {diagnostics}");
+            }
+        }
+    }
+}
+
+#[test]
+fn write_requirements_cannot_hide_partial_writes_behind_whole_writes() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+fn field_then_whole(field: *Item, whole: *Item) {
+    (*field).n = 1
+    *whole = Item { n: 7 }
+}
+fn bad(pointer: *Item) {
+    let old = *pointer
+    field_then_whole(field: pointer, whole: pointer)
+    consume(old)
+}
+"#,
+    );
+    assert!(
+        diagnostics.contains("move conflict in `fn bad`"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn reinitializing_one_summarized_move_preserves_unrelated_moves() {
+    for field in ["left", "right"] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ n: u256 }}
+struct Pair {{ left: Item, right: Item }}
+fn consume(_ item: own Item) {{}}
+fn take_both(pointer: *Pair) {{
+    consume((*pointer).left)
+    consume((*pointer).right)
+}}
+fn initialize_left(pointer: *Pair) {{ (*pointer).left = Item {{ n: 7 }} }}
+fn inspect(pointer: *Pair) {{
+    take_both(pointer)
+    initialize_left(pointer)
+    let fresh = (*pointer).{field}
+    consume(fresh)
+}}
+"#
+        ));
+        if field == "left" {
+            assert!(diagnostics.is_empty(), "{diagnostics}");
+        } else {
+            assert!(
+                diagnostics.contains("move conflict in `fn inspect`"),
+                "{diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
+fn caller_enum_guards_use_actual_occurrences_in_parameterless_summaries() {
+    with_borrow_summary(
+        r#"
+extern { fn pointer() -> *u256 }
+enum Maybe { Empty, Full(*u256) }
+fn read(value: own Maybe) -> u256 {
+    match value {
+        Maybe::Empty => 0,
+        Maybe::Full(pointer) => *pointer,
+    }
+}
+fn root() -> u256 { read(value: Maybe::Full(pointer())) }
+"#,
+        "root",
+        |_, summary| {
+            assert!(!summary.availability.incoming.is_empty());
+            assert!(
+                summary
+                    .availability
+                    .incoming
+                    .iter()
+                    .flat_map(|requirement| requirement.region.clauses())
+                    .flat_map(|clause| clause.guard.occurrences())
+                    .all(|occurrence| !matches!(occurrence, ValueOccurrence::Argument(_)))
+            );
+        },
+    );
+}
+
+#[test]
+fn packed_encoding_fixture_does_not_report_semantic_borrow_errors() {
+    let diagnostics = checked_borrow_diags(include_str!(
+        "../../fe/tests/fixtures/fe_test/packed_encoding.fe"
+    ));
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn raw_call_preserves_fresh_return_buffer_pointer() {
+    let source = r#"
+use core::ptr::{MemBuffer, MemSpan}
+use std::evm::{Address, Call}
+fn returned() -> *u8 uses (call: mut Call) {
+    let mut ret = MemBuffer::empty()
+    let _ = call.raw_call(addr: Address { inner: 0 }, gas: 0, value: 0, args: MemSpan::empty(), ret: mut ret)
+    ret.ptr()
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+    with_borrow_summary(source, "returned", |db, summary| {
+        let values = ValueInterner::new(db, ValueLimits::default());
+        let leaves = values.leaves(&summary.result, ValueOccurrence::Summary);
+        assert!(!leaves.is_empty());
+        for leaf in leaves {
+            assert!(
+                matches!(leaf.payload.source.origin, ExternalOrigin::Allocation(_)),
+                "{:?}",
+                leaf.payload
+            );
+        }
+    });
+}
+
+#[test]
+fn scalar_field_writes_preserve_buffer_pointer_provenance() {
+    let source = r#"
+use std::evm::{Packed, RawMem}
+fn filled() -> Packed uses (mem: mut RawMem) {
+    let mut value = Packed::with_capacity(bytes: 64)
+    value.u256(1)
+    value.u256(2)
+    value
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+    with_borrow_summary(source, "filled", |db, summary| {
+        let values = ValueInterner::new(db, ValueLimits::default());
+        let leaves = values.leaves(&summary.result, ValueOccurrence::Summary);
+        assert!(!leaves.is_empty());
+        assert!(
+            leaves
+                .iter()
+                .all(|leaf| matches!(leaf.payload.source.origin, ExternalOrigin::Allocation(_)))
+        );
+    });
 }
 
 #[test]
@@ -2904,7 +3843,7 @@ fn mixed_returned_borrow_provenance_poison_normalization() {
     let SemanticNormalizationFailure::InternalFailure(err) = err else {
         panic!("provider provenance conflict must be an internal normalization failure")
     };
-    assert_eq!(err.kind, SemanticBorrowDiagKind::ProviderProvenanceConflict);
+    assert_eq!(err.kind, SemanticDiagnosticKind::ProviderProvenanceConflict);
     assert_eq!(
         err.primary.message,
         "effect argument may come from multiple address spaces: memory, storage"
@@ -6731,6 +7670,8 @@ fn boundary_effect_access_preserves_all_address_spaces() {
             space,
             "u256",
             r#"
+use core::Copy
+impl Copy for Ptr {}
 fn read() -> u256 uses (value: u256) { value }
 fn write() uses (value: mut u256) { value = 1 }
 fn transport(_ value: Ptr) -> Ptr { value }
@@ -6739,6 +7680,7 @@ fn allowed() -> Ptr {
     let result = with (ptr) { read() }
     transport(ptr)
 }
+
 fn access() {
     let ptr = Ptr { addr: 32 }
     with (ptr) { write() }
@@ -6756,6 +7698,28 @@ fn access() {
             assert!(diags.is_empty(), "{space}: {diags}");
         }
     }
+}
+
+#[test]
+fn raw_provider_access_may_alias_a_moved_local_representation() {
+    let source = boundary_provider_source(
+        "Memory",
+        "u256",
+        r#"
+fn read() -> u256 uses (value: u256) { value }
+fn transport(_ value: Ptr) -> Ptr { value }
+fn conservative() -> Ptr {
+    let ptr = Ptr { addr: 32 }
+    let result = with (ptr) { read() }
+    transport(ptr)
+}
+"#,
+    );
+    let diagnostics = checked_trusted_borrow_diags(&source);
+    assert!(
+        diagnostics.contains("move conflict in `fn conservative`"),
+        "{diagnostics}"
+    );
 }
 
 #[test]

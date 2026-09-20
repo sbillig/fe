@@ -5435,7 +5435,7 @@ impl<'db> TyChecker<'db> {
     /// Returns `true`` if the expression can be used as an left hand side of an
     /// assignment.
     /// This method doesn't take mutability into account.
-    fn is_assignable_expr(&self, expr: ExprId) -> bool {
+    pub(super) fn is_assignable_expr(&self, expr: ExprId) -> bool {
         let Partial::Present(expr_data) = expr.data(self.db, self.body()) else {
             return false;
         };

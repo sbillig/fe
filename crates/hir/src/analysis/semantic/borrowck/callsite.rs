@@ -1,4 +1,7 @@
 use crate::analysis::semantic::capability::{region::RegionSet, state::BorrowState};
+use crate::analysis::semantic::diagnostics::{
+    SemanticDiagnostic, SemanticDiagnosticKind, SemanticNormalizationFailure, operand_origin,
+};
 
 use crate::analysis::{
     HirAnalysisDb,
@@ -16,11 +19,7 @@ use crate::analysis::{
     },
 };
 
-use super::{
-    diagnostics::operand_origin,
-    ir::{SemanticBorrowDiagnostic, SemanticNormalizationFailure},
-    solver::Borrowck,
-};
+use super::solver::Borrowck;
 
 pub(crate) fn provisional_call_site_provider_refinements<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -50,7 +49,7 @@ struct CallSiteProviderRefiner<'db> {
 }
 
 impl<'db> CallSiteProviderRefiner<'db> {
-    fn refine(&self) -> Result<Vec<CallSiteProviderRefinement>, SemanticBorrowDiagnostic<'db>> {
+    fn refine(&self) -> Result<Vec<CallSiteProviderRefinement>, SemanticDiagnostic<'db>> {
         let mut out = Vec::new();
         for (bb_idx, block) in self.borrowck.body.blocks.iter().enumerate() {
             for (statement, state) in block.statements.iter().zip(&self.borrowck.before[bb_idx]) {
@@ -65,7 +64,7 @@ impl<'db> CallSiteProviderRefiner<'db> {
         state: &BorrowState<'db>,
         statement: &NStatement<'db>,
         out: &mut Vec<CallSiteProviderRefinement>,
-    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<(), SemanticDiagnostic<'db>> {
         let NStatementKind::Define {
             expr:
                 NExpr::Call {
@@ -103,7 +102,7 @@ impl<'db> CallSiteProviderRefiner<'db> {
         state: &BorrowState<'db>,
         origin: SemOrigin<'db>,
         arg: &NEffectArg<'db>,
-    ) -> Result<Option<ProviderAddressSpace>, SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<Option<ProviderAddressSpace>, SemanticDiagnostic<'db>> {
         let targets = match &arg.arg {
             NEffectArgValue::Place(place) => self.borrowck.resolve_region(state, place),
             NEffectArgValue::Value(value) => self.value_targets(state, *value),
@@ -124,7 +123,7 @@ impl<'db> CallSiteProviderRefiner<'db> {
         &self,
         targets: &RegionSet<'db>,
         origin: SemOrigin<'db>,
-    ) -> Result<Option<ProviderAddressSpace>, SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<Option<ProviderAddressSpace>, SemanticDiagnostic<'db>> {
         let mut spaces = Vec::new();
         let mut symbolic = false;
         for target in targets.clauses() {
@@ -144,7 +143,7 @@ impl<'db> CallSiteProviderRefiner<'db> {
         }
         spaces.sort_by_key(|space| address_space_rank(*space));
         Err(self.borrowck.diag(
-            super::ir::SemanticBorrowDiagKind::ProviderProvenanceConflict,
+            SemanticDiagnosticKind::ProviderProvenanceConflict,
             origin,
             format!(
                 "effect argument may come from multiple address spaces: {}",

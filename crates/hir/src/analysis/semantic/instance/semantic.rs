@@ -7,7 +7,7 @@ use crate::{
         semantic::{
             CallSiteId, PlaceProvenance, SBlockId, SExpr, SStmtKind, STerminatorKind, SemanticBody,
             SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
-            borrowck::SemanticNormalizationFailure,
+            diagnostics::SemanticNormalizationFailure,
             effect_param_site,
             lower::{BindingRoleMode, lower_to_smir, lower_to_smir_with_call_sites},
             owner_effect_bindings, verify_semantic_body,
@@ -155,7 +155,7 @@ pub struct SemanticEffectEnvInstantiationError<'db> {
 pub(crate) enum SemanticBodyAdmissionError<'db> {
     BlockedByUpstreamDiagnostics(Box<[crate::analysis::ty::ty_check::SmirLoweringIssue]>),
     IncompleteLoweringPlan(Box<[crate::analysis::ty::ty_check::SmirLoweringIssue]>),
-    CallSiteFinalization(crate::analysis::semantic::BorrowDiagnosticId<'db>),
+    CallSiteFinalization(crate::analysis::semantic::SemanticDiagnosticId<'db>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
@@ -190,7 +190,7 @@ pub(crate) struct CallSiteProviderRefinement {
 struct CallSiteFinalizationData<'db> {
     call_sites: Vec<Option<CallSiteLowering<'db>>>,
     for_loop_call_sites: Vec<Option<ForLoopCallSites<'db>>>,
-    diagnostic: Option<crate::analysis::semantic::BorrowDiagnosticId<'db>>,
+    diagnostic: Option<crate::analysis::semantic::SemanticDiagnosticId<'db>>,
 }
 
 #[derive(Debug, Clone)]
@@ -441,7 +441,9 @@ fn final_call_site_data<'db>(
                 return CallSiteFinalizationData {
                     call_sites,
                     for_loop_call_sites,
-                    diagnostic: Some(crate::analysis::semantic::BorrowDiagnosticId::new(db, diag)),
+                    diagnostic: Some(crate::analysis::semantic::SemanticDiagnosticId::new(
+                        db, diag,
+                    )),
                 };
             }
         }
@@ -667,7 +669,7 @@ impl<'db> SemanticInstance<'db> {
     pub fn call_site_finalization_diagnostic(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> Option<crate::analysis::semantic::BorrowDiagnosticId<'db>> {
+    ) -> Option<crate::analysis::semantic::SemanticDiagnosticId<'db>> {
         final_call_site_data(db, self).diagnostic
     }
 

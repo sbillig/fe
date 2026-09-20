@@ -8,6 +8,7 @@ pub mod guard;
 pub mod handle;
 pub mod index;
 pub mod loan;
+pub mod opaque;
 pub mod path;
 pub mod region;
 pub mod repack;

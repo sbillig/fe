@@ -1,7 +1,9 @@
+//! Shared diagnostics and admission failures for semantic consumers.
 use common::diagnostics::{
     CompleteDiagnostic, DiagnosticPass, GlobalErrorCode, LabelStyle, Severity, Span, SubDiagnostic,
 };
 use cranelift_entity::EntityRef;
+use salsa::Update;
 
 use crate::{
     analysis::{
@@ -10,35 +12,33 @@ use crate::{
         diagnostics::SpannedHirAnalysisDb,
         semantic::{
             SLocalId, SemOrigin, SemanticInstance,
-            normalized::{NOperand, NormalizedBody},
+            normalized::{
+                NOperand, NormalizeError, NormalizedBody, NormalizedBodyVerifyError,
+                NormalizedLayoutPlanVerifyError,
+            },
         },
-        ty::ty_check::BodyOwner,
+        ty::ty_check::{BodyOwner, SmirLoweringIssue},
     },
     hir_def::{Body, Partial},
     span::LazySpan,
 };
 
-use super::ir::{
-    BorrowDiagnosticId, SemanticBorrowDiagKind, SemanticBorrowDiagnostic,
-    SemanticBorrowDiagnosticLabel, SemanticBorrowDiagnosticSpan,
-};
-
-pub(super) fn operand_origin<'db>(operand: NOperand, fallback: SemOrigin<'db>) -> SemOrigin<'db> {
+pub(crate) fn operand_origin<'db>(operand: NOperand, fallback: SemOrigin<'db>) -> SemOrigin<'db> {
     operand.origin.map_or(fallback, SemOrigin::Expr)
 }
 
-pub(super) fn normalized_body_internal_diag<'db>(
+pub(crate) fn normalized_body_internal_diag<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     body: &NormalizedBody<'db>,
     origin: SemOrigin<'db>,
     message: String,
-) -> SemanticBorrowDiagnostic<'db> {
-    SemanticBorrowDiagnostic::new(
+) -> SemanticDiagnostic<'db> {
+    SemanticDiagnostic::new(
         instance,
-        SemanticBorrowDiagKind::Internal,
+        SemanticDiagnosticKind::Internal,
         message,
-        SemanticBorrowDiagnosticSpan::OriginWithTemplateFallback {
+        SemanticDiagnosticSpan::OriginWithTemplateFallback {
             owner: instance.key(db).owner(db),
             template_owner: body.template_owner,
             origin,
@@ -49,18 +49,18 @@ pub(super) fn normalized_body_internal_diag<'db>(
 pub(crate) fn smir_lowering_admission_diag<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    causes: &[crate::analysis::ty::ty_check::SmirLoweringIssue],
-) -> SemanticBorrowDiagnostic<'db> {
+    causes: &[SmirLoweringIssue],
+) -> SemanticDiagnostic<'db> {
     let owner = instance.key(db).owner(db);
-    SemanticBorrowDiagnostic::new(
+    SemanticDiagnostic::new(
         instance,
-        SemanticBorrowDiagKind::Internal,
+        SemanticDiagnosticKind::Internal,
         format!(
             "semantic body has {} unresolved lowering plan entr{} despite valid typed input",
             causes.len(),
             if causes.len() == 1 { "y" } else { "ies" },
         ),
-        SemanticBorrowDiagnosticSpan::Origin {
+        SemanticDiagnosticSpan::Origin {
             owner,
             origin: SemOrigin::Body(owner),
         },
@@ -70,10 +70,8 @@ pub(crate) fn smir_lowering_admission_diag<'db>(
 pub(crate) fn normalized_body_error_to_diag<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    error: crate::analysis::semantic::normalized::NormalizeError<'db>,
-) -> SemanticBorrowDiagnostic<'db> {
-    use crate::analysis::semantic::normalized::NormalizeError;
-
+    error: NormalizeError<'db>,
+) -> SemanticDiagnostic<'db> {
     let owner = instance.key(db).owner(db);
     let (message, span) = match error {
         NormalizeError::MissingValue(local) => (
@@ -81,18 +79,18 @@ pub(crate) fn normalized_body_error_to_diag<'db>(
                 "normalized body is missing a value for raw local `%{}`",
                 local.index()
             ),
-            SemanticBorrowDiagnosticSpan::LocalSourceOrBody { instance, local },
+            SemanticDiagnosticSpan::LocalSourceOrBody { instance, local },
         ),
         NormalizeError::MissingRoot(local) => (
             format!(
                 "normalized body is missing a root for raw local `%{}`",
                 local.index()
             ),
-            SemanticBorrowDiagnosticSpan::LocalSourceOrBody { instance, local },
+            SemanticDiagnosticSpan::LocalSourceOrBody { instance, local },
         ),
         NormalizeError::MissingProviderAddressSpace(provider) => (
             format!("normalized provider has no address space: {provider:?}"),
-            SemanticBorrowDiagnosticSpan::Origin {
+            SemanticDiagnosticSpan::Origin {
                 owner,
                 origin: SemOrigin::Body(owner),
             },
@@ -102,21 +100,21 @@ pub(crate) fn normalized_body_error_to_diag<'db>(
                 "normalized handle has no resolved origin contract: {}",
                 ty.pretty_print(db)
             ),
-            SemanticBorrowDiagnosticSpan::Origin {
+            SemanticDiagnosticSpan::Origin {
                 owner,
                 origin: SemOrigin::Body(owner),
             },
         ),
         NormalizeError::InvalidProjection => (
             "normalized body contains an invalid projection".to_string(),
-            SemanticBorrowDiagnosticSpan::Origin {
+            SemanticDiagnosticSpan::Origin {
                 owner,
                 origin: SemOrigin::Body(owner),
             },
         ),
         NormalizeError::UnsupportedPlaceProjection => (
             "normalized body contains a non-data place projection".to_string(),
-            SemanticBorrowDiagnosticSpan::Origin {
+            SemanticDiagnosticSpan::Origin {
                 owner,
                 origin: SemOrigin::Body(owner),
             },
@@ -127,33 +125,33 @@ pub(crate) fn normalized_body_error_to_diag<'db>(
                 from.pretty_print(db),
                 to.pretty_print(db),
             ),
-            SemanticBorrowDiagnosticSpan::Origin {
+            SemanticDiagnosticSpan::Origin {
                 owner,
                 origin: SemOrigin::Body(owner),
             },
         ),
         NormalizeError::InvalidControlFlow => (
             "normalized body contains invalid control flow".to_string(),
-            SemanticBorrowDiagnosticSpan::Origin {
+            SemanticDiagnosticSpan::Origin {
                 owner,
                 origin: SemOrigin::Body(owner),
             },
         ),
     };
-    SemanticBorrowDiagnostic::new(instance, SemanticBorrowDiagKind::Internal, message, span)
+    SemanticDiagnostic::new(instance, SemanticDiagnosticKind::Internal, message, span)
 }
 
 pub(crate) fn normalized_body_verify_error_to_diag<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    error: crate::analysis::semantic::normalized::NormalizedBodyVerifyError,
-) -> SemanticBorrowDiagnostic<'db> {
+    error: NormalizedBodyVerifyError,
+) -> SemanticDiagnostic<'db> {
     let owner = instance.key(db).owner(db);
-    SemanticBorrowDiagnostic::new(
+    SemanticDiagnostic::new(
         instance,
-        SemanticBorrowDiagKind::Internal,
+        SemanticDiagnosticKind::Internal,
         format!("normalized body verification failed: {error:?}"),
-        SemanticBorrowDiagnosticSpan::Origin {
+        SemanticDiagnosticSpan::Origin {
             owner,
             origin: SemOrigin::Body(owner),
         },
@@ -163,62 +161,58 @@ pub(crate) fn normalized_body_verify_error_to_diag<'db>(
 pub(crate) fn normalized_layout_plan_verify_error_to_diag<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    error: crate::analysis::semantic::normalized::NormalizedLayoutPlanVerifyError,
-) -> SemanticBorrowDiagnostic<'db> {
+    error: NormalizedLayoutPlanVerifyError,
+) -> SemanticDiagnostic<'db> {
     let owner = instance.key(db).owner(db);
-    SemanticBorrowDiagnostic::new(
+    SemanticDiagnostic::new(
         instance,
-        SemanticBorrowDiagKind::Internal,
+        SemanticDiagnosticKind::Internal,
         format!("normalized layout plan verification failed: {error:?}"),
-        SemanticBorrowDiagnosticSpan::Origin {
+        SemanticDiagnosticSpan::Origin {
             owner,
             origin: SemOrigin::Body(owner),
         },
     )
 }
 
-impl<'db> SemanticBorrowDiagnostic<'db> {
-    pub(super) fn new(
+impl<'db> SemanticDiagnostic<'db> {
+    pub(crate) fn new(
         instance: SemanticInstance<'db>,
-        kind: SemanticBorrowDiagKind,
+        kind: SemanticDiagnosticKind,
         message: String,
-        span: SemanticBorrowDiagnosticSpan<'db>,
+        span: SemanticDiagnosticSpan<'db>,
     ) -> Self {
         Self {
             kind,
             instance,
-            primary: SemanticBorrowDiagnosticLabel { message, span },
+            primary: SemanticDiagnosticLabel { message, span },
             secondaries: Vec::new(),
         }
     }
 
-    pub(super) fn push_secondary(
-        &mut self,
-        message: String,
-        span: SemanticBorrowDiagnosticSpan<'db>,
-    ) {
+    pub(crate) fn push_secondary(&mut self, message: String, span: SemanticDiagnosticSpan<'db>) {
         self.secondaries
-            .push(SemanticBorrowDiagnosticLabel { message, span });
+            .push(SemanticDiagnosticLabel { message, span });
     }
 }
 
-impl DiagnosticVoucher for BorrowDiagnosticId<'_> {
+impl DiagnosticVoucher for SemanticDiagnosticId<'_> {
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         self.diag(db).to_complete(db)
     }
 }
 
-impl DiagnosticVoucher for SemanticBorrowDiagnostic<'_> {
+impl DiagnosticVoucher for SemanticDiagnostic<'_> {
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         let local_code = match self.kind {
-            SemanticBorrowDiagKind::BorrowConflict => 1,
-            SemanticBorrowDiagKind::MoveConflict => 2,
-            SemanticBorrowDiagKind::InvalidReturnBorrow => 3,
-            SemanticBorrowDiagKind::Internal => 4,
-            SemanticBorrowDiagKind::NoEscViolation => 5,
-            SemanticBorrowDiagKind::ProviderProvenanceConflict => 6,
-            SemanticBorrowDiagKind::TransportViolation => 7,
-            SemanticBorrowDiagKind::StorageViolation => 8,
+            SemanticDiagnosticKind::BorrowConflict => 1,
+            SemanticDiagnosticKind::MoveConflict => 2,
+            SemanticDiagnosticKind::InvalidReturnBorrow => 3,
+            SemanticDiagnosticKind::Internal => 4,
+            SemanticDiagnosticKind::NoEscViolation => 5,
+            SemanticDiagnosticKind::ProviderProvenanceConflict => 6,
+            SemanticDiagnosticKind::TransportViolation => 7,
+            SemanticDiagnosticKind::StorageViolation => 8,
         };
         CompleteDiagnostic::new(
             Severity::Error,
@@ -242,7 +236,7 @@ impl DiagnosticVoucher for SemanticBorrowDiagnostic<'_> {
     }
 }
 
-impl SemanticBorrowDiagKind {
+impl SemanticDiagnosticKind {
     fn header<'db>(self, db: &'db dyn HirAnalysisDb, instance: SemanticInstance<'db>) -> String {
         match self {
             Self::BorrowConflict => {
@@ -280,7 +274,7 @@ impl SemanticBorrowDiagKind {
     }
 }
 
-impl<'db> SemanticBorrowDiagnosticSpan<'db> {
+impl<'db> SemanticDiagnosticSpan<'db> {
     fn resolve(&self, db: &dyn SpannedHirAnalysisDb) -> Option<Span> {
         match *self {
             Self::Origin { owner, origin } => span_for_origin_from_body(db, owner.body(db), origin),
@@ -366,4 +360,80 @@ pub(crate) fn checker_name<'db>(
             }
         ),
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct SemanticDiagnostic<'db> {
+    pub kind: SemanticDiagnosticKind,
+    pub instance: SemanticInstance<'db>,
+    pub primary: SemanticDiagnosticLabel<'db>,
+    pub secondaries: Vec<SemanticDiagnosticLabel<'db>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct SemanticDiagnosticLabel<'db> {
+    pub message: String,
+    pub span: SemanticDiagnosticSpan<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SemanticDiagnosticSpan<'db> {
+    Origin {
+        owner: BodyOwner<'db>,
+        origin: SemOrigin<'db>,
+    },
+    OriginWithTemplateFallback {
+        owner: BodyOwner<'db>,
+        template_owner: BodyOwner<'db>,
+        origin: SemOrigin<'db>,
+    },
+    LocalSourceOrBody {
+        instance: SemanticInstance<'db>,
+        local: SLocalId,
+    },
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct SemanticDiagnosticId<'db> {
+    pub diag: SemanticDiagnostic<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct BlockedSemanticBody<'db> {
+    pub instance: SemanticInstance<'db>,
+    pub causes: Box<[SmirLoweringIssue]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SemanticNormalizationFailure<'db> {
+    Blocked(BlockedSemanticBody<'db>),
+    InternalFailure(SemanticDiagnostic<'db>),
+}
+
+impl<'db> SemanticNormalizationFailure<'db> {
+    pub fn diagnostic(&self) -> Option<&SemanticDiagnostic<'db>> {
+        match self {
+            Self::Blocked(_) => None,
+            Self::InternalFailure(diag) => Some(diag),
+        }
+    }
+}
+
+impl<'db> From<SemanticDiagnostic<'db>> for SemanticNormalizationFailure<'db> {
+    fn from(diag: SemanticDiagnostic<'db>) -> Self {
+        Self::InternalFailure(diag)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SemanticDiagnosticKind {
+    BorrowConflict,
+    MoveConflict,
+    InvalidReturnBorrow,
+    Internal,
+    NoEscViolation,
+    TransportViolation,
+    StorageViolation,
+    ProviderProvenanceConflict,
 }

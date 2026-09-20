@@ -1,13 +1,13 @@
 //! External referents retain every load-and-dereference transition.
 use std::collections::BTreeMap;
 
-use crate::analysis::HirAnalysisDb;
+use crate::analysis::{HirAnalysisDb, semantic::SemanticInstance, ty::ty_def::TyId};
 
 use super::{
     external::{ExternalOrigin, ExternalSource},
     guard::Guard,
     index::{BinderScope, IndexExpr, IndexSubst},
-    path::{RegionPath, StructuralPath},
+    path::{RegionPath, StructuralPath, project_referent_ty},
     region::{RegionRoot, SymbolicPlace, path_alias_guard},
     repack::{ReferentRepackId, ReferentViews, RepackPayload},
     semantics::CapabilityClass,
@@ -20,9 +20,28 @@ pub struct SourceExpr<'db> {
     pub source: ExternalSource<'db>,
     pub path: RegionPath<IndexExpr<'db>>,
     pub views: ReferentViews<'db>,
+    /// An opaque overwrite of a native capability establishes no loan authority.
+    pub invalidated: bool,
 }
 
 impl<'db> SourceExpr<'db> {
+    pub fn referent_ty(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        instance: SemanticInstance<'db>,
+    ) -> Option<TyId<'db>> {
+        let mut target =
+            project_referent_ty(db, instance, self.source.contract.ty, self.path.as_slice())?;
+        for view in self.views.iter() {
+            let suffix = self.path.as_slice().get(view.depth..)?;
+            if target != project_referent_ty(db, instance, view.repack.source_ty(db), suffix)? {
+                return None;
+            }
+            target = project_referent_ty(db, instance, view.repack.target_ty(db), suffix)?;
+        }
+        Some(target)
+    }
+
     pub fn from_place(place: &SymbolicPlace<'db>) -> Option<Self> {
         let RegionRoot::External(source) = &place.root else {
             return None;
@@ -34,12 +53,16 @@ impl<'db> SourceExpr<'db> {
             source: source.clone(),
             path: place.path.clone(),
             views: place.views.clone(),
+            invalidated: false,
         })
     }
 }
 
 impl<'db> IndexPayload<'db> for SourceExpr<'db> {
     fn accepts_class(&self, class: CapabilityClass) -> bool {
+        if self.invalidated {
+            return matches!(class, CapabilityClass::Borrow(_) | CapabilityClass::View);
+        }
         matches!(
             class,
             CapabilityClass::Borrow(_)
@@ -58,6 +81,7 @@ impl<'db> IndexPayload<'db> for SourceExpr<'db> {
             source: self.source.substitute(db, subst),
             path: self.path.substitute(subst),
             views: self.views.substitute(db, subst),
+            invalidated: self.invalidated,
         }
     }
 }

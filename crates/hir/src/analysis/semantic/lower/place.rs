@@ -4,7 +4,7 @@ use crate::{
         semantic::{FieldIndex, SExpr, SPlace, SemOrigin},
         ty::ty_def::TyId,
     },
-    hir_def::{ExprId, Partial},
+    hir_def::{Expr, ExprId, Partial, UnOp, expr::BinOp},
 };
 
 use super::body::SmirLowerCtxt;
@@ -15,9 +15,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     pub(super) fn lower_place(&mut self, expr: ExprId) -> SPlace<'db> {
-        if let Partial::Present(crate::hir_def::Expr::Un(inner, crate::hir_def::UnOp::Deref)) =
-            expr.data(self.db, self.body)
-        {
+        self.try_lower_place(expr)
+            .unwrap_or_else(|| panic!("expected place expression: {expr:?}"))
+    }
+
+    pub(super) fn try_lower_place(&mut self, expr: ExprId) -> Option<SPlace<'db>> {
+        if let Partial::Present(Expr::Un(inner, UnOp::Deref)) = expr.data(self.db, self.body) {
             let inner_ty = self.expr_ty(*inner);
             if let Some((_, ptr_ty)) = inner_ty.as_capability(self.db)
                 && ptr_ty.as_ptr(self.db).is_some()
@@ -29,16 +32,34 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     ptr_ty,
                     SExpr::ReadPlace { place },
                 );
-                return SPlace::deref(ptr);
+                return Some(SPlace::deref(ptr));
             }
             let ptr = self.lower_expr(*inner);
-            return SPlace::deref(ptr);
+            return Some(SPlace::deref(ptr));
         }
-        let place = self
-            .typed_body
-            .expr_place(expr)
-            .unwrap_or_else(|| panic!("expected place expression: {expr:?}"));
-        self.lower_place_data(place)
+        if let Some(place) = self.typed_body.expr_place(expr) {
+            return Some(self.lower_place_data(place));
+        }
+        // The frontend's binding-based Place cannot name a temporary pointer.
+        // Retain its dereference while selecting fields/elements, so an owned
+        // projection consumes the original storage rather than a read snapshot.
+        match expr.data(self.db, self.body) {
+            Partial::Present(Expr::Field(base, _)) => {
+                let mut place = self.try_lower_place(*base)?;
+                let field = self.typed_body.resolved_field_index(expr)?;
+                place.push_field(FieldIndex(field));
+                Some(place)
+            }
+            Partial::Present(Expr::Bin(base, index, BinOp::Index))
+                if self.typed_body.semantic_expr_lowering(expr).is_none() =>
+            {
+                let mut place = self.try_lower_place(*base)?;
+                let index = self.lower_expr(*index);
+                place.push_dynamic_index(index);
+                Some(place)
+            }
+            _ => None,
+        }
     }
 
     pub(super) fn lower_place_data(&mut self, source_place: &Place<'db>) -> SPlace<'db> {

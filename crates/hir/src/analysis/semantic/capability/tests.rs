@@ -4,9 +4,13 @@ use std::{collections::BTreeSet, iter::empty};
 use super::{
     external::{ExternalOrigin, ExternalSource, ReferentContract},
     guard::{ChoiceKey, Guard, ValueOccurrence},
-    handle::{AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef},
+    handle::{
+        AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
+        OpaqueWriteSite,
+    },
     index::{BinderScope, IndexError, IndexExpr, IndexNamespace, IndexSubst},
     loan::{CapabilityRef, LoanDef, LoanId, LoanRef},
+    opaque::OpaqueWrite,
     path::{Projection, RegionPath, StructuralPath},
     region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace},
     repack::ReferentRepackId,
@@ -1254,6 +1258,7 @@ fn structural_summary_mapping_retains_nested_sources_and_exact_array_overrides()
         vec![Guarded {
             guard: entry.guard.clone(),
             payload: SourceExpr {
+                invalidated: false,
                 views: Default::default(),
                 source: test_roots::input(
                     &db,
@@ -1282,6 +1287,7 @@ fn structural_summary_mapping_retains_nested_sources_and_exact_array_overrides()
         assert_eq!(
             leaves[0].payload,
             SourceExpr {
+                invalidated: false,
                 views: Default::default(),
                 source: test_roots::input(
                     &db,
@@ -1359,6 +1365,7 @@ fn contextual_payload_mapping_reports_variant_fields_and_nested_array_binders() 
         vec![Guarded {
             guard: entry.guard.clone(),
             payload: SourceExpr {
+                invalidated: false,
                 views: Default::default(),
                 source: test_roots::input(&db, InputSource::slot(0, slot.clone())),
                 path: RegionPath::default(),
@@ -1879,7 +1886,16 @@ fn inspect(
         )
         .unwrap();
     state
-        .write_region(&mut values, &converted.project(&selected), &new_handle)
+        .write_region(
+            OpaqueWrite {
+                site: OpaqueWriteSite::Summary(0),
+                scope: func.scope(),
+                assumptions: instance.assumptions(&db),
+            },
+            &mut values,
+            &converted.project(&selected),
+            &new_handle,
+        )
         .unwrap();
     let reread = state
         .read_region(
@@ -2011,7 +2027,16 @@ fn symbolic_lengths_do_not_hide_capability_structure() {
     let file = db.new_stand_alone(
         "symbolic_referents.fe".into(),
         r#"
-fn inspect<T, const N: usize>(_ bytes: own [u8; N], _ generic: own [T; N], _ text: own String<N>) {}
+struct Pointer<T> { pointer: *T }
+struct Inline<T> { value: T }
+fn inspect<T, const N: usize>(
+    _ bytes: own [u8; N],
+    _ generic: own [T; N],
+    _ text: own String<N>,
+    _ pointer: own Pointer<T>,
+    _ borrowed: ref T,
+    _ inline: own Inline<T>,
+) {}
 "#,
     );
     let (top_mod, _) = db.top_mod(file);
@@ -2034,5 +2059,5 @@ fn inspect<T, const N: usize>(_ bytes: own [u8; N], _ generic: own [T; N], _ tex
             .is_abstract(&db)
         })
         .collect();
-    assert_eq!(abstract_inputs, [false, true, false]);
+    assert_eq!(abstract_inputs, [false, true, false, false, false, true]);
 }

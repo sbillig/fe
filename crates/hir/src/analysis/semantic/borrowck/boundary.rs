@@ -1,4 +1,8 @@
 //! Transport, storage and escape policy over solved capability values.
+use crate::analysis::semantic::diagnostics::{
+    BlockedSemanticBody, SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
+    SemanticDiagnosticSpan, SemanticNormalizationFailure, operand_origin,
+};
 use crate::analysis::{
     HirAnalysisDb,
     diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
@@ -25,14 +29,10 @@ use crate::analysis::{
 use cranelift_entity::EntityRef;
 
 use super::{
+    access::effect_occurrence,
     check::SemanticAnalysisError,
-    diagnostics::operand_origin,
     events::CapabilityTraversal,
-    ir::{
-        BlockedSemanticBody, BorrowDiagnosticId, BoundaryRequirement, BoundaryRule,
-        SemanticBorrowCheckResult, SemanticBorrowDiagKind, SemanticBorrowDiagnostic,
-        SemanticBorrowDiagnosticSpan, SemanticNormalizationFailure,
-    },
+    ir::{BoundaryRequirement, BoundaryRule, SemanticBorrowCheckResult},
     solver::Borrowck,
     summary::CallInputs,
 };
@@ -61,13 +61,13 @@ pub(super) fn semantic_boundary_check_query<'db>(
             return SemanticBorrowCheckResult::Blocked(blocked);
         }
         Err(SemanticNormalizationFailure::InternalFailure(diag)) => {
-            return SemanticBorrowCheckResult::Err(BorrowDiagnosticId::new(db, diag));
+            return SemanticBorrowCheckResult::Err(SemanticDiagnosticId::new(db, diag));
         }
     };
     match check(borrowck) {
         Ok(Some(blocked)) => SemanticBorrowCheckResult::Blocked(blocked),
         Ok(None) => SemanticBorrowCheckResult::Ok,
-        Err(diag) => SemanticBorrowCheckResult::Err(BorrowDiagnosticId::new(db, diag)),
+        Err(diag) => SemanticBorrowCheckResult::Err(SemanticDiagnosticId::new(db, diag)),
     }
 }
 
@@ -93,7 +93,7 @@ pub(super) enum Boundary {
 
 fn check<'db>(
     mut borrowck: Borrowck<'db>,
-) -> Result<Option<BlockedSemanticBody<'db>>, SemanticBorrowDiagnostic<'db>> {
+) -> Result<Option<BlockedSemanticBody<'db>>, SemanticDiagnostic<'db>> {
     borrowck.solve()?;
     if let Some(blocked) = borrowck.blocked.clone() {
         return Ok(Some(blocked));
@@ -104,9 +104,9 @@ fn check<'db>(
     Ok(None)
 }
 
-pub(super) fn check_solved_body<'db>(
+pub(super) fn resolve_boundary_requirements<'db>(
     borrowck: &mut Borrowck<'db>,
-) -> Result<Vec<BoundaryRequirement<'db>>, SemanticBorrowDiagnostic<'db>> {
+) -> Result<Vec<BoundaryRequirement<'db>>, SemanticDiagnostic<'db>> {
     BoundaryCheck {
         borrowck,
         requirements: Vec::new(),
@@ -120,7 +120,7 @@ struct BoundaryCheck<'a, 'db> {
 }
 
 impl<'db> BoundaryCheck<'_, 'db> {
-    fn run(mut self) -> Result<Vec<BoundaryRequirement<'db>>, SemanticBorrowDiagnostic<'db>> {
+    fn run(mut self) -> Result<Vec<BoundaryRequirement<'db>>, SemanticDiagnostic<'db>> {
         for index in 0..self.borrowck.body.blocks.len() {
             let statements = self.borrowck.body.blocks[index].statements.clone();
             let states = self.borrowck.before[index].clone();
@@ -219,7 +219,7 @@ impl<'db> BoundaryCheck<'_, 'db> {
         rule: BoundaryRule<'db>,
         origin: SemOrigin<'db>,
         region: RegionSet<'db>,
-    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<(), SemanticDiagnostic<'db>> {
         self.check_requirement(BoundaryRequirement {
             rule,
             instance: self.borrowck.instance,
@@ -232,7 +232,7 @@ impl<'db> BoundaryCheck<'_, 'db> {
     fn check_requirement(
         &mut self,
         mut requirement: BoundaryRequirement<'db>,
-    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<(), SemanticDiagnostic<'db>> {
         if let Some(populated) = requirement.populated.take() {
             for clause in populated.clauses() {
                 // Source and destination families are independently quantified.
@@ -281,7 +281,7 @@ impl<'db> BoundaryCheck<'_, 'db> {
         &mut self,
         mut requirement: BoundaryRequirement<'db>,
         conditional: bool,
-    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<(), SemanticDiagnostic<'db>> {
         let mut unresolved = Vec::new();
         for clause in requirement.region.clauses() {
             let Some(space) = clause.payload.root.address_space().known() else {
@@ -291,7 +291,7 @@ impl<'db> BoundaryCheck<'_, 'db> {
             let violation = match requirement.rule {
                 BoundaryRule::MemoryTransport(ty) if space != ProviderAddressSpace::Memory => {
                     Some((
-                        SemanticBorrowDiagKind::TransportViolation,
+                        SemanticDiagnosticKind::TransportViolation,
                         format!(
                             "cannot pass `{}` from {} as function argument",
                             ty.pretty_print(self.borrowck.db),
@@ -306,7 +306,7 @@ impl<'db> BoundaryCheck<'_, 'db> {
                     ) =>
                 {
                     Some((
-                        SemanticBorrowDiagKind::StorageViolation,
+                        SemanticDiagnosticKind::StorageViolation,
                         format!("cannot write to {}", space.pretty()),
                     ))
                 }
@@ -317,7 +317,7 @@ impl<'db> BoundaryCheck<'_, 'db> {
                     ) =>
                 {
                     Some((
-                        SemanticBorrowDiagKind::NoEscViolation,
+                        SemanticDiagnosticKind::NoEscViolation,
                         format!(
                             "cannot store `{}` in {}",
                             ty.pretty_print(self.borrowck.db),
@@ -332,11 +332,11 @@ impl<'db> BoundaryCheck<'_, 'db> {
                     unresolved.push(clause.clone());
                     continue;
                 }
-                return Err(SemanticBorrowDiagnostic::new(
+                return Err(SemanticDiagnostic::new(
                     requirement.instance,
                     kind,
                     message,
-                    SemanticBorrowDiagnosticSpan::Origin {
+                    SemanticDiagnosticSpan::Origin {
                         owner: requirement
                             .instance
                             .key(self.borrowck.db)
@@ -361,7 +361,7 @@ impl<'db> BoundaryCheck<'_, 'db> {
         origin: SemOrigin<'db>,
         operand: NOperand,
         boundary: Boundary,
-    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<(), SemanticDiagnostic<'db>> {
         let capabilities = self.borrowck.capabilities(
             state,
             state.value(operand.value),
@@ -393,7 +393,7 @@ impl<'db> BoundaryCheck<'_, 'db> {
         state: &BorrowState<'db>,
         origin: SemOrigin<'db>,
         effect: &NEffectArg<'db>,
-    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<(), SemanticDiagnostic<'db>> {
         let boundary = Boundary::EffectArg {
             mode: effect.pass_mode,
             required_mut: effect.required_mut,
@@ -421,7 +421,7 @@ impl<'db> BoundaryCheck<'_, 'db> {
                         state,
                         &region,
                         shape,
-                        ValueOccurrence::Argument(effect.binding_idx),
+                        effect_occurrence(&effect.arg),
                         origin,
                     )?,
                     CapabilityTraversal::Held,
@@ -445,7 +445,7 @@ impl<'db> BoundaryCheck<'_, 'db> {
         for capability in self.borrowck.capabilities(
             state,
             &value,
-            ValueOccurrence::Argument(effect.binding_idx),
+            effect_occurrence(&effect.arg),
             origin,
             traversal,
         )? {
@@ -465,7 +465,7 @@ impl<'db> BoundaryCheck<'_, 'db> {
         origin: SemOrigin<'db>,
         region: &RegionSet<'db>,
         target: TyId<'db>,
-    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<(), SemanticDiagnostic<'db>> {
         // An empty receiver has no bytes to modify. Its methods' other regions
         // keep their own effect and store contracts.
         if target.is_zero_sized(self.borrowck.db) {
@@ -480,7 +480,7 @@ impl<'db> BoundaryCheck<'_, 'db> {
         origin: SemOrigin<'db>,
         operand: NOperand,
         region: &RegionSet<'db>,
-    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<(), SemanticDiagnostic<'db>> {
         for leaf in self
             .borrowck
             .inventory
@@ -532,7 +532,7 @@ pub(super) fn escape_source<'db>(
     place: &SymbolicPlace<'db>,
     boundary: Boundary,
     origin: SemOrigin<'db>,
-) -> Result<SourceExpr<'db>, SemanticBorrowDiagnostic<'db>> {
+) -> Result<SourceExpr<'db>, SemanticDiagnostic<'db>> {
     let message = match &place.root {
         RegionRoot::Root { root, .. } => {
             let name = match &borrowck.body.roots[root.index()].kind {
@@ -581,5 +581,5 @@ pub(super) fn escape_source<'db>(
             });
         }
     };
-    Err(borrowck.diag(SemanticBorrowDiagKind::InvalidReturnBorrow, origin, message))
+    Err(borrowck.diag(SemanticDiagnosticKind::InvalidReturnBorrow, origin, message))
 }

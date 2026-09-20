@@ -1,12 +1,16 @@
 //! Explicit origins for nominal handles manufactured without an input referent.
 use super::{
     index::{IndexExpr, IndexSubst},
+    path::StructuralPath,
     semantics::UnresolvedCapability,
 };
 use crate::{
     analysis::{
         HirAnalysisDb,
-        semantic::{SemanticInstance, normalized::NValueId},
+        semantic::{
+            SemanticInstance,
+            normalized::{NStatementId, NValueId},
+        },
         ty::{
             assoc_const::AssocConstUse,
             const_ty::{ConstTyId, const_ty_or_abstract_from_assoc_const_use},
@@ -136,6 +140,29 @@ pub enum AddressOccurrence<'db> {
         choice: u32,
     },
     Summary(u32),
+    Overwrite(OpaqueContentsId<'db>),
+    /// Summary-renaming key for invalid native bytes, which name no valid address.
+    NativeInvalidity,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum OpaqueWriteSite<'db> {
+    Operation {
+        instance: SemanticInstance<'db>,
+        statement: NStatementId,
+    },
+    Summary(u32),
+}
+
+/// Stable transfer-site and structural-leaf identity. A separate existential
+/// argument distinguishes independently clobbered cells at the same site.
+#[salsa::interned]
+#[derive(Debug)]
+pub struct OpaqueContentsId<'db> {
+    pub site: OpaqueWriteSite<'db>,
+    pub representation_ty: TyId<'db>,
+    #[return_ref]
+    pub path: StructuralPath<IndexExpr<'db>>,
 }
 
 /// Equal occurrences preserve identity through copies. Different occurrences may

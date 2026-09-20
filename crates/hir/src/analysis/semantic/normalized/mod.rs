@@ -1,3 +1,4 @@
+pub mod access;
 mod admission;
 mod ir;
 pub mod layout_plan;

@@ -4,8 +4,8 @@ use salsa::Update;
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        BlockedSemanticBody, SBlockId, SLocalId, SemConstId, SemConstValue,
-        SemanticBorrowDiagnostic, SemanticCalleeRef, SemanticInstance, normalized::NStatementId,
+        BlockedSemanticBody, SBlockId, SLocalId, SemConstId, SemConstValue, SemanticCalleeRef,
+        SemanticDiagnostic, SemanticInstance, normalized::NStatementId,
     },
     ty::{
         CallableLayoutParamPort, LayoutBundleComponentId, LayoutBundleInterface,
@@ -216,7 +216,7 @@ impl<'db> LayoutEvidenceBody<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum LayoutEvidenceError<'db> {
     Blocked(BlockedSemanticBody<'db>),
-    Normalize(SemanticBorrowDiagnostic<'db>),
+    Normalize(SemanticDiagnostic<'db>),
     MissingBody(BodyOwner<'db>),
     TemplateLocalCountMismatch {
         expected: usize,

@@ -60,6 +60,12 @@ pub enum CapabilityRef<'db> {
         authority: Vec<Guarded<'db, LoanRef<'db>>>,
     },
     Address(RegionSet<'db>),
+    /// Raw bytes no longer establish a valid native capability. The symbolic
+    /// region preserves the overwrite identity across summaries, never authority.
+    Invalidated {
+        class: CapabilityClass,
+        region: RegionSet<'db>,
+    },
 }
 
 impl<'db> CapabilityRef<'db> {
@@ -91,7 +97,7 @@ impl<'db> CapabilityRef<'db> {
                     })
                     .collect()
             }
-            Self::Address(_) => Vec::new(),
+            Self::Address(_) | Self::Invalidated { .. } => Vec::new(),
         }
     }
 
@@ -99,6 +105,10 @@ impl<'db> CapabilityRef<'db> {
         match self {
             Self::Shared { .. } | Self::Mutable { .. } => self.clone(),
             Self::Address(region) => Self::Address(region.forget_occurrences(repeated)),
+            Self::Invalidated { class, region } => Self::Invalidated {
+                class: *class,
+                region: region.forget_occurrences(repeated),
+            },
             Self::View { region, authority } => Self::view(
                 region.forget_occurrences(repeated),
                 authority
@@ -127,7 +137,7 @@ impl<'db> CapabilityRef<'db> {
     pub fn loan(&self) -> Option<&LoanRef<'db>> {
         match self {
             Self::Shared { reference, .. } | Self::Mutable { reference, .. } => Some(reference),
-            Self::View { .. } | Self::Address(_) => None,
+            Self::View { .. } | Self::Address(_) | Self::Invalidated { .. } => None,
         }
     }
     pub fn region(
@@ -141,7 +151,9 @@ impl<'db> CapabilityRef<'db> {
                 [reference.id.0]
                 .region(db, reference, scope)
                 .with_relative_views(db, views, 0),
-            Self::View { region, .. } | Self::Address(region) => {
+            Self::View { region, .. }
+            | Self::Address(region)
+            | Self::Invalidated { region, .. } => {
                 let lift =
                     IndexSubst::new(region.scope(), scope, []).expect("capability witness scope");
                 region.substitute(db, &lift)
@@ -156,6 +168,7 @@ impl<'db> IndexPayload<'db> for CapabilityRef<'db> {
             Self::Shared { .. } => CapabilityClass::Borrow(BorrowKind::Ref),
             Self::Mutable { .. } => CapabilityClass::Borrow(BorrowKind::Mut),
             Self::View { .. } => CapabilityClass::View,
+            Self::Invalidated { class, .. } => *class,
             Self::Address(_) => {
                 return matches!(class, CapabilityClass::Handle | CapabilityClass::Pointer);
             }
@@ -182,7 +195,7 @@ impl<'db> IndexPayload<'db> for CapabilityRef<'db> {
                 }
                 indices
             }
-            Self::Address(region) => region.indices(),
+            Self::Address(region) | Self::Invalidated { region, .. } => region.indices(),
         }
         .into_iter()
     }
@@ -222,6 +235,14 @@ impl<'db> IndexPayload<'db> for CapabilityRef<'db> {
                     .expect("handle guard scope");
                 Self::Address(region.substitute(db, &lift).substitute(db, subst))
             }
+            Self::Invalidated { class, region } => {
+                let lift = IndexSubst::new(region.scope(), subst.source(), [])
+                    .expect("invalidated capability scope");
+                Self::Invalidated {
+                    class: *class,
+                    region: region.substitute(db, &lift).substitute(db, subst),
+                }
+            }
         }
     }
 }
@@ -231,9 +252,9 @@ impl<'db> RepackPayload<'db> for CapabilityRef<'db> {
         let mut payload = self.clone();
         match &mut payload {
             Self::Shared { views, .. } | Self::Mutable { views, .. } => views.append(db, 0, repack),
-            Self::View { region, .. } | Self::Address(region) => {
-                *region = region.repack(db, repack)
-            }
+            Self::View { region, .. }
+            | Self::Address(region)
+            | Self::Invalidated { region, .. } => *region = region.repack(db, repack),
         }
         payload
     }

@@ -26,6 +26,7 @@ use crate::{
                 state::{BorrowState, CapabilityValue, CapabilityValues},
                 value::{Guarded, ValueLimits},
             },
+            instantiated_effect_env,
             normalized::{
                 HandleOrigin, NBlock, NBlockId, NExpr, NRootId, NRootKind, NStatementKind,
                 NTerminator, NTerminatorKind, NValue, NValueDefinition, NValueId, NormalizedBody,
@@ -33,6 +34,7 @@ use crate::{
             },
         },
         ty::{
+            corelib::{is_std_evm_effect_method, is_std_evm_effect_trait},
             ty_check::BodyOwner,
             ty_def::{BorrowKind, TyId},
         },
@@ -345,12 +347,31 @@ impl<'db> Inventory<'db> {
                 return Err(error);
             }
         }
+        let normalization_scope = instance.key(db).impl_env(db).normalization_scope(db);
+        // Sealed EVM effect traits admit only the zero-sized EVM token. A
+        // symbolic effect witness must not invent hidden pointer-bearing fields.
+        let effect_env = instantiated_effect_env(db, instance);
+        let zero_sized_providers: HashSet<_> = instance
+            .assumptions(db)
+            .list(db)
+            .iter()
+            .chain(
+                effect_env
+                    .iter()
+                    .flat_map(|env| env.forwarded_witnesses(db)),
+            )
+            .filter(|predicate| is_std_evm_effect_trait(db, normalization_scope, predicate.def(db)))
+            .map(|predicate| predicate.self_ty(db))
+            .collect();
+        let evm_receiver = matches!(instance.key(db).owner(db), BodyOwner::Func(func) if is_std_evm_effect_method(db, func));
         let abstract_roots: Vec<_> = builder
             .storage
             .iter()
             .filter(|(root, _)| {
-                root.contract()
-                    .is_some_and(|contract| contract.is_abstract(db))
+                root.contract().is_some_and(|contract| {
+                    contract.is_abstract(db) && !zero_sized_providers.contains(&contract.ty)
+                }) && !(evm_receiver
+                    && matches!(root, RegionRoot::External(source) if source.param() == Some(0)))
             })
             .map(|(root, value)| (root.clone(), value.scope().clone()))
             .collect();

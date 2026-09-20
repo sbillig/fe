@@ -3,13 +3,13 @@ use salsa::Update;
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        BlockedSemanticBody, BorrowDiagnosticId, SemanticBody, SemanticBorrowDiagnostic,
+        BlockedSemanticBody, SemanticBody, SemanticDiagnostic, SemanticDiagnosticId,
         SemanticInstance, SemanticNormalizationFailure,
-        borrowck::{
+        ctfe::canonicalize_semantic_consts_for_admission,
+        diagnostics::{
             normalized_body_error_to_diag, normalized_body_verify_error_to_diag,
             normalized_layout_plan_verify_error_to_diag, smir_lowering_admission_diag,
         },
-        ctfe::canonicalize_semantic_consts_for_admission,
         instance::SemanticBodyAdmissionError,
         semantic_instance_base_assumptions_for_key,
     },
@@ -34,7 +34,7 @@ pub struct AdmittedSemanticBodyId<'db> {
 pub enum SemanticBodyAdmission<'db> {
     Ready(AdmittedSemanticBodyId<'db>),
     Blocked(BlockedSemanticBody<'db>),
-    InternalFailure(BorrowDiagnosticId<'db>),
+    InternalFailure(SemanticDiagnosticId<'db>),
 }
 
 pub fn semantic_body_admission<'db>(
@@ -159,7 +159,7 @@ fn admission_failure<'db>(
 
 fn internal_failure<'db>(
     db: &'db dyn HirAnalysisDb,
-    diagnostic: SemanticBorrowDiagnostic<'db>,
+    diagnostic: SemanticDiagnostic<'db>,
 ) -> SemanticBodyAdmission<'db> {
-    SemanticBodyAdmission::InternalFailure(BorrowDiagnosticId::new(db, diagnostic))
+    SemanticBodyAdmission::InternalFailure(SemanticDiagnosticId::new(db, diagnostic))
 }

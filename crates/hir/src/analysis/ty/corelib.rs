@@ -341,6 +341,14 @@ pub fn is_std_evm_effect_method<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>
     let Some(containing_trait) = func.containing_trait(db) else {
         return false;
     };
+    is_std_evm_effect_trait(db, func.scope(), containing_trait)
+}
+
+pub fn is_std_evm_effect_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    effect: Trait<'db>,
+) -> bool {
     [
         "std::evm::effects::Ctx",
         "std::evm::effects::RawMem",
@@ -352,7 +360,7 @@ pub fn is_std_evm_effect_method<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>
         "std::evm::effects::Super",
     ]
     .into_iter()
-    .any(|path| resolve_lib_trait_path(db, func.scope(), path) == Some(containing_trait))
+    .any(|path| resolve_lib_trait_path(db, scope, path) == Some(effect))
 }
 
 fn runtime_builtin_func_path<'db>(

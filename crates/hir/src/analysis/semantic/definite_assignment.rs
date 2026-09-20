@@ -21,7 +21,7 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            BlockedSemanticBody, BorrowDiagnosticId, SConst, SemConstScalar, SemConstValue,
+            BlockedSemanticBody, SConst, SemConstScalar, SemConstValue, SemanticDiagnosticId,
             SemanticInstance, SemanticNormalizationFailure, get_or_build_semantic_instance,
             identity_semantic_instance_key,
             normalized::{
@@ -96,13 +96,13 @@ pub fn contract_init_assigned_fields<'db>(
 enum AssignedTargetsResult<'db> {
     Ready(Option<Vec<AssignedTarget<'db>>>),
     Blocked(BlockedSemanticBody<'db>),
-    InternalFailure(BorrowDiagnosticId<'db>),
+    InternalFailure(SemanticDiagnosticId<'db>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum AssignedTargetsFailure<'db> {
     Blocked(BlockedSemanticBody<'db>),
-    InternalFailure(BorrowDiagnosticId<'db>),
+    InternalFailure(SemanticDiagnosticId<'db>),
 }
 
 #[salsa::tracked(

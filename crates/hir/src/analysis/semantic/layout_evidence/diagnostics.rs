@@ -1,3 +1,6 @@
+use crate::analysis::semantic::diagnostics::{
+    checker_name, resolve_local_source_span, span_for_origin_from_body,
+};
 use common::diagnostics::{
     CompleteDiagnostic, DiagnosticPass, GlobalErrorCode, LabelStyle, Severity, SubDiagnostic,
 };
@@ -207,7 +210,7 @@ impl DiagnosticVoucher for LayoutEvidenceDiagnostic<'_> {
                 true,
             ),
         };
-        let name = crate::analysis::semantic::borrowck::checker_name(db, self.instance);
+        let name = checker_name(db, self.instance);
         let header = if internal {
             format!("internal layout-evidence error in `{name}`")
         } else {
@@ -229,10 +232,6 @@ impl DiagnosticVoucher for LayoutEvidenceDiagnostic<'_> {
 
 impl LayoutEvidenceDiagnostic<'_> {
     fn primary_span(&self, db: &dyn SpannedHirAnalysisDb) -> Option<common::diagnostics::Span> {
-        use crate::analysis::semantic::borrowck::{
-            resolve_local_source_span, span_for_origin_from_body,
-        };
-
         let owner = self.instance.key(db).owner(db);
         let span = match &self.error {
             LayoutEvidenceError::AmbiguousConstBinding { origin, .. }

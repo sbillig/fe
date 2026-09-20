@@ -528,8 +528,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Expr::RecordInit(path, fields) => self.lower_record_init(expr, *path, fields),
             Expr::Field(base, _) => {
-                if let Some(place) = self.typed_body.expr_place(expr) {
-                    let place = self.lower_place_data(place);
+                if let Some(place) = self.try_lower_place(expr) {
                     return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
                 }
                 let base_expr = *base;
@@ -552,8 +551,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
                     return self.lower_call_like_expr(expr, ty, Some(*base), &[*index]);
                 }
-                if let Some(place) = self.typed_body.expr_place(expr) {
-                    let place = self.lower_place_data(place);
+                if let Some(place) = self.try_lower_place(expr) {
                     return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
                 }
                 let base = self.lower_expr_operand(*base);

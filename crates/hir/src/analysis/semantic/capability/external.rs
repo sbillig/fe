@@ -6,6 +6,7 @@ use crate::analysis::{
     semantic::normalized::NRootId,
     ty::{
         ProviderAddressSpace,
+        adt_def::instantiate_adt_field_shape,
         fold::TyFoldable,
         provider::ProviderKind,
         ty_def::{TyData, TyId},
@@ -52,16 +53,36 @@ impl<'db> ReferentContract<'db> {
     }
 
     pub fn is_abstract(self, db: &'db dyn HirAnalysisDb) -> bool {
-        // A symbolic length or layout constant does not hide capability fields.
-        // Only unresolved type structure requires conservative reachability.
-        matches!(
-            self.ty.base_ty(db).data(db),
+        let ty = self.ty.as_view(db).unwrap_or(self.ty);
+        // Referents behind a pointer or native borrow have their own storage.
+        // Their type parameters do not hide fields in this representation.
+        if ty.as_ptr(db).is_some() || ty.as_borrow(db).is_some() {
+            return false;
+        }
+        if matches!(
+            ty.base_ty(db).data(db),
             TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
-        ) || self
-            .ty
-            .generic_args(db)
-            .iter()
-            .any(|ty| Self { ty: *ty, ..self }.is_abstract(db))
+        ) {
+            return true;
+        }
+        let fields = if ty.is_array(db) {
+            vec![ty.generic_args(db)[0]]
+        } else if let Some(adt) = ty.adt_def(db) {
+            adt.fields(db)
+                .iter()
+                .enumerate()
+                .flat_map(|(variant, fields)| {
+                    (0..fields.num_types()).map(move |field| {
+                        instantiate_adt_field_shape(db, adt, variant, field, ty.generic_args(db))
+                    })
+                })
+                .collect()
+        } else {
+            ty.field_types(db)
+        };
+        fields
+            .into_iter()
+            .any(|ty| Self { ty, ..self }.is_abstract(db))
     }
 
     pub fn may_alias(self, other: Self) -> bool {
@@ -96,18 +117,58 @@ pub enum ExternalOrigin<'db> {
 pub struct ExternalSource<'db> {
     pub origin: ExternalOrigin<'db>,
     pub contract: ReferentContract<'db>,
+    /// This arbitrary replacement is present only when these locations overlap.
+    /// The condition carries addresses, never replacement contents or authority.
+    pub clobber: Option<Box<ClobberCondition<'db>>>,
     dereferences: Box<[RegionPath<IndexExpr<'db>>]>,
     reachable: bool,
     uncertain: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ClobberCondition<'db> {
+    pub target: SourceExpr<'db>,
+    pub written: SourceExpr<'db>,
+}
+
+impl<'db> ClobberCondition<'db> {
+    pub fn new(mut target: SourceExpr<'db>, mut written: SourceExpr<'db>) -> Self {
+        // A write through an earlier arbitrary replacement can happen only if
+        // that replacement's corruption condition held. Keep that prerequisite
+        // rather than making a loop's later writes unconditionally arbitrary.
+        // Dropping the additional overlap test is conservative and keeps the
+        // condition depth bounded across repeated writes and summary calls.
+        let mut dependency = &written.source;
+        loop {
+            if let Some(condition) = &dependency.clobber {
+                return (**condition).clone();
+            }
+            let ExternalOrigin::Memory { base, .. } = &dependency.origin else {
+                break;
+            };
+            dependency = &base.source;
+        }
+        target.source.erase_clobber_conditions();
+        written.source.erase_clobber_conditions();
+        Self { target, written }
+    }
+}
+
 impl<'db> ExternalSource<'db> {
+    fn erase_clobber_conditions(&mut self) {
+        self.clobber = None;
+        if let ExternalOrigin::Memory { base, .. } = &mut self.origin {
+            base.source.erase_clobber_conditions();
+        }
+    }
+
     pub fn abstract_target(root: &RegionRoot<'db>, contract: ReferentContract<'db>) -> Self {
         let mut source = match root {
             RegionRoot::External(source) => source.clone().widen(),
             RegionRoot::Root { root, .. } => Self {
                 origin: ExternalOrigin::Local(*root),
                 contract,
+                clobber: None,
                 dereferences: Box::new([]),
                 reachable: true,
                 uncertain: true,
@@ -127,6 +188,7 @@ impl<'db> ExternalSource<'db> {
         Self {
             origin: ExternalOrigin::Input(source),
             contract,
+            clobber: None,
             dereferences: Box::new([]),
             reachable,
             uncertain,
@@ -155,6 +217,7 @@ impl<'db> ExternalSource<'db> {
                 provider,
                 target_ty,
             },
+            clobber: None,
             contract: ReferentContract::new(db, target_ty, space),
             dereferences: Box::new([]),
             reachable: false,
@@ -170,6 +233,7 @@ impl<'db> ExternalSource<'db> {
                 handle.contract.address_space,
             ),
             origin: ExternalOrigin::OpaqueHandle(handle),
+            clobber: None,
             dereferences: Box::new([]),
             reachable: false,
             uncertain: true,
@@ -222,6 +286,7 @@ impl<'db> ExternalSource<'db> {
                 element,
                 target_ty,
             },
+            clobber: None,
             dereferences: Box::new([]),
             reachable: false,
         }
@@ -229,6 +294,10 @@ impl<'db> ExternalSource<'db> {
 
     /// Rewrites construction occurrences through every nested memory base.
     pub fn map_occurrences(&mut self, f: &mut impl FnMut(&mut OpaqueHandleRef<'db>)) {
+        if let Some(clobber) = &mut self.clobber {
+            clobber.target.source.map_occurrences(f);
+            clobber.written.source.map_occurrences(f);
+        }
         match &mut self.origin {
             ExternalOrigin::OpaqueHandle(source) | ExternalOrigin::Allocation(source) => f(source),
             ExternalOrigin::Memory { base, .. } => base.source.map_occurrences(f),
@@ -304,7 +373,7 @@ impl<'db> ExternalSource<'db> {
     }
 
     pub fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> + '_ {
-        let indices: Vec<_> = match &self.origin {
+        let mut indices: Vec<_> = match &self.origin {
             ExternalOrigin::Input(input) => input.indices().collect(),
             ExternalOrigin::OpaqueHandle(handle) | ExternalOrigin::Allocation(handle) => {
                 handle.arguments.to_vec()
@@ -315,6 +384,11 @@ impl<'db> ExternalSource<'db> {
                 .collect(),
             ExternalOrigin::Provider { .. } | ExternalOrigin::Local(_) => Vec::new(),
         };
+        indices.extend(
+            self.clobber
+                .iter()
+                .flat_map(|clobber| clobber.target.indices().chain(clobber.written.indices())),
+        );
         indices
             .into_iter()
             .chain(self.dereferences.iter().flat_map(RegionPath::indices))
@@ -323,6 +397,12 @@ impl<'db> ExternalSource<'db> {
     pub fn substitute(&self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
         let mut result = self.rename_indices(subst);
         result.contract = self.contract.substitute(db, subst);
+        result.clobber = self.clobber.as_ref().map(|clobber| {
+            Box::new(ClobberCondition {
+                target: clobber.target.substitute(db, subst),
+                written: clobber.written.substitute(db, subst),
+            })
+        });
         match &self.origin {
             ExternalOrigin::OpaqueHandle(handle) => {
                 result.origin = ExternalOrigin::OpaqueHandle(handle.substitute(db, subst))
@@ -375,6 +455,7 @@ impl<'db> ExternalSource<'db> {
             } => ExternalOrigin::Memory {
                 target_ty: *target_ty,
                 base: Box::new(SourceExpr {
+                    invalidated: base.invalidated,
                     source: base.source.rename_indices(subst),
                     path: base.path.substitute(subst),
                     views: base.views.clone(),
@@ -401,6 +482,17 @@ impl<'db> ExternalSource<'db> {
         Self {
             origin,
             contract: self.contract,
+            clobber: self.clobber.as_ref().map(|clobber| {
+                let rename = |source: &SourceExpr<'db>| SourceExpr {
+                    source: source.source.rename_indices(subst),
+                    path: source.path.substitute(subst),
+                    ..source.clone()
+                };
+                Box::new(ClobberCondition {
+                    target: rename(&clobber.target),
+                    written: rename(&clobber.written),
+                })
+            }),
             dereferences: self
                 .dereferences
                 .iter()

@@ -5,16 +5,17 @@ use crate::{
         semantic::{
             BorrowActivation, FieldIndex, SemOrigin,
             capability::{
-                external::{ExternalSource, ReferentContract},
+                external::{ExternalOrigin, ExternalSource, ReferentContract},
                 handle::{
                     AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
+                    OpaqueWriteSite,
                 },
                 index::IndexNamespace,
                 loan::{LoanId, LoanRef},
                 path::Projection,
                 region::SymbolicPlace,
                 semantics::{CapabilityClass, CapabilitySemantics, StorageClass, TransportClass},
-                shape::{ArrayLength, CapabilityShape, ShapeChildren},
+                shape::{ArrayLength, CapabilityShape, ShapeChildren, capability_shape},
                 source::InputSource,
                 value::{Guarded, ValueLimits},
             },
@@ -22,11 +23,28 @@ use crate::{
         },
         ty::{
             ProviderAddressSpace,
+            trait_resolution::PredicateListId,
             ty_def::{BorrowKind, TyId},
         },
     },
     test_db::HirAnalysisTestDb,
 };
+use common::file::File;
+
+fn database() -> (HirAnalysisTestDb, File) {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("opaque_context.fe".into(), "fn context() {}");
+    (db, file)
+}
+
+fn overwrite(db: &HirAnalysisTestDb, file: File) -> OpaqueWrite<'_> {
+    let (module, _) = db.top_mod(file);
+    OpaqueWrite {
+        site: OpaqueWriteSite::Summary(0),
+        scope: module.scope(),
+        assumptions: PredicateListId::empty_list(db),
+    }
+}
 
 struct Shapes<'db> {
     scalar: ShapeId<'db>,
@@ -143,8 +161,138 @@ fn read<'db>(
 }
 
 #[test]
+fn opaque_contents_preserve_families_without_manufacturing_native_loans() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let shapes = Shapes::new(&db);
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let scope = BinderScope::default();
+    for shape in [shapes.handle, shapes.pair, shapes.array] {
+        let unknown = overwrite
+            .contents(&mut values, shape, &scope, None)
+            .unwrap();
+        assert_eq!(unknown.shape(), shape);
+        assert_eq!(
+            unknown,
+            overwrite
+                .contents(&mut values, shape, &scope, None)
+                .unwrap()
+        );
+        let leaves = values.leaves(&unknown, ValueOccurrence::Summary);
+        assert!(!leaves.is_empty());
+        for leaf in leaves {
+            assert!(matches!(leaf.payload, CapabilityRef::Invalidated { .. }));
+            assert!(leaf.payload.loan().is_none());
+            assert!(leaf.payload.authority(&leaf.guard).is_empty());
+            for index in leaf.payload.indices() {
+                leaf.guard.scope().validate(index).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn raw_overwrites_invalidate_exact_pointer_cells_and_remain_opaque() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let scope = BinderScope::default();
+    let shape = capability_shape(
+        &db,
+        overwrite.scope,
+        overwrite.assumptions,
+        TyId::ptr_to(&db, TyId::u256(&db)),
+    )
+    .unwrap();
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let old_target = region(root(&db, 1));
+    let initial = values.from_shape(shape, &scope, |_, _, scope| {
+        vec![Guarded {
+            guard: Guard::always(scope),
+            payload: CapabilityRef::Address(old_target.clone()),
+        }]
+    });
+    let destination = region(root(&db, 0));
+    let mut state = BorrowState::new(&mut values, [], [(root(&db, 0), initial)]);
+    state
+        .invalidate_memory(&mut values, &destination, overwrite)
+        .unwrap();
+    let after = read(&db, &mut values, &state, &destination, shape);
+    let targets = after
+        .direct()
+        .iter()
+        .flat_map(|entry| {
+            let CapabilityRef::Address(region) = &entry.payload else {
+                panic!("pointer contents")
+            };
+            region.clauses().iter().map(|clause| &clause.payload.root)
+        })
+        .collect::<Vec<_>>();
+    assert!(targets.contains(&&root(&db, 1)));
+    assert!(targets.iter().any(|root| matches!(root,
+        RegionRoot::External(source) if matches!(source.origin,
+            ExternalOrigin::OpaqueHandle(_)))));
+    let snapshot = state.clone();
+    state
+        .invalidate_memory(&mut values, &destination, overwrite)
+        .unwrap();
+    assert_eq!(state, snapshot, "replaying one overwrite is idempotent");
+}
+
+#[test]
+fn opaque_field_writes_preserve_disjoint_capability_fields() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let shapes = Shapes::new(&db);
+    let scope = BinderScope::default();
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    for first_shape in [shapes.scalar, shapes.handle] {
+        let shape = ShapeId::new(
+            &db,
+            CapabilityShape {
+                direct: None,
+                children: ShapeChildren::Product(
+                    [(FieldIndex(0), first_shape), (FieldIndex(1), shapes.handle)].into(),
+                ),
+            },
+        );
+        let first = if first_shape == shapes.scalar {
+            values.empty(first_shape, &scope)
+        } else {
+            handle(&mut values, first_shape, 0)
+        };
+        let second = handle(&mut values, shapes.handle, 1);
+        let initial = values.product(
+            shape,
+            &scope,
+            [(FieldIndex(0), first), (FieldIndex(1), second.clone())],
+        );
+        let destination =
+            region(root(&db, 0)).project(&RegionPath::new([Projection::Field(FieldIndex(0))]));
+        let preserved =
+            region(root(&db, 0)).project(&RegionPath::new([Projection::Field(FieldIndex(1))]));
+        let mut state = BorrowState::new(&mut values, [], [(root(&db, 0), initial)]);
+        state
+            .invalidate_memory(&mut values, &destination, overwrite)
+            .unwrap();
+        assert_eq!(
+            read(&db, &mut values, &state, &preserved, shapes.handle),
+            second
+        );
+        let changed = read(&db, &mut values, &state, &destination, first_shape);
+        assert_eq!(
+            changed
+                .direct()
+                .iter()
+                .any(|entry| matches!(entry.payload, CapabilityRef::Invalidated { .. })),
+            first_shape == shapes.handle
+        );
+    }
+}
+
+#[test]
 fn outer_borrow_tracks_contents_without_conflating_handle_slot_and_referent() {
-    let db = HirAnalysisTestDb::default();
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
     let shapes = Shapes::new(&db);
     let scope = BinderScope::default();
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
@@ -182,7 +330,9 @@ fn outer_borrow_tracks_contents_without_conflating_handle_slot_and_referent() {
         region(root(&db, 1))
     );
     assert!(slot.intersection(&region(root(&db, 1))).is_empty());
-    state.write_region(&mut values, &slot, &second).unwrap();
+    state
+        .write_region(overwrite, &mut values, &slot, &second)
+        .unwrap();
     assert_eq!(state.value(NValueId::from_u32(0)), &outer);
     assert_eq!(
         state.value(NValueId::from_u32(1)),
@@ -200,7 +350,8 @@ fn outer_borrow_tracks_contents_without_conflating_handle_slot_and_referent() {
 
 #[test]
 fn dynamic_stores_partition_array_members_and_exact_overwrites_remove_old_handles() {
-    let db = HirAnalysisTestDb::default();
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
     let shapes = Shapes::new(&db);
     let scope = BinderScope::default();
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
@@ -210,7 +361,9 @@ fn dynamic_stores_partition_array_members_and_exact_overwrites_remove_old_handle
     let mut state = BorrowState::new(&mut values, [], [(root(&db, 0), array)]);
     let index = IndexExpr::Runtime(NValueId::from_u32(0));
     let selected = region(root(&db, 0)).project(&RegionPath::new([Projection::Index(index)]));
-    state.write_region(&mut values, &selected, &new).unwrap();
+    state
+        .write_region(overwrite, &mut values, &selected, &new)
+        .unwrap();
     let loaded = read(&db, &mut values, &state, &selected, shapes.handle);
     assert_eq!(loaded.direct().len(), 1);
     assert_eq!(loaded.direct()[0].payload, new.direct()[0].payload);
@@ -228,7 +381,9 @@ fn dynamic_stores_partition_array_members_and_exact_overwrites_remove_old_handle
             .proves_equal(index, IndexExpr::Const(0))
     );
     let absent = values.empty(shapes.handle, &scope);
-    state.write_region(&mut values, &zero, &absent).unwrap();
+    state
+        .write_region(overwrite, &mut values, &zero, &absent)
+        .unwrap();
     assert!(read(&db, &mut values, &state, &zero, shapes.handle).is_empty());
     assert!(
         !read(
@@ -244,7 +399,8 @@ fn dynamic_stores_partition_array_members_and_exact_overwrites_remove_old_handle
 
 #[test]
 fn symbolic_external_referents_preserve_member_identity_and_followed_handle_identity() {
-    let db = HirAnalysisTestDb::default();
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
     let shapes = Shapes::new(&db);
     let scope = BinderScope::default();
     let (family_scope, member) = scope.bind(IndexNamespace::InputSlot);
@@ -287,7 +443,7 @@ fn symbolic_external_referents_preserve_member_identity_and_followed_handle_iden
     );
     let replacement = handle(&mut values, shapes.handle, 1);
     state
-        .write_region(&mut values, &selected, &replacement)
+        .write_region(overwrite, &mut values, &selected, &replacement)
         .unwrap();
     assert_eq!(
         read(&db, &mut values, &state, &selected, shapes.handle),
@@ -327,7 +483,8 @@ fn symbolic_external_referents_preserve_member_identity_and_followed_handle_iden
 
 #[test]
 fn conditional_and_ambiguous_stores_keep_unwritten_contents() {
-    let db = HirAnalysisTestDb::default();
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
     let shapes = Shapes::new(&db);
     let scope = BinderScope::default();
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
@@ -344,6 +501,7 @@ fn conditional_and_ambiguous_stores_keep_unwritten_contents() {
         .unwrap();
     state
         .write_region(
+            overwrite,
             &mut values,
             &region(root(&db, 0)).with_guard(&condition),
             &new,
@@ -367,7 +525,9 @@ fn conditional_and_ambiguous_stores_keep_unwritten_contents() {
             .implies(&condition)
     );
     let ambiguous = region(root(&db, 0)).union(&region(root(&db, 1)));
-    state.write_region(&mut values, &ambiguous, &new).unwrap();
+    state
+        .write_region(overwrite, &mut values, &ambiguous, &new)
+        .unwrap();
     assert_eq!(
         read(
             &db,
@@ -382,7 +542,8 @@ fn conditional_and_ambiguous_stores_keep_unwritten_contents() {
 
 #[test]
 fn missing_capability_storage_is_an_error_and_failed_writes_are_atomic() {
-    let db = HirAnalysisTestDb::default();
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
     let shapes = Shapes::new(&db);
     let scope = BinderScope::default();
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
@@ -392,8 +553,8 @@ fn missing_capability_storage_is_an_error_and_failed_writes_are_atomic() {
     let before = state.clone();
     let destination = region(root(&db, 0)).union(&region(root(&db, 1)));
     assert_eq!(
-        state.write_region(&mut values, &destination, &new),
-        Err(StateError::MissingStorage(root(&db, 1)))
+        state.write_region(overwrite, &mut values, &destination, &new),
+        Err(StateError::MissingStorage(Box::new(root(&db, 1))))
     );
     assert_eq!(state, before);
     assert_eq!(
@@ -404,7 +565,7 @@ fn missing_capability_storage_is_an_error_and_failed_writes_are_atomic() {
             shapes.handle,
             ValueOccurrence::Summary
         ),
-        Err(StateError::MissingStorage(root(&db, 1)))
+        Err(StateError::MissingStorage(Box::new(root(&db, 1))))
     );
     assert_eq!(
         read(
@@ -449,7 +610,8 @@ fn missing_capability_storage_is_an_error_and_failed_writes_are_atomic() {
 
 #[test]
 fn joins_include_storage_contents_and_are_independent_of_predecessor_order() {
-    let db = HirAnalysisTestDb::default();
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
     let shapes = Shapes::new(&db);
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
     let first = handle(&mut values, shapes.handle, 0);
@@ -464,7 +626,7 @@ fn joins_include_storage_contents_and_are_independent_of_predecessor_order() {
     let mut right = left.clone();
     right.set_value(holder, second.clone());
     right
-        .write_region(&mut values, &region(root(&db, 0)), &second)
+        .write_region(overwrite, &mut values, &region(root(&db, 0)), &second)
         .unwrap();
     let mut left_first = left.clone();
     assert!(left_first.join(&right, &mut values));
@@ -486,7 +648,8 @@ fn joins_include_storage_contents_and_are_independent_of_predecessor_order() {
 
 #[test]
 fn symbolic_array_writes_are_pointwise_and_can_select_a_diagonal() {
-    let db = HirAnalysisTestDb::default();
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
     let shapes = Shapes::new(&db);
     let scope = BinderScope::default();
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
@@ -523,7 +686,7 @@ fn symbolic_array_writes_are_pointwise_and_can_select_a_diagonal() {
         RegionPath::new([Projection::Index(member), Projection::Index(member)]),
     );
     state
-        .write_region(&mut values, &diagonal, &replacement)
+        .write_region(overwrite, &mut values, &diagonal, &replacement)
         .unwrap();
     for row in [0, 1, 2] {
         for column in [0, 1, 2] {
@@ -546,7 +709,8 @@ fn symbolic_array_writes_are_pointwise_and_can_select_a_diagonal() {
 
 #[test]
 fn family_writes_keep_input_slot_and_destination_array_binders_independent() {
-    let db = HirAnalysisTestDb::default();
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
     let shapes = Shapes::new(&db);
     let scope = BinderScope::default();
     let (storage_scope, slot) = scope.bind(IndexNamespace::InputSlot);
@@ -584,7 +748,7 @@ fn family_writes_keep_input_slot_and_destination_array_binders_independent() {
         RegionPath::new([Projection::Index(result_member)]),
     );
     state
-        .write_region(&mut values, &destination, &replacement)
+        .write_region(overwrite, &mut values, &destination, &replacement)
         .unwrap();
     let selected_source = source.substitute(
         &IndexSubst::new(&storage_scope, &scope, [(slot, IndexExpr::Const(7))]).unwrap(),
@@ -604,7 +768,8 @@ fn family_writes_keep_input_slot_and_destination_array_binders_independent() {
 
 #[test]
 fn a_family_write_cannot_capture_an_unbound_source_index() {
-    let db = HirAnalysisTestDb::default();
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
     let shapes = Shapes::new(&db);
     let scope = BinderScope::default();
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
@@ -631,15 +796,16 @@ fn a_family_write_cannot_capture_an_unbound_source_index() {
     );
     let before = state.clone();
     assert_eq!(
-        state.write_region(&mut values, &destination, &replacement),
-        Err(StateError::UnrepresentableWrite(root(&db, 0)))
+        state.write_region(overwrite, &mut values, &destination, &replacement),
+        Err(StateError::UnrepresentableWrite(Box::new(root(&db, 0))))
     );
     assert_eq!(state, before);
 }
 
 #[test]
 fn a_guarded_family_write_specializes_an_exact_input_referent() {
-    let db = HirAnalysisTestDb::default();
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
     let shapes = Shapes::new(&db);
     let scope = BinderScope::default();
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
@@ -675,7 +841,7 @@ fn a_guarded_family_write_specializes_an_exact_input_referent() {
     let destination =
         RegionSet::singleton(&write_scope, source, RegionPath::default()).with_guard(&guard);
     state
-        .write_region(&mut values, &destination, &replacement)
+        .write_region(overwrite, &mut values, &destination, &replacement)
         .unwrap();
     let loaded = read(&db, &mut values, &state, &region(exact), shapes.handle);
     assert_eq!(loaded.direct().len(), 1);
@@ -705,7 +871,8 @@ fn storage_families_cannot_own_unrelated_binders() {
 
 #[test]
 fn uncertain_member_write_preserves_old_handles_and_scopes_unknown_sources() {
-    let db = HirAnalysisTestDb::default();
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
     let shapes = Shapes::new(&db);
     let scope = BinderScope::default();
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
@@ -728,7 +895,7 @@ fn uncertain_member_write_preserves_old_handles_and_scopes_unknown_sources() {
     );
     let replacement = handle(&mut values, shapes.handle, 1);
     state
-        .write_region(&mut values, &destination, &replacement)
+        .write_region(overwrite, &mut values, &destination, &replacement)
         .unwrap();
     for index in [0, 1, 2] {
         let selected = read(
@@ -751,7 +918,8 @@ fn uncertain_member_write_preserves_old_handles_and_scopes_unknown_sources() {
 
 #[test]
 fn simultaneous_poststates_join_overlaps_without_update_order() {
-    let db = HirAnalysisTestDb::default();
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
     let shapes = Shapes::new(&db);
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
     let old = handle(&mut values, shapes.handle, 0);
@@ -765,6 +933,7 @@ fn simultaneous_poststates_join_overlaps_without_update_order() {
     let mut forward = initial.clone();
     forward
         .write_regions(
+            overwrite,
             &mut values,
             &[(&whole, &whole_replacement), (&selected, &second)],
         )
@@ -772,6 +941,7 @@ fn simultaneous_poststates_join_overlaps_without_update_order() {
     let mut reverse = initial;
     reverse
         .write_regions(
+            overwrite,
             &mut values,
             &[(&selected, &second), (&whole, &whole_replacement)],
         )
@@ -788,7 +958,8 @@ fn simultaneous_poststates_join_overlaps_without_update_order() {
 
 #[test]
 fn simultaneous_disjoint_poststates_replace_exactly_and_fail_atomically() {
-    let db = HirAnalysisTestDb::default();
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
     let shapes = Shapes::new(&db);
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
     let old = handle(&mut values, shapes.handle, 0);
@@ -800,7 +971,11 @@ fn simultaneous_disjoint_poststates_replace_exactly_and_fail_atomically() {
     let left = whole.project(&RegionPath::new([Projection::Index(IndexExpr::Const(0))]));
     let right = whole.project(&RegionPath::new([Projection::Index(IndexExpr::Const(1))]));
     state
-        .write_regions(&mut values, &[(&left, &first), (&right, &second)])
+        .write_regions(
+            overwrite,
+            &mut values,
+            &[(&left, &first), (&right, &second)],
+        )
         .unwrap();
     assert_eq!(read(&db, &mut values, &state, &left, shapes.handle), first);
     assert_eq!(
@@ -810,17 +985,19 @@ fn simultaneous_disjoint_poststates_replace_exactly_and_fail_atomically() {
     let before = state.clone();
     assert_eq!(
         state.write_regions(
+            overwrite,
             &mut values,
             &[(&left, &old), (&region(root(&db, 99)), &old)]
         ),
-        Err(StateError::MissingStorage(root(&db, 99)))
+        Err(StateError::MissingStorage(Box::new(root(&db, 99))))
     );
     assert_eq!(state, before);
 }
 
 #[test]
 fn unknown_alias_stores_retain_origins_across_offsets_and_respect_address_spaces() {
-    let db = HirAnalysisTestDb::default();
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
     let shapes = Shapes::new(&db);
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
     let scope = BinderScope::default();
@@ -864,7 +1041,12 @@ fn unknown_alias_stores_retain_origins_across_offsets_and_respect_address_spaces
         region(root).project(&RegionPath::new([Projection::Field(FieldIndex(index))]))
     };
     state
-        .write_region(&mut values, &field(first.clone(), 0), &replacement)
+        .write_region(
+            overwrite,
+            &mut values,
+            &field(first.clone(), 0),
+            &replacement,
+        )
         .unwrap();
     assert_eq!(
         read(
@@ -891,9 +1073,16 @@ fn unknown_alias_stores_retain_origins_across_offsets_and_respect_address_spaces
         let ids: Vec<_> = loaded
             .direct()
             .iter()
-            .map(|entry| entry.payload.loan().unwrap().id)
+            .filter_map(|entry| entry.payload.loan().map(|loan| loan.id))
             .collect();
         assert_eq!(ids, [LoanId(0), LoanId(1)]);
+        assert!(
+            loaded
+                .direct()
+                .iter()
+                .any(|entry| matches!(entry.payload, CapabilityRef::Invalidated { .. })),
+            "an unknown byte offset need not preserve native capability alignment"
+        );
         assert_eq!(
             read(
                 &db,
@@ -909,7 +1098,8 @@ fn unknown_alias_stores_retain_origins_across_offsets_and_respect_address_spaces
 
 #[test]
 fn typed_reachable_storage_can_be_read_but_never_overwritten_exactly() {
-    let db = HirAnalysisTestDb::default();
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
     let shapes = Shapes::new(&db);
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
     let source = ExternalSource::input(
@@ -926,7 +1116,7 @@ fn typed_reachable_storage_can_be_read_but_never_overwritten_exactly() {
     let replacement = handle(&mut values, shapes.handle, 1);
     let mut state = BorrowState::new(&mut values, [], [(root.clone(), original.clone())]);
     state
-        .write_region(&mut values, &region(root.clone()), &replacement)
+        .write_region(overwrite, &mut values, &region(root.clone()), &replacement)
         .unwrap();
     let loaded = read(&db, &mut values, &state, &region(root), shapes.handle);
     assert_eq!(loaded, values.join(&original, &replacement));

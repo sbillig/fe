@@ -2184,7 +2184,7 @@ impl<'db> TyChecker<'db> {
                 }
             }
             _ => {
-                if self.env.expr_place(expr).is_none() {
+                if !self.is_assignable_expr(expr) {
                     return;
                 }
 

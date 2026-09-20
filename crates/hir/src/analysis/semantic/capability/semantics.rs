@@ -10,7 +10,7 @@ use crate::{
     hir_def::scope_graph::ScopeId,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CapabilityClass {
     Borrow(BorrowKind),
     View,

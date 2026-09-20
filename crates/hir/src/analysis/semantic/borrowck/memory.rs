@@ -1,9 +1,11 @@
 //! Memory effects use the same regions and input substitution as borrow results.
+use super::validity::NativeValidity;
 use super::{
-    ir::{BorrowSummary, MemoryAccess, SemanticBorrowDiagnostic},
+    ir::{AvailabilityRequirement, AvailabilitySummary, BorrowSummary, MemoryAccess},
     solver::Borrowck,
     summary::CallInputs,
 };
+use crate::analysis::semantic::diagnostics::SemanticDiagnostic;
 use crate::analysis::{
     semantic::{
         FieldIndex, SemOrigin,
@@ -20,7 +22,7 @@ use crate::analysis::{
             state::BorrowState,
             value::{Guarded, ValueInterner, ValueLimits},
         },
-        normalized::{NExpr, NStatementKind, NValueId},
+        normalized::NValueId,
     },
     ty::{
         corelib::{
@@ -29,10 +31,13 @@ use crate::analysis::{
         },
         ty_check::BodyOwner,
         ty_def::{BorrowKind, TyId},
+        ty_is_copy,
     },
 };
 
+#[derive(Clone)]
 pub(super) struct ResolvedMemoryAccess<'db> {
+    pub invalidated: NativeValidity<'db>,
     pub access: MemoryAccess<'db>,
     pub authority: Vec<Guarded<'db, LoanRef<'db>>>,
 }
@@ -43,12 +48,13 @@ impl<'db> Borrowck<'db> {
         state: &BorrowState<'db>,
         result: NValueId,
         inputs: CallInputs<'_, 'db>,
-    ) -> Result<Vec<ResolvedMemoryAccess<'db>>, SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<Vec<ResolvedMemoryAccess<'db>>, SemanticDiagnostic<'db>> {
         let Some(call) = self.calls.get(&result).cloned() else {
             return Ok(Vec::new());
         };
         let mut resolved = Vec::new();
         for access in &call.summary.accesses {
+            let mut invalidated = NativeValidity::default();
             let mut authority = Vec::new();
             let mut regions = Vec::new();
             for source_region in [&access.region, &access.authorizers] {
@@ -71,6 +77,7 @@ impl<'db> Borrowck<'db> {
 
                     let target =
                         self.instantiate_source(state, &source, result, guard.scope(), inputs)?;
+                    invalidated |= target.invalidated;
                     authority.extend(
                         target
                             .parents
@@ -104,6 +111,7 @@ impl<'db> Borrowck<'db> {
             let authorizers = regions.pop().expect("authorizers");
             let region = regions.pop().expect("access target");
             resolved.push(ResolvedMemoryAccess {
+                invalidated,
                 access: MemoryAccess {
                     kind: access.kind,
                     region,
@@ -115,92 +123,35 @@ impl<'db> Borrowck<'db> {
         Ok(resolved)
     }
 
-    pub fn body_memory_accesses(
-        &mut self,
-    ) -> Result<Vec<MemoryAccess<'db>>, SemanticBorrowDiagnostic<'db>> {
+    pub fn body_memory_accesses(&self) -> Vec<MemoryAccess<'db>> {
         let mut accesses = Vec::new();
-        for block in 0..self.body.blocks.len() {
-            let statements = self.body.blocks[block].statements.clone();
-            for (index, statement) in statements.iter().enumerate() {
-                let Some(state) = self.before[block].get(index).cloned() else {
-                    break;
-                };
-                let (kind, place) = match &statement.kind {
-                    NStatementKind::Store { destination, .. } => {
-                        (MemoryAccessKind::Write, destination)
-                    }
-                    NStatementKind::Define {
-                        expr: NExpr::Load { place, .. } | NExpr::MakeView { place, .. },
-                        ..
-                    } => (MemoryAccessKind::Read, place),
-                    NStatementKind::Define {
-                        expr: NExpr::Borrow { place, kind, .. },
-                        ..
-                    } => (
-                        if *kind == crate::analysis::ty::ty_def::BorrowKind::Mut {
-                            MemoryAccessKind::MutAccess
-                        } else {
-                            MemoryAccessKind::Read
-                        },
-                        place,
-                    ),
-                    NStatementKind::Define {
-                        result,
-                        expr:
-                            NExpr::Call {
-                                args, effect_args, ..
-                            },
-                    } => {
-                        accesses.extend(
-                            self.call_memory_accesses(
-                                &state,
-                                *result,
-                                CallInputs {
-                                    args,
-                                    effects: effect_args,
-                                    origin: statement.origin,
-                                },
-                            )?
-                            .into_iter()
-                            .map(|mut resolved| {
-                                for parent in self.ancestors(resolved.authority) {
-                                    let region = self.inventory.loans[parent.payload.id.0]
-                                        .region(self.db, &parent.payload, parent.guard.scope())
-                                        .with_guard(&parent.guard);
-                                    resolved.access.authorizers = resolved
-                                        .access
-                                        .authorizers
-                                        .union(&region.close_existentials(
-                                            resolved.access.authorizers.scope(),
-                                        ));
-                                }
-                                resolved.access
-                            }),
-                        );
-                        continue;
-                    }
-                    _ => continue,
-                };
-                let region = self
-                    .resolve_region(&state, place)
-                    .with_guard(&state.guard().in_scope(&BinderScope::default()));
-                accesses.push(MemoryAccess {
-                    kind,
-                    region,
-                    authorizers: RegionSet::empty(&BinderScope::default()),
-                });
+        for operation in self.operations.iter().flatten() {
+            accesses.extend(operation.accesses.iter().map(|access| MemoryAccess {
+                kind: access.kind,
+                region: access.region.clone(),
+                authorizers: RegionSet::empty(access.region.scope()),
+            }));
+            for resolved in &operation.calls {
+                let mut access = resolved.access.clone();
+                for parent in self.ancestors(resolved.authority.iter().cloned()) {
+                    let region = self.inventory.loans[parent.payload.id.0]
+                        .region(self.db, &parent.payload, parent.guard.scope())
+                        .with_guard(&parent.guard);
+                    access.authorizers = access
+                        .authorizers
+                        .union(&region.close_existentials(access.authorizers.scope()));
+                }
+                accesses.push(access);
             }
         }
-        Ok(accesses)
+        accesses
     }
 }
 
 impl<'db> Borrowck<'db> {
     /// Trusted intrinsic identities supply precise effects even when the source
     /// declaration is bodyless, or its implementation uses raw address arithmetic.
-    pub fn intrinsic_summary(
-        &self,
-    ) -> Result<Option<BorrowSummary<'db>>, SemanticBorrowDiagnostic<'db>> {
+    pub fn intrinsic_summary(&self) -> Result<Option<BorrowSummary<'db>>, SemanticDiagnostic<'db>> {
         let BodyOwner::Func(func) = self.instance.key(self.db).owner(self.db) else {
             return Ok(None);
         };
@@ -231,6 +182,7 @@ impl<'db> Borrowck<'db> {
                     _ => false,
                 })
                 .map(|target| SourceExpr {
+                    invalidated: false,
                     source: target.source.clone(),
                     path: RegionPath::default(),
                     views: Default::default(),
@@ -256,6 +208,7 @@ impl<'db> Borrowck<'db> {
                     })?
                     .expect("allocation returns a raw pointer");
                     SourceExpr {
+                        invalidated: false,
                         source: ExternalSource::allocation(
                             self.db,
                             OpaqueHandleRef {
@@ -284,6 +237,7 @@ impl<'db> Borrowck<'db> {
                 }
                 IntrinsicPointerReturn::InputMemArrayElem => {
                     source = SourceExpr {
+                        invalidated: false,
                         source: ExternalSource::memory(
                             self.db,
                             source,
@@ -296,6 +250,7 @@ impl<'db> Borrowck<'db> {
                 }
                 IntrinsicPointerReturn::InputPointee => {
                     source = SourceExpr {
+                        invalidated: false,
                         source: ExternalSource::memory(
                             self.db,
                             source,
@@ -351,10 +306,21 @@ impl<'db> Borrowck<'db> {
             });
         }
         Ok(Some(BorrowSummary {
+            native_requirements: RegionSet::empty(&scope),
             may_return: !self.instance.is_intrinsically_never_returning(self.db),
             result,
             mutable_inputs: Vec::new(),
             requirements: Vec::new(),
+            availability: AvailabilitySummary {
+                incoming: accesses
+                    .iter()
+                    .map(|access| AvailabilityRequirement {
+                        kind: access.kind,
+                        region: access.region.clone(),
+                    })
+                    .collect(),
+                ..AvailabilitySummary::empty()
+            },
             accesses,
         }))
     }
@@ -364,7 +330,7 @@ impl<'db> Borrowck<'db> {
     pub fn signature_memory_accesses(
         &self,
         mut choice: u32,
-    ) -> Result<Vec<MemoryAccess<'db>>, SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<Vec<MemoryAccess<'db>>, SemanticDiagnostic<'db>> {
         let scope = BinderScope::default();
         let evm_receiver = matches!(self.instance.key(self.db).owner(self.db), BodyOwner::Func(func) if is_std_evm_effect_method(self.db, func));
         let mut accesses = Vec::new();
@@ -385,6 +351,19 @@ impl<'db> Borrowck<'db> {
                 .filter_map(|class| match class {
                     CapabilityClass::Borrow(BorrowKind::Ref) | CapabilityClass::View => {
                         Some(MemoryAccessKind::Read)
+                    }
+                    CapabilityClass::Pointer
+                        if !ty_is_copy(
+                            self.db,
+                            self.instance
+                                .key(self.db)
+                                .impl_env(self.db)
+                                .normalization_scope(self.db),
+                            input.ty,
+                            self.instance.assumptions(self.db),
+                        ) =>
+                    {
+                        Some(MemoryAccessKind::Move)
                     }
                     CapabilityClass::Borrow(BorrowKind::Mut) | CapabilityClass::Pointer => {
                         Some(MemoryAccessKind::Write)

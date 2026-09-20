@@ -1109,7 +1109,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 &place.path,
             )
             .map_err(|_| NormalizeError::InvalidProjection)?;
-            self.load_or_borrow_place(base.sem_origin(origin), result_ty, place, None)
+            self.load_or_borrow_place(origin, result_ty, place, None)
         } else {
             let value = self.read_operand(block, origin, base, None)?;
             self.normalize_value_projection(

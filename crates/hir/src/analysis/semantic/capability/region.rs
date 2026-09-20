@@ -131,6 +131,16 @@ pub struct RegionSet<'db> {
     clauses: Box<[Guarded<'db, SymbolicPlace<'db>>]>,
 }
 
+/// Proof that one typed store selects a unique destination under its guard.
+/// Possibility unions and existentially selected targets do not establish this.
+pub struct DefiniteWrite<'a, 'db>(&'a RegionSet<'db>);
+
+impl<'a, 'db> DefiniteWrite<'a, 'db> {
+    pub fn region(&self) -> &'a RegionSet<'db> {
+        self.0
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OverlapResult<'db> {
     Disjoint,
@@ -139,6 +149,17 @@ pub enum OverlapResult<'db> {
 }
 
 impl<'db> RegionSet<'db> {
+    /// Shared by strong provenance updates and ownership reinitialization.
+    /// A runtime index still denotes one cell; coverage must separately prove
+    /// that this cell contains the unavailable region being cleared.
+    pub fn definite_write(&self) -> Option<DefiniteWrite<'_, 'db>> {
+        let [clause] = &*self.clauses else {
+            return None;
+        };
+        (!clause.payload.root.is_reachable() && clause.guard.scope() == &self.scope)
+            .then_some(DefiniteWrite(self))
+    }
+
     pub fn empty(scope: &BinderScope) -> Self {
         Self {
             scope: scope.clone(),
@@ -599,7 +620,7 @@ impl<'db> RegionSet<'db> {
     }
 }
 
-fn substitute_clause<'db>(
+pub(crate) fn substitute_clause<'db>(
     clause: &Guarded<'db, SymbolicPlace<'db>>,
     subst: &IndexSubst<'db>,
 ) -> Guarded<'db, SymbolicPlace<'db>> {
@@ -780,6 +801,48 @@ mod tests {
             )
             .unwrap();
             assert_eq!(remaining.substitute(&db, &subst).is_empty(), selected == 0);
+        }
+    }
+
+    #[test]
+    fn certified_reinitialization_overapproximates_three_concrete_cells() {
+        let db = HirAnalysisTestDb::default();
+        let cells = [0, 1, 2].map(|id| {
+            region(
+                test_roots::local(&db, NRootId::from_u32(id)),
+                RegionPath::default(),
+            )
+        });
+        let subset = |mask: u32| {
+            cells
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| mask & (1 << index) != 0)
+                .fold(
+                    RegionSet::empty(&BinderScope::default()),
+                    |set, (_, cell)| set.union(cell),
+                )
+        };
+        for possible in [1_u32, 2, 3, 4, 5, 6, 7] {
+            let destination = subset(possible);
+            for unavailable in [0_u32, 1, 2, 3, 4, 5, 6, 7] {
+                let before = subset(unavailable);
+                let after = destination.definite_write().map_or_else(
+                    || before.clone(),
+                    |proof| before.remove_covered(proof.region()),
+                );
+                for (chosen, _) in cells
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| possible & (1 << index) != 0)
+                {
+                    let concrete_after = subset(unavailable & !(1 << chosen));
+                    assert!(
+                        after.provably_covers(&concrete_after),
+                        "possible={possible:b}, unavailable={unavailable:b}, chosen={chosen}"
+                    );
+                }
+            }
         }
     }
 

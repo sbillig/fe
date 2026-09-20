@@ -8,9 +8,11 @@ use super::{
     guard::{Guard, ValueOccurrence},
     index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     loan::{CapabilityRef, LoanDef},
+    opaque::OpaqueWrite,
     path::{RegionPath, StructuralPath},
     region::{OverlapResult, RegionRoot, RegionSet},
     repack::RepackError,
+    semantics::UnresolvedCapability,
     shape::ShapeId,
     value::{Guarded, IndexPayload, ValueId, ValueInterner, ValueLimits},
 };
@@ -21,9 +23,10 @@ pub type CapabilityValues<'db> = ValueInterner<'db, CapabilityRef<'db>>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StateError<'db> {
-    MissingStorage(RegionRoot<'db>),
+    OpaqueContents(UnresolvedCapability<'db>),
+    MissingStorage(Box<RegionRoot<'db>>),
     Repack(RepackError<'db>),
-    UnrepresentableWrite(RegionRoot<'db>),
+    UnrepresentableWrite(Box<RegionRoot<'db>>),
 }
 
 /// The keys and shapes are the immutable inventory shared by every block state.
@@ -34,9 +37,6 @@ pub struct BorrowState<'db> {
     guard: Guard<'db>,
     values: BTreeMap<NValueId, CapabilityValue<'db>>,
     contents: BTreeMap<RegionRoot<'db>, CapabilityValue<'db>>,
-    /// Unknown contents before any definite write, also used after an overlapping
-    /// raw write through an incompatible typed view.
-    initial_contents: BTreeMap<RegionRoot<'db>, CapabilityValue<'db>>,
 }
 
 impl<'db> BorrowState<'db> {
@@ -50,7 +50,6 @@ impl<'db> BorrowState<'db> {
             guard: Guard::always(&scope),
             values: BTreeMap::new(),
             contents: BTreeMap::new(),
-            initial_contents: BTreeMap::new(),
         };
         for (id, shape) in holders {
             assert!(
@@ -77,15 +76,11 @@ impl<'db> BorrowState<'db> {
             }
             assert!(state.contents.insert(root, value).is_none());
         }
-        state.initial_contents = state.contents.clone();
         state
     }
 
     pub fn extend_storage(&mut self, inventory: &Self) {
         for (root, initial) in &inventory.contents {
-            self.initial_contents
-                .entry(root.clone())
-                .or_insert_with(|| initial.clone());
             self.contents
                 .entry(root.clone())
                 .or_insert_with(|| initial.clone());
@@ -222,6 +217,7 @@ impl<'db> BorrowState<'db> {
         value
             .direct()
             .iter()
+            .filter(|entry| !matches!(entry.payload, CapabilityRef::Invalidated { .. }))
             .fold(RegionSet::empty(value.scope()), |region, entry| {
                 region.union(
                     &entry
@@ -285,7 +281,9 @@ impl<'db> BorrowState<'db> {
                 result = values.join(&result, &selected);
             }
             if covered.is_none_or(|guard| !clause.guard.implies(&guard)) {
-                return Err(StateError::MissingStorage(clause.payload.root.clone()));
+                return Err(StateError::MissingStorage(Box::new(
+                    clause.payload.root.clone(),
+                )));
             }
         }
         Ok(result)
@@ -296,21 +294,24 @@ impl<'db> BorrowState<'db> {
     /// All replacements are prepared before changing state, so failure is atomic.
     pub fn write_region(
         &mut self,
+        overwrite: OpaqueWrite<'db>,
         values: &mut CapabilityValues<'db>,
         region: &RegionSet<'db>,
         replacement: &CapabilityValue<'db>,
     ) -> Result<(), StateError<'db>> {
-        self.write_regions(values, &[(region, replacement)])
+        self.write_regions(overwrite, values, &[(region, replacement)])
     }
 
-    /// A byte-level call write can destroy values held through another typed
-    /// interpretation. Exact typed cells are handled by structural poststates.
+    /// Byte writes may destroy every overlapping typed interpretation, including
+    /// an exact cell when an intrinsic supplies no structural poststate.
     pub fn invalidate_memory(
         &mut self,
         values: &mut CapabilityValues<'db>,
         region: &RegionSet<'db>,
-    ) {
-        for (root, contents) in &mut self.contents {
+        overwrite: OpaqueWrite<'db>,
+    ) -> Result<(), StateError<'db>> {
+        let mut updates = BTreeMap::new();
+        for (root, contents) in &self.contents {
             if !contents.shape().contains_capability(values.db) {
                 continue;
             }
@@ -318,24 +319,20 @@ impl<'db> BorrowState<'db> {
                 RegionSet::singleton(contents.scope(), root.clone(), RegionPath::default())
                     .substitute(values.db, &contents.scope().freshening(region.scope()))
                     .close_existentials(region.scope());
-            if region.clauses().iter().any(|clause| {
-                storage_instance(
-                    values.db,
-                    root,
-                    contents.scope(),
-                    &clause.payload.root,
-                    clause.guard.scope(),
-                )
-                .is_none()
-                    && root.may_alias_unknown(&clause.payload.root)
-                    && !matches!(
-                        candidate.overlap(&RegionSet::new(region.scope(), [clause.clone()])),
-                        OverlapResult::Disjoint
+            if !matches!(candidate.overlap(region), OverlapResult::Disjoint) {
+                let unknown = overwrite
+                    .contents(
+                        values,
+                        contents.shape(),
+                        contents.scope(),
+                        Some((root, region)),
                     )
-            }) {
-                *contents = values.join(contents, &self.initial_contents[root]);
+                    .map_err(StateError::OpaqueContents)?;
+                updates.insert(root.clone(), values.join(contents, &unknown));
             }
         }
+        self.contents.extend(updates);
+        Ok(())
     }
 
     /// Apply one call's complete poststate without imposing an order on aliased
@@ -343,6 +340,7 @@ impl<'db> BorrowState<'db> {
     /// destinations weakly retain every candidate. Failure leaves state intact.
     pub fn write_regions(
         &mut self,
+        overwrite: OpaqueWrite<'db>,
         values: &mut CapabilityValues<'db>,
         replacements: &[(&RegionSet<'db>, &CapabilityValue<'db>)],
     ) -> Result<(), StateError<'db>> {
@@ -426,13 +424,9 @@ impl<'db> BorrowState<'db> {
                             },
                         )
                         .map_err(|_| {
-                            StateError::UnrepresentableWrite(clause.payload.root.clone())
+                            StateError::UnrepresentableWrite(Box::new(clause.payload.root.clone()))
                         })?;
-                    let updated = if !interferes
-                        && !root.is_reachable()
-                        && region.clauses().len() == 1
-                        && clause.guard.scope() == region.scope()
-                    {
+                    let updated = if !interferes && region.definite_write().is_some() {
                         changed
                     } else {
                         values.join(old, &changed)
@@ -440,11 +434,13 @@ impl<'db> BorrowState<'db> {
                     updates.insert(root.clone(), updated);
                 }
                 if covered.is_none_or(|guard| !clause.guard.implies(&guard)) {
-                    return Err(StateError::MissingStorage(clause.payload.root.clone()));
+                    return Err(StateError::MissingStorage(Box::new(
+                        clause.payload.root.clone(),
+                    )));
                 }
             }
         }
-        for (region, replacement) in replacements {
+        for (region, _) in replacements {
             for clause in region.clauses() {
                 for (root, contents) in &self.contents {
                     if !contents.shape().contains_capability(values.db)
@@ -468,14 +464,19 @@ impl<'db> BorrowState<'db> {
                     if matches!(candidate.overlap(region), OverlapResult::Disjoint) {
                         continue;
                     }
-                    // Retain the old value because aliasing is only possible. Add
-                    // uninitialized contents whenever the write cannot transport the
-                    // same structural shape (including integer overwrites of pointers).
-                    if replacement.shape() != contents.shape() {
-                        let old = updates.get(root).unwrap_or(contents);
-                        updates
-                            .insert(root.clone(), values.join(old, &self.initial_contents[root]));
-                    }
+                    // Unknown bases may overlap at a byte offset, even when
+                    // their typed contents have the same shape. A partial store
+                    // can corrupt a native capability rather than copy it intact.
+                    let old = updates.get(root).unwrap_or(contents);
+                    let unknown = overwrite
+                        .contents(
+                            values,
+                            contents.shape(),
+                            contents.scope(),
+                            Some((root, region)),
+                        )
+                        .map_err(StateError::OpaqueContents)?;
+                    updates.insert(root.clone(), values.join(old, &unknown));
                 }
             }
         }
