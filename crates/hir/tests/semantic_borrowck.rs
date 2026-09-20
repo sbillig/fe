@@ -13,6 +13,7 @@ use fe_hir::{
             SemanticNormalizationFailure, canonicalize_semantic_consts,
             capability::{
                 external::ExternalOrigin,
+                footprint::AccessExtent,
                 guard::ValueOccurrence,
                 handle::{AddressOccurrence, HandleAddressSpace},
                 index::IndexExpr,
@@ -32,7 +33,7 @@ use fe_hir::{
         },
         ty::{
             ProviderAddressSpace,
-            corelib::MemoryAccessKind,
+            corelib::{MemoryAccessKind, resolve_lib_func_path},
             ty_check::{BodyOwner, LocalBinding},
             ty_def::{BorrowKind, TyData},
         },
@@ -365,6 +366,115 @@ fn memory() uses (raw: mut RawStorage) {{
                 !diagnostics.contains("borrow conflict in `fn memory`"),
                 "{source}\n{diagnostics}"
             );
+        }
+    }
+}
+
+#[test]
+fn external_call_intrinsic_summaries_include_current_state_effects() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("external_effects.fe".into(), "fn anchor() {}");
+    let (module, _) = db.top_mod(file);
+    let anchor = find_func(&db, module, "anchor");
+    for name in ["delegatecall", "call", "create", "create2", "staticcall"] {
+        let function =
+            resolve_lib_func_path(&db, anchor.scope(), &format!("std::evm::ops::{name}")).unwrap();
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(function)),
+        );
+        // Query the trusted contract before diagnostics or a caller body runs.
+        let summary = semantic_borrow_summary(&db, instance).unwrap().unwrap();
+        for space in [
+            ProviderAddressSpace::Storage,
+            ProviderAddressSpace::Transient,
+        ] {
+            for kind in [MemoryAccessKind::Read, MemoryAccessKind::Write] {
+                let found = summary.accesses.iter().any(|access| {
+                    access.kind == kind
+                        && access.extent == AccessExtent::Unknown
+                        && access.region.clauses().iter().any(|clause| {
+                            clause.payload.root.address_space() == HandleAddressSpace::Known(space)
+                        })
+                });
+                assert_eq!(
+                    found,
+                    name != "staticcall" || kind == MemoryAccessKind::Read,
+                    "{name}: {space:?} {kind:?}\n{summary:#?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn delegatecall_conflicts_with_native_state_loans_but_not_disjoint_memory() {
+    for (method, value, writes) in [
+        ("raw_delegatecall", "", true),
+        ("raw_call", "value: 0,", true),
+        ("raw_staticcall", "", false),
+    ] {
+        let operation = format!(
+            r#"
+let mut output = MemBuffer::empty()
+let outcome = call.{method}(
+    addr: Address {{ inner: 1 }}, gas: 100000, {value}
+    args: MemSpan::empty(), ret: mut output,
+)
+"#
+        );
+        for slot_ty in ["u256", "TStorPtr<u256>"] {
+            for kind in ["ref", "mut"] {
+                for call in [
+                    operation.as_str(),
+                    "access()",
+                    "forward()",
+                    "recursive(again: true)",
+                    "specialized<u256>(0)",
+                ] {
+                    let source = format!(
+                        r#"
+use core::ptr::{{MemBuffer, MemSpan}}
+use std::evm::{{Address, Call}}
+use std::evm::effects::TStorPtr
+fn access() uses (call: mut Call) {{ {operation} }}
+fn forward() uses (call: mut Call) {{ access() }}
+fn recursive(again: bool) uses (call: mut Call) {{
+    if again {{ recursive(again: false) }} else {{ forward() }}
+}}
+fn specialized<T: Copy>(_ witness: T) uses (call: mut Call) {{ forward() }}
+pub contract Cell {{
+    mut slot: {slot_ty}
+    init() uses (mut slot, call: mut Call) {{
+        let native = {kind} slot
+        {call}
+        let observed: u256 = native
+    }}
+}}
+fn memory() uses (call: mut Call) {{
+    let mut value: u256 = 0
+    let native = {kind} value
+    {call}
+    let observed: u256 = native
+}}
+"#
+                    );
+                    let diagnostics = checked_borrow_diags(&source);
+                    assert_eq!(
+                        diagnostics.contains("borrow conflict in `fn Cell::__init__`"),
+                        writes || kind == "mut",
+                        "{source}\n{diagnostics}"
+                    );
+                    assert!(
+                        !diagnostics.contains("borrow conflict in `fn memory`"),
+                        "{source}\n{diagnostics}"
+                    );
+                    assert!(
+                        !diagnostics.contains("internal borrow checking error"),
+                        "{diagnostics}"
+                    );
+                }
+            }
         }
     }
 }

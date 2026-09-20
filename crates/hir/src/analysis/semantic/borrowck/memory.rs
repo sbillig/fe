@@ -31,7 +31,7 @@ use crate::analysis::{
     },
     ty::{
         corelib::{
-            IntrinsicContract, IntrinsicMemoryExtent, IntrinsicMemoryProjection,
+            IntrinsicContract, IntrinsicMemoryExtent, IntrinsicMemoryTarget,
             IntrinsicPointerReturn, MemoryAccessKind, contract_metadata_kind, intrinsic_contract,
         },
         ty_check::BodyOwner,
@@ -296,8 +296,10 @@ impl<'db> Borrowck<'db> {
         let contracts = contract.memory.unwrap_or_default();
         let authorizers = contracts
             .iter()
-            .filter(|access| access.projection == IntrinsicMemoryProjection::Value)
-            .filter_map(|access| input(access.input, false))
+            .filter_map(|access| match access.target {
+                IntrinsicMemoryTarget::Value(param) => input(param, false),
+                _ => None,
+            })
             .fold(RegionSet::empty(&scope), |region, source| {
                 region.union(&RegionSet::singleton(
                     &scope,
@@ -306,8 +308,8 @@ impl<'db> Borrowck<'db> {
                 ))
             });
         for access in contracts {
-            if access.projection == IntrinsicMemoryProjection::Value {
-                let ty = self.summary_param_ty(access.input).ok_or_else(|| {
+            if let IntrinsicMemoryTarget::Value(param) = access.target {
+                let ty = self.summary_param_ty(param).ok_or_else(|| {
                     self.internal_diag(origin, "intrinsic access has no input parameter".into())
                 })?;
                 // A value access reads through native argument transport. Plain
@@ -317,23 +319,41 @@ impl<'db> Borrowck<'db> {
                     continue;
                 }
             }
-            let source = if let IntrinsicMemoryProjection::Address(space) = access.projection {
-                Some(SourceExpr {
+            let source = match access.target {
+                IntrinsicMemoryTarget::Address { input, space } => Some(SourceExpr {
                     source: ExternalSource::unknown(
                         ReferentContract::new(
                             self.db,
                             TyId::u256(self.db),
                             HandleAddressSpace::Known(space),
                         ),
-                        AddressOccurrence::Summary(access.input),
-                        Box::new([IndexExpr::FormalValue(access.input)]),
+                        AddressOccurrence::Summary(input),
+                        Box::new([IndexExpr::FormalValue(input)]),
                     ),
                     path: RegionPath::default(),
                     views: Default::default(),
                     invalidated: false,
-                })
-            } else {
-                input(access.input, false)
+                }),
+                IntrinsicMemoryTarget::WholeSpace(space) => Some(SourceExpr {
+                    // This uncertain source ranges over every compatible slot.
+                    // Unknown extent prevents field/offset separation, and this
+                    // may-write can never establish definite initialization.
+                    source: ExternalSource::unknown(
+                        ReferentContract::new(
+                            self.db,
+                            TyId::u256(self.db),
+                            HandleAddressSpace::Known(space),
+                        ),
+                        AddressOccurrence::Summary(0),
+                        Box::new([]),
+                    ),
+                    path: RegionPath::default(),
+                    views: Default::default(),
+                    invalidated: false,
+                }),
+                IntrinsicMemoryTarget::Value(param) | IntrinsicMemoryTarget::Pointee(param) => {
+                    input(param, false)
+                }
             }
             .ok_or_else(|| {
                 self.internal_diag(
@@ -349,16 +369,22 @@ impl<'db> Borrowck<'db> {
                     IntrinsicMemoryExtent::Argument(param) => {
                         AccessExtent::Bytes(IndexExpr::FormalValue(param))
                     }
+                    IntrinsicMemoryExtent::Unknown => AccessExtent::Unknown,
                 },
                 region: RegionSet::singleton(
                     &scope,
                     RegionRoot::External(source.source),
                     source.path,
                 ),
-                authorizers: if access.projection != IntrinsicMemoryProjection::Value {
-                    authorizers.clone()
-                } else {
+                authorizers: if matches!(
+                    access.target,
+                    IntrinsicMemoryTarget::Value(_) | IntrinsicMemoryTarget::WholeSpace(_)
+                ) {
+                    // A capability to issue an external call supplies no
+                    // authority over native loans into arbitrary current state.
                     RegionSet::empty(&scope)
+                } else {
+                    authorizers.clone()
                 },
             });
         }

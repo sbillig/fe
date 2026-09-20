@@ -236,6 +236,28 @@ trait dispatch. Compiler-provided contract code offsets and lengths have explici
 contracts only for concrete contract types, using the same library identity check
 as runtime lowering.
 
+Trusted external-call contracts include current-context state independently of
+buffer arguments. `DELEGATECALL` can read and write any persistent or transient
+slot directly. `CALL`, `CREATE`, and `CREATE2` conservatively have the same state
+effects through callbacks. `STATICCALL` can read those spaces through callbacks;
+its propagated static context forbids state writes. Consequently, shared native
+state loans cannot cross unrestricted state interference, and exclusive native
+state loans cannot cross either kind of unbounded state access. A constant callee
+address or a mutable zero-sized EVM witness does not establish a narrower contract.
+
+`IntrinsicMemoryTarget::WholeSpace` has an uncertain, stable region source with
+`AccessExtent::Unknown`. It denotes any compatible slot and supplies no authority
+over native child loans. Writes remain possible writes, never proof of typed
+initialization. Local checks, opaque contents invalidation, summary forwarding,
+recursive composition and specialization consume the same effects. Linear-memory
+effects remain the explicit input/output buffer footprints; external execution
+does not directly share the caller frame's other memory. Locking fixtures follow
+these ordinary rules; the checker has no lock-name exemption.
+
+The state policy follows [EIP-7](https://eips.ethereum.org/EIPS/eip-7),
+[EIP-1153](https://eips.ethereum.org/EIPS/eip-1153), and the static-context propagation
+in [EIP-214](https://eips.ethereum.org/EIPS/eip-214).
+
 Summary verification rejects a feasible returning native slot with no represented
 referent. This is distinct from empty arrays, absent enum alternatives, moved
 poststates, and genuinely nonreturning paths, which may contain no native value.

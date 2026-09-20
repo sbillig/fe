@@ -1,7 +1,7 @@
 use fe_hir::analysis::ty::corelib::{
-    IntrinsicMemoryAccess, IntrinsicMemoryExtent, IntrinsicMemoryProjection,
-    IntrinsicPointerReturn, MemoryAccessKind, RuntimeBuiltinFuncKind, intrinsic_contract,
-    is_std_evm_effect_method, resolve_lib_func_path, runtime_builtin_func_kind,
+    IntrinsicMemoryAccess, IntrinsicMemoryExtent, IntrinsicMemoryTarget, IntrinsicPointerReturn,
+    MemoryAccessKind, RuntimeBuiltinFuncKind, intrinsic_contract, is_std_evm_effect_method,
+    resolve_lib_func_path, runtime_builtin_func_kind,
 };
 use fe_hir::test_db::HirAnalysisTestDb;
 
@@ -116,8 +116,7 @@ fn classifies_core_and_std_runtime_builtins() {
             .memory
             .expect("mload memory contract"),
         &[IntrinsicMemoryAccess {
-            input: 0,
-            projection: IntrinsicMemoryProjection::Pointee,
+            target: IntrinsicMemoryTarget::Pointee(0),
             kind: MemoryAccessKind::Read,
             extent: IntrinsicMemoryExtent::Bytes(32),
         }]
@@ -129,14 +128,12 @@ fn classifies_core_and_std_runtime_builtins() {
             .expect("memory-copy memory contract"),
         &[
             IntrinsicMemoryAccess {
-                input: 1,
-                projection: IntrinsicMemoryProjection::Pointee,
+                target: IntrinsicMemoryTarget::Pointee(1),
                 kind: MemoryAccessKind::Read,
                 extent: IntrinsicMemoryExtent::Argument(2),
             },
             IntrinsicMemoryAccess {
-                input: 0,
-                projection: IntrinsicMemoryProjection::Pointee,
+                target: IntrinsicMemoryTarget::Pointee(0),
                 kind: MemoryAccessKind::Write,
                 extent: IntrinsicMemoryExtent::Argument(2),
             },
@@ -156,14 +153,12 @@ fn classifies_core_and_std_runtime_builtins() {
             .expect("RawMem::mstore memory contract"),
         &[
             IntrinsicMemoryAccess {
-                input: 0,
-                projection: IntrinsicMemoryProjection::Value,
+                target: IntrinsicMemoryTarget::Value(0),
                 kind: MemoryAccessKind::MutAccess,
                 extent: IntrinsicMemoryExtent::Typed,
             },
             IntrinsicMemoryAccess {
-                input: 1,
-                projection: IntrinsicMemoryProjection::Pointee,
+                target: IntrinsicMemoryTarget::Pointee(1),
                 kind: MemoryAccessKind::Write,
                 extent: IntrinsicMemoryExtent::Bytes(32),
             },

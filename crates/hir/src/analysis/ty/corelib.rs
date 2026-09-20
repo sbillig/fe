@@ -125,11 +125,16 @@ pub enum IntrinsicPointerReturn {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IntrinsicMemoryProjection {
-    Value,
-    Pointee,
-    /// A numeric address in an address space with no pointer argument.
-    Address(ProviderAddressSpace),
+pub enum IntrinsicMemoryTarget {
+    Value(u32),
+    Pointee(u32),
+    /// A numeric address argument rather than a typed pointer argument.
+    Address {
+        input: u32,
+        space: ProviderAddressSpace,
+    },
+    /// Any compatible location in the current execution context, independent of arguments.
+    WholeSpace(ProviderAddressSpace),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -154,12 +159,12 @@ pub enum IntrinsicMemoryExtent {
     Typed,
     Bytes(usize),
     Argument(u32),
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IntrinsicMemoryAccess {
-    pub input: u32,
-    pub projection: IntrinsicMemoryProjection,
+    pub target: IntrinsicMemoryTarget,
     pub kind: MemoryAccessKind,
     pub extent: IntrinsicMemoryExtent,
 }
@@ -167,8 +172,7 @@ pub struct IntrinsicMemoryAccess {
 impl IntrinsicMemoryAccess {
     const fn value(input: u32, kind: MemoryAccessKind) -> Self {
         Self {
-            input,
-            projection: IntrinsicMemoryProjection::Value,
+            target: IntrinsicMemoryTarget::Value(input),
             kind,
             extent: IntrinsicMemoryExtent::Typed,
         }
@@ -176,8 +180,7 @@ impl IntrinsicMemoryAccess {
 
     const fn pointee(input: u32, kind: MemoryAccessKind, extent: IntrinsicMemoryExtent) -> Self {
         Self {
-            input,
-            projection: IntrinsicMemoryProjection::Pointee,
+            target: IntrinsicMemoryTarget::Pointee(input),
             kind,
             extent,
         }
@@ -190,10 +193,17 @@ impl IntrinsicMemoryAccess {
         extent: IntrinsicMemoryExtent,
     ) -> Self {
         Self {
-            input,
-            projection: IntrinsicMemoryProjection::Address(space),
+            target: IntrinsicMemoryTarget::Address { input, space },
             kind,
             extent,
+        }
+    }
+
+    const fn whole_space(space: ProviderAddressSpace, kind: MemoryAccessKind) -> Self {
+        Self {
+            target: IntrinsicMemoryTarget::WholeSpace(space),
+            kind,
+            extent: IntrinsicMemoryExtent::Unknown,
         }
     }
 }
@@ -299,7 +309,10 @@ const COPY_EXTERNAL_CODE: &[IntrinsicMemoryAccess] = &[
         IntrinsicMemoryExtent::Argument(3),
     ),
 ];
-const CALL_MEMORY: &[IntrinsicMemoryAccess] = &[
+// Unrestricted external execution can access current state directly (delegatecall)
+// or through callbacks (call/create). Static execution propagates its write ban,
+// but callbacks can still read state. Caller-frame memory is limited to buffers.
+const CALL_EFFECTS: &[IntrinsicMemoryAccess] = &[
     IntrinsicMemoryAccess::pointee(
         3,
         MemoryAccessKind::Read,
@@ -310,8 +323,12 @@ const CALL_MEMORY: &[IntrinsicMemoryAccess] = &[
         MemoryAccessKind::Write,
         IntrinsicMemoryExtent::Argument(6),
     ),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Write),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Write),
 ];
-const STATIC_CALL_MEMORY: &[IntrinsicMemoryAccess] = &[
+const STATIC_CALL_EFFECTS: &[IntrinsicMemoryAccess] = &[
     IntrinsicMemoryAccess::pointee(
         2,
         MemoryAccessKind::Read,
@@ -322,12 +339,36 @@ const STATIC_CALL_MEMORY: &[IntrinsicMemoryAccess] = &[
         MemoryAccessKind::Write,
         IntrinsicMemoryExtent::Argument(5),
     ),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Read),
 ];
-const READ_POINTEE_1: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
-    1,
-    MemoryAccessKind::Read,
-    IntrinsicMemoryExtent::Argument(2),
-)];
+const DELEGATE_CALL_EFFECTS: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::pointee(
+        2,
+        MemoryAccessKind::Read,
+        IntrinsicMemoryExtent::Argument(3),
+    ),
+    IntrinsicMemoryAccess::pointee(
+        4,
+        MemoryAccessKind::Write,
+        IntrinsicMemoryExtent::Argument(5),
+    ),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Write),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Write),
+];
+const CREATE_EFFECTS: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::pointee(
+        1,
+        MemoryAccessKind::Read,
+        IntrinsicMemoryExtent::Argument(2),
+    ),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Write),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Write),
+];
 const READ_VALUE_0: &[IntrinsicMemoryAccess] =
     &[IntrinsicMemoryAccess::value(0, MemoryAccessKind::Read)];
 const READ_STORAGE: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::address(
@@ -465,11 +506,11 @@ define_runtime_intrinsics! {
     BlobHash => (Std, ["evm", "ops", "blobhash"], NO_MEMORY_ACCESSES, None),
     BlobBaseFee => (Std, ["evm", "ops", "blobbasefee"], NO_MEMORY_ACCESSES, None),
     Gas => (Std, ["evm", "ops", "gas"], NO_MEMORY_ACCESSES, None),
-    Call => (Std, ["evm", "ops", "call"], CALL_MEMORY, None),
-    StaticCall => (Std, ["evm", "ops", "staticcall"], STATIC_CALL_MEMORY, None),
-    DelegateCall => (Std, ["evm", "ops", "delegatecall"], STATIC_CALL_MEMORY, None),
-    Create => (Std, ["evm", "ops", "create"], READ_POINTEE_1, None),
-    Create2 => (Std, ["evm", "ops", "create2"], READ_POINTEE_1, None),
+    Call => (Std, ["evm", "ops", "call"], CALL_EFFECTS, None),
+    StaticCall => (Std, ["evm", "ops", "staticcall"], STATIC_CALL_EFFECTS, None),
+    DelegateCall => (Std, ["evm", "ops", "delegatecall"], DELEGATE_CALL_EFFECTS, None),
+    Create => (Std, ["evm", "ops", "create"], CREATE_EFFECTS, None),
+    Create2 => (Std, ["evm", "ops", "create2"], CREATE_EFFECTS, None),
     Log0 => (Std, ["evm", "ops", "log0"], READ_POINTEE_0, None),
     Log1 => (Std, ["evm", "ops", "log1"], READ_POINTEE_0, None),
     Log2 => (Std, ["evm", "ops", "log2"], READ_POINTEE_0, None),
