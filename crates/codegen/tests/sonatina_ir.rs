@@ -12,7 +12,7 @@ use driver::DriverDataBase;
 use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_module_sonatina_ir_optimized};
 use std::{collections::HashSet, path::Path};
 use test_utils::_macro_support::_insta::{self, Settings};
-use tracing::{info, warn};
+use tracing::info;
 use url::Url;
 
 fn with_top_mod_for_source<T>(
@@ -426,10 +426,6 @@ fn sonatina_ir_snap(fixture: Fixture<&str>) {
         Ok(ir) => ir,
         Err(fe_codegen::LowerError::Unsupported(msg)) => {
             info!("SKIP {}: unsupported ({msg})", fixture.path());
-            return;
-        }
-        Err(fe_codegen::LowerError::Internal(msg)) => {
-            warn!("SKIP {}: internal error ({msg})", fixture.path());
             return;
         }
         Err(err) => panic!("Sonatina IR lowering failed: {err}"),
