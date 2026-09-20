@@ -82,6 +82,7 @@ pub enum NormalizedBodyVerifyError {
     },
     InvalidBorrowActivation(NValueId),
     ExpressionType,
+    ArrayRepeatRequiresCopy,
     ScalarCapability,
     ScalarOperandCapability(NValueId),
     InvalidRepack,
@@ -597,11 +598,17 @@ fn verify_expr<'db>(
         }
         NExpr::ArrayRepeat { ty, value } => {
             let (_, args) = ty.decompose_ty_app(db);
-            if *ty != result_ty
-                || !ty.is_array(db)
-                || args.first().copied() != Some(operand_ty(body, *value)?)
-            {
+            let element = operand_ty(body, *value)?;
+            if *ty != result_ty || !ty.is_array(db) || args.first().copied() != Some(element) {
                 return Err(NormalizedBodyVerifyError::ExpressionType);
+            }
+            if !ty_is_copy(
+                db,
+                body.template_owner.scope(),
+                element,
+                body.owner.assumptions(db),
+            ) {
+                return Err(NormalizedBodyVerifyError::ArrayRepeatRequiresCopy);
             }
             Ok(())
         }

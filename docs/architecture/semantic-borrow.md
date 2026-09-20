@@ -119,6 +119,37 @@ Array and loop occurrences carry explicit indices or lexical witnesses. Export
 renames occurrences to summary identities; call substitution maps them to the
 call site. Replaying an analysis does not allocate a new opaque identity.
 
+## Raw range validity
+
+Allocation disjointness and elision of fresh-allocation effects assume each raw
+operation's **whole footprint** fits, without address/length wrapping, inside its
+live allocated object. The compiler tracks provenance, not allocation bounds for
+arbitrary raw spans. Two 32-byte allocations are disjoint under this premise; a
+64-byte access starting at the first allocation violates the raw API contract.
+Borrow acceptance of that access is not a static bounds proof.
+
+`alloc_raw`, `alloc`, `alloc_bytes`, `MemArray::new_uninit`, and buffer allocators
+establish the requested byte extent. They do not establish typed native contents.
+Raw dereferences, `zero_bytes`, `copy_raw`, and `copy` assert valid complete access
+ranges; copy requires both ranges and permits overlap. `MemSlice::from_raw_parts`
+asserts its complete range without checking it. `cast`, `byte_ptr`, and `offset`
+preserve an address interpretation and do not enlarge, validate, or initialize an
+allocation. A cast also supplies no native authority.
+
+`MemSlice::try_slice`/`slice`, slice indexing, and array indexing check containment
+relative to an already valid parent extent. Buffer reserve and checked buffer
+writes establish room for their full byte ranges. A forged parent extent cannot
+be repaired merely by taking a checked subrange. Native-reference leaves separately
+require valid typed initialization; zeroing or copying bytes cannot provide it.
+
+The `raw_extent_contract.fe` execution fixture pairs a valid complete raw write
+with checks that reject ranges crossing the end, including nonwrapping length
+checks. `raw_allocation_effect_elision_assumes_the_complete_range_contract` also
+records the compile-only, out-of-contract 64-byte candidate: it is deliberately
+not executed or described as proved safe. General raw-bounds inference would
+require allocation-size and whole-footprint containment evidence in addition to
+the provenance tracked here.
+
 ## Entry contents, allocation birth, and opaque overwrites
 
 Entry contents mean the caller's contents at function entry. Substituting an entry

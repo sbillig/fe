@@ -744,6 +744,97 @@ fn inspect() {{
 }
 
 #[test]
+fn normalized_array_repeat_requires_copy_under_instance_assumptions() {
+    for (declarations, generics, ty, mode, copy) in [
+        ("struct Item { value: u256 }", "", "Item", "own ", false),
+        ("struct Item { value: *u256 }", "", "Item", "own ", false),
+        ("struct Item { value: ref u256 }", "", "Item", "own ", false),
+        (
+            "struct Item { value: u256 }\nimpl Copy for Item {}",
+            "",
+            "Item",
+            "own ",
+            true,
+        ),
+        ("", "<T>", "T", "own ", false),
+        ("", "<T: Copy>", "T", "own ", true),
+        ("", "", "u256", "", true),
+        ("", "", "*u256", "", true),
+        ("", "", "ref u256", "", true),
+        ("", "", "mut u256", "", true),
+    ] {
+        for (len, fields) in [(1, "first"), (2, "first, second")] {
+            let source = format!(
+                r#"
+{declarations}
+fn inspect{generics}(first: {mode}{ty}, second: {mode}{ty}) -> [{ty}; {len}] {{
+    [{fields}]
+}}
+"#
+            );
+            let mut db = HirAnalysisTestDb::default();
+            let file = db.new_stand_alone("repeat_copy.fe".into(), &source);
+            let (module, _) = db.top_mod(file);
+            db.assert_no_diags(module);
+            let mut artifacts = normalized_func_body(&db, module, "inspect");
+            verify_normalized_body(&db, &artifacts.body).expect("valid source array construction");
+            let expr = artifacts
+                .body
+                .blocks
+                .iter_mut()
+                .flat_map(|block| &mut block.statements)
+                .find_map(|statement| match &mut statement.kind {
+                    NStatementKind::Define {
+                        expr: expr @ NExpr::AggregateMake { .. },
+                        ..
+                    } => Some(expr),
+                    _ => None,
+                })
+                .expect("array construction");
+            let NExpr::AggregateMake { ty, fields } = expr else {
+                unreachable!()
+            };
+            assert!(ty.is_array(&db));
+            *expr = NExpr::ArrayRepeat {
+                ty: *ty,
+                value: fields[0],
+            };
+            let expected = if copy {
+                Ok(())
+            } else {
+                Err(NormalizedBodyVerifyError::ArrayRepeatRequiresCopy)
+            };
+            assert_eq!(
+                verify_normalized_body(&db, &artifacts.body),
+                expected,
+                "{source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn raw_allocation_effect_elision_assumes_the_complete_range_contract() {
+    for len in [32, 64] {
+        // Only len=32 satisfies this allocation's raw range contract. The
+        // len=64 candidate deliberately documents an unchecked caller assertion:
+        // borrow acceptance is not a bounds proof, and this case is never run.
+        with_borrow_summary(
+            &format!(
+                r#"
+fn raw_range() {{
+    let bytes = core::ptr::alloc_bytes(32)
+    core::ptr::zero_bytes(bytes, {len})
+}}
+"#
+            ),
+            "raw_range",
+            |_, summary| assert!(summary.accesses.is_empty(), "{summary:#?}"),
+        );
+    }
+}
+
+#[test]
 fn physical_casts_do_not_inherit_zero_sized_pointee_disjointness() {
     for write in [
         "*ptr::cast<(), u256>(empty) = 1",

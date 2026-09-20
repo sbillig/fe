@@ -397,6 +397,8 @@ impl<'db> ExternalSource<'db> {
 
     /// Direct bytes in an allocation created by this invocation cannot alias
     /// any caller loan. Following a pointer stored there loses that guarantee.
+    /// Raw accesses must stay within the allocation's complete valid extent;
+    /// this provenance query does not prove bounds for a cast or offset.
     pub fn is_fresh_allocation(&self) -> bool {
         self.fresh_allocation().is_some()
     }
@@ -748,6 +750,8 @@ impl<'db> ExternalSource<'db> {
         }
         // Distinct fresh allocations and incoming pointers cannot identify the
         // same object. Unknown manufactured addresses remain conservative.
+        // This assumes each raw operation's entire footprint is within its
+        // allocated object. Allocation identity is not a raw bounds certificate.
         if matches!(
             (&self.origin, &other.origin),
             (

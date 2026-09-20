@@ -563,6 +563,9 @@ impl<'db> Borrowck<'db> {
         let pending_accesses = self.body_memory_accesses();
         let mut accesses = Vec::new();
         for access in pending_accesses {
+            // Eliding fresh-object effects relies on the raw API's valid-range
+            // precondition for the whole footprint. A cast/offset does not prove
+            // containment, and out-of-allocation spans are outside that contract.
             // Occurrences exposed by results, poststates, and requirements stay
             // shared. An address used only by this effect is existential within
             // the effect: retaining call-depth identities would grow recursive
