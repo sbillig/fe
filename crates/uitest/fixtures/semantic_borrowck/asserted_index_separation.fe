@@ -1,0 +1,22 @@
+// Known precision limit: assert does not supply an index equality proof.
+use core::ptr
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+
+// Rejected conservatively: the assertion does not prove index separation.
+fn read_other(index: usize) -> u256 {
+    assert!(index == 1)
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[index].n
+}
+
+// Accepted: the literal index is disjoint from the moved element.
+fn read_constant(index: usize) -> u256 {
+    assert!(index == 1)
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[1].n
+}

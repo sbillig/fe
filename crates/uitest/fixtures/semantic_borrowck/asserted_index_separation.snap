@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/asserted_index_separation.fe
+---
+error[16-0002]: move conflict in `fn read_other`
+   ┌─ asserted_index_separation.fe:12:5
+   │
+11 │     consume((*items)[0])
+   │             ----------- value is moved here
+12 │     (*items)[index].n
+   │     ^^^^^^^^^^^^^^^^^ cannot use a value after it was moved

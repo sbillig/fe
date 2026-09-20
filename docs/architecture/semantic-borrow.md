@@ -3,6 +3,8 @@
 The compiler checks ownership and capability provenance over verified normalized
 semantic IR. Runtime layout is a separate consumer of that boundary. A scalar-only
 non-Copy value has ownership state even when its capability shape is empty.
+For source examples and compatibility changes, see
+[source diagnostics and compatibility](#source-diagnostics-and-compatibility).
 
 ## Admission and consumers
 
@@ -485,6 +487,75 @@ bytes, 208 extra runtime bytes, and 138–139 extra call gas for native carriers
 descriptor construction and dispatch are not fully optimized away. These are
 comparison programs on the current compiler, not a historical branch-wide estimate.
 The checked-in cost snapshot records the baseline for future changes.
+
+## Source diagnostics and compatibility
+
+The UI fixtures below preserve complete diagnostics, including source labels, for
+these rules and current precision limits. Each fixture contains both the rejected case and accepted
+alternatives, labeled in the source. A precision-limit snapshot records current behavior; it
+should change when a sound improvement makes the program acceptable.
+
+| Source pattern | Current behavior | Diagnostic fixture |
+| --- | --- | --- |
+| Read `items[index]` after moving `items[0]`, even after `assert!(index == 1)` | The assertion does not supply an index-separation proof. A literal disjoint index is accepted. | [Asserted index separation](../../crates/uitest/fixtures/semantic_borrowck/asserted_index_separation.fe) |
+| Zero or byte-copy a native-reference slot, then load it | Raw bytes do not establish a valid native reference. Typed reference stores and copies are accepted. | [Native slot initialization](../../crates/uitest/fixtures/semantic_borrowck/native_slot_initialization.fe) |
+| Move one cell, then write through a pointer selecting that cell or another | The write cannot definitely restore the moved cell. An exact destination is accepted. | [Ambiguous reinitialization](../../crates/uitest/fixtures/semantic_borrowck/ambiguous_reinitialization.fe) |
+| Keep a storage borrow live across an external call | CALL conflicts with shared and mutable state loans; STATICCALL conflicts with mutable state loans. Ending the loan before the call and reborrowing afterward is accepted. | [External call state borrows](../../crates/uitest/fixtures/semantic_borrowck/external_call_state_borrows.fe) |
+| Select an allocating factory with a boolean inside a loop, then consume the joined result | Lost branch correlation can cause a conservative move conflict. Consuming inside each branch or retaining enum guards is accepted. | [Boolean factory loop](../../crates/uitest/fixtures/semantic_borrowck/boolean_factory_loop.fe) |
+| Recursively return freshly allocated objects | Summary allocation choices can fail bounded convergence. Recursively forwarding an existing pointer is accepted. | [Recursive fresh return](../../crates/uitest/fixtures/semantic_borrowck/recursive_fresh_return.fe) |
+| Use a raw pointee after an unresolved generic operation | Template validation remains pending. A concrete implementation that consumes the pointee makes the subsequent use invalid. | [Generic ownership specialization](../../crates/uitest/fixtures/semantic_borrowck/generic_ownership_specialization.fe) |
+| Execute a bodyless, untrusted function | The call remains pending even without arguments; its signature supplies no effect bound. | [Opaque executable call](../../crates/uitest/fixtures/semantic_borrowck/opaque_executable_call.fe) |
+| Leave a function-local reference in a fresh raw heap slot when returning | The retained-storage boundary rejects the local borrow even when only a copied integer is returned. A heap-owned referent has a different lifetime and is accepted. | [Retained local reference](../../crates/uitest/fixtures/semantic_borrowck/retained_local_reference.fe) |
+| Return a mutable borrow inside a tuple and create an overlapping live borrow | Destructuring the tuple preserves the loan. The overlapping borrow is rejected, just as with a direct return. Ending the first loan before reborrowing is accepted. | [Returned tuple borrow](../../crates/uitest/fixtures/semantic_borrowck/returned_tuple_borrow.fe) |
+
+A fresh raw heap slot is not a function-local ownership container merely because
+its pointer is not explicitly returned. Leaving a borrow in that storage is a
+separate export from the function's return value. Returning a copied scalar does
+not erase the slot's retained reference. Native slots must satisfy both typed
+initialization and the retained-storage boundary.
+
+Raw allocation bounds and native-reference representation costs have different
+coverage because they do not necessarily produce diagnostics. The
+[raw range validity](#raw-range-validity) section documents the caller's complete
+range obligation and its compile-only out-of-contract example. The
+[stored native reference](#stored-native-references-and-static-runtime-views)
+section records the runtime representation and measured comparison costs.
+
+### StorageKey encoding and buffer reservation
+
+`StorageKey` requires the encoded length before writing:
+
+```fe
+pub trait StorageKey {
+    fn encoded_len(self) -> u256
+    fn write_key(ptr: *u8, self)
+}
+```
+
+Previously, `write_key` returned its length after writing. `StorageMap` obtained
+scratch space with `alloc_bytes(0)`, which did not reserve the key or salt bytes.
+An allocation during encoding could reuse the same address and overwrite the key
+before hashing. Compiler-generated native-reference descriptors can allocate too.
+For example, an encoder could write key 7, allocate and zero a temporary buffer at
+the same address, and cause the map to hash zero instead. Encoding key 8 could
+then produce the same storage slot. This is memory corruption, independent of
+whether the borrow checker accepts the encoder.
+
+The map now obtains `key_len`, reserves `key_len + 32` bytes, writes the key, appends
+the salt, and hashes the reserved region. Custom encoders must report their exact
+length and write exactly that many bytes. The encoding and its length must remain
+stable between `encoded_len` and `write_key`; a variable-length encoder may need
+a separate sizing traversal. Allocations during encoding are permitted because
+they occur beyond the already reserved preimage.
+
+Upfront reservation is the safety requirement. The separate `encoded_len` method
+is the chosen API for meeting it; `write_key` now returns unit so the encoded length
+has one authoritative source. The existing word and tuple encoding bytes remain
+unchanged. The [StorageKey UI fixture](../../crates/uitest/fixtures/ty_check/storage_key_encoding_contract.fe)
+shows the missing-method and incompatible-return-type diagnostics for the old API
+alongside a current implementation. The
+[allocating-key execution regression](../../crates/fe/tests/fixtures/fe_test/storage_map_allocating_key.fe)
+checks that an encoder allocating during its write keeps distinct keys distinct.
 
 ## Verification and conservative limits
 

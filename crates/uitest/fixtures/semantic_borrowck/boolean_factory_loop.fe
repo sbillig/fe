@@ -1,0 +1,41 @@
+// Known precision limit: boolean joins lose allocation-family correlation.
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+fn initialized(_ n: u256) -> *Item {
+    let p = core::ptr::alloc<Item>()
+    *p = Item { n }
+    p
+}
+fn forward(_ n: u256) -> *Item { initialized(n) }
+
+// Rejected conservatively: joining boolean branches loses allocation correlation.
+fn example(count: u256) {
+    let mut i: u256 = 0
+    while i < count {
+        let p = if i == 0 { initialized(i) } else { forward(i) }
+        consume(*p)
+        i += 1
+    }
+}
+
+// Accepted: consume each fresh value before joining the branches.
+fn consume_in_branch(count: u256) {
+    let mut i: u256 = 0
+    while i < count {
+        if i == 0 { consume(*initialized(i)) } else { consume(*forward(i)) }
+        i += 1
+    }
+}
+
+// Accepted: enum selection retains its guard through the join.
+fn enum_selected(count: u256, choice: Choice) {
+    let mut i: u256 = 0
+    while i < count {
+        let p = match choice { Choice::First => initialized(i), Choice::Second => forward(i) }
+        consume(*p)
+        i += 1
+    }
+}
+
+enum Choice { First, Second }
+impl Copy for Choice {}
