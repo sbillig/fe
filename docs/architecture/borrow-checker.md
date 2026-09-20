@@ -1,8 +1,9 @@
-# Semantic ownership, capabilities, and boundaries
+# Borrow checker architecture
 
-The compiler checks ownership and capability provenance over verified normalized
-semantic IR. Runtime layout is a separate consumer of that boundary. A scalar-only
-non-Copy value has ownership state even when its capability shape is empty.
+Fe's borrow checker analyzes ownership availability, loan conflicts, capability
+provenance, and transport and escape boundaries over verified normalized semantic
+IR. Runtime layout is a separate consumer of that IR. A scalar-only non-Copy value
+has ownership state even when its capability shape is empty.
 For source examples and compatibility changes, see
 [source diagnostics and compatibility](#source-diagnostics-and-compatibility).
 
@@ -22,7 +23,10 @@ flowchart TD
     Ownership --> Summary[Interprocedural summary]
     Conflicts --> Diagnostics[Diagnostics]
     Boundary --> Summary
-    Normalized --> Runtime[Layout evidence and runtime lowering]
+    Summary --> Validation[Concrete borrow and boundary validation]
+    Conflicts --> Validation
+    Validation --> Runtime[Layout evidence and runtime lowering]
+    Normalized --> Runtime
 ```
 
 Admission distinguishes an upstream-blocked body from an internal normalization
@@ -36,6 +40,14 @@ Final queries enforce the resulting ownership and boundary contracts. A blocked
 query retains its blocking causes even if it has a conservative signature summary.
 A successful summary with `may_return = false` describes divergence; neither a
 blocked body nor an internal failure becomes a successful diverging body.
+
+A successful summary describes effects and boundary requirements; local loan
+conflicts have a separate validation query. `check_semantic_borrows` checks the
+body and its resolved callees transitively, while `check_semantic_boundaries`
+consumes the summary's boundary result. The
+[runtime instance lowering gate](../../crates/mir/src/instance/runtime.rs)
+requires both checks to succeed for each concrete semantic body before lowering
+it. A pending, blocked, or failed result cannot pass that gate.
 
 Admission-time CTFE runs before these summaries exist. Its conservative raw-body
 invalidation remains independent. Contract-field definite assignment similarly
@@ -243,7 +255,7 @@ do not acquire invented hidden fields.
 ## Definite writes
 
 `RegionSet::definite_write` provides the shared certificate for strong provenance
-updates and ownership restoration. The initial criterion requires one non-widened
+updates and ownership restoration. The current criterion requires one non-widened
 destination with no additional existential target selection. A runtime index can
 denote one cell, but coverage must still prove that this is the moved cell.
 
@@ -413,25 +425,36 @@ body still observes its own statement order. Aliasing between formal destination
 can make an additional forwarding summary less precise than inline execution;
 sound overapproximation is required, universal acceptance equivalence is not.
 
-## Related changes in this branch
+## Frontend and runtime integration
 
 Trait selection preserves implementation evidence and associated-constant
 binders through selection and substitution. Those semantics support correct
 instantiated bodies but are not part of the ownership dataflow or its abstract
 domain.
 
-Runtime changes consume the normalized body and its explicit layout plan, including
-terminal capability stores through referents, materialized views, parameter
-carriers, and synthetic values with independent runtime homes. Review
+Runtime lowering consumes the normalized body and its explicit layout plan,
+including terminal capability stores through referents, materialized views,
+parameter carriers, and synthetic values with independent runtime homes. These
+are implemented in
 [`mir/runtime/lower/semantic_body.rs`](../../crates/mir/src/runtime/lower/semantic_body.rs),
-the runtime return/argument adapters, and the codegen handle-preservation tests
-separately from the static ownership transfer. Layout cannot supply ownership
-facts missing from normalized semantics.
+the runtime return/argument adapters, and codegen, with handle-preservation tests
+covering their interaction. Layout cannot supply ownership facts missing from
+normalized semantics.
 
 Frontend move marking recognizes dereferences of temporary pointers, including
 selected fields and array elements. Lowering preserves those places through
 normalization; projecting a read snapshot must not replace consuming the original
 storage. Copy values remain non-consuming.
+
+Place typing preserves native-reference slot types: for `slot: *ref u256`,
+`*slot = value` replaces the stored reference and requires a reference value.
+Compound assignment instead accesses the referent, so `*slot += 1` requires
+`slot: *mut u256`. Contextual Copy reads, including reads from native-reference
+call results, become explicit referent loads in normalized IR. The frontend also
+rejects mutable method borrows of fields through an immutable `own self` binding.
+These distinctions are covered by the
+[type-check tests](../../crates/hir/tests/ty_check.rs) and
+[normalization tests](../../crates/hir/src/analysis/semantic/normalized/normalize.rs).
 
 ## Stored native references and static runtime views
 
@@ -471,11 +494,13 @@ a descriptor costs a two-word heap allocation before optimization; copying an
 existing native reference copies only its one-word handle. User buffers must reserve
 their complete extent before writes, including across compiler-generated allocations.
 
-The `native_reference_runtime` execution tests cover the remaining address spaces,
-readonly rejection at concrete specialization, live references across callee
-allocation, and query/declaration order. The O2 cost fixture compares two non-inlined
-helpers selecting one of two `u8` values with helpers storing and returning native
-references to those same values. Both branch results are checked by execution.
+The [native_reference_runtime tests](../../crates/fe/tests/native_reference_runtime.rs)
+cover storage, transient storage, calldata, and code descriptors, readonly rejection
+at concrete specialization, live references across callee allocation, and
+query/declaration order. The O2 cost test in that integration-test harness compares
+two non-inlined helpers selecting one of two `u8` values with helpers storing and
+returning native references to those same values. Both branch results are checked
+by execution.
 
 | Representation in this fixture | Deploy bytes | Runtime bytes | First branch gas | Second branch gas |
 | --- | ---: | ---: | ---: | ---: |
@@ -485,15 +510,18 @@ references to those same values. Both branch results are checked by execution.
 Gas includes transaction and calldata costs. This fixture measures 209 extra deploy
 bytes, 208 extra runtime bytes, and 138–139 extra call gas for native carriers;
 descriptor construction and dispatch are not fully optimized away. These are
-comparison programs on the current compiler, not a historical branch-wide estimate.
-The checked-in cost snapshot records the baseline for future changes.
+comparison programs under this harness's compilation settings, not a historical
+branch-wide estimate. The
+[checked-in cost snapshot](../../crates/fe/tests/native_reference_runtime_cost.snap)
+records the baseline for future changes under the same harness.
 
 ## Source diagnostics and compatibility
 
 The UI fixtures below preserve complete diagnostics, including source labels, for
-these rules and current precision limits. Each fixture contains both the rejected case and accepted
-alternatives, labeled in the source. A precision-limit snapshot records current behavior; it
-should change when a sound improvement makes the program acceptable.
+these rules and current precision limits. Each fixture contains both the rejected
+case and accepted alternatives, labeled in the source. A precision-limit snapshot
+records current behavior; it should change when a sound improvement makes the
+program acceptable.
 
 | Source pattern | Current behavior | Diagnostic fixture |
 | --- | --- | --- |
@@ -521,42 +549,6 @@ range obligation and its compile-only out-of-contract example. The
 [stored native reference](#stored-native-references-and-static-runtime-views)
 section records the runtime representation and measured comparison costs.
 
-### StorageKey encoding and buffer reservation
-
-`StorageKey` requires the encoded length before writing:
-
-```fe
-pub trait StorageKey {
-    fn encoded_len(self) -> u256
-    fn write_key(ptr: *u8, self)
-}
-```
-
-Previously, `write_key` returned its length after writing. `StorageMap` obtained
-scratch space with `alloc_bytes(0)`, which did not reserve the key or salt bytes.
-An allocation during encoding could reuse the same address and overwrite the key
-before hashing. Compiler-generated native-reference descriptors can allocate too.
-For example, an encoder could write key 7, allocate and zero a temporary buffer at
-the same address, and cause the map to hash zero instead. Encoding key 8 could
-then produce the same storage slot. This is memory corruption, independent of
-whether the borrow checker accepts the encoder.
-
-The map now obtains `key_len`, reserves `key_len + 32` bytes, writes the key, appends
-the salt, and hashes the reserved region. Custom encoders must report their exact
-length and write exactly that many bytes. The encoding and its length must remain
-stable between `encoded_len` and `write_key`; a variable-length encoder may need
-a separate sizing traversal. Allocations during encoding are permitted because
-they occur beyond the already reserved preimage.
-
-Upfront reservation is the safety requirement. The separate `encoded_len` method
-is the chosen API for meeting it; `write_key` now returns unit so the encoded length
-has one authoritative source. The existing word and tuple encoding bytes remain
-unchanged. The [StorageKey UI fixture](../../crates/uitest/fixtures/ty_check/storage_key_encoding_contract.fe)
-shows the missing-method and incompatible-return-type diagnostics for the old API
-alongside a current implementation. The
-[allocating-key execution regression](../../crates/fe/tests/fixtures/fe_test/storage_map_allocating_key.fe)
-checks that an encoder allocating during its write keeps distinct keys distinct.
-
 ## Verification and conservative limits
 
 The semantic borrow suite pairs unsafe inline programs with helper and forwarding
@@ -571,6 +563,7 @@ These cases can reject programs that a stronger relational analysis would accept
 They must never turn a possible write into definite initialization or grant native
 authority to arbitrary bytes.
 
-Use `cargo nextest r --release --no-fail-fast` for the complete suite, together with
+Use `cargo nextest r --release --workspace --all-features --locked --no-fail-fast`
+for the complete suite, together with
 `cargo +nightly fmt --all -- --check` and workspace Clippy. Admission, CTFE, layout,
 runtime, and codegen tests are required as well as the focused borrow regressions.
