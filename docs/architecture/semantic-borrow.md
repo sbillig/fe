@@ -401,6 +401,10 @@ Aggregate construction converts native fields explicitly with `RExpr::NativeRef`
 Joins of native references with different physical layouts use that same carrier,
 and function declarations and body inference share the transport-join rule.
 Loading a reference from a slot returns the stored carrier, not the slot address.
+Return inference and value forwarding retain normalized operands: a loaded native
+field remains its descriptor even when its semantic local is an erased place alias.
+Copy scalar parameters materialize their value when the calling convention carries
+an implicit view. Declaration and body queries enforce the same return class.
 The verifier checks these conversions independently of semantic borrow checking;
 runtime representation never supplies ownership or aliasing authority.
 
@@ -415,6 +419,23 @@ and dereference preserve these distinctions across calls and control flow. Creat
 a descriptor costs a two-word heap allocation before optimization; copying an
 existing native reference copies only its one-word handle. User buffers must reserve
 their complete extent before writes, including across compiler-generated allocations.
+
+The `native_reference_runtime` execution tests cover the remaining address spaces,
+readonly rejection at concrete specialization, live references across callee
+allocation, and query/declaration order. The O2 cost fixture compares two non-inlined
+helpers selecting one of two `u8` values with helpers storing and returning native
+references to those same values. Both branch results are checked by execution.
+
+| Representation in this fixture | Deploy bytes | Runtime bytes | First branch gas | Second branch gas |
+| --- | ---: | ---: | ---: | ---: |
+| Static view | 194 | 175 | 22,120 | 22,090 |
+| Stored native carriers | 403 | 383 | 22,259 | 22,228 |
+
+Gas includes transaction and calldata costs. This fixture measures 209 extra deploy
+bytes, 208 extra runtime bytes, and 138–139 extra call gas for native carriers;
+descriptor construction and dispatch are not fully optimized away. These are
+comparison programs on the current compiler, not a historical branch-wide estimate.
+The checked-in cost snapshot records the baseline for future changes.
 
 ## Verification and conservative limits
 

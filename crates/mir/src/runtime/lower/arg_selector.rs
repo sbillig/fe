@@ -4,13 +4,15 @@ use hir::analysis::{
         SLocalId, SemanticLocalKind,
         normalized::{
             NEffectArg, NEffectArgValue, NOperand as SemanticOperand, NPlace, NPlaceBase,
-            NRootKind, ReadMode,
+            NRootKind, NValueDefinition, ReadMode,
         },
     },
     ty::ty_def::TyId,
 };
 
-use crate::runtime::{AddressSpaceKind, RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass};
+use crate::runtime::{
+    AddressSpaceKind, RefKind, RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass,
+};
 
 use super::{
     boundary::{
@@ -74,11 +76,11 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         RuntimeSourceQuery::new(self.env, self.carriers, self.source_mode)
     }
 
-    pub(super) fn selected_actual_value(
+    pub(super) fn selected_actual_operand(
         &mut self,
-        local: SLocalId,
+        operand: RuntimeOperand,
     ) -> Option<SelectedRuntimeArg<'db>> {
-        self.select_actual_operand_value(local, copy_operand(local))
+        self.select_actual_operand_value(operand.local, operand)
     }
 
     pub(super) fn selected_materialized_operand(
@@ -89,6 +91,28 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             .value
             .and_then(|value| self.env.body().normalized.value(value))
             .map_or(self.env.body().local(operand.local)?.ty, |value| value.ty);
+        let local_ty = self.env.body().local(operand.local)?.ty;
+        let copied_param = local_ty.as_view(self.env.db()) == Some(ty)
+            && operand.value.is_some_and(|value| {
+                matches!(
+                    self.env.body().normalized.values[value.index()].definition,
+                    NValueDefinition::EntryParam { .. }
+                )
+            });
+        // A stored native carrier is a value even when its semantic local is an
+        // erased place alias. Static views still use their materialization plan.
+        let actual = self.operand_value_class(operand);
+        if copied_param
+            || matches!(
+                actual,
+                Some(RuntimeClass::Ref {
+                    kind: RefKind::Native,
+                    ..
+                })
+            )
+        {
+            return actual.map(|class| SelectedRuntimeArg::semantic_operand(operand, class));
+        }
         if ty.as_capability(self.env.db()).is_none()
             && effect_handle_transport_class_for_ty_in_env(self.env.db(), self.env.type_env(), ty)
                 .is_some()
@@ -322,10 +346,19 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         boundary: &StagedBoundary<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
         let boundary = self.specialized_boundary(arg.local, boundary);
-        // A joined carrier describes every incoming value. Recovering an alias
-        // place first can instead select just one predecessor's transport.
+        // A stored native operand identifies its loaded carrier even when the
+        // local is only an erased place alias. Static views use the joined
+        // carrier so an alias cannot select just one predecessor's transport.
         if let Some(class) = self.operand_value_class(arg)
-            && carrier_value_class(arg.local, self.carriers).as_ref() == Some(&class)
+            && ((arg.value.is_some()
+                && matches!(
+                    class,
+                    RuntimeClass::Ref {
+                        kind: RefKind::Native,
+                        ..
+                    }
+                ))
+                || carrier_value_class(arg.local, self.carriers).as_ref() == Some(&class))
             && BoundaryMatcher::class_satisfies_boundary(&class, &boundary)
         {
             return Some(SelectedRuntimeArg::semantic_operand(arg, class));
@@ -336,14 +369,6 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             .normalized_place_address_class(self.carriers, &place)?;
         BoundaryMatcher::class_satisfies_boundary(&class, &boundary)
             .then(|| SelectedRuntimeArg::place_addr(place, semantic_ty, class))
-    }
-
-    pub(super) fn selected_value_for_local(
-        &mut self,
-        local: SLocalId,
-        plan: &CompiledValuePassPlan<'db>,
-    ) -> Option<SelectedRuntimeArg<'db>> {
-        self.selected_value_pass_plan(copy_operand(local), plan)
     }
 
     fn select_value_view_arg(

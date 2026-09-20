@@ -1,3 +1,6 @@
+#[cfg(test)]
+use hir::analysis::semantic::normalized::ReadMode;
+
 use common::indexmap::IndexSet;
 use cranelift_entity::{EntityRef, PrimaryMap, entity_impl};
 use hir::analysis::{
@@ -7,7 +10,7 @@ use hir::analysis::{
         ValueProvenance, VariantIndex, get_or_build_semantic_instance,
         normalized::{
             NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace, NPlaceBase, NRootKind,
-            NStatementKind, NValueDefinition, NValueId, ReadMode,
+            NStatementKind, NValueDefinition, NValueId,
         },
     },
     ty::{
@@ -2188,9 +2191,9 @@ fn aggregate_make_class_from_facts<'db>(
     })
 }
 
-pub(super) fn selected_visible_return_for_local<'db>(
+pub(super) fn selected_visible_return_for_operand<'db>(
     env: BodyEnv<'_, 'db>,
-    local: SLocalId,
+    operand: RuntimeOperand,
     plan: &RuntimeVisibleReturnPlan<'db>,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<SelectedRuntimeArg<'db>> {
@@ -2198,22 +2201,23 @@ pub(super) fn selected_visible_return_for_local<'db>(
     match plan {
         RuntimeVisibleReturnPlan::Erased => None,
         RuntimeVisibleReturnPlan::Exact(class) => {
-            Some(evaluator.selected_semantic_operand_for_class(copy_operand(local), class))
+            Some(evaluator.selected_semantic_operand_for_class(operand, class))
         }
         RuntimeVisibleReturnPlan::Constrained(boundary) => {
             let mut boundary_sites = BoundarySiteAllocator::default();
-            evaluator.selected_value_for_local(
-                local,
+            evaluator.selected_value_pass_plan(
+                operand,
                 &compile_value_pass_plan(
                     RuntimeParamPlan::Boundary(boundary.clone()),
                     &mut boundary_sites,
                 ),
             )
         }
-        RuntimeVisibleReturnPlan::PassActual => evaluator.selected_actual_value(local),
+        RuntimeVisibleReturnPlan::PassActual => evaluator.selected_actual_operand(operand),
     }
 }
 
+#[cfg(test)]
 fn copy_operand(local: SLocalId) -> RuntimeOperand {
     RuntimeOperand {
         local,
@@ -2778,6 +2782,19 @@ fn normalized_value_runtime_class<'db>(
     let value_data = env.body.normalized.value(value)?;
     let local = env.value_local(value)?;
     let fallback = || {
+        // Copy scalar parameters are normalized as values even when the semantic
+        // binding has an implicit view and this instance passes its address.
+        if matches!(value_data.definition, NValueDefinition::EntryParam { .. })
+            && env.local(local)?.ty.as_view(env.db) == Some(value_data.ty)
+            && let Some(class @ RuntimeClass::Scalar(_)) = top_level_class_for_ty_in_env(
+                env.db,
+                env.type_env(),
+                value_data.ty,
+                AddressSpaceKind::Memory,
+            )
+        {
+            return Some(class);
+        }
         carrier_value_class(local, carriers).or_else(|| {
             env.local_facts(local)?
                 .root_transport_fallback_class
@@ -3517,17 +3534,19 @@ mod tests {
             .blocks
             .iter()
             .filter_map(|block| match &block.terminator.kind {
-                NTerminatorKind::Return(Some(value)) => normalized.operand_local(*value),
+                NTerminatorKind::Return(Some(value)) => normalized.runtime_operand(*value),
                 NTerminatorKind::Goto(_)
                 | NTerminatorKind::Branch { .. }
                 | NTerminatorKind::MatchEnum { .. }
                 | NTerminatorKind::Assert { .. }
                 | NTerminatorKind::Return(None) => None,
             })
-            .map(|local| {
-                selected_visible_return_for_local(env, local, &return_plan, &inferred.carriers)
+            .map(|operand| {
+                selected_visible_return_for_operand(env, operand, &return_plan, &inferred.carriers)
                     .unwrap_or_else(|| {
-                        panic!("pick_ac_mut return local should stay runtime-visible: {local:?}")
+                        panic!(
+                            "pick_ac_mut return operand should stay runtime-visible: {operand:?}"
+                        )
                     })
             })
             .collect::<Vec<_>>();
@@ -3973,8 +3992,8 @@ uses (slot: Slot<u256>)
                     let mut class_cache = InferClassCache::new(normalized.locals.len());
                     let mut evaluator =
                         RuntimeArgSelector::new(env, &inferred.carriers, Some(&mut class_cache));
-                    let receiver_actual =
-                        receiver.and_then(|local| evaluator.selected_actual_value(local));
+                    let receiver_actual = receiver
+                        .and_then(|local| evaluator.selected_actual_operand(copy_operand(local)));
                     let receiver_materialized = receiver.and_then(|local| {
                         evaluator.selected_materialized_operand(copy_operand(local))
                     });

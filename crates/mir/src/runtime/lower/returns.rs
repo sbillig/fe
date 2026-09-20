@@ -36,7 +36,7 @@ use crate::{
 use super::{
     classify::{
         AssignmentId, BodyEnv, BodyStaticFacts, RuntimeVisibleReturnPlan, default_return_class,
-        desired_runtime_return_plan, selected_visible_return_for_local,
+        desired_runtime_return_plan, selected_visible_return_for_operand,
     },
     infer::{
         AssignmentSpace, CarrierInferer, ReturnClassLookup, join_reference_transports,
@@ -44,7 +44,7 @@ use super::{
     },
     interface::{runtime_visible_binding_local, runtime_visible_binding_plans},
     provider_space::address_space_from_provider,
-    semantic_body::RuntimeSemanticBody,
+    semantic_body::{RuntimeOperand, RuntimeSemanticBody},
 };
 use crate::runtime::synthetic::runtime_synthetic_exit_behavior;
 
@@ -61,7 +61,7 @@ pub(crate) struct RuntimeReturnSummary<'db> {
     pub(crate) return_plan: RuntimeVisibleReturnPlan<'db>,
     pub(crate) default_return_class: Option<RuntimeClass<'db>>,
     pub(crate) param_locals: Box<[SLocalId]>,
-    pub(crate) return_locals: Box<[SLocalId]>,
+    pub(crate) return_operands: Box<[RuntimeOperand]>,
     pub(crate) slice_assignment_ids: PrimaryMap<SliceAssignmentId, AssignmentId>,
     pub(crate) slice_assignment_positions: SecondaryMap<AssignmentId, Option<SliceAssignmentId>>,
     pub(crate) slice_assignments_by_local: Vec<Vec<AssignmentId>>,
@@ -97,12 +97,12 @@ impl<'db> RuntimeReturnSummary<'db> {
             .map(|entry| runtime_visible_binding_local(&semantic_body.source, entry.binding))
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let return_locals = semantic_body
+        let return_operands = semantic_body
             .normalized
             .blocks
             .iter()
             .filter_map(|block| match &block.terminator.kind {
-                NTerminatorKind::Return(Some(value)) => semantic_body.operand_local(*value),
+                NTerminatorKind::Return(Some(value)) => semantic_body.runtime_operand(*value),
                 NTerminatorKind::Goto(_)
                 | NTerminatorKind::Branch { .. }
                 | NTerminatorKind::MatchEnum { .. }
@@ -117,8 +117,8 @@ impl<'db> RuntimeReturnSummary<'db> {
         if matches!(return_plan, RuntimeVisibleReturnPlan::Erased) {
             let mut fallback = None;
             let mut all_fallbacks_match = true;
-            for local in return_locals.iter().copied() {
-                let Some(class) = env.root_transport_fallback_class(local) else {
+            for operand in return_operands.iter().copied() {
+                let Some(class) = env.root_transport_fallback_class(operand.local) else {
                     continue;
                 };
                 match &fallback {
@@ -137,7 +137,10 @@ impl<'db> RuntimeReturnSummary<'db> {
 
         let mut needed_assignments = FxHashSet::default();
         let mut needed_locals = FxHashSet::default();
-        let mut pending = return_locals.iter().copied().collect::<VecDeque<_>>();
+        let mut pending = return_operands
+            .iter()
+            .map(|operand| operand.local)
+            .collect::<VecDeque<_>>();
         while let Some(local) = pending.pop_front() {
             if !needed_locals.insert(local) {
                 continue;
@@ -187,7 +190,7 @@ impl<'db> RuntimeReturnSummary<'db> {
             return_plan,
             default_return_class,
             param_locals,
-            return_locals,
+            return_operands,
             slice_assignment_ids,
             slice_assignment_positions,
             slice_assignments_by_local,
@@ -718,9 +721,9 @@ pub(crate) fn evaluate_runtime_return_class<'db>(
     )
     .solve_carriers();
     let mut returned = Vec::new();
-    for local in summary.return_locals.iter().copied() {
+    for operand in summary.return_operands.iter().copied() {
         let Some(selected) =
-            selected_visible_return_for_local(env, local, &summary.return_plan, &carriers)
+            selected_visible_return_for_operand(env, operand, &summary.return_plan, &carriers)
         else {
             return summary.default_return_class.clone();
         };
@@ -861,10 +864,10 @@ mod tests {
         )
         .run();
         let mut returned = Vec::new();
-        for local in summary.return_locals.iter().copied() {
-            let Some(selected) = selected_visible_return_for_local(
+        for operand in summary.return_operands.iter().copied() {
+            let Some(selected) = selected_visible_return_for_operand(
                 env,
-                local,
+                operand,
                 &summary.return_plan,
                 &inferred.carriers,
             ) else {
@@ -919,6 +922,54 @@ mod tests {
             legacy_return_class_for_key(&db, key),
             "static exact return class should match full-body carrier inference"
         );
+    }
+
+    #[test]
+    fn stored_native_field_returns_preserve_their_carrier() {
+        for (expression, signature_first) in [
+            "holder.first",
+            "if take_first { holder.first } else { holder.second }",
+        ]
+        .into_iter()
+        .flat_map(|expression| [true, false].map(|signature_first| (expression, signature_first)))
+        {
+            let mut db = DriverDataBase::default();
+            let file = db.workspace().touch(
+                &mut db,
+                Url::parse("file:///stored_native_field_returns.fe").unwrap(),
+                Some(format!(
+                    "struct Holder {{ first: ref u8, second: ref u8 }}\nfn select(holder: Holder, take_first: bool) -> ref u8 {{ {expression} }}\n"
+                )),
+            );
+            let module = db.top_mod(file);
+            let diagnostics = db.run_on_top_mod(module);
+            assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(&db));
+            let semantic = semantic_instance_for_named_func(&db, module, "select");
+            let instance = runtime_instance_for_semantic(&db, semantic);
+            let key = instance.key(&db);
+            if signature_first {
+                instance.interface_signature(&db);
+            }
+            let body = instance.body(&db);
+            assert_eq!(body.signature, instance.interface_signature(&db));
+            let semantic_body = RuntimeSemanticBody::admitted(&db, semantic).unwrap();
+            let inferred = runtime_return_class_for_body(&db, key, &semantic_body);
+            assert_eq!(
+                inferred,
+                declaration_runtime_return_class(&db, key),
+                "{expression}"
+            );
+            assert_eq!(inferred, legacy_return_class_for_key(&db, key));
+            assert!(matches!(
+                inferred,
+                Some(RuntimeClass::Ref {
+                    kind: RefKind::Native,
+                    ..
+                })
+            ));
+            let program: &dyn MirDb = &db;
+            crate::verify_runtime_body(&db, &program, &body).expect("valid runtime body");
+        }
     }
 
     fn assert_runtime_exit_behavior(
@@ -1299,10 +1350,11 @@ fn choose(_ flag: bool) -> u256 {
         let semantic_body =
             RuntimeSemanticBody::admitted(&db, semantic).expect("semantic body should normalize");
         let summary = RuntimeReturnSummary::build(&db, semantic, &semantic_body);
-        let return_local = *summary
-            .return_locals
+        let return_local = summary
+            .return_operands
             .first()
-            .expect("choose should return one local");
+            .expect("choose should return one operand")
+            .local;
         let source_local = summary
             .facts
             .source_locals(return_local)
