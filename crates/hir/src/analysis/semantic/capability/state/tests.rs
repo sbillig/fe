@@ -214,7 +214,7 @@ fn raw_overwrites_invalidate_exact_pointer_cells_and_remain_opaque() {
     let destination = region(root(&db, 0));
     let mut state = BorrowState::new(&mut values, [], [(root(&db, 0), initial)]);
     state
-        .invalidate_memory(&mut values, &destination, overwrite)
+        .invalidate_memory(&mut values, AccessFootprint::typed(&destination), overwrite)
         .unwrap();
     let after = read(&db, &mut values, &state, &destination, shape);
     let targets = after
@@ -233,7 +233,7 @@ fn raw_overwrites_invalidate_exact_pointer_cells_and_remain_opaque() {
             ExternalOrigin::OpaqueHandle(_)))));
     let snapshot = state.clone();
     state
-        .invalidate_memory(&mut values, &destination, overwrite)
+        .invalidate_memory(&mut values, AccessFootprint::typed(&destination), overwrite)
         .unwrap();
     assert_eq!(state, snapshot, "replaying one overwrite is idempotent");
 }
@@ -272,7 +272,7 @@ fn opaque_field_writes_preserve_disjoint_capability_fields() {
             region(root(&db, 0)).project(&RegionPath::new([Projection::Field(FieldIndex(1))]));
         let mut state = BorrowState::new(&mut values, [], [(root(&db, 0), initial)]);
         state
-            .invalidate_memory(&mut values, &destination, overwrite)
+            .invalidate_memory(&mut values, AccessFootprint::typed(&destination), overwrite)
             .unwrap();
         assert_eq!(
             read(&db, &mut values, &state, &preserved, shapes.handle),

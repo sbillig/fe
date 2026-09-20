@@ -1,10 +1,16 @@
 use crate::analysis::semantic::diagnostics::{BlockedSemanticBody, SemanticDiagnosticId};
 use salsa::Update;
+use std::collections::BTreeSet;
 
 use crate::analysis::{
     semantic::{
-        SemOrigin, SemanticInstance,
-        capability::{region::RegionSet, source::SourceExpr, value::ValueId},
+        SemOrigin, SemanticInstance, SemanticInstanceKey,
+        capability::{
+            footprint::{AccessExtent, AccessFootprint},
+            region::RegionSet,
+            source::SourceExpr,
+            value::ValueId,
+        },
     },
     ty::{corelib::MemoryAccessKind, ty_def::TyId},
 };
@@ -39,14 +45,34 @@ pub struct AvailabilityRequirement<'db> {
     /// Write requires an available parent; other accesses require the contents.
     pub kind: MemoryAccessKind,
     pub region: RegionSet<'db>,
+    pub extent: AccessExtent<'db>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MemoryAccess<'db> {
     pub kind: MemoryAccessKind,
     pub region: RegionSet<'db>,
+    pub extent: AccessExtent<'db>,
     /// Explicit receiver authority for an otherwise unknown memory effect.
     pub authorizers: RegionSet<'db>,
+}
+
+impl<'db> MemoryAccess<'db> {
+    pub fn footprint(&self) -> AccessFootprint<'_, 'db> {
+        AccessFootprint {
+            region: &self.region,
+            extent: self.extent,
+        }
+    }
+}
+
+impl<'db> AvailabilityRequirement<'db> {
+    pub fn footprint(&self) -> AccessFootprint<'_, 'db> {
+        AccessFootprint {
+            region: &self.region,
+            extent: self.extent,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -83,6 +109,10 @@ pub struct BorrowSummaryId<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SemanticBorrowSummaryResult<'db> {
     Ok(Option<BorrowSummaryId<'db>>),
+    Pending {
+        validation: PendingSemanticValidation<'db>,
+        summary: Option<BorrowSummaryId<'db>>,
+    },
     Blocked {
         body: BlockedSemanticBody<'db>,
         summary: Option<BorrowSummaryId<'db>>,
@@ -93,6 +123,14 @@ pub enum SemanticBorrowSummaryResult<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SemanticBorrowCheckResult<'db> {
     Ok,
+    Pending(PendingSemanticValidation<'db>),
     Blocked(BlockedSemanticBody<'db>),
     Err(SemanticDiagnosticId<'db>),
+}
+
+/// Obligations that must be discharged by rebuilding the concrete semantic
+/// instance. A conservative template summary is not a successful validation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Update)]
+pub struct PendingSemanticValidation<'db> {
+    pub callees: BTreeSet<SemanticInstanceKey<'db>>,
 }

@@ -66,6 +66,40 @@ Liveness, conflict checking, availability, and summary access collection consume
 this contract. Each analysis applies its own transfer rule rather than inferring
 semantics from a generic operand visitor.
 
+Availability uses one evaluator for fixed-point propagation and diagnostic/summary
+replay. Accesses explicitly identify address evaluation, operands, and writes;
+their position in the flat vector is not an execution order. Carrier and index
+reads see the incoming state. The consuming operand batch rejects overlapping
+guarded ownership regions, including two uses of one SSA owner, before checking
+callee entry requirements. Definite writes, normal-return effects, and the fresh
+result holder are initialized afterward. Disjoint fields and mutually exclusive
+guarded alternatives remain separate. Zero-sized non-Copy owners still cannot be
+consumed twice, even though their physical accesses touch no bytes.
+
+## Physical access footprints
+
+[`capability/footprint.rs`](../../crates/hir/src/analysis/semantic/capability/footprint.rs)
+combines a guarded region with a typed extent, a byte length, or an unknown extent.
+Address identity, physical overlap, definite typed coverage, and valid native
+contents are separate proofs. Different starting addresses do not imply disjoint
+accesses, and full byte coverage does not establish native authority.
+
+For linear memory, the semantic `size_of` representation contract supplies typed
+widths and field/element offsets. Known nonwrapping intervals can prove separation;
+unknown types, lengths, offsets, unsupported views, and overflowing arithmetic
+retain possible overlap. Capability-leaf counts and runtime backing homes provide
+no size evidence. Casts retain address identity while changing the accessed type,
+including casts from zero-sized pointees. Other address spaces retain their object
+semantics rather than using linear-memory byte arithmetic.
+
+Intrinsic contracts distinguish byte and word operations and describe both sides
+of copies, zeroing, hashing/logging, return/revert data, creation code, and external
+call buffers. Zero-length byte accesses are empty; unknown lengths are not zero.
+Byte writes remain may-writes and never certify typed initialization. Extents are
+part of summary equality and survive scalar substitution, forwarding, and clobber
+conditions. Corruption is discarded only after the full write footprint is proven
+disjoint from the affected typed cell.
+
 ## Structural values and stable resolution
 
 Capability values describe product fields, enum alternatives, and symbolic array
@@ -162,6 +196,51 @@ All components participate in equality and interning. Summary construction runs
 the same availability analysis as local diagnostics; correctness does not depend
 on a diagnostic query running first. Ownership effects are exported for scalar-only
 non-Copy pointees as well as aggregates containing pointers or native borrows.
+
+Signature-only summaries distinguish unknown results from unknown writable
+contents. A returning native result includes valid referents and creates a result
+loan when instantiated. Raw input candidates supply addresses without becoming
+inherited native parents. An arbitrary memory referent also covers permitted fresh
+allocation results; it does not claim the stronger identity of a known allocation.
+Writable poststates separately join valid possible contents with shape-aware opaque
+replacement, including invalidated-native alternatives. They cannot turn a raw
+clobber into a guaranteed restoration of entry validity.
+
+A bare callable signature does not bound raw effects to its arguments. Its fallback
+includes arbitrary compatible-space reads, writes, and consumption, including for
+parameterless calls. Each effect remains an individual `MemoryAccessKind` event;
+choosing a maximum kind would lose either contents invalidation or ownership loss.
+Compiler-defined intrinsic identities have explicit contracts instead. Numeric
+intrinsics are recognized by their core-library identity, not by a user-declared
+function's spelling. Unknown semantic addresses carry no runtime layout evidence.
+
+Unresolved implementations produce explicit `Pending` validation, separate from
+successful checking and upstream-blocked bodies. The pending result records the
+unresolved semantic callee keys and propagates transitively through calls and
+recursive query recovery. Conservative summary facts remain available internally
+for analysis; they do not constitute a checked executable contract. Public borrow,
+boundary, and summary consumers report pending validation as an incomplete result.
+
+Generic templates retain type/normalized-IR checking, checks before an unresolved
+call, and the call's operand checks. An unbounded unknown effect makes subsequent
+memory-dependent checks conditional along every reachable successor. SSA holders
+have no address, so their move checks remain active across statements and control
+flow; moving through a borrowed/view carrier also remains forbidden. Concrete
+specialization recomputes the body and its callees under the selected implementation
+and must finish validation before runtime lowering. Executable calls that remain
+opaque are rejected, even when they have no arguments or active borrows.
+
+A trait default body is not an effect contract for an unresolved call: an
+implementation may override it. Trusted intrinsic contracts remain usable through
+trait dispatch. Compiler-provided contract code offsets and lengths have explicit
+contracts only for concrete contract types, using the same library identity check
+as runtime lowering.
+
+Summary verification rejects a feasible returning native slot with no represented
+referent. This is distinct from empty arrays, absent enum alternatives, moved
+poststates, and genuinely nonreturning paths, which may contain no native value.
+An empty enum result still requires provenance when every variant contains a
+required native value, including through nested records and nonempty arrays.
 
 The availability transformer is:
 

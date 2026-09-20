@@ -14,8 +14,9 @@ use crate::analysis::{
 };
 
 use super::{
+    footprint::AccessExtent,
     guard::Guard,
-    handle::{HandleAddressSpace, OpaqueHandleRef},
+    handle::{AddressOccurrence, HandleAddressSpace, OpaqueHandleRef},
     index::{BinderScope, IndexExpr, IndexSubst},
     path::RegionPath,
     region::{ProviderRegionId, RegionRoot, path_alias_guard},
@@ -86,7 +87,9 @@ impl<'db> ReferentContract<'db> {
     }
 
     pub fn may_alias(self, other: Self) -> bool {
-        self.addressable && other.addressable && self.address_space.may_alias(other.address_space)
+        // Addresses survive casts even when their original pointee is empty.
+        // Whether an access touches storage belongs to its current footprint.
+        self.address_space.may_alias(other.address_space)
     }
 }
 
@@ -102,6 +105,13 @@ pub enum ExternalOrigin<'db> {
     OpaqueHandle(OpaqueHandleRef<'db>),
     /// An allocator-created object. Its identity is distinct from every older input.
     Allocation(OpaqueHandleRef<'db>),
+    /// An address admitted by an explicit unknown-call or intrinsic contract.
+    /// Unlike a manufactured handle, it has no source-language carrier type.
+    Unknown {
+        contract: ReferentContract<'db>,
+        occurrence: AddressOccurrence<'db>,
+        arguments: Box<[IndexExpr<'db>]>,
+    },
     /// A typed interpretation of raw memory at an element-scaled offset.
     /// This is a memory location, never a structural Index on a scalar type.
     Memory {
@@ -129,10 +139,15 @@ pub struct ExternalSource<'db> {
 pub struct ClobberCondition<'db> {
     pub target: SourceExpr<'db>,
     pub written: SourceExpr<'db>,
+    pub extent: AccessExtent<'db>,
 }
 
 impl<'db> ClobberCondition<'db> {
-    pub fn new(mut target: SourceExpr<'db>, mut written: SourceExpr<'db>) -> Self {
+    pub fn new(
+        mut target: SourceExpr<'db>,
+        mut written: SourceExpr<'db>,
+        extent: AccessExtent<'db>,
+    ) -> Self {
         // A write through an earlier arbitrary replacement can happen only if
         // that replacement's corruption condition held. Keep that prerequisite
         // rather than making a loop's later writes unconditionally arbitrary.
@@ -150,11 +165,48 @@ impl<'db> ClobberCondition<'db> {
         }
         target.source.erase_clobber_conditions();
         written.source.erase_clobber_conditions();
-        Self { target, written }
+        Self {
+            target,
+            written,
+            extent,
+        }
     }
 }
 
 impl<'db> ExternalSource<'db> {
+    pub fn unknown(
+        contract: ReferentContract<'db>,
+        occurrence: AddressOccurrence<'db>,
+        arguments: Box<[IndexExpr<'db>]>,
+    ) -> Self {
+        Self {
+            origin: ExternalOrigin::Unknown {
+                contract,
+                occurrence,
+                arguments,
+            },
+            contract,
+            clobber: None,
+            dereferences: Box::new([]),
+            reachable: false,
+            uncertain: true,
+        }
+    }
+
+    /// The original address before following stored capabilities or widening.
+    pub fn address_base(&self, db: &'db dyn HirAnalysisDb) -> Option<Self> {
+        match &self.origin {
+            ExternalOrigin::OpaqueHandle(handle) => Some(Self::opaque(db, handle.clone())),
+            ExternalOrigin::Allocation(handle) => Some(Self::allocation(db, handle.clone())),
+            ExternalOrigin::Unknown {
+                contract,
+                occurrence,
+                arguments,
+            } => Some(Self::unknown(*contract, *occurrence, arguments.clone())),
+            _ => None,
+        }
+    }
+
     fn erase_clobber_conditions(&mut self) {
         self.clobber = None;
         if let ExternalOrigin::Memory { base, .. } = &mut self.origin {
@@ -293,13 +345,23 @@ impl<'db> ExternalSource<'db> {
     }
 
     /// Rewrites construction occurrences through every nested memory base.
-    pub fn map_occurrences(&mut self, f: &mut impl FnMut(&mut OpaqueHandleRef<'db>)) {
+    pub fn map_occurrences(
+        &mut self,
+        f: &mut impl FnMut(&mut AddressOccurrence<'db>, &mut Box<[IndexExpr<'db>]>),
+    ) {
         if let Some(clobber) = &mut self.clobber {
             clobber.target.source.map_occurrences(f);
             clobber.written.source.map_occurrences(f);
         }
         match &mut self.origin {
-            ExternalOrigin::OpaqueHandle(source) | ExternalOrigin::Allocation(source) => f(source),
+            ExternalOrigin::OpaqueHandle(source) | ExternalOrigin::Allocation(source) => {
+                f(&mut source.occurrence, &mut source.arguments)
+            }
+            ExternalOrigin::Unknown {
+                occurrence,
+                arguments,
+                ..
+            } => f(occurrence, arguments),
             ExternalOrigin::Memory { base, .. } => base.source.map_occurrences(f),
             _ => {}
         }
@@ -378,17 +440,20 @@ impl<'db> ExternalSource<'db> {
             ExternalOrigin::OpaqueHandle(handle) | ExternalOrigin::Allocation(handle) => {
                 handle.arguments.to_vec()
             }
+            ExternalOrigin::Unknown { arguments, .. } => arguments.to_vec(),
             ExternalOrigin::Memory { base, element, .. } => base
                 .indices()
                 .chain(element.iter().map(|(_, index)| *index))
                 .collect(),
             ExternalOrigin::Provider { .. } | ExternalOrigin::Local(_) => Vec::new(),
         };
-        indices.extend(
-            self.clobber
-                .iter()
-                .flat_map(|clobber| clobber.target.indices().chain(clobber.written.indices())),
-        );
+        indices.extend(self.clobber.iter().flat_map(|clobber| {
+            clobber
+                .target
+                .indices()
+                .chain(clobber.written.indices())
+                .chain(clobber.extent.indices())
+        }));
         indices
             .into_iter()
             .chain(self.dereferences.iter().flat_map(RegionPath::indices))
@@ -401,9 +466,21 @@ impl<'db> ExternalSource<'db> {
             Box::new(ClobberCondition {
                 target: clobber.target.substitute(db, subst),
                 written: clobber.written.substitute(db, subst),
+                extent: clobber.extent.substitute(subst),
             })
         });
         match &self.origin {
+            ExternalOrigin::Unknown {
+                contract,
+                occurrence,
+                arguments,
+            } => {
+                result.origin = ExternalOrigin::Unknown {
+                    contract: contract.substitute(db, subst),
+                    occurrence: *occurrence,
+                    arguments: arguments.iter().map(|index| subst.apply(*index)).collect(),
+                };
+            }
             ExternalOrigin::OpaqueHandle(handle) => {
                 result.origin = ExternalOrigin::OpaqueHandle(handle.substitute(db, subst))
             }
@@ -439,6 +516,15 @@ impl<'db> ExternalSource<'db> {
 
     pub(super) fn rename_indices(&self, subst: &IndexSubst<'db>) -> Self {
         let origin = match &self.origin {
+            ExternalOrigin::Unknown {
+                contract,
+                occurrence,
+                arguments,
+            } => ExternalOrigin::Unknown {
+                contract: *contract,
+                occurrence: *occurrence,
+                arguments: arguments.iter().map(|index| subst.apply(*index)).collect(),
+            },
             ExternalOrigin::Local(root) => ExternalOrigin::Local(*root),
             ExternalOrigin::Input(input) => ExternalOrigin::Input(input.substitute(subst)),
             ExternalOrigin::Provider {
@@ -491,6 +577,7 @@ impl<'db> ExternalSource<'db> {
                 Box::new(ClobberCondition {
                     target: rename(&clobber.target),
                     written: rename(&clobber.written),
+                    extent: clobber.extent.substitute(subst),
                 })
             }),
             dereferences: self
@@ -533,6 +620,26 @@ impl<'db> ExternalSource<'db> {
             return None;
         }
         guard = match (&self.origin, &other.origin) {
+            (
+                ExternalOrigin::Unknown {
+                    contract: left_contract,
+                    occurrence: left,
+                    arguments: left_args,
+                },
+                ExternalOrigin::Unknown {
+                    contract: right_contract,
+                    occurrence: right,
+                    arguments: right_args,
+                },
+            ) if left_contract == right_contract
+                && left == right
+                && left_args.len() == right_args.len() =>
+            {
+                for (left, right) in left_args.iter().zip(right_args) {
+                    guard = guard.with_equality(*left, *right)?;
+                }
+                guard
+            }
             (ExternalOrigin::Local(left), ExternalOrigin::Local(right)) if left == right => guard,
             (ExternalOrigin::Input(left), ExternalOrigin::Input(right)) if self.reachable => {
                 (left.param() == right.param()).then_some(guard)?
@@ -615,27 +722,12 @@ impl<'db> ExternalSource<'db> {
         }
         if self.dereferences.is_empty()
             && !self.reachable
-            && let ExternalOrigin::Memory {
-                base: left,
-                element: left_element,
-                ..
-            } = &self.origin
+            && let ExternalOrigin::Memory { base: left, .. } = &self.origin
         {
             let other_base = match &other.origin {
-                ExternalOrigin::Memory {
-                    base,
-                    element: right_element,
-                    ..
-                } if other.dereferences.is_empty() && !other.reachable => {
-                    if left.source == base.source
-                        && left.path == base.path
-                        && left.views == base.views
-                        && let (Some((left_ty, left_index)), Some((right_ty, right_index))) =
-                            (left_element, right_element)
-                        && left_ty == right_ty
-                    {
-                        return guard.with_equality(*left_index, *right_index);
-                    }
+                ExternalOrigin::Memory { base, .. }
+                    if other.dereferences.is_empty() && !other.reachable =>
+                {
                     Some(&**base)
                 }
                 _ => None,

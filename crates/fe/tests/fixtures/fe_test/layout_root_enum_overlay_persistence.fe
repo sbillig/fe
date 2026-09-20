@@ -5,8 +5,10 @@ enum Choice {
     Right(StorageMap<u256, u256>),
 }
 
+impl Copy for Choice {}
+
 impl Choice {
-    fn set(mut self, key: u256, value: u256) {
+    fn set(own self, key: u256, value: u256) {
         match self {
             Choice::Left(mut map) => map.set(key: key, value: value),
             Choice::Right(mut map) => map.set(key: key, value: value),

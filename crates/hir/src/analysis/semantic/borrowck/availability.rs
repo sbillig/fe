@@ -18,6 +18,7 @@ use crate::analysis::{
         SemOrigin,
         capability::{
             external::ExternalOrigin,
+            footprint::{AccessExtent, AccessFootprint},
             guard::{Guard, ValueOccurrence},
             index::{BinderScope, IndexExpr},
             path::RegionPath,
@@ -25,7 +26,7 @@ use crate::analysis::{
             source::{InputOrigin, SourceExpr},
             state::BorrowState,
         },
-        normalized::{NBlockId, NStatementKind, NTerminatorKind, NValueId},
+        normalized::{NBlockId, NStatementKind, NTerminatorKind, NValueId, access::AccessPhase},
     },
     ty::{corelib::MemoryAccessKind, ty_is_copy},
 };
@@ -51,6 +52,7 @@ pub(super) struct AvailabilityAnalysis<'db> {
     pub summary: AvailabilitySummary<'db>,
     pub native_validity: NativeValidity<'db>,
     pub diagnostic: Option<SemanticDiagnostic<'db>>,
+    report_errors: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,15 +149,32 @@ impl<'db> Borrowck<'db> {
         };
         // Every source is substituted against the same pre-call snapshot. A
         // guaranteed callee destination can still be ambiguous in its caller.
-        for (region, kind, definite) in call
+        for (region, kind, definite, extent) in call
             .summary
             .availability
             .incoming
             .iter()
-            .map(|requirement| (&requirement.region, Some(requirement.kind), false))
+            .map(|requirement| {
+                (
+                    &requirement.region,
+                    Some(requirement.kind),
+                    false,
+                    requirement.extent,
+                )
+            })
             .chain([
-                (&call.summary.availability.reinitialized, None, true),
-                (&call.summary.availability.unavailable, None, false),
+                (
+                    &call.summary.availability.reinitialized,
+                    None,
+                    true,
+                    AccessExtent::Typed,
+                ),
+                (
+                    &call.summary.availability.unavailable,
+                    None,
+                    false,
+                    AccessExtent::Typed,
+                ),
             ])
         {
             let mut target_region = RegionSet::empty(&scope);
@@ -175,8 +194,24 @@ impl<'db> Borrowck<'db> {
                 {
                     continue;
                 }
-                let target =
+                let mut target =
                     self.instantiate_source(state, &source, result, guard.scope(), inputs)?;
+                // A by-value effect provider can expose its representation as
+                // an input place. Its logical holder was already validated and
+                // transferred by the caller's operand access. Only addressable
+                // referents survive as callee memory pre/postconditions.
+                target.region = RegionSet::new(
+                    target.region.scope(),
+                    target
+                        .region
+                        .clauses()
+                        .iter()
+                        .filter(|clause| !matches!(clause.payload.root, RegionRoot::Value(_)))
+                        .cloned(),
+                );
+                if target.region.is_empty() {
+                    continue;
+                }
                 invalidated |= target.invalidated;
                 if kind.is_some_and(|kind| kind != MemoryAccessKind::Write) {
                     let ty = source.referent_ty(self.db, call.instance).ok_or_else(|| {
@@ -207,6 +242,7 @@ impl<'db> Borrowck<'db> {
                 resolved.incoming.push((
                     AvailabilityRequirement {
                         kind,
+                        extent: self.instantiate_extent(extent, inputs),
                         region: target_region,
                     },
                     invalidated,
@@ -230,7 +266,7 @@ impl<'db> Borrowck<'db> {
                     continue;
                 };
                 for (index, _) in self.before[block_index].iter().enumerate() {
-                    self.transfer_availability(&mut state, block_index, index);
+                    self.evaluate_availability(&mut state, block_index, index, None);
                 }
                 let Some(terminal) = &self.terminal[block_index] else {
                     continue;
@@ -361,46 +397,19 @@ impl<'db> Borrowck<'db> {
             summary: AvailabilitySummary::empty(),
             native_validity: NativeValidity::default(),
             diagnostic: None,
+            report_errors: true,
         };
         let mut returned: Option<AvailabilityState<'db>> = None;
         for (block_index, block) in self.body.blocks.iter().enumerate() {
             let Some(mut state) = entries[block_index].clone() else {
                 continue;
             };
-            for (index, statement) in block
-                .statements
-                .iter()
-                .take(self.before[block_index].len())
-                .enumerate()
-            {
-                let operation = &self.operations[block_index][index];
-                analysis.native_validity |= operation.native_validity.clone();
-                for call in &operation.calls {
-                    analysis.native_validity |= call.invalidated.clone();
-                }
-                if analysis.native_validity.invalid && analysis.diagnostic.is_none() {
-                    analysis.diagnostic = Some(self.invalidated_diag(statement.origin));
-                }
-                for access in &operation.accesses {
-                    self.require_access(&mut analysis, &state, access);
-                }
-                if let Some(call) = &operation.availability {
-                    for (requirement, invalidated) in &call.incoming {
-                        self.require_available(
-                            &mut analysis,
-                            &state,
-                            requirement.kind,
-                            &requirement.region,
-                            statement.origin,
-                        );
-                        analysis.native_validity |= invalidated.clone();
-                        if invalidated.invalid && analysis.diagnostic.is_none() {
-                            analysis.diagnostic = Some(self.invalidated_diag(statement.origin));
-                        }
-                    }
-                }
-                self.transfer_availability(&mut state, block_index, index);
+            for (index, _) in self.before[block_index].iter().enumerate() {
+                analysis.report_errors = !self.validation_dependencies[block_index][index];
+                self.evaluate_availability(&mut state, block_index, index, Some(&mut analysis));
             }
+            analysis.report_errors =
+                !self.validation_dependencies[block_index][block.statements.len()];
             let Some(terminal) = &self.terminal[block_index] else {
                 continue;
             };
@@ -492,28 +501,90 @@ impl<'db> Borrowck<'db> {
         state.initialize(written, &exported);
     }
 
-    fn transfer_availability(
+    /// One transfer for fixed-point propagation and diagnostic/summary replay.
+    /// Provenance remains a pre-operation snapshot, while ownership consumption
+    /// precedes callee entry requirements and all writes/result initialization.
+    fn evaluate_availability(
         &self,
         state: &mut AvailabilityState<'db>,
         block: usize,
         index: usize,
+        mut analysis: Option<&mut AvailabilityAnalysis<'db>>,
     ) {
         let statement = &self.body.blocks[block].statements[index];
         let operation = &self.operations[block][index];
+        if let Some(analysis) = analysis.as_deref_mut() {
+            analysis.native_validity |= operation.native_validity.clone();
+            for call in &operation.calls {
+                analysis.native_validity |= call.invalidated.clone();
+            }
+            if analysis.report_errors
+                && !self.call_validation_pending(block, index)
+                && (operation.native_validity.invalid
+                    || operation.calls.iter().any(|call| call.invalidated.invalid))
+                && analysis.diagnostic.is_none()
+            {
+                analysis.diagnostic = Some(self.invalidated_diag(statement.origin));
+            }
+            // Address evaluation and nonconsuming operand uses see the incoming
+            // state. Synthetic reads need not precede operands in the vector.
+            for phase in [AccessPhase::Address, AccessPhase::Operand] {
+                for access in &operation.accesses {
+                    if access.phase == phase && access.kind != MemoryAccessKind::Move {
+                        self.require_access(analysis, state, access);
+                    }
+                }
+            }
+        }
+        // Only consumption mutates this atomic batch. Each next move is checked
+        // against prior consuming regions, preserving guards and selected paths.
+        // This establishes nonduplication without imposing an order on address
+        // computation, reads, or writes.
         for (access_index, access) in operation.accesses.iter().enumerate() {
-            if access.kind == MemoryAccessKind::Move {
-                state.consume(
-                    (block, index, access_index),
-                    access.region.clone(),
-                    access.origin,
+            if access.kind != MemoryAccessKind::Move {
+                continue;
+            }
+            debug_assert_eq!(access.phase, AccessPhase::Operand);
+            if let Some(analysis) = analysis.as_deref_mut() {
+                self.require_access(analysis, state, access);
+            }
+            state.consume(
+                (block, index, access_index),
+                access.region.clone(),
+                access.origin,
+            );
+        }
+        if let Some(analysis) = analysis.as_deref_mut()
+            && self.call_validation_pending(block, index)
+        {
+            analysis.report_errors = false;
+        }
+        if let Some(analysis) = analysis.as_deref_mut()
+            && let Some(call) = &operation.availability
+        {
+            for (requirement, invalidated) in &call.incoming {
+                self.require_available(
+                    analysis,
+                    state,
+                    requirement.kind,
+                    requirement.footprint(),
+                    statement.origin,
                 );
+                analysis.native_validity |= invalidated.clone();
+                if analysis.report_errors && invalidated.invalid && analysis.diagnostic.is_none() {
+                    analysis.diagnostic = Some(self.invalidated_diag(statement.origin));
+                }
             }
         }
         for access in &operation.accesses {
-            if access.kind == MemoryAccessKind::Write
-                && let Some(write) = access.region.definite_write()
-            {
-                self.initialize_availability(state, write.region());
+            if access.phase == AccessPhase::Write {
+                debug_assert_eq!(access.kind, MemoryAccessKind::Write);
+                if let Some(analysis) = analysis.as_deref_mut() {
+                    self.require_access(analysis, state, access);
+                }
+                if let Some(write) = access.region.definite_write() {
+                    self.initialize_availability(state, write.region());
+                }
             }
         }
         if let Some(call) = &operation.availability {
@@ -543,7 +614,13 @@ impl<'db> Borrowck<'db> {
         access: &ResolvedAccess<'db>,
     ) {
         analysis.native_validity |= access.invalidated.clone();
-        self.require_available(analysis, state, access.kind, &access.region, access.origin);
+        self.require_available(
+            analysis,
+            state,
+            access.kind,
+            AccessFootprint::typed(&access.region),
+            access.origin,
+        );
         if analysis.diagnostic.is_none() {
             if access.forbidden_move {
                 analysis.diagnostic = Some(self.diag(
@@ -551,7 +628,7 @@ impl<'db> Borrowck<'db> {
                     access.origin,
                     "cannot move out of a view parameter or through a borrow handle".into(),
                 ));
-            } else if access.invalidated.invalid {
+            } else if analysis.report_errors && access.invalidated.invalid {
                 analysis.diagnostic = Some(self.invalidated_diag(access.origin));
             }
         }
@@ -562,14 +639,36 @@ impl<'db> Borrowck<'db> {
         analysis: &mut AvailabilityAnalysis<'db>,
         state: &AvailabilityState<'db>,
         kind: MemoryAccessKind,
-        region: &RegionSet<'db>,
+        footprint: AccessFootprint<'_, 'db>,
         origin: SemOrigin<'db>,
     ) {
-        let region = region.with_guard(&state.guard);
-        if analysis.diagnostic.is_none()
+        if footprint.extent == AccessExtent::Bytes(IndexExpr::Const(0)) {
+            return;
+        }
+        let region = footprint.region.with_guard(&state.guard);
+        // Logical SSA holders have no address. Unknown memory effects cannot
+        // change their ownership, so these checks never depend on specialization.
+        let independent = region
+            .clauses()
+            .iter()
+            .all(|clause| matches!(clause.payload.root, RegionRoot::Value(_)));
+        if (analysis.report_errors || independent)
+            && analysis.diagnostic.is_none()
             && let Some(fact) = state.moved.values().find(|fact| {
                 if kind != MemoryAccessKind::Write {
-                    return !matches!(fact.region.overlap(&region), OverlapResult::Disjoint);
+                    // Ownership still exists for an empty representation.
+                    // Exact structural overlap is a logical conflict even when
+                    // the corresponding physical footprint touches no bytes.
+                    return (footprint.extent == AccessExtent::Typed
+                        && !region.proven_intersection(&fact.region).is_empty())
+                        || !matches!(
+                            AccessFootprint {
+                                region: &region,
+                                extent: footprint.extent
+                            }
+                            .overlap(self.db, AccessFootprint::typed(&fact.region)),
+                            OverlapResult::Disjoint
+                        );
                 }
                 // Requirements are conjunctive. A whole-value write elsewhere
                 // cannot authorize an earlier field write through a moved owner.
@@ -580,7 +679,16 @@ impl<'db> Borrowck<'db> {
                         if write.guard.scope() == region.scope() {
                             unavailable = unavailable.with_guard(&write.guard);
                         }
-                        !matches!(written.overlap(&unavailable), OverlapResult::Disjoint)
+                        ((footprint.extent == AccessExtent::Typed
+                            && !written.proven_intersection(&unavailable).is_empty())
+                            || !matches!(
+                                AccessFootprint {
+                                    region: &written,
+                                    extent: footprint.extent
+                                }
+                                .overlap(self.db, AccessFootprint::typed(&unavailable)),
+                                OverlapResult::Disjoint
+                            ))
                             && !written.provably_covers(&unavailable)
                     })
                 })
@@ -608,7 +716,12 @@ impl<'db> Borrowck<'db> {
         // them here also avoids subtracting unrelated byte-offset writes.
         let region = RegionSet::new(region.scope(), region.clauses().iter().filter(|clause| {
             matches!(&clause.payload.root, RegionRoot::External(source) if !matches!(source.origin, ExternalOrigin::Local(_)) && !source.is_fresh_allocation())
-        }).cloned()).remove_covered(&state.initialized);
+        }).cloned());
+        let region = if footprint.extent == AccessExtent::Typed {
+            region.remove_covered(&state.initialized)
+        } else {
+            region
+        };
         if !region.is_empty() {
             analysis.summary.incoming.push(AvailabilityRequirement {
                 kind: if kind == MemoryAccessKind::Write {
@@ -617,6 +730,7 @@ impl<'db> Borrowck<'db> {
                     MemoryAccessKind::Read
                 },
                 region,
+                extent: footprint.extent,
             });
         }
     }
@@ -627,11 +741,135 @@ mod tests {
     use super::*;
     use crate::{
         analysis::{
-            semantic::capability::{source::InputSource, test_roots},
+            semantic::{
+                FieldIndex,
+                borrowck::solver::BorrowSummaryMode,
+                capability::{path::Projection, source::InputSource, test_roots},
+                get_or_build_semantic_instance, identity_semantic_instance_key,
+                normalized::{NExpr, normalize_semantic_body, verify_normalized_body},
+            },
             ty::ty_check::BodyOwner,
         },
         test_db::{HirAnalysisTestDb, find_func},
     };
+
+    #[test]
+    fn operation_operands_reject_duplicate_moves_in_verified_normalized_ir() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "operation_consumption.fe".into(),
+            "struct Item { n: u256 }\n\
+             fn pair(first: own Item, second: own Item) -> (Item, Item) { (first, second) }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "pair"))),
+        );
+        let mut body = normalize_semantic_body(&db, instance).unwrap().body;
+        let fields = body
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| {
+                if let NStatementKind::Define {
+                    expr: NExpr::AggregateMake { fields, .. },
+                    ..
+                } = &mut statement.kind
+                {
+                    (fields.len() == 2).then_some(fields)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        fields[1].value = fields[0].value;
+        verify_normalized_body(&db, &body).unwrap();
+        let mut checker =
+            Borrowck::new_with_body(&db, instance, body, BorrowSummaryMode::Final).unwrap();
+        checker.solve().unwrap();
+        let diagnostic = checker.analyze_availability().diagnostic.unwrap();
+        assert_eq!(diagnostic.kind, SemanticDiagnosticKind::MoveConflict);
+        assert_eq!(diagnostic.secondaries.len(), 1);
+        assert_ne!(diagnostic.primary.span, diagnostic.secondaries[0].span);
+        assert!(checker.build_summary().is_err());
+    }
+
+    #[test]
+    fn operation_operands_respect_guarded_regions_and_availability_phases() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "guarded_operation_consumption.fe".into(),
+            "struct Item { n: u256 }\nstruct Pair { left: Item, right: Item }\n\
+             fn pair(first: own Pair, second: own Pair) -> (Pair, Pair) { (first, second) }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "pair"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        let (block, index) = checker.body.blocks.iter().enumerate().find_map(|(block, body)| {
+            body.statements.iter().position(|statement| matches!(&statement.kind,
+                NStatementKind::Define { expr: NExpr::AggregateMake { fields, .. }, .. } if fields.len() == 2
+            )).map(|index| (block, index))
+        }).unwrap();
+        let original = checker.operations[block][index].clone();
+        let scope = BinderScope::default();
+        let whole = original.accesses[0].region.clone();
+        let field = |index| whole.project(&RegionPath::new([Projection::Field(FieldIndex(index))]));
+        let selector = IndexExpr::Runtime(NValueId::new(0));
+        let selected = |index| {
+            whole.with_guard(
+                &Guard::always(&scope)
+                    .with_equality(selector, IndexExpr::Const(index))
+                    .unwrap(),
+            )
+        };
+        for (first, second, conflict) in [
+            (whole.clone(), whole.clone(), true),
+            (whole.clone(), field(0), true),
+            (field(0), field(0), true),
+            (field(0), field(1), false),
+            (selected(0), selected(1), false),
+        ] {
+            let operation = &mut checker.operations[block][index];
+            *operation = original.clone();
+            operation.accesses[0].region = first;
+            operation.accesses[1].region = second;
+            assert_eq!(
+                checker.analyze_availability().diagnostic.is_some(),
+                conflict
+            );
+            assert_eq!(checker.build_summary().is_err(), conflict);
+        }
+
+        let operation = &mut checker.operations[block][index];
+        *operation = original;
+        let mut carrier = operation.accesses[0].clone();
+        carrier.kind = MemoryAccessKind::Read;
+        carrier.phase = AccessPhase::Address;
+        operation.accesses.push(carrier);
+        assert!(checker.analyze_availability().diagnostic.is_none());
+        // Callee entry requirements see argument ownership already consumed,
+        // while the appended synthetic address read above must see it available.
+        checker.operations[block][index].availability = Some(ResolvedAvailability {
+            incoming: vec![(
+                AvailabilityRequirement {
+                    kind: MemoryAccessKind::Read,
+                    extent: AccessExtent::Typed,
+                    region: whole,
+                },
+                NativeValidity::default(),
+            )],
+            reinitialized: RegionSet::empty(&scope),
+            unavailable: RegionSet::empty(&scope),
+        });
+        assert!(checker.analyze_availability().diagnostic.is_some());
+    }
 
     #[test]
     fn ownership_join_and_composition_cover_two_cell_executions() {

@@ -553,7 +553,7 @@ mod tests {
         };
         assert!(definition.parents(&sibling, &empty).is_empty());
         assert_eq!(
-            actual.overlap(&definition.region(&db, &sibling, &empty)),
+            actual.overlap(&db, &definition.region(&db, &sibling, &empty)),
             OverlapResult::Disjoint
         );
         let out_of_bound = LoanRef {

@@ -167,6 +167,31 @@ impl<'db> ShapeId<'db> {
                 }
             }
     }
+
+    /// A returning value cannot omit all native provenance for this shape.
+    /// An enum can omit it only if some alternative permits a native-free value.
+    pub(super) fn requires_native_value(self, db: &'db dyn HirAnalysisDb) -> bool {
+        self.direct(db).is_some_and(|semantics| {
+            matches!(
+                semantics.class,
+                CapabilityClass::Borrow(_) | CapabilityClass::View
+            )
+        }) || match self.children(db) {
+            ShapeChildren::None | ShapeChildren::EmptyArray => false,
+            ShapeChildren::Product(fields) => fields
+                .iter()
+                .any(|(_, child)| child.requires_native_value(db)),
+            ShapeChildren::Sum(variants) => {
+                !variants.is_empty()
+                    && variants
+                        .iter()
+                        .all(|(_, child)| child.requires_native_value(db))
+            }
+            ShapeChildren::Array { len, element } => {
+                *len != ArrayLength::Known(0) && element.requires_native_value(db)
+            }
+        }
+    }
 }
 
 pub fn capability_shape<'db>(

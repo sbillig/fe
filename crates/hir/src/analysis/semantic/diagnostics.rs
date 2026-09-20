@@ -213,6 +213,7 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::ProviderProvenanceConflict => 6,
             SemanticDiagnosticKind::TransportViolation => 7,
             SemanticDiagnosticKind::StorageViolation => 8,
+            SemanticDiagnosticKind::UnresolvedCall => 9,
         };
         CompleteDiagnostic::new(
             Severity::Error,
@@ -270,6 +271,10 @@ impl SemanticDiagnosticKind {
                     checker_name(db, instance)
                 )
             }
+            Self::UnresolvedCall => format!(
+                "pending borrow validation in `fn {}`",
+                checker_name(db, instance)
+            ),
         }
     }
 }
@@ -436,4 +441,5 @@ pub enum SemanticDiagnosticKind {
     TransportViolation,
     StorageViolation,
     ProviderProvenanceConflict,
+    UnresolvedCall,
 }

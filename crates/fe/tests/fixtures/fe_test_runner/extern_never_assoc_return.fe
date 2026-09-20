@@ -24,6 +24,6 @@ fn trigger() {
 }
 
 #[test]
-fn test_extern_never_assoc_return_compiles() {
+fn test_extern_never_requires_implementation() {
     assert!(true)
 }

@@ -11,6 +11,7 @@ mod ir;
 mod memory;
 mod solver;
 mod summary;
+mod validation;
 mod validity;
 
 pub use boundary::check_semantic_boundaries;

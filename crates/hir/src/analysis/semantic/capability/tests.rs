@@ -89,6 +89,38 @@ fn leaf_shape(db: &HirAnalysisTestDb) -> ShapeId<'_> {
     )
 }
 
+#[test]
+fn physical_offsets_do_not_prove_disjoint_wide_accesses() {
+    let db = HirAnalysisTestDb::default();
+    let base = ExternalSource::input(
+        InputSource::slot(0, StructuralPath::default()),
+        ReferentContract::new(
+            &db,
+            TyId::u8(&db),
+            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+        ),
+        false,
+    );
+    let region = |offset| {
+        RegionSet::singleton(
+            &scope(),
+            RegionRoot::External(ExternalSource::memory(
+                &db,
+                SourceExpr {
+                    invalidated: false,
+                    source: base.clone(),
+                    path: RegionPath::default(),
+                    views: Default::default(),
+                },
+                TyId::u256(&db),
+                Some((TyId::u8(&db), IndexExpr::Const(offset))),
+            )),
+            RegionPath::default(),
+        )
+    };
+    assert_ne!(region(1).overlap(&db, &region(2)), OverlapResult::Disjoint);
+}
+
 fn array_shape<'db>(db: &'db HirAnalysisTestDb, element: ShapeId<'db>, len: usize) -> ShapeId<'db> {
     ShapeId::new(
         db,
@@ -1473,7 +1505,7 @@ fn existential_region_witnesses_are_fresh_for_independent_enum_selections() {
     let left = guarded(0);
     let right = guarded(1);
     assert!(
-        !matches!(left.overlap(&right), OverlapResult::Disjoint),
+        !matches!(left.overlap(&db, &right), OverlapResult::Disjoint),
         "different selected elements can have different variants while holding the same target"
     );
     let whole = RegionSet::singleton(&base, root, RegionPath::default());
@@ -1607,15 +1639,15 @@ fn opaque_handle_origins_preserve_copies_but_never_imply_fresh_storage() {
         RegionPath::new([Projection::Field(FieldIndex(1))]),
     );
     assert!(left.provably_covers(&same));
-    assert_eq!(left.overlap(&sibling), OverlapResult::Disjoint);
-    assert_eq!(left.overlap(&unknown), OverlapResult::Unknown);
+    assert_eq!(left.overlap(&db, &sibling), OverlapResult::Disjoint);
+    assert_eq!(left.overlap(&db, &unknown), OverlapResult::Unknown);
     assert!(!left.provably_covers(&unknown));
     let local = RegionSet::singleton(
         &scope,
         test_roots::local(&db, NRootId::from_u32(0)),
         RegionPath::default(),
     );
-    assert_eq!(left.overlap(&local), OverlapResult::Unknown);
+    assert_eq!(left.overlap(&db, &local), OverlapResult::Unknown);
     let storage = RegionSet::singleton(
         &scope,
         RegionRoot::External(ExternalSource::opaque(
@@ -1631,8 +1663,8 @@ fn opaque_handle_origins_preserve_copies_but_never_imply_fresh_storage() {
         )),
         RegionPath::default(),
     );
-    assert_eq!(left.overlap(&storage), OverlapResult::Disjoint);
-    assert_eq!(local.overlap(&storage), OverlapResult::Disjoint);
+    assert_eq!(left.overlap(&db, &storage), OverlapResult::Disjoint);
+    assert_eq!(local.overlap(&db, &storage), OverlapResult::Disjoint);
 }
 
 #[test]
@@ -1826,7 +1858,7 @@ fn inspect(
     let conversion = proof(source_ty, target_ty);
     let converted = region(0).repack(&db, conversion);
     assert!(matches!(
-        converted.overlap(&region(0)),
+        converted.overlap(&db, &region(0)),
         OverlapResult::Overlap(_)
     ));
     assert_eq!(converted.repack(&db, conversion.inverse(&db)), region(0));
@@ -1859,7 +1891,7 @@ fn inspect(
         .unwrap();
     let target = handle.direct()[0].payload.region(&db, &[], &scope());
     assert!(matches!(
-        target.overlap(&region(10)),
+        target.overlap(&db, &region(10)),
         OverlapResult::Overlap(_)
     ));
     assert_ne!(
@@ -1928,7 +1960,7 @@ fn inspect(
         .unwrap();
     let physical_target = physical.direct()[0].payload.region(&db, &[], &scope());
     assert!(matches!(
-        physical_target.overlap(&region(11)),
+        physical_target.overlap(&db, &region(11)),
         OverlapResult::Overlap(_)
     ));
     assert_ne!(

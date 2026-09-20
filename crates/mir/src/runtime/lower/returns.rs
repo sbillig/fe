@@ -364,7 +364,8 @@ fn raw_return_space<'db>(
             *target_ty,
             provider.binding(db).provider_ty.as_ptr(db).is_some(),
         ),
-        ExternalOrigin::Local(_) => return None,
+        // An unknown semantic referent supplies no raw-carrier layout evidence.
+        ExternalOrigin::Local(_) | ExternalOrigin::Unknown { .. } => return None,
     };
     steps.extend(source.dereferences().iter());
     for path in steps {
@@ -939,10 +940,6 @@ struct Pair {
     b: u256,
 }
 
-extern {
-    fn todo() -> !
-}
-
 fn fail() -> ! {
     core::panic()
 }
@@ -971,9 +968,6 @@ fn caller_pair_from_declared_pair() -> Pair {
     fail_declared_pair()
 }
 
-fn caller_u256_from_extern_never() -> u256 {
-    todo()
-}
 "#
                 .to_string(),
             ),
@@ -988,7 +982,6 @@ fn caller_u256_from_extern_never() -> u256 {
             "caller_u256_from_never",
             "caller_u256_from_declared_u256",
             "caller_pair_from_declared_pair",
-            "caller_u256_from_extern_never",
         ] {
             let caller = semantic_instance_for_named_func(&db, top_mod, caller_name);
             let body = runtime_instance_for_semantic(&db, caller).body(&db);

@@ -8,15 +8,17 @@ enum Choice<const SHARED: u256 = _, const OTHER: u256 = _> {
     One(StorageMap<u256, u256, SHARED>),
 }
 
+impl<const SHARED: u256, const OTHER: u256> Copy for Choice<SHARED, OTHER> {}
+
 impl<const SHARED: u256, const OTHER: u256> Choice<SHARED, OTHER> {
-    fn set_other(mut self, key: u256, value: u256) {
+    fn set_other(own self, key: u256, value: u256) {
         match self {
             Choice::Two(mut other, _) => other.set(key: key, value: value),
             Choice::One(_) => {},
         }
     }
 
-    fn set_shared(mut self, key: u256, value: u256) {
+    fn set_shared(own self, key: u256, value: u256) {
         match self {
             Choice::Two(_, mut shared) => shared.set(key: key, value: value),
             Choice::One(mut shared) => shared.set(key: key, value: value),

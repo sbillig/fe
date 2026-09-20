@@ -4,6 +4,7 @@
 //! participate in index identity, capability slots, or guarded value equality.
 mod decision;
 pub mod external;
+pub mod footprint;
 pub mod guard;
 pub mod handle;
 pub mod index;

@@ -12,7 +12,7 @@ use hir::analysis::{
     },
     ty::{
         ProviderKind,
-        corelib::runtime_builtin_func_kind,
+        corelib::{ContractMetadataKind, contract_metadata_kind, runtime_builtin_func_kind},
         normalize::normalize_ty,
         provider::registered_root_providers,
         trait_def::{
@@ -2880,11 +2880,7 @@ pub(crate) fn contract_metadata_builtin<'db>(
     let BodyOwner::Func(func) = semantic.key(db).owner(db) else {
         return None;
     };
-    let name = func.name(db).to_opt()?.data(db);
-    let trait_ = func.containing_trait(db)?;
-    if trait_.name(db).to_opt()?.data(db) != "Contract" {
-        return None;
-    }
+    let kind = contract_metadata_kind(db, func)?;
     let contract = semantic
         .key(db)
         .subst(db)
@@ -2892,11 +2888,10 @@ pub(crate) fn contract_metadata_builtin<'db>(
         .iter()
         .find_map(|ty| ty.as_contract(db))?;
     let region = RuntimeCodeRegion::new(db, RuntimeCodeRegionKey::ContractInit { contract });
-    match name.as_str() {
-        "init_code_offset" => Some(ContractMetadataBuiltin::InitCodeOffset(region)),
-        "init_code_len" => Some(ContractMetadataBuiltin::InitCodeLen(region)),
-        _ => None,
-    }
+    Some(match kind {
+        ContractMetadataKind::InitCodeOffset => ContractMetadataBuiltin::InitCodeOffset(region),
+        ContractMetadataKind::InitCodeLen => ContractMetadataBuiltin::InitCodeLen(region),
+    })
 }
 
 #[salsa::tracked]

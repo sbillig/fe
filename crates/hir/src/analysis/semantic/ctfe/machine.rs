@@ -26,7 +26,8 @@ use crate::{
             const_expr::{ConstExpr, ConstExprId},
             const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, const_ty_from_sem_const},
             corelib::{
-                PrimitiveWrapperCallKind, RuntimeBuiltinFuncKind, core_primitive_wrapper_call_kind,
+                NumericExternIntrinsic, PrimitiveWrapperCallKind, RuntimeBuiltinFuncKind,
+                SaturatingArithmetic, core_primitive_wrapper_call_kind, numeric_extern_intrinsic,
                 runtime_builtin_func_kind,
             },
             normalize::normalize_ty,
@@ -132,26 +133,6 @@ impl<'db> CtfeError<'db> {
 #[derive(Clone, Copy)]
 enum EvmModularArithmetic {
     Add,
-    Mul,
-}
-
-#[derive(Clone, Copy)]
-enum NumericExternIntrinsic {
-    CheckedBinary(ArithBinOp),
-    WrappingBinary(ArithBinOp),
-    SaturatingBinary(SaturatingArithmetic),
-    Comparison(CompBinOp),
-    BoolBinary(ArithBinOp),
-    CheckedNeg,
-    WrappingNeg,
-    BitNot,
-    BoolNot,
-}
-
-#[derive(Clone, Copy)]
-enum SaturatingArithmetic {
-    Add,
-    Sub,
     Mul,
 }
 
@@ -841,93 +822,6 @@ fn int_bounds(bits: u16, signed: bool) -> (BigInt, BigInt) {
             (BigInt::one() << usize::from(bits)) - BigInt::one(),
         )
     }
-}
-
-fn numeric_extern_intrinsic(name: &str) -> Option<NumericExternIntrinsic> {
-    Some(match name {
-        "__checked_add" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Add),
-        "__checked_sub" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Sub),
-        "__checked_mul" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Mul),
-        "__checked_div" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Div),
-        "__checked_rem" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Rem),
-        "__checked_pow" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Pow),
-        "__checked_neg" => NumericExternIntrinsic::CheckedNeg,
-        "__saturating_add" => NumericExternIntrinsic::SaturatingBinary(SaturatingArithmetic::Add),
-        "__saturating_sub" => NumericExternIntrinsic::SaturatingBinary(SaturatingArithmetic::Sub),
-        "__saturating_mul" => NumericExternIntrinsic::SaturatingBinary(SaturatingArithmetic::Mul),
-        "__not_bool" => NumericExternIntrinsic::BoolNot,
-        "__bitand_bool" => NumericExternIntrinsic::BoolBinary(ArithBinOp::BitAnd),
-        "__bitor_bool" => NumericExternIntrinsic::BoolBinary(ArithBinOp::BitOr),
-        "__bitxor_bool" => NumericExternIntrinsic::BoolBinary(ArithBinOp::BitXor),
-        "__eq_bool" => NumericExternIntrinsic::Comparison(CompBinOp::Eq),
-        "__ne_bool" => NumericExternIntrinsic::Comparison(CompBinOp::NotEq),
-        _ => {
-            let suffix = |prefix| {
-                name.strip_prefix(prefix)
-                    .filter(|suffix| has_integer_numeric_suffix(suffix))
-            };
-            if suffix("__add_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Add)
-            } else if suffix("__sub_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Sub)
-            } else if suffix("__mul_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Mul)
-            } else if suffix("__div_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Div)
-            } else if suffix("__rem_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Rem)
-            } else if suffix("__pow_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Pow)
-            } else if suffix("__shl_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::LShift)
-            } else if suffix("__shr_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::RShift)
-            } else if suffix("__bitand_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::BitAnd)
-            } else if suffix("__bitor_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::BitOr)
-            } else if suffix("__bitxor_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::BitXor)
-            } else if suffix("__eq_").is_some() {
-                NumericExternIntrinsic::Comparison(CompBinOp::Eq)
-            } else if suffix("__ne_").is_some() {
-                NumericExternIntrinsic::Comparison(CompBinOp::NotEq)
-            } else if suffix("__lt_").is_some() {
-                NumericExternIntrinsic::Comparison(CompBinOp::Lt)
-            } else if suffix("__le_").is_some() {
-                NumericExternIntrinsic::Comparison(CompBinOp::LtEq)
-            } else if suffix("__gt_").is_some() {
-                NumericExternIntrinsic::Comparison(CompBinOp::Gt)
-            } else if suffix("__ge_").is_some() {
-                NumericExternIntrinsic::Comparison(CompBinOp::GtEq)
-            } else if suffix("__neg_").is_some() {
-                NumericExternIntrinsic::WrappingNeg
-            } else if suffix("__bitnot_").is_some() {
-                NumericExternIntrinsic::BitNot
-            } else {
-                return None;
-            }
-        }
-    })
-}
-
-fn has_integer_numeric_suffix(suffix: &str) -> bool {
-    matches!(
-        suffix,
-        "u8" | "u16"
-            | "u32"
-            | "u64"
-            | "u128"
-            | "u256"
-            | "usize"
-            | "i8"
-            | "i16"
-            | "i32"
-            | "i64"
-            | "i128"
-            | "i256"
-            | "isize"
-    )
 }
 
 fn sem_const_contains_type_level<'db>(db: &'db dyn HirAnalysisDb, value: SemConstId<'db>) -> bool {

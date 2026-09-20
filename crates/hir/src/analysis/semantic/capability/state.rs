@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
+    footprint::AccessFootprint,
     guard::{Guard, ValueOccurrence},
     index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     loan::{CapabilityRef, LoanDef},
@@ -307,9 +308,10 @@ impl<'db> BorrowState<'db> {
     pub fn invalidate_memory(
         &mut self,
         values: &mut CapabilityValues<'db>,
-        region: &RegionSet<'db>,
+        footprint: AccessFootprint<'_, 'db>,
         overwrite: OpaqueWrite<'db>,
     ) -> Result<(), StateError<'db>> {
+        let region = footprint.region;
         let mut updates = BTreeMap::new();
         for (root, contents) in &self.contents {
             if !contents.shape().contains_capability(values.db) {
@@ -319,13 +321,16 @@ impl<'db> BorrowState<'db> {
                 RegionSet::singleton(contents.scope(), root.clone(), RegionPath::default())
                     .substitute(values.db, &contents.scope().freshening(region.scope()))
                     .close_existentials(region.scope());
-            if !matches!(candidate.overlap(region), OverlapResult::Disjoint) {
+            if !matches!(
+                AccessFootprint::typed(&candidate).overlap(values.db, footprint),
+                OverlapResult::Disjoint
+            ) {
                 let unknown = overwrite
                     .contents(
                         values,
                         contents.shape(),
                         contents.scope(),
-                        Some((root, region)),
+                        Some((root, footprint)),
                     )
                     .map_err(StateError::OpaqueContents)?;
                 updates.insert(root.clone(), values.join(contents, &unknown));
@@ -358,7 +363,10 @@ impl<'db> BorrowState<'db> {
         for (index, (region, replacement)) in replacements.iter().enumerate() {
             let interferes = independent.iter().enumerate().any(|(other, region)| {
                 index != other
-                    && !matches!(independent[index].overlap(region), OverlapResult::Disjoint)
+                    && !matches!(
+                        independent[index].overlap(values.db, region),
+                        OverlapResult::Disjoint
+                    )
             });
             for clause in region.clauses() {
                 let mut covered: Option<Guard<'db>> = None;
@@ -461,7 +469,10 @@ impl<'db> BorrowState<'db> {
                     let candidate = candidate
                         .substitute(values.db, &contents.scope().freshening(region.scope()))
                         .close_existentials(region.scope());
-                    if matches!(candidate.overlap(region), OverlapResult::Disjoint) {
+                    if matches!(
+                        candidate.overlap(values.db, region),
+                        OverlapResult::Disjoint
+                    ) {
                         continue;
                     }
                     // Unknown bases may overlap at a byte offset, even when
@@ -473,7 +484,7 @@ impl<'db> BorrowState<'db> {
                             values,
                             contents.shape(),
                             contents.scope(),
-                            Some((root, region)),
+                            Some((root, AccessFootprint::typed(region))),
                         )
                         .map_err(StateError::OpaqueContents)?;
                     updates.insert(root.clone(), values.join(old, &unknown));
@@ -517,7 +528,10 @@ impl<'db> BorrowState<'db> {
                         RegionSet::singleton(contents.scope(), root.clone(), RegionPath::default())
                             .substitute(values.db, &contents.scope().freshening(region.scope()))
                             .close_existentials(region.scope());
-                    if matches!(candidate.overlap(region), OverlapResult::Disjoint) {
+                    if matches!(
+                        candidate.overlap(values.db, region),
+                        OverlapResult::Disjoint
+                    ) {
                         continue;
                     }
                     let added = values.from_shape(

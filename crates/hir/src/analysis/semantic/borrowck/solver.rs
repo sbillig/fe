@@ -39,8 +39,11 @@ use crate::analysis::{
 };
 
 use super::{
-    access::ResolvedOperation, boundary::resolve_boundary_requirements, inventory::Inventory,
-    ir::BoundaryRequirement, summary::CallSummary,
+    access::ResolvedOperation,
+    boundary::resolve_boundary_requirements,
+    inventory::Inventory,
+    ir::{BoundaryRequirement, PendingSemanticValidation},
+    summary::CallSummary,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,6 +86,8 @@ pub(super) struct Borrowck<'db> {
     pub boundary_requirements:
         Option<Result<Vec<BoundaryRequirement<'db>>, SemanticDiagnostic<'db>>>,
     pub blocked: Option<BlockedSemanticBody<'db>>,
+    pub pending: PendingSemanticValidation<'db>,
+    pub validation_dependencies: Vec<Vec<bool>>,
     pub loan_facts_changed: bool,
     pub storage_facts_changed: bool,
 }
@@ -124,11 +129,17 @@ impl<'db> Borrowck<'db> {
             terminal: vec![None; body.blocks.len()],
             operations: vec![Vec::new(); body.blocks.len()],
             boundary_requirements: None,
+            validation_dependencies: body
+                .blocks
+                .iter()
+                .map(|block| vec![false; block.statements.len() + 1])
+                .collect(),
             body,
             inventory,
             summary_mode,
             calls: BTreeMap::new(),
             blocked: None,
+            pending: PendingSemanticValidation::default(),
             loan_facts_changed: false,
             storage_facts_changed: false,
         })
@@ -419,6 +430,7 @@ impl<'db> Borrowck<'db> {
 
     pub fn solve(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
         self.prepare_calls()?;
+        self.prepare_validation_dependencies();
         loop {
             self.before.fill(Vec::new());
             self.terminal.fill(None);

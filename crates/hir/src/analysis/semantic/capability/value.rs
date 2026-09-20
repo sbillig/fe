@@ -117,6 +117,48 @@ impl<'db, P: IndexPayload<'db>> ValueId<'db, P> {
                 }
             }
     }
+
+    /// Missing provenance is bottom, not an unknown returning native value.
+    /// Only represented enum alternatives and inhabited array members count;
+    /// this predicate must not be applied to moved poststates or divergence.
+    pub fn has_missing_native_result(&self, db: &'db dyn HirAnalysisDb) -> bool {
+        if self.shape().direct(db).is_some_and(|semantics| {
+            matches!(
+                semantics.class,
+                CapabilityClass::Borrow(_) | CapabilityClass::View
+            )
+        }) && self.direct().is_empty()
+        {
+            return true;
+        }
+        match &self.0.children {
+            ValueChildren::None => false,
+            ValueChildren::Product(fields) => fields
+                .iter()
+                .any(|(_, child)| child.has_missing_native_result(db)),
+            ValueChildren::Sum(variants) => {
+                (variants.is_empty() && self.shape().requires_native_value(db))
+                    || variants
+                        .iter()
+                        .any(|(_, child)| child.has_missing_native_result(db))
+            }
+            ValueChildren::Array { default, exact } => {
+                let default_used = match self.shape().children(db) {
+                    ShapeChildren::Array { len, .. } => match len.index() {
+                        IndexExpr::Const(len) => {
+                            exact.keys().filter(|index| **index < len).count() < len
+                        }
+                        _ => true,
+                    },
+                    _ => unreachable!("array value shape"),
+                };
+                (default_used && default.has_missing_native_result(db))
+                    || exact
+                        .values()
+                        .any(|child| child.has_missing_native_result(db))
+            }
+        }
+    }
 }
 
 impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {

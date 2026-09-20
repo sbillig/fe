@@ -315,7 +315,7 @@ mod tests {
             assert!(left.provably_covers(left));
             for right in regions.iter().skip(index + 1) {
                 assert_ne!(left, right);
-                assert_eq!(left.overlap(right), OverlapResult::Disjoint);
+                assert_eq!(left.overlap(&db, right), OverlapResult::Disjoint);
             }
         }
     }
@@ -396,13 +396,13 @@ mod tests {
         assert_eq!(widened.clauses()[0].payload.path, field(7));
         for descendant in descendants {
             let exact = region(&db, descendant, field(3));
-            assert_eq!(widened.overlap(&exact), OverlapResult::Unknown);
+            assert_eq!(widened.overlap(&db, &exact), OverlapResult::Unknown);
             assert!(!widened.provably_covers(&exact));
             assert!(!exact.provably_covers(&widened));
             assert_eq!(exact.remove_covered(&widened), exact);
         }
         assert_eq!(
-            widened.overlap(&region(&db, InputSource::place(1), field(0))),
+            widened.overlap(&db, &region(&db, InputSource::place(1), field(0))),
             OverlapResult::Unknown
         );
     }

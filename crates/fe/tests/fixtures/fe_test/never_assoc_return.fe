@@ -1,0 +1,24 @@
+trait HasAssoc {
+    type Assoc
+}
+
+struct Generic<T> {
+    value: T,
+}
+
+impl<T> HasAssoc for Generic<T> {
+    type Assoc = T
+}
+
+fn make<T: HasAssoc>() -> T::Assoc {
+    core::panic()
+}
+
+fn trigger() {
+    let _x: u32 = make<Generic<u32>>()
+}
+
+#[test]
+fn test_never_assoc_return_compiles() {
+    assert!(true)
+}

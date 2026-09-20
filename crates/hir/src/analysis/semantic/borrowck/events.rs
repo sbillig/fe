@@ -13,6 +13,7 @@ use crate::analysis::{
         BorrowActivation, SemOrigin,
         capability::{
             external::{ExternalSource, ReferentContract},
+            footprint::AccessFootprint,
             guard::{Guard, ValueOccurrence},
             handle::HandleAddressSpace,
             index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
@@ -138,10 +139,20 @@ impl Live {
 }
 
 impl<'db> Borrowck<'db> {
-    pub fn check(mut self) -> Result<Option<BlockedSemanticBody<'db>>, SemanticDiagnostic<'db>> {
+    pub fn check(&mut self) -> Result<Option<BlockedSemanticBody<'db>>, SemanticDiagnostic<'db>> {
         self.solve()?;
         if self.blocked.is_some() {
-            return Ok(self.blocked);
+            return Ok(self.blocked.clone());
+        }
+        if self
+            .instance
+            .key(self.db)
+            .owner(self.db)
+            .body(self.db)
+            .is_none()
+            && self.intrinsic_summary()?.is_none()
+        {
+            self.pending.callees.insert(self.instance.key(self.db));
         }
         self.check_conflicts()?;
         if let Some(diagnostic) = self.analyze_availability().diagnostic {
@@ -678,9 +689,12 @@ impl<'db> Borrowck<'db> {
         Ok(())
     }
 
-    fn check_conflicts(&self) -> Result<(), SemanticDiagnostic<'db>> {
+    pub(super) fn check_conflicts(&self) -> Result<(), SemanticDiagnostic<'db>> {
         for (block, operations) in self.operations.iter().enumerate() {
             for (index, operation) in operations.iter().enumerate() {
+                if self.validation_dependencies[block][index] {
+                    continue;
+                }
                 let origin = self.body.blocks[block].statements[index].origin;
                 for access in &operation.accesses {
                     if access.invalidated.invalid {
@@ -689,19 +703,22 @@ impl<'db> Borrowck<'db> {
                     self.check_access(
                         &operation.active,
                         access.conflict_kind,
-                        &access.region,
+                        AccessFootprint::typed(&access.region),
                         &access.authority,
                         access.origin,
                     )?;
                 }
                 for resolved in &operation.calls {
+                    if self.call_validation_pending(block, index) {
+                        break;
+                    }
                     if resolved.invalidated.invalid {
                         return Err(self.invalidated_diag(origin));
                     }
                     self.check_access(
                         &operation.active,
                         resolved.access.kind.borrow_kind(),
-                        &resolved.access.region,
+                        resolved.access.footprint(),
                         &resolved.authority,
                         origin,
                     )?;
@@ -715,7 +732,7 @@ impl<'db> Borrowck<'db> {
                         self.check_access(
                             &operation.active,
                             kind,
-                            &member.region,
+                            AccessFootprint::typed(&member.region),
                             &authority,
                             origin,
                         )?;
@@ -778,7 +795,7 @@ impl<'db> Borrowck<'db> {
         if !matches!(
             left.region
                 .with_guard(&guard)
-                .overlap(&right.region.with_guard(&guard)),
+                .overlap(self.db, &right.region.with_guard(&guard)),
             OverlapResult::Disjoint
         ) {
             return Err(self.diag(
@@ -794,10 +811,11 @@ impl<'db> Borrowck<'db> {
         &self,
         active: &[CapabilityOccurrence<'db>],
         kind: BorrowKind,
-        region: &RegionSet<'db>,
+        footprint: AccessFootprint<'_, 'db>,
         authority: &[Guarded<'db, LoanRef<'db>>],
         origin: SemOrigin<'db>,
     ) -> Result<(), SemanticDiagnostic<'db>> {
+        let region = footprint.region;
         for loan in active {
             if loan.semantics.target_ty.is_zero_sized(self.db) {
                 continue;
@@ -819,7 +837,11 @@ impl<'db> Borrowck<'db> {
             let (overlap, uncertain) = if self.inventory.input_loans.contains(&reference.id) {
                 (accessed.proven_intersection(&loan.region), false)
             } else {
-                accessed.intersect(&loan.region)
+                AccessFootprint {
+                    region: &accessed,
+                    extent: footprint.extent.substitute(&lift),
+                }
+                .intersect(self.db, AccessFootprint::typed(&loan.region))
             };
             if !uncertain && (overlap.is_empty() || loan.suspended.provably_covers(&overlap)) {
                 continue;

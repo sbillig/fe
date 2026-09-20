@@ -19,6 +19,21 @@ pub enum CapabilityClass {
     Pointer,
 }
 
+impl CapabilityClass {
+    /// Possible result origins include explicit native borrowing from raw
+    /// addresses. Raw origins still supply no inherited native parent loan.
+    pub fn can_supply_result(self, result: Self) -> bool {
+        match result {
+            Self::Borrow(BorrowKind::Mut) => matches!(
+                self,
+                Self::Borrow(BorrowKind::Mut) | Self::Pointer | Self::Handle
+            ),
+            Self::Borrow(BorrowKind::Ref) | Self::View => true,
+            Self::Handle | Self::Pointer => self == result,
+        }
+    }
+}
+
 /// Ordinary argument transport is independent of access authority and storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TransportClass {

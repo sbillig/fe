@@ -1,0 +1,29 @@
+trait Step {
+    fn step(value: mut u256) {
+        value += 10
+    }
+}
+
+struct Increment {}
+impl Step for Increment {
+    fn step(value: mut u256) {
+        value += 1
+    }
+}
+
+struct DefaultStep {}
+impl Step for DefaultStep {}
+
+fn twice<T: Step>(value: mut u256) {
+    T::step(value)
+    T::step(value)
+}
+
+#[test]
+fn concrete_specialization_validates_default_and_overridden_effects() {
+    let mut value: u256 = 0
+    twice<Increment>(value: mut value)
+    assert!(value == 2)
+    twice<DefaultStep>(value: mut value)
+    assert!(value == 22)
+}

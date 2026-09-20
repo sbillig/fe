@@ -2,6 +2,7 @@
 //! Entry reads have a different denotation and must never be used as havoc.
 use super::{
     external::{ClobberCondition, ExternalSource},
+    footprint::AccessFootprint,
     guard::Guard,
     handle::{
         AddressOccurrence, OpaqueContentsId, OpaqueHandleContract, OpaqueHandleRef, OpaqueWriteSite,
@@ -34,7 +35,7 @@ impl<'db> OpaqueWrite<'db> {
         values: &mut CapabilityValues<'db>,
         shape: ShapeId<'db>,
         scope: &BinderScope,
-        clobber: Option<(&RegionRoot<'db>, &RegionSet<'db>)>,
+        clobber: Option<(&RegionRoot<'db>, AccessFootprint<'_, 'db>)>,
     ) -> Result<CapabilityValue<'db>, UnresolvedCapability<'db>> {
         let db = values.db;
         let mut failure = None;
@@ -76,6 +77,7 @@ impl<'db> OpaqueWrite<'db> {
                 },
             );
             let alternatives = if let Some((target, written)) = clobber {
+                let extent = written.extent;
                 let target = SymbolicPlace {
                     root: target.clone(),
                     path: RegionPath::new(path.as_slice()),
@@ -84,6 +86,7 @@ impl<'db> OpaqueWrite<'db> {
                 let target_region =
                     RegionSet::singleton(&witness_scope, target.root.clone(), target.path.clone());
                 written
+                    .region
                     .clauses()
                     .iter()
                     .filter_map(|clause| {
@@ -92,7 +95,13 @@ impl<'db> OpaqueWrite<'db> {
                         let written_region =
                             RegionSet::new(&witness_scope, vec![substitute_clause(clause, &fresh)]);
                         if matches!(
-                            target_region.overlap(&written_region),
+                            AccessFootprint::typed(&target_region).overlap(
+                                db,
+                                AccessFootprint {
+                                    region: &written_region,
+                                    extent: extent.substitute(&fresh),
+                                }
+                            ),
                             OverlapResult::Disjoint
                         ) {
                             return None;
@@ -103,6 +112,7 @@ impl<'db> OpaqueWrite<'db> {
                                 Box::new(ClobberCondition::new(
                                     target,
                                     written.substitute(db, &fresh),
+                                    extent.substitute(&fresh),
                                 ))
                             });
                         Some((guard, condition))

@@ -24,7 +24,7 @@ use crate::analysis::{
         },
         normalized::{
             NEffectArgValue, NExpr, NPlaceBase, NStatementKind, ReadMode,
-            access::{AccessTarget, OperationAccess},
+            access::{AccessPhase, AccessTarget, OperationAccess},
         },
     },
     ty::{corelib::MemoryAccessKind, ty_def::BorrowKind},
@@ -33,6 +33,7 @@ use crate::analysis::{
 #[derive(Clone)]
 pub(super) struct ResolvedAccess<'db> {
     pub kind: MemoryAccessKind,
+    pub phase: AccessPhase,
     pub conflict_kind: BorrowKind,
     pub region: RegionSet<'db>,
     pub authority: Vec<Guarded<'db, LoanRef<'db>>>,
@@ -106,6 +107,7 @@ impl<'db> Borrowck<'db> {
                     matches!(leaf.payload, CapabilityRef::Invalidated { .. })
                         && !matches!(
                             region.overlap(
+                                self.db,
                                 &RegionSet::singleton(
                                     leaf.guard.scope(),
                                     RegionRoot::Value(operand.value),
@@ -131,6 +133,7 @@ impl<'db> Borrowck<'db> {
         };
         ResolvedAccess {
             kind: access.kind,
+            phase: access.phase,
             conflict_kind: access.conflict_kind(),
             region,
             authority,

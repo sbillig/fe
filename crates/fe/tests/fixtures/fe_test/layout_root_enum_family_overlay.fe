@@ -5,8 +5,10 @@ enum SmallFirst {
     Large([StorageMap<u256, u256>; 3]),
 }
 
+impl Copy for SmallFirst {}
+
 impl SmallFirst {
-    fn set(mut self, lane: usize, key: u256, value: u256) {
+    fn set(own self, lane: usize, key: u256, value: u256) {
         match self {
             SmallFirst::Small(mut maps) => maps[lane].set(key: key, value: value),
             SmallFirst::Large(mut maps) => maps[lane].set(key: key, value: value),
@@ -26,8 +28,10 @@ enum LargeFirst {
     Small([StorageMap<u256, u256>; 2]),
 }
 
+impl Copy for LargeFirst {}
+
 impl LargeFirst {
-    fn set(mut self, lane: usize, key: u256, value: u256) {
+    fn set(own self, lane: usize, key: u256, value: u256) {
         match self {
             LargeFirst::Large(mut maps) => maps[lane].set(key: key, value: value),
             LargeFirst::Small(mut maps) => maps[lane].set(key: key, value: value),

@@ -1,7 +1,7 @@
 //! Transport, storage and escape policy over solved capability values.
 use crate::analysis::semantic::diagnostics::{
-    BlockedSemanticBody, SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
-    SemanticDiagnosticSpan, SemanticNormalizationFailure, operand_origin,
+    SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind, SemanticDiagnosticSpan,
+    operand_origin,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -30,7 +30,7 @@ use cranelift_entity::EntityRef;
 
 use super::{
     access::effect_occurrence,
-    check::SemanticAnalysisError,
+    check::{SemanticAnalysisError, semantic_borrow_summary_voucher},
     events::CapabilityTraversal,
     ir::{BoundaryRequirement, BoundaryRule, SemanticBorrowCheckResult},
     solver::Borrowck,
@@ -43,6 +43,9 @@ pub fn check_semantic_boundaries<'db>(
 ) -> Result<(), SemanticAnalysisError<'db>> {
     match semantic_boundary_check_query(db, instance) {
         SemanticBorrowCheckResult::Ok => Ok(()),
+        SemanticBorrowCheckResult::Pending(validation) => {
+            Err(SemanticAnalysisError::Pending(validation))
+        }
         SemanticBorrowCheckResult::Blocked(body) => Err(SemanticAnalysisError::Blocked(body)),
         SemanticBorrowCheckResult::Err(diag) => {
             Err(SemanticAnalysisError::Diagnostic(diag.to_complete(db)))
@@ -55,18 +58,17 @@ pub(super) fn semantic_boundary_check_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> SemanticBorrowCheckResult<'db> {
-    let borrowck = match Borrowck::new(db, instance) {
-        Ok(borrowck) => borrowck,
-        Err(SemanticNormalizationFailure::Blocked(blocked)) => {
-            return SemanticBorrowCheckResult::Blocked(blocked);
+    // The canonical export validates body boundaries and uses the declared
+    // contract for intrinsics/bodyless methods. Their synthetic empty body is
+    // not an implementation that can supply a returning native result.
+    match semantic_borrow_summary_voucher(db, instance) {
+        Ok(voucher) if voucher.blocked.is_none() && !voucher.pending.callees.is_empty() => {
+            SemanticBorrowCheckResult::Pending(voucher.pending)
         }
-        Err(SemanticNormalizationFailure::InternalFailure(diag)) => {
-            return SemanticBorrowCheckResult::Err(SemanticDiagnosticId::new(db, diag));
-        }
-    };
-    match check(borrowck) {
-        Ok(Some(blocked)) => SemanticBorrowCheckResult::Blocked(blocked),
-        Ok(None) => SemanticBorrowCheckResult::Ok,
+        Ok(voucher) => voucher.blocked.map_or(
+            SemanticBorrowCheckResult::Ok,
+            SemanticBorrowCheckResult::Blocked,
+        ),
         Err(diag) => SemanticBorrowCheckResult::Err(SemanticDiagnosticId::new(db, diag)),
     }
 }
@@ -91,19 +93,6 @@ pub(super) enum Boundary {
     Retained,
 }
 
-fn check<'db>(
-    mut borrowck: Borrowck<'db>,
-) -> Result<Option<BlockedSemanticBody<'db>>, SemanticDiagnostic<'db>> {
-    borrowck.solve()?;
-    if let Some(blocked) = borrowck.blocked.clone() {
-        return Ok(Some(blocked));
-    }
-    // Export validates return values and caller-visible poststates as well as
-    // each statement boundary. Provisional exports remain policy-independent.
-    borrowck.build_summary()?;
-    Ok(None)
-}
-
 pub(super) fn resolve_boundary_requirements<'db>(
     borrowck: &mut Borrowck<'db>,
 ) -> Result<Vec<BoundaryRequirement<'db>>, SemanticDiagnostic<'db>> {
@@ -124,7 +113,11 @@ impl<'db> BoundaryCheck<'_, 'db> {
         for index in 0..self.borrowck.body.blocks.len() {
             let statements = self.borrowck.body.blocks[index].statements.clone();
             let states = self.borrowck.before[index].clone();
-            for (statement, state) in statements.iter().zip(&states) {
+            for (statement_index, (statement, state)) in statements.iter().zip(&states).enumerate()
+            {
+                if self.borrowck.validation_dependencies[index][statement_index] {
+                    continue;
+                }
                 match &statement.kind {
                     NStatementKind::Define {
                         result,

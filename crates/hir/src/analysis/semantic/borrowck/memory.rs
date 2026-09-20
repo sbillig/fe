@@ -1,4 +1,6 @@
 //! Memory effects use the same regions and input substitution as borrow results.
+use std::cmp::Reverse;
+
 use super::validity::NativeValidity;
 use super::{
     ir::{AvailabilityRequirement, AvailabilitySummary, BorrowSummary, MemoryAccess},
@@ -10,9 +12,12 @@ use crate::analysis::{
     semantic::{
         FieldIndex, SemOrigin,
         capability::{
-            external::{ExternalOrigin, ExternalSource},
+            external::{ExternalOrigin, ExternalSource, ReferentContract},
+            footprint::AccessExtent,
             guard::Guard,
-            handle::{AddressOccurrence, OpaqueHandleContract, OpaqueHandleRef},
+            handle::{
+                AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
+            },
             index::{BinderScope, IndexExpr},
             loan::LoanRef,
             path::{Projection, RegionPath, StructuralPath},
@@ -26,8 +31,8 @@ use crate::analysis::{
     },
     ty::{
         corelib::{
-            IntrinsicMemoryProjection, IntrinsicPointerReturn, MemoryAccessKind,
-            intrinsic_contract, is_std_evm_effect_method,
+            IntrinsicContract, IntrinsicMemoryExtent, IntrinsicMemoryProjection,
+            IntrinsicPointerReturn, MemoryAccessKind, contract_metadata_kind, intrinsic_contract,
         },
         ty_check::BodyOwner,
         ty_def::{BorrowKind, TyId},
@@ -114,6 +119,7 @@ impl<'db> Borrowck<'db> {
                 invalidated,
                 access: MemoryAccess {
                     kind: access.kind,
+                    extent: self.instantiate_extent(access.extent, inputs),
                     region,
                     authorizers,
                 },
@@ -128,6 +134,7 @@ impl<'db> Borrowck<'db> {
         for operation in self.operations.iter().flatten() {
             accesses.extend(operation.accesses.iter().map(|access| MemoryAccess {
                 kind: access.kind,
+                extent: AccessExtent::Typed,
                 region: access.region.clone(),
                 authorizers: RegionSet::empty(access.region.scope()),
             }));
@@ -155,7 +162,21 @@ impl<'db> Borrowck<'db> {
         let BodyOwner::Func(func) = self.instance.key(self.db).owner(self.db) else {
             return Ok(None);
         };
-        let Some(contract) = intrinsic_contract(self.db, func) else {
+        let contract = intrinsic_contract(self.db, func).or_else(|| {
+            (contract_metadata_kind(self.db, func).is_some()
+                && self
+                    .instance
+                    .key(self.db)
+                    .subst(self.db)
+                    .generic_args(self.db)
+                    .iter()
+                    .any(|ty| ty.as_contract(self.db).is_some()))
+            .then_some(IntrinsicContract {
+                pointer_return: None,
+                memory: Some(&[]),
+            })
+        });
+        let Some(contract) = contract else {
             return Ok(None);
         };
         let scope = BinderScope::default();
@@ -285,7 +306,36 @@ impl<'db> Borrowck<'db> {
                 ))
             });
         for access in contracts {
-            let source = input(access.input, false).ok_or_else(|| {
+            if access.projection == IntrinsicMemoryProjection::Value {
+                let ty = self.summary_param_ty(access.input).ok_or_else(|| {
+                    self.internal_diag(origin, "intrinsic access has no input parameter".into())
+                })?;
+                // A value access reads through native argument transport. Plain
+                // copied values are already checked by the caller's operand
+                // access; a copied raw address does not read its pointee.
+                if ty.as_capability(self.db).is_none() {
+                    continue;
+                }
+            }
+            let source = if let IntrinsicMemoryProjection::Address(space) = access.projection {
+                Some(SourceExpr {
+                    source: ExternalSource::unknown(
+                        ReferentContract::new(
+                            self.db,
+                            TyId::u256(self.db),
+                            HandleAddressSpace::Known(space),
+                        ),
+                        AddressOccurrence::Summary(access.input),
+                        Box::new([IndexExpr::FormalValue(access.input)]),
+                    ),
+                    path: RegionPath::default(),
+                    views: Default::default(),
+                    invalidated: false,
+                })
+            } else {
+                input(access.input, false)
+            }
+            .ok_or_else(|| {
                 self.internal_diag(
                     origin,
                     "intrinsic memory access has no input referent".into(),
@@ -293,12 +343,19 @@ impl<'db> Borrowck<'db> {
             })?;
             accesses.push(MemoryAccess {
                 kind: access.kind,
+                extent: match access.extent {
+                    IntrinsicMemoryExtent::Typed => AccessExtent::Typed,
+                    IntrinsicMemoryExtent::Bytes(len) => AccessExtent::Bytes(IndexExpr::Const(len)),
+                    IntrinsicMemoryExtent::Argument(param) => {
+                        AccessExtent::Bytes(IndexExpr::FormalValue(param))
+                    }
+                },
                 region: RegionSet::singleton(
                     &scope,
                     RegionRoot::External(source.source),
                     source.path,
                 ),
-                authorizers: if access.projection == IntrinsicMemoryProjection::Pointee {
+                authorizers: if access.projection != IntrinsicMemoryProjection::Value {
                     authorizers.clone()
                 } else {
                     RegionSet::empty(&scope)
@@ -316,6 +373,7 @@ impl<'db> Borrowck<'db> {
                     .iter()
                     .map(|access| AvailabilityRequirement {
                         kind: access.kind,
+                        extent: access.extent,
                         region: access.region.clone(),
                     })
                     .collect(),
@@ -329,11 +387,12 @@ impl<'db> Borrowck<'db> {
 impl<'db> Borrowck<'db> {
     pub fn signature_memory_accesses(
         &self,
-        mut choice: u32,
+        choice: u32,
     ) -> Result<Vec<MemoryAccess<'db>>, SemanticDiagnostic<'db>> {
         let scope = BinderScope::default();
-        let evm_receiver = matches!(self.instance.key(self.db).owner(self.db), BodyOwner::Func(func) if is_std_evm_effect_method(self.db, func));
         let mut accesses = Vec::new();
+        let mut read_authorizers = RegionSet::empty(&scope);
+        let mut write_authorizers = RegionSet::empty(&scope);
         for input in &self.inventory.inputs {
             if input.source.param().is_none() {
                 continue;
@@ -345,75 +404,75 @@ impl<'db> Borrowck<'db> {
             )
             .substitute(self.db, &input.scope.freshening(&scope))
             .close_existentials(&scope);
-            let Some(kind) = input
+            let native = input
                 .classes
                 .iter()
-                .filter_map(|class| match class {
-                    CapabilityClass::Borrow(BorrowKind::Ref) | CapabilityClass::View => {
-                        Some(MemoryAccessKind::Read)
-                    }
-                    CapabilityClass::Pointer
-                        if !ty_is_copy(
-                            self.db,
-                            self.instance
-                                .key(self.db)
-                                .impl_env(self.db)
-                                .normalization_scope(self.db),
-                            input.ty,
-                            self.instance.assumptions(self.db),
-                        ) =>
-                    {
-                        Some(MemoryAccessKind::Move)
-                    }
-                    CapabilityClass::Borrow(BorrowKind::Mut) | CapabilityClass::Pointer => {
-                        Some(MemoryAccessKind::Write)
-                    }
-                    CapabilityClass::Handle => None,
-                })
-                .max()
-            else {
-                continue;
-            };
-            accesses.push(MemoryAccess {
-                kind,
-                region: region.clone(),
-                authorizers: RegionSet::empty(&scope),
-            });
-            if input.source.contract.is_abstract(self.db)
-                && !(evm_receiver && input.source.param() == Some(0))
-            {
-                let handle_ty = TyId::ptr_to(self.db, TyId::u8(self.db));
-                let contract = OpaqueHandleContract::for_ty(
+                .any(|class| matches!(class, CapabilityClass::Borrow(_) | CapabilityClass::View));
+            let mutable = input
+                .classes
+                .contains(&CapabilityClass::Borrow(BorrowKind::Mut));
+            if native {
+                read_authorizers = read_authorizers.union(&region);
+            }
+            if mutable {
+                write_authorizers = write_authorizers.union(&region);
+            }
+            let pointer = input.classes.contains(&CapabilityClass::Pointer);
+            let consume = pointer
+                && !ty_is_copy(
                     self.db,
                     self.instance
                         .key(self.db)
                         .impl_env(self.db)
                         .normalization_scope(self.db),
+                    input.ty,
                     self.instance.assumptions(self.db),
-                    handle_ty,
-                )
-                .expect("builtin pointer contract")
-                .expect("raw memory pointer");
-                let unknown = ExternalSource::opaque(
-                    self.db,
-                    OpaqueHandleRef {
-                        contract,
-                        occurrence: AddressOccurrence::Summary(choice),
-                        arguments: Box::new([]),
-                    },
                 );
-                choice += 1;
-                accesses.push(MemoryAccess {
-                    kind: MemoryAccessKind::Write,
-                    region: RegionSet::singleton(
-                        &scope,
-                        RegionRoot::External(unknown),
-                        RegionPath::default(),
-                    ),
-                    authorizers: region,
-                });
+            for (kind, possible) in [
+                (MemoryAccessKind::Read, native || pointer),
+                (MemoryAccessKind::Write, mutable || pointer),
+                (MemoryAccessKind::Move, consume),
+            ] {
+                if possible {
+                    accesses.push(MemoryAccess {
+                        kind,
+                        extent: AccessExtent::Typed,
+                        region: region.clone(),
+                        authorizers: RegionSet::empty(&scope),
+                    });
+                }
             }
         }
+        // A bare signature bounds neither raw addresses nor their extent. This
+        // contract may touch existing storage in any space, even without inputs.
+        // Compiler-defined intrinsics bypass this fallback with explicit effects.
+        let unknown = RegionSet::singleton(
+            &scope,
+            RegionRoot::External(ExternalSource::unknown(
+                ReferentContract::new(self.db, TyId::u8(self.db), HandleAddressSpace::Unspecified),
+                AddressOccurrence::Summary(choice),
+                Box::new([]),
+            )),
+            RegionPath::default(),
+        );
+        for kind in [
+            MemoryAccessKind::Read,
+            MemoryAccessKind::Write,
+            MemoryAccessKind::Move,
+        ] {
+            accesses.push(MemoryAccess {
+                kind,
+                extent: AccessExtent::Unknown,
+                region: unknown.clone(),
+                authorizers: if kind == MemoryAccessKind::Read {
+                    read_authorizers.clone()
+                } else {
+                    write_authorizers.clone()
+                },
+            });
+        }
+        // Prefer the strongest conflict diagnostic without joining distinct effects.
+        accesses.sort_by_key(|access| Reverse(access.kind));
         Ok(accesses)
     }
 }

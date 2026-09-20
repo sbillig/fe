@@ -6,6 +6,7 @@ use std::{
 
 use super::{
     external::{ExternalOrigin, ExternalSource, ReferentContract},
+    footprint::AccessFootprint,
     guard::{Guard, ValueOccurrence},
     handle::HandleAddressSpace,
     index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
@@ -101,7 +102,7 @@ impl<'db> RegionRoot<'db> {
         }
     }
 
-    fn alias_guard(
+    pub(super) fn alias_guard(
         &self,
         other: &Self,
         guard: Guard<'db>,
@@ -434,22 +435,7 @@ impl<'db> RegionSet<'db> {
         let mut uncertain = false;
         for left in &self.clauses {
             for right in &other.clauses {
-                let left_subst = left
-                    .guard
-                    .scope()
-                    .open_existentials(&self.scope, &self.scope);
-                let right_subst = right
-                    .guard
-                    .scope()
-                    .open_existentials(&self.scope, left_subst.destination());
-                let left_subst = left_subst
-                    .then(
-                        &IndexSubst::new(left_subst.destination(), right_subst.destination(), [])
-                            .expect("combined witness scope"),
-                    )
-                    .expect("fresh witnesses");
-                let left = substitute_clause(left, &left_subst);
-                let right = substitute_clause(right, &right_subst);
+                let (left, right, ..) = open_clause_pair(left, right, &self.scope);
                 // Distinct raw-handle occurrences can name overlapping bases.
                 // Their field paths cannot prove disjointness without base identity.
                 if allow_unknown
@@ -532,15 +518,8 @@ impl<'db> RegionSet<'db> {
         (Self::new(&self.scope, clauses), uncertain)
     }
 
-    pub fn overlap(&self, other: &Self) -> OverlapResult<'db> {
-        let (overlap, uncertain) = self.intersect(other);
-        if uncertain {
-            OverlapResult::Unknown
-        } else if overlap.is_empty() {
-            OverlapResult::Disjoint
-        } else {
-            OverlapResult::Overlap(overlap)
-        }
+    pub fn overlap(&self, db: &'db dyn HirAnalysisDb, other: &Self) -> OverlapResult<'db> {
+        AccessFootprint::typed(self).overlap(db, AccessFootprint::typed(other))
     }
 
     /// Coverage requires an exact root and a proven prefix for every clause.
@@ -618,6 +597,35 @@ impl<'db> RegionSet<'db> {
             }),
         )
     }
+}
+
+pub(super) fn open_clause_pair<'db>(
+    left: &Guarded<'db, SymbolicPlace<'db>>,
+    right: &Guarded<'db, SymbolicPlace<'db>>,
+    scope: &BinderScope,
+) -> (
+    Guarded<'db, SymbolicPlace<'db>>,
+    Guarded<'db, SymbolicPlace<'db>>,
+    IndexSubst<'db>,
+    IndexSubst<'db>,
+) {
+    let left_subst = left.guard.scope().open_existentials(scope, scope);
+    let right_subst = right
+        .guard
+        .scope()
+        .open_existentials(scope, left_subst.destination());
+    let left_subst = left_subst
+        .then(
+            &IndexSubst::new(left_subst.destination(), right_subst.destination(), [])
+                .expect("combined witness scope"),
+        )
+        .expect("fresh witnesses");
+    (
+        substitute_clause(left, &left_subst),
+        substitute_clause(right, &right_subst),
+        left_subst,
+        right_subst,
+    )
 }
 
 pub(crate) fn substitute_clause<'db>(
@@ -860,7 +868,7 @@ mod tests {
             )
         };
         let uncertain = field(0).intersection(&field(1));
-        assert_eq!(field(0).overlap(&field(1)), OverlapResult::Unknown);
+        assert_eq!(field(0).overlap(&db, &field(1)), OverlapResult::Unknown);
         assert_eq!(uncertain, field(1).intersection(&field(0)));
         assert!(!uncertain.is_empty());
         assert!(!field(0).provably_covers(&uncertain));
