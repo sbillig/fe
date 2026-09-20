@@ -3245,6 +3245,13 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             *root = new_value;
             return Ok(());
         };
+        if self.is_type_level(root) {
+            // Projected writes need a concrete aggregate. Defer the enclosing call
+            // so specialization replays the write and checks its bounds.
+            return Err(CtfeError::NotConstEvaluable {
+                origin: root.error_origin(origin),
+            });
+        }
         let root_origin = root.error_origin(origin);
         let root_deferred_origin = root.deferred_origin;
         let deferred_origin = match &mut root.kind {

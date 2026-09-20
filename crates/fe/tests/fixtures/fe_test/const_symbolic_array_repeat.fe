@@ -6,15 +6,27 @@ impl<const N: usize> Repeated<N> {
     const VALUE: Repeated<N> = Repeated<N> { values: [7; N] }
     const ROWS: [[u8; N]; 2] = [[9; N]; 2]
     const FIRST: u8 = Self::VALUE.values[0]
+    const CHANGED_VALUES: [u8; N] = changed_values<N>()
+    const CHANGED_ROWS: [[u8; N]; 2] = changed_rows<N>()
 }
 
-const fn changed_rows() -> [[u8; 3]; 2] {
-    let mut rows = Repeated<3>::ROWS
+const fn changed_values<const N: usize>() -> [u8; N] {
+    let mut value = Repeated<N> { values: [0; N] }
+    value.values[0] = 1
+    value.values
+}
+
+const fn changed_rows<const N: usize>() -> [[u8; N]; 2] {
+    let mut rows = Repeated<N>::ROWS
     rows[0][1] = 2
     rows
 }
 
-const CHANGED: [[u8; 3]; 2] = changed_rows()
+fn generic_changed_rows<const N: usize>() -> [[u8; N]; 2] {
+    Repeated<N>::CHANGED_ROWS
+}
+
+const CHANGED: [[u8; 3]; 2] = Repeated<3>::CHANGED_ROWS
 
 #[test]
 fn test_symbolic_repeat_specialization() {
@@ -23,6 +35,11 @@ fn test_symbolic_repeat_specialization() {
     assert!(Repeated<4>::ROWS[1][3] == 9)
     assert!(CHANGED[0][1] == 2)
     assert!(CHANGED[1][1] == 9)
+    assert!(Repeated<1>::CHANGED_VALUES[0] == 1)
+    assert!(Repeated<3>::CHANGED_VALUES[2] == 0)
+    let changed = generic_changed_rows<4>()
+    assert!(changed[0][1] == 2)
+    assert!(changed[1][1] == 9)
     let empty: [u8; 0] = Repeated<0>::VALUE.values
     assert!(empty.len() == 0)
 }
