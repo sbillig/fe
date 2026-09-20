@@ -597,13 +597,7 @@ impl<'db> TyChecker<'db> {
                 },
                 UnOp::Mut => {
                     if !prop.is_mut {
-                        let binding = self.find_base_binding(*lhs).map(|binding| {
-                            (binding.binding_name(&self.env), binding.def_span(&self.env))
-                        });
-                        self.push_diag(BodyDiag::CannotBorrowMut {
-                            primary: expr.span(self.body()).into(),
-                            binding,
-                        });
+                        self.report_cannot_borrow_mut(*lhs, expr.span(self.body()).into());
                         return ExprProp::invalid(self.db);
                     }
                     ExprProp {
@@ -4851,6 +4845,17 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    fn assignment_target_ty(&self, lhs: ExprId, ty: TyId<'db>) -> TyId<'db> {
+        // An explicit raw-pointer dereference selects the stored pointee, even
+        // when that value is a capability. Ordinary capability places instead
+        // assign through their referent.
+        if self.is_pointer_deref_expr(lhs) {
+            ty
+        } else {
+            ty.as_capability(self.db).map_or(ty, |(_, target)| target)
+        }
+    }
+
     fn check_assign(&mut self, _expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
         let Expr::Assign(lhs, rhs) = expr_data else {
             unreachable!()
@@ -4861,11 +4866,7 @@ impl<'db> TyChecker<'db> {
         }
 
         let typed_lhs = self.check_expr_unknown(*lhs);
-        let lhs_ty = typed_lhs
-            .ty
-            .as_capability(self.db)
-            .map(|(_, inner)| inner)
-            .unwrap_or(typed_lhs.ty);
+        let lhs_ty = self.assignment_target_ty(*lhs, typed_lhs.ty);
         // Assignment is an expected-type boundary. In particular, an assigned
         // contract-field view can carry concrete layout roots that must reach
         // aggregate constructors before their runtime layout is selected.
@@ -4980,9 +4981,7 @@ impl<'db> TyChecker<'db> {
 
             return Some(MutableIndexTarget {
                 prop: typed_lhs,
-                target_ty: lhs_ty
-                    .as_capability(self.db)
-                    .map_or(lhs_ty, |(_, target)| target),
+                target_ty: self.assignment_target_ty(lhs, lhs_ty),
                 trait_lowered: false,
             });
         }
@@ -5030,14 +5029,26 @@ impl<'db> TyChecker<'db> {
                 (target.prop, target.target_ty, target.trait_lowered)
             } else {
                 let typed_lhs = self.check_expr_unknown(*lhs);
-                let lhs_ty = typed_lhs.ty;
-                let lhs_place_ty = lhs_ty
+                let lhs_place_ty = typed_lhs
+                    .ty
                     .as_capability(self.db)
-                    .map(|(_, inner)| inner)
-                    .unwrap_or(lhs_ty);
+                    .map_or(typed_lhs.ty, |(_, target)| target);
                 (typed_lhs, lhs_place_ty, false)
             };
         if typed_lhs.ty.has_invalid(self.db) {
+            return unit;
+        }
+        // Compound assignment mutates the referent. A writable slot containing
+        // a shared reference permits replacing the reference, not mutating it.
+        if matches!(
+            typed_lhs.ty.as_capability(self.db),
+            Some((CapabilityKind::Ref, _))
+        ) {
+            self.push_diag(BodyDiag::ImmutableAssignment {
+                primary: lhs.span(self.body()).into(),
+                binding: None,
+            });
+            self.check_expr_unknown(*rhs);
             return unit;
         }
         if !trait_lowered
@@ -5403,6 +5414,13 @@ impl<'db> TyChecker<'db> {
         self.env.leave_scope();
 
         ty
+    }
+
+    pub(super) fn report_cannot_borrow_mut(&mut self, expr: ExprId, primary: DynLazySpan<'db>) {
+        let binding = self
+            .find_base_binding(expr)
+            .map(|binding| (binding.binding_name(&self.env), binding.def_span(&self.env)));
+        self.push_diag(BodyDiag::CannotBorrowMut { primary, binding });
     }
 
     /// Returns the base binding for a given expression if it exists.

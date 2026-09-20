@@ -400,6 +400,36 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     let mut normalized =
                         self.normalize_expr(raw_block, statement.origin, *dst, expr)?;
                     let mut source = Some(statement.id);
+                    if let NExpr::Call { callee, .. } = &normalized {
+                        let callee = get_or_build_semantic_instance(self.db, callee.key);
+                        let returned_ty = callee.normalized_result_ty(self.db);
+                        let target_ty = self.normalized_local_ty(*dst);
+                        if returned_ty.as_borrow(self.db).is_some()
+                            && target_ty.as_capability(self.db).is_none()
+                        {
+                            // A contextual Copy read does not change the callee's
+                            // result type. Bind the native carrier first, then
+                            // perform the same explicit read as other operands.
+                            let returned = self.emit_define(
+                                raw_block,
+                                source.take(),
+                                statement.origin,
+                                returned_ty,
+                                *dst,
+                                normalized,
+                            )?;
+                            let returned = self.operand(returned, statement.origin, ReadMode::Copy);
+                            normalized = NExpr::Forward {
+                                src: self.coerce_operand_as(
+                                    raw_block,
+                                    statement.origin,
+                                    *dst,
+                                    returned,
+                                    target_ty,
+                                )?,
+                            };
+                        }
+                    }
                     if let NExpr::Call { callee, .. } = &normalized
                         && let Some(target) = self.normalized_local_ty(*dst).as_view(self.db)
                     {
@@ -581,7 +611,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         SemanticLocalRole::PlaceCarrier { .. }
                     )
                     .then_some(ReadMode::Copy);
-                    self.load_or_borrow_place(value.sem_origin(origin), dst_ty, place, mode)?
+                    self.load_or_borrow_place(block, value.sem_origin(origin), value.value, dst_ty, place, mode)?
                 } else {
                     NExpr::Forward {
                         src: self.read_operand(block, origin, *value, None)?,
@@ -590,8 +620,8 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             }
             SExpr::ReadPlace { place } => {
                 if self.local_has_place(place.local) || place.path.iter().any(|projection| matches!(projection, Projection::Deref)) {
-                    let place = self.normalize_place(block, origin, place)?;
-                    self.load_or_borrow_place(origin, dst_ty, place, None)?
+                    let normalized = self.normalize_place(block, origin, place)?;
+                    self.load_or_borrow_place(block, origin, place.local, dst_ty, normalized, None)?
                 } else {
                     let value = self.read_operand(
                         block,
@@ -1041,8 +1071,10 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     }
 
     fn load_or_borrow_place(
-        &self,
+        &mut self,
+        block: SBlockId,
         origin: SemOrigin<'db>,
+        source_local: SLocalId,
         result_ty: TyId<'db>,
         place: NPlace<'db>,
         load_mode: Option<ReadMode>,
@@ -1081,6 +1113,26 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     .unwrap_or_else(|| self.read_mode_for_place(origin, place.ty, &place)),
                 place,
             })
+        } else if place.ty.as_capability(self.db).is_some()
+            && result_ty.as_capability(self.db).is_none()
+        {
+            // Contextual reads can copy the referent of a stored capability.
+            // Load its carrier first, then use the ordinary operand coercion so
+            // place reads enforce the same Copy and conversion requirements.
+            let carrier = self.emit_define(
+                block,
+                None,
+                origin,
+                place.ty,
+                source_local,
+                NExpr::Load {
+                    place,
+                    mode: ReadMode::Copy,
+                },
+            )?;
+            let value = self.operand(carrier, origin, ReadMode::Copy);
+            let src = self.coerce_operand_as(block, origin, source_local, value, result_ty)?;
+            Ok(NExpr::Forward { src })
         } else {
             Err(NormalizeError::InvalidProjection)
         }
@@ -1109,7 +1161,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 &place.path,
             )
             .map_err(|_| NormalizeError::InvalidProjection)?;
-            self.load_or_borrow_place(origin, result_ty, place, None)
+            self.load_or_borrow_place(block, origin, base.value, result_ty, place, None)
         } else {
             let value = self.read_operand(block, origin, base, None)?;
             self.normalize_value_projection(
@@ -1192,7 +1244,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     place = self.dereference_place(block, origin, source_local, place)?;
                 }
             }
-            return self.load_or_borrow_place(origin, result_ty, place, None);
+            return self.load_or_borrow_place(block, origin, source_local, result_ty, place, None);
         }
         if self.ty_is_copy(projected_ty) {
             value.mode = ReadMode::Copy;
@@ -1233,10 +1285,15 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         } else {
             self.place_for_local(block, origin, raw.local)?
         };
-        while let Some(projection) = projections.next() {
+        for projection in projections {
             if matches!(projection, Projection::Deref) {
                 place = self.dereference_place(block, origin, raw.local, place)?;
                 continue;
+            }
+            // A raw dereference can expose a stored native carrier. Follow it
+            // before applying data projections, just as for carriers in fields.
+            if place.ty.as_capability(self.db).is_some() {
+                place = self.dereference_place(block, origin, raw.local, place)?;
             }
             let suffix = self.normalize_path(
                 block,
@@ -1251,9 +1308,6 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             let base_ty = self.place_base_ty(place.base)?;
             place.ty = project_path_ty(self.db, self.instance, &self.values, base_ty, &place.path)
                 .map_err(|_| NormalizeError::InvalidProjection)?;
-            if projections.peek().is_some() && place.ty.as_capability(self.db).is_some() {
-                place = self.dereference_place(block, origin, raw.local, place)?;
-            }
         }
         Ok(place)
     }
@@ -2948,6 +3002,147 @@ mod tests {
             .expect("test body should be admitted");
         normalize_raw_body(db, instance, raw, instance.assumptions(db))
             .unwrap_or_else(|error| panic!("test body should normalize: {error:?}\n{raw:#?}"))
+    }
+
+    #[test]
+    fn native_call_results_keep_the_declared_carrier_before_contextual_copy_reads() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "native_call_reads.fe".into(),
+            r#"
+fn shared(_ value: ref u256) -> ref u256 { value }
+fn mutable(_ value: mut u256) -> mut u256 { value }
+fn consume(_ value: u256) -> u256 { value }
+fn comparison(value: ref u256) -> bool { shared(value) == 11 }
+fn arithmetic(value: ref u256) -> u256 { shared(value) + 1 }
+fn argument(value: ref u256) -> u256 { consume(shared(value)) }
+fn returned(value: ref u256) -> u256 { shared(value) }
+fn exclusive(value: mut u256) -> bool { mutable(value) == 11 }
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        for name in [
+            "comparison",
+            "arithmetic",
+            "argument",
+            "returned",
+            "exclusive",
+        ] {
+            let body = normalized_func(&db, top_mod, name).body;
+            verify_normalized_body(&db, &body)
+                .unwrap_or_else(|error| panic!("{name}: {error:?}\n{body:#?}"));
+            assert!(
+                body.blocks
+                    .iter()
+                    .flat_map(|block| &block.statements)
+                    .any(|statement| {
+                        let NStatementKind::Define {
+                            expr:
+                                NExpr::Load {
+                                    place,
+                                    mode: ReadMode::Copy,
+                                },
+                            ..
+                        } = &statement.kind
+                        else {
+                            return false;
+                        };
+                        let NPlaceBase::CapabilityTarget { carrier } = place.base else {
+                            return false;
+                        };
+                        let NValueDefinition::Statement { block, statement } =
+                            body.values[carrier.index()].definition
+                        else {
+                            return false;
+                        };
+                        body.values[carrier.index()].ty.as_borrow(&db).is_some()
+                            && matches!(
+                                body.blocks[block.index()].statements[statement as usize].kind,
+                                NStatementKind::Define {
+                                    expr: NExpr::Call { .. },
+                                    ..
+                                }
+                            )
+                    }),
+                "{name} must read the referent of the returned carrier"
+            );
+        }
+    }
+
+    #[test]
+    fn native_pointer_reads_load_the_carrier_before_copying_its_referent() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "native_pointer_reads.fe".into(),
+            r#"
+fn identity<T>(_ pointer: *T) -> *T { pointer }
+fn shared(slot: *ref u256) -> u256 { *slot }
+fn exclusive(slot: *mut u256) -> u256 { *slot }
+fn temporary(slot: *ref u256) -> u256 { *identity(slot) }
+fn nested(slots: **ref u256) -> u256 { *(*slots) }
+fn indexed(slot: *ref [u256; 2]) -> u256 { (*slot)[1] }
+fn indexed_update(slot: *mut [u256; 2]) -> u256 {
+    (*slot)[1] += 1
+    (*slot)[1]
+}
+struct Pair { n: u256 }
+fn field(slot: *ref Pair) -> u256 { (*slot).n }
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        for name in [
+            "shared",
+            "exclusive",
+            "temporary",
+            "nested",
+            "indexed",
+            "indexed_update",
+            "field",
+        ] {
+            let body = normalized_func(&db, top_mod, name).body;
+            verify_normalized_body(&db, &body)
+                .unwrap_or_else(|error| panic!("{name}: {error:?}\n{body:#?}"));
+            let carrier = body
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .find_map(|statement| match &statement.kind {
+                    NStatementKind::Define {
+                        expr:
+                            NExpr::Load {
+                                place,
+                                mode: ReadMode::Copy,
+                            },
+                        ..
+                    } if place.ty == TyId::u256(&db) => match place.base {
+                        NPlaceBase::CapabilityTarget { carrier }
+                            if body.values[carrier.index()].ty.as_borrow(&db).is_some() =>
+                        {
+                            Some(carrier)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .expect("Copy read must follow the stored native carrier");
+            let NValueDefinition::Statement { block, statement } =
+                body.values[carrier.index()].definition
+            else {
+                panic!("stored carrier must be loaded")
+            };
+            assert!(matches!(
+                &body.blocks[block.index()].statements[statement as usize].kind,
+                NStatementKind::Define {
+                    expr: NExpr::Load {
+                        mode: ReadMode::Copy,
+                        ..
+                    },
+                    ..
+                }
+            ));
+        }
     }
 
     #[test]
