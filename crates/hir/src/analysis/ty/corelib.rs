@@ -106,7 +106,7 @@ pub enum IntrinsicMemoryProjection {
     Pointee,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MemoryAccessKind {
     Read,
     MutAccess,

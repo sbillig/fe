@@ -1,0 +1,1885 @@
+//! Structural return values and mutable-input poststates use the same algebra.
+use std::collections::BTreeMap;
+
+use cranelift_entity::EntityRef;
+
+use crate::{
+    analysis::{
+        HirAnalysisDb,
+        semantic::{
+            BorrowActivation, FieldIndex, SemOrigin, SemanticInstance,
+            capability::{
+                external::{ExternalOrigin, ExternalSource, ReferentContract},
+                guard::{Guard, ValueOccurrence},
+                handle::{AddressOccurrence, OpaqueHandleContract, OpaqueHandleRef},
+                index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
+                loan::{CapabilityRef, LoanDef, LoanId, LoanRef},
+                path::{Projection, RegionPath, StructuralPath, project_referent_ty},
+                region::{RegionRoot, RegionSet, SymbolicPlace},
+                semantics::{CapabilityClass, CapabilitySemantics},
+                shape::ShapeChildren,
+                source::{InputOrigin, SourceExpr},
+                state::{BorrowState, CapabilityValue, CapabilityValues},
+                value::{Guarded, IndexPayload, ValueId, ValueInterner, ValueLimits},
+            },
+            get_or_build_semantic_instance, instantiated_effect_env,
+            normalized::{
+                NEffectArg, NEffectArgValue, NExpr, NOperand, NRootKind, NStatement,
+                NStatementKind, NTerminatorKind, NValueDefinition, NValueId,
+            },
+        },
+        ty::{
+            corelib::MemoryAccessKind,
+            provider::ProviderKind,
+            ty_def::{BorrowKind, TyData, TyId},
+        },
+    },
+    semantic::ProviderSource,
+};
+
+use super::{
+    boundary::Boundary,
+    check::{
+        BorrowSummaryComputation, provisional_borrow_summary_voucher,
+        semantic_borrow_summary_voucher,
+    },
+    inventory::referent_contract,
+    ir::{
+        BorrowSummary, BoundaryRequirement, InputPoststate, MemoryAccess, SemanticBorrowDiagnostic,
+    },
+    solver::{BorrowSummaryMode, Borrowck, Resolution},
+};
+
+pub type SourceValue<'db> = ValueId<'db, SourceExpr<'db>>;
+type SourceValues<'db> = ValueInterner<'db, SourceExpr<'db>>;
+
+#[derive(Clone, Copy)]
+pub(super) struct CallInputs<'a, 'db> {
+    pub args: &'a [NOperand],
+    pub effects: &'a [NEffectArg<'db>],
+    pub origin: SemOrigin<'db>,
+}
+
+#[derive(Clone)]
+pub(super) struct CallSummary<'db> {
+    instance: SemanticInstance<'db>,
+    pub summary: BorrowSummary<'db>,
+    updates: Vec<CapabilityValue<'db>>,
+}
+
+impl<'db> Borrowck<'db> {
+    pub fn prepare_calls(&mut self) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+        let calls: Vec<_> = self
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| {
+                if let NStatementKind::Define {
+                    result,
+                    expr: NExpr::Call { callee, .. },
+                } = &statement.kind
+                {
+                    Some((*result, *callee, statement.origin))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let mut bases = Vec::new();
+        for (result, callee, origin) in calls {
+            let instance = get_or_build_semantic_instance(self.db, callee.key);
+            let voucher = match self.summary_mode {
+                BorrowSummaryMode::Final => semantic_borrow_summary_voucher(self.db, instance),
+                BorrowSummaryMode::Provisional => {
+                    provisional_borrow_summary_voucher(self.db, instance)
+                }
+            }?;
+            if self.blocked.is_none() {
+                self.blocked = voucher.blocked;
+            }
+            let Some(summary) = voucher.summary else {
+                continue;
+            };
+            let updates = summary
+                .mutable_inputs
+                .iter()
+                .map(|update| {
+                    self.inventory.values.from_shape(
+                        update.value.shape(),
+                        update.value.scope(),
+                        |semantics, _, scope| {
+                            let payload = match semantics.class {
+                                CapabilityClass::Borrow(kind) => {
+                                    let id = LoanId(self.inventory.loans.len());
+                                    let (loan, args, _) = LoanDef::with_occurrence_arguments(
+                                        kind,
+                                        BorrowActivation::Immediate,
+                                        origin,
+                                        scope,
+                                        self.inventory.loops.arguments(&self.body, result),
+                                    );
+                                    self.inventory.loans.push(loan);
+                                    CapabilityRef::borrow(kind, LoanRef { id, args })
+                                }
+                                CapabilityClass::View => {
+                                    CapabilityRef::view(RegionSet::empty(scope), Vec::new())
+                                }
+                                CapabilityClass::Handle | CapabilityClass::Pointer => {
+                                    CapabilityRef::Address(RegionSet::empty(scope))
+                                }
+                            };
+                            vec![Guarded {
+                                guard: Guard::always(scope),
+                                payload,
+                            }]
+                        },
+                    )
+                })
+                .collect();
+            let sources = SourceValues::new(self.db, ValueLimits::default());
+            let mut external = Vec::new();
+            for value in std::iter::once(&summary.result)
+                .chain(summary.mutable_inputs.iter().map(|update| &update.value))
+            {
+                for leaf in sources.leaves(value, ValueOccurrence::Summary) {
+                    external.push((leaf.payload.source, leaf.guard.scope().clone()));
+                }
+            }
+            external.extend(summary.mutable_inputs.iter().map(|update| {
+                (
+                    update.destination.source.clone(),
+                    update.value.scope().clone(),
+                )
+            }));
+            external.extend(summary.requirements.iter().flat_map(|requirement| {
+                std::iter::once(&requirement.region)
+                    .chain(requirement.populated.iter())
+                    .flat_map(|region| region.clauses())
+                    .filter_map(|clause| {
+                        SourceExpr::from_place(&clause.payload)
+                            .map(|source| (source.source, clause.guard.scope().clone()))
+                    })
+            }));
+            external.extend(
+                summary
+                    .accesses
+                    .iter()
+                    .flat_map(|access| [&access.region, &access.authorizers])
+                    .flat_map(|region| region.clauses())
+                    .filter_map(|clause| {
+                        SourceExpr::from_place(&clause.payload)
+                            .map(|source| (source.source, clause.guard.scope().clone()))
+                    }),
+            );
+            for (source, scope) in external {
+                let allocation = matches!(source.origin, ExternalOrigin::Allocation(_));
+                let base = match source.origin {
+                    ExternalOrigin::OpaqueHandle(mut handle)
+                    | ExternalOrigin::Allocation(mut handle) => {
+                        let AddressOccurrence::Summary(choice) = handle.occurrence else {
+                            return Err(self.internal_diag(
+                                origin,
+                                "summary retains a local handle occurrence".into(),
+                            ));
+                        };
+                        handle.arguments = handle
+                            .arguments
+                            .iter()
+                            .copied()
+                            .chain(
+                                self.inventory
+                                    .loops
+                                    .for_value(&self.body, result)
+                                    .map(IndexExpr::Iteration),
+                            )
+                            .collect();
+                        handle.occurrence = AddressOccurrence::Value {
+                            instance: self.instance,
+                            value: result,
+                            choice,
+                        };
+                        if allocation {
+                            ExternalSource::allocation(self.db, handle)
+                        } else {
+                            ExternalSource::opaque(self.db, handle)
+                        }
+                    }
+                    ExternalOrigin::Provider {
+                        provider,
+                        target_ty,
+                    } if !matches!(
+                        provider.binding(self.db).source,
+                        ProviderSource::UsesParam { .. }
+                    ) =>
+                    {
+                        ExternalSource::provider(self.db, provider, target_ty)
+                    }
+                    ExternalOrigin::Input(_)
+                    | ExternalOrigin::Memory { .. }
+                    | ExternalOrigin::Provider { .. }
+                    | ExternalOrigin::Local(_) => continue,
+                };
+                bases.push((base, scope));
+            }
+            self.calls.insert(
+                result,
+                CallSummary {
+                    instance,
+                    summary,
+                    updates,
+                },
+            );
+        }
+        self.inventory
+            .add_external_sources(self.db, self.instance, bases)
+            .map_err(|error| {
+                self.internal_diag(
+                    SemOrigin::Body(self.body.template_owner),
+                    format!("unresolved external call storage: {error:?}"),
+                )
+            })?;
+        Ok(())
+    }
+
+    pub fn borrow_summary(
+        mut self,
+    ) -> Result<BorrowSummaryComputation<'db>, SemanticBorrowDiagnostic<'db>> {
+        if let Some(summary) = self.intrinsic_summary()? {
+            self.verify_summary(&summary)?;
+            return Ok(BorrowSummaryComputation {
+                summary: Some(summary),
+                blocked: None,
+            });
+        }
+        if self
+            .instance
+            .key(self.db)
+            .owner(self.db)
+            .body(self.db)
+            .is_none()
+        {
+            return Ok(BorrowSummaryComputation {
+                summary: Some(signature_summary(self.db, self.instance, true)?),
+                blocked: None,
+            });
+        }
+        self.solve()?;
+        let summary = self.build_summary()?;
+        Ok(BorrowSummaryComputation {
+            summary: Some(summary),
+            blocked: self.blocked,
+        })
+    }
+
+    pub fn build_summary(&mut self) -> Result<BorrowSummary<'db>, SemanticBorrowDiagnostic<'db>> {
+        // Provisional summaries supply provider facts needed for body admission
+        // and definite assignment. Boundary policy must not suppress those facts.
+        let pending = if self.summary_mode == BorrowSummaryMode::Final {
+            super::boundary::check_solved_body(self)?
+        } else {
+            Vec::new()
+        };
+        let scope = BinderScope::default();
+        let result_shape = self.shape(self.instance.normalized_result_ty(self.db))?;
+        let mut values = SourceValues::new(self.db, ValueLimits::default());
+        let mut result = values.empty(result_shape, &scope);
+        let mut updates = Vec::new();
+        let inputs = self.inventory.inputs.clone();
+        for input in &inputs {
+            if input.writable
+                && input.shape.contains_capability(self.db)
+                && !matches!(input.source.origin, ExternalOrigin::Local(_))
+            {
+                let root = RegionRoot::External(input.source.clone());
+                let initial = self
+                    .inventory
+                    .entry
+                    .storage()
+                    .find(|(key, _)| **key == root)
+                    .expect("inventoried external entry")
+                    .1;
+                if self.terminal.iter().flatten().all(|state| {
+                    state
+                        .storage()
+                        .find(|(key, _)| **key == root)
+                        .is_some_and(|(_, value)| value == initial)
+                }) {
+                    continue;
+                }
+                updates.push(InputPoststate {
+                    destination: SourceExpr {
+                        views: Default::default(),
+                        source: input.source.clone(),
+                        path: RegionPath::default(),
+                    },
+                    value: values.empty(input.shape, &input.scope),
+                });
+            }
+        }
+        let mut may_return = false;
+        let mut choices = BTreeMap::new();
+        let mut handles = BTreeMap::new();
+        for index in 0..self.body.blocks.len() {
+            let block = &self.body.blocks[index];
+            let NTerminatorKind::Return(returned) = block.terminator.kind else {
+                continue;
+            };
+            let Some(state) = self.terminal[index].clone() else {
+                continue;
+            };
+            may_return = true;
+            let origin = block.terminator.origin;
+            if let Some(returned) = returned {
+                let returned = state.value(returned.value);
+                if returned.shape() != result_shape {
+                    return Err(self.internal_diag(
+                        origin,
+                        "return capability shape differs from its semantic signature".into(),
+                    ));
+                }
+                let sources = self.summarize_value(
+                    returned,
+                    Boundary::Return,
+                    origin,
+                    &mut values,
+                    &mut choices,
+                    &mut handles,
+                )?;
+                result = values.join(&result, &sources);
+            }
+            for update in &mut updates {
+                let source = &update.destination.source;
+                let contents = state
+                    .storage()
+                    .find(|(root, _)| *root == &RegionRoot::External(source.clone()))
+                    .expect("inventoried mutable input")
+                    .1;
+                let sources = self.summarize_value(
+                    contents,
+                    Boundary::Retained,
+                    origin,
+                    &mut values,
+                    &mut choices,
+                    &mut handles,
+                )?;
+                update.value = values.join(&update.value, &sources);
+            }
+        }
+        for update in &mut updates {
+            update.destination.source.map_occurrences(&mut |handle| {
+                let next = handles.len().try_into().expect("summary handle count");
+                handle.occurrence =
+                    AddressOccurrence::Summary(*handles.entry(handle.occurrence).or_insert(next));
+            });
+        }
+        let mut requirements: Vec<BoundaryRequirement<'db>> = Vec::new();
+        for mut requirement in pending {
+            requirement.region = self.summarize_region(
+                &requirement.region,
+                requirement.origin,
+                &mut choices,
+                &mut handles,
+            )?;
+            requirement.populated = requirement
+                .populated
+                .as_ref()
+                .map(|region| {
+                    self.summarize_region(region, requirement.origin, &mut choices, &mut handles)
+                })
+                .transpose()?;
+            if requirement.region.is_empty() {
+                continue;
+            }
+            if let Some(existing) = requirements.iter_mut().find(|existing| {
+                existing.rule == requirement.rule
+                    && existing.instance == requirement.instance
+                    && existing.origin == requirement.origin
+                    && existing.populated == requirement.populated
+            }) {
+                existing.region = existing.region.union(&requirement.region);
+            } else {
+                requirements.push(requirement);
+            }
+        }
+        let pending_accesses = self.body_memory_accesses()?;
+        let mut accesses = Vec::new();
+        for access in pending_accesses {
+            // Occurrences exposed by results, poststates, and requirements stay
+            // shared. An address used only by this effect is existential within
+            // the effect: retaining call-depth identities would grow recursive
+            // summaries forever without distinguishing their possible targets.
+            let mut access_handles = handles.clone();
+            let external = |region: &RegionSet<'db>| {
+                RegionSet::new(
+                    region.scope(),
+                    region
+                        .clauses()
+                        .iter()
+                        .filter(|clause| {
+                            SourceExpr::from_place(&clause.payload)
+                                .is_some_and(|source| !source.source.is_fresh_allocation())
+                        })
+                        .cloned(),
+                )
+            };
+            let region = self.summarize_region(
+                &external(&access.region),
+                SemOrigin::Body(self.body.template_owner),
+                &mut choices,
+                &mut access_handles,
+            )?;
+            if region.is_empty() {
+                continue;
+            }
+            let authorizers = self.summarize_region(
+                &external(&access.authorizers),
+                SemOrigin::Body(self.body.template_owner),
+                &mut choices,
+                &mut access_handles,
+            )?;
+            let access = MemoryAccess {
+                kind: access.kind,
+                region,
+                authorizers,
+            };
+            if !accesses.contains(&access) {
+                accesses.push(access);
+            }
+        }
+        accesses.sort();
+        accesses.dedup();
+        let summary = BorrowSummary {
+            accesses,
+            may_return,
+            result,
+            mutable_inputs: updates,
+            requirements,
+        };
+        self.verify_summary(&summary)?;
+        Ok(summary)
+    }
+
+    fn summarize_region(
+        &self,
+        region: &RegionSet<'db>,
+        origin: SemOrigin<'db>,
+        choices: &mut BTreeMap<ValueOccurrence, u32>,
+        handles: &mut BTreeMap<AddressOccurrence<'db>, u32>,
+    ) -> Result<RegionSet<'db>, SemanticBorrowDiagnostic<'db>> {
+        let scope = BinderScope::default();
+        let mut clauses = Vec::new();
+        for clause in region.clauses() {
+            let source = SourceExpr::from_place(&clause.payload).ok_or_else(|| {
+                self.internal_diag(
+                    origin,
+                    "boundary requirement has no external provenance".into(),
+                )
+            })?;
+            // Requirements quantify over all selected regions, independent
+            // of any result shape that might otherwise bind array families.
+            let fresh = clause.guard.scope().freshening(&scope);
+            let guard = clause
+                .guard
+                .substitute(&fresh)
+                .expect("boundary source scope");
+            if let Some(source) =
+                self.summarize_source(source.substitute(self.db, &fresh), &guard, choices, handles)
+            {
+                clauses.push(Guarded {
+                    guard: source.guard,
+                    payload: SymbolicPlace {
+                        root: RegionRoot::External(source.payload.source),
+                        path: source.payload.path,
+                        views: source.payload.views,
+                    },
+                });
+            }
+        }
+        Ok(RegionSet::new(&scope, clauses))
+    }
+
+    fn summarize_value(
+        &self,
+        value: &CapabilityValue<'db>,
+        boundary: Boundary,
+        origin: SemOrigin<'db>,
+        values: &mut SourceValues<'db>,
+        choices: &mut BTreeMap<ValueOccurrence, u32>,
+        handles: &mut BTreeMap<AddressOccurrence<'db>, u32>,
+    ) -> Result<SourceValue<'db>, SemanticBorrowDiagnostic<'db>> {
+        let mut failure = None;
+        let result =
+            self.inventory
+                .values
+                .map_payloads(value, values, |semantics, _, entry, domain| {
+                    let region = entry
+                        .payload
+                        .region(self.db, &self.inventory.loans, entry.guard.scope())
+                        .with_guard(domain);
+                    let mut sources = Vec::new();
+                    for clause in region.clauses() {
+                        let payload = match super::boundary::escape_source(
+                            self,
+                            value,
+                            semantics,
+                            &clause.payload,
+                            boundary,
+                            origin,
+                        ) {
+                            Ok(source) => source,
+                            Err(diag) => {
+                                failure.get_or_insert(diag);
+                                continue;
+                            }
+                        };
+                        if let Some(source) =
+                            self.summarize_source(payload, &clause.guard, choices, handles)
+                        {
+                            sources.push(source);
+                        }
+                    }
+                    sources
+                });
+        if let Some(failure) = failure {
+            return Err(failure);
+        }
+        Ok(result)
+    }
+
+    fn summarize_source(
+        &self,
+        mut payload: SourceExpr<'db>,
+        guard: &Guard<'db>,
+        choices: &mut BTreeMap<ValueOccurrence, u32>,
+        handles: &mut BTreeMap<AddressOccurrence<'db>, u32>,
+    ) -> Option<Guarded<'db, SourceExpr<'db>>> {
+        payload.source.map_occurrences(&mut |source| {
+            let next = handles.len().try_into().expect("summary handle count");
+            source.occurrence =
+                AddressOccurrence::Summary(*handles.entry(source.occurrence).or_insert(next));
+        });
+        let mut scope = guard.scope().clone();
+        let mut substitutions = BTreeMap::new();
+        for index in guard.indices().into_iter().chain(payload.indices()) {
+            if matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_)) {
+                substitutions.entry(index).or_insert_with(|| {
+                    match match index {
+                        IndexExpr::Runtime(value) => self.index(value),
+                        index => index,
+                    } {
+                        IndexExpr::Runtime(actual) => {
+                            match self.body.values[actual.index()].definition {
+                                NValueDefinition::EntryParam { param } => {
+                                    IndexExpr::FormalValue(param)
+                                }
+                                NValueDefinition::BlockParam { .. }
+                                | NValueDefinition::Statement { .. } => {
+                                    let (nested, witness) = scope.bind(IndexNamespace::Existential);
+                                    scope = nested;
+                                    witness
+                                }
+                            }
+                        }
+                        IndexExpr::Iteration(_) => {
+                            let (nested, witness) = scope.bind(IndexNamespace::Existential);
+                            scope = nested;
+                            witness
+                        }
+                        index => index,
+                    }
+                });
+            }
+        }
+        let subst = IndexSubst::new(guard.scope(), &scope, substitutions)
+            .expect("summary local index abstraction");
+        let guard = guard.substitute(&subst).and_then(|guard| {
+            guard.map_occurrences(|occurrence| {
+                if let ValueOccurrence::Value(value) = occurrence
+                    && let NValueDefinition::EntryParam { param } =
+                        self.body.values[value.index()].definition
+                {
+                    return ValueOccurrence::Argument(param);
+                }
+                if matches!(
+                    occurrence,
+                    ValueOccurrence::Argument(_) | ValueOccurrence::Summary
+                ) {
+                    return occurrence;
+                }
+                let next = choices.len().try_into().expect("summary choice count");
+                ValueOccurrence::SummaryChoice(*choices.entry(occurrence).or_insert(next))
+            })
+        })?;
+        Some(Guarded {
+            guard,
+            payload: payload.substitute(self.db, &subst),
+        })
+    }
+
+    fn summary_param_ty(&self, param: u32) -> Option<TyId<'db>> {
+        self.body
+            .values
+            .iter()
+            .find_map(|value| {
+                matches!(value.definition,
+            NValueDefinition::EntryParam { param: actual } if actual == param)
+                .then_some(value.ty)
+            })
+            .or_else(|| {
+                self.body.roots.iter().find_map(|root| {
+                    matches!(root.kind, NRootKind::ParamPlace { param: actual } if actual == param)
+                        .then_some(root.ty)
+                })
+            })
+    }
+
+    fn reachable_source_class(
+        &self,
+        external: &ExternalSource<'db>,
+        requested: Option<CapabilitySemantics<'db>>,
+        writable: bool,
+    ) -> Option<CapabilityClass> {
+        // A widened source denotes any reachable referent. Its final type can
+        // differ from the abstract input that provides its authority.
+        let classes = self
+            .inventory
+            .inputs
+            .iter()
+            .filter(|target| match (&target.source.origin, &external.origin) {
+                (ExternalOrigin::Input(left), ExternalOrigin::Input(right)) => {
+                    left.param() == right.param()
+                }
+                (ExternalOrigin::Provider { .. }, ExternalOrigin::Provider { .. }) => {
+                    target.source.origin == external.origin
+                }
+                _ => false,
+            })
+            .flat_map(|target| target.classes.iter().copied());
+        classes
+            .filter(|class| {
+                !writable
+                    || matches!(
+                        class,
+                        CapabilityClass::Borrow(BorrowKind::Mut)
+                            | CapabilityClass::Handle
+                            | CapabilityClass::Pointer
+                    )
+            })
+            .find(|class| {
+                requested.is_none_or(|semantics| match semantics.class {
+                    CapabilityClass::Borrow(BorrowKind::Mut) => *class == semantics.class,
+                    CapabilityClass::Borrow(BorrowKind::Ref) | CapabilityClass::View => {
+                        !matches!(class, CapabilityClass::Handle | CapabilityClass::Pointer)
+                    }
+                    CapabilityClass::Handle | CapabilityClass::Pointer => *class == semantics.class,
+                })
+            })
+    }
+
+    fn verify_source(
+        &self,
+        source: &SourceExpr<'db>,
+        scope: &BinderScope,
+        requested: Option<CapabilitySemantics<'db>>,
+        writable: bool,
+    ) -> Result<TyId<'db>, SemanticBorrowDiagnostic<'db>> {
+        let invalid = |message: &str| {
+            self.internal_diag(
+                SemOrigin::Body(self.body.template_owner),
+                format!("invalid structural summary: {message}"),
+            )
+        };
+        let db = self.db;
+        for index in source.indices() {
+            if scope.validate(index).is_err() {
+                return Err(invalid("source contains a free binder"));
+            }
+            match index {
+                IndexExpr::Runtime(_) | IndexExpr::Iteration(_) => {
+                    return Err(invalid("source contains a callee-local index"));
+                }
+                IndexExpr::FormalValue(param)
+                    if !self
+                        .summary_param_ty(param)
+                        .is_some_and(|ty| ty.as_view(db).unwrap_or(ty).is_integral(db)) =>
+                {
+                    return Err(invalid(
+                        "source refers to a missing or nonintegral scalar parameter",
+                    ));
+                }
+                _ => {}
+            }
+        }
+        let external = &source.source;
+        if external.contract
+            != ReferentContract::new(db, external.contract.ty, external.contract.address_space)
+        {
+            return Err(invalid("referent addressability does not match its type"));
+        }
+        let (mut ty, mut class, mut space) = match &external.origin {
+            ExternalOrigin::Local(_) => return Err(invalid("source contains local storage")),
+            ExternalOrigin::Input(input) => {
+                let param_ty = self
+                    .summary_param_ty(input.param())
+                    .ok_or_else(|| invalid("source parameter does not exist"))?;
+                if external.is_reachable() {
+                    let class = self
+                        .reachable_source_class(external, requested, writable)
+                        .ok_or_else(|| {
+                            invalid("reachable source has no compatible input authority")
+                        })?;
+                    (external.contract.ty, class, external.contract.address_space)
+                } else {
+                    let semantics = match input.origin() {
+                        InputOrigin::Place(_) => self.shape(param_ty)?.direct(db),
+                        InputOrigin::Slot { slot, .. } => {
+                            let param_ty = param_ty.as_view(db).unwrap_or(param_ty);
+                            let ty =
+                                project_referent_ty(db, self.instance, param_ty, slot.as_slice())
+                                    .ok_or_else(|| invalid("input slot path is invalid"))?;
+                            self.shape(ty)?.direct(db)
+                        }
+                    }
+                    .ok_or_else(|| invalid("input source does not select a capability"))?;
+                    let contract = referent_contract(db, self.instance, semantics)
+                        .map_err(|_| invalid("input referent contract is unresolved"))?;
+                    (contract.ty, semantics.class, contract.address_space)
+                }
+            }
+            ExternalOrigin::Provider {
+                provider,
+                target_ty,
+            } => {
+                if !self.inventory.inputs.iter().any(|input| matches!(input.source.origin,
+                    ExternalOrigin::Provider { provider: actual, target_ty: actual_ty } if actual == *provider && actual_ty == *target_ty)) {
+                    return Err(invalid("provider is not declared by the body or a call"));
+                }
+                if external.is_reachable() {
+                    let class = self
+                        .reachable_source_class(external, requested, writable)
+                        .ok_or_else(|| invalid("reachable provider has no compatible authority"))?;
+                    (external.contract.ty, class, external.contract.address_space)
+                } else {
+                    let binding = provider.binding(db);
+                    let class = if binding.provider_ty.as_capability(db).is_some()
+                        || binding.semantics.kind == ProviderKind::RootObject
+                    {
+                        CapabilityClass::Borrow(if binding.is_mut {
+                            BorrowKind::Mut
+                        } else {
+                            BorrowKind::Ref
+                        })
+                    } else {
+                        CapabilityClass::Handle
+                    };
+                    let base = ExternalSource::provider(db, *provider, *target_ty);
+                    (*target_ty, class, base.contract.address_space)
+                }
+            }
+            ExternalOrigin::Memory {
+                base,
+                element,
+                target_ty,
+            } => {
+                self.verify_source(base, scope, None, false)?;
+                if element.is_some_and(|(_, index)| scope.validate(index).is_err()) {
+                    return Err(invalid("memory element has a free selector"));
+                }
+                (
+                    *target_ty,
+                    CapabilityClass::Pointer,
+                    base.source.contract.address_space,
+                )
+            }
+            ExternalOrigin::OpaqueHandle(handle) | ExternalOrigin::Allocation(handle) => {
+                if !matches!(handle.occurrence, AddressOccurrence::Summary(_)) {
+                    return Err(invalid("opaque source contains a callee-local occurrence"));
+                }
+                let declared = OpaqueHandleContract::for_ty(
+                    db,
+                    self.instance.key(db).impl_env(db).normalization_scope(db),
+                    self.instance.assumptions(db),
+                    handle.contract.handle_ty,
+                )
+                .map_err(|_| invalid("opaque source has an unresolved handle contract"))?;
+                if declared != Some(handle.contract) {
+                    return Err(invalid(
+                        "opaque source differs from its declared target or address space",
+                    ));
+                }
+                (
+                    handle.contract.target_ty,
+                    if handle.contract.handle_ty.as_ptr(db).is_some() {
+                        CapabilityClass::Pointer
+                    } else {
+                        CapabilityClass::Handle
+                    },
+                    handle.contract.address_space,
+                )
+            }
+        };
+        if !external.is_reachable() {
+            let steps = match &external.origin {
+                ExternalOrigin::Input(input) => input.dereferences(),
+                _ => &[],
+            };
+            for path in steps.iter().chain(external.dereferences()) {
+                let slot = project_referent_ty(db, self.instance, ty, path.as_slice())
+                    .ok_or_else(|| invalid("followed source path is invalid"))?;
+                let semantics = self.shape(slot)?.direct(db).ok_or_else(|| {
+                    invalid("followed source does not select a stored capability")
+                })?;
+                let contract = referent_contract(db, self.instance, semantics)
+                    .map_err(|_| invalid("followed referent contract is unresolved"))?;
+                ty = contract.ty;
+                class = semantics.class;
+                space = contract.address_space;
+            }
+            if ty != external.contract.ty || space != external.contract.address_space {
+                return Err(invalid("source contract differs from its final referent"));
+            }
+        }
+        if writable
+            && !matches!(
+                class,
+                CapabilityClass::Borrow(BorrowKind::Mut)
+                    | CapabilityClass::Handle
+                    | CapabilityClass::Pointer
+            )
+        {
+            return Err(invalid("poststate destination is immutable"));
+        }
+        if let Some(requested) = requested
+            && matches!(requested.class, CapabilityClass::Borrow(BorrowKind::Mut))
+            && !matches!(
+                class,
+                CapabilityClass::Borrow(BorrowKind::Mut)
+                    | CapabilityClass::Handle
+                    | CapabilityClass::Pointer
+            )
+        {
+            return Err(invalid("mutable result comes from shared authority"));
+        }
+        let mut target = project_referent_ty(
+            db,
+            self.instance,
+            external.contract.ty,
+            source.path.as_slice(),
+        )
+        .ok_or_else(|| invalid("referent projection is invalid"))?;
+        for view in source.views.iter() {
+            let suffix = source
+                .path
+                .as_slice()
+                .get(view.depth..)
+                .ok_or_else(|| invalid("referent view anchor is invalid"))?;
+            let original =
+                project_referent_ty(db, self.instance, view.repack.source_ty(db), suffix)
+                    .ok_or_else(|| invalid("referent view source is invalid"))?;
+            if target != original {
+                return Err(invalid("referent view starts at the wrong type"));
+            }
+            target = project_referent_ty(db, self.instance, view.repack.target_ty(db), suffix)
+                .ok_or_else(|| invalid("referent view target is invalid"))?;
+        }
+        if let Some(requested) = requested {
+            if target != requested.target_ty {
+                return Err(invalid("source target differs from its capability slot"));
+            }
+            if matches!(
+                requested.class,
+                CapabilityClass::Handle | CapabilityClass::Pointer
+            ) {
+                let contract = referent_contract(db, self.instance, requested)
+                    .map_err(|_| invalid("result handle has an unresolved contract"))?;
+                if contract.address_space != external.contract.address_space {
+                    return Err(invalid("result handle changes address space"));
+                }
+            }
+        }
+        Ok(target)
+    }
+
+    fn verify_summary(
+        &self,
+        summary: &BorrowSummary<'db>,
+    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+        let values = SourceValues::new(self.db, ValueLimits::default());
+        if summary.result.shape() != self.shape(self.instance.normalized_result_ty(self.db))?
+            || summary.result.scope() != &BinderScope::default()
+        {
+            return Err(self.internal_diag(
+                SemOrigin::Body(self.body.template_owner),
+                "summary result shape or scope differs from its signature".into(),
+            ));
+        }
+        for update in &summary.mutable_inputs {
+            let ty = self.verify_source(&update.destination, update.value.scope(), None, true)?;
+            if self.shape(ty)? != update.value.shape() {
+                return Err(self.internal_diag(
+                    SemOrigin::Body(self.body.template_owner),
+                    "summary poststate differs from its destination shape".into(),
+                ));
+            }
+        }
+        for access in &summary.accesses {
+            for region in [&access.region, &access.authorizers] {
+                for clause in region.clauses() {
+                    let source = SourceExpr::from_place(&clause.payload).ok_or_else(|| {
+                        self.internal_diag(
+                            SemOrigin::Body(self.body.template_owner),
+                            "memory summary retains local storage".into(),
+                        )
+                    })?;
+                    self.verify_source(&source, clause.guard.scope(), None, false)?;
+                    self.verify_summary_guard(&clause.guard, &source)?;
+                }
+            }
+        }
+        for requirement in &summary.requirements {
+            for region in std::iter::once(&requirement.region).chain(requirement.populated.iter()) {
+                if region.scope() != &BinderScope::default() {
+                    return Err(self.internal_diag(
+                        requirement.origin,
+                        "boundary requirement retains a lexical scope".into(),
+                    ));
+                }
+                for clause in region.clauses() {
+                    let source = SourceExpr::from_place(&clause.payload).ok_or_else(|| {
+                        self.internal_diag(
+                            requirement.origin,
+                            "boundary requirement retains local storage".into(),
+                        )
+                    })?;
+                    self.verify_source(&source, clause.guard.scope(), None, false)?;
+                    self.verify_summary_guard(&clause.guard, &source)?;
+                }
+            }
+        }
+        for value in std::iter::once(&summary.result)
+            .chain(summary.mutable_inputs.iter().map(|input| &input.value))
+        {
+            for leaf in values.leaves(value, ValueOccurrence::Summary) {
+                self.verify_source(
+                    &leaf.payload,
+                    leaf.guard.scope(),
+                    Some(leaf.semantics),
+                    false,
+                )?;
+                self.verify_summary_guard(&leaf.guard, &leaf.payload)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn verify_summary_guard(
+        &self,
+        guard: &Guard<'db>,
+        source: &SourceExpr<'db>,
+    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+        if guard
+            .occurrences()
+            .iter()
+            .any(|occurrence| match occurrence {
+                ValueOccurrence::Value(_)
+                | ValueOccurrence::Root(_)
+                | ValueOccurrence::CallChoice { .. } => true,
+                ValueOccurrence::Argument(param) => self.summary_param_ty(*param).is_none(),
+                ValueOccurrence::Summary | ValueOccurrence::SummaryChoice(_) => false,
+            })
+            || guard.indices().iter().any(|index| match index {
+                IndexExpr::FormalValue(param) => !self
+                    .summary_param_ty(*param)
+                    .is_some_and(|ty| ty.as_view(self.db).unwrap_or(ty).is_integral(self.db)),
+                _ => guard.scope().validate(*index).is_err(),
+            })
+        {
+            return Err(self.internal_diag(
+                SemOrigin::Body(self.body.template_owner),
+                "summary guard contains an invalid occurrence or scalar parameter".into(),
+            ));
+        }
+        if matches!(&source.source.origin, ExternalOrigin::OpaqueHandle(source) if !matches!(source.occurrence, AddressOccurrence::Summary(_)))
+        {
+            return Err(self.internal_diag(
+                SemOrigin::Body(self.body.template_owner),
+                "summary retains a callee-local handle occurrence".into(),
+            ));
+        }
+        if guard
+            .indices()
+            .into_iter()
+            .chain(source.indices())
+            .any(|index| matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_)))
+        {
+            return Err(self.internal_diag(
+                SemOrigin::Body(self.body.template_owner),
+                "summary retains a callee-local value index".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn transfer_call(
+        &mut self,
+        state: &mut BorrowState<'db>,
+        result: NValueId,
+        statement: &NStatement<'db>,
+    ) -> Result<CapabilityValue<'db>, SemanticBorrowDiagnostic<'db>> {
+        let NStatementKind::Define {
+            expr: NExpr::Call {
+                args, effect_args, ..
+            },
+            ..
+        } = &statement.kind
+        else {
+            unreachable!()
+        };
+        let Some(call) = self.calls.get(&result).cloned() else {
+            let shape = self.inventory.shapes[result.index()];
+            if shape.contains_capability(self.db) {
+                return Err(self.internal_diag(
+                    statement.origin,
+                    "capability-returning call has no summary".into(),
+                ));
+            }
+            return Ok(self.inventory.values.empty(shape, &BinderScope::default()));
+        };
+        let template = self.inventory.definitions[&result].clone();
+        let inputs = CallInputs {
+            args,
+            effects: effect_args,
+            origin: statement.origin,
+        };
+        let returned =
+            self.instantiate_value(state, &call.summary.result, &template, result, inputs)?;
+        let mut updates = Vec::new();
+        for (update, template) in call.summary.mutable_inputs.iter().zip(&call.updates) {
+            let value = self.instantiate_value(state, &update.value, template, result, inputs)?;
+            let target = self.instantiate_source(
+                state,
+                &update.destination,
+                result,
+                update.value.scope(),
+                inputs,
+            )?;
+            updates.push((target.region, value));
+        }
+        let storage = updates
+            .iter()
+            .flat_map(|(region, _)| region.clauses())
+            .filter_map(|clause| match &clause.payload.root {
+                RegionRoot::External(source) => {
+                    Some((source.clone(), clause.guard.scope().clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let accesses = self.call_memory_accesses(state, result, inputs)?;
+        self.ensure_storage(state, storage, statement.origin)?;
+        for access in accesses {
+            if access.access.kind == MemoryAccessKind::Write {
+                state.invalidate_memory(&mut self.inventory.values, &access.access.region);
+            }
+        }
+        state
+            .write_regions(
+                &mut self.inventory.values,
+                &updates
+                    .iter()
+                    .map(|(region, value)| (region, value))
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|error| {
+                self.internal_diag(
+                    statement.origin,
+                    format!("unresolved call poststate: {error:?}"),
+                )
+            })?;
+        Ok(returned)
+    }
+
+    fn instantiate_value(
+        &mut self,
+        state: &BorrowState<'db>,
+        value: &SourceValue<'db>,
+        template: &CapabilityValue<'db>,
+        result: NValueId,
+        inputs: CallInputs<'_, 'db>,
+    ) -> Result<CapabilityValue<'db>, SemanticBorrowDiagnostic<'db>> {
+        let mut values = CapabilityValues::new(self.db, ValueLimits::default());
+        let sources = SourceValues::new(self.db, ValueLimits::default());
+        let mut error = None;
+        let instantiated =
+            sources.map_payloads(value, &mut values, |semantics, path, entry, domain| {
+                let guard = match self.instantiate_guard(domain, result, inputs) {
+                    Ok(Some(guard)) => guard,
+                    Ok(None) => return Vec::new(),
+                    Err(failure) => {
+                        error.get_or_insert(failure);
+                        return Vec::new();
+                    }
+                };
+                let resolved = match self.instantiate_source(
+                    state,
+                    &entry.payload,
+                    result,
+                    guard.scope(),
+                    inputs,
+                ) {
+                    Ok(resolved) => resolved,
+                    Err(failure) => {
+                        error.get_or_insert(failure);
+                        return Vec::new();
+                    }
+                };
+                let region = resolved.region.with_guard(&guard);
+                let payload = match semantics.class {
+                    CapabilityClass::Borrow(kind) => {
+                        let lift = IndexSubst::new(template.scope(), guard.scope(), [])
+                            .expect("result template scope");
+                        let template = self.inventory.values.substitute(template, &lift);
+                        let selected = self
+                            .inventory
+                            .values
+                            .project(&template, path, ValueOccurrence::Value(result))
+                            .expect("a result leaf selects an inventoried template member");
+                        let reference = selected
+                            .direct()
+                            .first()
+                            .and_then(|entry| entry.payload.loan())
+                            .expect("inventoried call result loan")
+                            .clone();
+                        let parents = resolved.parents.into_iter().filter_map(|parent| {
+                            let guard = parent.guard.and(&guard.in_scope(parent.guard.scope()))?;
+                            Some(Guarded {
+                                guard,
+                                payload: parent.payload,
+                            })
+                        });
+                        self.extend_loan(result, &reference, &region, parents.collect());
+                        CapabilityRef::borrow(kind, reference)
+                    }
+                    CapabilityClass::View => CapabilityRef::view(region, resolved.parents),
+                    CapabilityClass::Handle | CapabilityClass::Pointer => {
+                        CapabilityRef::Address(region)
+                    }
+                };
+                vec![Guarded { guard, payload }]
+            });
+        if let Some(error) = error {
+            return Err(error);
+        }
+        Ok(instantiated)
+    }
+
+    pub(super) fn instantiate_guard(
+        &self,
+        guard: &Guard<'db>,
+        result: NValueId,
+        inputs: CallInputs<'_, 'db>,
+    ) -> Result<Option<Guard<'db>>, SemanticBorrowDiagnostic<'db>> {
+        let subst = IndexSubst::new(
+            guard.scope(),
+            guard.scope(),
+            inputs.args.iter().enumerate().map(|(param, arg)| {
+                (
+                    IndexExpr::FormalValue(param.try_into().expect("parameter count")),
+                    self.index(arg.value),
+                )
+            }),
+        )
+        .expect("call guard substitution");
+        let mut invalid = false;
+        let guard = guard.substitute(&subst).and_then(|guard| {
+            guard.map_occurrences(|occurrence| match occurrence {
+                ValueOccurrence::Argument(param) => inputs.args.get(param as usize).map_or(
+                    ValueOccurrence::CallChoice {
+                        result,
+                        choice: param,
+                    },
+                    |arg| ValueOccurrence::Value(arg.value),
+                ),
+                ValueOccurrence::SummaryChoice(choice) => {
+                    ValueOccurrence::CallChoice { result, choice }
+                }
+                ValueOccurrence::Summary => ValueOccurrence::Value(result),
+                ValueOccurrence::Value(_)
+                | ValueOccurrence::Root(_)
+                | ValueOccurrence::CallChoice { .. } => {
+                    invalid = true;
+                    occurrence
+                }
+            })
+        });
+        if invalid {
+            return Err(self.internal_diag(
+                inputs.origin,
+                "summary retains a local enum occurrence".into(),
+            ));
+        }
+        Ok(guard)
+    }
+
+    pub(super) fn instantiate_requirement(
+        &mut self,
+        state: &BorrowState<'db>,
+        region: &RegionSet<'db>,
+        result: NValueId,
+        inputs: CallInputs<'_, 'db>,
+    ) -> Result<RegionSet<'db>, SemanticBorrowDiagnostic<'db>> {
+        let mut instantiated = RegionSet::empty(region.scope());
+        for clause in region.clauses() {
+            let source = SourceExpr::from_place(&clause.payload).ok_or_else(|| {
+                self.internal_diag(
+                    inputs.origin,
+                    "summary boundary requirement retains local storage".into(),
+                )
+            })?;
+            if let Some(guard) = self.instantiate_guard(&clause.guard, result, inputs)? {
+                let resolved =
+                    self.instantiate_source(state, &source, result, guard.scope(), inputs)?;
+                instantiated = instantiated.union(
+                    &resolved
+                        .region
+                        .with_guard(&guard)
+                        .close_existentials(region.scope()),
+                );
+            }
+        }
+        Ok(instantiated)
+    }
+
+    pub(super) fn instantiate_source(
+        &mut self,
+        state: &BorrowState<'db>,
+        source: &SourceExpr<'db>,
+        result: NValueId,
+        scope: &BinderScope,
+        inputs: CallInputs<'_, 'db>,
+    ) -> Result<Resolution<'db>, SemanticBorrowDiagnostic<'db>> {
+        let CallInputs {
+            args,
+            effects,
+            origin,
+        } = inputs;
+        let subst = IndexSubst::new(
+            scope,
+            scope,
+            args.iter().enumerate().map(|(param, arg)| {
+                (
+                    IndexExpr::FormalValue(param.try_into().expect("parameter count")),
+                    self.index(arg.value),
+                )
+            }),
+        )
+        .expect("summary destination scalar substitution");
+        let source = source.substitute(self.db, &subst);
+        let path = &source.path;
+        let external = &source.source;
+        if let ExternalOrigin::Input(input) = &external.origin
+            && external.is_reachable()
+        {
+            let mut resolved = self.reachable_input(
+                state,
+                input.param(),
+                external.contract.ty,
+                path,
+                scope,
+                inputs,
+            )?;
+            resolved.region =
+                resolved
+                    .region
+                    .with_relative_views(self.db, &source.views, path.as_slice().len());
+            return Ok(resolved);
+        }
+        let (mut resolved, mut target_ty) = match &external.origin {
+            ExternalOrigin::Local(_) => {
+                return Err(self.internal_diag(origin, "summary retains local storage".into()));
+            }
+            ExternalOrigin::Memory {
+                base,
+                element,
+                target_ty,
+            } => {
+                let base = self.instantiate_source(state, base, result, scope, inputs)?;
+                let region = self.memory_region(&base.region, *target_ty, *element, origin)?;
+                (
+                    Resolution {
+                        region,
+                        parents: Vec::new(),
+                        traversed: base.traversed.into_iter().chain(base.parents).collect(),
+                    },
+                    *target_ty,
+                )
+            }
+            ExternalOrigin::OpaqueHandle(handle) | ExternalOrigin::Allocation(handle) => {
+                let allocation = matches!(external.origin, ExternalOrigin::Allocation(_));
+                let AddressOccurrence::Summary(choice) = handle.occurrence else {
+                    return Err(self.internal_diag(
+                        origin,
+                        "summary retains a local handle occurrence".into(),
+                    ));
+                };
+                let mut handle = handle.clone();
+                handle.arguments = handle
+                    .arguments
+                    .iter()
+                    .copied()
+                    .chain(
+                        self.inventory
+                            .loops
+                            .for_value(&self.body, result)
+                            .map(IndexExpr::Iteration),
+                    )
+                    .collect();
+                handle.occurrence = AddressOccurrence::Value {
+                    instance: self.instance,
+                    value: result,
+                    choice,
+                };
+                let source = if allocation {
+                    ExternalSource::allocation(self.db, handle)
+                } else {
+                    ExternalSource::opaque(self.db, handle)
+                };
+                let ty = source.contract.ty;
+                (
+                    Resolution {
+                        region: RegionSet::singleton(
+                            scope,
+                            RegionRoot::External(source),
+                            RegionPath::default(),
+                        ),
+                        parents: Vec::new(),
+                        traversed: Vec::new(),
+                    },
+                    ty,
+                )
+            }
+            ExternalOrigin::Provider {
+                provider,
+                target_ty,
+            } => {
+                let source = ExternalSource::provider(self.db, *provider, *target_ty);
+                let ty = source.contract.ty;
+                if let ProviderSource::UsesParam {
+                    requirement_idx, ..
+                } = provider.binding(self.db).source
+                {
+                    let callee = self.calls.get(&result).expect("prepared call").instance;
+                    let binding = provider.binding(self.db);
+                    let local_requirement = instantiated_effect_env(self.db, callee)
+                        .and_then(|env| {
+                            let local_provider =
+                                env.providers(self.db).iter().find(|candidate| {
+                                    candidate.source == binding.source
+                                        && candidate.provider_ty == binding.provider_ty
+                                })?;
+                            env.resolutions(self.db)
+                                .iter()
+                                .find(|resolution| {
+                                    resolution.provider_idx == local_provider.provider_idx
+                                })
+                                .map(|resolution| resolution.requirement_idx)
+                        })
+                        .unwrap_or(requirement_idx);
+                    let effect = effects
+                        .iter()
+                        .find(|effect| effect.binding_idx == local_requirement)
+                        .ok_or_else(|| {
+                            self.internal_diag(
+                                origin,
+                                format!("summary effect source has no call argument for binding {local_requirement}"),
+                            )
+                        })?;
+                    let mut resolved = match &effect.arg {
+                        NEffectArgValue::Place(place) => self.resolve_place(state, place),
+                        NEffectArgValue::Value(value)
+                            if self.body.values[value.value.index()].ty == ty =>
+                        {
+                            // A by-value provider can expose its own fields as
+                            // well as a separate handle target. Reading the
+                            // copied representation must use its structural value.
+                            Resolution {
+                                region: RegionSet::singleton(
+                                    scope,
+                                    RegionRoot::Value(value.value),
+                                    RegionPath::default(),
+                                ),
+                                parents: Vec::new(),
+                                traversed: Vec::new(),
+                            }
+                        }
+                        NEffectArgValue::Value(value) => {
+                            self.resolve_capability(state.value(value.value))
+                        }
+                    };
+                    let lift = IndexSubst::new(resolved.region.scope(), scope, [])
+                        .expect("effect region scope");
+                    resolved.region = resolved.region.substitute(self.db, &lift);
+                    resolved.parents = resolved
+                        .parents
+                        .into_iter()
+                        .map(|parent| {
+                            let subst = lift.under_existentials(parent.guard.scope());
+                            Guarded {
+                                guard: parent
+                                    .guard
+                                    .substitute(&subst)
+                                    .expect("effect parent scope"),
+                                payload: parent.payload.substitute(&subst),
+                            }
+                        })
+                        .collect();
+                    (resolved, ty)
+                } else {
+                    (
+                        Resolution {
+                            region: RegionSet::singleton(
+                                scope,
+                                RegionRoot::External(source),
+                                RegionPath::default(),
+                            ),
+                            parents: Vec::new(),
+                            traversed: Vec::new(),
+                        },
+                        ty,
+                    )
+                }
+            }
+            ExternalOrigin::Input(input) => {
+                let param = input.param();
+                let (mut value, direct_place) = if let Some(arg) = args.get(param as usize) {
+                    (state.value(arg.value).clone(), None)
+                } else {
+                    let binding = param as usize - args.len();
+                    let effect = effects
+                        .iter()
+                        .find(|effect| effect.binding_idx as usize == binding)
+                        .ok_or_else(|| {
+                            self.internal_diag(
+                                origin,
+                                "summary input has no actual argument".into(),
+                            )
+                        })?;
+                    match &effect.arg {
+                        NEffectArgValue::Value(arg) => (state.value(arg.value).clone(), None),
+                        NEffectArgValue::Place(place) => {
+                            let region = self.resolve_region(state, place);
+                            let shape = self.shape(place.ty)?;
+                            let value = self.read_region(
+                                state,
+                                &region,
+                                shape,
+                                ValueOccurrence::Argument(param),
+                                origin,
+                            )?;
+                            (value, Some((self.resolve_place(state, place), place.ty)))
+                        }
+                    }
+                };
+                let lift =
+                    IndexSubst::new(value.scope(), scope, []).expect("actual argument scope");
+                value = self.inventory.values.substitute(&value, &lift);
+                match input.origin() {
+                    InputOrigin::Place(_) => {
+                        if let Some((mut resolved, ty)) = direct_place {
+                            resolved.region = resolved.region.substitute(self.db, &lift);
+                            (resolved, ty)
+                        } else {
+                            let semantics = value.shape().direct(self.db).ok_or_else(|| {
+                                self.internal_diag(
+                                    origin,
+                                    "input place requires an explicit view or capability argument"
+                                        .into(),
+                                )
+                            })?;
+                            (self.resolve_capability(&value), semantics.target_ty)
+                        }
+                    }
+                    InputOrigin::Slot { slot, .. } => {
+                        let mut traversed = Vec::new();
+                        if let Some(semantics) = value.shape().direct(self.db)
+                            && semantics.class == CapabilityClass::View
+                        {
+                            let resolved = self.resolve_capability(&value);
+                            traversed.extend(resolved.parents);
+                            let region = resolved.region;
+                            let shape = self.shape(semantics.target_ty)?;
+                            value = self.read_region(
+                                state,
+                                &region,
+                                shape,
+                                ValueOccurrence::Argument(param),
+                                origin,
+                            )?;
+                        }
+                        let Some(selected) = self.inventory.values.project(
+                            &value,
+                            slot,
+                            ValueOccurrence::Argument(param),
+                        ) else {
+                            return Ok(Resolution::empty(scope));
+                        };
+                        let semantics = selected.shape().direct(self.db).ok_or_else(|| {
+                            self.internal_diag(
+                                origin,
+                                "summary slot does not select a capability".into(),
+                            )
+                        })?;
+                        let mut resolved = self.resolve_capability(&selected);
+                        resolved.traversed = traversed;
+                        (resolved, semantics.target_ty)
+                    }
+                }
+            }
+        };
+        if external.is_reachable() {
+            resolved = self.reachable_region(
+                state,
+                &resolved.region,
+                target_ty,
+                external.contract.ty,
+                scope,
+                origin,
+            )?;
+        } else {
+            let input_steps = match &external.origin {
+                ExternalOrigin::Input(input) => input.dereferences(),
+                _ => &[],
+            };
+            for step in input_steps.iter().chain(external.dereferences()) {
+                let shape = self.shape(target_ty)?;
+                let contents = self.read_region(
+                    state,
+                    &resolved.region,
+                    shape,
+                    ValueOccurrence::Value(result),
+                    origin,
+                )?;
+                let Some(selected) = self.inventory.values.project(
+                    &contents,
+                    &StructuralPath::new(step.as_slice()),
+                    ValueOccurrence::Value(result),
+                ) else {
+                    return Ok(Resolution::empty(scope));
+                };
+                let semantics = selected.shape().direct(self.db).ok_or_else(|| {
+                    self.internal_diag(
+                        origin,
+                        "summary dereference does not select a stored capability".into(),
+                    )
+                })?;
+                let mut selected = self.resolve_capability(&selected);
+                selected.traversed.extend(resolved.traversed);
+                selected.traversed.extend(resolved.parents);
+                resolved = selected;
+                target_ty = semantics.target_ty;
+            }
+        }
+        resolved.region = resolved.region.project(path).with_relative_views(
+            self.db,
+            &source.views,
+            path.as_slice().len(),
+        );
+        Ok(resolved)
+    }
+}
+
+#[derive(Clone)]
+struct Candidate<'db> {
+    source: SourceExpr<'db>,
+    guard: Guard<'db>,
+    ty: TyId<'db>,
+    class: CapabilityClass,
+}
+
+pub(super) fn signature_summary<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    opaque: bool,
+) -> Result<BorrowSummary<'db>, SemanticBorrowDiagnostic<'db>> {
+    let body = super::inventory::signature_body(db, instance);
+    let checker = Borrowck::new_with_body(db, instance, body, BorrowSummaryMode::Provisional)?;
+    let mut values = SourceValues::new(db, ValueLimits::default());
+    let shape = checker.shape(instance.normalized_result_ty(db))?;
+    let mut candidates = Vec::new();
+    if opaque {
+        for input in &checker.inventory.inputs {
+            let mut pending = vec![(input.ty, RegionPath::default(), Guard::always(&input.scope))];
+            while let Some((ty, path, guard)) = pending.pop() {
+                candidates.extend(input.classes.iter().map(|class| Candidate {
+                    source: SourceExpr {
+                        views: Default::default(),
+                        source: input.source.clone(),
+                        path: path.clone(),
+                    },
+                    guard: guard.clone(),
+                    ty,
+                    class: *class,
+                }));
+                let shape = checker.shape(ty)?;
+                if shape.direct(db).is_some() {
+                    continue;
+                }
+                match shape.children(db) {
+                    ShapeChildren::None | ShapeChildren::EmptyArray => {}
+                    ShapeChildren::Product(fields) => {
+                        let types = instance.normalized_field_types(db, ty);
+                        pending.extend(fields.iter().zip(types.iter().copied()).map(
+                            |((field, _), ty)| {
+                                (ty, path.appended(Projection::Field(*field)), guard.clone())
+                            },
+                        ));
+                    }
+                    ShapeChildren::Sum(variants) => {
+                        for (variant, _) in variants {
+                            pending.extend(
+                                instance
+                                    .normalized_enum_variant_field_tys(db, ty, *variant)
+                                    .iter()
+                                    .copied()
+                                    .enumerate()
+                                    .map(|(field, ty)| {
+                                        (
+                                            ty,
+                                            path.appended(Projection::VariantField {
+                                                variant: *variant,
+                                                field: FieldIndex(
+                                                    field.try_into().expect("verified field count"),
+                                                ),
+                                            }),
+                                            guard.clone(),
+                                        )
+                                    }),
+                            );
+                        }
+                    }
+                    ShapeChildren::Array { len, .. } => {
+                        let (scope, witness) = guard.scope().bind(IndexNamespace::Existential);
+                        if let Some(guard) = guard.in_scope(&scope).with_bound(witness, len.index())
+                        {
+                            pending.push((
+                                ty.generic_args(db)[0],
+                                path.appended(Projection::Index(witness)),
+                                guard,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut opaque_choice = 0;
+    let mut failure = None;
+    let mut build = |shape, scope: &BinderScope| {
+        values.from_shape(shape, scope, |semantics, _, scope| {
+            let mut sources: Vec<_> = candidates
+                .iter()
+                .filter(|candidate| {
+                    (candidate.ty == semantics.target_ty
+                        || matches!(
+                            candidate.ty.base_ty(db).data(db),
+                            TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
+                        ))
+                        && match semantics.class {
+                            CapabilityClass::Borrow(BorrowKind::Mut) => {
+                                candidate.class == CapabilityClass::Borrow(BorrowKind::Mut)
+                            }
+                            CapabilityClass::Borrow(BorrowKind::Ref) | CapabilityClass::View => {
+                                !matches!(
+                                    candidate.class,
+                                    CapabilityClass::Handle | CapabilityClass::Pointer
+                                )
+                            }
+                            CapabilityClass::Handle | CapabilityClass::Pointer => {
+                                candidate.class == semantics.class
+                            }
+                        }
+                })
+                .filter_map(|candidate| {
+                    let subst = candidate.guard.scope().freshening(scope);
+                    Some(Guarded {
+                        guard: candidate.guard.substitute(&subst)?,
+                        payload: if candidate.ty != semantics.target_ty {
+                            let mut source = candidate.source.source.clone().widen();
+                            source.contract = ReferentContract::new(
+                                db,
+                                semantics.target_ty,
+                                source.contract.address_space,
+                            );
+                            SourceExpr {
+                                views: Default::default(),
+                                source,
+                                path: RegionPath::default(),
+                            }
+                        } else {
+                            candidate.source.substitute(db, &subst)
+                        },
+                    })
+                })
+                .collect();
+            if opaque
+                && matches!(
+                    semantics.class,
+                    CapabilityClass::Handle | CapabilityClass::Pointer
+                )
+            {
+                match OpaqueHandleContract::for_ty(
+                    db,
+                    instance.key(db).impl_env(db).normalization_scope(db),
+                    instance.assumptions(db),
+                    semantics.representation_ty,
+                ) {
+                    Ok(Some(contract)) => {
+                        let choice = opaque_choice;
+                        opaque_choice += 1;
+                        sources.push(Guarded {
+                            guard: Guard::always(scope),
+                            payload: SourceExpr {
+                                views: Default::default(),
+                                source: ExternalSource::opaque(
+                                    db,
+                                    OpaqueHandleRef {
+                                        contract,
+                                        occurrence: AddressOccurrence::Summary(choice),
+                                        arguments: scope.variables().collect(),
+                                    },
+                                ),
+                                path: RegionPath::default(),
+                            },
+                        });
+                    }
+                    Ok(None) | Err(_) => {
+                        failure.get_or_insert_with(|| {
+                            checker.internal_diag(
+                                SemOrigin::Body(checker.body.template_owner),
+                                "opaque signature has an unresolved handle origin".into(),
+                            )
+                        });
+                    }
+                }
+            }
+            sources
+        })
+    };
+    let result = build(shape, &BinderScope::default());
+    let mutable_inputs = checker
+        .inventory
+        .inputs
+        .iter()
+        .filter(|input| input.writable && input.shape.contains_capability(db))
+        .map(|input| InputPoststate {
+            destination: SourceExpr {
+                views: Default::default(),
+                source: input.source.clone(),
+                path: RegionPath::default(),
+            },
+            value: build(input.shape, &input.scope),
+        })
+        .collect();
+    if let Some(failure) = failure {
+        return Err(failure);
+    }
+    let summary = BorrowSummary {
+        may_return: opaque && !instance.is_intrinsically_never_returning(db),
+        result,
+        mutable_inputs,
+        requirements: Vec::new(),
+        accesses: if opaque {
+            checker.signature_memory_accesses(opaque_choice)?
+        } else {
+            Vec::new()
+        },
+    };
+    checker.verify_summary(&summary)?;
+    Ok(summary)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        analysis::{
+            semantic::{
+                capability::{handle::HandleAddressSpace, source::InputSource},
+                identity_semantic_instance_key,
+            },
+            ty::{ProviderAddressSpace, ty_check::BodyOwner},
+        },
+        hir_def::ItemKind,
+        test_db::HirAnalysisTestDb,
+    };
+
+    #[test]
+    fn summary_verification_rejects_invalid_sources_and_authority() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "summary_verification.fe".into(),
+            "fn forward(value: ref u256) -> ref u256 { value }",
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let func = top_mod
+            .all_items(&db)
+            .iter()
+            .find_map(|item| {
+                if let ItemKind::Func(func) = item {
+                    Some(*func)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        let summary = checker.build_summary().unwrap();
+        let values = SourceValues::new(&db, ValueLimits::default());
+        let leaf = values
+            .leaves(&summary.result, ValueOccurrence::Summary)
+            .pop()
+            .unwrap();
+        let check = |source: &SourceExpr<'_>| {
+            checker
+                .verify_source(source, leaf.guard.scope(), Some(leaf.semantics), false)
+                .is_ok()
+        };
+        assert!(check(&leaf.payload));
+        let mut source = leaf.payload.clone();
+        source.source.origin =
+            ExternalOrigin::Input(InputSource::slot(9, StructuralPath::default()));
+        assert!(!check(&source));
+        let mut source = leaf.payload.clone();
+        source.path = RegionPath::new([Projection::Field(FieldIndex(0))]);
+        assert!(!check(&source));
+        let mut source = leaf.payload.clone();
+        source.source.contract.ty = TyId::bool(&db);
+        assert!(!check(&source));
+        let mut source = leaf.payload.clone();
+        source.source.contract.address_space =
+            HandleAddressSpace::Known(ProviderAddressSpace::Storage);
+        assert!(!check(&source));
+        let mut requested = leaf.semantics;
+        requested.class = CapabilityClass::Borrow(BorrowKind::Mut);
+        assert!(
+            checker
+                .verify_source(&leaf.payload, leaf.guard.scope(), Some(requested), false)
+                .is_err()
+        );
+        assert!(
+            checker
+                .verify_source(&leaf.payload, leaf.guard.scope(), None, true)
+                .is_err()
+        );
+        let (_, unowned) = BinderScope::default().bind(IndexNamespace::Result);
+        let mut source = leaf.payload.clone();
+        source.path = RegionPath::new([Projection::Index(unowned)]);
+        assert!(!check(&source));
+    }
+}

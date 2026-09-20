@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use cranelift_entity::EntityRef;
 use fe_hir::diagnosable::Diagnosable;
-use fe_hir::test_db::HirAnalysisTestDb;
+use fe_hir::test_db::{HirAnalysisTestDb, find_func};
 use fe_hir::{
     analysis::{
         semantic::{
@@ -48,10 +48,12 @@ fn wrap() {
         identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
     );
     assert!(std::ptr::eq(semantic.body(&db), semantic.body(&db)));
-    let body = canonicalize_semantic_consts(&db, semantic);
+    let body = canonicalize_semantic_consts(&db, semantic)
+        .expect("valid semantic body should be canonicalizable");
     assert!(std::ptr::eq(
         body,
         canonicalize_semantic_consts(&db, semantic)
+            .expect("valid semantic body should remain canonicalizable")
     ));
 
     let found = body
@@ -726,7 +728,8 @@ fn contract_init_fixed_array_arg_fixture_has_no_type_level_semantic_consts() {
         if !seen.insert(instance.key(&db)) {
             continue;
         }
-        let body = canonicalize_semantic_consts(&db, instance);
+        let body = canonicalize_semantic_consts(&db, instance)
+            .expect("valid semantic body should be canonicalizable");
         for stmt in body.blocks.iter().flat_map(|block| block.stmts.iter()) {
             if let SStmtKind::Assign {
                 expr: SExpr::Const(SConst::Value(value)),
@@ -792,7 +795,8 @@ fn test_add_overflow_u8() {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
     );
-    let body = canonicalize_semantic_consts(&db, semantic);
+    let body = canonicalize_semantic_consts(&db, semantic)
+        .expect("valid semantic body should be canonicalizable");
 
     assert!(
         body.blocks
@@ -837,7 +841,8 @@ fn signed_mul_no_overflow_i8_neg_neg() {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
     );
-    let body = canonicalize_semantic_consts(&db, semantic);
+    let body = canonicalize_semantic_consts(&db, semantic)
+        .expect("valid semantic body should be canonicalizable");
 
     assert!(
         body.blocks
@@ -918,7 +923,8 @@ fn entry() -> u256 {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
     );
-    let body = canonicalize_semantic_consts(&db, semantic);
+    let body = canonicalize_semantic_consts(&db, semantic)
+        .expect("valid semantic body should be canonicalizable");
     let expected_ty = top_mod
         .all_funcs(&db)
         .iter()
@@ -986,7 +992,8 @@ fn wraps_after_aug_assign() -> bool {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
     );
-    let body = canonicalize_semantic_consts(&db, semantic);
+    let body = canonicalize_semantic_consts(&db, semantic)
+        .expect("valid semantic body should be canonicalizable");
 
     let mut saw_bool_call = false;
     let mut saw_const_false = false;
@@ -1048,7 +1055,8 @@ fn negated_min_i8_compares_equal() -> bool {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
     );
-    let body = canonicalize_semantic_consts(&db, semantic);
+    let body = canonicalize_semantic_consts(&db, semantic)
+        .expect("valid semantic body should be canonicalizable");
 
     let mut saw_const_true = false;
     let mut saw_const_false = false;
@@ -1091,4 +1099,215 @@ fn negated_min_i8_compares_equal() -> bool {
         !saw_const_false,
         "negated minimum integer literal should not stay abstract and fold to false"
     );
+}
+
+#[test]
+fn canonicalize_tracks_mutation_through_aggregate_capabilities() {
+    for (name, operation, folds) in [
+        ("field", "holder.handle = 1", false),
+        (
+            "reborrow",
+            "let alias = mut holder.handle\n alias = 1",
+            false,
+        ),
+        (
+            "array",
+            "let mut values = [holder]\n values[index].handle = 1",
+            false,
+        ),
+        (
+            "nested",
+            "let mut outer = Outer { inner: mut holder }\n outer.inner.handle = 1",
+            false,
+        ),
+        ("value_call", "write(holder)", false),
+        ("borrowed_call", "write_borrowed(mut holder)", false),
+        (
+            "returned",
+            "let alias = returned(holder)\n alias = 1",
+            false,
+        ),
+        (
+            "stored",
+            "let mut values = [Wrap { handle: mut other }]\n values[0] = holder\n values[0].handle = 1",
+            false,
+        ),
+        (
+            "call_stored",
+            "let mut values = [Wrap { handle: mut other }]\n replace(values: mut values, replacement: holder)\n values[0].handle = 1",
+            false,
+        ),
+        (
+            "loop",
+            "while index == 0 { holder.handle = 1\n break }",
+            false,
+        ),
+        ("reassigned_control", "holder.handle = 1\n value = 1", true),
+        ("unrelated_control", "holder.handle = 1", true),
+        ("shared_control", "read(ref unrelated)", true),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let result = if matches!(name, "unrelated_control" | "shared_control") {
+            "unrelated == 7"
+        } else {
+            "value == 1"
+        };
+        let source = format!(
+            r#"
+struct Wrap {{ handle: mut u256 }}
+struct Outer {{ inner: mut Wrap }}
+fn read(_ value: ref u256) -> u256 {{ value }}
+fn write(holder: Wrap) {{ holder.handle = 1 }}
+fn write_borrowed(_ holder: mut Wrap) {{ holder.handle = 1 }}
+fn returned(holder: Wrap) -> mut u256 {{ holder.handle }}
+fn replace(values: mut [Wrap; 1], replacement: Wrap) {{ values[0] = replacement }}
+fn probe(index: usize) -> bool {{
+    let unrelated: u256 = 7
+    let mut value: u256 = 0
+    let mut other: u256 = 0
+    let mut holder = Wrap {{ handle: mut value }}
+    {operation}
+    {result}
+}}
+"#
+        );
+        let file = db.new_stand_alone(format!("ctfe_{name}.fe").into(), &source);
+        let (top_mod, _) = db.top_mod(file);
+        let func = top_mod.all_funcs(&db).iter().copied().find(|func| {
+            matches!(func.name(&db), Partial::Present(name) if name.data(&db) == "probe")
+        }).unwrap();
+        let (diagnostics, _) = check_func_body(&db, func).clone();
+        assert!(diagnostics.is_empty(), "{name}: {diagnostics:#?}");
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+        );
+        let body = canonicalize_semantic_consts(&db, instance).unwrap();
+        let mut constant_true = false;
+        let mut dynamic_comparison = false;
+        for statement in body.blocks.iter().flat_map(|block| &block.stmts) {
+            if let SStmtKind::Assign { dst, expr } = &statement.kind
+                && body.locals[dst.index()].ty.is_bool(&db)
+            {
+                match expr {
+                    SExpr::Const(SConst::Value(value)) => {
+                        assert!(
+                            !matches!(
+                                value.value(&db),
+                                SemConstValue::Scalar {
+                                    value: SemConstScalar::Bool(false),
+                                    ..
+                                }
+                            ),
+                            "{name}: stale comparison folded to false: {body:#?}"
+                        );
+                        constant_true |= matches!(
+                            value.value(&db),
+                            SemConstValue::Scalar {
+                                value: SemConstScalar::Bool(true),
+                                ..
+                            }
+                        );
+                    }
+                    SExpr::Call { .. } => dynamic_comparison = true,
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(constant_true, folds, "{name}: {body:#?}");
+        assert!(
+            folds || dynamic_comparison,
+            "{name}: missing comparison: {body:#?}"
+        );
+    }
+}
+
+#[test]
+fn selected_trait_const_results_keep_the_callers_generic_parameters() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "selected_trait_const.fe".into(),
+        r#"
+trait Pick<const N: usize> {
+    const A: usize = N
+    const B: usize = Self::A
+}
+struct Single<const N: usize> {}
+impl<const N: usize> Pick<N> for Single<N> {}
+struct Marker<const M: usize, const N: usize> {}
+impl<const M: usize, const N: usize> Pick<N> for Marker<M, N> {}
+const fn single() -> usize { Single<7>::B }
+const fn first() -> usize { Marker<3, 7>::B }
+const fn second() -> usize { Marker<7, 3>::B }
+fn exact_length(_ value: [u8; Single<7>::B]) {}
+fn check_length() {
+    let value: [u8; 7] = [0; 7]
+    exact_length(value)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    for (name, expected) in [("single", 7), ("first", 7), ("second", 3)] {
+        let value = eval_body_owner_const(
+            &db,
+            BodyOwner::Func(find_func(&db, top_mod, name)),
+            Vec::new(),
+        )
+        .expect("selected associated constant should evaluate");
+        let SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } = value.value(&db)
+        else {
+            panic!(
+                "expected an integer constant for {name}: {:?}",
+                value.value(&db)
+            );
+        };
+        assert_eq!(value.to_usize(), Some(expected));
+    }
+}
+
+#[test]
+fn generic_associated_const_records_are_typed_before_specialization() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_record_template.fe".into(),
+        r#"
+trait Build {
+    type Value
+    const VALUE: Self::Value
+}
+struct Marker<const N: usize> { value: u8 }
+impl<const N: usize> Build for Marker<N> {
+    type Value = Marker<N>
+    const VALUE: Self::Value = Marker<N> { value: 7 }
+}
+impl<const N: usize> Marker<N> {
+    const OTHER: Marker<N> = Marker<N> { value: 9 }
+}
+const fn first() -> u8 { Marker<2>::VALUE.value }
+const fn second() -> u8 { Marker<3>::VALUE.value }
+const fn inherent() -> u8 { Marker<3>::OTHER.value }
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    for (name, expected) in [("first", 7), ("second", 7), ("inherent", 9)] {
+        let value = eval_body_owner_const(
+            &db,
+            BodyOwner::Func(find_func(&db, top_mod, name)),
+            Vec::new(),
+        )
+        .expect("generic const record should evaluate");
+        let SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } = value.value(&db)
+        else {
+            panic!("expected scalar for {name}");
+        };
+        assert_eq!(value.to_usize(), Some(expected));
+    }
 }

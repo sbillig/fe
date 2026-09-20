@@ -4903,7 +4903,7 @@ impl<'db> TyChecker<'db> {
             return Some(ExprProp::new(TyId::unit(self.db), true));
         }
 
-        let mut rhs_prop = self.check_expr_unknown(rhs);
+        let mut rhs_prop = self.check_expr(rhs, target.target_ty);
         if let Some(coerced) =
             self.try_coerce_capability_for_expr_to_expected(rhs, rhs_prop.ty, target.target_ty)
         {
@@ -4980,7 +4980,9 @@ impl<'db> TyChecker<'db> {
 
             return Some(MutableIndexTarget {
                 prop: typed_lhs,
-                target_ty: lhs_ty,
+                target_ty: lhs_ty
+                    .as_capability(self.db)
+                    .map_or(lhs_ty, |(_, target)| target),
                 trait_lowered: false,
             });
         }

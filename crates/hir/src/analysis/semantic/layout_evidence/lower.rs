@@ -6,11 +6,14 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        NBorrowRoot, NEffectArg, NEffectArgValue, NExpr, NOperand, NSPlace, NSPlaceRoot,
-        NSStmtKind, NSTerminatorKind, NormalizedSemanticBody, SConst, SLocalId, SemConstId,
-        SemOrigin, SemanticCalleeRef, SemanticInstance,
-        borrowck::normalize_semantic_body_for_layout_evidence, get_or_build_semantic_instance,
+        SConst, SLocalId, SemConstId, SemanticBody, SemanticCalleeRef, SemanticInstance,
+        SemanticNormalizationFailure, get_or_build_semantic_instance,
         identity_semantic_instance_key,
+        normalized::{
+            NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NIndex, NLayoutLocals,
+            NLayoutPlan, NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId,
+            NStatementKind, NTerminatorKind, NValueId, NormalizedBody, normalize_semantic_body,
+        },
     },
     ty::{
         CallableLayoutParamPort, CallableLayoutPort, LayoutBundleComponent,
@@ -25,7 +28,6 @@ use crate::analysis::{
         ty_lower::layout_bundle_schema_for_semantic_value,
     },
 };
-use crate::projection::{IndexSource, Projection};
 use crate::semantic::{AssignedRootValue, LayoutProjection, LayoutViewKind, ProviderBinding};
 
 use super::{
@@ -264,7 +266,7 @@ enum LayoutTransfer<'db> {
         dst: SLocalId,
         value: LayoutTransferBundle<'db>,
         call: Option<LayoutTransferCall<'db>>,
-        const_binding: Option<(SemConstId<'db>, SemOrigin<'db>)>,
+        result_used: bool,
     },
     Store {
         dst: Option<SLocalId>,
@@ -466,7 +468,10 @@ enum EvidencePlaceRoot<'db> {
 
 struct LayoutEvidenceBuilder<'a, 'db> {
     db: &'db dyn HirAnalysisDb,
-    normalized: &'a NormalizedSemanticBody<'db>,
+    normalized: &'a NormalizedBody<'db>,
+    layout_plan: &'a NLayoutPlan<'db>,
+    source: &'a SemanticBody<'db>,
+    representations: &'a NLayoutLocals<'db>,
     locals: Vec<LayoutEvidenceLocal<'db>>,
     semantic_values: Vec<LayoutEvidenceValue<'db>>,
     declared_sources: Vec<DeclaredComponentSource<'db>>,
@@ -474,6 +479,15 @@ struct LayoutEvidenceBuilder<'a, 'db> {
 }
 
 impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
+    fn value_local(&self, value: NValueId) -> Result<SLocalId, LayoutEvidenceError<'db>> {
+        self.representations
+            .value_local(value)
+            .ok_or(LayoutEvidenceError::InvalidPlace)
+    }
+
+    fn operand_local(&self, operand: NOperand) -> Result<SLocalId, LayoutEvidenceError<'db>> {
+        self.value_local(operand.value)
+    }
     fn alloc_local(
         &mut self,
         semantic_local: Option<SLocalId>,
@@ -859,7 +873,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
 
     fn place_transfer_bundle(
         &self,
-        place: &NSPlace<'db>,
+        place: &NPlace<'db>,
         target: &LayoutBundleSchema<'db>,
     ) -> Result<LayoutTransferBundle<'db>, LayoutEvidenceError<'db>> {
         if target.components.is_empty() {
@@ -875,6 +889,49 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                 self.provider_value(&provider, &projection, target)?,
             ),
         }
+    }
+
+    fn evidence_projection(
+        &self,
+        path: &NDataPath,
+    ) -> Result<EvidenceProjection, LayoutEvidenceError<'db>> {
+        let mut projection = EvidenceProjection::default();
+        for step in path.iter() {
+            match step {
+                NDataProjection::Field(field) => {
+                    projection.path.push(LayoutEvidencePathStep::Field(field.0));
+                }
+                NDataProjection::VariantField { variant, field } => {
+                    projection
+                        .path
+                        .push(LayoutEvidencePathStep::Variant(variant.0));
+                    projection.path.push(LayoutEvidencePathStep::Field(field.0));
+                }
+                NDataProjection::Index(index) => {
+                    projection.path.push(LayoutEvidencePathStep::Index);
+                    projection.indices.push(match index {
+                        NIndex::Const(index) => LayoutEvidenceIndex::Constant(*index),
+                        NIndex::Value(value) => {
+                            LayoutEvidenceIndex::Dynamic(self.value_local(*value)?)
+                        }
+                    });
+                }
+            }
+        }
+        Ok(projection)
+    }
+
+    fn structural_repack_transfer_bundle(
+        &self,
+        dst: SLocalId,
+        source: SLocalId,
+    ) -> Result<LayoutTransferBundle<'db>, LayoutEvidenceError<'db>> {
+        let target =
+            LayoutBundleInterface::all_runtime(self.semantic_values[dst.index()].schema.clone());
+        let mapping = target
+            .runtime_call_mapping(&self.semantic_values[source.index()].schema, &[])
+            .ok_or(LayoutEvidenceError::InvalidPlace)?;
+        self.mapped_transfer_bundle(source, &EvidenceProjection::default(), &target, &mapping)
     }
 
     fn ambient_component(
@@ -1111,7 +1168,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                         .projected(&[LayoutEvidencePathStep::Field(*field_idx)])
                         .ok_or(LayoutEvidenceError::InvalidPlace)?;
                     LayoutTransferExpr::Source(self.transfer_source_for_port(
-                        field.local,
+                        self.operand_local(*field)?,
                         &port,
                         Vec::new(),
                         &component.map_ty(),
@@ -1156,7 +1213,12 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                 let elements = fields
                     .iter()
                     .map(|field| {
-                        self.transfer_source_for_port(field.local, &port, Vec::new(), &child_ty)
+                        self.transfer_source_for_port(
+                            self.operand_local(*field)?,
+                            &port,
+                            Vec::new(),
+                            &child_ty,
+                        )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(LayoutTransferComponent::new(
@@ -1240,7 +1302,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                             .projected(&prefix)
                             .ok_or(LayoutEvidenceError::InvalidPlace)?;
                         LayoutTransferExpr::Source(self.transfer_source_for_port(
-                            field.local,
+                            self.operand_local(*field)?,
                             &port,
                             Vec::new(),
                             &component.map_ty(),
@@ -1268,8 +1330,9 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         expected: &LayoutBundleInterface<'db>,
     ) -> Result<LayoutTransferBundle<'db>, LayoutEvidenceError<'db>> {
         let local_data = self
-            .normalized
-            .local(local)
+            .representations
+            .locals
+            .get(local.index())
             .ok_or(LayoutEvidenceError::InvalidPlace)?;
         let source_schema = &self.semantic_values[local.index()].schema;
         let mut path = Vec::new();
@@ -1334,26 +1397,29 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             CallableInputLayoutHoleOrigin::Receiver => args
                 .first()
                 .ok_or(LayoutEvidenceError::InvalidPlace)
-                .and_then(|value| direct(value.local)),
+                .and_then(|value| self.operand_local(*value).and_then(direct)),
             CallableInputLayoutHoleOrigin::ValueParam(idx) => args
                 .get(idx)
                 .ok_or(LayoutEvidenceError::InvalidPlace)
-                .and_then(|value| direct(value.local)),
+                .and_then(|value| self.operand_local(*value).and_then(direct)),
             CallableInputLayoutHoleOrigin::Effect(idx) => {
                 let arg = effect_args
                     .iter()
                     .find(|arg| arg.binding_idx as usize == idx)
                     .ok_or(LayoutEvidenceError::InvalidPlace)?;
                 match &arg.arg {
-                    NEffectArgValue::Value(value) => match arg.layout_view {
-                        EffectArgLayoutView::Direct => direct(value.local),
-                        EffectArgLayoutView::ProviderTarget => self.effect_arg_transfer_bundle(
-                            value.local,
-                            arg.provider_target_ty
-                                .ok_or(LayoutEvidenceError::InvalidPlace)?,
-                            interface,
-                        ),
-                    },
+                    NEffectArgValue::Value(value) => {
+                        let local = self.operand_local(*value)?;
+                        match arg.layout_view {
+                            EffectArgLayoutView::Direct => direct(local),
+                            EffectArgLayoutView::ProviderTarget => self.effect_arg_transfer_bundle(
+                                local,
+                                arg.provider_target_ty
+                                    .ok_or(LayoutEvidenceError::InvalidPlace)?,
+                                interface,
+                            ),
+                        }
+                    }
                     NEffectArgValue::Place(place) => LayoutTransferBundle::new(
                         self.place_transfer_bundle(place, &interface.schema)?
                             .components
@@ -1541,66 +1607,75 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
 
     fn build_layout_transfer(
         &self,
-        statement: &crate::analysis::semantic::NSStmt<'db>,
+        statement: &NStatement<'db>,
     ) -> Result<LayoutTransfer<'db>, LayoutEvidenceError<'db>> {
         match &statement.kind {
-            NSStmtKind::Assign { dst, expr } => {
-                let mut const_value = None;
+            NStatementKind::Define { result, expr } => {
+                let dst = self.value_local(*result)?;
+                let result_used = self.normalized.value_is_used(*result);
                 let (value, call) = match expr {
-                    NExpr::Use(value) => (
+                    NExpr::Forward { src: value } => (
                         self.source_transfer_bundle(
-                            value.local,
+                            self.operand_local(*value)?,
                             &EvidenceProjection::default(),
                             &self.semantic_values[dst.index()].schema,
                         )?,
                         None,
                     ),
-                    NExpr::ReadPlace { place, .. } | NExpr::Borrow { place, .. } => (
+                    NExpr::Load { place, .. }
+                    | NExpr::Borrow { place, .. }
+                    | NExpr::MakeView { place, .. } => (
                         self.place_transfer_bundle(
                             place,
                             &self.semantic_values[dst.index()].schema,
                         )?,
                         None,
                     ),
-                    NExpr::ExtractEnumField {
-                        value,
-                        variant,
-                        field,
-                    } => (
+                    NExpr::ProjectValue { value, path } => (
                         self.source_transfer_bundle(
-                            value.local,
-                            &EvidenceProjection {
-                                path: vec![
-                                    LayoutEvidencePathStep::Variant(variant.0),
-                                    LayoutEvidencePathStep::Field(field.0),
-                                ],
-                                indices: Vec::new(),
-                            },
+                            self.operand_local(*value)?,
+                            &self.evidence_projection(&path.0)?,
                             &self.semantic_values[dst.index()].schema,
                         )?,
                         None,
                     ),
-                    NExpr::AggregateMake { ty, fields } if ty.is_array(self.db) => {
-                        (self.array_transfer_bundle(*dst, fields)?, None)
-                    }
-                    NExpr::AggregateMake { fields, .. } => {
-                        (self.aggregate_transfer_bundle(*dst, fields)?, None)
-                    }
-                    NExpr::ArrayRepeat { value, .. } => {
-                        (self.repeat_transfer_bundle(*dst, value.local)?, None)
-                    }
+                    NExpr::StructuralRepack { value, .. } => (
+                        self.structural_repack_transfer_bundle(dst, self.operand_local(*value)?)?,
+                        None,
+                    ),
+                    NExpr::AggregateMake { ty, fields }
+                    | NExpr::MakeHandle {
+                        ty,
+                        variant: None,
+                        fields,
+                        ..
+                    } if ty.is_array(self.db) => (self.array_transfer_bundle(dst, fields)?, None),
+                    NExpr::AggregateMake { fields, .. }
+                    | NExpr::MakeHandle {
+                        fields,
+                        variant: None,
+                        ..
+                    } => (self.aggregate_transfer_bundle(dst, fields)?, None),
+                    NExpr::ArrayRepeat { value, .. } => (
+                        self.repeat_transfer_bundle(dst, self.operand_local(*value)?)?,
+                        None,
+                    ),
                     NExpr::EnumMake {
                         variant, fields, ..
-                    } => (self.enum_transfer_bundle(*dst, variant.0, fields)?, None),
-                    NExpr::Const(SConst::Value(value)) => {
-                        const_value = Some(*value);
-                        (self.ambient_transfer_bundle(*dst)?, None)
                     }
-                    NExpr::Const(SConst::Ref(_)) => (self.ambient_transfer_bundle(*dst)?, None),
+                    | NExpr::MakeHandle {
+                        variant: Some(variant),
+                        fields,
+                        ..
+                    } => (self.enum_transfer_bundle(dst, variant.0, fields)?, None),
+                    NExpr::Const(_) if !result_used => (LayoutTransferBundle::default(), None),
+                    NExpr::Const(SConst::Value(_)) => (self.ambient_transfer_bundle(dst)?, None),
+                    NExpr::Const(SConst::Ref(_)) => (self.ambient_transfer_bundle(dst)?, None),
                     NExpr::CodeRegionRef { .. }
                     | NExpr::Unary { .. }
                     | NExpr::Binary { .. }
-                    | NExpr::Cast { .. }
+                    | NExpr::PointerCast { .. }
+                    | NExpr::ScalarCast { .. }
                     | NExpr::GetEnumTag { .. }
                     | NExpr::IsEnumVariant { .. }
                     | NExpr::CodeRegionOffset { .. }
@@ -1611,30 +1686,34 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                         effect_args,
                         ..
                     } => {
-                        let (value, call) = self.call_transfer(*dst, *callee, args, effect_args)?;
+                        let (value, call) = self.call_transfer(dst, *callee, args, effect_args)?;
                         (value, call)
                     }
                 };
                 Ok(LayoutTransfer::Assign {
-                    dst: *dst,
+                    dst,
                     value,
                     call,
-                    const_binding: const_value.map(|value| (value, statement.origin)),
+                    result_used,
                 })
             }
-            NSStmtKind::Store { dst, src } => {
-                let (root, projection) = self.place_projection(dst)?;
+            NStatementKind::Store { destination, value } => {
+                let src = self.operand_local(*value)?;
+                let (root, projection) = self.place_projection(destination)?;
                 let fallback = (!projection.path.is_empty()
                     || matches!(&root, EvidencePlaceRoot::Provider(_)))
                 .then(|| {
-                    self.place_transfer_bundle(dst, &self.semantic_values[src.local.index()].schema)
-                        .map(|bundle| (src.local, bundle))
+                    self.place_transfer_bundle(
+                        destination,
+                        &self.semantic_values[src.index()].schema,
+                    )
+                    .map(|bundle| (src, bundle))
                 })
                 .transpose()?;
                 let (dst, value) = match root {
                     EvidencePlaceRoot::Local(dst) => (
                         Some(dst),
-                        self.store_transfer_bundle(dst, &projection, src.local)?,
+                        self.store_transfer_bundle(dst, &projection, src)?,
                     ),
                     EvidencePlaceRoot::Provider(_) => (None, LayoutTransferBundle::default()),
                 };
@@ -1649,7 +1728,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
 
     fn index_declared_sources(&mut self) -> Result<(), LayoutEvidenceError<'db>> {
         let mut sources = Vec::new();
-        for (local_idx, local) in self.normalized.locals.iter().enumerate() {
+        for (local_idx, local) in self.representations.locals.iter().enumerate() {
             let Some(origin) = local
                 .source
                 .and_then(|source| source.callable_input_origin(self.db))
@@ -1991,7 +2070,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             .filter(|source| matches!(source.source, CallableLayoutParamPort::OutputWitness(_)))
             .map(|source| source.value.clone())
             .collect::<Vec<_>>();
-        let mut sites = vec![Vec::new(); self.normalized.locals.len()];
+        let mut sites = vec![Vec::new(); self.representations.locals.len()];
         let mut store_seeds = Vec::new();
         for transfer in transfers {
             match transfer {
@@ -2015,10 +2094,11 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         let mut queue = VecDeque::new();
         let mut queued = FxHashSet::default();
         for block in &self.normalized.blocks {
-            if let NSTerminatorKind::Return(Some(value)) = block.terminator.kind {
+            if let NTerminatorKind::Return(Some(value)) = block.terminator.kind {
+                let local = self.operand_local(value)?;
                 for witness in &witnesses {
                     self.enqueue_contextual_source(
-                        value.local,
+                        local,
                         ContextualComponentExpr {
                             value: witness.clone(),
                             strength: ContextStrength::Required,
@@ -2149,41 +2229,51 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
 
     fn place_projection(
         &self,
-        place: &NSPlace<'db>,
+        place: &NPlace<'db>,
     ) -> Result<(EvidencePlaceRoot<'db>, EvidenceProjection), LayoutEvidenceError<'db>> {
         let mut ty = self
             .normalized
-            .place_root_ty(&place.root)
+            .place_base_ty(self.db, place.base)
             .ok_or(LayoutEvidenceError::InvalidPlace)?;
-        let root = match place.root {
-            NSPlaceRoot::CarrierDerefLocal(local) => self
+        let root = match place.base {
+            NPlaceBase::CapabilityTarget { carrier } => {
+                let local = self.value_local(carrier)?;
+                self.representations
+                    .locals
+                    .get(local.index())
+                    .and_then(|local| local.role.root_provider(&self.representations.locals))
+                    .map(EvidencePlaceRoot::Provider)
+                    .unwrap_or(EvidencePlaceRoot::Local(local))
+            }
+            NPlaceBase::Root(root) => match &self
                 .normalized
-                .local(local)
-                .and_then(|local| local.facts.origin.root_provider())
-                .cloned()
-                .map(EvidencePlaceRoot::Provider)
-                .unwrap_or(EvidencePlaceRoot::Local(local)),
-            NSPlaceRoot::Root(root) => match self.normalized.root(root) {
-                Some(NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local }) => {
-                    EvidencePlaceRoot::Local(*local)
+                .root(root)
+                .ok_or(LayoutEvidenceError::InvalidPlace)?
+                .kind
+            {
+                NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
+                    EvidencePlaceRoot::Local(
+                        self.layout_plan
+                            .root_source(root)
+                            .ok_or(LayoutEvidenceError::InvalidPlace)?,
+                    )
                 }
-                Some(NBorrowRoot::Provider { binding, .. }) => {
-                    EvidencePlaceRoot::Provider(binding.clone())
+                NRootKind::Provider { binding } => EvidencePlaceRoot::Provider(binding.clone()),
+                NRootKind::CapabilityRepresentation { carrier }
+                | NRootKind::Temporary { value: carrier } => {
+                    EvidencePlaceRoot::Local(self.value_local(*carrier)?)
                 }
-                None => return Err(LayoutEvidenceError::InvalidPlace),
             },
         };
         let mut path = Vec::new();
         let mut indices = Vec::new();
         for step in place.path.iter() {
             match step {
-                Projection::Field(field) => {
-                    path.push(LayoutEvidencePathStep::Field(
-                        u16::try_from(*field).map_err(|_| LayoutEvidenceError::InvalidPlace)?,
-                    ));
+                NDataProjection::Field(field) => {
+                    path.push(LayoutEvidencePathStep::Field(field.0));
                     ty = if ty.is_tuple(self.db) {
                         ty.field_types(self.db)
-                            .get(*field)
+                            .get(usize::from(field.0))
                             .copied()
                             .ok_or(LayoutEvidenceError::InvalidPlace)?
                     } else {
@@ -2194,18 +2284,14 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                             self.db,
                             adt,
                             0,
-                            *field,
+                            usize::from(field.0),
                             ty.generic_args(self.db),
                         )
                     };
                 }
-                Projection::VariantField {
-                    variant, field_idx, ..
-                } => {
+                NDataProjection::VariantField { variant, field } => {
                     path.push(LayoutEvidencePathStep::Variant(variant.0));
-                    path.push(LayoutEvidencePathStep::Field(
-                        u16::try_from(*field_idx).map_err(|_| LayoutEvidenceError::InvalidPlace)?,
-                    ));
+                    path.push(LayoutEvidencePathStep::Field(field.0));
                     let adt = ty
                         .adt_def(self.db)
                         .ok_or(LayoutEvidenceError::InvalidPlace)?;
@@ -2213,16 +2299,17 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                         self.db,
                         adt,
                         variant.0 as usize,
-                        *field_idx,
+                        usize::from(field.0),
                         ty.generic_args(self.db),
                     );
                 }
-                Projection::Index(index) => {
+                NDataProjection::Index(index) => {
                     path.push(LayoutEvidencePathStep::Index);
                     indices.push(match index {
-                        IndexSource::Constant(index) => LayoutEvidenceIndex::Constant(*index),
-                        IndexSource::Dynamic(index) => LayoutEvidenceIndex::Dynamic(*index),
-                        IndexSource::Any => return Err(LayoutEvidenceError::InvalidPlace),
+                        NIndex::Const(index) => LayoutEvidenceIndex::Constant(*index),
+                        NIndex::Value(value) => {
+                            LayoutEvidenceIndex::Dynamic(self.value_local(*value)?)
+                        }
                     });
                     ty = ty
                         .generic_args(self.db)
@@ -2230,22 +2317,6 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                         .copied()
                         .ok_or(LayoutEvidenceError::InvalidPlace)?;
                 }
-                Projection::Deref => {
-                    if let Some((_, inner)) = ty.as_capability(self.db) {
-                        ty = inner;
-                    } else if let EffectHandleResolution::Resolved { target_ty, .. } =
-                        resolve_effect_handle(
-                            self.db,
-                            self.normalized.owner.key(self.db).owner(self.db).scope(),
-                            self.normalized.owner.assumptions(self.db),
-                            ty,
-                        )
-                    {
-                        path.push(LayoutEvidencePathStep::EffectTarget);
-                        ty = target_ty;
-                    }
-                }
-                Projection::Discriminant => return Err(LayoutEvidenceError::InvalidPlace),
             }
         }
         Ok((root, EvidenceProjection { path, indices }))
@@ -2259,7 +2330,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
     ) -> Result<LayoutBundleValue<'db>, LayoutEvidenceError<'db>> {
         if provider.assigned_field_layout(self.db).is_none() {
             let local = self
-                .normalized
+                .source
                 .locals
                 .iter()
                 .position(|local| {
@@ -2267,7 +2338,11 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                         .source
                         .and_then(|source| source.callable_input_origin(self.db))
                         .is_some()
-                        && local.facts.origin.root_provider() == Some(provider)
+                        && local
+                            .role
+                            .root_provider(&self.representations.locals)
+                            .as_ref()
+                            == Some(provider)
                 })
                 .map(|local| SLocalId::from_u32(local as u32))
                 .ok_or(LayoutEvidenceError::ProviderPlace)?;
@@ -2326,6 +2401,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         dst: SLocalId,
         value: &LayoutTransferBundle<'db>,
         call: &LayoutTransferCall<'db>,
+        result_used: bool,
     ) -> Result<LayoutEvidenceStatement<'db>, LayoutEvidenceError<'db>> {
         let args = call
             .args
@@ -2338,12 +2414,15 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             })
             .collect::<Result<Vec<_>, LayoutEvidenceError<'db>>>()?;
         Ok(LayoutEvidenceStatement {
-            assignments: self.transfer_assignments(dst, value, true)?,
+            assignments: if result_used {
+                self.transfer_assignments(dst, value, true)?
+            } else {
+                Box::new([])
+            },
             call: Some(LayoutEvidenceCall {
                 callee: call.callee,
                 args: args.into_boxed_slice(),
             }),
-            const_bindings: Box::new([]),
         })
     }
 
@@ -2356,20 +2435,21 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                 dst,
                 value,
                 call: Some(call),
+                result_used,
                 ..
-            } => self.lower_transfer_call(*dst, value, call),
+            } => self.lower_transfer_call(*dst, value, call, *result_used),
             LayoutTransfer::Assign {
                 dst,
                 value,
                 call: None,
-                const_binding,
+                result_used,
             } => Ok(LayoutEvidenceStatement {
-                assignments: self.transfer_assignments(*dst, value, true)?,
-                call: None,
-                const_bindings: match const_binding {
-                    Some((value, origin)) => self.const_bindings(*value, *origin)?,
-                    None => Box::new([]),
+                assignments: if *result_used {
+                    self.transfer_assignments(*dst, value, true)?
+                } else {
+                    Box::new([])
                 },
+                call: None,
             }),
             LayoutTransfer::Store {
                 dst: Some(dst),
@@ -2378,7 +2458,6 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             } => Ok(LayoutEvidenceStatement {
                 assignments: self.transfer_assignments(*dst, value, false)?,
                 call: None,
-                const_bindings: Box::new([]),
             }),
             LayoutTransfer::Store { dst: None, .. } => Ok(LayoutEvidenceStatement::default()),
         }
@@ -2420,26 +2499,28 @@ fn layout_evidence_body_query<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: SemanticInstance<'db>,
 ) -> Result<LayoutEvidenceBody<'db>, LayoutEvidenceError<'db>> {
-    let normalized = normalize_semantic_body_for_layout_evidence(db, owner)
-        .map_err(LayoutEvidenceError::Normalize)?;
+    let artifacts = normalize_semantic_body(db, owner).map_err(layout_normalization_error)?;
+    let normalized = artifacts.body;
+    let layout_plan = artifacts.layout_plan;
+    let source = owner.body(db);
+    let representations = NLayoutLocals::new(&normalized, &layout_plan, source);
     let template_owner = normalized.template_owner;
-    let body = template_owner.body(db);
+    let hir_body = template_owner.body(db);
     let identity_key = identity_semantic_instance_key(db, template_owner);
-    let template_normalized = (owner.key(db) != identity_key)
+    let template_source = (owner.key(db) != identity_key)
         .then(|| {
-            normalize_semantic_body_for_layout_evidence(
-                db,
-                get_or_build_semantic_instance(db, identity_key),
-            )
-            .map_err(LayoutEvidenceError::Normalize)
+            let template = get_or_build_semantic_instance(db, identity_key);
+            normalize_semantic_body(db, template)
+                .map_err(layout_normalization_error)
+                .map(|_| template.body(db))
         })
         .transpose()?;
-    if let Some(template) = &template_normalized
-        && template.locals.len() != normalized.locals.len()
+    if let Some(template) = template_source
+        && template.locals.len() != source.locals.len()
     {
         return Err(LayoutEvidenceError::TemplateLocalCountMismatch {
             expected: template.locals.len(),
-            actual: normalized.locals.len(),
+            actual: source.locals.len(),
         });
     }
     let signature = owner.key(db).layout_bundle_signature(db);
@@ -2454,18 +2535,21 @@ fn layout_evidence_body_query<'db>(
     let mut builder = LayoutEvidenceBuilder {
         db,
         normalized: &normalized,
+        layout_plan: &layout_plan,
+        source,
+        representations: &representations,
         locals: Vec::new(),
-        semantic_values: Vec::with_capacity(normalized.locals.len()),
+        semantic_values: Vec::with_capacity(representations.locals.len()),
         declared_sources: Vec::new(),
-        contextual_sources: vec![Vec::new(); normalized.locals.len()],
+        contextual_sources: vec![Vec::new(); representations.locals.len()],
     };
     let mut input_values = FxHashMap::default();
-    for (idx, local) in normalized.locals.iter().enumerate() {
+    for (idx, local) in representations.locals.iter().enumerate() {
         let semantic_local = SLocalId::from_u32(idx as u32);
         let layout_ty = local.ty;
-        let template_ty = template_normalized
-            .as_ref()
-            .map_or(layout_ty, |template| template.locals[idx].ty);
+        let template_ty = template_source
+            .and_then(|template| template.locals.get(idx))
+            .map_or(layout_ty, |local| local.ty);
         let origin = local
             .source
             .and_then(|source| source.callable_input_origin(db));
@@ -2477,7 +2561,7 @@ fn layout_evidence_body_query<'db>(
         } else {
             let schema = layout_bundle_schema_for_semantic_value(
                 db,
-                body.ok_or(LayoutEvidenceError::MissingBody(template_owner))?,
+                hir_body.ok_or(LayoutEvidenceError::MissingBody(template_owner))?,
                 idx as u32,
                 layout_ty,
                 template_ty,
@@ -2543,10 +2627,10 @@ fn layout_evidence_body_query<'db>(
     let statement_count = normalized
         .blocks
         .iter()
-        .map(|block| block.stmts.len())
+        .map(|block| block.statements.len())
         .sum();
     let mut transfers = vec![None; statement_count];
-    for statement in normalized.blocks.iter().flat_map(|block| &block.stmts) {
+    for statement in normalized.blocks.iter().flat_map(|block| &block.statements) {
         let slot = transfers
             .get_mut(statement.id.index())
             .ok_or(LayoutEvidenceError::InvalidStatementIdentity(statement.id))?;
@@ -2560,7 +2644,7 @@ fn layout_evidence_body_query<'db>(
         .enumerate()
         .map(|(idx, transfer)| {
             transfer.ok_or(LayoutEvidenceError::InvalidStatementIdentity(
-                crate::analysis::semantic::SStmtId::from_u32(idx as u32),
+                NStatementId::new(idx),
             ))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -2574,18 +2658,28 @@ fn layout_evidence_body_query<'db>(
         .iter()
         .map(|block| {
             let returns = match block.terminator.kind {
-                NSTerminatorKind::Return(Some(value)) => {
-                    builder.return_operands(value.local, &signature.output)?
+                NTerminatorKind::Return(Some(value)) => {
+                    builder.return_operands(builder.operand_local(value)?, &signature.output)?
                 }
-                NSTerminatorKind::Goto(_)
-                | NSTerminatorKind::Branch { .. }
-                | NSTerminatorKind::MatchEnum { .. }
-                | NSTerminatorKind::Assert { .. }
-                | NSTerminatorKind::Return(None) => Box::new([]),
+                NTerminatorKind::Goto(_)
+                | NTerminatorKind::Branch { .. }
+                | NTerminatorKind::MatchEnum { .. }
+                | NTerminatorKind::Assert { .. }
+                | NTerminatorKind::Return(None) => Box::new([]),
             };
             Ok(LayoutEvidenceTerminator { returns })
         })
         .collect::<Result<Vec<_>, LayoutEvidenceError<'db>>>()?;
+    let mut constant_bindings = vec![Box::new([]) as Box<[_]>; normalized.values.len()];
+    for statement in normalized.blocks.iter().flat_map(|block| &block.statements) {
+        if let NStatementKind::Define {
+            result,
+            expr: NExpr::Const(SConst::Value(value)),
+        } = &statement.kind
+        {
+            constant_bindings[result.index()] = builder.const_bindings(*value, statement.origin)?;
+        }
+    }
     let evidence = LayoutEvidenceBody {
         owner,
         template_owner,
@@ -2594,10 +2688,21 @@ fn layout_evidence_body_query<'db>(
         params,
         output: signature.output,
         statements,
+        constant_bindings,
         terminators,
     };
-    verify_layout_evidence_body(db, &normalized, &evidence).map_err(LayoutEvidenceError::Verify)?;
+    verify_layout_evidence_body(db, &normalized, &layout_plan, source, &evidence)
+        .map_err(LayoutEvidenceError::Verify)?;
     Ok(evidence)
+}
+
+fn layout_normalization_error<'db>(
+    failure: SemanticNormalizationFailure<'db>,
+) -> LayoutEvidenceError<'db> {
+    match failure {
+        SemanticNormalizationFailure::Blocked(blocked) => LayoutEvidenceError::Blocked(blocked),
+        SemanticNormalizationFailure::InternalFailure(diag) => LayoutEvidenceError::Normalize(diag),
+    }
 }
 
 pub fn layout_evidence_body<'db>(

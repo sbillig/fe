@@ -10,6 +10,7 @@ use trace_facts::{
     TypeFact, TypeKind, ValueProperty, ValuePropertyFact, VariableFact, VariableStorageClass,
 };
 
+use crate::runtime::lower::semantic_body::RuntimeSemanticBody;
 use crate::{
     MirDb, RuntimeInstance, RuntimePackage,
     instance::RuntimeInstanceSource,
@@ -27,10 +28,7 @@ use crate::{
     },
 };
 use hir::{
-    analysis::{
-        semantic::{SemOrigin, borrowck::normalize_semantic_body},
-        ty::ty_check::LocalBinding,
-    },
+    analysis::{semantic::SemOrigin, ty::ty_check::LocalBinding},
     hir_def::{Partial, Pat},
     origin::{HIR_EXPR_EXPORT_KIND, HIR_STMT_EXPORT_KIND, HirOriginBodyOwnerKey},
 };
@@ -755,7 +753,7 @@ fn semantic_local_trace_info<'db>(
     let Some(body) = typed_body.body() else {
         return Vec::new();
     };
-    let Ok(normalized) = normalize_semantic_body(db, semantic) else {
+    let Ok(normalized) = RuntimeSemanticBody::admitted(db, semantic) else {
         return Vec::new();
     };
     normalized

@@ -24,9 +24,6 @@ pub(crate) enum RuntimeConversionStep<'db> {
     LoadRef {
         class: RuntimeClass<'db>,
     },
-    AddrOfRef {
-        class: RuntimeClass<'db>,
-    },
     LoadRawAddr {
         class: RuntimeClass<'db>,
         space: AddressSpaceKind,
@@ -135,18 +132,6 @@ fn emit_runtime_conversion_step<'db>(
             semantic_ty,
             class,
             RExpr::Load {
-                place: RuntimePlace {
-                    root: PlaceRoot::Ref(src),
-                    path: Box::default(),
-                },
-            },
-        ),
-        RuntimeConversionStep::AddrOfRef { class } => assign_runtime_conversion_temp(
-            emitter,
-            bb,
-            semantic_ty,
-            class,
-            RExpr::AddrOf {
                 place: RuntimePlace {
                     root: PlaceRoot::Ref(src),
                     path: Box::default(),
@@ -420,41 +405,6 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 Ok(())
             }
             (
-                RuntimeClass::Ref {
-                    pointee,
-                    kind: RefKind::Object | RefKind::Const,
-                    view: RefView::Whole,
-                },
-                RuntimeClass::Ref {
-                    pointee: target_pointee,
-                    kind: RefKind::Provider { .. },
-                    view: RefView::Whole,
-                },
-            ) if pointee == target_pointee => {
-                steps.push(RuntimeConversionStep::AddrOfRef { class: target });
-                Ok(())
-            }
-            (
-                RuntimeClass::Ref {
-                    pointee,
-                    kind: RefKind::Object | RefKind::Const,
-                    view: RefView::Whole,
-                },
-                RuntimeClass::RawAddr {
-                    space,
-                    pointee: target_pointee,
-                },
-            ) if pointee.aggregate_layout().is_some()
-                && target_pointee
-                    .as_deref()
-                    .is_none_or(|target_pointee| target_pointee == pointee.as_ref()) =>
-            {
-                steps.push(RuntimeConversionStep::AddrOfRef {
-                    class: RuntimeClass::raw_addr(*space, pointee.as_ref().clone()),
-                });
-                Ok(())
-            }
-            (
                 RuntimeClass::RawAddr {
                     space,
                     pointee: Some(pointee),
@@ -567,11 +517,23 @@ impl<'db> RuntimeConversionPlanner<'db> {
             }
             (
                 RuntimeClass::Ref {
-                    kind: RefKind::Provider { .. },
-                    ..
+                    pointee,
+                    kind:
+                        RefKind::Provider {
+                            space: provider_space,
+                            ..
+                        },
+                    view: RefView::Whole,
                 },
-                RuntimeClass::RawAddr { .. },
-            ) => {
+                RuntimeClass::RawAddr {
+                    space: raw_space,
+                    pointee: raw_pointee,
+                },
+            ) if provider_space == raw_space
+                && raw_pointee
+                    .as_deref()
+                    .is_none_or(|target| target == pointee.as_ref()) =>
+            {
                 steps.push(RuntimeConversionStep::ProviderRefToRaw { class: target });
                 Ok(())
             }
@@ -752,6 +714,51 @@ mod tests {
     }
 
     #[test]
+    fn provider_to_raw_address_requires_matching_space_and_target() {
+        let db = DriverDataBase::default();
+        let provider_ty = TyId::unit(&db);
+        let storage_provider = RuntimeClass::Ref {
+            pointee: Box::new(word_class()),
+            kind: RefKind::Provider {
+                provider_ty,
+                space: AddressSpaceKind::Storage,
+            },
+            view: RefView::Whole,
+        };
+        let storage_raw = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Storage,
+            pointee: None,
+        };
+
+        let plan =
+            RuntimeConversionPlanner::plan(&db, storage_provider.clone(), storage_raw.clone())
+                .unwrap();
+        assert_eq!(
+            plan.steps.as_ref(),
+            &[RuntimeConversionStep::ProviderRefToRaw { class: storage_raw }]
+        );
+
+        let memory_raw = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Memory,
+            pointee: None,
+        };
+        assert!(matches!(
+            RuntimeConversionPlanner::plan(&db, storage_provider.clone(), memory_raw),
+            Err(RuntimeConversionError::Unsupported { .. })
+        ));
+
+        let layout = test_struct_layout(&db);
+        let typed_raw = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Storage,
+            pointee: Some(Box::new(RuntimeClass::AggregateValue { layout })),
+        };
+        assert!(matches!(
+            RuntimeConversionPlanner::plan(&db, storage_provider, typed_raw),
+            Err(RuntimeConversionError::Unsupported { .. })
+        ));
+    }
+
+    #[test]
     fn raw_memory_address_does_not_reconstruct_memory_provider() {
         let db = DriverDataBase::default();
         let provider_ty = TyId::unit(&db);
@@ -823,20 +830,16 @@ mod tests {
     }
 
     #[test]
-    fn object_ref_to_non_memory_provider_uses_address_of_ref() {
+    fn object_ref_cannot_change_to_a_storage_provider() {
         let db = DriverDataBase::default();
         let layout = test_struct_layout(&db);
         let provider_ty = TyId::unit(&db);
         let target = RuntimeClass::provider_ref(layout, provider_ty, AddressSpaceKind::Storage);
 
-        let plan =
-            RuntimeConversionPlanner::plan(&db, RuntimeClass::object_ref(layout), target.clone())
-                .unwrap();
-
-        assert_eq!(
-            plan.steps.as_ref(),
-            &[RuntimeConversionStep::AddrOfRef { class: target }]
-        );
+        assert!(matches!(
+            RuntimeConversionPlanner::plan(&db, RuntimeClass::object_ref(layout), target),
+            Err(RuntimeConversionError::Unsupported { .. })
+        ));
     }
 
     #[test]
