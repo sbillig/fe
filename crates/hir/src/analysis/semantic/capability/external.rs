@@ -398,13 +398,18 @@ impl<'db> ExternalSource<'db> {
     /// Direct bytes in an allocation created by this invocation cannot alias
     /// any caller loan. Following a pointer stored there loses that guarantee.
     pub fn is_fresh_allocation(&self) -> bool {
-        !self.is_reachable()
-            && self.dereferences.is_empty()
-            && match &self.origin {
-                ExternalOrigin::Allocation(_) => true,
-                ExternalOrigin::Memory { base, .. } => base.source.is_fresh_allocation(),
-                _ => false,
-            }
+        self.fresh_allocation().is_some()
+    }
+
+    pub fn fresh_allocation(&self) -> Option<&OpaqueHandleRef<'db>> {
+        if self.is_reachable() || !self.dereferences.is_empty() {
+            return None;
+        }
+        match &self.origin {
+            ExternalOrigin::Allocation(handle) => Some(handle),
+            ExternalOrigin::Memory { base, .. } => base.source.fresh_allocation(),
+            _ => None,
+        }
     }
 
     pub fn is_reachable(&self) -> bool {

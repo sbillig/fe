@@ -119,11 +119,31 @@ Array and loop occurrences carry explicit indices or lexical witnesses. Export
 renames occurrences to summary identities; call substitution maps them to the
 call site. Replaying an analysis does not allocate a new opaque identity.
 
-## Entry contents and opaque overwrites
+## Entry contents, allocation birth, and opaque overwrites
 
 Entry contents mean the caller's contents at function entry. Substituting an entry
 source at a call can therefore resolve to a precise old pointer. They cannot model
 bytes that an intervening write has replaced.
+
+Storage discovery classifies its seed independently of query order: actual entry
+contents remain symbolic caller data; fresh allocations start uninitialized; other
+manufactured addresses contain unknown bytes. The latter two use the same
+structural arbitrary-contents constructor as byte writes. Native leaves have an
+unconditional invalidity marker, with no disjoint-clobber condition that could
+restore authority. Pointer/handle leaves contain stable unknown addresses and do
+not inherit the containing allocation's freshness. Scalar initialization is not
+tracked by this capability analysis.
+
+Inventory presence is separate from runtime birth. A fresh allocation occurrence
+resets its current loop-family member to the byte seed before applying a call's
+typed poststates; earlier members retain their contents. A definite valid typed
+store establishes native contents, while weak stores retain invalid alternatives.
+On late discovery the fixed point replays earlier stores against the correct
+seed. Reads and native transport, including discarded loads, use the same native
+validity checks; raw pointer transport itself does not assert initialized contents.
+Seed identities use normalized allocation/handle occurrences and structural leaves,
+with lexical witnesses for families. Following unknown pointer contents reuses
+the seed site, so replay cannot grow an unbounded chain of identities.
 
 [`capability/opaque.rs`](../../crates/hir/src/analysis/semantic/capability/opaque.rs)
 constructs arbitrary replacement contents from the affected shape. Raw pointer and

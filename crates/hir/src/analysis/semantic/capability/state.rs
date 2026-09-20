@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::{
     footprint::AccessFootprint,
     guard::{Guard, ValueOccurrence},
+    handle::AddressOccurrence,
     index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     loan::{CapabilityRef, LoanDef},
     opaque::OpaqueWrite,
@@ -17,7 +18,13 @@ use super::{
     shape::ShapeId,
     value::{Guarded, IndexPayload, ValueId, ValueInterner, ValueLimits},
 };
-use crate::analysis::{HirAnalysisDb, semantic::normalized::NValueId};
+use crate::analysis::{
+    HirAnalysisDb,
+    semantic::{
+        SemanticInstance,
+        normalized::{NBlockId, NValueId},
+    },
+};
 
 pub type CapabilityValue<'db> = ValueId<'db, CapabilityRef<'db>>;
 pub type CapabilityValues<'db> = ValueInterner<'db, CapabilityRef<'db>>;
@@ -85,6 +92,49 @@ impl<'db> BorrowState<'db> {
             self.contents
                 .entry(root.clone())
                 .or_insert_with(|| initial.clone());
+        }
+    }
+
+    /// Inventory can precede execution. Each allocation occurrence starts with
+    /// its byte seed again; older loop-family members retain their own contents.
+    /// A call's typed poststates are applied only after this birth.
+    pub fn birth_allocations(
+        &mut self,
+        values: &mut CapabilityValues<'db>,
+        inventory: &Self,
+        instance: SemanticInstance<'db>,
+        result: NValueId,
+        iteration: Option<NBlockId>,
+    ) {
+        for (root, initial) in &inventory.contents {
+            let RegionRoot::External(source) = root else {
+                continue;
+            };
+            let Some(allocation) = source.fresh_allocation() else {
+                continue;
+            };
+            if !matches!(allocation.occurrence, AddressOccurrence::Value { instance: owner, value, .. }
+                if owner == instance && value == result)
+            {
+                continue;
+            }
+            let mut born = Guard::always(initial.scope());
+            if let Some(iteration) = iteration {
+                // Instantiation appends this call's iteration after the callee's
+                // family arguments. Canonical inventory preserves that order.
+                let parameter = *allocation
+                    .arguments
+                    .last()
+                    .expect("allocation iteration argument");
+                born = born
+                    .with_equality(parameter, IndexExpr::Iteration(iteration))
+                    .expect("allocation family contains the current iteration");
+            }
+            let old = self.contents.get_mut(root).expect("inventoried allocation");
+            let kept =
+                values.map_guards(old, |guard| guard.difference(&born.in_scope(guard.scope())));
+            let initial = values.with_guard(initial, &born);
+            *old = values.join(&kept, &initial);
         }
     }
 

@@ -1408,6 +1408,13 @@ impl<'db> Borrowck<'db> {
             }
             return Ok(self.inventory.values.empty(shape, &BinderScope::default()));
         };
+        state.birth_allocations(
+            &mut self.inventory.values,
+            &self.inventory.entry,
+            self.instance,
+            result,
+            self.inventory.loops.for_value(&self.body, result),
+        );
         let template = self.inventory.definitions[&result].clone();
         let inputs = CallInputs {
             args,

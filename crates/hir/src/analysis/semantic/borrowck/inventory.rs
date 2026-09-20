@@ -11,13 +11,15 @@ use crate::{
         semantic::{
             BorrowActivation, Mutability, SemOrigin, SemanticInstance,
             capability::{
-                external::{ExternalSource, ReferentContract},
+                external::{ExternalOrigin, ExternalSource, ReferentContract},
                 guard::Guard,
                 handle::{
                     AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
+                    OpaqueWriteSite, SeedOrigin,
                 },
                 index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
                 loan::{CapabilityRef, LoanDef, LoanId, LoanRef},
+                opaque::OpaqueWrite,
                 path::{RegionPath, StructuralPath},
                 region::{ProviderRegionId, RegionRoot, RegionSet},
                 semantics::{CapabilityClass, CapabilitySemantics},
@@ -71,6 +73,31 @@ pub(super) struct Inventory<'db> {
 enum InputOrigin<'db> {
     Parameter(u32),
     Referent(ExternalSource<'db>),
+}
+
+/// These classify initial contents, independently of inventory/discovery order.
+#[derive(Clone, Copy)]
+enum CellSeed {
+    EntryContents,
+    FreshUninitialized,
+    UnknownBytes,
+}
+
+impl CellSeed {
+    fn for_source(source: &ExternalSource<'_>) -> Self {
+        if source.is_fresh_allocation() {
+            return Self::FreshUninitialized;
+        }
+        match &source.origin {
+            ExternalOrigin::Input(_) | ExternalOrigin::Provider { .. } => Self::EntryContents,
+            ExternalOrigin::Memory { base, .. }
+                if matches!(Self::for_source(&base.source), Self::EntryContents) =>
+            {
+                Self::EntryContents
+            }
+            _ => Self::UnknownBytes,
+        }
+    }
 }
 
 struct InputBuilder<'db> {
@@ -474,7 +501,53 @@ impl<'db> InputBuilder<'db> {
             // Reserve the cell before traversing recursively followed handles.
             self.storage
                 .insert(root.clone(), self.values.empty(target.shape, &target.scope));
-            let value = self.value(target.shape, &target.scope, origin, &ancestry)?;
+            let value = match CellSeed::for_source(&target.source) {
+                CellSeed::EntryContents => {
+                    self.value(target.shape, &target.scope, origin, &ancestry)?
+                }
+                CellSeed::FreshUninitialized | CellSeed::UnknownBytes => {
+                    let mut base = &target.source;
+                    while let ExternalOrigin::Memory { base: next, .. } = &base.origin {
+                        base = &next.source;
+                    }
+                    let origin = match &base.origin {
+                        ExternalOrigin::Allocation(handle)
+                        | ExternalOrigin::OpaqueHandle(handle) => {
+                            SeedOrigin::Address(handle.occurrence)
+                        }
+                        ExternalOrigin::Unknown { occurrence, .. } => {
+                            SeedOrigin::Address(*occurrence)
+                        }
+                        ExternalOrigin::Local(root) => SeedOrigin::Local(*root),
+                        _ => unreachable!("entry contents have symbolic input seeds"),
+                    };
+                    // Following an arbitrary pointer seed must not grow an
+                    // unbounded chain of seed identities during discovery.
+                    let site = if let SeedOrigin::Address(AddressOccurrence::Overwrite(id)) = origin
+                        && let site @ OpaqueWriteSite::Seed { .. } = id.site(self.db)
+                    {
+                        site
+                    } else {
+                        OpaqueWriteSite::Seed {
+                            instance: self.instance,
+                            origin,
+                        }
+                    };
+                    OpaqueWrite {
+                        site,
+                        scope: self
+                            .instance
+                            .key(self.db)
+                            .impl_env(self.db)
+                            .normalization_scope(self.db),
+                        assumptions: self.instance.assumptions(self.db),
+                    }
+                    // No conditional clobber: fresh/arbitrary bytes have no
+                    // native authority even if all raw writes were disjoint.
+                    .contents(&mut self.values, target.shape, &target.scope, None)
+                    .map_err(|error| ShapeError::UnresolvedCapability(error.0))?
+                }
+            };
             self.storage.insert(root, value);
         }
         Ok(())
@@ -719,5 +792,64 @@ pub(super) fn signature_body<'db>(
                 kind: NTerminatorKind::Return(None),
             },
         }],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        analysis::{
+            semantic::{
+                capability::guard::ValueOccurrence, get_or_build_semantic_instance,
+                identity_semantic_instance_key,
+            },
+            ty::ProviderAddressSpace,
+        },
+        test_db::{HirAnalysisTestDb, find_func},
+    };
+
+    #[test]
+    fn fresh_cell_discovery_does_not_manufacture_native_input_loans() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("fresh_inventory.fe".into(), "fn anchor() {}");
+        let (module, _) = db.top_mod(file);
+        let owner = BodyOwner::Func(find_func(&db, module, "anchor"));
+        let instance =
+            get_or_build_semantic_instance(&db, identity_semantic_instance_key(&db, owner));
+        let mut inventory = Inventory::new(&db, &signature_body(&db, instance)).unwrap();
+        for native in [
+            TyId::borrow_ref_of(&db, TyId::u256(&db)),
+            TyId::borrow_mut_of(&db, TyId::u256(&db)),
+        ] {
+            let source = ExternalSource::allocation(
+                &db,
+                OpaqueHandleRef {
+                    contract: OpaqueHandleContract {
+                        handle_ty: TyId::ptr_to(&db, native),
+                        target_ty: native,
+                        address_space: HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+                    },
+                    occurrence: AddressOccurrence::Summary(0),
+                    arguments: Box::new([]),
+                },
+            );
+            inventory
+                .add_external_sources(&db, instance, [(source.clone(), BinderScope::default())])
+                .unwrap();
+            let (_, value) = inventory
+                .entry
+                .storage()
+                .find(|(root, _)| **root == RegionRoot::External(source.clone()))
+                .unwrap();
+            let leaves = inventory.values.leaves(value, ValueOccurrence::Summary);
+            assert!(!leaves.is_empty());
+            assert!(
+                leaves
+                    .iter()
+                    .all(|leaf| matches!(leaf.payload, CapabilityRef::Invalidated { .. })),
+                "fresh bytes must not manufacture native input loans: {leaves:#?}"
+            );
+        }
     }
 }

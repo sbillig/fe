@@ -747,7 +747,7 @@ impl<'db> Borrowck<'db> {
         self.diag(
             SemanticDiagnosticKind::BorrowConflict,
             origin,
-            "cannot use a native borrow invalidated by a raw write".into(),
+            "cannot use a native borrow that is uninitialized or invalidated by a raw write".into(),
         )
     }
 

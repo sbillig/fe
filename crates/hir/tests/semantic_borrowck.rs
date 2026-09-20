@@ -480,6 +480,270 @@ fn memory() uses (call: mut Call) {{
 }
 
 #[test]
+fn fresh_native_slots_require_typed_initialization_before_reads() {
+    let mut accepted = Vec::new();
+    for kind in ["ref", "mut"] {
+        for read in ["*slot", "read(slot)", "forward(slot)"] {
+            let source = format!(
+                r#"
+fn read(_ slot: *{kind} u256) -> u256 {{ *slot }}
+fn forward(_ slot: *{kind} u256) -> u256 {{ read(slot) }}
+fn bad() -> u256 {{
+    let slot = core::ptr::alloc<{kind} u256>()
+    {read}
+}}
+"#
+            );
+            let diagnostics = checked_borrow_diags(&source);
+            if !diagnostics.contains("cannot use a native borrow") {
+                accepted.push(format!("{source}\n{diagnostics}"));
+            }
+            assert!(
+                !diagnostics.contains("internal borrow checking error"),
+                "{diagnostics}"
+            );
+        }
+    }
+    assert!(accepted.is_empty(), "{}", accepted.join("\n\n"));
+}
+
+#[test]
+fn fresh_native_slots_preserve_invalid_alternatives_and_typed_restoration() {
+    for kind in ["ref", "mut"] {
+        for (initialization, valid) in [
+            ("", false),
+            ("*slot = native", true),
+            ("replace(slot, native)", true),
+            ("if condition { *slot = native }", false),
+            (
+                "if condition { *slot = native } else { *slot = native }",
+                true,
+            ),
+            ("while condition { *slot = native }", false),
+            (
+                "let selected = if condition { slot } else { other }\n*selected = native",
+                false,
+            ),
+            ("ptr::zero_bytes(ptr::byte_ptr(slot), 32)", false),
+            (
+                "ptr::copy_raw(ptr::byte_ptr(slot), source: ptr::byte_ptr(owner), len: 32)",
+                false,
+            ),
+            (
+                "*slot = native\nptr::zero_bytes(ptr::byte_ptr(slot), 32)",
+                false,
+            ),
+            (
+                "ptr::zero_bytes(ptr::byte_ptr(slot), 32)\nreplace(slot, native)",
+                true,
+            ),
+        ] {
+            let source = format!(
+                r#"
+use core::ptr
+fn fresh() -> *{kind} u256 {{ ptr::alloc<{kind} u256>() }}
+fn forward() -> *{kind} u256 {{ fresh() }}
+fn replace(_ slot: *{kind} u256, _ native: {kind} u256) {{ *slot = native }}
+fn read(_ slot: *{kind} u256) -> u256 {{ *slot }}
+fn inspect(condition: bool) -> u256 {{
+    let owner = ptr::alloc<u256>()
+    *owner = 7
+    let native = {kind} *owner
+    let slot = forward()
+    let other = fresh()
+    {initialization}
+    read(slot)
+}}
+"#
+            );
+            let diagnostics = checked_borrow_diags(&source);
+            if valid {
+                assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+            } else {
+                assert!(
+                    diagnostics.contains("cannot use a native borrow"),
+                    "{source}\n{diagnostics}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn fresh_raw_slot_transport_and_initialized_helper_poststates_are_valid() {
+    for kind in ["ref", "mut"] {
+        let source = format!(
+            r#"
+use core::ptr
+fn fresh() -> *{kind} u256 {{ ptr::alloc<{kind} u256>() }}
+fn forward() -> *{kind} u256 {{ fresh() }}
+fn raw_transport() -> *{kind} u256 {{ forward() }}
+fn initialize(_ value: {kind} u256) -> *{kind} u256 {{
+    let slot = forward()
+    *slot = value
+    slot
+}}
+fn initialized_forward(_ value: {kind} u256) -> *{kind} u256 {{ initialize(value) }}
+fn inspect() -> u256 {{
+    let owner = ptr::alloc<u256>()
+    *owner = 7
+    let slot = initialized_forward({kind} *owner)
+    *slot
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+    }
+}
+
+#[test]
+fn fresh_native_transport_and_structural_leaves_require_initialization() {
+    for (body, valid) in [
+        (
+            "let slot = ptr::alloc<ref u256>()\nlet loaded = *slot",
+            false,
+        ),
+        ("let slot = ptr::alloc<ref u256>()\ndiscard(*slot)", false),
+        ("let slot = ptr::alloc<Pair>()\nlet loaded = *slot", false),
+        (
+            "let slot = ptr::alloc<Pair>()\nlet loaded: u256 = (*slot).native",
+            false,
+        ),
+        (
+            "let slot = ptr::alloc<Pair>()\n*slot = Pair { native: ref *owner, other: 0 }\ndiscard((*slot).native)",
+            true,
+        ),
+        (
+            "let slot = ptr::alloc<[ref u256; 2]>()\ndiscard((*slot)[1])",
+            false,
+        ),
+        (
+            "let slot = ptr::alloc<[ref u256; 2]>()\n*ptr::cast<[ref u256; 2], ref u256>(slot) = ref *owner\ndiscard((*slot)[1])",
+            false,
+        ),
+        (
+            "let slot = ptr::alloc<[ref u256; 2]>()\n*slot = [ref *owner, ref *owner]\ndiscard((*slot)[1])",
+            true,
+        ),
+        ("let slot = ptr::alloc<Choice>()\nlet loaded = *slot", false),
+        (
+            "let slot = ptr::alloc<Choice>()\n*slot = Choice::Empty\nlet loaded = *slot",
+            true,
+        ),
+        (
+            "let slot = ptr::alloc<Choice>()\n*slot = Choice::Some(ref *owner)\nlet loaded = *slot",
+            true,
+        ),
+    ] {
+        let source = format!(
+            r#"
+use core::ptr
+struct Pair {{ native: ref u256, other: u256 }}
+enum Choice {{ Empty, Some(ref u256) }}
+fn discard(_ value: ref u256) {{}}
+fn inspect() {{
+    let owner = ptr::alloc<u256>()
+    *owner = 7
+    {body}
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        if valid {
+            assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+        } else {
+            assert!(
+                diagnostics.contains("cannot use a native borrow"),
+                "{source}\n{diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
+fn fresh_slot_discovery_replays_typed_stores_before_reads_in_either_query_order() {
+    for initialized in [false, true] {
+        for query_first in ["inspect", "read", "fresh"] {
+            let store = if initialized {
+                "*slot = ref *owner"
+            } else {
+                ""
+            };
+            let source = format!(
+                r#"
+use core::ptr
+fn fresh() -> *u8 {{ ptr::alloc_bytes(32) }}
+fn read(_ slot: *ref u256) -> u256 {{ *slot }}
+fn inspect() -> u256 {{
+    let owner = ptr::alloc<u256>()
+    *owner = 7
+    let bytes = fresh()
+    let slot: *ref u256 = ptr::cast(bytes)
+    {store}
+    read(ptr::cast(bytes))
+}}
+"#
+            );
+            let mut db = HirAnalysisTestDb::default();
+            let file = db.new_stand_alone("fresh_query_order.fe".into(), &source);
+            let (module, _) = db.top_mod(file);
+            db.assert_no_diags(module);
+            let _ = semantic_borrow_summary(&db, func_instance(&db, module, query_first));
+            let diagnostics = format_diagnostics(
+                &db,
+                &collect_semantic_borrow_diagnostic_vouchers(&db, module),
+            );
+            if initialized {
+                assert!(
+                    diagnostics.is_empty(),
+                    "{query_first}: {source}\n{diagnostics}"
+                );
+            } else {
+                assert!(
+                    diagnostics.contains("cannot use a native borrow"),
+                    "{query_first}: {source}\n{diagnostics}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn allocation_birth_does_not_reuse_previous_loop_initialization() {
+    for (store, valid) in [
+        ("*slot = ref *owner", true),
+        ("if index == 0 { *slot = ref *owner }", false),
+    ] {
+        let source = format!(
+            r#"
+use core::ptr
+fn inspect() {{
+    let owner = ptr::alloc<u256>()
+    *owner = 7
+    let mut index: u256 = 0
+    while index < 2 {{
+        let slot = ptr::alloc<ref u256>()
+        {store}
+        let loaded: u256 = *slot
+        index += 1
+    }}
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        if valid {
+            assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+        } else {
+            assert!(
+                diagnostics.contains("cannot use a native borrow"),
+                "{source}\n{diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
 fn physical_casts_do_not_inherit_zero_sized_pointee_disjointness() {
     for write in [
         "*ptr::cast<(), u256>(empty) = 1",
@@ -8471,14 +8735,20 @@ fn store(_ handle: ref u256) uses (holder: mut Holder) { holder.value = Maybe::F
             match space {
                 "Memory" => {
                     assert!(boundary.is_ok(), "{space} {name}: {boundary:?}");
-                    // The raw handle and its unknown nested borrow can overlap.
-                    // Boundary legality does not establish disjoint memory.
-                    let conflict = check_semantic_borrows(&db, instance)
-                        .expect_err("opaque memory aliasing remains conservative");
-                    assert!(
-                        conflict.to_string().contains("borrow conflict"),
-                        "{conflict}"
-                    );
+                    let borrows = check_semantic_borrows(&db, instance);
+                    if name == "empty" {
+                        // Unknown bytes contain no invented live native loan.
+                        assert!(borrows.is_ok(), "{space} {name}: {borrows:?}");
+                    } else {
+                        // Storing a real incoming loan retains the ordinary
+                        // alias check against the unknown destination.
+                        let conflict =
+                            borrows.expect_err("opaque memory aliasing remains conservative");
+                        assert!(
+                            conflict.to_string().contains("borrow conflict"),
+                            "{conflict}"
+                        );
+                    }
                 }
                 "Storage" | "TransientStorage" if name == "empty" => {
                     assert!(boundary.is_ok(), "{space} {name}: {boundary:?}")
