@@ -1312,6 +1312,7 @@ pub(crate) fn merge_runtime_carrier<'db>(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RuntimeJoinDemand {
+    native_borrow: bool,
     prefer_owned_object: bool,
     prefer_transport: bool,
 }
@@ -1324,6 +1325,7 @@ impl RuntimeJoinDemand {
         local: &SLocal<'_>,
     ) -> Self {
         Self {
+            native_borrow: local.ty.as_borrow(db).is_some(),
             prefer_owned_object: body
                 .root_demand(db, local_id)
                 .needs_projectable_owned_storage(),
@@ -1345,6 +1347,9 @@ fn join_runtime_class<'db>(
 ) -> Option<RuntimeClass<'db>> {
     if current == desired {
         return Some(current.clone());
+    }
+    if demand.native_borrow {
+        return join_reference_transports(db, current, desired);
     }
     if demand.prefer_transport
         && let Some(raw_addr) = prefer_raw_addr_join(current, desired)
@@ -1372,6 +1377,29 @@ fn join_runtime_class<'db>(
         .into_iter()
         .filter(|candidate| can_join_as(db, current, desired, candidate))
         .min_by_key(|candidate| join_candidate_rank(demand, candidate))
+}
+
+/// Join actual native-reference values, as distinct from specializing a
+/// declaration's default transport. Mixed physical layouts require a descriptor;
+/// choosing one static representation would change the other branch's referent.
+pub(super) fn join_reference_transports<'db>(
+    db: &'db dyn MirDb,
+    current: &RuntimeClass<'db>,
+    desired: &RuntimeClass<'db>,
+) -> Option<RuntimeClass<'db>> {
+    if current.shares_runtime_rep_with(db, desired) {
+        return merge_runtime_class(db, current, desired);
+    }
+    let pointee = current.pointee()?;
+    if desired.pointee() != Some(pointee) {
+        return None;
+    }
+    let native = RuntimeClass::Ref {
+        pointee: Box::new(pointee.clone()),
+        kind: RefKind::Native,
+        view: RefView::Whole,
+    };
+    can_join_as(db, current, desired, &native).then_some(native)
 }
 
 fn prefer_raw_addr_join<'db>(
@@ -1406,13 +1434,13 @@ fn prefer_raw_addr_join<'db>(
         };
         let pointee = raw_addr_join_pointee(raw_pointee, pointee)?;
         return Some(RuntimeClass::RawAddr {
-            space: preferred_address_space(ref_kind_address_space(kind), *space)?,
+            space: preferred_address_space(ref_kind_address_space(kind)?, *space)?,
             pointee,
         });
     };
     let pointee = raw_addr_join_pointee(raw_pointee, pointee)?;
     Some(RuntimeClass::RawAddr {
-        space: preferred_address_space(*space, ref_kind_address_space(kind))?,
+        space: preferred_address_space(*space, ref_kind_address_space(kind)?)?,
         pointee,
     })
 }
@@ -1488,7 +1516,7 @@ fn join_candidate_rank(demand: RuntimeJoinDemand, candidate: &RuntimeClass<'_>) 
         } => 2,
         RuntimeClass::AggregateValue { .. } => 3,
         RuntimeClass::Ref {
-            kind: RefKind::Provider { .. },
+            kind: RefKind::Provider { .. } | RefKind::Native,
             ..
         } => 4,
         RuntimeClass::RawAddr { .. } => 5,
@@ -1571,7 +1599,14 @@ pub(super) fn merge_runtime_class<'db>(
                 view: RefView::Whole,
             },
         ) if raw_pointee.as_deref() == Some(pointee.as_ref()) => {
-            let ref_space = ref_kind_address_space(kind);
+            if *kind == RefKind::Native {
+                return Some(RuntimeClass::Ref {
+                    pointee: pointee.clone(),
+                    kind: RefKind::Native,
+                    view: RefView::Whole,
+                });
+            }
+            let ref_space = ref_kind_address_space(kind)?;
             if ref_space == *space {
                 Some(RuntimeClass::Ref {
                     pointee: pointee.clone(),
@@ -1661,6 +1696,7 @@ fn merge_ref_kind<'db>(current: &RefKind<'db>, desired: &RefKind<'db>) -> Option
     match (current, desired) {
         (RefKind::Object, RefKind::Object) => Some(RefKind::Object),
         (RefKind::Const, RefKind::Const) => Some(RefKind::Const),
+        (RefKind::Native, _) | (_, RefKind::Native) => Some(RefKind::Native),
         (RefKind::Object, RefKind::Provider { provider_ty, space })
         | (RefKind::Provider { provider_ty, space }, RefKind::Object) => Some(RefKind::Provider {
             provider_ty: *provider_ty,
@@ -1712,10 +1748,11 @@ fn preferred_address_space(
     }
 }
 
-fn ref_kind_address_space(kind: &RefKind<'_>) -> AddressSpaceKind {
+fn ref_kind_address_space(kind: &RefKind<'_>) -> Option<AddressSpaceKind> {
     match kind {
-        RefKind::Provider { space, .. } => *space,
-        RefKind::Object | RefKind::Const => AddressSpaceKind::Memory,
+        RefKind::Provider { space, .. } => Some(*space),
+        RefKind::Object | RefKind::Const => Some(AddressSpaceKind::Memory),
+        RefKind::Native => None,
     }
 }
 
@@ -1779,6 +1816,7 @@ mod tests {
 
     fn plain_value_join_demand() -> RuntimeJoinDemand {
         RuntimeJoinDemand {
+            native_borrow: false,
             prefer_owned_object: false,
             prefer_transport: false,
         }
@@ -1786,6 +1824,7 @@ mod tests {
 
     fn owned_object_join_demand() -> RuntimeJoinDemand {
         RuntimeJoinDemand {
+            native_borrow: false,
             prefer_owned_object: true,
             prefer_transport: false,
         }
@@ -1815,6 +1854,56 @@ mod tests {
             provider(TyId::bool(db), AddressSpaceKind::Storage, pointee.clone()),
             provider(TyId::u256(db), AddressSpaceKind::Memory, pointee),
         )
+    }
+
+    #[test]
+    fn native_borrow_joins_preserve_mixed_layouts_in_both_orders() {
+        let db = DriverDataBase::default();
+        let pointee = RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int {
+                bits: 8,
+                signed: false,
+            },
+            role: ScalarRole::Plain,
+        });
+        let object = RuntimeClass::Ref {
+            pointee: Box::new(pointee.clone()),
+            kind: RefKind::Object,
+            view: RefView::Whole,
+        };
+        let packed = RuntimeClass::raw_addr(AddressSpaceKind::Memory, pointee.clone());
+        let storage = RuntimeClass::Ref {
+            pointee: Box::new(pointee.clone()),
+            kind: RefKind::Provider {
+                provider_ty: TyId::u8(&db),
+                space: AddressSpaceKind::Storage,
+            },
+            view: RefView::Whole,
+        };
+        let native = RuntimeClass::Ref {
+            pointee: Box::new(pointee),
+            kind: RefKind::Native,
+            view: RefView::Whole,
+        };
+        let demand = RuntimeJoinDemand {
+            native_borrow: true,
+            prefer_owned_object: false,
+            prefer_transport: true,
+        };
+        for left in [&object, &packed, &storage] {
+            assert_eq!(
+                join_runtime_class(&db, demand, left, left),
+                Some(left.clone())
+            );
+            for right in [&object, &packed, &storage] {
+                if left != right {
+                    assert_eq!(
+                        join_runtime_class(&db, demand, left, right),
+                        Some(native.clone())
+                    );
+                }
+            }
+        }
     }
 
     #[test]

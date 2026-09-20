@@ -38,7 +38,10 @@ use super::{
         AssignmentId, BodyEnv, BodyStaticFacts, RuntimeVisibleReturnPlan, default_return_class,
         desired_runtime_return_plan, selected_visible_return_for_local,
     },
-    infer::{AssignmentSpace, CarrierInferer, ReturnClassLookup, merge_runtime_class},
+    infer::{
+        AssignmentSpace, CarrierInferer, ReturnClassLookup, join_reference_transports,
+        merge_runtime_class,
+    },
     interface::{runtime_visible_binding_local, runtime_visible_binding_plans},
     provider_space::address_space_from_provider,
     semantic_body::RuntimeSemanticBody,
@@ -247,13 +250,20 @@ pub(crate) fn declaration_runtime_return_class<'db>(
         else {
             continue;
         };
+        let merge = if !fully_forwarded {
+            ReturnSourceMerge::Specialize
+        } else if replaced.insert(source.result_projection.clone()) {
+            ReturnSourceMerge::Replace
+        } else {
+            ReturnSourceMerge::Join
+        };
         let Some(updated) = merge_declaration_return_source(
             db,
             class.clone(),
             &source.result_projection,
             source_class,
             &projected,
-            !fully_forwarded || !replaced.insert(source.result_projection.clone()),
+            merge,
         ) else {
             continue;
         };
@@ -310,7 +320,7 @@ pub(crate) fn declaration_runtime_return_class<'db>(
                 &projection,
                 &source,
                 &source,
-                false,
+                ReturnSourceMerge::Replace,
             ) {
                 class = updated;
             }
@@ -418,23 +428,37 @@ fn project_declaration_return_source<'db>(
     Some(class)
 }
 
+#[derive(Clone, Copy)]
+enum ReturnSourceMerge {
+    Replace,
+    Specialize,
+    Join,
+}
+
 fn merge_declaration_return_source<'db>(
     db: &'db dyn MirDb,
     current: RuntimeClass<'db>,
     projection: &[ReturnProjectionStep],
     source_root: &RuntimeClass<'db>,
     projected_source: &RuntimeClass<'db>,
-    merge_existing: bool,
+    merge: ReturnSourceMerge,
 ) -> Option<RuntimeClass<'db>> {
     let Some((step, suffix)) = projection.split_first() else {
         let source =
             retarget_declaration_return_transport(current.clone(), source_root, projected_source);
-        return if merge_existing {
-            merge_runtime_class(db, &current, &source).or(Some(current))
-        } else if declaration_return_value_shapes_match(db, &current, &source) {
-            Some(source)
-        } else {
-            Some(current)
+        return match merge {
+            ReturnSourceMerge::Join if current.is_transport() && source.is_transport() => {
+                join_reference_transports(db, &current, &source)
+            }
+            ReturnSourceMerge::Join | ReturnSourceMerge::Specialize => {
+                merge_runtime_class(db, &current, &source).or(Some(current))
+            }
+            ReturnSourceMerge::Replace
+                if declaration_return_value_shapes_match(db, &current, &source) =>
+            {
+                Some(source)
+            }
+            ReturnSourceMerge::Replace => Some(current),
         };
     };
     let layout = current.aggregate_layout()?.data(db);
@@ -447,7 +471,7 @@ fn merge_declaration_return_source<'db>(
                 suffix,
                 source_root,
                 projected_source,
-                merge_existing,
+                merge,
             )?;
             LayoutKey::Struct(layout)
         }
@@ -463,7 +487,7 @@ fn merge_declaration_return_source<'db>(
                 suffix,
                 source_root,
                 projected_source,
-                merge_existing,
+                merge,
             )?;
             LayoutKey::Enum(EnumLayoutKey {
                 variants: layout.variants,
@@ -481,7 +505,7 @@ fn merge_declaration_return_source<'db>(
                 suffix,
                 source_root,
                 projected_source,
-                merge_existing,
+                merge,
             )?;
             LayoutKey::Array(layout)
         }
@@ -543,7 +567,31 @@ fn retarget_declaration_return_transport<'db>(
     } else {
         source_root
     };
+    // Forwarded type provenance may name the containing slot. Loading a stored
+    // native carrier returns its value, not the address of that carrier's slot.
+    if let RuntimeClass::Ref {
+        pointee: target_pointee,
+        ..
+    } = &target
+        && let Some(
+            stored @ RuntimeClass::Ref {
+                pointee,
+                kind: RefKind::Native,
+                ..
+            },
+        ) = source.pointee()
+        && pointee == target_pointee
+    {
+        return stored.clone();
+    }
     match (target, source) {
+        (
+            target @ RuntimeClass::Ref {
+                kind: RefKind::Native,
+                ..
+            },
+            _,
+        ) => target,
         (
             RuntimeClass::Ref {
                 pointee: target_pointee,
@@ -678,7 +726,16 @@ pub(crate) fn evaluate_runtime_return_class<'db>(
         };
         returned.push(selected.class);
     }
-    let Some(class) = merged_return_class(db, returned) else {
+    let Some(class) = merged_return_class(
+        db,
+        returned,
+        summary
+            .semantic_body
+            .owner()
+            .normalized_result_ty(db)
+            .as_borrow(db)
+            .is_some(),
+    ) else {
         return summary.default_return_class.clone();
     };
     Some(class)
@@ -687,10 +744,15 @@ pub(crate) fn evaluate_runtime_return_class<'db>(
 fn merged_return_class<'db>(
     db: &'db dyn MirDb,
     mut returned: Vec<RuntimeClass<'db>>,
+    native_borrow: bool,
 ) -> Option<RuntimeClass<'db>> {
     let mut merged = returned.pop()?;
     for class in returned {
-        merged = merge_runtime_class(db, &merged, &class)?;
+        merged = if native_borrow {
+            join_reference_transports(db, &merged, &class)?
+        } else {
+            merge_runtime_class(db, &merged, &class)?
+        };
     }
     Some(merged)
 }
@@ -810,7 +872,16 @@ mod tests {
             };
             returned.push(selected.class);
         }
-        let Some(class) = merged_return_class(db, returned) else {
+        let Some(class) = merged_return_class(
+            db,
+            returned,
+            summary
+                .semantic_body
+                .owner()
+                .normalized_result_ty(db)
+                .as_borrow(db)
+                .is_some(),
+        ) else {
             return summary.default_return_class.clone();
         };
         Some(class)
@@ -1069,6 +1140,40 @@ fn helper() {}
     }
 
     #[test]
+    fn mixed_native_return_declaration_matches_body_inference() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///mixed_native_return.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn choose(first: ref u8, second: ref u8, use_first: bool) -> ref u8 {
+    if use_first { first } else { second }
+}
+"#
+                .into(),
+            ),
+        );
+        let file = db.workspace().get(&db, &file_url).unwrap();
+        let semantic = semantic_instance_for_named_func(&db, db.top_mod(file), "choose");
+        let default_key = runtime_instance_for_semantic(&db, semantic).key(&db);
+        let mut params = default_key.params(&db).clone();
+        let pointee = params[1].pointee().unwrap().clone();
+        params[1] = RuntimeClass::raw_addr(AddressSpaceKind::Memory, pointee);
+        let key = RuntimeInstanceKey::new(&db, RuntimeInstanceSource::Semantic(semantic), params);
+        let declaration = declaration_runtime_return_class(&db, key);
+        assert!(matches!(
+            declaration,
+            Some(RuntimeClass::Ref {
+                kind: RefKind::Native,
+                ..
+            })
+        ));
+        assert_eq!(declaration, legacy_return_class_for_key(&db, key));
+    }
+
+    #[test]
     fn raw_pointer_borrows_keep_their_return_layout() {
         let mut db = DriverDataBase::default();
         let file_url = Url::parse("file:///raw_borrow_returns.fe").unwrap();
@@ -1098,16 +1203,30 @@ fn nested(_ buffer: Buffer) -> Loan { Loan { value: mut *buffer.ptr } }
                 Some(declaration.clone()),
                 legacy_return_class_for_key(&db, key)
             );
-            assert!(
-                matches!(
-                    project_declaration_return_source(&db, declaration, &projection),
-                    Some(RuntimeClass::RawAddr {
-                        space: AddressSpaceKind::Memory,
-                        ..
-                    })
-                ),
-                "{name} must return the raw pointee's layout"
-            );
+            let result = project_declaration_return_source(&db, declaration, &projection).unwrap();
+            if projection.is_empty() {
+                assert!(
+                    matches!(
+                        result,
+                        RuntimeClass::RawAddr {
+                            space: AddressSpaceKind::Memory,
+                            ..
+                        }
+                    ),
+                    "direct returns retain their static raw layout"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        RuntimeClass::Ref {
+                            kind: RefKind::Native,
+                            ..
+                        }
+                    ),
+                    "stored borrows use the canonical address/layout carrier"
+                );
+            }
         }
     }
 
@@ -1389,14 +1508,11 @@ pub contract C {
             matches!(
                 some_variant.fields.first(),
                 Some(RuntimeClass::Ref {
-                    kind: RefKind::Provider {
-                        space: AddressSpaceKind::Storage,
-                        ..
-                    },
+                    kind: RefKind::Native,
                     ..
                 })
             ),
-            "return class should preserve the storage provider variant:\n{ret:#?}"
+            "returned enum fields must use native carriers that preserve storage layout:\n{ret:#?}"
         );
     }
 
@@ -1488,10 +1604,13 @@ fn first(_ arr: [u8; 4]) -> u8 {
         // fold reports failure (caller falls back to the default class) regardless of
         // the order the return sites were collected in.
         assert_eq!(
-            merged_return_class(&db, vec![storage.clone(), transient.clone()]),
+            merged_return_class(&db, vec![storage.clone(), transient.clone()], false),
             None
         );
-        assert_eq!(merged_return_class(&db, vec![transient, storage]), None);
+        assert_eq!(
+            merged_return_class(&db, vec![transient, storage], false),
+            None
+        );
     }
 
     #[test]
@@ -1502,11 +1621,11 @@ fn first(_ arr: [u8; 4]) -> u8 {
         let merged = RuntimeClass::opaque_raw_addr(AddressSpaceKind::Storage);
 
         assert_eq!(
-            merged_return_class(&db, vec![memory.clone(), storage.clone()]),
+            merged_return_class(&db, vec![memory.clone(), storage.clone()], false),
             Some(merged.clone())
         );
         assert_eq!(
-            merged_return_class(&db, vec![storage, memory]),
+            merged_return_class(&db, vec![storage, memory], false),
             Some(merged)
         );
     }

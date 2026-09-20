@@ -2240,6 +2240,7 @@ fn scalar_role_sort_key<'db>(db: &'db dyn MirDb, role: &ScalarRole<'db>) -> Stri
 
 fn ref_kind_sort_key<'db>(db: &'db dyn MirDb, kind: &RefKind<'db>) -> String {
     match kind {
+        RefKind::Native => "native".to_string(),
         RefKind::Const => "const".to_string(),
         RefKind::Object => "object".to_string(),
         RefKind::Provider { provider_ty, space } => {

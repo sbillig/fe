@@ -309,6 +309,40 @@ selected fields and array elements. Lowering preserves those places through
 normalization; projecting a read snapshot must not replace consuming the original
 storage. Copy values remain non-consuming.
 
+## Stored native references and static runtime views
+
+Runtime lowering keeps ordinary compiler views in their static `Const`, `Object`,
+or `Provider` representation. Local native borrows and specialized parameters can
+also retain a known transport. Native `ref`/`mut` fields and raw-pointer slots use
+`RefKind::Native`: a one-word handle to an immutable address/layout descriptor.
+The descriptor distinguishes packed Fe memory, native Sonatina object memory,
+and storage, transient, calldata, and code address spaces. Exporting an object
+uses its original allocation, preserving aliases; converting a stored native
+carrier back to a static view by copying its referent is forbidden.
+
+Immutable constant views have no mutable allocation identity. Converting one to a
+stored native reference realizes its scalar or aggregate value in addressable
+storage; existing object references always export their original allocation.
+
+Aggregate construction converts native fields explicitly with `RExpr::NativeRef`.
+Joins of native references with different physical layouts use that same carrier,
+and function declarations and body inference share the transport-join rule.
+Loading a reference from a slot returns the stored carrier, not the slot address.
+The verifier checks these conversions independently of semantic borrow checking;
+runtime representation never supplies ownership or aliasing authority.
+
+Copy reads of native call results bind the callee's declared reference carrier
+before explicitly loading its referent. Slot assignment similarly uses the
+destination's class to distinguish replacing a carrier from writing its referent.
+
+Native scalar fields occupy words, and native enum payloads concatenate variants.
+Raw memory, calldata and code use packed fields and overlaid enum payloads; storage
+and transient storage use word slots and overlaid payloads. Descriptor projection
+and dereference preserve these distinctions across calls and control flow. Creating
+a descriptor costs a two-word heap allocation before optimization; copying an
+existing native reference copies only its one-word handle. User buffers must reserve
+their complete extent before writes, including across compiler-generated allocations.
+
 ## Verification and conservative limits
 
 The semantic borrow suite pairs unsafe inline programs with helper and forwarding

@@ -75,6 +75,7 @@ pub fn collect_referenced_code_regions<'db>(
                 | RExpr::ProviderRefFromRaw { .. }
                 | RExpr::WordToRawAddr { .. }
                 | RExpr::ProviderRefToRaw { .. }
+                | RExpr::NativeRef { .. }
                 | RExpr::RetagRef { .. }
                 | RExpr::AddrOf { .. }
                 | RExpr::Load { .. }

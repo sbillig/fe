@@ -169,7 +169,17 @@ fn transported_local_from_param(body: &RuntimeBody<'_>, param: RLocalId) -> RLoc
 }
 
 fn body_preserves_handle_field(body: &RuntimeBody<'_>, param: RLocalId, field: u16) -> bool {
-    let transported = transported_local_from_param(body, param);
+    let mut transported = transported_local_from_param(body, param);
+    for stmt in runtime_body_stmts(body) {
+        if let RStmt::Assign {
+            dst,
+            expr: RExpr::NativeRef { value },
+        } = stmt
+            && *value == transported
+        {
+            transported = *dst;
+        }
+    }
     runtime_body_stmts(body).any(|stmt| match stmt {
         RStmt::Assign {
             expr: RExpr::AggregateMake { fields, .. },
@@ -681,9 +691,9 @@ pub fn entry() -> u256 {
 }
 
 #[test]
-fn object_backed_nested_const_handle_fields_load_carriers_before_const_projection() {
+fn object_backed_native_reference_fields_load_carriers_before_projection() {
     let output = sonatina_ir_for_source(
-        "object_backed_nested_const_handle_fields_load_carriers_before_const_projection.fe",
+        "object_backed_native_reference_fields_load_carriers_before_projection.fe",
         r#"struct Data {
     x: u256,
 }
@@ -706,8 +716,8 @@ pub fn entry() -> u256 {
     let read = sonatina_function_body(&output, "read");
 
     assert!(
-        contains_op_subsequence(read, &["obj.proj", "obj.load", "const.proj", "const.load"]),
-        "object-backed aggregates may store nested const refs, but field access must load the handle carrier before projecting through the const ref:\n{read}"
+        contains_op_subsequence(read, &["obj.load", "extract_value", "mload", "mload"]),
+        "stored native references must load their address/layout carrier before projecting the referent:\n{read}"
     );
 }
 
@@ -726,9 +736,9 @@ fn storage_backed_nested_handle_fields_follow_carriers_before_projecting_childre
 }
 
 #[test]
-fn storage_backed_nested_handle_field_borrows_use_storage_transport() {
+fn stored_native_field_borrows_preserve_the_native_transport() {
     with_runtime_package!(
-        "storage_backed_nested_handle_field_borrows_use_storage_transport.fe",
+        "stored_native_field_borrows_preserve_the_native_transport.fe",
         include_str!("fixtures/effect_handle_field_deref.fe").to_string(),
         |db, package| {
             let bump = package
@@ -753,10 +763,7 @@ fn storage_backed_nested_handle_field_borrows_use_storage_transport() {
                             body.value_class(*dst),
                             Some(RuntimeClass::Ref {
                                 pointee,
-                                kind: RefKind::Provider {
-                                    space: mir::AddressSpaceKind::Storage,
-                                    ..
-                                },
+                                kind: RefKind::Native,
                                 ..
                             }) if matches!(**pointee, RuntimeClass::AggregateValue { .. })
                         ) =>
@@ -811,14 +818,8 @@ fn storage_backed_nested_handle_field_borrows_use_storage_transport() {
                 "nested storage-backed field borrow should point at the scalar field:\n{body:#?}"
             );
             assert!(
-                matches!(
-                    kind,
-                    RefKind::Provider {
-                        space: mir::AddressSpaceKind::Storage,
-                        ..
-                    }
-                ),
-                "nested storage-backed field borrow should use storage transport, not object/memory transport:\n{body:#?}"
+                matches!(kind, RefKind::Native),
+                "nested field borrow must retain its native address/layout carrier:\n{body:#?}"
             );
         }
     );
@@ -2146,7 +2147,10 @@ fn object_backed_scalar_field_borrows_lower_as_typed_refs() {
                     assert!(
                         matches!(
                             kind,
-                            RefKind::Object | RefKind::Provider { .. } | RefKind::Const
+                            RefKind::Object
+                                | RefKind::Provider { .. }
+                                | RefKind::Const
+                                | RefKind::Native
                         ),
                         "scalar field borrow should lower as a typed ref, not a raw address:\n{body:#?}"
                     );

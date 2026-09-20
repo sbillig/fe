@@ -2142,6 +2142,16 @@ fn aggregate_make_class_from_facts<'db>(
     let mut field_classes = Vec::with_capacity(fields.len());
     let mut evaluator = RuntimeArgSelector::new(env, carriers, class_cache);
     for (field, field_facts) in fields.iter().copied().zip(facts.fields.iter()) {
+        if matches!(
+            field_facts.stored_class,
+            RuntimeClass::Ref {
+                kind: RefKind::Native,
+                ..
+            }
+        ) {
+            field_classes.push(field_facts.stored_class.clone());
+            continue;
+        }
         let field = env.body.runtime_operand(field)?;
         let selected = if let Some(boundary) = field_facts.boundary.as_ref() {
             let mut boundary_sites = BoundarySiteAllocator::default();

@@ -370,6 +370,7 @@ fn runtime_expr_display(expr: &RExpr<'_>) -> String {
             format!("word_to_raw_addr {value:?}, {space:?}")
         }
         RExpr::ProviderRefToRaw { value } => format!("provider_ref_to_raw {value:?}"),
+        RExpr::NativeRef { value } => format!("native_ref {value:?}"),
         RExpr::RetagRef { value } => format!("retag_ref {value:?}"),
         RExpr::AddrOf { place } => format!("addr_of {place:?}"),
         RExpr::Load { place } => format!("load {place:?}"),

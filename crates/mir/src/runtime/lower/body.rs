@@ -1171,7 +1171,9 @@ impl<'db> RmirEmitter<'db> {
                     if place_class.is_some() {
                         let place = self.lower_place(bb, destination);
                         let target = self.project_place_class(&place);
-                        let value = self.read_semantic_operand(bb, *value);
+                        // A native-reference slot stores its carrier, whereas
+                        // a scalar destination needs the referent's value.
+                        let value = self.lower_semantic_operand_for_class(bb, *value, &target);
                         self.write_value_to_place(bb, place, value, &target);
                     }
                 }
@@ -1226,7 +1228,7 @@ impl<'db> RmirEmitter<'db> {
         // A normalized assignment initializes the root's representation. Its
         // source span may name an expression; it does not make this a write
         // through the reference (which may point into immutable constant data).
-        let source = self.read_semantic_operand(bb, value);
+        let source = self.lower_semantic_operand_for_class(bb, value, &class);
         let source = self.coerce_value(bb, source, &class);
         if source != runtime_local {
             self.push_stmt(
@@ -2508,7 +2510,7 @@ impl<'db> RmirEmitter<'db> {
                 ..
             } => RuntimeClass::object_ref(layout),
             class @ (RuntimeClass::Ref {
-                kind: RefKind::Provider { .. } | RefKind::Const,
+                kind: RefKind::Provider { .. } | RefKind::Const | RefKind::Native,
                 ..
             }
             | RuntimeClass::RawAddr { .. }) => class,
@@ -2632,6 +2634,16 @@ impl<'db> RmirEmitter<'db> {
         let stored = stored_class_for_ty_in_env(self.db, self.env, field_ty);
         if self.class_is_runtime_zst(&stored) {
             let value = self.lower_zst_value_placeholder(bb, field_ty, stored.clone());
+            return (value, stored);
+        }
+        if matches!(
+            stored,
+            RuntimeClass::Ref {
+                kind: RefKind::Native,
+                ..
+            }
+        ) {
+            let value = self.lower_semantic_operand_for_class(bb, field, &stored);
             return (value, stored);
         }
         let value = match boundary_spec_for_ty_in_env(

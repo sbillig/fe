@@ -18,6 +18,9 @@ pub(crate) enum RuntimeConversionStep<'db> {
     UseAs {
         class: RuntimeClass<'db>,
     },
+    NativeRef {
+        class: RuntimeClass<'db>,
+    },
     RetagRef {
         class: RuntimeClass<'db>,
     },
@@ -119,6 +122,13 @@ fn emit_runtime_conversion_step<'db>(
         RuntimeConversionStep::UseAs { class } => {
             assign_runtime_conversion_temp(emitter, bb, semantic_ty, class, RExpr::Use(src))
         }
+        RuntimeConversionStep::NativeRef { class } => assign_runtime_conversion_temp(
+            emitter,
+            bb,
+            semantic_ty,
+            class,
+            RExpr::NativeRef { value: src },
+        ),
         RuntimeConversionStep::RetagRef { class } => assign_runtime_conversion_temp(
             emitter,
             bb,
@@ -312,6 +322,25 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 && source.shares_runtime_rep_with(self.db, &target) =>
             {
                 steps.push(RuntimeConversionStep::RetagRef { class: target });
+                Ok(())
+            }
+            (
+                RuntimeClass::Ref {
+                    pointee,
+                    view: RefView::Whole,
+                    ..
+                }
+                | RuntimeClass::RawAddr {
+                    pointee: Some(pointee),
+                    ..
+                },
+                RuntimeClass::Ref {
+                    pointee: desired,
+                    kind: RefKind::Native,
+                    view: RefView::Whole,
+                },
+            ) if pointee == desired => {
+                steps.push(RuntimeConversionStep::NativeRef { class: target });
                 Ok(())
             }
             (RuntimeClass::RawAddr { .. }, RuntimeClass::RawAddr { .. })
@@ -561,6 +590,13 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 });
                 Ok(())
             }
+            (
+                RuntimeClass::Ref {
+                    kind: RefKind::Native,
+                    ..
+                },
+                RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. },
+            ) => Err(RuntimeConversionError::Unsupported { source, target }),
             (
                 _,
                 RuntimeClass::Ref {
@@ -826,6 +862,56 @@ mod tests {
         assert_eq!(
             plan.steps.as_ref(),
             &[RuntimeConversionStep::MaterializeToObject { class: target }]
+        );
+    }
+
+    #[test]
+    fn native_reference_conversion_preserves_static_and_raw_referents() {
+        let db = DriverDataBase::default();
+        let layout = test_struct_layout(&db);
+        let native = RuntimeClass::Ref {
+            pointee: Box::new(RuntimeClass::AggregateValue { layout }),
+            kind: RefKind::Native,
+            view: RefView::Whole,
+        };
+        let mut sources = vec![
+            RuntimeClass::object_ref(layout),
+            RuntimeClass::const_ref(layout),
+        ];
+        for space in [
+            AddressSpaceKind::Memory,
+            AddressSpaceKind::Storage,
+            AddressSpaceKind::Transient,
+            AddressSpaceKind::Calldata,
+            AddressSpaceKind::Code,
+        ] {
+            sources.push(RuntimeClass::raw_addr(
+                space,
+                RuntimeClass::AggregateValue { layout },
+            ));
+            sources.push(RuntimeClass::provider_ref(layout, TyId::unit(&db), space));
+        }
+        for source in sources {
+            assert!(!source.shares_runtime_rep_with(&db, &native));
+            let plan = RuntimeConversionPlanner::plan(&db, source.clone(), native.clone()).unwrap();
+            assert_eq!(
+                plan.steps.as_ref(),
+                &[RuntimeConversionStep::NativeRef {
+                    class: native.clone()
+                }]
+            );
+            assert!(
+                RuntimeConversionPlanner::plan(&db, native.clone(), source).is_err(),
+                "an erased native layout cannot become a static view"
+            );
+        }
+        assert!(
+            RuntimeConversionPlanner::plan(
+                &db,
+                RuntimeClass::opaque_raw_addr(AddressSpaceKind::Memory),
+                native
+            )
+            .is_err()
         );
     }
 

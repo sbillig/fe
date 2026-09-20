@@ -322,7 +322,9 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         boundary: &StagedBoundary<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
         let boundary = self.specialized_boundary(arg.local, boundary);
-        if let Some(class) = self.concrete_operand_value_class(arg)
+        // A joined carrier describes every incoming value. Recovering an alias
+        // place first can instead select just one predecessor's transport.
+        if let Some(class) = self.operand_value_class(arg)
             && carrier_value_class(arg.local, self.carriers).as_ref() == Some(&class)
             && BoundaryMatcher::class_satisfies_boundary(&class, &boundary)
         {
