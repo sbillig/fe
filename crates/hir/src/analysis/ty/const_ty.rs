@@ -1045,6 +1045,29 @@ pub fn evaluate_type_level_const_expr<'db>(
     })
 }
 
+/// Evaluate a const type as far as its symbolic inputs permit, including
+/// deferred expressions that retain a declaration's resolution context.
+pub(crate) fn evaluate_type_level_const_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_ty: ConstTyId<'db>,
+    expected_ty: Option<TyId<'db>>,
+) -> ConstTyId<'db> {
+    // An implicit view describes access at the use site, not the const's value.
+    let ty = const_ty.ty(db);
+    let const_ty = const_ty.with_ty(db, ty.as_view(db).unwrap_or(ty));
+    let expected_ty = expected_ty.map(|ty| ty.as_view(db).unwrap_or(ty));
+    let evaluated = const_ty.evaluate(db, expected_ty);
+    let ConstTyData::Abstract(expr, ty) = evaluated.data(db) else {
+        return evaluated;
+    };
+    let concrete = if let Some(env) = const_canon_env(db, evaluated) {
+        evaluate_type_level_const_expr(db, *expr, *ty, env)
+    } else {
+        evaluate_type_level_int_const_expr(db, *expr, *ty)
+    };
+    concrete.unwrap_or(evaluated)
+}
+
 fn evaluate_array_const_expr<'db>(
     db: &'db dyn HirAnalysisDb,
     expr: ConstExprId<'db>,
@@ -1100,14 +1123,7 @@ fn evaluate_array_operand<'db>(
     let TyData::ConstTy(value) = value.data(db) else {
         return None;
     };
-    let mut value = value.evaluate(db, None);
-    if let ConstTyData::Abstract(expr, ty) = value.data(db) {
-        value = if let Some(env) = const_canon_env(db, value) {
-            evaluate_type_level_const_expr(db, *expr, *ty, env)?
-        } else {
-            evaluate_type_level_int_const_expr(db, *expr, *ty)?
-        };
-    }
+    let value = evaluate_type_level_const_ty(db, *value, None);
     let ConstTyData::Evaluated(evaluated, ty) = value.data(db) else {
         return None;
     };
