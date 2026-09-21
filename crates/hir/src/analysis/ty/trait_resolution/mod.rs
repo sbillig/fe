@@ -501,7 +501,8 @@ fn check_const_ty_wf<'db>(
     match const_ty.data(db) {
         ConstTyData::Evaluated(EvaluatedConstTy::Tuple(elems), _)
         | ConstTyData::Evaluated(EvaluatedConstTy::Array(elems), _)
-        | ConstTyData::Evaluated(EvaluatedConstTy::Record(elems), _) => {
+        | ConstTyData::Evaluated(EvaluatedConstTy::Record(elems), _)
+        | ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant { fields: elems, .. }, _) => {
             for &elem in elems {
                 let wf = check_ty_wf(db, solve_cx, elem);
                 if !wf.is_wf() {
@@ -556,7 +557,9 @@ fn check_const_expr_wf<'db>(
                 }
             }
         }
-        ConstExpr::UnOp { expr, .. } | ConstExpr::ArrayIndex { array: expr, .. } => {
+        ConstExpr::UnOp { expr, .. }
+        | ConstExpr::ArrayIndex { array: expr, .. }
+        | ConstExpr::Field { value: expr, .. } => {
             let wf = check_ty_wf(db, solve_cx, *expr);
             if !wf.is_wf() {
                 return wf;

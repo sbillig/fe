@@ -30,7 +30,7 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, resolve_path},
     semantic::{
-        CtfeError, SemConstId, SemConstValue, SemOrigin, VariantIndex, eval_body_owner_const,
+        CtfeError, SemConstId, SemConstValue, SemOrigin, eval_body_owner_const,
         eval_body_owner_const_with_args, int_ty_shape, normalize_int_to_shape, sem_const_from_ty,
     },
     ty::trait_resolution::PredicateListId,
@@ -845,15 +845,15 @@ fn evaluated_const_ty_is_fully_ground<'db>(
     match value {
         EvaluatedConstTy::Tuple(elems)
         | EvaluatedConstTy::Array(elems)
-        | EvaluatedConstTy::Record(elems) => elems
+        | EvaluatedConstTy::Record(elems)
+        | EvaluatedConstTy::EnumVariant { fields: elems, .. } => elems
             .iter()
             .copied()
             .all(|elem| ty_is_fully_ground(db, elem)),
         EvaluatedConstTy::LitInt(..)
         | EvaluatedConstTy::LitBool(..)
         | EvaluatedConstTy::Unit
-        | EvaluatedConstTy::Bytes(..)
-        | EvaluatedConstTy::EnumVariant(..) => true,
+        | EvaluatedConstTy::Bytes(..) => true,
         EvaluatedConstTy::Invalid => false,
     }
 }
@@ -877,7 +877,8 @@ fn const_expr_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, expr: ConstExprId
         } => ty_is_fully_ground(db, *lhs) && ty_is_fully_ground(db, *rhs),
         ConstExpr::UnOp { expr, .. }
         | ConstExpr::Cast { expr, .. }
-        | ConstExpr::ArrayIndex { array: expr, .. } => ty_is_fully_ground(db, *expr),
+        | ConstExpr::ArrayIndex { array: expr, .. }
+        | ConstExpr::Field { value: expr, .. } => ty_is_fully_ground(db, *expr),
         ConstExpr::TraitConst(assoc) => trait_inst_is_fully_ground(db, assoc.inst()),
         ConstExpr::InherentConst(use_) => ty_is_fully_ground(db, use_.receiver_ty()),
         ConstExpr::LocalBinding(_) => false,
@@ -967,6 +968,13 @@ fn canonicalize_const_expr_for_mode<'db>(
                 index: *index,
             },
         ),
+        ConstExpr::Field { value, index } => ConstExprId::new(
+            db,
+            ConstExpr::Field {
+                value: canonicalize_ty_for_mode(db, *value, env, mode),
+                index: *index,
+            },
+        ),
         ConstExpr::TraitConst(assoc) => ConstExprId::new(
             db,
             ConstExpr::TraitConst(if let Some(inst) = env.assoc_ty_subst {
@@ -1029,9 +1037,9 @@ pub fn evaluate_type_level_const_expr<'db>(
                     )),
                 }
             }
-            ConstExpr::ArrayRepeat { .. } | ConstExpr::ArrayIndex { .. } => {
-                evaluate_array_const_expr(db, expr, expected_ty)
-            }
+            ConstExpr::ArrayRepeat { .. }
+            | ConstExpr::ArrayIndex { .. }
+            | ConstExpr::Field { .. } => evaluate_aggregate_const_expr(db, expr, expected_ty),
             ConstExpr::TraitConst(assoc) => const_ty_from_assoc_const_use(db, *assoc)
                 .map(|const_ty| const_ty.evaluate(db, Some(expected_ty))),
             ConstExpr::InherentConst(use_) => const_ty_from_inherent_const_use(db, *use_)
@@ -1068,7 +1076,7 @@ pub(crate) fn evaluate_type_level_const_ty<'db>(
     concrete.unwrap_or(evaluated)
 }
 
-fn evaluate_array_const_expr<'db>(
+fn evaluate_aggregate_const_expr<'db>(
     db: &'db dyn HirAnalysisDb,
     expr: ConstExprId<'db>,
     expected_ty: TyId<'db>,
@@ -1077,11 +1085,11 @@ fn evaluate_array_const_expr<'db>(
         ConstExpr::ArrayRepeat { value, len } => {
             // The element is evaluated even when the extent specializes to zero.
             // Retain the repeat until both operands resolve, including their faults.
-            let value = evaluate_array_operand(db, *value)?;
+            let value = evaluate_const_operand(db, *value)?;
             if value.ty(db).has_invalid(db) {
                 return Some(value);
             }
-            let len = evaluate_array_operand(db, *len)?;
+            let len = evaluate_const_operand(db, *len)?;
             let ConstTyData::Evaluated(EvaluatedConstTy::LitInt(len), _) = len.data(db) else {
                 return None;
             };
@@ -1096,13 +1104,28 @@ fn evaluate_array_const_expr<'db>(
                 ),
             ))
         }
-        ConstExpr::ArrayIndex { array, index } => {
-            let array = evaluate_array_operand(db, *array)?;
-            if array.ty(db).has_invalid(db) {
-                return Some(array);
+        ConstExpr::ArrayIndex {
+            array: value,
+            index,
+        }
+        | ConstExpr::Field { value, index } => {
+            let value = evaluate_const_operand(db, *value)?;
+            if value.ty(db).has_invalid(db) {
+                return Some(value);
             }
-            let ConstTyData::Evaluated(EvaluatedConstTy::Array(elems), _) = array.data(db) else {
-                return None;
+            let elems = match (expr.data(db), value.data(db)) {
+                (
+                    ConstExpr::ArrayIndex { .. },
+                    ConstTyData::Evaluated(EvaluatedConstTy::Array(elems), _),
+                )
+                | (
+                    ConstExpr::Field { .. },
+                    ConstTyData::Evaluated(
+                        EvaluatedConstTy::Tuple(elems) | EvaluatedConstTy::Record(elems),
+                        _,
+                    ),
+                ) => elems,
+                _ => return None,
             };
             let Some(elem) = elems.get(*index) else {
                 return Some(ConstTyId::invalid(db, InvalidCause::Other));
@@ -1116,7 +1139,7 @@ fn evaluate_array_const_expr<'db>(
     }
 }
 
-fn evaluate_array_operand<'db>(
+fn evaluate_const_operand<'db>(
     db: &'db dyn HirAnalysisDb,
     value: TyId<'db>,
 ) -> Option<ConstTyId<'db>> {
@@ -1130,12 +1153,13 @@ fn evaluate_array_operand<'db>(
     let fields = match evaluated {
         EvaluatedConstTy::Tuple(fields)
         | EvaluatedConstTy::Array(fields)
-        | EvaluatedConstTy::Record(fields) => fields,
+        | EvaluatedConstTy::Record(fields)
+        | EvaluatedConstTy::EnumVariant { fields, .. } => fields,
         _ => return Some(value),
     };
     let mut values = Vec::with_capacity(fields.len());
     for field in fields {
-        let field = evaluate_array_operand(db, *field)?;
+        let field = evaluate_const_operand(db, *field)?;
         if field.ty(db).has_invalid(db) {
             return Some(field);
         }
@@ -1145,6 +1169,10 @@ fn evaluate_array_operand<'db>(
         EvaluatedConstTy::Tuple(_) => EvaluatedConstTy::Tuple(values),
         EvaluatedConstTy::Array(_) => EvaluatedConstTy::Array(values),
         EvaluatedConstTy::Record(_) => EvaluatedConstTy::Record(values),
+        EvaluatedConstTy::EnumVariant { variant, .. } => EvaluatedConstTy::EnumVariant {
+            variant: *variant,
+            fields: values,
+        },
         _ => unreachable!(),
     };
     Some(ConstTyId::new(db, ConstTyData::Evaluated(evaluated, *ty)))
@@ -1369,6 +1397,14 @@ fn canonicalize_evaluated_const_ty_for_mode<'db>(
                 .map(|field| canonicalize_ty_for_mode(db, field, env, mode))
                 .collect(),
         ),
+        EvaluatedConstTy::EnumVariant { variant, fields } => EvaluatedConstTy::EnumVariant {
+            variant: *variant,
+            fields: fields
+                .iter()
+                .copied()
+                .map(|field| canonicalize_ty_for_mode(db, field, env, mode))
+                .collect(),
+        },
         _ => value.clone(),
     }
 }
@@ -1999,7 +2035,7 @@ pub(crate) fn evaluate_const_ty<'db>(
     }
 
     if let ConstTyData::Abstract(expr, ty) = const_ty.data(db)
-        && let Some(value) = evaluate_array_const_expr(db, *expr, *ty)
+        && let Some(value) = evaluate_aggregate_const_expr(db, *expr, *ty)
     {
         return value.evaluate(db, expected_ty);
     }
@@ -2180,7 +2216,10 @@ pub(crate) fn evaluate_const_ty<'db>(
                     }
                 }
                 PathRes::EnumVariant(variant) if variant.ty.is_unit_variant_only_enum(db) => {
-                    let evaluated = EvaluatedConstTy::EnumVariant(variant.variant);
+                    let evaluated = EvaluatedConstTy::EnumVariant {
+                        variant: variant.variant,
+                        fields: Vec::new(),
+                    };
                     let const_ty =
                         ConstTyId::new(db, ConstTyData::Evaluated(evaluated, variant.ty));
                     return const_ty.evaluate(db, expected_ty);
@@ -2473,28 +2512,24 @@ pub(crate) fn const_ty_from_sem_const<'db>(
         }
         SemConstValue::Enum {
             variant, fields, ..
-        } => enum_const_ty_from_sem_const(db, ty, variant, fields.as_ref()),
+        } => {
+            let Some(enum_) = ty.as_enum(db) else {
+                return ConstTyId::invalid(db, InvalidCause::Other);
+            };
+            let Some(variant) = enum_.variants(db).nth(variant.0 as usize) else {
+                return ConstTyId::invalid(db, InvalidCause::Other);
+            };
+            EvaluatedConstTy::EnumVariant {
+                variant: EnumVariant::new(variant.owner, variant.idx),
+                fields: fields
+                    .iter()
+                    .copied()
+                    .map(|field| TyId::const_ty(db, const_ty_from_sem_const(db, field)))
+                    .collect(),
+            }
+        }
     };
     ConstTyId::new(db, ConstTyData::Evaluated(evaluated, ty))
-}
-
-fn enum_const_ty_from_sem_const<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-    variant: VariantIndex,
-    fields: &[SemConstId<'db>],
-) -> EvaluatedConstTy<'db> {
-    if !fields.is_empty() {
-        return EvaluatedConstTy::Invalid;
-    }
-
-    let Some(enum_) = ty.as_enum(db) else {
-        return EvaluatedConstTy::Invalid;
-    };
-    let Some(variant) = enum_.variants(db).nth(variant.0 as usize) else {
-        return EvaluatedConstTy::Invalid;
-    };
-    EvaluatedConstTy::EnumVariant(crate::hir_def::EnumVariant::new(variant.owner, variant.idx))
 }
 
 pub(crate) fn assumptions_for_body<'db>(
@@ -3220,7 +3255,10 @@ pub enum EvaluatedConstTy<'db> {
     Array(Vec<TyId<'db>>),
     Bytes(Vec<u8>),
     Record(Vec<TyId<'db>>),
-    EnumVariant(EnumVariant<'db>),
+    EnumVariant {
+        variant: EnumVariant<'db>,
+        fields: Vec<TyId<'db>>,
+    },
     Invalid,
 }
 
@@ -3264,7 +3302,7 @@ impl EvaluatedConstTy<'_> {
                     .join(", ");
                 format!("{{{fields}}}")
             }
-            EvaluatedConstTy::EnumVariant(variant) => {
+            EvaluatedConstTy::EnumVariant { variant, fields } => {
                 let enum_name = variant
                     .enum_
                     .name(db)
@@ -3272,7 +3310,17 @@ impl EvaluatedConstTy<'_> {
                     .map(|n| n.data(db).to_string())
                     .unwrap_or_else(|| "<unknown>".to_string());
                 let variant_name = variant.name(db).unwrap_or("<unknown>");
-                format!("{enum_name}::{variant_name}")
+                let name = format!("{enum_name}::{variant_name}");
+                if fields.is_empty() {
+                    name
+                } else {
+                    let fields = fields
+                        .iter()
+                        .map(|field| field.pretty_print(db).as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{name}({fields})")
+                }
             }
             EvaluatedConstTy::Invalid => "<invalid>".to_string(),
         }

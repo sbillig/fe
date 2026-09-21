@@ -170,7 +170,7 @@ pub(crate) fn const_scalar_from_value<'db>(
                     | EvaluatedConstTy::Tuple(_)
                     | EvaluatedConstTy::Array(_)
                     | EvaluatedConstTy::Record(_)
-                    | EvaluatedConstTy::EnumVariant(_)
+                    | EvaluatedConstTy::EnumVariant { .. }
                     | EvaluatedConstTy::Invalid,
                     _,
                 )

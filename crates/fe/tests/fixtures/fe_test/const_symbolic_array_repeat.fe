@@ -43,3 +43,37 @@ fn test_symbolic_repeat_specialization() {
     let empty: [u8; 0] = Repeated<0>::VALUE.values
     assert!(empty.len() == 0)
 }
+
+enum Maybe<T> { None, Some(T) }
+impl<T: Copy> Copy for Maybe<T> {}
+struct Pair { value: u8 }
+impl Copy for Pair {}
+struct SymbolicAggregates<const N: usize> {}
+impl<const N: usize> SymbolicAggregates<N> {
+    const VALUES: [Maybe<u8>; N] = [Maybe::Some(7); N]
+    const NESTED: [(Maybe<u8>, [Maybe<u8>; 1]); N] = [(Maybe::Some(9), [Maybe::Some(11); 1]); N]
+    const FIELD: u8 = [Pair { value: 13 }; N][0].value
+    const TUPLE: u8 = [(17 as u8, 19 as u8); N][0].1
+}
+
+#[test]
+fn test_symbolic_aggregate_specialization() {
+    let values = SymbolicAggregates<3>::VALUES
+    match values[2] {
+        Maybe::Some(value) => assert!(value == 7),
+        Maybe::None => assert!(false),
+    }
+    let nested = SymbolicAggregates<2>::NESTED
+    match nested[1].0 {
+        Maybe::Some(value) => assert!(value == 9),
+        Maybe::None => assert!(false),
+    }
+    match nested[0].1[0] {
+        Maybe::Some(value) => assert!(value == 11),
+        Maybe::None => assert!(false),
+    }
+    assert!(SymbolicAggregates<3>::FIELD == 13)
+    assert!(SymbolicAggregates<1>::TUPLE == 19)
+    let empty = SymbolicAggregates<0>::VALUES
+    assert!(empty.len() == 0)
+}

@@ -3168,6 +3168,24 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     );
                     CtfeConstValue::concrete(self.db, projected)
                 }
+                (CtfeConstKind::Interned(interned), CtfePathElem::Field(field))
+                    if let SemConstValue::TypeLevel { ty, const_ty } = interned.value(self.db)
+                        && (ty.is_tuple(self.db) || ty.is_struct(self.db)) =>
+                {
+                    let field_ty = ty
+                        .field_types(self.db)
+                        .get(field.0 as usize)
+                        .copied()
+                        .ok_or(CtfeError::OutOfBounds { origin })?;
+                    let projected = self.abstract_const_expr(
+                        ConstExpr::Field {
+                            value: const_ty,
+                            index: field.0 as usize,
+                        },
+                        field_ty,
+                    );
+                    CtfeConstValue::concrete(self.db, projected)
+                }
                 (CtfeConstKind::Interned(interned), _)
                     if matches!(interned.value(self.db), SemConstValue::TypeLevel { .. }) =>
                 {

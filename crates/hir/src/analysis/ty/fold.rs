@@ -101,6 +101,16 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                                     .map(|field| folder.fold_ty(db, field))
                                     .collect(),
                             ),
+                            EvaluatedConstTy::EnumVariant { variant, fields } => {
+                                EvaluatedConstTy::EnumVariant {
+                                    variant: *variant,
+                                    fields: fields
+                                        .iter()
+                                        .copied()
+                                        .map(|field| folder.fold_ty(db, field))
+                                        .collect(),
+                                }
+                            }
                             _ => val.clone(),
                         };
                         Evaluated(val, ty)
@@ -244,6 +254,13 @@ where
             db,
             ConstExpr::ArrayIndex {
                 array: folder.fold_ty(db, *array),
+                index: *index,
+            },
+        ),
+        ConstExpr::Field { value, index } => ConstExprId::new(
+            db,
+            ConstExpr::Field {
+                value: folder.fold_ty(db, *value),
                 index: *index,
             },
         ),
