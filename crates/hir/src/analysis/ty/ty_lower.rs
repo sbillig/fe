@@ -407,7 +407,13 @@ fn lower_opt_const_body<'db>(
         Ok(PathRes::EnumVariant(variant)) if variant.ty.is_unit_variant_only_enum(db) => {
             ConstTyId::new(
                 db,
-                ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant(variant.variant), variant.ty),
+                ConstTyData::Evaluated(
+                    EvaluatedConstTy::EnumVariant {
+                        variant: variant.variant,
+                        fields: Vec::new(),
+                    },
+                    variant.ty,
+                ),
             )
         }
         _ => ConstTyId::from_body(db, body, None, None),
@@ -3520,7 +3526,10 @@ pub(crate) fn lower_generic_arg_list<'db>(
                         PathRes::EnumVariant(variant)
                             if variant.ty.is_unit_variant_only_enum(db) =>
                         {
-                            let evaluated = EvaluatedConstTy::EnumVariant(variant.variant);
+                            let evaluated = EvaluatedConstTy::EnumVariant {
+                                variant: variant.variant,
+                                fields: Vec::new(),
+                            };
                             let const_ty =
                                 ConstTyId::new(db, ConstTyData::Evaluated(evaluated, variant.ty));
                             return TyId::const_ty(db, const_ty);

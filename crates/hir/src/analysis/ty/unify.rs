@@ -291,6 +291,16 @@ where
                     index: i2,
                 },
             ) if i1 == i2 => self.unify_ty(*a1, *a2),
+            (
+                Field {
+                    value: v1,
+                    index: i1,
+                },
+                Field {
+                    value: v2,
+                    index: i2,
+                },
+            ) if i1 == i2 => self.unify_ty(*v1, *v2),
             (Cast { expr: e1, to: t1 }, Cast { expr: e2, to: t2 }) => {
                 self.unify_ty(*t1, *t2)?;
                 self.unify_ty(*e1, *e2)

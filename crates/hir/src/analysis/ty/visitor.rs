@@ -116,7 +116,8 @@ where
         ConstTyData::Evaluated(val, _) => match val {
             EvaluatedConstTy::Tuple(elems)
             | EvaluatedConstTy::Array(elems)
-            | EvaluatedConstTy::Record(elems) => {
+            | EvaluatedConstTy::Record(elems)
+            | EvaluatedConstTy::EnumVariant { fields: elems, .. } => {
                 elems.visit_with(visitor);
             }
             _ => {}
@@ -149,7 +150,9 @@ where
                 value.visit_with(visitor);
                 len.visit_with(visitor);
             }
-            ConstExpr::ArrayIndex { array, .. } => array.visit_with(visitor),
+            ConstExpr::ArrayIndex { array: value, .. } | ConstExpr::Field { value, .. } => {
+                value.visit_with(visitor)
+            }
             ConstExpr::TraitConst(assoc) => {
                 assoc.visit_with(visitor);
             }

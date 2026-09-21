@@ -429,11 +429,15 @@ pub fn sem_const_from_ty<'db>(
                     .collect::<Option<Vec<_>>>()?
                     .into_boxed_slice(),
             )),
-            EvaluatedConstTy::EnumVariant(variant) => Some(enum_const(
+            EvaluatedConstTy::EnumVariant { variant, fields } => Some(enum_const(
                 db,
                 *expected_ty,
                 VariantIndex(variant.idx),
-                Box::new([]),
+                fields
+                    .iter()
+                    .map(|field| sem_const_from_ty(db, *field))
+                    .collect::<Option<Vec<_>>>()?
+                    .into_boxed_slice(),
             )),
             EvaluatedConstTy::Invalid => None,
         },

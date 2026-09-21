@@ -633,7 +633,8 @@ pub(crate) fn effect_space_from_const_ty<'db>(
     use super::const_ty::{ConstTyData, EvaluatedConstTy};
 
     let evaluated = const_ty.evaluate(db, None);
-    let ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant(variant), _) = evaluated.data(db)
+    let ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant { variant, .. }, _) =
+        evaluated.data(db)
     else {
         return None;
     };

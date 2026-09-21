@@ -38,6 +38,21 @@ fn scalar(db: &HirAnalysisTestDb, value: SemConstId<'_>) -> usize {
     value.to_usize().expect("small integer")
 }
 
+fn const_args<'db>(db: &'db HirAnalysisTestDb, len: u32, element: u32) -> [TyId<'db>; 2] {
+    [(PrimTy::Usize, len), (PrimTy::U8, element)].map(|(prim, value)| {
+        TyId::new(
+            db,
+            TyData::ConstTy(ConstTyId::new(
+                db,
+                ConstTyData::Evaluated(
+                    EvaluatedConstTy::LitInt(IntegerId::new(db, BigUint::from(value))),
+                    TyId::new(db, TyData::TyBase(TyBase::Prim(prim))),
+                ),
+            )),
+        )
+    })
+}
+
 #[test]
 fn generic_inherent_const_array_repeats_specialize() {
     let mut db = HirAnalysisTestDb::default();
@@ -241,20 +256,7 @@ const fn record<const N: usize, const X: u8>() -> Rows<N> { store_record<N>(X) }
                 .is_none()
         );
         for (len, element) in [(0, 0), (0, 5), (1, 5), (2, 5), (4, 9)] {
-            let args =
-                [(PrimTy::Usize, len), (PrimTy::U8, element)].map(|(prim, value): (_, u32)| {
-                    let ty = TyId::new(&db, TyData::TyBase(TyBase::Prim(prim)));
-                    TyId::new(
-                        &db,
-                        TyData::ConstTy(ConstTyId::new(
-                            &db,
-                            ConstTyData::Evaluated(
-                                EvaluatedConstTy::LitInt(IntegerId::new(&db, BigUint::from(value))),
-                                ty,
-                            ),
-                        )),
-                    )
-                });
+            let args = const_args(&db, len, element);
             let key = SemanticInstanceKey::new(
                 &db,
                 owner,
@@ -404,4 +406,252 @@ const fn value() -> u8 { Buffer<Large>::VALUES[3] }
     let value = eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, "value")), vec![])
         .unwrap();
     assert_eq!(scalar(&db, value), 9);
+}
+
+#[test]
+fn symbolic_repeat_enum_payloads_specialize() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "repeat_enum_payloads.fe".into(),
+        r#"
+enum Maybe<T> { None, Some(T) }
+impl<T: Copy> Copy for Maybe<T> {}
+struct Wrapped { item: Maybe<u8> }
+impl Copy for Wrapped {}
+struct Marker<const N: usize> {}
+impl<const N: usize> Marker<N> {
+    const VALUES: [Maybe<u8>; N] = [Maybe::Some(7); N]
+    const NONE: [Maybe<u8>; N] = [Maybe::None; N]
+    const NESTED: [(Wrapped, [Maybe<u8>; 1]); N] = [(Wrapped { item: Maybe::Some(9) }, [Maybe::Some(11); 1]); N]
+}
+const fn values() -> [Maybe<u8>; 3] { Marker<3>::VALUES }
+const fn none() -> [Maybe<u8>; 2] { Marker<2>::NONE }
+const fn nested() -> [(Wrapped, [Maybe<u8>; 1]); 2] { Marker<2>::NESTED }
+const fn empty() -> [Maybe<u8>; 0] { Marker<0>::VALUES }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for (name, len) in [("values", 3), ("none", 2), ("nested", 2), ("empty", 0)] {
+        let value =
+            eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, name)), vec![])
+                .unwrap();
+        let SemConstValue::Array { elems, .. } = value.value(&db) else {
+            panic!("expected array")
+        };
+        assert_eq!(elems.len(), len);
+        for elem in elems {
+            let payloads = if name == "nested" {
+                let SemConstValue::Tuple { elems, .. } = elem.value(&db) else {
+                    panic!("expected tuple")
+                };
+                let SemConstValue::Struct { fields, .. } = elems[0].value(&db) else {
+                    panic!("expected record")
+                };
+                let SemConstValue::Array { elems, .. } = elems[1].value(&db) else {
+                    panic!("expected nested array")
+                };
+                vec![(fields[0], Some(9)), (elems[0], Some(11))]
+            } else {
+                vec![(elem, (name == "values").then_some(7))]
+            };
+            for (value, payload) in payloads {
+                let SemConstValue::Enum {
+                    variant, fields, ..
+                } = value.value(&db)
+                else {
+                    panic!("expected enum")
+                };
+                assert_eq!(variant.0, u16::from(payload.is_some()));
+                assert_eq!(fields.len(), usize::from(payload.is_some()));
+                if let Some(expected) = payload {
+                    assert_eq!(scalar(&db, fields[0]), expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn symbolic_repeat_enum_payloads_reify_after_substitution() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "repeat_enum_reification.fe".into(),
+        r#"
+enum Maybe<T> { None, Some(T) }
+impl<T: Copy> Copy for Maybe<T> {}
+struct Wrapped { item: Maybe<u8> }
+impl Copy for Wrapped {}
+const fn repeat<const N: usize, const X: u8>() -> [Wrapped; N] { [Wrapped { item: Maybe::Some(X) }; N] }
+const fn checked<const N: usize, const X: u8>() -> [Wrapped; N] { [Wrapped { item: Maybe::Some(10 / X) }; N] }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for name in ["repeat", "checked"] {
+        let owner = BodyOwner::Func(function(&db, module, name));
+        let symbolic = eval_body_owner_const(&db, owner, vec![]).unwrap();
+        let identity = identity_semantic_instance_key(&db, owner);
+        assert!(
+            reify_runtime_const(&db, get_or_build_semantic_instance(&db, identity), symbolic)
+                .is_none()
+        );
+        for (len, element) in [(0, 0), (0, 5), (2, 0), (3, 5)] {
+            let args = const_args(&db, len, element);
+            let key = SemanticInstanceKey::new(
+                &db,
+                owner,
+                GenericSubst::new(&db, args.to_vec()),
+                identity.effect_providers(&db),
+                identity.impl_env(&db),
+            );
+            let reified =
+                reify_runtime_const(&db, get_or_build_semantic_instance(&db, key), symbolic);
+            if name == "checked" && element == 0 {
+                assert!(
+                    reified.is_none(),
+                    "invalid payload must be retained even at length zero"
+                );
+                continue;
+            }
+            let reified =
+                reified.unwrap_or_else(|| panic!("{name} failed: len={len}, element={element}"));
+            assert!(!sem_const_ty(&db, reified).has_param(&db));
+            let SemConstValue::Array { elems, .. } = reified.value(&db) else {
+                panic!("expected array")
+            };
+            assert_eq!(elems.len(), len as usize);
+            for elem in elems {
+                let SemConstValue::Struct { fields, .. } = elem.value(&db) else {
+                    panic!("expected record")
+                };
+                let SemConstValue::Enum {
+                    variant, fields, ..
+                } = fields[0].value(&db)
+                else {
+                    panic!("expected enum")
+                };
+                assert_eq!(variant.0, 1);
+                assert_eq!(fields.len(), 1);
+                assert_eq!(
+                    scalar(&db, fields[0]),
+                    if name == "checked" {
+                        10 / element as usize
+                    } else {
+                        element as usize
+                    }
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn symbolic_repeat_field_projections_specialize() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "repeat_field_projections.fe".into(),
+        r#"
+struct Pair { value: u8 }
+impl Copy for Pair {}
+struct Marker<const N: usize> {}
+impl<const N: usize> Marker<N> {
+    const FIELD: u8 = [Pair { value: 7 }; N][0].value
+    const TUPLE: u8 = [(9 as u8, 11 as u8); N][0].1
+    const NESTED: u8 = [(Pair { value: 13 }, [17 as u8; 2]); N][0].0.value
+    const ARRAY: u8 = [(Pair { value: 13 }, [17 as u8; 2]); N][0].1[1]
+}
+const fn field() -> u8 { Marker<3>::FIELD }
+const fn tuple() -> u8 { Marker<1>::TUPLE }
+const fn nested() -> u8 { Marker<2>::NESTED }
+const fn array() -> u8 { Marker<2>::ARRAY }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for (name, expected) in [("field", 7), ("tuple", 11), ("nested", 13), ("array", 17)] {
+        let value =
+            eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, name)), vec![])
+                .unwrap();
+        assert_eq!(scalar(&db, value), expected, "{name}");
+    }
+}
+
+#[test]
+fn symbolic_repeat_field_projections_preserve_bounds_checks() {
+    for projection in [
+        "[Pair { value: 7 }; N][0].value",
+        "[(9 as u8, 11 as u8); N][0].1",
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "repeat_field_bounds.fe".into(),
+            &format!(
+                r#"
+struct Pair {{ value: u8 }}
+impl Copy for Pair {{}}
+struct Marker<const N: usize> {{}}
+impl<const N: usize> Marker<N> {{ const VALUE: u8 = {projection} }}
+const BAD: u8 = Marker<0>::VALUE
+"#
+            ),
+        );
+        let (module, _) = db.top_mod(file);
+        let diags = db.run_on_top_mod(module);
+        let rendered = format_diagnostics(&db, &diags);
+        assert!(!diags.is_empty(), "out-of-bounds field access must fail");
+        assert!(!rendered.contains("internal"), "{rendered}");
+    }
+}
+
+#[test]
+fn symbolic_repeat_field_projections_reify_after_substitution() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "repeat_field_reification.fe".into(),
+        r#"
+struct Pair { value: u8 }
+impl Copy for Pair {}
+const fn project<const N: usize, const X: u8>() -> u8 { [(Pair { value: X }, [X; 2]); N][0].0.value }
+const fn checked<const N: usize, const X: u8>() -> u8 { [(Pair { value: X }, [10 / X; 2]); N][0].1[1] }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for name in ["project", "checked"] {
+        let owner = BodyOwner::Func(function(&db, module, name));
+        let symbolic = eval_body_owner_const(&db, owner, vec![]).unwrap();
+        let identity = identity_semantic_instance_key(&db, owner);
+        assert!(
+            reify_runtime_const(&db, get_or_build_semantic_instance(&db, identity), symbolic)
+                .is_none()
+        );
+        for (len, element) in [(0, 5), (1, 0), (2, 5)] {
+            let args = const_args(&db, len, element);
+            let key = SemanticInstanceKey::new(
+                &db,
+                owner,
+                GenericSubst::new(&db, args.to_vec()),
+                identity.effect_providers(&db),
+                identity.impl_env(&db),
+            );
+            let reified =
+                reify_runtime_const(&db, get_or_build_semantic_instance(&db, key), symbolic);
+            if len == 0 || (name == "checked" && element == 0) {
+                assert!(
+                    reified.is_none(),
+                    "deferred projection must retain bounds and element errors"
+                );
+            } else {
+                assert_eq!(
+                    scalar(&db, reified.expect("concrete projected value")),
+                    if name == "checked" {
+                        10 / element as usize
+                    } else {
+                        element as usize
+                    }
+                );
+            }
+        }
+    }
 }

@@ -45,6 +45,10 @@ pub enum ConstExpr<'db> {
         array: TyId<'db>,
         index: usize,
     },
+    Field {
+        value: TyId<'db>,
+        index: usize,
+    },
     TraitConst(AssocConstUse<'db>),
     InherentConst(InherentConstUse<'db>),
     LocalBinding(LocalBinding<'db>),
@@ -83,6 +87,7 @@ impl<'db> ConstExprId<'db> {
             ConstExpr::ArrayIndex { array, index } => {
                 format!("{}[{index}]", array.pretty_print(db))
             }
+            ConstExpr::Field { value, index } => format!("{}.{index}", value.pretty_print(db)),
             ConstExpr::TraitConst(assoc) => {
                 let inst = assoc.inst();
                 let name = assoc.name();
