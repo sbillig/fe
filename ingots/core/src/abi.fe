@@ -411,6 +411,7 @@ pub fn encode_alloc<A: Abi, T>(_ value: own T) -> ptr::MemBuffer
     buffer
 }
 
+#[inline(always)]
 pub fn encode_single_root_alloc<A: Abi, T>(_ value: own T) -> ptr::MemBuffer
     where T: Encode<A> + AbiSize
 {
@@ -518,14 +519,21 @@ fn copy_dynamic_payload_from_with_input_len<A: Abi, I: ByteInput>(_ input: I, _ 
 
 // Fe strings are currently represented as a single packed word. This limits the
 // ABI path here to strings whose runtime payload fits in 32 bytes.
+#[inline(always)]
 fn packed_string_len(_ word: u256) -> u256 {
-    let mut len: u256 = 0
-    let mut value = word
-    while value != 0 {
-        len += 1
-        value = value >> 8
-    }
-    len
+    // Locate the highest nonzero byte with five binary-search steps. Each
+    // shift removes a known number of whole bytes; no loop or mutable state
+    // is needed, and constant string values fold to their exact ABI length.
+    let n16 = ((word >> 128 != 0) as u256) << 4
+    let word16 = word >> (n16 << 3)
+    let n8 = ((word16 >> 64 != 0) as u256) << 3
+    let word8 = word16 >> (n8 << 3)
+    let n4 = ((word8 >> 32 != 0) as u256) << 2
+    let word4 = word8 >> (n4 << 3)
+    let n2 = ((word4 >> 16 != 0) as u256) << 1
+    let word2 = word4 >> (n2 << 3)
+    let n1 = (word2 >> 8 != 0) as u256
+    (n16 | n8 | n4 | n2 | n1) + (word != 0) as u256
 }
 
 fn decode_string_payload_after_head<A: Abi, I: ByteInput, const N: usize>(_ input: I, _ pos: u256, _ data_len: u256) -> String<N> {
@@ -1015,7 +1023,8 @@ impl<const N: usize> AbiSize for String<N> {
     const IS_DYNAMIC: bool = true
 
     fn payload_size(self) -> u256 {
-        32 + round_up_words(packed_string_len(self.to_word()))
+        // A packed string occupies at most one ABI data word.
+        if self.to_word() == 0 { 32 } else { 64 }
     }
 }
 
@@ -1812,6 +1821,7 @@ impl<A: Abi, const N: usize> Decode<A> for String<N> {
 
 impl<A: Abi, const N: usize> Encode<A> for String<N> {
     #[arithmetic(unchecked)]
+    #[inline(always)]
     fn encode(own self, _ ptr: *u8) {
         let word = self.to_word()
         let len = packed_string_len(word)

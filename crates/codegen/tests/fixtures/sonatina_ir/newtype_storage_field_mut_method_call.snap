@@ -275,7 +275,7 @@ func inline(always) private %encode_field_at(v0.i256, v1.i256, v2.i256, v3.i256)
         return v3;
 }
 
-func private %encode_single_root_alloc(v0.i256) -> @layout_1 {
+func inline(always) private %encode_single_root_alloc(v0.i256) -> @layout_1 {
     block0:
         v1.objref<@layout_1> = obj.alloc @layout_1;
         jump block1;
