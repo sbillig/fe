@@ -8,7 +8,7 @@ use crate::analysis::{
     HirAnalysisDb,
     semantic::{SemanticInstance, instantiate_with_generic_args},
     ty::{
-        const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, evaluate_type_level_int_const_expr},
+        const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, evaluate_type_level_const_ty},
         ty_def::{PrimTy, TyBase, TyData, TyId, TyVarSort, prim_int_bits},
     },
 };
@@ -352,9 +352,9 @@ pub fn sem_const_eq<'db>(
 
 /// Demands the most concrete form of a type-level (symbolic) const value
 /// under an instance's generic arguments: instantiates the carried const
-/// type with the args, evaluates it at the value's expected type, and folds
-/// integer const expressions. A second round covers structure exposed by the
-/// first evaluation (e.g. a trait const that resolved to another symbolic
+/// type and expected type with the args, then evaluates deferred expressions
+/// in their retained resolution context. A second round covers structure exposed
+/// by the first evaluation (e.g. a trait const that resolved to another symbolic
 /// form mentioning instantiable params).
 ///
 /// This is the single demand point for turning a `SemConstValue::TypeLevel`
@@ -367,33 +367,19 @@ pub(crate) fn demand_concrete_const_ty<'db>(
     expected: TyId<'db>,
     generic_args: &[TyId<'db>],
 ) -> Option<ConstTyId<'db>> {
-    fn evaluate_and_fold<'db>(
-        db: &'db dyn HirAnalysisDb,
-        const_ty: ConstTyId<'db>,
-        expected: TyId<'db>,
-    ) -> ConstTyId<'db> {
-        let evaluated = const_ty.evaluate(db, Some(expected));
-        if let ConstTyData::Abstract(expr, expected_ty) = evaluated.data(db)
-            && let Some(concrete) = evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
-        {
-            concrete
-        } else {
-            evaluated
-        }
-    }
-
+    let expected = instantiate_with_generic_args(db, expected, generic_args);
     let instantiated = instantiate_with_generic_args(db, const_ty, generic_args);
     let TyData::ConstTy(const_ty) = instantiated.data(db) else {
         return None;
     };
-    let mut evaluated = evaluate_and_fold(db, *const_ty, expected);
+    let mut evaluated = evaluate_type_level_const_ty(db, *const_ty, Some(expected));
     if matches!(evaluated.data(db), ConstTyData::Abstract(..)) {
         let reinstantiated =
             instantiate_with_generic_args(db, TyId::const_ty(db, evaluated), generic_args);
         let TyData::ConstTy(reinstantiated) = reinstantiated.data(db) else {
             unreachable!("instantiating a const ty must yield a const ty");
         };
-        evaluated = evaluate_and_fold(db, *reinstantiated, expected);
+        evaluated = evaluate_type_level_const_ty(db, *reinstantiated, Some(expected));
     }
     Some(evaluated)
 }
@@ -484,6 +470,8 @@ pub fn reify_runtime_const_for_ty<'db>(
     expected_ty: TyId<'db>,
     value: SemConstId<'db>,
 ) -> Option<SemConstId<'db>> {
+    let expected_ty =
+        instantiate_with_generic_args(db, expected_ty, instance.key(db).subst(db).generic_args(db));
     reify_runtime_const_impl(db, instance, value, expected_ty)
 }
 
@@ -523,7 +511,7 @@ fn reify_runtime_const_impl<'db>(
             if matches!(value.value(db), SemConstValue::TypeLevel { .. }) {
                 return None;
             }
-            reify_runtime_const_impl(db, instance, value, ty)?
+            reify_runtime_const_impl(db, instance, value, expected_ty)?
         }
         SemConstValue::Tuple { ty: _, elems } => {
             let ty = expected_ty;

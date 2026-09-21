@@ -3,7 +3,7 @@ use fe_hir::{
         semantic::{
             CtfeError, GenericSubst, SemConstId, SemConstScalar, SemConstValue,
             SemanticInstanceKey, eval_body_owner_const, get_or_build_semantic_instance,
-            identity_semantic_instance_key, instantiate_with_generic_args,
+            identity_semantic_instance_key, instantiate_with_generic_args, reify_runtime_const,
             reify_runtime_const_for_ty, sem_const_ty,
         },
         ty::{
@@ -207,13 +207,39 @@ fn symbolic_repeat_values_reify_after_element_and_length_substitution() {
 const fn repeat<const N: usize, const X: u8>() -> [[u8; N]; 2] { [[X; N]; 2] }
 const fn project<const N: usize, const X: u8>() -> u8 { [X; N][1] }
 const fn checked<const N: usize, const X: u8>() -> [[u8; N]; 2] { [[10 / X; N]; 2] }
+const fn store<const N: usize>(_ value: u8) -> [[u8; N]; 2] {
+    let mut rows = [[value; N]; 2]
+    rows[0][1] = 10
+    rows
+}
+const fn changed<const N: usize, const X: u8>() -> [[u8; N]; 2] { store<N>(X) }
+const fn checked_changed<const N: usize, const X: u8>() -> [[u8; N]; 2] { store<N>(10 / X) }
+struct Rows<const N: usize> { values: [[u8; N]; 2] }
+const fn store_record<const N: usize>(_ value: u8) -> Rows<N> {
+    let mut rows = Rows<N> { values: [[value; N]; 2] }
+    rows.values[0][1] = 10
+    rows
+}
+const fn record<const N: usize, const X: u8>() -> Rows<N> { store_record<N>(X) }
 "#,
     );
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
-    for name in ["repeat", "project", "checked"] {
+    for name in [
+        "repeat",
+        "project",
+        "checked",
+        "changed",
+        "checked_changed",
+        "record",
+    ] {
         let owner = BodyOwner::Func(function(&db, module, name));
         let value = eval_body_owner_const(&db, owner, vec![]).unwrap();
+        let identity = identity_semantic_instance_key(&db, owner);
+        assert!(
+            reify_runtime_const(&db, get_or_build_semantic_instance(&db, identity), value)
+                .is_none()
+        );
         for (len, element) in [(0, 0), (0, 5), (1, 5), (2, 5), (4, 9)] {
             let args =
                 [(PrimTy::Usize, len), (PrimTy::U8, element)].map(|(prim, value): (_, u32)| {
@@ -229,7 +255,6 @@ const fn checked<const N: usize, const X: u8>() -> [[u8; N]; 2] { [[10 / X; N]; 
                         )),
                     )
                 });
-            let identity = identity_semantic_instance_key(&db, owner);
             let key = SemanticInstanceKey::new(
                 &db,
                 owner,
@@ -238,13 +263,16 @@ const fn checked<const N: usize, const X: u8>() -> [[u8; N]; 2] { [[10 / X; N]; 
                 identity.impl_env(&db),
             );
             let expected = instantiate_with_generic_args(&db, sem_const_ty(&db, value), &args);
-            let reified = reify_runtime_const_for_ty(
-                &db,
-                get_or_build_semantic_instance(&db, key),
-                expected,
-                value,
+            let instance = get_or_build_semantic_instance(&db, key);
+            let reified = reify_runtime_const_for_ty(&db, instance, expected, value);
+            assert_eq!(
+                reify_runtime_const(&db, instance, value),
+                reified,
+                "{name} inferred result type"
             );
-            if (name == "project" && len < 2) || (name == "checked" && element == 0) {
+            if (matches!(name, "project" | "changed" | "checked_changed" | "record") && len < 2)
+                || (matches!(name, "checked" | "checked_changed") && element == 0)
+            {
                 assert!(
                     reified.is_none(),
                     "{name} must retain its failure after substitution: len={len}, element={element}"
@@ -253,7 +281,20 @@ const fn checked<const N: usize, const X: u8>() -> [[u8; N]; 2] { [[10 / X; N]; 
             }
             let reified = reified
                 .unwrap_or_else(|| panic!("{name} failed to reify: len={len}, element={element}"));
-            let expected = if name == "checked" {
+            assert_eq!(sem_const_ty(&db, reified), expected, "{name} result type");
+            assert!(
+                !sem_const_ty(&db, reified).has_param(&db),
+                "{name} result type"
+            );
+            let reified = if name == "record" {
+                let SemConstValue::Struct { fields, .. } = reified.value(&db) else {
+                    panic!("expected record")
+                };
+                fields[0]
+            } else {
+                reified
+            };
+            let expected = if matches!(name, "checked" | "checked_changed") {
                 10 / element
             } else {
                 element
@@ -265,16 +306,24 @@ const fn checked<const N: usize, const X: u8>() -> [[u8; N]; 2] { [[10 / X; N]; 
                     panic!("expected outer array")
                 };
                 assert_eq!(elems.len(), 2);
-                for row in elems.iter() {
+                assert!(!sem_const_ty(&db, reified).has_param(&db));
+                for (row_index, row) in elems.iter().enumerate() {
+                    assert!(!sem_const_ty(&db, *row).has_param(&db));
                     let SemConstValue::Array { elems, .. } = row.value(&db) else {
                         panic!("expected inner array")
                     };
                     assert_eq!(elems.len(), len as usize);
-                    assert!(
-                        elems
-                            .iter()
-                            .all(|elem| scalar(&db, *elem) == expected as usize)
-                    );
+                    for (index, elem) in elems.iter().enumerate() {
+                        let expected = if matches!(name, "changed" | "checked_changed" | "record")
+                            && row_index == 0
+                            && index == 1
+                        {
+                            10
+                        } else {
+                            expected as usize
+                        };
+                        assert_eq!(scalar(&db, *elem), expected);
+                    }
                 }
             }
         }
