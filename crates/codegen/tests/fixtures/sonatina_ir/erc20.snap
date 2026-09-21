@@ -4181,7 +4181,7 @@ func inline(always) private %impl_trait_TransferEvent__emit__gcd5c(v0.@layout_7)
         return;
 }
 
-func private %encode__g4320(v0.i256, v1.i256) {
+func inline(always) private %encode__g4320(v0.i256, v1.i256) {
     block0:
         jump block1;
 
@@ -4237,7 +4237,7 @@ func private %impl_trait_bool__encode__gf13e(v0.i1, v1.i256) {
         return;
 }
 
-func private %encode__g30cc(v0.i256, v1.i256) {
+func inline(always) private %encode__g30cc(v0.i256, v1.i256) {
     block0:
         jump block1;
 
@@ -4497,7 +4497,7 @@ func inline(always) private %core__lib__abi__encode_field_at__gac80_d14f(v0.i256
         return v3;
 }
 
-func private %encode_single_root_alloc__g472d(v0.i256) -> @layout_2 {
+func inline(always) private %encode_single_root_alloc__g472d(v0.i256) -> @layout_2 {
     block0:
         v1.objref<@layout_2> = obj.alloc @layout_2;
         jump block1;
@@ -4520,7 +4520,7 @@ func private %encode_single_root_alloc__g472d(v0.i256) -> @layout_2 {
         return v17;
 }
 
-func private %encode_single_root_alloc__g0c18(v0.i256) -> @layout_2 {
+func inline(always) private %encode_single_root_alloc__g0c18(v0.i256) -> @layout_2 {
     block0:
         v1.objref<@layout_2> = obj.alloc @layout_2;
         jump block1;
@@ -4543,7 +4543,7 @@ func private %encode_single_root_alloc__g0c18(v0.i256) -> @layout_2 {
         return v17;
 }
 
-func private %encode_single_root_alloc__g09ca(v0.i1) -> @layout_2 {
+func inline(always) private %encode_single_root_alloc__g09ca(v0.i1) -> @layout_2 {
     block0:
         v1.objref<@layout_2> = obj.alloc @layout_2;
         jump block1;
@@ -4566,7 +4566,7 @@ func private %encode_single_root_alloc__g09ca(v0.i1) -> @layout_2 {
         return v17;
 }
 
-func private %encode_single_root_alloc__gcb0a(v0.i8) -> @layout_2 {
+func inline(always) private %encode_single_root_alloc__gcb0a(v0.i8) -> @layout_2 {
     block0:
         v1.objref<@layout_2> = obj.alloc @layout_2;
         jump block1;
@@ -4589,7 +4589,7 @@ func private %encode_single_root_alloc__gcb0a(v0.i8) -> @layout_2 {
         return v17;
 }
 
-func private %encode_single_root_alloc__gac80(v0.i256) -> @layout_2 {
+func inline(always) private %encode_single_root_alloc__gac80(v0.i256) -> @layout_2 {
     block0:
         v1.objref<@layout_2> = obj.alloc @layout_2;
         jump block1;
@@ -5582,144 +5582,116 @@ func inline(always) private %impl_Cursor__new__g140d(v0.@layout_3) -> @layout_4 
         return v11;
 }
 
-func private %core__lib__abi__packed_string_len_2af9(v0.i256) -> i256 {
+func inline(always) private %core__lib__abi__packed_string_len_2af9(v0.i256) -> i256 {
     block0:
-        v1.objref<i256> = obj.alloc i256;
         jump block1;
 
     block1:
-        obj.store v1 0.i256;
-        jump block2;
+        v3.i256 = shr 128.i256 v0;
+        v5.i1 = eq v3 0.i256;
+        v6.i1 = is_zero v5;
+        v7.i256 = zext v6 i256;
+        v9.i256 = shl 4.i256 v7;
+        v11.i256 = shl 3.i256 v9;
+        v12.i256 = shr v11 v0;
+        v14.i256 = shr 64.i256 v12;
+        v15.i1 = eq v14 0.i256;
+        v16.i1 = is_zero v15;
+        v17.i256 = zext v16 i256;
+        v18.i256 = shl 3.i256 v17;
+        v19.i256 = shl 3.i256 v18;
+        v20.i256 = shr v19 v12;
+        v22.i256 = shr 32.i256 v20;
+        v23.i1 = eq v22 0.i256;
+        v24.i1 = is_zero v23;
+        v25.i256 = zext v24 i256;
+        v27.i256 = shl 2.i256 v25;
+        v28.i256 = shl 3.i256 v27;
+        v29.i256 = shr v28 v20;
+        v31.i256 = shr 16.i256 v29;
+        v32.i1 = eq v31 0.i256;
+        v33.i1 = is_zero v32;
+        v34.i256 = zext v33 i256;
+        v36.i256 = shl 1.i256 v34;
+        v37.i256 = shl 3.i256 v36;
+        v38.i256 = shr v37 v29;
+        v40.i256 = shr 8.i256 v38;
+        v41.i1 = eq v40 0.i256;
+        v42.i1 = is_zero v41;
+        v43.i256 = zext v42 i256;
+        v44.i256 = or v9 v18;
+        v45.i256 = or v44 v27;
+        v46.i256 = or v45 v36;
+        v47.i256 = or v46 v43;
+        v48.i1 = eq v0 0.i256;
+        v49.i1 = is_zero v48;
+        v50.i256 = zext v49 i256;
+        (v51.i256, v52.i1) = uaddo v47 v50;
+        br v52 block2 block3;
 
     block2:
-        v4.i256 = phi (v0 block1) (v18 block6);
-        v5.i1 = eq v4 0.i256;
-        v6.i1 = is_zero v5;
-        br v6 block3 block4;
-
-    block3:
-        v8.i256 = obj.load v1;
-        (v9.i256, v10.i1) = uaddo v8 1.i256;
-        br v10 block5 block6;
-
-    block4:
-        v19.i256 = obj.load v1;
-        return v19;
-
-    block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
-    block6:
-        obj.store v1 v9;
-        v18.i256 = shr 8.i256 v4;
-        jump block2;
+    block3:
+        return v51;
 }
 
-func private %core__lib__abi__packed_string_len_38ff(v0.i256) -> i256 {
+func inline(always) private %core__lib__abi__packed_string_len_aa10(v0.i256) -> i256 {
     block0:
-        v1.objref<i256> = obj.alloc i256;
         jump block1;
 
     block1:
-        obj.store v1 0.i256;
-        jump block2;
+        v3.i256 = shr 128.i256 v0;
+        v5.i1 = eq v3 0.i256;
+        v6.i1 = is_zero v5;
+        v7.i256 = zext v6 i256;
+        v9.i256 = shl 4.i256 v7;
+        v11.i256 = shl 3.i256 v9;
+        v12.i256 = shr v11 v0;
+        v14.i256 = shr 64.i256 v12;
+        v15.i1 = eq v14 0.i256;
+        v16.i1 = is_zero v15;
+        v17.i256 = zext v16 i256;
+        v18.i256 = shl 3.i256 v17;
+        v19.i256 = shl 3.i256 v18;
+        v20.i256 = shr v19 v12;
+        v22.i256 = shr 32.i256 v20;
+        v23.i1 = eq v22 0.i256;
+        v24.i1 = is_zero v23;
+        v25.i256 = zext v24 i256;
+        v27.i256 = shl 2.i256 v25;
+        v28.i256 = shl 3.i256 v27;
+        v29.i256 = shr v28 v20;
+        v31.i256 = shr 16.i256 v29;
+        v32.i1 = eq v31 0.i256;
+        v33.i1 = is_zero v32;
+        v34.i256 = zext v33 i256;
+        v36.i256 = shl 1.i256 v34;
+        v37.i256 = shl 3.i256 v36;
+        v38.i256 = shr v37 v29;
+        v40.i256 = shr 8.i256 v38;
+        v41.i1 = eq v40 0.i256;
+        v42.i1 = is_zero v41;
+        v43.i256 = zext v42 i256;
+        v44.i256 = or v9 v18;
+        v45.i256 = or v44 v27;
+        v46.i256 = or v45 v36;
+        v47.i256 = or v46 v43;
+        v48.i1 = eq v0 0.i256;
+        v49.i1 = is_zero v48;
+        v50.i256 = zext v49 i256;
+        (v51.i256, v52.i1) = uaddo v47 v50;
+        br v52 block2 block3;
 
     block2:
-        v4.i256 = phi (v0 block1) (v18 block6);
-        v5.i1 = eq v4 0.i256;
-        v6.i1 = is_zero v5;
-        br v6 block3 block4;
-
-    block3:
-        v8.i256 = obj.load v1;
-        (v9.i256, v10.i1) = uaddo v8 1.i256;
-        br v10 block5 block6;
-
-    block4:
-        v19.i256 = obj.load v1;
-        return v19;
-
-    block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
-    block6:
-        obj.store v1 v9;
-        v18.i256 = shr 8.i256 v4;
-        jump block2;
-}
-
-func private %core__lib__abi__packed_string_len_740b(v0.i256) -> i256 {
-    block0:
-        v1.objref<i256> = obj.alloc i256;
-        jump block1;
-
-    block1:
-        obj.store v1 0.i256;
-        jump block2;
-
-    block2:
-        v4.i256 = phi (v0 block1) (v18 block6);
-        v5.i1 = eq v4 0.i256;
-        v6.i1 = is_zero v5;
-        br v6 block3 block4;
-
     block3:
-        v8.i256 = obj.load v1;
-        (v9.i256, v10.i1) = uaddo v8 1.i256;
-        br v10 block5 block6;
-
-    block4:
-        v19.i256 = obj.load v1;
-        return v19;
-
-    block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block6:
-        obj.store v1 v9;
-        v18.i256 = shr 8.i256 v4;
-        jump block2;
-}
-
-func private %core__lib__abi__packed_string_len_aa10(v0.i256) -> i256 {
-    block0:
-        v1.objref<i256> = obj.alloc i256;
-        jump block1;
-
-    block1:
-        obj.store v1 0.i256;
-        jump block2;
-
-    block2:
-        v4.i256 = phi (v0 block1) (v18 block6);
-        v5.i1 = eq v4 0.i256;
-        v6.i1 = is_zero v5;
-        br v6 block3 block4;
-
-    block3:
-        v8.i256 = obj.load v1;
-        (v9.i256, v10.i1) = uaddo v8 1.i256;
-        br v10 block5 block6;
-
-    block4:
-        v19.i256 = obj.load v1;
-        return v19;
-
-    block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block6:
-        obj.store v1 v9;
-        v18.i256 = shr 8.i256 v4;
-        jump block2;
+        return v51;
 }
 
 func private %payload_size__gc7cf(v0.i256) -> i256 {
@@ -5727,19 +5699,19 @@ func private %payload_size__gc7cf(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v3.i256 = call %to_word__gc7cf v0;
-        v4.i256 = call %core__lib__abi__packed_string_len_740b v3;
-        v5.i256 = call %core__lib__abi__round_up_words_9426 v4;
-        (v6.i256, v7.i1) = uaddo 32.i256 v5;
-        br v7 block2 block3;
+        v2.i256 = call %to_word__gc7cf v0;
+        v4.i1 = eq v2 0.i256;
+        br v4 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        jump block4;
 
     block3:
-        return v6;
+        jump block4;
+
+    block4:
+        v7.i256 = phi (32.i256 block2) (64.i256 block3);
+        return v7;
 }
 
 func private %payload_size__g79ff(v0.i8) -> i256 {
@@ -5755,19 +5727,19 @@ func private %payload_size__g3eb7(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v3.i256 = call %to_word__g3eb7 v0;
-        v4.i256 = call %core__lib__abi__packed_string_len_38ff v3;
-        v5.i256 = call %core__lib__abi__round_up_words_6704 v4;
-        (v6.i256, v7.i1) = uaddo 32.i256 v5;
-        br v7 block2 block3;
+        v2.i256 = call %to_word__g3eb7 v0;
+        v4.i1 = eq v2 0.i256;
+        br v4 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        jump block4;
 
     block3:
-        return v6;
+        jump block4;
+
+    block4:
+        v7.i256 = phi (32.i256 block2) (64.i256 block3);
+        return v7;
 }
 
 func private %payload_size__gda9b(v0.i1) -> i256 {
@@ -6813,102 +6785,6 @@ func private %return_value__g0c18(v0.i256) {
         obj.store v66 v67;
         call %return_data v7;
         unreachable;
-}
-
-func private %core__lib__abi__round_up_words_6704(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i1 = eq v0 0.i256;
-        br v3 block2 block3;
-
-    block2:
-        return 0.i256;
-
-    block3:
-        jump block4;
-
-    block4:
-        (v6.i256, v7.i1) = usubo v0 1.i256;
-        br v7 block5 block6;
-
-    block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block6:
-        v13.i1 = eq 32.i256 0.i256;
-        br v13 block7 block8;
-
-    block7:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 18.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block8:
-        (v15.i256, v16.i1) = evm_udivo v6 32.i256;
-        br v16 block5 block9;
-
-    block9:
-        (v17.i256, v18.i1) = uaddo v15 1.i256;
-        br v18 block5 block10;
-
-    block10:
-        (v19.i256, v20.i1) = umulo v17 32.i256;
-        br v20 block5 block11;
-
-    block11:
-        return v19;
-}
-
-func private %core__lib__abi__round_up_words_9426(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i1 = eq v0 0.i256;
-        br v3 block2 block3;
-
-    block2:
-        return 0.i256;
-
-    block3:
-        jump block4;
-
-    block4:
-        (v6.i256, v7.i1) = usubo v0 1.i256;
-        br v7 block5 block6;
-
-    block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block6:
-        v13.i1 = eq 32.i256 0.i256;
-        br v13 block7 block8;
-
-    block7:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 18.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block8:
-        (v15.i256, v16.i1) = evm_udivo v6 32.i256;
-        br v16 block5 block9;
-
-    block9:
-        (v17.i256, v18.i1) = uaddo v15 1.i256;
-        br v18 block5 block10;
-
-    block10:
-        (v19.i256, v20.i1) = umulo v17 32.i256;
-        br v20 block5 block11;
-
-    block11:
-        return v19;
 }
 
 func inline(always) private %set__gbae5(v0.@layout_0, v1.i256, v2.i256) {
