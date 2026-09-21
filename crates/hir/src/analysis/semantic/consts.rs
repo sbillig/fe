@@ -458,15 +458,26 @@ pub fn sem_const_from_ty<'db>(
     }
 }
 
+/// Reify a declaration-owned const value, specializing its expected type once
+/// with the instance's arguments. For values whose expected type already comes
+/// from an instantiated body, use `reify_runtime_const_for_ty` instead.
 #[salsa::tracked]
 pub fn reify_runtime_const<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     value: SemConstId<'db>,
 ) -> Option<SemConstId<'db>> {
-    reify_runtime_const_for_ty(db, instance, sem_const_ty(db, value), value)
+    let expected_ty = instantiate_with_generic_args(
+        db,
+        sem_const_ty(db, value),
+        instance.key(db).subst(db).generic_args(db),
+    );
+    reify_runtime_const_for_ty(db, instance, expected_ty, value)
 }
 
+/// Reify a const value against an already-instantiated expected type. Preserve
+/// that type's caller context: applying the instance's positional substitution
+/// again can change forwarded generic parameters.
 #[salsa::tracked]
 pub fn reify_runtime_const_for_ty<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -474,8 +485,6 @@ pub fn reify_runtime_const_for_ty<'db>(
     expected_ty: TyId<'db>,
     value: SemConstId<'db>,
 ) -> Option<SemConstId<'db>> {
-    let expected_ty =
-        instantiate_with_generic_args(db, expected_ty, instance.key(db).subst(db).generic_args(db));
     reify_runtime_const_impl(db, instance, value, expected_ty)
 }
 

@@ -1,10 +1,11 @@
 use fe_hir::{
     analysis::{
         semantic::{
-            CtfeError, GenericSubst, SemConstId, SemConstScalar, SemConstValue,
-            SemanticInstanceKey, eval_body_owner_const, get_or_build_semantic_instance,
-            identity_semantic_instance_key, instantiate_with_generic_args, reify_runtime_const,
-            reify_runtime_const_for_ty, sem_const_ty,
+            CtfeError, GenericSubst, SConst, SExpr, SStmtKind, SemConstId, SemConstScalar,
+            SemConstValue, SemanticInstanceKey, canonicalize_semantic_consts,
+            eval_body_owner_const, get_or_build_semantic_instance, identity_semantic_instance_key,
+            instantiate_with_generic_args, reify_runtime_const, reify_runtime_const_for_ty,
+            sem_const_ty,
         },
         ty::{
             const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
@@ -653,5 +654,110 @@ const fn checked<const N: usize, const X: u8>() -> u8 { [(Pair { value: X }, [10
                 );
             }
         }
+    }
+}
+
+#[test]
+fn runtime_const_reification_preserves_instantiated_aggregate_types() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "reification_expected_types.fe".into(),
+        r#"
+struct Marker<const A: usize, const B: usize> { value: u8 }
+enum Wrapped<const A: usize, const B: usize> { Some(Marker<A, B>) }
+const fn value<const A: usize, const B: usize>() -> (Marker<A, B>, [Wrapped<B, A>; 1]) {
+    (Marker<A, B> { value: 7 }, [Wrapped::Some(Marker<B, A> { value: 9 })])
+}
+fn outer<const A: usize, const B: usize>() {}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(function(&db, module, "value"));
+    let template_value = eval_body_owner_const(&db, owner, vec![]).unwrap();
+    let identity = identity_semantic_instance_key(&db, owner);
+    let outer =
+        identity_semantic_instance_key(&db, BodyOwner::Func(function(&db, module, "outer")));
+    let params = outer.subst(&db).generic_args(&db);
+    for args in [[params[1], params[0]], [params[0], params[0]]] {
+        let key = SemanticInstanceKey::new(
+            &db,
+            owner,
+            GenericSubst::new(&db, args.to_vec()),
+            identity.effect_providers(&db),
+            identity.impl_env(&db),
+        );
+        let instance = get_or_build_semantic_instance(&db, key);
+        let expected = key.typed_body(&db).result_ty();
+        let reified = reify_runtime_const_for_ty(&db, instance, expected, template_value).unwrap();
+        assert_eq!(
+            sem_const_ty(&db, reified),
+            expected,
+            "explicit expected type must not be substituted again"
+        );
+        assert_eq!(
+            reify_runtime_const(&db, instance, template_value),
+            Some(reified),
+            "declaration-owned expected type must be substituted once"
+        );
+        assert_eq!(
+            reify_runtime_const_for_ty(&db, instance, expected, reified),
+            Some(reified),
+            "reification with the same explicit type must be stable"
+        );
+        let SemConstValue::Tuple { elems, .. } = reified.value(&db) else {
+            panic!("expected tuple")
+        };
+        assert_eq!(sem_const_ty(&db, elems[0]).generic_args(&db), args);
+        let SemConstValue::Array { ty, elems } = elems[1].value(&db) else {
+            panic!("expected array")
+        };
+        assert_eq!(elems.len(), 1);
+        let SemConstValue::Enum {
+            ty: enum_ty,
+            fields,
+            ..
+        } = elems[0].value(&db)
+        else {
+            panic!("expected enum")
+        };
+        assert_eq!(enum_ty, ty.generic_args(&db)[0]);
+        assert_eq!(enum_ty.generic_args(&db), [args[1], args[0]]);
+        assert_eq!(
+            sem_const_ty(&db, fields[0]).generic_args(&db),
+            [args[1], args[0]]
+        );
+        let SemConstValue::Struct { fields, .. } = fields[0].value(&db) else {
+            panic!("expected record")
+        };
+        assert_eq!(scalar(&db, fields[0]), 9);
+
+        let body = canonicalize_semantic_consts(&db, instance).unwrap();
+        let mut aggregate_count = 0;
+        for stmt in body.blocks.iter().flat_map(|block| &block.stmts) {
+            if let SStmtKind::Assign {
+                dst,
+                expr: SExpr::Const(SConst::Value(value)),
+            } = &stmt.kind
+                && matches!(
+                    value.value(&db),
+                    SemConstValue::Tuple { .. }
+                        | SemConstValue::Array { .. }
+                        | SemConstValue::Struct { .. }
+                        | SemConstValue::Enum { .. }
+                )
+            {
+                aggregate_count += 1;
+                assert_eq!(
+                    sem_const_ty(&db, *value),
+                    body.local(*dst).unwrap().ty,
+                    "canonicalized constant must retain its instantiated local type"
+                );
+            }
+        }
+        assert!(
+            aggregate_count >= 4,
+            "expected nested aggregate constants in the semantic body"
+        );
     }
 }
