@@ -25,7 +25,7 @@ use crate::{
 
 use super::resolve_default_root_effect_ty;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
 pub enum ProviderAddressSpace {
     Memory,
     Storage,
@@ -72,12 +72,7 @@ pub struct ProviderSemantics<'db> {
 }
 
 impl<'db> ProviderSemantics<'db> {
-    /// Returns the pointee represented by a binding when the binding is a
-    /// effect handle.
-    ///
-    /// Native pointers are ordinary first-class values unless the binding is
-    /// serving as an effect provider. Nominal handles always denote their
-    /// target.
+    /// Native pointers are ordinary values unless this binding supplies an effect.
     pub fn binding_target_ty(
         &self,
         db: &'db dyn HirAnalysisDb,
@@ -193,9 +188,6 @@ pub(crate) fn resolve_effect_handle<'db>(
     assumptions: PredicateListId<'db>,
     provider_ty: TyId<'db>,
 ) -> EffectHandleResolution<'db> {
-    if provider_ty.has_var(db) {
-        return EffectHandleResolution::Invalid(ProviderLayoutFailure::Ambiguous);
-    }
     if provider_ty.as_capability(db).is_some() || !can_select_effect_handle_impl(db, provider_ty) {
         return EffectHandleResolution::NotHandle;
     }
@@ -205,6 +197,14 @@ pub(crate) fn resolve_effect_handle<'db>(
     };
     let inst = TraitInstId::new(db, effect_handle, vec![provider_ty], IndexMap::new());
     let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    if provider_ty.has_var(db) {
+        return match solve_cx.select_impl(db, inst) {
+            Selection::NotFound => EffectHandleResolution::NotHandle,
+            Selection::Unique(_) | Selection::Ambiguous(_) => {
+                EffectHandleResolution::Invalid(ProviderLayoutFailure::Ambiguous)
+            }
+        };
+    }
     let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
         Selection::Unique(resolved) => resolved,
         Selection::Ambiguous(_) => {
@@ -306,7 +306,13 @@ pub fn resolve_effect_handle_layout<'db>(
                 return ProviderLayoutResolution::Invalid(failure);
             }
         };
-    if target_ty.has_param(db) {
+    if matches!(
+        impl_instance.selected().origin(db),
+        ImplementorOrigin::Assumption
+    ) {
+        return ProviderLayoutResolution::Invalid(ProviderLayoutFailure::Ambiguous);
+    }
+    if target_ty.has_param(db) || contains_unresolved_type_projection(db, target_ty) {
         return ProviderLayoutResolution::Invalid(ProviderLayoutFailure::UnresolvedTarget);
     }
     let resolved = impl_instance;
@@ -619,7 +625,7 @@ fn effect_space_from_resolved_trait_const<'db>(
     effect_space_from_const_ty(db, scope, const_ty)
 }
 
-fn effect_space_from_const_ty<'db>(
+pub(crate) fn effect_space_from_const_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     const_ty: super::const_ty::ConstTyId<'db>,
@@ -679,13 +685,17 @@ mod tests {
     use url::Url;
 
     use super::{
-        ProviderAddressSpace, ProviderKind, ProviderLayoutEvidence, ProviderLayoutFailure,
-        ProviderLayoutResolution, provider_semantics, resolve_effect_handle_layout,
+        EffectHandleResolution, ProviderAddressSpace, ProviderKind, ProviderLayoutEvidence,
+        ProviderLayoutFailure, ProviderLayoutResolution, provider_semantics, resolve_effect_handle,
+        resolve_effect_handle_layout,
     };
     use crate::{
-        analysis::ty::{trait_def::ImplementorOrigin, trait_resolution::PredicateListId},
+        analysis::ty::{
+            binder::Binder, trait_def::ImplementorOrigin, trait_resolution::PredicateListId,
+            unify::UnificationTable,
+        },
         hir_def::{ItemKind, TopLevelMod, scope_graph::ScopeId},
-        test_db::HirAnalysisTestDb,
+        test_db::{HirAnalysisTestDb, find_func},
     };
 
     fn provider_param_ty<'db>(
@@ -705,6 +715,42 @@ mod tests {
             .expect("missing provider parameter")
             .ty(db);
         (func.scope(), ty)
+    }
+
+    #[test]
+    fn unresolved_arguments_do_not_turn_plain_types_into_handles() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "plain_inferred_parameter.fe".into(),
+            r#"
+struct Plain<const N: u256> {}
+fn probe<const N: u256>(value: own Plain<N>) {}
+fn handle<T>(value: own *T) {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let (scope, provider_ty) = provider_param_ty(&db, top_mod);
+        let mut table = UnificationTable::new(&db);
+        let provider_ty = table.instantiate_with_fresh_vars(Binder::bind(provider_ty));
+        assert!(provider_ty.has_var(&db));
+        assert!(matches!(
+            resolve_effect_handle(&db, scope, PredicateListId::empty_list(&db), provider_ty),
+            EffectHandleResolution::NotHandle
+        ));
+        let func = find_func(&db, top_mod, "handle");
+        let ty = func.params(&db).next().expect("handle parameter").ty(&db);
+        let handle_ty = table.instantiate_with_fresh_vars(Binder::bind(ty));
+        assert!(handle_ty.has_var(&db));
+        assert!(matches!(
+            resolve_effect_handle(
+                &db,
+                func.scope(),
+                PredicateListId::empty_list(&db),
+                handle_ty
+            ),
+            EffectHandleResolution::Invalid(ProviderLayoutFailure::Ambiguous)
+        ));
     }
 
     #[test]

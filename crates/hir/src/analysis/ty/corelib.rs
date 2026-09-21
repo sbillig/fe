@@ -5,6 +5,7 @@ use crate::{
         HirAnalysisDb,
         name_resolution::{NameDomain, PathRes, resolve_ident_to_bucket, resolve_path},
         ty::{
+            ProviderAddressSpace,
             trait_resolution::PredicateListId,
             ty_def::{BorrowKind, TyBase, TyData, TyId},
         },
@@ -92,6 +93,29 @@ pub fn lib_func_matches<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>, path: 
     resolve_lib_func_path(db, func.scope(), path) == Some(func)
 }
 
+#[derive(Clone, Copy)]
+pub enum ContractMetadataKind {
+    InitCodeOffset,
+    InitCodeLen,
+}
+
+/// These declarations are implemented by the compiler only for concrete contract
+/// types. An unresolved trait call still needs its implementation selected.
+pub fn contract_metadata_kind<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> Option<ContractMetadataKind> {
+    let trait_ = func.containing_trait(db)?;
+    if resolve_lib_trait_path(db, func.scope(), "std::evm::Contract") != Some(trait_) {
+        return None;
+    }
+    match func.name(db).to_opt()?.data(db).as_str() {
+        "init_code_offset" => Some(ContractMetadataKind::InitCodeOffset),
+        "init_code_len" => Some(ContractMetadataKind::InitCodeLen),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicPointerReturn {
     FreshMemory,
@@ -101,12 +125,19 @@ pub enum IntrinsicPointerReturn {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IntrinsicMemoryProjection {
-    Value,
-    Pointee,
+pub enum IntrinsicMemoryTarget {
+    Value(u32),
+    Pointee(u32),
+    /// A numeric address argument rather than a typed pointer argument.
+    Address {
+        input: u32,
+        space: ProviderAddressSpace,
+    },
+    /// Any compatible location in the current execution context, independent of arguments.
+    WholeSpace(ProviderAddressSpace),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MemoryAccessKind {
     Read,
     MutAccess,
@@ -124,26 +155,55 @@ impl MemoryAccessKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntrinsicMemoryExtent {
+    Typed,
+    Bytes(usize),
+    Argument(u32),
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IntrinsicMemoryAccess {
-    pub input: u32,
-    pub projection: IntrinsicMemoryProjection,
+    pub target: IntrinsicMemoryTarget,
     pub kind: MemoryAccessKind,
+    pub extent: IntrinsicMemoryExtent,
 }
 
 impl IntrinsicMemoryAccess {
     const fn value(input: u32, kind: MemoryAccessKind) -> Self {
         Self {
-            input,
-            projection: IntrinsicMemoryProjection::Value,
+            target: IntrinsicMemoryTarget::Value(input),
             kind,
+            extent: IntrinsicMemoryExtent::Typed,
         }
     }
 
-    const fn pointee(input: u32, kind: MemoryAccessKind) -> Self {
+    const fn pointee(input: u32, kind: MemoryAccessKind, extent: IntrinsicMemoryExtent) -> Self {
         Self {
-            input,
-            projection: IntrinsicMemoryProjection::Pointee,
+            target: IntrinsicMemoryTarget::Pointee(input),
             kind,
+            extent,
+        }
+    }
+
+    const fn address(
+        input: u32,
+        space: ProviderAddressSpace,
+        kind: MemoryAccessKind,
+        extent: IntrinsicMemoryExtent,
+    ) -> Self {
+        Self {
+            target: IntrinsicMemoryTarget::Address { input, space },
+            kind,
+            extent,
+        }
+    }
+
+    const fn whole_space(space: ProviderAddressSpace, kind: MemoryAccessKind) -> Self {
+        Self {
+            target: IntrinsicMemoryTarget::WholeSpace(space),
+            kind,
+            extent: IntrinsicMemoryExtent::Unknown,
         }
     }
 }
@@ -158,32 +218,204 @@ pub struct IntrinsicContract {
 
 const RAW_MEM_READS: &[IntrinsicMemoryAccess] = &[
     IntrinsicMemoryAccess::value(0, MemoryAccessKind::Read),
-    IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Read, IntrinsicMemoryExtent::Bytes(32)),
 ];
 const RAW_MEM_WRITES: &[IntrinsicMemoryAccess] = &[
     IntrinsicMemoryAccess::value(0, MemoryAccessKind::MutAccess),
-    IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Write),
+    IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Write, IntrinsicMemoryExtent::Bytes(32)),
 ];
-const READ_POINTEE_0: &[IntrinsicMemoryAccess] =
-    &[IntrinsicMemoryAccess::pointee(0, MemoryAccessKind::Read)];
-const WRITE_POINTEE_0: &[IntrinsicMemoryAccess] =
-    &[IntrinsicMemoryAccess::pointee(0, MemoryAccessKind::Write)];
+const RAW_MEM_BYTE_WRITES: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::value(0, MemoryAccessKind::MutAccess),
+    IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Write, IntrinsicMemoryExtent::Bytes(1)),
+];
+const READ_POINTEE_0: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
+    0,
+    MemoryAccessKind::Read,
+    IntrinsicMemoryExtent::Argument(1),
+)];
+const WRITE_POINTEE_0: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
+    0,
+    MemoryAccessKind::Write,
+    IntrinsicMemoryExtent::Argument(2),
+)];
+const READ_WORD_0: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
+    0,
+    MemoryAccessKind::Read,
+    IntrinsicMemoryExtent::Bytes(32),
+)];
+const WRITE_WORD_0: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
+    0,
+    MemoryAccessKind::Write,
+    IntrinsicMemoryExtent::Bytes(32),
+)];
+const WRITE_BYTE_0: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
+    0,
+    MemoryAccessKind::Write,
+    IntrinsicMemoryExtent::Bytes(1),
+)];
+const ZERO_MEMORY: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
+    0,
+    MemoryAccessKind::Write,
+    IntrinsicMemoryExtent::Argument(1),
+)];
 const COPY_MEMORY: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Read),
-    IntrinsicMemoryAccess::pointee(0, MemoryAccessKind::Write),
+    IntrinsicMemoryAccess::pointee(
+        1,
+        MemoryAccessKind::Read,
+        IntrinsicMemoryExtent::Argument(2),
+    ),
+    IntrinsicMemoryAccess::pointee(
+        0,
+        MemoryAccessKind::Write,
+        IntrinsicMemoryExtent::Argument(2),
+    ),
 ];
-const WRITE_POINTEE_1: &[IntrinsicMemoryAccess] =
-    &[IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Write)];
-const CALL_MEMORY: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::pointee(3, MemoryAccessKind::Read),
-    IntrinsicMemoryAccess::pointee(5, MemoryAccessKind::Write),
+const COPY_CALLDATA: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::address(
+        1,
+        ProviderAddressSpace::Calldata,
+        MemoryAccessKind::Read,
+        IntrinsicMemoryExtent::Argument(2),
+    ),
+    IntrinsicMemoryAccess::pointee(
+        0,
+        MemoryAccessKind::Write,
+        IntrinsicMemoryExtent::Argument(2),
+    ),
 ];
-const STATIC_CALL_MEMORY: &[IntrinsicMemoryAccess] = &[
-    IntrinsicMemoryAccess::pointee(2, MemoryAccessKind::Read),
-    IntrinsicMemoryAccess::pointee(4, MemoryAccessKind::Write),
+const COPY_CODE: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::address(
+        1,
+        ProviderAddressSpace::Code,
+        MemoryAccessKind::Read,
+        IntrinsicMemoryExtent::Argument(2),
+    ),
+    IntrinsicMemoryAccess::pointee(
+        0,
+        MemoryAccessKind::Write,
+        IntrinsicMemoryExtent::Argument(2),
+    ),
 ];
-const READ_POINTEE_1: &[IntrinsicMemoryAccess] =
-    &[IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Read)];
+const COPY_EXTERNAL_CODE: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::address(
+        2,
+        ProviderAddressSpace::Code,
+        MemoryAccessKind::Read,
+        IntrinsicMemoryExtent::Argument(3),
+    ),
+    IntrinsicMemoryAccess::pointee(
+        1,
+        MemoryAccessKind::Write,
+        IntrinsicMemoryExtent::Argument(3),
+    ),
+];
+// Unrestricted external execution can access current state directly (delegatecall)
+// or through callbacks (call/create). Static execution propagates its write ban,
+// but callbacks can still read state. Caller-frame memory is limited to buffers.
+const CALL_EFFECTS: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::pointee(
+        3,
+        MemoryAccessKind::Read,
+        IntrinsicMemoryExtent::Argument(4),
+    ),
+    IntrinsicMemoryAccess::pointee(
+        5,
+        MemoryAccessKind::Write,
+        IntrinsicMemoryExtent::Argument(6),
+    ),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Write),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Write),
+];
+const STATIC_CALL_EFFECTS: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::pointee(
+        2,
+        MemoryAccessKind::Read,
+        IntrinsicMemoryExtent::Argument(3),
+    ),
+    IntrinsicMemoryAccess::pointee(
+        4,
+        MemoryAccessKind::Write,
+        IntrinsicMemoryExtent::Argument(5),
+    ),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Read),
+];
+const DELEGATE_CALL_EFFECTS: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::pointee(
+        2,
+        MemoryAccessKind::Read,
+        IntrinsicMemoryExtent::Argument(3),
+    ),
+    IntrinsicMemoryAccess::pointee(
+        4,
+        MemoryAccessKind::Write,
+        IntrinsicMemoryExtent::Argument(5),
+    ),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Write),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Write),
+];
+const CREATE_EFFECTS: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::pointee(
+        1,
+        MemoryAccessKind::Read,
+        IntrinsicMemoryExtent::Argument(2),
+    ),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Write),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Write),
+];
+const READ_VALUE_0: &[IntrinsicMemoryAccess] =
+    &[IntrinsicMemoryAccess::value(0, MemoryAccessKind::Read)];
+const READ_STORAGE: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::address(
+    0,
+    ProviderAddressSpace::Storage,
+    MemoryAccessKind::Read,
+    IntrinsicMemoryExtent::Typed,
+)];
+const WRITE_STORAGE: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::address(
+    0,
+    ProviderAddressSpace::Storage,
+    MemoryAccessKind::Write,
+    IntrinsicMemoryExtent::Typed,
+)];
+const RAW_STORAGE_READS: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::value(0, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::address(
+        1,
+        ProviderAddressSpace::Storage,
+        MemoryAccessKind::Read,
+        IntrinsicMemoryExtent::Typed,
+    ),
+];
+const RAW_STORAGE_WRITES: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::value(0, MemoryAccessKind::MutAccess),
+    IntrinsicMemoryAccess::address(
+        1,
+        ProviderAddressSpace::Storage,
+        MemoryAccessKind::Write,
+        IntrinsicMemoryExtent::Typed,
+    ),
+];
+const READ_CALLDATA_WORD: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::address(
+    0,
+    ProviderAddressSpace::Calldata,
+    MemoryAccessKind::Read,
+    IntrinsicMemoryExtent::Bytes(32),
+)];
+const RAW_CALLDATA_READS: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::value(0, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::address(
+        1,
+        ProviderAddressSpace::Calldata,
+        MemoryAccessKind::Read,
+        IntrinsicMemoryExtent::Bytes(32),
+    ),
+];
 const NO_MEMORY_ACCESSES: IntrinsicMemoryContract = &[];
 
 macro_rules! define_runtime_intrinsics {
@@ -233,22 +465,22 @@ define_runtime_intrinsics! {
     Malloc => (Core, ["ptr", "alloc_raw"], NO_MEMORY_ACCESSES, Some(IntrinsicPointerReturn::FreshMemory)),
     PtrOffsetBytes => (Core, ["ptr", "offset_bytes"], NO_MEMORY_ACCESSES, Some(IntrinsicPointerReturn::InputPointee)),
     PtrEq => (Core, ["ptr", "addr_eq"], NO_MEMORY_ACCESSES, None),
-    Mload => (Std, ["evm", "ops", "mload"], READ_POINTEE_0, None),
-    Mstore => (Std, ["evm", "ops", "mstore"], WRITE_POINTEE_0, None),
-    Mstore8 => (Std, ["evm", "ops", "mstore8"], WRITE_POINTEE_0, None),
+    Mload => (Std, ["evm", "ops", "mload"], READ_WORD_0, None),
+    Mstore => (Std, ["evm", "ops", "mstore"], WRITE_WORD_0, None),
+    Mstore8 => (Std, ["evm", "ops", "mstore8"], WRITE_BYTE_0, None),
     Mcopy => (Core, ["ptr", "copy_mem"], COPY_MEMORY, None),
-    ZeroMem => (Core, ["ptr", "zero_mem"], WRITE_POINTEE_0, None),
+    ZeroMem => (Core, ["ptr", "zero_mem"], ZERO_MEMORY, None),
     Msize => (Std, ["evm", "ops", "msize"], NO_MEMORY_ACCESSES, None),
-    Sload => (Std, ["evm", "ops", "sload"], NO_MEMORY_ACCESSES, None),
-    Sstore => (Std, ["evm", "ops", "sstore"], NO_MEMORY_ACCESSES, None),
-    CallDataLoad => (Std, ["evm", "ops", "calldataload"], NO_MEMORY_ACCESSES, None),
-    CallDataCopy => (Std, ["evm", "ops", "calldatacopy"], WRITE_POINTEE_0, None),
+    Sload => (Std, ["evm", "ops", "sload"], READ_STORAGE, None),
+    Sstore => (Std, ["evm", "ops", "sstore"], WRITE_STORAGE, None),
+    CallDataLoad => (Std, ["evm", "ops", "calldataload"], READ_CALLDATA_WORD, None),
+    CallDataCopy => (Std, ["evm", "ops", "calldatacopy"], COPY_CALLDATA, None),
     CallDataSize => (Std, ["evm", "ops", "calldatasize"], NO_MEMORY_ACCESSES, None),
     ReturnDataCopy => (Std, ["evm", "ops", "returndatacopy"], WRITE_POINTEE_0, None),
     ReturnDataSize => (Std, ["evm", "ops", "returndatasize"], NO_MEMORY_ACCESSES, None),
-    CodeCopy => (Std, ["evm", "ops", "codecopy"], WRITE_POINTEE_0, None),
+    CodeCopy => (Std, ["evm", "ops", "codecopy"], COPY_CODE, None),
     CodeSize => (Std, ["evm", "ops", "codesize"], NO_MEMORY_ACCESSES, None),
-    ExtCodeCopy => (Std, ["evm", "ops", "extcodecopy"], WRITE_POINTEE_1, None),
+    ExtCodeCopy => (Std, ["evm", "ops", "extcodecopy"], COPY_EXTERNAL_CODE, None),
     ExtCodeSize => (Std, ["evm", "ops", "extcodesize"], NO_MEMORY_ACCESSES, None),
     ExtCodeHash => (Std, ["evm", "ops", "extcodehash"], NO_MEMORY_ACCESSES, None),
     Keccak256 => (Std, ["evm", "ops", "keccak256"], READ_POINTEE_0, None),
@@ -274,11 +506,11 @@ define_runtime_intrinsics! {
     BlobHash => (Std, ["evm", "ops", "blobhash"], NO_MEMORY_ACCESSES, None),
     BlobBaseFee => (Std, ["evm", "ops", "blobbasefee"], NO_MEMORY_ACCESSES, None),
     Gas => (Std, ["evm", "ops", "gas"], NO_MEMORY_ACCESSES, None),
-    Call => (Std, ["evm", "ops", "call"], CALL_MEMORY, None),
-    StaticCall => (Std, ["evm", "ops", "staticcall"], STATIC_CALL_MEMORY, None),
-    DelegateCall => (Std, ["evm", "ops", "delegatecall"], STATIC_CALL_MEMORY, None),
-    Create => (Std, ["evm", "ops", "create"], READ_POINTEE_1, None),
-    Create2 => (Std, ["evm", "ops", "create2"], READ_POINTEE_1, None),
+    Call => (Std, ["evm", "ops", "call"], CALL_EFFECTS, None),
+    StaticCall => (Std, ["evm", "ops", "staticcall"], STATIC_CALL_EFFECTS, None),
+    DelegateCall => (Std, ["evm", "ops", "delegatecall"], DELEGATE_CALL_EFFECTS, None),
+    Create => (Std, ["evm", "ops", "create"], CREATE_EFFECTS, None),
+    Create2 => (Std, ["evm", "ops", "create2"], CREATE_EFFECTS, None),
     Log0 => (Std, ["evm", "ops", "log0"], READ_POINTEE_0, None),
     Log1 => (Std, ["evm", "ops", "log1"], READ_POINTEE_0, None),
     Log2 => (Std, ["evm", "ops", "log2"], READ_POINTEE_0, None),
@@ -292,7 +524,114 @@ define_runtime_intrinsics! {
     Panic => (Core, ["panic"], NO_MEMORY_ACCESSES, None),
     PanicWithValue => (Core, ["panic_with_value"], NO_MEMORY_ACCESSES, None),
     Todo => (Core, ["todo"], NO_MEMORY_ACCESSES, None),
-    IntrinsicKeccak256 => (Core, ["intrinsic", "__keccak256"], NO_MEMORY_ACCESSES, None),
+    IntrinsicKeccak256 => (Core, ["intrinsic", "__keccak256"], READ_VALUE_0, None),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum NumericExternIntrinsic {
+    CheckedBinary(ArithBinOp),
+    WrappingBinary(ArithBinOp),
+    SaturatingBinary(SaturatingArithmetic),
+    Comparison(CompBinOp),
+    BoolBinary(ArithBinOp),
+    CheckedNeg,
+    WrappingNeg,
+    BitNot,
+    BoolNot,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum SaturatingArithmetic {
+    Add,
+    Sub,
+    Mul,
+}
+
+pub(crate) fn numeric_extern_intrinsic(name: &str) -> Option<NumericExternIntrinsic> {
+    Some(match name {
+        "__checked_add" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Add),
+        "__checked_sub" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Sub),
+        "__checked_mul" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Mul),
+        "__checked_div" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Div),
+        "__checked_rem" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Rem),
+        "__checked_pow" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Pow),
+        "__checked_neg" => NumericExternIntrinsic::CheckedNeg,
+        "__saturating_add" => NumericExternIntrinsic::SaturatingBinary(SaturatingArithmetic::Add),
+        "__saturating_sub" => NumericExternIntrinsic::SaturatingBinary(SaturatingArithmetic::Sub),
+        "__saturating_mul" => NumericExternIntrinsic::SaturatingBinary(SaturatingArithmetic::Mul),
+        "__not_bool" => NumericExternIntrinsic::BoolNot,
+        "__bitand_bool" => NumericExternIntrinsic::BoolBinary(ArithBinOp::BitAnd),
+        "__bitor_bool" => NumericExternIntrinsic::BoolBinary(ArithBinOp::BitOr),
+        "__bitxor_bool" => NumericExternIntrinsic::BoolBinary(ArithBinOp::BitXor),
+        "__eq_bool" => NumericExternIntrinsic::Comparison(CompBinOp::Eq),
+        "__ne_bool" => NumericExternIntrinsic::Comparison(CompBinOp::NotEq),
+        _ => {
+            let suffix = |prefix| {
+                name.strip_prefix(prefix)
+                    .filter(|suffix| has_integer_numeric_suffix(suffix))
+            };
+            if suffix("__add_").is_some() {
+                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Add)
+            } else if suffix("__sub_").is_some() {
+                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Sub)
+            } else if suffix("__mul_").is_some() {
+                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Mul)
+            } else if suffix("__div_").is_some() {
+                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Div)
+            } else if suffix("__rem_").is_some() {
+                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Rem)
+            } else if suffix("__pow_").is_some() {
+                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Pow)
+            } else if suffix("__shl_").is_some() {
+                NumericExternIntrinsic::WrappingBinary(ArithBinOp::LShift)
+            } else if suffix("__shr_").is_some() {
+                NumericExternIntrinsic::WrappingBinary(ArithBinOp::RShift)
+            } else if suffix("__bitand_").is_some() {
+                NumericExternIntrinsic::WrappingBinary(ArithBinOp::BitAnd)
+            } else if suffix("__bitor_").is_some() {
+                NumericExternIntrinsic::WrappingBinary(ArithBinOp::BitOr)
+            } else if suffix("__bitxor_").is_some() {
+                NumericExternIntrinsic::WrappingBinary(ArithBinOp::BitXor)
+            } else if suffix("__eq_").is_some() {
+                NumericExternIntrinsic::Comparison(CompBinOp::Eq)
+            } else if suffix("__ne_").is_some() {
+                NumericExternIntrinsic::Comparison(CompBinOp::NotEq)
+            } else if suffix("__lt_").is_some() {
+                NumericExternIntrinsic::Comparison(CompBinOp::Lt)
+            } else if suffix("__le_").is_some() {
+                NumericExternIntrinsic::Comparison(CompBinOp::LtEq)
+            } else if suffix("__gt_").is_some() {
+                NumericExternIntrinsic::Comparison(CompBinOp::Gt)
+            } else if suffix("__ge_").is_some() {
+                NumericExternIntrinsic::Comparison(CompBinOp::GtEq)
+            } else if suffix("__neg_").is_some() {
+                NumericExternIntrinsic::WrappingNeg
+            } else if suffix("__bitnot_").is_some() {
+                NumericExternIntrinsic::BitNot
+            } else {
+                return None;
+            }
+        }
+    })
+}
+
+fn has_integer_numeric_suffix(suffix: &str) -> bool {
+    matches!(
+        suffix,
+        "u8" | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "u256"
+            | "usize"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "i256"
+            | "isize"
+    )
 }
 
 pub fn intrinsic_contract<'db>(
@@ -302,6 +641,32 @@ pub fn intrinsic_contract<'db>(
     let func = func.trait_method_def(db).unwrap_or(func);
     if let Some(runtime) = runtime_builtin_func_kind(db, func) {
         return Some(runtime_intrinsic_contract(runtime));
+    }
+    let numeric = func.top_mod(db).ingot(db).kind(db) == IngotKind::Core
+        && func.body(db).is_none()
+        && runtime_builtin_func_path(db, func).is_some_and(|path| {
+            matches!(path.as_slice(), ["num" | "num_intrinsics", name]
+                if (*name == "__bitcast" || numeric_extern_intrinsic(name).is_some())
+                    && lib_func_matches(db, func, &format!("core::{}::{name}", path[0])))
+        });
+    if numeric
+        || [
+            "core::intrinsic::size_of",
+            "core::intrinsic::contract_field_slot",
+        ]
+        .iter()
+        .any(|path| lib_func_matches(db, func, path))
+    {
+        return Some(IntrinsicContract {
+            pointer_return: None,
+            memory: Some(NO_MEMORY_ACCESSES),
+        });
+    }
+    if lib_func_matches(db, func, "core::intrinsic::__as_bytes") {
+        return Some(IntrinsicContract {
+            pointer_return: None,
+            memory: Some(READ_VALUE_0),
+        });
     }
     let pointer_return = if lib_func_matches(db, func, "core::ptr::array_elem") {
         Some(IntrinsicPointerReturn::InputArrayElem)
@@ -323,10 +688,28 @@ fn raw_mem_contract<'db>(
 ) -> Option<IntrinsicMemoryContract> {
     if lib_func_matches(db, func, "std::evm::effects::RawMem::mload") {
         Some(RAW_MEM_READS)
-    } else if lib_func_matches(db, func, "std::evm::effects::RawMem::mstore")
-        || lib_func_matches(db, func, "std::evm::effects::RawMem::mstore8")
-    {
+    } else if lib_func_matches(db, func, "std::evm::effects::RawMem::mstore") {
         Some(RAW_MEM_WRITES)
+    } else if lib_func_matches(db, func, "std::evm::effects::RawMem::mstore8") {
+        Some(RAW_MEM_BYTE_WRITES)
+    } else if lib_func_matches(db, func, "std::evm::effects::RawStorage::sload") {
+        Some(RAW_STORAGE_READS)
+    } else if lib_func_matches(db, func, "std::evm::effects::RawStorage::sstore") {
+        Some(RAW_STORAGE_WRITES)
+    } else if lib_func_matches(db, func, "std::evm::effects::RawOps::calldataload") {
+        Some(RAW_CALLDATA_READS)
+    } else if [
+        "std::evm::effects::RawOps::calldatasize",
+        "std::evm::effects::RawOps::returndatasize",
+        "std::evm::effects::RawOps::codesize",
+        "std::evm::effects::RawOps::code_region_offset",
+        "std::evm::effects::RawOps::code_region_len",
+    ]
+    .iter()
+    .any(|path| lib_func_matches(db, func, path))
+    {
+        // Sealed EVM metadata operations have no storage or memory effects.
+        Some(NO_MEMORY_ACCESSES)
     } else {
         None
     }
@@ -341,6 +724,14 @@ pub fn is_std_evm_effect_method<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>
     let Some(containing_trait) = func.containing_trait(db) else {
         return false;
     };
+    is_std_evm_effect_trait(db, func.scope(), containing_trait)
+}
+
+pub fn is_std_evm_effect_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    effect: Trait<'db>,
+) -> bool {
     [
         "std::evm::effects::Ctx",
         "std::evm::effects::RawMem",
@@ -352,7 +743,7 @@ pub fn is_std_evm_effect_method<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>
         "std::evm::effects::Super",
     ]
     .into_iter()
-    .any(|path| resolve_lib_trait_path(db, func.scope(), path) == Some(containing_trait))
+    .any(|path| resolve_lib_trait_path(db, scope, path) == Some(effect))
 }
 
 fn runtime_builtin_func_path<'db>(

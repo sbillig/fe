@@ -75,26 +75,26 @@ func private %main_root() {
 
 func private %pointer_field_aggregate() {
     block0:
+        v0.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
 
     block1:
-        v0.i256 = call %alloc;
-        v4.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        v5.@layout_0 = insert_value v4 1.i256 1.i256;
-        v6.objref<@layout_0> = obj.alloc @layout_0;
-        v7.objref<i256> = obj.proj v6 0.i256;
-        v8.i256 = extract_value v5 0.i256;
+        v1.i256 = call %alloc;
+        v5.@layout_0 = insert_value undef.@layout_0 0.i256 v1;
+        v6.@layout_0 = insert_value v5 1.i256 1.i256;
+        v7.objref<i256> = obj.proj v0 0.i256;
+        v8.i256 = extract_value v6 0.i256;
         obj.store v7 v8;
-        v9.objref<i256> = obj.proj v6 1.i256;
-        v10.i256 = extract_value v5 1.i256;
+        v9.objref<i256> = obj.proj v0 1.i256;
+        v10.i256 = extract_value v6 1.i256;
         obj.store v9 v10;
-        v11.objref<i256> = obj.proj v6 0.i256;
+        v11.objref<i256> = obj.proj v0 0.i256;
         v12.i256 = obj.load v11;
         call %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__g06d7_1160 v12;
         v14.i256 = call %alloc;
-        v15.objref<i256> = obj.proj v6 0.i256;
+        v15.objref<i256> = obj.proj v0 0.i256;
         obj.store v15 v14;
-        v16.objref<i256> = obj.proj v6 0.i256;
+        v16.objref<i256> = obj.proj v0 0.i256;
         v17.i256 = obj.load v16;
         call %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__g06d7_1160_0 v17;
         return;

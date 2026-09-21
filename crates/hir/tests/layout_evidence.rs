@@ -1,19 +1,23 @@
 #[path = "support/layout.rs"]
 mod layout_test_support;
 
+use std::collections::HashSet;
+
 use camino::Utf8PathBuf;
 use cranelift_entity::EntityRef;
 use fe_hir::{
     analysis::{
         initialize_analysis_pass,
         semantic::{
-            EffectProviderSubst, GenericSubst, ImplEnv, LayoutEvidenceBase,
+            EffectProviderSubst, GenericSubst, ImplEnv, LayoutEvidenceBase, LayoutEvidenceBody,
             LayoutEvidenceComponentValue, LayoutEvidenceError, LayoutEvidenceExpr,
             LayoutEvidenceIndex, LayoutEvidenceOperand, LayoutEvidenceVerifyError, NExpr,
-            NSStmtKind, SStmtId, SemanticInstanceKey, collect_layout_evidence_diagnostic_vouchers,
-            get_or_build_semantic_instance, identity_semantic_instance_key, layout_evidence_body,
-            normalize_semantic_body, normalize_semantic_body_for_layout_evidence,
-            verify_layout_evidence_body, verify_layout_evidence_runtime_compatibility,
+            NStatementKind, NormalizedArtifacts, SExpr, SStmtKind, SemanticInstanceKey,
+            collect_layout_evidence_diagnostic_vouchers, get_or_build_semantic_instance,
+            identity_semantic_instance_key, layout_evidence_body, normalize_semantic_body,
+            normalized::{NLayoutLocals, NStatementId},
+            verify_layout_evidence_body as verify_normalized_layout_evidence_body,
+            verify_layout_evidence_runtime_compatibility as verify_normalized_layout_evidence_runtime_compatibility,
         },
         ty::{
             CallableLayoutParamPort, CallableLayoutPort, LayoutBundleComponentId,
@@ -26,6 +30,34 @@ use fe_hir::{
     test_db::{HirAnalysisTestDb, find_contract, find_func},
 };
 use layout_test_support::{parse_module, parse_ok};
+
+fn verify_layout_evidence_body<'db>(
+    db: &'db HirAnalysisTestDb,
+    normalized: &NormalizedArtifacts<'db>,
+    evidence: &LayoutEvidenceBody<'db>,
+) -> Result<(), LayoutEvidenceVerifyError> {
+    verify_normalized_layout_evidence_body(
+        db,
+        &normalized.body,
+        &normalized.layout_plan,
+        normalized.body.owner.body(db),
+        evidence,
+    )
+}
+
+fn verify_layout_evidence_runtime_compatibility<'db>(
+    db: &'db HirAnalysisTestDb,
+    normalized: &NormalizedArtifacts<'db>,
+    evidence: &LayoutEvidenceBody<'db>,
+) -> Result<(), LayoutEvidenceVerifyError> {
+    verify_normalized_layout_evidence_runtime_compatibility(
+        db,
+        &normalized.body,
+        &normalized.layout_plan,
+        normalized.body.owner.body(db),
+        evidence,
+    )
+}
 
 fn assert_layoutizes(name: &str, src: &str) {
     assert_layoutizes_in(name, src, false);
@@ -134,9 +166,9 @@ fn root<const ROOT: u256>(map: StorageMap<u256, u256, ROOT>) -> u256 {
         layout_evidence_body(&db, instance).expect("cached layoutization failed")
     ));
     let bindings = evidence
-        .statements
+        .constant_bindings
         .iter()
-        .flat_map(|statement| &statement.const_bindings)
+        .flatten()
         .collect::<Vec<_>>();
     let [binding] = bindings.as_slice() else {
         panic!("root use must have one explicit layout binding")
@@ -209,9 +241,9 @@ fn first<const FIRST: u256, const SECOND: u256>(
     let instance = get_or_build_semantic_instance(&db, key);
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     let bindings = evidence
-        .statements
+        .constant_bindings
         .iter()
-        .flat_map(|statement| &statement.const_bindings)
+        .flatten()
         .collect::<Vec<_>>();
     let [binding] = bindings.as_slice() else {
         panic!("FIRST must bind exactly one formal layout component")
@@ -1131,7 +1163,8 @@ fn select<const ROOT: u256>(
     );
     let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    let input = normalized
+    let source = normalized.body.owner.body(&db);
+    let input = source
         .locals
         .iter()
         .enumerate()
@@ -1154,17 +1187,19 @@ fn select<const ROOT: u256>(
     assert_eq!(value.schema.components[0].rank(), 2);
     assert_eq!(evidence.params, [*descriptor]);
     assert_eq!(evidence.locals[descriptor.index()].map_ty.rank(), 2);
-    assert_eq!(evidence.semantic_values.len(), normalized.locals.len());
+    let representations = NLayoutLocals::new(&normalized.body, &normalized.layout_plan, source);
+    assert_eq!(evidence.semantic_values.len(), representations.locals.len());
     assert_eq!(evidence.output.schema.components.len(), 1);
     assert_eq!(evidence.output.schema.components[0].rank(), 0);
     assert_eq!(evidence.output.runtime_descriptor_count(), 1);
-    assert_eq!(evidence.terminators.len(), normalized.blocks.len());
+    assert_eq!(evidence.terminators.len(), normalized.body.blocks.len());
     assert_eq!(
         evidence.statements.len(),
         normalized
+            .body
             .blocks
             .iter()
-            .map(|block| block.stmts.len())
+            .map(|block| block.statements.len())
             .sum::<usize>()
     );
     let (source, indices) = evidence
@@ -1314,18 +1349,20 @@ fn read<const ROOT: u256>(
     let forwarded = family_call
         .args
         .iter()
-        .map(|arg| match &arg.value {
-            LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Local(local)) => assignments
-                .iter()
-                .find_map(|assignment| (assignment.dst == *local).then_some(&assignment.expr))
-                .cloned()
-                .unwrap_or_else(|| arg.value.clone()),
-            LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Constant(_))
-            | LayoutEvidenceExpr::Project { .. }
-            | LayoutEvidenceExpr::Array { .. }
-            | LayoutEvidenceExpr::Repeat { .. }
-            | LayoutEvidenceExpr::Update { .. }
-            | LayoutEvidenceExpr::CallResult { .. } => arg.value.clone(),
+        .map(|arg| {
+            let mut value = &arg.value;
+            let mut seen = HashSet::new();
+            while let LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Local(local)) = value {
+                assert!(seen.insert(*local), "forwarded evidence must not cycle");
+                let Some(assignment) = assignments
+                    .iter()
+                    .find(|assignment| assignment.dst == *local)
+                else {
+                    break;
+                };
+                value = &assignment.expr;
+            }
+            value.clone()
         })
         .collect::<Vec<_>>();
     assert_eq!(
@@ -1458,19 +1495,41 @@ fn pass() -> Rooted<7> {
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "pass"))),
     );
     let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
-    let layout_normalized = normalize_semantic_body_for_layout_evidence(&db, instance)
-        .expect("layout normalization failed");
+    let source = instance.body(&db);
+    let source_call_ids = source
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .filter_map(|statement| {
+            matches!(
+                statement.kind,
+                SStmtKind::Assign {
+                    expr: SExpr::Call { .. },
+                    ..
+                }
+            )
+            .then_some(statement.id)
+        })
+        .collect::<Vec<_>>();
     let runtime_ids = normalized
+        .body
         .blocks
         .iter()
-        .flat_map(|block| block.stmts.iter().map(|statement| statement.id))
+        .flat_map(|block| {
+            block
+                .statements
+                .iter()
+                .filter_map(|statement| statement.source)
+        })
         .collect::<Vec<_>>();
-    let layout_ids = layout_normalized
-        .blocks
-        .iter()
-        .flat_map(|block| block.stmts.iter().map(|statement| statement.id))
-        .collect::<Vec<_>>();
-    assert_eq!(runtime_ids, layout_ids);
+    assert_eq!(
+        runtime_ids.len(),
+        source
+            .blocks
+            .iter()
+            .map(|block| block.stmts.len())
+            .sum::<usize>()
+    );
     assert!(
         runtime_ids
             .iter()
@@ -1479,29 +1538,22 @@ fn pass() -> Rooted<7> {
     );
     assert!(
         normalized
+            .body
             .blocks
             .iter()
-            .zip(&layout_normalized.blocks)
-            .any(
-                |(runtime, layout)| runtime.stmts.iter().zip(&layout.stmts).any(
-                    |(runtime, layout)| {
-                        runtime.id == layout.id
-                            && matches!(
-                                (&runtime.kind, &layout.kind),
-                                (
-                                    NSStmtKind::Assign {
-                                        expr: NExpr::Const(_),
-                                        ..
-                                    },
-                                    NSStmtKind::Assign {
-                                        expr: NExpr::Call { .. },
-                                        ..
-                                    }
-                                )
-                            )
-                    }
-                )
-            )
+            .flat_map(|block| &block.statements)
+            .any(|statement| {
+                statement
+                    .source
+                    .is_some_and(|id| source_call_ids.contains(&id))
+                    && matches!(
+                        statement.kind,
+                        NStatementKind::Define {
+                            expr: NExpr::Const(_),
+                            ..
+                        }
+                    )
+            })
     );
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     let assignment = evidence
@@ -1560,11 +1612,11 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "pass"))),
     );
     let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
-    assert!(normalized.blocks.iter().any(|block| {
-        block.stmts.iter().any(|statement| {
+    assert!(normalized.body.blocks.iter().any(|block| {
+        block.statements.iter().any(|statement| {
             matches!(
                 statement.kind,
-                NSStmtKind::Assign {
+                NStatementKind::Define {
                     expr: NExpr::Call { .. },
                     ..
                 }
@@ -1584,13 +1636,15 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
 
     let mut reordered = normalized.clone();
     let positions = reordered
+        .body
         .blocks
         .iter()
         .enumerate()
         .flat_map(|(block, data)| {
-            data.stmts
+            data.statements
                 .iter()
                 .enumerate()
+                .filter(|(_, statement)| statement.source.is_some())
                 .map(move |(statement, _)| (block, statement))
         })
         .take(2)
@@ -1602,25 +1656,28 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
     else {
         panic!("fixture must contain two statements")
     };
-    let first = reordered.blocks[*first_block].stmts[*first_statement].clone();
-    let second = reordered.blocks[*second_block].stmts[*second_statement].clone();
-    reordered.blocks[*first_block].stmts[*first_statement] = second;
-    reordered.blocks[*second_block].stmts[*second_statement] = first;
+    let first = reordered.body.blocks[*first_block].statements[*first_statement].clone();
+    let second = reordered.body.blocks[*second_block].statements[*second_statement].clone();
+    reordered.body.blocks[*first_block].statements[*first_statement] = second;
+    reordered.body.blocks[*second_block].statements[*second_statement] = first;
     verify_layout_evidence_runtime_compatibility(&db, &reordered, evidence)
         .expect("statement identity must make evidence independent of statement position");
 
     let mut duplicate = normalized.clone();
     let duplicate_id = duplicate
+        .body
         .blocks
         .iter()
-        .flat_map(|block| &block.stmts)
+        .flat_map(|block| &block.statements)
+        .map(|statement| statement.id)
         .next()
-        .expect("fixture must contain a statement")
-        .id;
+        .expect("fixture must contain a statement");
     duplicate
+        .body
         .blocks
         .iter_mut()
-        .flat_map(|block| &mut block.stmts)
+        .flat_map(|block| &mut block.statements)
+        .filter(|statement| statement.source.is_some())
         .nth(1)
         .expect("fixture must contain another statement")
         .id = duplicate_id;
@@ -1632,12 +1689,13 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
     );
 
     let mut invalid = normalized.clone();
-    let invalid_id = SStmtId::from_u32(evidence.statements.len() as u32);
+    let invalid_id = NStatementId::from_u32(evidence.statements.len() as u32);
     invalid
+        .body
         .blocks
         .iter_mut()
-        .flat_map(|block| &mut block.stmts)
-        .next()
+        .flat_map(|block| &mut block.statements)
+        .find(|statement| statement.source.is_some())
         .expect("fixture must contain a statement")
         .id = invalid_id;
     assert!(matches!(
@@ -1661,15 +1719,16 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "alternate")));
     let mut mismatched = normalized.clone();
     let callee = mismatched
+        .body
         .blocks
         .iter_mut()
-        .flat_map(|block| &mut block.stmts)
+        .flat_map(|block| &mut block.statements)
         .find_map(|statement| match &mut statement.kind {
-            NSStmtKind::Assign {
+            NStatementKind::Define {
                 expr: NExpr::Call { callee, .. },
                 ..
             } => Some(callee),
-            NSStmtKind::Assign { .. } | NSStmtKind::Store { .. } => None,
+            NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
         })
         .expect("missing runtime evidence call");
     callee.key = alternate;
@@ -2089,11 +2148,12 @@ fn branch<const ROOT: u256>(
         })
         .expect("missing branch-local projection evidence");
     let (call_block, call_statement, call_id) = normalized
+        .body
         .blocks
         .iter()
         .enumerate()
         .find_map(|(block, data)| {
-            data.stmts
+            data.statements
                 .iter()
                 .enumerate()
                 .find(|(_, statement)| {
@@ -2174,44 +2234,53 @@ fn replace<const ROOT: usize>(
     );
     let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    let (block_idx, statement_idx, index_local) = normalized
-        .blocks
-        .iter()
-        .enumerate()
-        .find_map(|(block_idx, block)| {
-            block
-                .stmts
-                .iter()
-                .enumerate()
-                .find_map(|(statement_idx, normalized_statement)| {
-                    evidence
-                        .statement(normalized_statement.id)
-                        .and_then(|statement| statement.call.as_ref())
-                        .and_then(|call| {
-                            call.args.iter().find_map(|arg| match &arg.value {
-                                LayoutEvidenceExpr::Project { indices, .. } => {
-                                    indices.iter().find_map(|index| match index {
-                                        LayoutEvidenceIndex::Dynamic(index) => {
-                                            Some((block_idx, statement_idx, *index))
-                                        }
-                                        LayoutEvidenceIndex::Constant(_) => None,
-                                    })
-                                }
-                                LayoutEvidenceExpr::Use(_)
-                                | LayoutEvidenceExpr::Array { .. }
-                                | LayoutEvidenceExpr::Repeat { .. }
-                                | LayoutEvidenceExpr::Update { .. }
-                                | LayoutEvidenceExpr::CallResult { .. } => None,
+    let (block_idx, statement_idx, index_local) =
+        normalized
+            .body
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(block_idx, block)| {
+                block.statements.iter().enumerate().find_map(
+                    |(statement_idx, normalized_statement)| {
+                        evidence
+                            .statement(normalized_statement.id)
+                            .and_then(|statement| statement.call.as_ref())
+                            .and_then(|call| {
+                                call.args.iter().find_map(|arg| match &arg.value {
+                                    LayoutEvidenceExpr::Project { indices, .. } => {
+                                        indices.iter().find_map(|index| match index {
+                                            LayoutEvidenceIndex::Dynamic(index) => {
+                                                Some((block_idx, statement_idx, *index))
+                                            }
+                                            LayoutEvidenceIndex::Constant(_) => None,
+                                        })
+                                    }
+                                    LayoutEvidenceExpr::Use(_)
+                                    | LayoutEvidenceExpr::Array { .. }
+                                    | LayoutEvidenceExpr::Repeat { .. }
+                                    | LayoutEvidenceExpr::Update { .. }
+                                    | LayoutEvidenceExpr::CallResult { .. } => None,
+                                })
                             })
-                        })
-                })
-        })
-        .expect("fresh call must receive a dynamically projected output witness");
-    let index_definition = normalized.blocks[block_idx]
-        .stmts
+                    },
+                )
+            })
+            .expect("fresh call must receive a dynamically projected output witness");
+    let representations = NLayoutLocals::new(
+        &normalized.body,
+        &normalized.layout_plan,
+        instance.body(&db),
+    );
+    let index_definition = normalized.body.blocks[block_idx]
+        .statements
         .iter()
         .position(|statement| {
-            matches!(statement.kind, NSStmtKind::Assign { dst, .. } if dst == index_local)
+            matches!(
+                statement.kind,
+                NStatementKind::Define { result, .. }
+                    if representations.value_local(result) == Some(index_local)
+            )
         })
         .expect("destination index must have a semantic definition");
     assert!(
@@ -2219,23 +2288,24 @@ fn replace<const ROOT: usize>(
         "destination index must be evaluated before the witnessed RHS call"
     );
 
-    let future_index = normalized.blocks[block_idx]
-        .stmts
+    let future_index = normalized.body.blocks[block_idx]
+        .statements
         .iter()
         .enumerate()
         .skip(statement_idx + 1)
         .find_map(|(_, statement)| match &statement.kind {
-            NSStmtKind::Assign {
-                dst,
+            NStatementKind::Define {
+                result,
                 expr: NExpr::Call { .. },
-            } if normalized.locals[dst.index()].ty == normalized.locals[index_local.index()].ty => {
-                Some(*dst)
-            }
-            NSStmtKind::Assign { .. } | NSStmtKind::Store { .. } => None,
+            } => representations.value_local(*result).filter(|local| {
+                representations.locals[local.index()].ty
+                    == representations.locals[index_local.index()].ty
+            }),
+            NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
         })
         .expect("fixture must define another usize call result after fresh");
     let mut malformed = (*evidence).clone();
-    let statement_id = normalized.blocks[block_idx].stmts[statement_idx].id;
+    let statement_id = normalized.body.blocks[block_idx].statements[statement_idx].id;
     let index = malformed.statements[statement_id.index()]
         .call
         .as_mut()
@@ -2642,15 +2712,16 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
     let normalized =
         normalize_semantic_body(&db, replace_raw_caller).expect("normalization failed");
     let callee = normalized
+        .body
         .blocks
         .iter()
-        .flat_map(|block| &block.stmts)
+        .flat_map(|block| &block.statements)
         .find_map(|statement| match statement.kind {
-            NSStmtKind::Assign {
+            NStatementKind::Define {
                 expr: NExpr::Call { callee, .. },
                 ..
             } => Some(callee),
-            NSStmtKind::Assign { .. } | NSStmtKind::Store { .. } => None,
+            NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
         })
         .expect("missing Handle::replace_raw call");
     let replace_raw = get_or_build_semantic_instance(&db, callee.key);
@@ -2658,12 +2729,12 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
     let evidence = layout_evidence_body(&db, replace_raw)
         .expect("physical EffectHandle field writes must preserve target evidence opaquely");
     let mut stores = 0;
-    for block in &normalized.blocks {
-        for statement in &block.stmts {
+    for block in &normalized.body.blocks {
+        for statement in &block.statements {
             let evidence_statement = evidence
                 .statement(statement.id)
                 .expect("missing statement evidence");
-            if matches!(statement.kind, NSStmtKind::Store { .. }) {
+            if matches!(statement.kind, NStatementKind::Store { .. }) {
                 stores += 1;
                 assert!(
                     evidence_statement.assignments.is_empty(),
@@ -3088,9 +3159,9 @@ fn specialized_array_enum_leaf_methods_bind_runtime_layout_consts() {
             found = true;
             assert!(
                 evidence
-                    .statements
+                    .constant_bindings
                     .iter()
-                    .any(|statement| !statement.const_bindings.is_empty()),
+                    .any(|bindings| !bindings.is_empty()),
                 "specialized Slot::root must bind ROOT from receiver evidence: {evidence:#?}",
             );
         }

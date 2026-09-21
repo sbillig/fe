@@ -138,7 +138,12 @@ impl<'db> RuntimeTypeModel<'db> {
 
     fn stored_class(&self, db: &'db dyn MirDb, env: RuntimeTypeEnv<'db>) -> RuntimeClass<'db> {
         match &self.shape {
-            RuntimeTypeShape::Borrow { inner, .. } | RuntimeTypeShape::Capability { inner } => {
+            RuntimeTypeShape::Borrow { inner, .. } => RuntimeClass::Ref {
+                pointee: Box::new(stored_class_for_ty_in_env(db, env, *inner)),
+                kind: RefKind::Native,
+                view: RefView::Whole,
+            },
+            RuntimeTypeShape::Capability { inner } => {
                 provider_class_for_target_in_env(db, env, Some(*inner), AddressSpaceKind::Memory)
             }
             RuntimeTypeShape::Pointer { target } => raw_addr_class_for_ty_in_env(db, env, *target),
@@ -703,10 +708,12 @@ mod tests {
         )
         .expect("borrowed ZST should have a top-level provider class");
         assert_memory_provider_ref(&top_level);
-        assert_memory_provider_ref(&stored_class_for_ty_in_env(
-            &db,
-            RuntimeTypeEnv::new(None, assumptions),
-            borrowed_unit,
+        assert!(matches!(
+            stored_class_for_ty_in_env(&db, RuntimeTypeEnv::new(None, assumptions), borrowed_unit),
+            RuntimeClass::Ref {
+                kind: RefKind::Native,
+                ..
+            }
         ));
     }
 
@@ -744,10 +751,12 @@ mod tests {
             ),
             "non-ZST borrow top-level class should remain an object ref: {top_level:#?}",
         );
-        assert_memory_provider_ref(&stored_class_for_ty_in_env(
-            &db,
-            RuntimeTypeEnv::new(None, assumptions),
-            borrowed_word,
+        assert!(matches!(
+            stored_class_for_ty_in_env(&db, RuntimeTypeEnv::new(None, assumptions), borrowed_word),
+            RuntimeClass::Ref {
+                kind: RefKind::Native,
+                ..
+            }
         ));
     }
 

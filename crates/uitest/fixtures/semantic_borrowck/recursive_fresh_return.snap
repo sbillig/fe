@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/recursive_fresh_return.fe
+---
+error[16-0007]: transport violation in `fn recursive`
+   ┌─ recursive_fresh_return.fe:11:47
+   │
+11 │   fn recursive(_ n: u256, depth: u256) -> *Item {
+   │ ╭───────────────────────────────────────────────^
+12 │ │     if depth == 0 { initialized(n) }
+13 │ │     else { recursive(n, depth: depth - 1) }
+14 │ │ }
+   │ ╰─^ recursive boundary requirements did not converge

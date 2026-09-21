@@ -184,15 +184,16 @@ pub(super) fn create_payload_size_func<'db, O: Clone + Into<crate::span::Desugar
         FuncModifiers::new(Visibility::Private, false, false, false),
         |body| {
             let db = body.db();
-            let self_expr = body.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
             let dynamic_payload_size_path = PathId::from_ident(db, roots.core)
                 .push_str(db, "abi")
                 .push_str(db, "dynamic_payload_size");
             let mut expr = body.abi_size_assoc_expr(TypeId::fallback_self_ty(db), "HEAD_SIZE");
+            let self_expr = (!field_specs.is_empty())
+                .then(|| body.path_expr(PathId::from_ident(db, IdentId::make_self(db))));
 
             for (field_name, _) in field_specs.iter().copied() {
                 let field_expr = body.push_expr(Expr::Field(
-                    self_expr,
+                    self_expr.expect("message payload fields require a receiver"),
                     Partial::Present(FieldIndex::Ident(field_name)),
                 ));
                 let dynamic_payload_size = body.path_expr(dynamic_payload_size_path);

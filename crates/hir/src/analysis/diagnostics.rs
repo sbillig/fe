@@ -3575,7 +3575,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 if let Some((name, span)) = binding {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("try changing to `let mut {}`", name.data(db)),
+                        message: format!("`{}` does not provide mutable access", name.data(db)),
                         span: span.resolve(db),
                     });
                 }

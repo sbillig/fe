@@ -142,6 +142,7 @@ impl<'db> RuntimeClassShape<'db> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum RefShapeKind {
+    Native,
     Const,
     Object,
     Provider(AddressSpaceKind),
@@ -150,6 +151,7 @@ pub(super) enum RefShapeKind {
 impl RefShapeKind {
     fn from_kind(kind: &RefKind<'_>) -> Self {
         match kind {
+            RefKind::Native => Self::Native,
             RefKind::Const => Self::Const,
             RefKind::Object => Self::Object,
             RefKind::Provider { space, .. } => Self::Provider(*space),
@@ -197,7 +199,7 @@ impl<'db> BoundaryShapeMatcher<'db> {
             } => match actual {
                 RuntimeClassShape::Ref {
                     pointee: actual_pointee,
-                    kind: RefShapeKind::Object,
+                    kind: RefShapeKind::Object | RefShapeKind::Native,
                     view: RefView::Whole,
                 } => *allow_object && **actual_pointee == *pointee,
                 RuntimeClassShape::Ref {
@@ -613,7 +615,7 @@ impl BoundaryMatcher {
             RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } => match class {
                 RuntimeClass::Ref {
                     pointee: actual_pointee,
-                    kind: RefKind::Object,
+                    kind: RefKind::Object | RefKind::Native,
                     view: RefView::Whole,
                 } => allow.allow_object && **actual_pointee == *pointee,
                 RuntimeClass::Ref {

@@ -177,14 +177,6 @@ pub fn resolve_runtime_place<'db>(
         }
     }
 
-    if place.path.is_empty()
-        && let PlaceRoot::Ref(_) | PlaceRoot::Provider(_) = &place.root
-        && let RuntimeClass::Ref { ref pointee, .. } = current
-        && let RuntimeClass::AggregateValue { layout } = **pointee
-    {
-        current = RuntimeClass::AggregateValue { layout };
-    }
-
     Ok(ResolvedRuntimePlace {
         root_kind,
         result_class: current,
@@ -243,14 +235,14 @@ pub(crate) fn ref_class_for_place_result<'db>(
                     view: RefView::Whole,
                 };
             }
-            RuntimeClass::AggregateValue { .. } => {
+            RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => {
                 return RuntimeClass::Ref {
                     pointee: Box::new(value_class.clone()),
                     kind: RefKind::Object,
                     view: RefView::Whole,
                 };
             }
-            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {}
+            RuntimeClass::RawAddr { .. } => {}
         }
     }
     RuntimeClass::raw_addr(
@@ -621,4 +613,108 @@ pub(crate) fn project_variant_field_class<'db>(
 ) -> RuntimeClass<'db> {
     project_variant_field(db, class.clone(), variant, field)
         .unwrap_or_else(|_| panic!("invalid variant-field projection class: {class:?}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use driver::DriverDataBase;
+
+    use super::{
+        PlaceClassEnv, ref_class_for_place_result, resolve_runtime_place,
+        resolve_runtime_place_address_class,
+    };
+    use crate::{
+        db::MirDb,
+        runtime::{
+            AddressSpaceKind, LayoutId, LayoutKey, PlaceElem, PlaceRoot, RLocalId, RefKind,
+            RefView, RuntimeClass, RuntimeLocalRoot, RuntimePlace, RuntimeProviderBinding,
+            RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, StructLayout,
+        },
+    };
+
+    struct ReferenceSlot<'db>(RuntimeClass<'db>);
+
+    impl<'db> PlaceClassEnv<'db> for ReferenceSlot<'db> {
+        fn place_local_root(&self, _: RLocalId) -> Option<&RuntimeLocalRoot<'db>> {
+            None
+        }
+        fn place_value_class(&self, _: RLocalId) -> Option<&RuntimeClass<'db>> {
+            Some(&self.0)
+        }
+        fn place_provider_binding(
+            &self,
+            _: RuntimeProviderBindingId,
+        ) -> Option<&RuntimeProviderBinding<'db>> {
+            None
+        }
+    }
+
+    #[test]
+    fn native_scalar_addresses_preserve_object_layout() {
+        let scalar = RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int {
+                bits: 8,
+                signed: false,
+            },
+            role: ScalarRole::Plain,
+        });
+        let object = RuntimeClass::Ref {
+            pointee: Box::new(scalar.clone()),
+            kind: RefKind::Object,
+            view: RefView::Whole,
+        };
+        assert_eq!(
+            ref_class_for_place_result(&scalar, &scalar, AddressSpaceKind::Memory, false),
+            object
+        );
+        let pointer = RuntimeClass::raw_addr(AddressSpaceKind::Memory, scalar.clone());
+        assert_eq!(
+            ref_class_for_place_result(&pointer, &scalar, AddressSpaceKind::Memory, true),
+            pointer
+        );
+    }
+
+    #[test]
+    fn loading_a_reference_slot_preserves_the_stored_reference() {
+        let db = DriverDataBase::default();
+        let program: &dyn MirDb = &db;
+        let layout = LayoutId::new(
+            &db,
+            LayoutKey::Struct(StructLayout {
+                fields: Box::new([]),
+            }),
+        );
+        for stored in [
+            RuntimeClass::const_ref(layout),
+            RuntimeClass::object_ref(layout),
+        ] {
+            let address = RuntimeClass::Ref {
+                pointee: Box::new(stored.clone()),
+                kind: RefKind::Object,
+                view: RefView::Whole,
+            };
+            let environment = ReferenceSlot(address.clone());
+            let mut place = RuntimePlace {
+                root: PlaceRoot::Ref(RLocalId::from_u32(0)),
+                path: Box::new([]),
+            };
+            assert_eq!(
+                resolve_runtime_place(&db, &program, &environment, &place)
+                    .unwrap()
+                    .result_class,
+                stored
+            );
+            assert_eq!(
+                resolve_runtime_place_address_class(&db, &program, &environment, &place).unwrap(),
+                address
+            );
+            place.path = Box::new([PlaceElem::Deref]);
+            assert_eq!(
+                resolve_runtime_place(&db, &program, &environment, &place)
+                    .unwrap()
+                    .result_class,
+                RuntimeClass::AggregateValue { layout }
+            );
+        }
+    }
 }

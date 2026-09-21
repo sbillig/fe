@@ -156,6 +156,158 @@ fn deref_once(value: **u256) -> *u256 {
 }
 
 #[test]
+fn raw_pointer_assignments_preserve_native_value_types() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "raw_pointer_native_assignments.fe".into(),
+        r#"
+use core::ptr
+struct Slots { shared: *ref u256 }
+fn identity<T>(_ pointer: *T) -> *T { pointer }
+fn shared(slot: *ref u256, value: ref u256) { *slot = value }
+fn exclusive(slot: *mut u256, value: mut u256) { *slot = value }
+fn weaken(slot: *ref u256, value: mut u256) { *slot = value }
+fn temporary(slot: *ref u256, value: ref u256) { *identity(slot) = value }
+fn nested(slots: **ref u256, value: ref u256) { *(*slots) = value }
+fn field(slots: Slots, value: ref u256) { *slots.shared = value }
+fn element(slots: *[ref u256; 2], value: ref u256) {
+    *ptr::offset(ptr::cast<[ref u256; 2], ref u256>(slots), 1) = value
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    let mut assignments = 0;
+    for func in top_mod.all_funcs(&db) {
+        let body = func.body(&db).unwrap();
+        let typed_body = &check_func_body(&db, *func).1;
+        for expr in body.exprs(&db).values() {
+            if let Partial::Present(Expr::Assign(lhs, rhs)) = expr {
+                let destination = typed_body.expr_ty(&db, *lhs);
+                assert!(destination.as_capability(&db).is_some());
+                assert_eq!(typed_body.expr_ty(&db, *rhs), destination);
+                assignments += 1;
+            }
+        }
+    }
+    assert_eq!(assignments, 7);
+}
+
+#[test]
+fn raw_pointer_assignments_reject_values_of_the_referent_type() {
+    for kind in ["ref", "mut"] {
+        let mut db = HirAnalysisTestDb::default();
+        let source = format!("fn invalid(slot: *{kind} u256) {{ *slot = 1 }}");
+        let file = db.new_stand_alone("raw_pointer_wrong_assignment.fe".into(), &source);
+        let (top_mod, _) = db.top_mod(file);
+        let diags = diagnostics_for(&db, top_mod);
+        assert!(
+            diagnostics_contain(&diags, &format!("expected `{kind} u256`")),
+            "{source}\n{diags:#?}"
+        );
+    }
+}
+
+#[test]
+fn compound_assignment_requires_a_mutable_native_referent() {
+    for target in ["*slot", "*identity(slot)", "holder.shared", "values[0]"] {
+        let source = format!(
+            "struct Holder {{ shared: ref u256 }}\n\
+             fn identity<T>(_ pointer: *T) -> *T {{ pointer }}\n\
+             fn invalid(slot: *ref u256, mut holder: Holder, mut values: [ref u256; 1]) {{\n\
+                 {target} += 1\n\
+             }}"
+        );
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("shared_compound_assignment.fe".into(), &source);
+        let (top_mod, _) = db.top_mod(file);
+        let diags = diagnostics_for(&db, top_mod);
+        assert!(
+            diagnostics_contain(&diags, "immutable"),
+            "{source}\n{diags:#?}"
+        );
+        assert!(!diagnostics_contain(&diags, "try changing"), "{diags:#?}");
+    }
+
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "mutable_compound_assignment.fe".into(),
+        "fn valid(slot: *mut u256) { *slot += 1 }",
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn mutable_method_receivers_reject_immutable_owned_places() {
+    for receiver in ["self.counter", "counter", "counters[0]"] {
+        let source = format!(
+            "struct Counter {{ value: u256 }}\n\
+             impl Counter {{ fn increment(mut self) {{ self.value += 1 }} }}\n\
+             struct Wrapper {{ counter: Counter }}\n\
+             impl Wrapper {{\n\
+                 fn invalid(own self, counter: own Counter, counters: own [Counter; 1]) {{\n\
+                     {receiver}.increment()\n\
+                 }}\n\
+             }}"
+        );
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("immutable_method_receiver.fe".into(), &source);
+        let (top_mod, _) = db.top_mod(file);
+        let diags = diagnostics_for(&db, top_mod);
+        assert!(
+            diagnostics_contain(&diags, "cannot borrow"),
+            "{source}\n{diags:#?}"
+        );
+        assert_eq!(diags.len(), 1, "{source}\n{diags:#?}");
+        assert!(!diagnostics_contain(&diags, "let mut"), "{diags:#?}");
+        assert!(!diagnostics_contain(&diags, "normalized"), "{diags:#?}");
+    }
+}
+
+#[test]
+fn mutable_method_receivers_allow_mutable_places_and_temporaries() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "mutable_method_receiver.fe".into(),
+        r#"
+struct Counter { value: u256 }
+impl Counter { fn increment(mut self) { self.value += 1 } }
+struct Wrapper { counter: Counter }
+impl Wrapper {
+    fn valid(mut own self) { self.counter.increment() }
+}
+fn make() -> Counter { Counter { value: 0 } }
+fn valid(mut counter: own Counter, pointer: *Counter) {
+    counter.increment()
+    (*pointer).increment()
+    make().increment()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn native_pointer_reads_cannot_move_non_copy_referents() {
+    for kind in ["ref", "mut"] {
+        let source = format!(
+            "struct Item {{ value: u256 }}\n\
+             fn invalid(slot: *{kind} Item) -> Item {{ *slot }}"
+        );
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("native_pointer_non_copy_read.fe".into(), &source);
+        let (top_mod, _) = db.top_mod(file);
+        let diags = diagnostics_for(&db, top_mod);
+        assert!(
+            diagnostics_contain(&diags, "expected `Item`"),
+            "{source}\n{diags:#?}"
+        );
+    }
+}
+
+#[test]
 fn pointer_equality_uses_the_eq_trait() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

@@ -469,6 +469,7 @@ fn format_expr<'db>(db: &'db dyn MirDb, expr: &RExpr<'db>) -> String {
         RExpr::ProviderRefToRaw { value } => {
             format!("provider_ref_to_raw {}", format_local_id(*value))
         }
+        RExpr::NativeRef { value } => format!("native_ref {}", format_local_id(*value)),
         RExpr::RetagRef { value } => format!("retag_ref {}", format_local_id(*value)),
         RExpr::AddrOf { place } => format!("addr_of {}", format_place(place)),
         RExpr::Load { place } => format!("load {}", format_place(place)),
@@ -1019,6 +1020,7 @@ fn format_scalar_class<'db>(db: &'db dyn MirDb, class: &ScalarClass<'db>) -> Str
 
 fn format_ref_kind<'db>(db: &'db dyn MirDb, kind: &RefKind<'db>) -> String {
     match kind {
+        RefKind::Native => "native".to_string(),
         RefKind::Const => "const".to_string(),
         RefKind::Object => "object".to_string(),
         RefKind::Provider { provider_ty, space } => {

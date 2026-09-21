@@ -71,6 +71,19 @@ impl<'db> RuntimeClass<'db> {
         }
     }
 
+    pub fn is_runtime_zst(&self, db: &'db dyn MirDb) -> bool {
+        match self {
+            Self::Scalar(_) | Self::Ref { .. } | Self::RawAddr { .. } => false,
+            Self::AggregateValue { layout } => match layout.data(db) {
+                Layout::Struct(layout) => {
+                    layout.fields.iter().all(|field| field.is_runtime_zst(db))
+                }
+                Layout::Array(layout) => layout.len == 0 || layout.elem.is_runtime_zst(db),
+                Layout::Enum(_) => false,
+            },
+        }
+    }
+
     pub fn const_ref(layout: LayoutId<'db>) -> Self {
         Self::Ref {
             pointee: Box::new(Self::AggregateValue { layout }),
@@ -167,7 +180,7 @@ impl<'db> RuntimeClass<'db> {
             RuntimeClass::Scalar(_)
             | RuntimeClass::AggregateValue { .. }
             | RuntimeClass::Ref {
-                kind: RefKind::Const | RefKind::Object,
+                kind: RefKind::Const | RefKind::Object | RefKind::Native,
                 ..
             } => None,
         }
@@ -262,6 +275,9 @@ impl<'db> RuntimeClass<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RefKind<'db> {
+    /// An address/layout descriptor for a native reference stored in a typed slot.
+    /// Unlike static views, this representation preserves any supported referent.
+    Native,
     Const,
     Object,
     Provider {
@@ -315,7 +331,9 @@ fn layouts_share_runtime_rep<'db>(
 
 fn ref_kinds_share_runtime_rep<'db>(actual: &RefKind<'db>, desired: &RefKind<'db>) -> bool {
     match (actual, desired) {
-        (RefKind::Const, RefKind::Const) | (RefKind::Object, RefKind::Object) => true,
+        (RefKind::Native, RefKind::Native)
+        | (RefKind::Const, RefKind::Const)
+        | (RefKind::Object, RefKind::Object) => true,
         (
             RefKind::Object,
             RefKind::Provider {
@@ -329,31 +347,11 @@ fn ref_kinds_share_runtime_rep<'db>(actual: &RefKind<'db>, desired: &RefKind<'db
                 ..
             },
             RefKind::Object,
-        )
-        | (
-            RefKind::Provider {
-                space: AddressSpaceKind::Memory,
-                ..
-            },
-            RefKind::Provider {
-                space: AddressSpaceKind::Memory,
-                ..
-            },
         ) => true,
-        (
-            RefKind::Provider {
-                space: actual_space,
-                ..
-            },
-            RefKind::Provider {
-                space: desired_space,
-                ..
-            },
-        ) => actual_space == desired_space,
-        (RefKind::Const, RefKind::Object | RefKind::Provider { .. })
-        | (RefKind::Object | RefKind::Provider { .. }, RefKind::Const)
-        | (RefKind::Object, RefKind::Provider { .. })
-        | (RefKind::Provider { .. }, RefKind::Object) => false,
+        (RefKind::Provider { space: actual, .. }, RefKind::Provider { space: desired, .. }) => {
+            actual == desired
+        }
+        _ => false,
     }
 }
 
@@ -1444,6 +1442,9 @@ pub enum RExpr<'db> {
     },
     MaterializePlaceToObject {
         place: RuntimePlace<'db>,
+    },
+    NativeRef {
+        value: RValueId,
     },
     ProviderRefFromRaw {
         raw: RValueId,

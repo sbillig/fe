@@ -1,9 +1,47 @@
 use fe_hir::analysis::ty::corelib::{
-    IntrinsicMemoryAccess, IntrinsicMemoryProjection, IntrinsicPointerReturn, MemoryAccessKind,
-    RuntimeBuiltinFuncKind, intrinsic_contract, is_std_evm_effect_method, resolve_lib_func_path,
-    runtime_builtin_func_kind,
+    IntrinsicMemoryAccess, IntrinsicMemoryExtent, IntrinsicMemoryTarget, IntrinsicPointerReturn,
+    MemoryAccessKind, RuntimeBuiltinFuncKind, intrinsic_contract, is_std_evm_effect_method,
+    resolve_lib_func_path, runtime_builtin_func_kind,
 };
 use fe_hir::test_db::HirAnalysisTestDb;
+
+#[test]
+fn numeric_memory_contracts_require_compiler_defined_identity() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "numeric_contracts.fe".into(),
+        "extern { fn __add_u256(a: u256, b: u256) -> u256 }\nfn anchor() {}",
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let func = module
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "__add_u256")
+        })
+        .unwrap();
+    assert!(intrinsic_contract(&db, func).is_none());
+    for path in [
+        "core::num::__add_u256",
+        "core::num::__checked_add",
+        "core::num::__bitcast",
+        "core::num::__not_bool",
+        "core::num_intrinsics::__div_u256",
+        "core::intrinsic::size_of",
+        "core::intrinsic::contract_field_slot",
+    ] {
+        let intrinsic = resolve_lib_func_path(&db, func.scope(), path).unwrap();
+        assert_eq!(
+            intrinsic_contract(&db, intrinsic).unwrap().memory,
+            Some(&[][..]),
+            "{path}"
+        );
+    }
+}
 
 #[test]
 fn classifies_core_and_std_runtime_builtins() {
@@ -78,9 +116,9 @@ fn classifies_core_and_std_runtime_builtins() {
             .memory
             .expect("mload memory contract"),
         &[IntrinsicMemoryAccess {
-            input: 0,
-            projection: IntrinsicMemoryProjection::Pointee,
+            target: IntrinsicMemoryTarget::Pointee(0),
             kind: MemoryAccessKind::Read,
+            extent: IntrinsicMemoryExtent::Bytes(32),
         }]
     );
     assert_eq!(
@@ -90,14 +128,14 @@ fn classifies_core_and_std_runtime_builtins() {
             .expect("memory-copy memory contract"),
         &[
             IntrinsicMemoryAccess {
-                input: 1,
-                projection: IntrinsicMemoryProjection::Pointee,
+                target: IntrinsicMemoryTarget::Pointee(1),
                 kind: MemoryAccessKind::Read,
+                extent: IntrinsicMemoryExtent::Argument(2),
             },
             IntrinsicMemoryAccess {
-                input: 0,
-                projection: IntrinsicMemoryProjection::Pointee,
+                target: IntrinsicMemoryTarget::Pointee(0),
                 kind: MemoryAccessKind::Write,
+                extent: IntrinsicMemoryExtent::Argument(2),
             },
         ]
     );
@@ -115,14 +153,14 @@ fn classifies_core_and_std_runtime_builtins() {
             .expect("RawMem::mstore memory contract"),
         &[
             IntrinsicMemoryAccess {
-                input: 0,
-                projection: IntrinsicMemoryProjection::Value,
+                target: IntrinsicMemoryTarget::Value(0),
                 kind: MemoryAccessKind::MutAccess,
+                extent: IntrinsicMemoryExtent::Typed,
             },
             IntrinsicMemoryAccess {
-                input: 1,
-                projection: IntrinsicMemoryProjection::Pointee,
+                target: IntrinsicMemoryTarget::Pointee(1),
                 kind: MemoryAccessKind::Write,
+                extent: IntrinsicMemoryExtent::Bytes(32),
             },
         ]
     );

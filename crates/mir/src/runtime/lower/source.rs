@@ -1,10 +1,10 @@
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        NBorrowRoot, NBorrowRootId, SLocalId, SemanticLocalKind, VariantIndex,
-        borrowck::{
-            NExpr, NSLocal, NSPlace, NSPlaceRoot, NSStmtKind, NormalizedBindingLowering,
-            NormalizedSemanticBody,
+        SLocal, SLocalId, SemanticLocalKind,
+        normalized::{
+            NDataPath, NDataProjection, NExpr, NIndex, NPlace, NPlaceBase, NRootKind,
+            NStatementKind, NValueDefinition, NValueId,
         },
     },
     ty::{
@@ -13,53 +13,63 @@ use hir::analysis::{
     },
 };
 use hir::hir_def::EnumVariant;
-use hir::projection::{IndexSource, Projection};
 
 use crate::{
     db::MirDb,
     runtime::{RuntimeCarrier, RuntimeClass, RuntimeLocalRoot},
 };
 
-use super::classify::{
-    BodyEnv, carrier_value_class, nonself_backing_value_place, provider_erases_runtime_root,
-    runtime_class_for_direct_value_provider_in_env,
-    runtime_class_for_effect_binding_provider_in_env, snapshot_source_place,
+use super::{
+    classify::{
+        BodyEnv, carrier_value_class, provider_erases_runtime_root,
+        runtime_class_for_direct_value_provider_in_env,
+        runtime_class_for_effect_binding_provider_in_env,
+    },
+    semantic_body::{RuntimeOperand, RuntimeSemanticBody},
 };
 
 /// Index bounds in projection order, stopping at the first empty array.
 /// Both alias erasure and emitted bounds checks must inspect the same path.
 pub(super) fn place_index_bounds<'db>(
     db: &'db dyn MirDb,
-    body: &NormalizedSemanticBody<'db>,
-    place: &NSPlace<'db>,
-) -> Vec<(IndexSource<SLocalId>, usize)> {
+    body: &RuntimeSemanticBody<'db>,
+    place: &NPlace<'db>,
+) -> Vec<(NIndex, usize)> {
+    body.normalized
+        .place_base_ty(db, place.base)
+        .map(|ty| data_path_index_bounds(db, ty, &place.path))
+        .unwrap_or_default()
+}
+
+pub(super) fn data_path_index_bounds<'db>(
+    db: &'db dyn MirDb,
+    mut ty: TyId<'db>,
+    path: &NDataPath,
+) -> Vec<(NIndex, usize)> {
     let mut bounds = Vec::new();
-    if !place
-        .path
-        .iter()
-        .any(|step| matches!(step, Projection::Index(_)))
-    {
-        return bounds;
-    }
-    let Some(mut ty) = body.place_root_ty(&place.root) else {
-        return bounds;
-    };
-    for projection in place.path.iter() {
+    for projection in path.iter() {
         while let Some((_, inner)) = ty.as_capability(db) {
             ty = inner;
         }
         ty = match projection {
-            Projection::Field(index) => Some(project_pattern_child_source_ty(
-                db, ty, PatternProjectionStep::Field(*index),
+            NDataProjection::Field(index) => Some(project_pattern_child_source_ty(
+                db,
+                ty,
+                PatternProjectionStep::Field(usize::from(index.0)),
             )),
-            Projection::VariantField { variant, field_idx, .. } => ty.as_enum(db).map(|enum_| {
-                project_pattern_child_source_ty(db, ty, PatternProjectionStep::VariantField {
-                    variant: EnumVariant::new(enum_, variant.0 as usize),
-                    field_idx: *field_idx,
-                })
+            NDataProjection::VariantField { variant, field } => ty.as_enum(db).map(|enum_| {
+                project_pattern_child_source_ty(
+                    db,
+                    ty,
+                    PatternProjectionStep::VariantField {
+                        variant: EnumVariant::new(enum_, usize::from(variant.0)),
+                        field_idx: usize::from(field.0),
+                    },
+                )
             }),
-            Projection::Index(index) => {
-                let len = ty.array_len(db)
+            NDataProjection::Index(index) => {
+                let len = ty
+                    .array_len(db)
                     .expect("normalized index projection must retain a concrete array length");
                 bounds.push((*index, len));
                 if len == 0 {
@@ -67,16 +77,8 @@ pub(super) fn place_index_bounds<'db>(
                 }
                 ty.generic_args(db).first().copied()
             }
-            Projection::Deref => ty.as_borrow(db).map(|(_, inner)| inner)
-                .or_else(|| ty.as_capability(db).map(|(_, inner)| inner)),
-            Projection::Discriminant => None,
         }
-        .unwrap_or_else(|| {
-            panic!(
-                "invalid semantic place projection while collecting index bounds: ty={}, projection={projection:?}",
-                ty.pretty_print(db),
-            )
-        });
+        .expect("verified normalized data path");
     }
     bounds
 }
@@ -90,11 +92,11 @@ pub(super) enum RuntimeSourceMode<'roots, 'db> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum SemanticPlaceValueSource<'db> {
     PlaceValue {
-        place: NSPlace<'db>,
+        place: NPlace<'db>,
         semantic_ty: TyId<'db>,
     },
     ValueExtract {
-        place: NSPlace<'db>,
+        place: NPlace<'db>,
         semantic_ty: TyId<'db>,
     },
 }
@@ -125,55 +127,88 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
 
     pub(super) fn semantic_place_value_source(
         &self,
-        local: SLocalId,
+        operand: RuntimeOperand,
     ) -> Option<SemanticPlaceValueSource<'db>> {
-        let local_data = self.env.body().locals.get(local.index())?;
-        [
-            snapshot_source_place(self.env.body(), local).cloned(),
-            nonself_backing_value_place(self.env.body(), local).cloned(),
-            alias_source_place_for_local(self.env.body(), local),
-        ]
-        .into_iter()
-        .flatten()
-        .find_map(|place| self.place_value_source(place, local_data.ty))
+        let local = self.env.body().local(operand.local)?;
+        let place = self.semantic_operand_place(operand)?;
+        self.place_value_source(place, local.ty)
     }
 
-    pub(super) fn place_is_lowerable(&self, place: &NSPlace<'db>) -> bool {
-        let mut visiting = vec![false; self.env.body().locals.len()];
-        self.place_is_lowerable_with_seen(place, &mut visiting)
+    pub(super) fn semantic_place_address_source(
+        &self,
+        operand: RuntimeOperand,
+    ) -> Option<(NPlace<'db>, TyId<'db>)> {
+        let local = self.env.body().local(operand.local)?;
+        let place = self.semantic_operand_place(operand)?;
+        self.place_is_lowerable(&place).then_some((place, local.ty))
     }
 
-    pub(super) fn place_has_existing_runtime_root(&self, place: &NSPlace<'db>) -> bool {
-        match place.root {
-            NSPlaceRoot::CarrierDerefLocal(local) => self.local_has_existing_runtime_root(local),
-            NSPlaceRoot::Root(root) => match self.env.body().root(root) {
-                Some(NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local }) => {
-                    self.local_has_existing_runtime_root(*local)
+    fn semantic_operand_place(&self, operand: RuntimeOperand) -> Option<NPlace<'db>> {
+        operand
+            .value
+            .and_then(|value| normalized_value_place(self.env.db(), self.env.body(), value))
+            .or_else(|| alias_source_place_for_local(self.env.db(), self.env.body(), operand.local))
+    }
+
+    pub(super) fn place_is_lowerable(&self, place: &NPlace<'db>) -> bool {
+        match place.base {
+            NPlaceBase::CapabilityTarget { carrier } => self
+                .env
+                .value_local(carrier)
+                .is_some_and(|local| self.local_has_transport_carrier(local)),
+            NPlaceBase::Root(root_id) => {
+                let Some(root) = self.env.body().normalized.root(root_id) else {
+                    return false;
+                };
+                match &root.kind {
+                    NRootKind::LocalSlot { .. }
+                    | NRootKind::Temporary { .. }
+                    | NRootKind::ParamPlace { .. } => self
+                        .env
+                        .body()
+                        .root_local(root_id)
+                        .is_some_and(|local| self.local_has_existing_runtime_root(local)),
+                    NRootKind::Provider { binding } => {
+                        self.provider_place_root_is_lowerable(binding)
+                    }
+                    NRootKind::CapabilityRepresentation { carrier } => self
+                        .env
+                        .value_local(*carrier)
+                        .is_some_and(|local| self.local_has_transport_carrier(local)),
                 }
-                Some(NBorrowRoot::Provider { binding, .. }) => {
-                    self.provider_place_root_is_lowerable(binding)
-                }
-                None => false,
-            },
+            }
         }
     }
 
     pub(super) fn local_has_existing_runtime_root(&self, local: SLocalId) -> bool {
-        let Some(local_data) = self.env.body().locals.get(local.index()) else {
+        let Some(local_data) = self.env.body().local(local) else {
             return false;
         };
         self.concrete_roots()
             .and_then(|roots| roots.get(local.index()))
             .is_some_and(|root| !matches!(root, RuntimeLocalRoot::None))
-            || (matches!(local_data.facts.interface, SemanticLocalKind::PlaceCarrier)
+            || (matches!(local_data.role.kind(), SemanticLocalKind::PlaceCarrier)
                 && self.local_has_transport_carrier(local))
             || self.local_root_provider_is_lowerable(local_data)
+    }
+
+    pub(super) fn local_has_concrete_runtime_root(&self, local: SLocalId) -> bool {
+        self.concrete_roots()
+            .and_then(|roots| roots.get(local.index()))
+            .is_some_and(|root| !matches!(root, RuntimeLocalRoot::None))
     }
 
     fn provider_place_root_is_lowerable(
         &self,
         provider: &hir::semantic::ProviderBinding<'db>,
     ) -> bool {
+        if self
+            .env
+            .actual_runtime_visible_root_provider_class(self.carriers, provider)
+            .is_some()
+        {
+            return true;
+        }
         if provider_erases_runtime_root(
             self.env.db(),
             provider,
@@ -182,15 +217,12 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
         ) {
             return false;
         }
-        self.env
-            .actual_runtime_visible_root_provider_class(self.carriers, provider)
-            .is_some()
-            || runtime_class_for_effect_binding_provider_in_env(
-                self.env.db(),
-                self.env.type_env(),
-                provider,
-            )
-            .is_some()
+        runtime_class_for_effect_binding_provider_in_env(
+            self.env.db(),
+            self.env.type_env(),
+            provider,
+        )
+        .is_some()
             || runtime_class_for_direct_value_provider_in_env(
                 self.env.db(),
                 self.env.type_env(),
@@ -200,23 +232,24 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
     }
 
     pub(super) fn handle_like_semantic_value_is_available(&self, local: SLocalId) -> bool {
-        let Some(local_data) = self.env.body().locals.get(local.index()) else {
+        let Some(local_data) = self.env.body().local(local) else {
             return false;
         };
         if self.local_has_transport_carrier(local) {
-            return !matches!(
-                local_data.facts.interface,
-                SemanticLocalKind::PlaceBoundValue
-            ) || local_data.facts.origin.root_provider().is_some();
+            return !matches!(local_data.role.kind(), SemanticLocalKind::PlaceBoundValue)
+                || local_data
+                    .role
+                    .root_provider(&self.env.body().locals)
+                    .is_some();
         }
         self.local_root_provider_is_lowerable(local_data)
     }
 
     pub(super) fn semantic_operand_place_address_is_lowerable(&self, local: SLocalId) -> bool {
-        let Some(local_data) = self.env.body().locals.get(local.index()) else {
+        let Some(local_data) = self.env.body().local(local) else {
             return false;
         };
-        (matches!(local_data.facts.interface, SemanticLocalKind::PlaceCarrier)
+        (matches!(local_data.role.kind(), SemanticLocalKind::PlaceCarrier)
             && self.local_has_transport_carrier(local))
             || self.local_root_provider_is_lowerable(local_data)
     }
@@ -229,10 +262,10 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
     }
 
     fn semantic_operand_value_is_lowerable(&self, local: SLocalId) -> bool {
-        let Some(local_data) = self.env.body().locals.get(local.index()) else {
+        let Some(local_data) = self.env.body().local(local) else {
             return false;
         };
-        match local_data.facts.interface {
+        match local_data.role.kind() {
             SemanticLocalKind::Erased => false,
             SemanticLocalKind::DirectValue
                 if carrier_value_class(local, self.carriers).is_some() =>
@@ -243,7 +276,7 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
             SemanticLocalKind::DirectValue
             | SemanticLocalKind::PlaceCarrier
             | SemanticLocalKind::PlaceBoundValue => {
-                self.semantic_place_value_source(local).is_some()
+                alias_source_place_for_local(self.env.db(), self.env.body(), local).is_some()
                     || self.local_has_existing_runtime_root(local)
             }
         }
@@ -251,17 +284,17 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
 
     fn place_value_source(
         &self,
-        place: NSPlace<'db>,
+        place: NPlace<'db>,
         semantic_ty: TyId<'db>,
     ) -> Option<SemanticPlaceValueSource<'db>> {
         if self.place_is_lowerable(&place) {
             return Some(SemanticPlaceValueSource::PlaceValue { place, semantic_ty });
         }
         self.value_extract_place_is_lowerable(&place)
-            .then(|| SemanticPlaceValueSource::ValueExtract { place, semantic_ty })
+            .then_some(SemanticPlaceValueSource::ValueExtract { place, semantic_ty })
     }
 
-    fn value_extract_place_is_lowerable(&self, place: &NSPlace<'db>) -> bool {
+    fn value_extract_place_is_lowerable(&self, place: &NPlace<'db>) -> bool {
         let Some(base) = place_root_local(self.env.body(), place) else {
             return false;
         };
@@ -278,228 +311,193 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
             && place.path.iter().all(value_extractable_projection)
     }
 
-    fn place_is_lowerable_with_seen(&self, place: &NSPlace<'db>, visiting: &mut [bool]) -> bool {
-        match place.root {
-            NSPlaceRoot::CarrierDerefLocal(local) => {
-                carrier_value_class(local, self.carriers).is_some_and(|class| class.is_transport())
-                    || self.semantic_place_root_is_lowerable(local, visiting)
-            }
-            NSPlaceRoot::Root(root) => match self.env.body().root(root) {
-                Some(NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local }) => {
-                    self.semantic_place_root_is_lowerable(*local, visiting)
-                }
-                Some(NBorrowRoot::Provider { binding, .. }) => {
-                    self.provider_place_root_is_lowerable(binding)
-                }
-                None => false,
-            },
-        }
-    }
-
-    fn semantic_place_root_is_lowerable(&self, local: SLocalId, visiting: &mut [bool]) -> bool {
-        let Some(local_data) = self.env.body().locals.get(local.index()) else {
-            return false;
-        };
-        if std::mem::replace(&mut visiting[local.index()], true) {
-            return false;
-        }
-        let lowerable = self.local_has_existing_runtime_root(local)
-            || snapshot_source_place(self.env.body(), local)
-                .is_some_and(|place| self.place_is_lowerable_with_seen(place, visiting))
-            || local_data
-                .backing_place()
-                .is_some_and(|place| self.place_is_lowerable_with_seen(place, visiting))
-            || (matches!(self.mode, RuntimeSourceMode::Abstract)
-                && local_data.facts.root_demand.needs_runtime_root());
-        visiting[local.index()] = false;
-        lowerable
-    }
-
     fn local_has_transport_carrier(&self, local: SLocalId) -> bool {
         carrier_value_class(local, self.carriers).is_some_and(|class| class.is_transport())
     }
 
-    fn local_root_provider_is_lowerable(&self, local: &NSLocal<'db>) -> bool {
+    fn local_root_provider_is_lowerable(&self, local: &SLocal<'db>) -> bool {
         local
-            .facts
-            .origin
-            .root_provider()
-            .is_some_and(|provider| self.provider_place_root_is_lowerable(provider))
+            .role
+            .root_provider(&self.env.body().locals)
+            .is_some_and(|provider| self.provider_place_root_is_lowerable(&provider))
     }
 }
 
 pub(super) fn alias_source_place_for_local<'db>(
-    body: &NormalizedSemanticBody<'db>,
+    db: &'db dyn MirDb,
+    body: &RuntimeSemanticBody<'db>,
     local: SLocalId,
-) -> Option<NSPlace<'db>> {
-    let local_data = body.local(local)?;
-    if let Some(place) = local_data.backing_place() {
-        return Some(place.clone());
-    }
-    match &local_data.lowering {
-        NormalizedBindingLowering::CarrierLocal {
-            provider,
-            target_ty,
-            ..
-        } => {
-            let root = if let Some(provider) = provider {
-                NSPlaceRoot::Root(provider_borrow_root(body, provider, *target_ty)?)
-            } else {
-                NSPlaceRoot::CarrierDerefLocal(local)
-            };
-            Some(NSPlace {
-                root,
-                path: Default::default(),
-            })
-        }
-        NormalizedBindingLowering::Erased
-        | NormalizedBindingLowering::ValueLocal { .. }
-        | NormalizedBindingLowering::PlaceBoundValue { .. } => None,
-    }
-}
-
-fn provider_borrow_root<'db>(
-    body: &NormalizedSemanticBody<'db>,
-    provider: &hir::semantic::ProviderBinding<'db>,
-    value_ty: TyId<'db>,
-) -> Option<NBorrowRootId> {
-    body.borrow_roots
+) -> Option<NPlace<'db>> {
+    body.layout_plan
+        .value_representations
         .iter()
-        .position(|root| {
-            matches!(
-                root,
-                NBorrowRoot::Provider {
-                    binding,
-                    value_ty: root_value_ty,
-                    ..
-                } if binding == provider && *root_value_ty == value_ty
-            )
-        })
-        .map(|idx| NBorrowRootId::from_u32(idx as u32))
+        .rev()
+        .filter(|representation| body.value_local(representation.value) == Some(local))
+        .find_map(|representation| normalized_value_place(db, body, representation.value))
 }
 
-pub(super) fn local_read_places_extractable_from_value<'db>(
-    body: &NormalizedSemanticBody<'db>,
+pub(super) fn declared_root_place_for_local<'db>(
+    body: &RuntimeSemanticBody<'db>,
     local: SLocalId,
-) -> bool {
-    body.blocks.iter().all(|block| {
-        block.stmts.iter().all(|stmt| match &stmt.kind {
-            NSStmtKind::Assign { expr, .. } => {
-                expr_read_places_extractable_from_value(body, local, expr)
-            }
-            NSStmtKind::Store { .. } => true,
-        })
+) -> Option<NPlace<'db>> {
+    let local_data = body.local(local)?;
+    let provider = local_data.role.root_provider(&body.locals);
+    let root = body
+        .normalized
+        .roots
+        .iter()
+        .enumerate()
+        .find_map(|(index, root)| {
+            let root_id = hir::analysis::semantic::normalized::NRootId::new(index);
+            let matches_local = body.root_local(root_id) == Some(local);
+            let matches_provider = provider.as_ref().is_some_and(|provider| {
+                matches!(
+                    &root.kind,
+                    NRootKind::Provider { binding }
+                        if binding == provider && root.ty == local_data.role.layout_ty(local_data.ty)
+                )
+            });
+            (matches_local || matches_provider).then_some((root_id, root))
+        })?;
+    Some(NPlace {
+        base: NPlaceBase::Root(root.0),
+        path: Default::default(),
+        ty: root.1.ty,
+        origin: root.1.origin,
     })
 }
 
-pub(super) fn local_pointer_uses_lowerable_from_value<'db>(
-    body: &NormalizedSemanticBody<'db>,
+pub(super) fn nonself_alias_source_place_for_local<'db>(
+    db: &'db dyn MirDb,
+    body: &RuntimeSemanticBody<'db>,
     local: SLocalId,
+) -> Option<NPlace<'db>> {
+    alias_source_place_for_local(db, body, local)
+        .filter(|place| !is_self_rooted_value_place(body, local, place))
+}
+
+fn is_self_rooted_value_place(
+    body: &RuntimeSemanticBody<'_>,
+    local: SLocalId,
+    place: &NPlace<'_>,
 ) -> bool {
-    let local_sources_lowerable =
-        body.locals.iter().all(|candidate| {
-            let backing_lowerable = match &candidate.lowering {
-                NormalizedBindingLowering::ValueLocal { place } => {
-                    pointer_place_lowers_from_value(body, local, place, true)
-                }
-                NormalizedBindingLowering::PlaceBoundValue { place, .. } => {
-                    pointer_place_lowers_from_value(body, local, place, false)
-                }
-                NormalizedBindingLowering::Erased
-                | NormalizedBindingLowering::CarrierLocal { .. } => true,
-            };
-            backing_lowerable
-                && candidate
-                    .snapshot_source_place()
-                    .is_none_or(|place| pointer_place_lowers_from_value(body, local, place, true))
-                && candidate.layout_backing_sources().iter().all(|source| {
-                    pointer_place_lowers_from_value(body, local, &source.source, true)
-                })
-        });
-    if !local_sources_lowerable {
+    if !place.path.is_empty() {
         return false;
     }
-    body.blocks.iter().all(|block| {
-        block.stmts.iter().all(|stmt| match &stmt.kind {
-            NSStmtKind::Store { dst, .. } => {
-                pointer_place_lowers_from_value(body, local, dst, false)
-            }
-            NSStmtKind::Assign { expr, .. } => {
-                let mut lowerable = true;
-                let allow_direct_value = matches!(expr, NExpr::ReadPlace { .. });
-                expr.for_each_place_operand(|place| {
-                    lowerable &=
-                        pointer_place_lowers_from_value(body, local, place, allow_direct_value);
-                });
-                lowerable
-            }
-        })
+    match place.base {
+        NPlaceBase::CapabilityTarget { carrier } => body.value_local(carrier) == Some(local),
+        NPlaceBase::Root(root) => {
+            matches!(
+                body.normalized.root(root).map(|root| &root.kind),
+                Some(
+                    NRootKind::LocalSlot { .. }
+                        | NRootKind::Temporary { .. }
+                        | NRootKind::ParamPlace { .. }
+                )
+            ) && body.root_local(root) == Some(local)
+        }
+    }
+}
+
+fn normalized_value_place<'db>(
+    db: &'db dyn MirDb,
+    body: &RuntimeSemanticBody<'db>,
+    value: NValueId,
+) -> Option<NPlace<'db>> {
+    fn resolve<'db>(
+        db: &'db dyn MirDb,
+        body: &RuntimeSemanticBody<'db>,
+        value: NValueId,
+        visiting: &mut [bool],
+    ) -> Option<NPlace<'db>> {
+        if std::mem::replace(visiting.get_mut(value.index())?, true) {
+            return None;
+        }
+        let data = body.normalized.value(value)?;
+        let place = match data.definition {
+            NValueDefinition::Statement { block, statement } => match &body
+                .normalized
+                .block(block)?
+                .statements
+                .get(statement as usize)?
+                .kind
+            {
+                NStatementKind::Define {
+                    expr:
+                        NExpr::Load { place, .. }
+                        | NExpr::Borrow { place, .. }
+                        | NExpr::MakeView { place, .. },
+                    ..
+                } => Some(place.clone()),
+                NStatementKind::Define {
+                    expr: NExpr::Forward { src },
+                    ..
+                } => resolve(db, body, src.value, visiting),
+                NStatementKind::Define {
+                    expr: NExpr::ProjectValue { value, path },
+                    ..
+                } => resolve(db, body, value.value, visiting).map(|mut place| {
+                    place.path = place.path.concat(&path.0);
+                    place.ty = data.ty;
+                    place
+                }),
+                NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
+            },
+            NValueDefinition::EntryParam { .. } | NValueDefinition::BlockParam { .. } => None,
+        }
+        .or_else(|| {
+            data.ty.as_capability(db).map(|(_, ty)| NPlace {
+                base: NPlaceBase::CapabilityTarget { carrier: value },
+                path: Default::default(),
+                ty,
+                origin: data.origin,
+            })
+        });
+        visiting[value.index()] = false;
+        place
+    }
+
+    resolve(
+        db,
+        body,
+        value,
+        &mut vec![false; body.normalized.values.len()],
+    )
+}
+
+pub(super) fn local_read_places_extractable_from_value(
+    body: &RuntimeSemanticBody<'_>,
+    local: SLocalId,
+) -> bool {
+    body.normalized.blocks.iter().all(|block| {
+        block
+            .statements
+            .iter()
+            .all(|statement| match &statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Load { place, .. } | NExpr::MakeView { place, .. },
+                    ..
+                } => {
+                    place_root_local(body, place) != Some(local)
+                        || place.path.iter().all(value_extractable_projection)
+                }
+                NStatementKind::Define { .. } | NStatementKind::Store { .. } => true,
+            })
     })
 }
 
-fn pointer_place_lowers_from_value<'db>(
-    body: &NormalizedSemanticBody<'db>,
-    local: SLocalId,
-    place: &NSPlace<'db>,
-    allow_direct_value: bool,
-) -> bool {
-    if place_root_local(body, place) != Some(local) {
-        return true;
-    }
-    (allow_direct_value && place.path.is_empty())
-        || place_path_starts_with_pointee_projection(&place.path)
-}
-
-pub(super) fn place_path_starts_with_pointee_projection<'db>(
-    path: &hir::analysis::semantic::borrowck::NSProjectionPath<'db>,
-) -> bool {
-    matches!(
-        path.iter().next(),
-        Some(
-            Projection::Deref
-                | Projection::Field(_)
-                | Projection::VariantField { .. }
-                | Projection::Index(IndexSource::Constant(_) | IndexSource::Dynamic(_))
-        )
-    )
-}
-
-fn place_root_local<'db>(
-    body: &NormalizedSemanticBody<'db>,
-    place: &NSPlace<'db>,
-) -> Option<SLocalId> {
-    match place.root {
-        NSPlaceRoot::CarrierDerefLocal(local) => Some(local),
-        NSPlaceRoot::Root(root) => match body.root(root) {
-            Some(NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local }) => {
-                Some(*local)
-            }
-            Some(NBorrowRoot::Provider { .. }) | None => None,
-        },
+fn place_root_local(body: &RuntimeSemanticBody<'_>, place: &NPlace<'_>) -> Option<SLocalId> {
+    match place.base {
+        NPlaceBase::CapabilityTarget { carrier } => body.value_local(carrier),
+        NPlaceBase::Root(root) => body.root_local(root),
     }
 }
 
-fn value_extractable_projection<'db>(
-    projection: &Projection<TyId<'db>, VariantIndex, SLocalId>,
-) -> bool {
+fn value_extractable_projection(projection: &NDataProjection) -> bool {
     matches!(
         projection,
-        Projection::Field(_)
-            | Projection::VariantField { .. }
-            | Projection::Index(IndexSource::Constant(_))
+        NDataProjection::Field(_)
+            | NDataProjection::VariantField { .. }
+            | NDataProjection::Index(NIndex::Const(_))
     )
-}
-
-fn expr_read_places_extractable_from_value<'db>(
-    body: &NormalizedSemanticBody<'db>,
-    local: SLocalId,
-    expr: &NExpr<'db>,
-) -> bool {
-    match expr {
-        NExpr::ReadPlace { place, .. } => {
-            place_root_local(body, place) != Some(local)
-                || place.path.iter().all(value_extractable_projection)
-        }
-        _ => true,
-    }
 }

@@ -16,8 +16,9 @@
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, Layout, RExpr, RLocalId, RValueId, RuntimeBody, RuntimeBuiltin,
-        RuntimeClass, RuntimeLayoutMap, RuntimeProgramView, ScalarClass, ScalarRepr, ScalarRole,
+        AddressSpaceKind, Layout, RExpr, RLocalId, RValueId, RefKind, RefView, RuntimeBody,
+        RuntimeBuiltin, RuntimeClass, RuntimeLayoutMap, RuntimeProgramView, ScalarClass,
+        ScalarRepr, ScalarRole,
         place::{
             enum_extract_class, enum_tag_class, enum_tag_class_from_value, project_place,
             resolve_runtime_place_address_class, runtime_value_class, scalar_class_from_const,
@@ -96,8 +97,8 @@ pub fn expr_result_class<'db>(
             let src_class = runtime_value_class(body, *src)?;
             let Some(RuntimeClass::Ref {
                 pointee,
-                kind: crate::runtime::RefKind::Object,
-                view: crate::runtime::RefView::Whole,
+                kind: RefKind::Object,
+                view: RefView::Whole,
             }) = &dst_class
             else {
                 return Err(VerifyError::InvalidExprClass(dst));
@@ -109,8 +110,8 @@ pub fn expr_result_class<'db>(
                 RuntimeClass::AggregateValue { layout: src_layout } if *src_layout == *layout => {}
                 RuntimeClass::Ref {
                     pointee: src_pointee,
-                    kind: crate::runtime::RefKind::Const,
-                    view: crate::runtime::RefView::Whole,
+                    kind: RefKind::Const,
+                    view: RefView::Whole,
                 } if **src_pointee == RuntimeClass::AggregateValue { layout: *layout } => {}
                 _ => return Err(VerifyError::InvalidExprClass(dst)),
             }
@@ -119,8 +120,8 @@ pub fn expr_result_class<'db>(
         RExpr::MaterializePlaceToObject { place } => {
             let Some(RuntimeClass::Ref {
                 pointee,
-                kind: crate::runtime::RefKind::Object,
-                view: crate::runtime::RefView::Whole,
+                kind: RefKind::Object,
+                view: RefView::Whole,
             }) = &dst_class
             else {
                 return Err(VerifyError::InvalidExprClass(dst));
@@ -130,6 +131,33 @@ pub fn expr_result_class<'db>(
             };
             if project_place(db, program, body, place)?
                 != (RuntimeClass::AggregateValue { layout: *layout })
+            {
+                return Err(VerifyError::InvalidExprClass(dst));
+            }
+            dst_class.clone()
+        }
+        RExpr::NativeRef { value } => {
+            let source = runtime_value_class(body, *value)?;
+            let Some(RuntimeClass::Ref {
+                pointee,
+                kind: RefKind::Native,
+                view: RefView::Whole,
+            }) = &dst_class
+            else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
+            if source.pointee() != Some(pointee.as_ref())
+                || !matches!(
+                    source,
+                    RuntimeClass::Ref {
+                        kind: RefKind::Const
+                            | RefKind::Object
+                            | RefKind::Native
+                            | RefKind::Provider { .. },
+                        view: RefView::Whole,
+                        ..
+                    } | RuntimeClass::RawAddr { .. }
+                )
             {
                 return Err(VerifyError::InvalidExprClass(dst));
             }
@@ -154,15 +182,16 @@ pub fn expr_result_class<'db>(
                 Some(RuntimeClass::Ref {
                     pointee,
                     kind:
-                        crate::runtime::RefKind::Provider {
+                        RefKind::Provider {
                             provider_ty: actual_provider_ty,
                             space: actual_space,
                         },
-                    view: crate::runtime::RefView::Whole,
+                    view: RefView::Whole,
                 }) if actual_provider_ty == provider_ty && *actual_space == *space => {
-                    if raw_pointee
-                        .as_deref()
-                        .is_some_and(|raw_pointee| raw_pointee != pointee.as_ref())
+                    if *space == AddressSpaceKind::Memory
+                        || raw_pointee
+                            .as_deref()
+                            .is_some_and(|raw_pointee| raw_pointee != pointee.as_ref())
                     {
                         return Err(VerifyError::InvalidExprClass(dst));
                     }
@@ -301,7 +330,7 @@ pub fn expr_result_class<'db>(
                 (runtime_value_class(body, *value)?, &dst_class),
                 (
                     RuntimeClass::Ref {
-                        kind: crate::runtime::RefKind::Provider { .. },
+                        kind: RefKind::Provider { .. },
                         ..
                     },
                     Some(RuntimeClass::RawAddr { .. }),
@@ -395,7 +424,7 @@ pub fn expr_result_class<'db>(
             Some(RuntimeClass::Ref {
                 pointee,
                 kind,
-                view: crate::runtime::RefView::EnumVariant(*variant),
+                view: RefView::EnumVariant(*variant),
             })
         }
     };
@@ -726,7 +755,7 @@ fn builtin_result_class<'db>(
         RuntimeBuiltin::MakeContractFieldRef { class, kind, .. } => {
             if let RuntimeClass::Ref {
                 kind: actual_kind,
-                view: crate::runtime::RefView::Whole,
+                view: RefView::Whole,
                 ..
             } = class
                 && actual_kind != kind

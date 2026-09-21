@@ -1,5 +1,8 @@
 use hir::analysis::{
-    semantic::{NEffectArg, NEffectArgValue, SemanticInstance},
+    semantic::{
+        SemanticInstance,
+        normalized::{NEffectArg, NEffectArgValue},
+    },
     ty::ty_check::EffectPassMode,
 };
 
@@ -12,6 +15,7 @@ use super::{
     boundary::{BoundarySiteAllocator, StagedBoundary, default_by_place_boundary},
     classify::{desired_runtime_effect_arg_boundary, runtime_effect_binding_plan_for_binding_idx},
     provider_space::resolved_effect_arg_address_space,
+    semantic_body::RuntimeSemanticBody,
     type_info::{RuntimeTypeEnv, provider_class_for_target_in_env},
 };
 
@@ -101,7 +105,7 @@ pub(super) fn compile_value_pass_plan<'db>(
 
 pub(super) fn compile_call_input_plan_for_semantic<'db>(
     db: &'db dyn MirDb,
-    body: &hir::analysis::semantic::borrowck::NormalizedSemanticBody<'db>,
+    body: &RuntimeSemanticBody<'db>,
     semantic: SemanticInstance<'db>,
     type_env: RuntimeTypeEnv<'db>,
     effect_args: &[NEffectArg<'db>],
@@ -126,17 +130,17 @@ pub(super) fn compile_call_input_plan_for_semantic<'db>(
 
 fn compile_effect_arg_plan<'db>(
     db: &'db dyn MirDb,
-    body: &hir::analysis::semantic::borrowck::NormalizedSemanticBody<'db>,
+    body: &RuntimeSemanticBody<'db>,
     semantic: SemanticInstance<'db>,
     type_env: RuntimeTypeEnv<'db>,
     arg: &NEffectArg<'db>,
     boundary_sites: &mut BoundarySiteAllocator,
 ) -> CompiledEffectArgPlan<'db> {
-    let space = resolved_effect_arg_address_space(db, body, arg);
     let binding_plan = runtime_effect_binding_plan_for_binding_idx(db, semantic, arg.binding_idx);
     if binding_plan.is_none() {
         return CompiledEffectArgPlan::Erased;
     }
+    let space = resolved_effect_arg_address_space(db, body, arg);
     let boundary =
         desired_runtime_effect_arg_boundary(db, type_env, arg, binding_plan.as_ref(), space);
     if boundary.is_none() && arg.provider.is_none() && arg.provider_target_ty.is_none() {
@@ -150,7 +154,7 @@ fn compile_effect_arg_plan<'db>(
                 NEffectArgValue::Value(_) | NEffectArgValue::Place(_),
             ) => panic!(
                 "effect arg without provider/target should compile as a plain value: owner={:?}; arg={arg:?}",
-                body.owner.key(db).owner(db),
+                body.owner().key(db).owner(db),
             ),
         };
     }

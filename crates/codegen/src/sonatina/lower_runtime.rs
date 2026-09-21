@@ -1,3 +1,9 @@
+mod memory_reference;
+
+#[cfg(test)]
+mod tests;
+
+use memory_reference::MemoryReference;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -330,8 +336,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
     fn lower_bodies(&mut self) -> Result<(), LowerError> {
         for function in self.package.functions(self.db) {
-            let body = function.instance(self.db).body(self.db);
-            let func_ref = self.func_ref(function.instance(self.db))?;
+            let instance = function.instance(self.db);
+            let body = instance.body(self.db);
+            let func_ref = self.func_ref(instance)?;
             let ctx = FunctionLowerer::new(self, body, func_ref)?;
             ctx.lower()?;
         }
@@ -496,7 +503,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                     let pointee_ty = self.ty_for_class(pointee)?;
                     self.builder.objref_type(pointee_ty)
                 }
-                RefKind::Provider { .. } => Type::I256,
+                RefKind::Native | RefKind::Provider { .. } => Type::I256,
             },
             RuntimeClass::RawAddr { .. } => Type::I256,
         })
@@ -669,6 +676,14 @@ enum SlotRoot {
 }
 
 enum PlaceTerminal<'db> {
+    Reference {
+        reference: MemoryReference,
+        class: RuntimeClass<'db>,
+    },
+    StackPtr {
+        addr: ValueId,
+        class: RuntimeClass<'db>,
+    },
     Ptr {
         addr: ValueId,
         space: AddressSpaceKind,
@@ -1032,16 +1047,23 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 RuntimeLocalRoot::Slot(class) => {
                     let class_ty = self.module.ty_for_class(class)?;
                     let root = match class {
-                        RuntimeClass::AggregateValue { .. } => SlotRoot::Object(
-                            self.fb.insert_inst(
-                                ObjAlloc::new(self.module.inst_set(), class_ty),
-                                self.fb.module_builder.objref_type(class_ty),
-                            ),
-                            class_ty,
-                        ),
                         RuntimeClass::Scalar(_)
-                        | RuntimeClass::Ref { .. }
-                        | RuntimeClass::RawAddr { .. } => SlotRoot::Ptr(
+                        | RuntimeClass::AggregateValue { .. }
+                        | RuntimeClass::Ref {
+                            kind: RefKind::Native,
+                            ..
+                        } => {
+                            // Native slot borrows can publish their address in a
+                            // descriptor, so they need identity-preserving heap export.
+                            SlotRoot::Object(
+                                self.fb.insert_inst(
+                                    ObjAlloc::new(self.module.inst_set(), class_ty),
+                                    self.fb.module_builder.objref_type(class_ty),
+                                ),
+                                class_ty,
+                            )
+                        }
+                        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => SlotRoot::Ptr(
                             {
                                 let ptr_ty = self.fb.ptr_type(class_ty);
                                 self.fb.insert_inst(
@@ -1172,6 +1194,25 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.checked_indices.clear();
                 self.pending_enum_proof = None;
             }
+            RStmt::EnumSetTag { root, variant }
+                if matches!(
+                    self.body.value_class(*root),
+                    Some(RuntimeClass::Ref {
+                        kind: RefKind::Native,
+                        ..
+                    })
+                ) =>
+            {
+                let object = self.local_value(*root)?;
+                let reference = self.load_memory_reference(object)?;
+                let Layout::Enum(layout) = variant.enum_layout.data(self.module.db) else {
+                    unreachable!("enum tag requires enum layout");
+                };
+                let tag = self.index_value(variant.index.into());
+                self.store_referent(reference, &RuntimeClass::Scalar(layout.tag), tag)?;
+                self.checked_indices.clear();
+                self.pending_enum_proof = None;
+            }
             RStmt::EnumSetTag { root, variant } => {
                 let object = self.local_value(*root)?;
                 self.fb.insert_inst_no_result(EnumSetTag::new(
@@ -1179,6 +1220,41 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     object,
                     self.variant_ref(*variant)?,
                 ));
+                self.checked_indices.clear();
+                self.pending_enum_proof = None;
+            }
+            RStmt::EnumWriteVariant {
+                root,
+                variant,
+                fields,
+            } if matches!(
+                self.body.value_class(*root),
+                Some(RuntimeClass::Ref {
+                    kind: RefKind::Native,
+                    ..
+                })
+            ) =>
+            {
+                let object = self.local_value(*root)?;
+                let values = fields
+                    .iter()
+                    .map(|value| self.local_value(*value))
+                    .collect::<Result<SmallVec<[ValueId; 2]>, _>>()?;
+                let class = RuntimeClass::AggregateValue {
+                    layout: variant.enum_layout,
+                };
+                let ty = self.module.ty_for_class(&class)?;
+                let value = self.fb.insert_inst(
+                    EnumMake::new(
+                        self.module.inst_set(),
+                        ty,
+                        self.variant_ref(*variant)?,
+                        values,
+                    ),
+                    ty,
+                );
+                let reference = self.load_memory_reference(object)?;
+                self.store_referent(reference, &class, value)?;
                 self.checked_indices.clear();
                 self.pending_enum_proof = None;
             }
@@ -1318,6 +1394,62 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RExpr::MaterializePlaceToObject { place } => {
                 return self.materialize_place_to_object(place, dst);
             }
+            RExpr::NativeRef { value } => {
+                let class = self.body.value_class(*value).cloned().ok_or_else(|| {
+                    LowerError::Internal("native reference requires a source class".into())
+                })?;
+                let value = self.local_value(*value)?;
+                match class {
+                    RuntimeClass::Ref {
+                        kind: RefKind::Native,
+                        ..
+                    } => value,
+                    RuntimeClass::Ref {
+                        kind: RefKind::Const,
+                        pointee,
+                        ..
+                    } => {
+                        // Const views have no mutable object identity. Realize their
+                        // immutable value in native storage when a stored reference
+                        // first needs a numeric address; scalar projections work too.
+                        let ty = self.module.ty_for_class(&pointee)?;
+                        let object_ty = self.fb.module_builder.objref_type(ty);
+                        let object = self
+                            .fb
+                            .insert_inst(ObjAlloc::new(self.module.inst_set(), ty), object_ty);
+                        self.copy_source_into_object(
+                            CopySource::Const {
+                                value,
+                                class: (*pointee).clone(),
+                            },
+                            &pointee,
+                            object,
+                        )?;
+                        self.export_object_reference(object)?
+                    }
+                    RuntimeClass::Ref {
+                        kind:
+                            RefKind::Object
+                            | RefKind::Provider {
+                                space: AddressSpaceKind::Memory,
+                                ..
+                            },
+                        ..
+                    } => self.export_object_reference(value)?,
+                    RuntimeClass::Ref {
+                        kind: RefKind::Provider { space, .. },
+                        ..
+                    }
+                    | RuntimeClass::RawAddr { space, .. } => {
+                        self.store_raw_reference(value, space)?
+                    }
+                    _ => {
+                        return Err(LowerError::Internal(
+                            "native reference requires a materialized source".into(),
+                        ));
+                    }
+                }
+            }
             RExpr::ProviderRefFromRaw { raw, space, .. } => {
                 let value = self.local_value(*raw)?;
                 if *space == AddressSpaceKind::Memory {
@@ -1447,6 +1579,33 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     ty,
                 )
             }
+            RExpr::EnumGetTag { root }
+                if matches!(
+                    self.body.value_class(*root),
+                    Some(RuntimeClass::Ref {
+                        kind: RefKind::Native,
+                        ..
+                    })
+                ) =>
+            {
+                let class = self
+                    .body
+                    .value_class(*root)
+                    .and_then(RuntimeClass::pointee)
+                    .cloned()
+                    .ok_or_else(|| {
+                        LowerError::Internal("enum get-tag requires reference".into())
+                    })?;
+                let root = self.local_value(*root)?;
+                let reference = self.load_memory_reference(root)?;
+                let value = self.load_referent(reference, &class)?;
+                let dst = dst.ok_or_else(|| {
+                    LowerError::Internal("enum get-tag missing destination".into())
+                })?;
+                let ty = self.local_ty(dst)?;
+                self.fb
+                    .insert_inst(EnumTag::new(self.module.inst_set(), value), ty)
+            }
             RExpr::EnumGetTag { root } => {
                 let root = self.local_value(*root)?;
                 let dst = dst.ok_or_else(|| {
@@ -1455,6 +1614,30 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let ty = self.local_ty(dst)?;
                 self.fb
                     .insert_inst(EnumGetTag::new(self.module.inst_set(), root), ty)
+            }
+            RExpr::EnumAssertVariantRef { root, variant }
+                if matches!(
+                    self.body.value_class(*root),
+                    Some(RuntimeClass::Ref {
+                        kind: RefKind::Native,
+                        ..
+                    })
+                ) =>
+            {
+                let root = self.local_value(*root)?;
+                let reference = self.load_memory_reference(root)?;
+                let value = self.load_referent(
+                    reference,
+                    &RuntimeClass::AggregateValue {
+                        layout: variant.enum_layout,
+                    },
+                )?;
+                self.fb.insert_inst_no_result(EnumAssertVariant::new(
+                    self.module.inst_set(),
+                    value,
+                    self.variant_ref(*variant)?,
+                ));
+                root
             }
             RExpr::EnumAssertVariantRef { root, variant } => {
                 let root = self.local_value(*root)?;
@@ -2703,6 +2886,16 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 class,
             }),
             RuntimeClass::Ref {
+                kind: RefKind::Native,
+                ..
+            } => {
+                let value = self.local_value(value)?;
+                Ok(PlaceTerminal::Reference {
+                    reference: self.load_memory_reference(value)?,
+                    class,
+                })
+            }
+            RuntimeClass::Ref {
                 kind: RefKind::Object,
                 ..
             }
@@ -2766,6 +2959,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 })
             }
             RuntimeClass::Ref {
+                kind: RefKind::Native,
+                pointee,
+                ..
+            } => Ok(PlaceTerminal::Reference {
+                reference: self.load_memory_reference(value)?,
+                class: (**pointee).clone(),
+            }),
+            RuntimeClass::Ref {
                 kind: RefKind::Object,
                 pointee,
                 ..
@@ -2816,6 +3017,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         class: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
         match terminal {
+            PlaceTerminal::Reference { reference, .. } => self.load_referent(*reference, class),
+            PlaceTerminal::StackPtr { addr, .. } => {
+                let ty = self.module.ty_for_class(class)?;
+                Ok(self
+                    .fb
+                    .insert_inst(Mload::new(self.module.inst_set(), *addr, ty), ty))
+            }
             PlaceTerminal::Object { value, .. } => Ok(self.fb.insert_inst(
                 ObjLoad::new(self.module.inst_set(), *value),
                 self.module.ty_for_class(class)?,
@@ -2853,11 +3061,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 match self.slot_roots.get(&local).ok_or_else(|| {
                     LowerError::Internal(format!("missing slot root for {local:?}"))
                 })? {
-                    SlotRoot::Ptr(ptr, _) => PlaceTerminal::Ptr {
-                        addr: *ptr,
-                        space: AddressSpaceKind::Memory,
-                        class,
-                    },
+                    SlotRoot::Ptr(ptr, _) => PlaceTerminal::StackPtr { addr: *ptr, class },
                     SlotRoot::Object(value, _) => PlaceTerminal::Object {
                         value: *value,
                         class,
@@ -2889,6 +3093,16 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
 
         for elem in resolved.path.iter() {
             terminal = match (terminal, elem) {
+                (PlaceTerminal::Reference { reference, class }, elem)
+                    if !matches!(elem, ResolvedPlaceElem::Deref { .. }) =>
+                {
+                    let Lowered::Value((reference, class)) =
+                        self.project_memory_reference(reference, &class, elem)?
+                    else {
+                        return Ok(Lowered::Terminated);
+                    };
+                    PlaceTerminal::Reference { reference, class }
+                }
                 (
                     PlaceTerminal::Object { value, .. },
                     ResolvedPlaceElem::Field { field, class },
@@ -3032,6 +3246,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     return Err(LowerError::Unsupported(format!(
                         "unsupported place projection terminal `{terminal_kind}` with `{elem:?}`",
                         terminal_kind = match terminal {
+                            PlaceTerminal::Reference { .. } => "memory reference",
+                            PlaceTerminal::StackPtr { .. } => "stack ptr",
                             PlaceTerminal::Ptr { .. } => "ptr",
                             PlaceTerminal::Object { .. } => "object",
                             PlaceTerminal::Const { .. } => "const",
@@ -3051,6 +3267,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             return Ok(Lowered::Terminated);
         };
         Ok(Lowered::Value(match terminal {
+            PlaceTerminal::Reference { reference, .. } => self.load_referent(reference, &class)?,
+            PlaceTerminal::StackPtr { addr, class } => {
+                let ty = self.module.ty_for_class(&class)?;
+                self.fb
+                    .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty)
+            }
             PlaceTerminal::Object { value, .. } => self.fb.insert_inst(
                 ObjLoad::new(self.module.inst_set(), value),
                 self.module.ty_for_class(&class)?,
@@ -3119,13 +3341,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         let Lowered::Value(terminal) = self.resolve_place(place)? else {
             return Ok(Lowered::Terminated);
         };
-        let source = self.copy_source_for_terminal(terminal);
+        let source = self.copy_source_for_terminal(terminal)?;
         self.copy_source_into_object(source, &RuntimeClass::AggregateValue { layout }, object)?;
         Ok(Lowered::Value(object))
     }
 
     fn copy_source_for_local(
-        &self,
+        &mut self,
         local: RLocalId,
         value: ValueId,
     ) -> Result<CopySource<'db>, LowerError> {
@@ -3133,6 +3355,17 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             LowerError::Internal(format!("missing runtime class for local {local:?}"))
         })?;
         Ok(match class {
+            RuntimeClass::Ref {
+                pointee,
+                kind: RefKind::Native,
+                ..
+            } => {
+                let reference = self.load_memory_reference(value)?;
+                CopySource::Value {
+                    value: self.load_referent(reference, &pointee)?,
+                    class: *pointee,
+                }
+            }
             RuntimeClass::Ref {
                 pointee,
                 kind: RefKind::Object,
@@ -3158,12 +3391,28 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         })
     }
 
-    fn copy_source_for_terminal(&self, terminal: PlaceTerminal<'db>) -> CopySource<'db> {
-        match terminal {
+    fn copy_source_for_terminal(
+        &mut self,
+        terminal: PlaceTerminal<'db>,
+    ) -> Result<CopySource<'db>, LowerError> {
+        Ok(match terminal {
+            PlaceTerminal::Reference { reference, class } => CopySource::Value {
+                value: self.load_referent(reference, &class)?,
+                class,
+            },
+            PlaceTerminal::StackPtr { addr, class } => {
+                let ty = self.module.ty_for_class(&class)?;
+                CopySource::Value {
+                    value: self
+                        .fb
+                        .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty),
+                    class,
+                }
+            }
             PlaceTerminal::Object { value, class } => CopySource::Object { value, class },
             PlaceTerminal::Const { value, class } => CopySource::Const { value, class },
             PlaceTerminal::Ptr { addr, space, class } => CopySource::Ptr { addr, space, class },
-        }
+        })
     }
 
     fn copy_source_into_object(
@@ -3615,7 +3864,25 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             return Ok(Lowered::Terminated);
         };
         match terminal {
-            PlaceTerminal::Object { value, .. } => Ok(Lowered::Value(value)),
+            PlaceTerminal::Reference { reference, .. } => {
+                Ok(Lowered::Value(self.store_memory_reference(reference)?))
+            }
+            PlaceTerminal::Object { value, .. } => {
+                let value = if dst.is_some_and(|dst| {
+                    matches!(
+                        self.body.value_class(dst),
+                        Some(RuntimeClass::Ref {
+                            kind: RefKind::Native,
+                            ..
+                        })
+                    )
+                }) {
+                    self.export_object_reference(value)?
+                } else {
+                    value
+                };
+                Ok(Lowered::Value(value))
+            }
             PlaceTerminal::Const { value, .. } => {
                 if let Some(dst) = dst
                     && matches!(
@@ -3632,7 +3899,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     "borrowing const-backed places requires a const-backed destination".to_string(),
                 ))
             }
-            PlaceTerminal::Ptr { addr, .. } => {
+            PlaceTerminal::StackPtr { addr, .. } | PlaceTerminal::Ptr { addr, .. } => {
                 if let Some(dst) = dst
                     && matches!(
                         self.body.value_class(dst),
@@ -3667,6 +3934,17 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             return Ok(Lowered::Terminated);
         };
         match terminal {
+            PlaceTerminal::Reference { reference, class } => {
+                self.store_referent(reference, &class, src)?;
+                Ok(Lowered::Value(()))
+            }
+            PlaceTerminal::StackPtr { addr, class } => {
+                let ty = self.module.ty_for_class(&class)?;
+                let src = self.coerce_value_to_ty(src, ty)?;
+                self.fb
+                    .insert_inst_no_result(Mstore::new(self.module.inst_set(), addr, src, ty));
+                Ok(Lowered::Value(()))
+            }
             PlaceTerminal::Ptr { addr, space, class } => {
                 self.store_to_ptr(addr, space, &class, src)?;
                 Ok(Lowered::Value(()))
@@ -3702,6 +3980,15 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             return Ok(Lowered::Terminated);
         };
         match terminal {
+            PlaceTerminal::Reference { reference, .. } => {
+                let source = self.copy_source_for_local(src, src_value)?;
+                let value = self.copy_source_value(source, &dst_class)?;
+                self.store_referent(reference, &dst_class, value)?;
+                Ok(Lowered::Value(()))
+            }
+            PlaceTerminal::StackPtr { .. } => Err(LowerError::Internal(
+                "aggregate CopyInto unexpectedly targeted a scalar stack slot".to_string(),
+            )),
             PlaceTerminal::Object { value, .. } => {
                 let source = self.copy_source_for_local(src, src_value)?;
                 self.copy_source_into_object(source, &dst_class, value)?;
@@ -3711,7 +3998,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 "cannot copy into const-backed places".to_string(),
             )),
             PlaceTerminal::Ptr { addr, space, .. } => {
-                self.copy_to_ptr(addr, space, &dst_class, src_value)?;
+                let source = self.copy_source_for_local(src, src_value)?;
+                let value = self.copy_source_value(source, &dst_class)?;
+                self.copy_to_ptr(addr, space, &dst_class, value)?;
                 Ok(Lowered::Value(()))
             }
         }
@@ -3870,7 +4159,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     },
                 ..
             } => self.load_word(addr, space),
-            RuntimeClass::RawAddr { .. } => self.load_word(addr, space),
+            RuntimeClass::RawAddr { .. }
+            | RuntimeClass::Ref {
+                kind: RefKind::Native,
+                ..
+            } => self.load_word(addr, space),
             RuntimeClass::AggregateValue { layout } => {
                 self.load_aggregate_from_ptr(addr, space, *layout)
             }
@@ -4099,7 +4392,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     },
                 ..
             } => self.coerce_value_to_ty(src, Type::I256),
-            RuntimeClass::RawAddr { .. } => self.coerce_value_to_ty(src, Type::I256),
+            RuntimeClass::RawAddr { .. }
+            | RuntimeClass::Ref {
+                kind: RefKind::Native,
+                ..
+            } => self.coerce_value_to_ty(src, Type::I256),
             RuntimeClass::AggregateValue { .. } | RuntimeClass::Ref { .. } => Err(
                 LowerError::Unsupported("aggregate/handle ptr stores require CopyInto".to_string()),
             ),
@@ -4109,7 +4406,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 RuntimeClass::Scalar(scalar) if scalar_raw_memory_size_bytes(scalar) < 32 => {
                     self.store_memory_scalar_bytes(addr, scalar, value)?
                 }
-                RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {
+                RuntimeClass::Scalar(_)
+                | RuntimeClass::RawAddr { .. }
+                | RuntimeClass::Ref {
+                    kind: RefKind::Native,
+                    ..
+                } => {
                     self.fb.insert_inst_no_result(Mstore::new(
                         self.module.inst_set(),
                         addr,

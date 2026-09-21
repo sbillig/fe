@@ -574,6 +574,7 @@ impl<'db> Callable<'db> {
                 )
                 .unwrap_or(given.expr_prop.ty)
             };
+            let mut has_targeted_borrow_diag = false;
             if has_receiver
                 && i == 0
                 && let Some((required_kind, required_inner)) = expected.as_capability(db)
@@ -581,13 +582,21 @@ impl<'db> Callable<'db> {
                 && actual == given.expr_prop.ty
                 && tc.ty_unifies(given_ty, required_inner)
             {
-                actual = match required_kind {
-                    CapabilityKind::Mut => TyId::borrow_mut_of(db, given_ty),
-                    CapabilityKind::Ref => TyId::borrow_ref_of(db, given_ty),
-                    CapabilityKind::View => unreachable!(),
-                };
+                if required_kind == CapabilityKind::Mut
+                    && !given.expr_prop.is_mut
+                    && (tc.env.expr_place(given.expr).is_some()
+                        || is_unary(given.expr, UnOp::Deref))
+                {
+                    tc.report_cannot_borrow_mut(given.expr, given.expr_span.clone());
+                    has_targeted_borrow_diag = true;
+                } else {
+                    actual = match required_kind {
+                        CapabilityKind::Mut => TyId::borrow_mut_of(db, given_ty),
+                        CapabilityKind::Ref => TyId::borrow_ref_of(db, given_ty),
+                        CapabilityKind::View => unreachable!(),
+                    };
+                }
             }
-            let mut has_targeted_borrow_diag = false;
 
             // Enforce explicit call-site borrow syntax for places.
             //

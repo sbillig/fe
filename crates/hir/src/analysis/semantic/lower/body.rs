@@ -10,11 +10,11 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            CallSiteId, FieldIndex, LayoutBackingPlace, LayoutBackingSource, Mutability, SBlock,
-            SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind,
-            STerminator, STerminatorKind, SValueId, SemConstId, SemConstValue, SemOrigin,
-            SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex, bool_const,
-            bytes_const, int_const, reify_runtime_const_for_ty, runtime_size_bytes,
+            BorrowActivation, CallSiteId, FieldIndex, LayoutBackingPlace, LayoutBackingSource,
+            Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt,
+            SStmtId, SStmtKind, STerminator, STerminatorKind, SValueId, SemConstId, SemConstValue,
+            SemOrigin, SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex,
+            bool_const, bytes_const, int_const, reify_runtime_const_for_ty, runtime_size_bytes,
             sem_const_from_ty, unit_const,
         },
         ty::{
@@ -494,6 +494,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     pub(super) fn lower_expr(&mut self, expr: ExprId) -> SValueId {
+        let value = self.lower_expr_inner(expr);
+        if self.expr_ty(expr).is_never(self.db) && !self.is_terminated(self.current) {
+            self.set_synthetic_terminator(self.current, STerminatorKind::Assert { message: None });
+        }
+        value
+    }
+
+    fn lower_expr_inner(&mut self, expr: ExprId) -> SValueId {
         let Partial::Present(expr_data) = expr.data(self.db, self.body) else {
             panic!("cannot lower absent expression")
         };
@@ -520,8 +528,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Expr::RecordInit(path, fields) => self.lower_record_init(expr, *path, fields),
             Expr::Field(base, _) => {
-                if let Some(place) = self.typed_body.expr_place(expr) {
-                    let place = self.lower_place_data(place);
+                if let Some(place) = self.try_lower_place(expr) {
                     return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
                 }
                 let base_expr = *base;
@@ -544,8 +551,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
                     return self.lower_call_like_expr(expr, ty, Some(*base), &[*index]);
                 }
-                if let Some(place) = self.typed_body.expr_place(expr) {
-                    let place = self.lower_place_data(place);
+                if let Some(place) = self.try_lower_place(expr) {
                     return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
                 }
                 let base = self.lower_expr_operand(*base);
@@ -565,6 +571,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     SExpr::Borrow {
                         place,
                         kind,
+                        activation: BorrowActivation::Immediate,
                         provider: self.typed_body.expr_prop(self.db, expr).borrow_provider,
                     },
                 )
@@ -619,14 +626,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 let rhs = self.lower_expr_operand(*rhs);
                 self.emit_expr_with_origin(origin, ty, SExpr::Binary { op: *op, lhs, rhs })
             }
-            Expr::Cast(value, to) => {
+            Expr::Cast(value, _) => {
                 let value = self.lower_expr_operand(*value);
                 self.emit_expr_with_origin(
                     origin,
                     ty,
                     SExpr::Cast {
                         value,
-                        to: to.to_opt().map_or(ty, |_| ty),
+                        to: ty.as_view(self.db).unwrap_or(ty),
                     },
                 )
             }
@@ -683,7 +690,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Expr::Block(stmts) => self.lower_block_expr(stmts),
             Expr::If(cond, then_expr, else_expr) => {
-                self.lower_if_expr(*cond, *then_expr, *else_expr)
+                self.lower_if_expr(expr, *cond, *then_expr, *else_expr)
             }
             Expr::Match(scrutinee, arms) => self.lower_match_expr(expr, *scrutinee, arms),
             Expr::With(bindings, body) => self.lower_with_expr(bindings, *body),
@@ -870,7 +877,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 SemOrigin::Expr(expr),
                 self.expr_ty(expr),
                 SExpr::EnumMake {
-                    enum_ty: variant.ty,
+                    enum_ty: self.expr_ty(expr),
                     variant: VariantIndex(variant.variant.idx),
                     fields: Box::new([]),
                 },
@@ -973,7 +980,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     SemOrigin::Expr(expr),
                     self.expr_ty(expr),
                     SExpr::EnumMake {
-                        enum_ty: variant.ty,
+                        enum_ty: self.expr_ty(expr),
                         variant: VariantIndex(variant.variant.idx),
                         fields: values
                             .into_iter()
@@ -1130,12 +1137,22 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     fn lower_callable_receiver(&mut self, call_expr: ExprId, receiver: ExprId) -> SValueId {
-        if let Some(plan) = self
+        if let Some(site) = self
             .call_sites
             .get(call_expr.index())
             .and_then(|site| site.as_ref())
-            .and_then(|plan| plan.receiver)
+            && let Some(plan) = site.receiver
         {
+            let activation = if plan.kind == BorrowKind::Mut {
+                BorrowActivation::AtCall {
+                    call_site: CallSiteId::Expr(call_expr),
+                    callee: site
+                        .callee
+                        .expect("receiver reservation must have a callee"),
+                }
+            } else {
+                BorrowActivation::Immediate
+            };
             let receiver_prop = self.typed_body.expr_prop(self.db, receiver);
             let place = if let Some(place) = self.typed_body.expr_place(receiver) {
                 self.lower_place_data(place)
@@ -1165,6 +1182,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 SExpr::Borrow {
                     place,
                     kind: plan.kind,
+                    activation,
                     provider: receiver_prop.borrow_provider,
                 },
             );
@@ -1448,11 +1466,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     fn lower_if_expr(
         &mut self,
+        expr: ExprId,
         cond: CondId,
         then_expr: ExprId,
         else_expr: Option<ExprId>,
     ) -> SValueId {
-        let result_ty = self.expr_ty(then_expr);
+        let result_ty = self.expr_ty(expr);
         let result = self.alloc_temp(result_ty);
         let then_bb = self.new_block();
         let else_bb = self.new_block();

@@ -26,14 +26,12 @@ use crate::{
             const_expr::{ConstExpr, ConstExprId},
             const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, const_ty_from_sem_const},
             corelib::{
-                PrimitiveWrapperCallKind, RuntimeBuiltinFuncKind, core_primitive_wrapper_call_kind,
+                NumericExternIntrinsic, PrimitiveWrapperCallKind, RuntimeBuiltinFuncKind,
+                SaturatingArithmetic, core_primitive_wrapper_call_kind, numeric_extern_intrinsic,
                 runtime_builtin_func_kind,
             },
             normalize::normalize_ty,
-            ty_check::{
-                BodyOwner, LocalBinding, ParamSite, check_anon_const_body, check_const_body,
-                check_func_body,
-            },
+            ty_check::{BodyOwner, LocalBinding, ParamSite},
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
@@ -135,26 +133,6 @@ impl<'db> CtfeError<'db> {
 #[derive(Clone, Copy)]
 enum EvmModularArithmetic {
     Add,
-    Mul,
-}
-
-#[derive(Clone, Copy)]
-enum NumericExternIntrinsic {
-    CheckedBinary(ArithBinOp),
-    WrappingBinary(ArithBinOp),
-    SaturatingBinary(SaturatingArithmetic),
-    Comparison(CompBinOp),
-    BoolBinary(ArithBinOp),
-    CheckedNeg,
-    WrappingNeg,
-    BitNot,
-    BoolNot,
-}
-
-#[derive(Clone, Copy)]
-enum SaturatingArithmetic {
-    Add,
-    Sub,
     Mul,
 }
 
@@ -312,7 +290,7 @@ fn eval_body_owner_const_with_args_cycle_recover<'db>(
 
 pub(super) fn try_eval_expr_to_const<'db>(
     db: &'db dyn HirAnalysisDb,
-    instance: SemanticInstance<'db>,
+    body: &SemanticBody<'db>,
     result_ty: TyId<'db>,
     expr: &SExpr<'db>,
     locals: &[Option<SemConstId<'db>>],
@@ -320,16 +298,16 @@ pub(super) fn try_eval_expr_to_const<'db>(
 ) -> Option<SemConstId<'db>> {
     let mut machine = CtfeMachine::new(db, CtfeConfig::default());
     machine
-        .eval_expr_with_locals(instance, result_ty, expr.clone(), locals, origin)
+        .eval_expr_with_locals(body, result_ty, expr.clone(), locals, origin)
         .ok()
 }
 
-struct CtfeMachine<'db> {
+struct CtfeMachine<'db, 'body> {
     db: &'db dyn HirAnalysisDb,
     config: CtfeConfig,
     steps: usize,
     instance_cache: FxHashMap<SemanticInstanceKey<'db>, SemanticInstance<'db>>,
-    frames: Vec<CtfeFrame<'db>>,
+    frames: Vec<CtfeFrame<'db, 'body>>,
     /// Memoized results of const-item references evaluated by this machine.
     const_results: FxHashMap<SemanticInstanceKey<'db>, Result<SemConstId<'db>, CtfeError<'db>>>,
     /// Const items currently being evaluated, outermost first. A reference to
@@ -338,8 +316,8 @@ struct CtfeMachine<'db> {
     const_stack: Vec<SemanticInstanceKey<'db>>,
 }
 
-struct CtfeFrame<'db> {
-    body: &'db SemanticBody<'db>,
+struct CtfeFrame<'db, 'body> {
+    body: &'body SemanticBody<'db>,
     locals: Vec<CtfeSlot<'db>>,
     current: usize,
 }
@@ -824,7 +802,7 @@ fn expect_binary_args<'a, 'db>(
 
 fn checked_result<'db>(
     value: BigInt,
-    machine: &CtfeMachine<'db>,
+    machine: &CtfeMachine<'db, '_>,
     result_ty: TyId<'db>,
     origin: SemOrigin<'db>,
 ) -> Result<BigInt, CtfeError<'db>> {
@@ -844,93 +822,6 @@ fn int_bounds(bits: u16, signed: bool) -> (BigInt, BigInt) {
             (BigInt::one() << usize::from(bits)) - BigInt::one(),
         )
     }
-}
-
-fn numeric_extern_intrinsic(name: &str) -> Option<NumericExternIntrinsic> {
-    Some(match name {
-        "__checked_add" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Add),
-        "__checked_sub" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Sub),
-        "__checked_mul" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Mul),
-        "__checked_div" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Div),
-        "__checked_rem" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Rem),
-        "__checked_pow" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Pow),
-        "__checked_neg" => NumericExternIntrinsic::CheckedNeg,
-        "__saturating_add" => NumericExternIntrinsic::SaturatingBinary(SaturatingArithmetic::Add),
-        "__saturating_sub" => NumericExternIntrinsic::SaturatingBinary(SaturatingArithmetic::Sub),
-        "__saturating_mul" => NumericExternIntrinsic::SaturatingBinary(SaturatingArithmetic::Mul),
-        "__not_bool" => NumericExternIntrinsic::BoolNot,
-        "__bitand_bool" => NumericExternIntrinsic::BoolBinary(ArithBinOp::BitAnd),
-        "__bitor_bool" => NumericExternIntrinsic::BoolBinary(ArithBinOp::BitOr),
-        "__bitxor_bool" => NumericExternIntrinsic::BoolBinary(ArithBinOp::BitXor),
-        "__eq_bool" => NumericExternIntrinsic::Comparison(CompBinOp::Eq),
-        "__ne_bool" => NumericExternIntrinsic::Comparison(CompBinOp::NotEq),
-        _ => {
-            let suffix = |prefix| {
-                name.strip_prefix(prefix)
-                    .filter(|suffix| has_integer_numeric_suffix(suffix))
-            };
-            if suffix("__add_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Add)
-            } else if suffix("__sub_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Sub)
-            } else if suffix("__mul_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Mul)
-            } else if suffix("__div_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Div)
-            } else if suffix("__rem_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Rem)
-            } else if suffix("__pow_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::Pow)
-            } else if suffix("__shl_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::LShift)
-            } else if suffix("__shr_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::RShift)
-            } else if suffix("__bitand_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::BitAnd)
-            } else if suffix("__bitor_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::BitOr)
-            } else if suffix("__bitxor_").is_some() {
-                NumericExternIntrinsic::WrappingBinary(ArithBinOp::BitXor)
-            } else if suffix("__eq_").is_some() {
-                NumericExternIntrinsic::Comparison(CompBinOp::Eq)
-            } else if suffix("__ne_").is_some() {
-                NumericExternIntrinsic::Comparison(CompBinOp::NotEq)
-            } else if suffix("__lt_").is_some() {
-                NumericExternIntrinsic::Comparison(CompBinOp::Lt)
-            } else if suffix("__le_").is_some() {
-                NumericExternIntrinsic::Comparison(CompBinOp::LtEq)
-            } else if suffix("__gt_").is_some() {
-                NumericExternIntrinsic::Comparison(CompBinOp::Gt)
-            } else if suffix("__ge_").is_some() {
-                NumericExternIntrinsic::Comparison(CompBinOp::GtEq)
-            } else if suffix("__neg_").is_some() {
-                NumericExternIntrinsic::WrappingNeg
-            } else if suffix("__bitnot_").is_some() {
-                NumericExternIntrinsic::BitNot
-            } else {
-                return None;
-            }
-        }
-    })
-}
-
-fn has_integer_numeric_suffix(suffix: &str) -> bool {
-    matches!(
-        suffix,
-        "u8" | "u16"
-            | "u32"
-            | "u64"
-            | "u128"
-            | "u256"
-            | "usize"
-            | "i8"
-            | "i16"
-            | "i32"
-            | "i64"
-            | "i128"
-            | "i256"
-            | "isize"
-    )
 }
 
 fn sem_const_contains_type_level<'db>(db: &'db dyn HirAnalysisDb, value: SemConstId<'db>) -> bool {
@@ -979,7 +870,7 @@ pub(super) enum CtfePathElem {
     Index(usize),
 }
 
-impl<'db> CtfeMachine<'db> {
+impl<'db, 'body> CtfeMachine<'db, 'body> {
     fn new(db: &'db dyn HirAnalysisDb, config: CtfeConfig) -> Self {
         Self {
             db,
@@ -1016,13 +907,12 @@ impl<'db> CtfeMachine<'db> {
 
     fn eval_expr_with_locals(
         &mut self,
-        instance: SemanticInstance<'db>,
+        body: &'body SemanticBody<'db>,
         result_ty: TyId<'db>,
         expr: SExpr<'db>,
         locals: &[Option<SemConstId<'db>>],
         origin: SemOrigin<'db>,
     ) -> Result<SemConstId<'db>, CtfeError<'db>> {
-        let body = instance.body(self.db);
         let mut frame_locals = vec![CtfeSlot::Uninit; body.locals.len()];
         for (idx, value) in locals.iter().copied().enumerate() {
             if let Some(value) = value
@@ -1082,7 +972,7 @@ impl<'db> CtfeMachine<'db> {
         args: Vec<CtfeValue<'db>>,
         origin: SemOrigin<'db>,
     ) -> Result<CtfeValue<'db>, CtfeError<'db>> {
-        self.ensure_const_evaluable(instance, origin)?;
+        let body = self.const_evaluable_body(instance, origin)?;
         // Const-item frames are exempt from the limit: the const stack's
         // cycle check already bounds them (each const is evaluated at most
         // once per path), and a long but finite chain of const definitions
@@ -1091,7 +981,6 @@ impl<'db> CtfeMachine<'db> {
             return Err(CtfeError::RecursionLimitExceeded { origin });
         }
 
-        let body = instance.body(self.db);
         let mut locals = vec![CtfeSlot::Uninit; body.locals.len()];
         let mut arg_locals = match instance.key(self.db).owner(self.db) {
             BodyOwner::Func(func) => body
@@ -1145,36 +1034,21 @@ impl<'db> CtfeMachine<'db> {
         result
     }
 
-    fn ensure_const_evaluable(
+    fn const_evaluable_body(
         &self,
         instance: SemanticInstance<'db>,
         origin: SemOrigin<'db>,
-    ) -> Result<(), CtfeError<'db>> {
+    ) -> Result<&'body SemanticBody<'db>, CtfeError<'db>> {
         match instance.key(self.db).owner(self.db) {
             BodyOwner::Func(func) if !func.is_const(self.db) => {
                 Err(CtfeError::NonConstCall { origin })
             }
-            owner
-            @ (BodyOwner::Func(_) | BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. }) => {
-                let typed_body = match owner {
-                    BodyOwner::Func(func) => &check_func_body(self.db, func).1,
-                    BodyOwner::Const(const_) => &check_const_body(self.db, const_).1,
-                    BodyOwner::AnonConstBody { body, expected } => {
-                        &check_anon_const_body(self.db, body, expected).1
-                    }
-                    BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
-                        unreachable!("contract bodies are not const-evaluable")
-                    }
-                };
-                if typed_body.has_smir_lowering_blocking_diagnostics(self.db) {
-                    Err(CtfeError::InvalidBody { origin })
-                } else {
-                    Ok(())
-                }
-            }
             BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
                 Err(CtfeError::NotConstEvaluable { origin })
             }
+            BodyOwner::Func(_) | BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => instance
+                .admitted_body(self.db)
+                .map_err(|_| CtfeError::InvalidBody { origin }),
         }
     }
 

@@ -1,17 +1,24 @@
 pub mod borrowck;
+pub mod capability;
 pub mod consts;
 pub mod ctfe;
 pub mod definite_assignment;
+pub mod diagnostics;
 pub mod instance;
 pub mod ir;
 pub mod layout_evidence;
 pub mod lower;
+pub mod normalized;
 mod verify;
 
 pub use borrowck::*;
 pub use consts::*;
 pub use ctfe::*;
 pub use definite_assignment::contract_init_assigned_fields;
+pub use diagnostics::{
+    BlockedSemanticBody, SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
+    SemanticDiagnosticLabel, SemanticDiagnosticSpan, SemanticNormalizationFailure,
+};
 pub(crate) use instance::CallSiteProviderRefinement;
 pub use instance::{
     EffectProviderSubst, GenericSubst, ImplEnv, InstantiatedEffectEnv, RootSemanticInstanceError,
@@ -30,4 +37,5 @@ pub use layout_evidence::*;
 pub use lower::{
     effect_param_site, lower_to_smir, owner_effect_bindings, same_owner_effect_binding,
 };
+pub use normalized::*;
 pub use verify::{SemanticVerifyError, verify_semantic_body};

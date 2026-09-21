@@ -60,8 +60,16 @@ fn assert_builtin_clean(
     let mir_diags = db.mir_diagnostics_for_ingot(ingot);
     if !mir_diags.is_empty() {
         db.emit_complete_diagnostics(&mir_diags);
+        let internal: Vec<_> = mir_diags
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic
+                    .message
+                    .starts_with("internal borrow checking error")
+            })
+            .collect();
         panic!(
-            "expected no MIR diagnostics for builtin {name}, but got:\n{}",
+            "expected no MIR diagnostics for builtin {name}, but got:\n{}\nInternal diagnostic details: {internal:#?}",
             db.format_complete_diagnostics(&mir_diags)
         );
     }

@@ -1,5 +1,5 @@
 use hir::analysis::{
-    semantic::{SemanticInstance, owner_effect_bindings, same_owner_effect_binding},
+    semantic::{SemanticBody, SemanticInstance, owner_effect_bindings, same_owner_effect_binding},
     ty::{
         ty_check::{BodyOwner, LocalBinding, ParamSite},
         ty_def::TyId,
@@ -21,6 +21,7 @@ use super::{
 pub(crate) fn runtime_param_locals<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
+    body: &SemanticBody<'db>,
     params: &[crate::runtime::RuntimeClass<'db>],
 ) -> Vec<hir::analysis::semantic::SLocalId> {
     let entries = runtime_visible_binding_plans(db, semantic);
@@ -33,10 +34,7 @@ pub(crate) fn runtime_param_locals<'db>(
                     .binding_ty(db, entry.binding)
                     .pretty_print(db)
                     .to_string();
-                format!(
-                    "{:?}:{ty}:plan={:?}:local={:?}",
-                    entry.binding, entry.plan, entry.local
-                )
+                format!("{:?}:{ty}:plan={:?}", entry.binding, entry.plan)
             })
             .collect::<Vec<_>>()
             .join("; ");
@@ -49,7 +47,10 @@ pub(crate) fn runtime_param_locals<'db>(
             binding_debug,
         );
     }
-    entries.iter().map(|entry| entry.local).collect()
+    entries
+        .iter()
+        .map(|entry| runtime_visible_binding_local(body, entry.binding))
+        .collect()
 }
 
 fn runtime_visible_binding_semantic_ty<'db>(
@@ -98,7 +99,6 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
         if !matches!(plan, RuntimeParamPlan::Erased) {
             entries.push(RuntimeVisibleBindingPlan {
                 binding,
-                local: runtime_visible_binding_local(db, semantic, binding),
                 semantic_ty: runtime_visible_binding_semantic_ty(db, semantic, typed_body, binding),
                 plan,
             });
@@ -149,12 +149,10 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
     entries
 }
 
-fn runtime_visible_binding_local<'db>(
-    db: &'db dyn MirDb,
-    semantic: SemanticInstance<'db>,
+pub(crate) fn runtime_visible_binding_local<'db>(
+    body: &SemanticBody<'db>,
     binding: LocalBinding<'db>,
 ) -> hir::analysis::semantic::SLocalId {
-    let body = semantic.body(db);
     if let Some(local) = body.entry_locals.iter().copied().find(|local| {
         body.local(*local)
             .and_then(|local| local.source)

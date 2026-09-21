@@ -1,10 +1,16 @@
-use cranelift_entity::EntityRef;
-use rustc_hash::FxHashSet;
+use crate::analysis::semantic::capability::{region::RegionSet, state::BorrowState};
+use crate::analysis::semantic::diagnostics::{
+    SemanticDiagnostic, SemanticDiagnosticKind, SemanticNormalizationFailure, operand_origin,
+};
 
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        CallSiteProviderRefinement, SBlockId, SemOrigin, SemanticInstance,
+        CallSiteProviderRefinement, SemOrigin, SemanticInstance,
+        normalized::{
+            NEffectArg, NEffectArgValue, NExpr, NOperand, NStatement, NStatementKind,
+            normalize_semantic_body_provisional,
+        },
         provisional_provider_idx_for_requirement,
     },
     ty::{
@@ -13,30 +19,29 @@ use crate::analysis::{
     },
 };
 
-use super::{
-    address_space_rank,
-    canon::{CanonPlace, State, address_spaces_for_borrow_root},
-    check::Borrowck,
-    diagnostics::operand_origin,
-    ir::{
-        NEffectArg, NEffectArgValue, NExpr, NOperand, NSStmt, NSStmtKind, SemanticBorrowDiagnostic,
-    },
-    normalize::normalize_provisional_semantic_body,
-};
+use super::solver::Borrowck;
 
 pub(crate) fn provisional_call_site_provider_refinements<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> Result<Vec<CallSiteProviderRefinement>, SemanticBorrowDiagnostic<'db>> {
-    let body = normalize_provisional_semantic_body(db, instance)?;
+) -> Result<Vec<CallSiteProviderRefinement>, SemanticNormalizationFailure<'db>> {
+    let body = normalize_semantic_body_provisional(db, instance)?.body;
     let mut borrowck = Borrowck::new_with_body(
         db,
         instance,
         body,
-        super::analyses::BorrowSummaryMode::Provisional,
-    )?;
-    borrowck.compute_entry_states_and_loan_targets()?;
-    CallSiteProviderRefiner { borrowck }.refine()
+        super::solver::BorrowSummaryMode::Provisional,
+    )
+    .map_err(SemanticNormalizationFailure::InternalFailure)?;
+    borrowck
+        .solve()
+        .map_err(SemanticNormalizationFailure::InternalFailure)?;
+    if let Some(blocked) = borrowck.blocked.clone() {
+        return Err(SemanticNormalizationFailure::Blocked(blocked));
+    }
+    CallSiteProviderRefiner { borrowck }
+        .refine()
+        .map_err(SemanticNormalizationFailure::InternalFailure)
 }
 
 struct CallSiteProviderRefiner<'db> {
@@ -44,33 +49,23 @@ struct CallSiteProviderRefiner<'db> {
 }
 
 impl<'db> CallSiteProviderRefiner<'db> {
-    fn refine(&self) -> Result<Vec<CallSiteProviderRefinement>, SemanticBorrowDiagnostic<'db>> {
+    fn refine(&self) -> Result<Vec<CallSiteProviderRefinement>, SemanticDiagnostic<'db>> {
         let mut out = Vec::new();
         for (bb_idx, block) in self.borrowck.body.blocks.iter().enumerate() {
-            let mut state = self.borrowck.entry_state[SBlockId::new(bb_idx)].clone();
-            if !state.is_reachable() {
-                continue;
-            }
-            for stmt in &block.stmts {
-                self.refine_stmt(&state, stmt, &mut out)?;
-                self.borrowck
-                    .state_transfer()
-                    .apply_stmt(&mut state, stmt)?;
-                if !state.is_reachable() {
-                    break;
-                }
+            for (statement, state) in block.statements.iter().zip(&self.borrowck.before[bb_idx]) {
+                self.refine_statement(state, statement, &mut out)?;
             }
         }
         Ok(out)
     }
 
-    fn refine_stmt(
+    fn refine_statement(
         &self,
-        state: &State<'db>,
-        stmt: &NSStmt<'db>,
+        state: &BorrowState<'db>,
+        statement: &NStatement<'db>,
         out: &mut Vec<CallSiteProviderRefinement>,
-    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
-        let NSStmtKind::Assign {
+    ) -> Result<(), SemanticDiagnostic<'db>> {
+        let NStatementKind::Define {
             expr:
                 NExpr::Call {
                     call_site,
@@ -79,7 +74,7 @@ impl<'db> CallSiteProviderRefiner<'db> {
                     ..
                 },
             ..
-        } = &stmt.kind
+        } = &statement.kind
         else {
             return Ok(());
         };
@@ -87,7 +82,8 @@ impl<'db> CallSiteProviderRefiner<'db> {
             if matches!(arg.pass_mode, EffectPassMode::Unknown) {
                 continue;
             }
-            let Some(address_space) = self.effect_arg_address_space(state, stmt.origin, arg)?
+            let Some(address_space) =
+                self.effect_arg_address_space(state, statement.origin, arg)?
             else {
                 continue;
             };
@@ -103,56 +99,51 @@ impl<'db> CallSiteProviderRefiner<'db> {
 
     fn effect_arg_address_space(
         &self,
-        state: &State<'db>,
+        state: &BorrowState<'db>,
         origin: SemOrigin<'db>,
         arg: &NEffectArg<'db>,
-    ) -> Result<Option<ProviderAddressSpace>, SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<Option<ProviderAddressSpace>, SemanticDiagnostic<'db>> {
         let targets = match &arg.arg {
-            NEffectArgValue::Place(place) => self
-                .borrowck
-                .canon()
-                .canonicalize_place(state, place, origin)?,
+            NEffectArgValue::Place(place) => self.borrowck.resolve_region(state, place),
             NEffectArgValue::Value(value) => self.value_targets(state, *value),
         };
         if targets.is_empty() {
             return Ok(arg.provider);
         }
         self.address_space_for_targets(&targets, self.effect_arg_origin(arg, origin))
-            .map(Some)
     }
 
-    fn value_targets(&self, state: &State<'db>, value: NOperand) -> FxHashSet<CanonPlace<'db>> {
+    fn value_targets(&self, state: &BorrowState<'db>, value: NOperand) -> RegionSet<'db> {
         self.borrowck
-            .canon()
-            .canonicalize_value_base(state, value.local)
+            .resolve_capability(state.value(value.value))
+            .region
     }
 
     fn address_space_for_targets(
         &self,
-        targets: &FxHashSet<CanonPlace<'db>>,
+        targets: &RegionSet<'db>,
         origin: SemOrigin<'db>,
-    ) -> Result<ProviderAddressSpace, SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<Option<ProviderAddressSpace>, SemanticDiagnostic<'db>> {
         let mut spaces = Vec::new();
-        for target in targets {
-            let root_spaces = address_spaces_for_borrow_root(
-                self.borrowck.db,
-                self.borrowck.instance,
-                &self.borrowck.body,
-                &target.root,
-                origin,
-            )?;
-            for space in root_spaces {
-                if !spaces.contains(&space) {
-                    spaces.push(space);
-                }
+        let mut symbolic = false;
+        for target in targets.clauses() {
+            let Some(space) = target.payload.root.address_space().known() else {
+                symbolic = true;
+                continue;
+            };
+            if !spaces.contains(&space) {
+                spaces.push(space);
             }
         }
+        if spaces.len() <= 1 && symbolic {
+            return Ok(None);
+        }
         if let [space] = spaces.as_slice() {
-            return Ok(*space);
+            return Ok(Some(*space));
         }
         spaces.sort_by_key(|space| address_space_rank(*space));
         Err(self.borrowck.diag(
-            super::ir::SemanticBorrowDiagKind::ProviderProvenanceConflict,
+            SemanticDiagnosticKind::ProviderProvenanceConflict,
             origin,
             format!(
                 "effect argument may come from multiple address spaces: {}",
@@ -188,5 +179,15 @@ impl<'db> CallSiteProviderRefiner<'db> {
             NEffectArgValue::Value(value) => operand_origin(value, fallback),
             NEffectArgValue::Place(_) => fallback,
         }
+    }
+}
+
+fn address_space_rank(space: ProviderAddressSpace) -> u8 {
+    match space {
+        ProviderAddressSpace::Memory => 0,
+        ProviderAddressSpace::Storage => 1,
+        ProviderAddressSpace::Transient => 2,
+        ProviderAddressSpace::Calldata => 3,
+        ProviderAddressSpace::Code => 4,
     }
 }

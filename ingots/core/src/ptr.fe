@@ -9,11 +9,16 @@ use super::panic
 /// This is a compiler intrinsic: backend-specific lowering is handled in codegen.
 extern {
     /// Allocates `size` bytes and returns a pointer to the first byte.
+    /// The allocation establishes a byte extent, not initialized typed contents.
+    /// Native `ref`/`mut` slots require a valid typed store before they are read.
     pub fn alloc_raw(_ size: u256) -> *u8
 
     /// Copies `len` bytes between linear-memory regions.
     pub(ingot) fn copy_mem(_ dest: *u8, _ source: *u8, _ len: u256)
 
+    /// Computes an address without enlarging or validating its allocation.
+    /// Before access, the caller must ensure nonwrapping containment of the
+    /// entire accessed value or byte range in the original allocation.
     pub fn offset_bytes<T>(_ ptr: *T, _ offset: u256) -> *T
 
     fn addr_eq<T>(_ lhs: *T, _ rhs: *T) -> bool
@@ -68,6 +73,7 @@ impl<T> Eq for *T {
 }
 
 impl<T> MemArray<T> {
+    /// Allocates space for `len` values without initializing their contents.
     pub fn new_uninit(_ len: u256) -> Self {
         Self {
             ptr: cast<u8, T>(alloc_raw(len * size_of<T>())),
@@ -75,6 +81,7 @@ impl<T> MemArray<T> {
         }
     }
 
+    /// Zeroes the allocated bytes. Zero bytes do not establish native references.
     pub fn new_zeroed(_ len: u256) -> Self {
         let mut array = Self::new_uninit(len)
         array.zero()
@@ -134,7 +141,10 @@ impl<T> MemSlice<T> {
     /// Construct a slice over a raw memory range.
     ///
     /// The caller must ensure the complete range is valid for every operation
-    /// that receives the slice.
+    /// that receives the slice: `len * size_of<T>()` bytes must fit without
+    /// wrapping within the original allocation. This constructor does not check
+    /// that claim. Typed reads additionally require valid initialized contents;
+    /// neither this constructor nor a cast creates native reference authority.
     pub fn from_raw_parts(ptr: *T, len: u256) -> Self {
         Self { ptr, len }
     }
@@ -163,6 +173,8 @@ impl<T> MemSlice<T> {
         MemSlice::from_raw_parts(ptr: cast<T, u8>(self.ptr), len: self.byte_len())
     }
 
+    /// Checks containment in this slice's asserted extent. The parent range
+    /// must already satisfy `from_raw_parts`' validity contract.
     pub fn try_slice(self, start: u256, len: u256) -> Option<Self> {
         if start > self.len || len > self.len - start {
             return Option::None
@@ -380,10 +392,15 @@ impl<const N: usize> FixedMemBuffer<N> {
     }
 }
 
+/// Changes interpretation without changing allocation size or initializing bytes.
+/// A cast establishes neither bounds nor native reference authority. A raw
+/// dereference requires the entire accessed value to fit in the live allocation,
+/// and native-reference leaves must have received valid typed contents.
 pub fn cast<T, U>(_ ptr: *T) -> *U {
     ptr as *U
 }
 
+/// Computes an element offset with the same access preconditions as `offset_bytes`.
 pub fn offset<T>(_ ptr: *T, _ count: u256) -> *T {
     offset_bytes(ptr, count * size_of<T>())
 }
@@ -392,6 +409,7 @@ pub fn byte_ptr<T>(_ ptr: *T) -> *u8 {
     cast<T, u8>(ptr)
 }
 
+/// Allocates room for `T`, without establishing initialized `T` contents.
 pub fn alloc<T>() -> *T {
     cast<u8, T>(alloc_raw(size_of<T>()))
 }
@@ -404,6 +422,8 @@ pub fn alloc_array<T>(_ len: u256) -> MemArray<T> {
     MemArray::new_uninit(len)
 }
 
+/// Zeroes a raw range. The caller must ensure all `len` bytes fit without
+/// wrapping in the live allocation. Zeroing does not initialize native references.
 pub fn zero_bytes(_ ptr: *u8, _ len: u256) {
     zero_mem(ptr, len)
 }
@@ -411,6 +431,7 @@ pub fn zero_bytes(_ ptr: *u8, _ len: u256) {
 /// Copy a byte span into a valid destination region.
 ///
 /// The caller must ensure that `dest` has room for `source.len()` bytes.
+/// Both complete ranges must fit without wrapping in their live allocations.
 /// Source and destination may overlap.
 pub fn copy(_ dest: *u8, _ source: own MemSpan) {
     copy_raw(dest, source: source.ptr(), len: source.len())
@@ -419,6 +440,9 @@ pub fn copy(_ dest: *u8, _ source: own MemSpan) {
 /// Copy a raw byte range into a valid destination region.
 ///
 /// Prefer `copy` when the source is already represented by a bounded span.
+/// The caller asserts that both complete `len`-byte ranges fit without wrapping
+/// in their live allocations. Copying raw bytes does not establish native
+/// reference authority in the destination.
 pub fn copy_raw(_ dest: *u8, _ source: *u8, _ len: u256) {
     copy_mem(dest, source, len)
 }

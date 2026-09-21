@@ -102,6 +102,8 @@ enum MapChoice {
     Scalar(StorageMap<u256, u256>),
 }
 
+impl Copy for MapChoice {}
+
 impl MapChoice {
     fn collapse(mut self) {
         match self {
@@ -110,7 +112,7 @@ impl MapChoice {
         }
     }
 
-    fn set(mut self, lane: usize, key: u256, value: u256) {
+    fn set(own self, lane: usize, key: u256, value: u256) {
         match self {
             MapChoice::Scalar(mut map) => map.set(key: key, value: value),
             MapChoice::Family(mut maps) => maps[lane].set(key: key, value: value),

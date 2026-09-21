@@ -1,0 +1,22 @@
+// Known precision limit: recursive fresh-result summaries may not converge.
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+fn initialized(_ n: u256) -> *Item {
+    let p = core::ptr::alloc<Item>()
+    *p = Item { n }
+    p
+}
+
+// Rejected conservatively: summaries of fresh recursive results do not converge.
+fn recursive(_ n: u256, depth: u256) -> *Item {
+    if depth == 0 { initialized(n) }
+    else { recursive(n, depth: depth - 1) }
+}
+fn example() { consume(*recursive(7, depth: 2)) }
+
+// Accepted: recursion forwards one existing allocation.
+fn forward_recursive(_ pointer: *Item, depth: u256) -> *Item {
+    if depth == 0 { pointer }
+    else { forward_recursive(pointer, depth: depth - 1) }
+}
+fn forward_existing() { consume(*forward_recursive(initialized(7), depth: 2)) }

@@ -10,6 +10,7 @@ use trace_facts::{
     TypeFact, TypeKind, ValueProperty, ValuePropertyFact, VariableFact, VariableStorageClass,
 };
 
+use crate::runtime::lower::semantic_body::RuntimeSemanticBody;
 use crate::{
     MirDb, RuntimeInstance, RuntimePackage,
     instance::RuntimeInstanceSource,
@@ -27,10 +28,7 @@ use crate::{
     },
 };
 use hir::{
-    analysis::{
-        semantic::{SemOrigin, borrowck::normalize_semantic_body},
-        ty::ty_check::LocalBinding,
-    },
+    analysis::{semantic::SemOrigin, ty::ty_check::LocalBinding},
     hir_def::{Partial, Pat},
     origin::{HIR_EXPR_EXPORT_KIND, HIR_STMT_EXPORT_KIND, HirOriginBodyOwnerKey},
 };
@@ -372,6 +370,7 @@ fn runtime_expr_display(expr: &RExpr<'_>) -> String {
             format!("word_to_raw_addr {value:?}, {space:?}")
         }
         RExpr::ProviderRefToRaw { value } => format!("provider_ref_to_raw {value:?}"),
+        RExpr::NativeRef { value } => format!("native_ref {value:?}"),
         RExpr::RetagRef { value } => format!("retag_ref {value:?}"),
         RExpr::AddrOf { place } => format!("addr_of {place:?}"),
         RExpr::Load { place } => format!("load {place:?}"),
@@ -755,7 +754,7 @@ fn semantic_local_trace_info<'db>(
     let Some(body) = typed_body.body() else {
         return Vec::new();
     };
-    let Ok(normalized) = normalize_semantic_body(db, semantic) else {
+    let Ok(normalized) = RuntimeSemanticBody::admitted(db, semantic) else {
         return Vec::new();
     };
     normalized
