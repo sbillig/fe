@@ -18,9 +18,9 @@ error[6-0003]: trait bound is not satisfied
  8 │     let _values: MemVec<DynString> = MemVec::zeroed(1)
    │                                      ^^^^^^^^^^^^^^ `DynString` doesn't implement `StaticAbiElement`
    │
-   ┌─ src/abi/dyn_array.fe:73:14
+   ┌─ src/abi/dyn_array.fe:76:14
    │
-73 │     where T: StaticAbiElement + Decode<Sol> + Encode<Sol> + AbiSize
+76 │     where T: StaticAbiElement + Decode<Sol> + Encode<Sol> + AbiSize
    │              ---------------- required by this bound on `zeroed`
 
 error[6-0003]: trait bound is not satisfied
@@ -38,9 +38,9 @@ error[6-0003]: trait bound is not satisfied
 16 │     let _values: MemVec<(u256, u256)> = MemVec::zeroed(1)
    │                                         ^^^^^^^^^^^^^^ `(u256, u256)` doesn't implement `StaticAbiElement`
    │
-   ┌─ src/abi/dyn_array.fe:73:14
+   ┌─ src/abi/dyn_array.fe:76:14
    │
-73 │     where T: StaticAbiElement + Decode<Sol> + Encode<Sol> + AbiSize
+76 │     where T: StaticAbiElement + Decode<Sol> + Encode<Sol> + AbiSize
    │              ---------------- required by this bound on `zeroed`
 
 error[6-0003]: trait bound is not satisfied
@@ -58,7 +58,7 @@ error[6-0003]: trait bound is not satisfied
 24 │     let _values: MemVec<Bytes> = MemVec::zeroed(1)
    │                                  ^^^^^^^^^^^^^^ `Bytes` doesn't implement `StaticAbiElement`
    │
-   ┌─ src/abi/dyn_array.fe:73:14
+   ┌─ src/abi/dyn_array.fe:76:14
    │
-73 │     where T: StaticAbiElement + Decode<Sol> + Encode<Sol> + AbiSize
+76 │     where T: StaticAbiElement + Decode<Sol> + Encode<Sol> + AbiSize
    │              ---------------- required by this bound on `zeroed`

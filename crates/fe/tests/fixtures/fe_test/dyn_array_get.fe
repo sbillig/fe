@@ -72,6 +72,33 @@ fn test_get_on_empty_panics() {
     let _ = values.get(0)
 }
 
+#[test(should_revert, panic = 0x32)]
+fn test_get_large_index_panics_before_offset_arithmetic() {
+    let values = make_arr(a: 1, b: 2, c: 3)
+    let _ = values.get(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+}
+
+#[test(should_revert, panic = 0x11)]
+fn test_array_constructor_rejects_overflowing_element_frame() {
+    let data = ptr::alloc_bytes(32)
+    // A forged count whose byte length would wrap to zero must never produce
+    // a DynArray that can bypass get's validated-frame invariant.
+    let len: u256 = 1 << 251
+    store_word(ptr: data, value: len)
+    let values: DynArray<u256> = DynArray::from_abi_tail(data, len, size: 32)
+    let _ = values.get(0)
+}
+
+#[test(should_revert, panic = 0x11)]
+fn test_array_constructor_rejects_overflowing_length_header() {
+    let data = ptr::alloc_bytes(32)
+    // The element bytes fit, but adding the array's length word overflows.
+    let len: u256 = (1 << 251) - 1
+    store_word(ptr: data, value: len)
+    let values: DynArray<u256> = DynArray::from_abi_tail(data, len, size: 32)
+    let _ = values.get(0)
+}
+
 /// Decoding a `DynArray<Address>` copies the payload without inspecting the
 /// element words, so a dirty upper-bit word survives until it is read:
 /// `len()` succeeds, `get` reverts — the same outcome the word would have

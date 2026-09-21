@@ -4,7 +4,6 @@ use core::abi::{
     DynArray,
     Encode,
     store_word,
-    checked_frame_end,
 }
 use ingot::abi::{Sol, StaticAbiElement}
 use core::ptr::{self, MemSpan}
@@ -41,15 +40,19 @@ pub trait DynArrayAccess<T> {
 impl<T> DynArrayAccess<T> for DynArray<T>
     where T: StaticAbiElement + Decode<Sol> + AbiSize
 {
+    #[inline(always)]
+    #[arithmetic(unchecked)]
     fn get(self, _ index: u256) -> T {
         if index >= self.len() {
             revert_error(Panic::from(PANIC_INDEX_OUT_OF_BOUNDS))
         }
 
-        let head_pos = 32 + index * 32
-        let input = self.encoded_span()
-        checked_frame_end<Sol>(head_pos, 32, input.len())
-        T::decode_from(input, head_pos)
+        // DynArray construction validates the entire static-element frame:
+        // size = 32 + len * 32, without overflow. StaticAbiElement is sealed
+        // to one-word types, so index < len proves both this offset arithmetic
+        // and the complete element read are in bounds. Keep the normal decode
+        // path to validate the element's canonical ABI representation.
+        T::decode_from(self.encoded_span(), 32 + index * 32)
     }
 }
 
