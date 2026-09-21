@@ -2141,6 +2141,7 @@ dependencies = [
  "blake3",
  "dir-test",
  "fe-common",
+ "fe-contract-harness",
  "fe-driver",
  "fe-hir",
  "fe-mir",

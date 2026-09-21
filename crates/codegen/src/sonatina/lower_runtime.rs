@@ -1,5 +1,8 @@
 mod memory_reference;
 
+#[cfg(test)]
+mod tests;
+
 use memory_reference::MemoryReference;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -1044,7 +1047,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 RuntimeLocalRoot::Slot(class) => {
                     let class_ty = self.module.ty_for_class(class)?;
                     let root = match class {
-                        RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => {
+                        RuntimeClass::Scalar(_)
+                        | RuntimeClass::AggregateValue { .. }
+                        | RuntimeClass::Ref {
+                            kind: RefKind::Native,
+                            ..
+                        } => {
+                            // Native slot borrows can publish their address in a
+                            // descriptor, so they need identity-preserving heap export.
                             SlotRoot::Object(
                                 self.fb.insert_inst(
                                     ObjAlloc::new(self.module.inst_set(), class_ty),
@@ -3857,7 +3867,22 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             PlaceTerminal::Reference { reference, .. } => {
                 Ok(Lowered::Value(self.store_memory_reference(reference)?))
             }
-            PlaceTerminal::Object { value, .. } => Ok(Lowered::Value(value)),
+            PlaceTerminal::Object { value, .. } => {
+                let value = if dst.is_some_and(|dst| {
+                    matches!(
+                        self.body.value_class(dst),
+                        Some(RuntimeClass::Ref {
+                            kind: RefKind::Native,
+                            ..
+                        })
+                    )
+                }) {
+                    self.export_object_reference(value)?
+                } else {
+                    value
+                };
+                Ok(Lowered::Value(value))
+            }
             PlaceTerminal::Const { value, .. } => {
                 if let Some(dst) = dst
                     && matches!(
