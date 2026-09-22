@@ -55,6 +55,206 @@ fn const_args<'db>(db: &'db HirAnalysisTestDb, len: u32, element: u32) -> [TyId<
 }
 
 #[test]
+fn symbolic_array_indices_specialize() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "symbolic_indices.fe".into(),
+        r#"
+struct Pair { value: u8 }
+impl Copy for Pair {}
+struct Marker<const N: usize, const I: usize> {}
+const fn local<const N: usize, const I: usize>() -> u8 {
+    let values = [13; N]
+    values[I]
+}
+const fn changed<const N: usize, const I: usize>() -> [u8; N] {
+    let mut values = [0; N]
+    values[I] = 19
+    values
+}
+impl<const N: usize, const I: usize> Marker<N, I> {
+    const VALUE: u8 = [7; N][I]
+    const CONCRETE: u8 = [3, 5, 11][I]
+    const FIELD: u8 = [(Pair { value: 23 }, [29 as u8; N]); N][I].0.value
+    const NESTED: u8 = [[31 as u8; N]; N][I][I]
+    const LOCAL: u8 = local<N, I>()
+    const CHANGED: [u8; N] = changed<N, I>()
+}
+const fn value() -> u8 { Marker<3, 1>::VALUE }
+const fn concrete() -> u8 { Marker<3, 2>::CONCRETE }
+const fn field() -> u8 { Marker<3, 1>::FIELD }
+const fn nested() -> u8 { Marker<3, 2>::NESTED }
+const fn local_value() -> u8 { Marker<3, 1>::LOCAL }
+const fn changed_value() -> u8 { Marker<3, 1>::CHANGED[1] }
+const fn unchanged_value() -> u8 { Marker<3, 1>::CHANGED[2] }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for (name, expected) in [
+        ("value", 7),
+        ("concrete", 11),
+        ("field", 23),
+        ("nested", 31),
+        ("local_value", 13),
+        ("changed_value", 19),
+        ("unchanged_value", 0),
+    ] {
+        let value =
+            eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, name)), vec![])
+                .unwrap();
+        assert_eq!(scalar(&db, value), expected, "{name}");
+    }
+}
+
+#[test]
+fn symbolic_array_indices_diagnose_invalid_specializations() {
+    for (expression, len, index) in [
+        ("[7; N][I]", 0, 0),
+        ("[7; N][I]", 3, 3),
+        ("[3, 5, 11][I]", 3, 3),
+        ("[7; N][1 / I]", 3, 0),
+        ("[10 / I; N][I]", 0, 0),
+        ("[10 / I; N][I]", 3, 0),
+        ("[Pair { value: 7 }; N][I].value", 3, 3),
+        ("changed<N, I>()[0]", 3, 3),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let source = format!(
+            r#"
+struct Pair {{ value: usize }}
+impl Copy for Pair {{}}
+struct Marker<const N: usize, const I: usize> {{}}
+const fn changed<const N: usize, const I: usize>() -> [usize; N] {{
+    let mut values = [0; N]
+    values[I] = 19
+    values
+}}
+impl<const N: usize, const I: usize> Marker<N, I> {{
+    const VALUE: usize = {expression}
+}}
+"#
+        );
+        let file = db.new_stand_alone("symbolic_index_template.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let file = db.new_stand_alone(
+            "invalid_symbolic_indices.fe".into(),
+            &format!("{source}\nconst BAD: usize = Marker<{len}, {index}>::VALUE"),
+        );
+        let (module, _) = db.top_mod(file);
+        let diags = db.run_on_top_mod(module);
+        let rendered = format_diagnostics(&db, &diags);
+        assert!(!diags.is_empty(), "{expression}: len={len}, index={index}");
+        assert!(!rendered.contains("internal"), "{rendered}");
+    }
+}
+
+#[test]
+fn symbolic_array_indices_reify_with_bounds_and_operand_checks() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "symbolic_index_reification.fe".into(),
+        r#"
+struct Pair { value: u8 }
+impl Copy for Pair {}
+const fn repeat<const N: usize, const I: usize>() -> u8 { [7; N][I] }
+const fn concrete<const N: usize, const I: usize>() -> u8 { [3, 5, 11][I] }
+const fn bytes<const N: usize, const I: usize>() -> u8 {
+    let text: String<3> = "abc"
+    text.as_bytes()[I]
+}
+const fn local<const N: usize, const I: usize>() -> u8 {
+    let values = [13; N]
+    values[I]
+}
+const fn field<const N: usize, const I: usize>() -> u8 { [Pair { value: 23 }; N][I].value }
+const fn checked_index<const N: usize, const I: usize>() -> u8 { [7; N][1 / I] }
+const fn checked_element<const N: usize, const I: usize>() -> usize { [10 / I; N][I] }
+const fn store<const N: usize, const I: usize>() -> u8 {
+    let mut values = [0; N]
+    values[I] = 19
+    values[I]
+}
+const fn changed<const N: usize, const I: usize>() -> u8 { store<N, I>() }
+const fn fixed_store<const N: usize, const I: usize>() -> u8 {
+    let mut values = [0; 3]
+    values[I] = 29
+    values[I]
+}
+const fn changed_fixed<const N: usize, const I: usize>() -> u8 { fixed_store<N, I>() }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for name in [
+        "repeat",
+        "concrete",
+        "bytes",
+        "local",
+        "field",
+        "checked_index",
+        "checked_element",
+        "changed",
+        "changed_fixed",
+    ] {
+        let owner = BodyOwner::Func(function(&db, module, name));
+        let symbolic = eval_body_owner_const(&db, owner, vec![]).unwrap();
+        let identity = identity_semantic_instance_key(&db, owner);
+        assert!(
+            reify_runtime_const(&db, get_or_build_semantic_instance(&db, identity), symbolic)
+                .is_none(),
+            "{name} must retain its unresolved index"
+        );
+        for (len, index) in [(0, 0), (0, 1), (1, 0), (1, 1), (3, 1), (3, 2), (3, 3)] {
+            let args = [len, index].map(|value: u32| {
+                TyId::new(
+                    &db,
+                    TyData::ConstTy(ConstTyId::new(
+                        &db,
+                        ConstTyData::Evaluated(
+                            EvaluatedConstTy::LitInt(IntegerId::new(&db, BigUint::from(value))),
+                            TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize))),
+                        ),
+                    )),
+                )
+            });
+            let key = SemanticInstanceKey::new(
+                &db,
+                owner,
+                GenericSubst::new(&db, args.to_vec()),
+                identity.effect_providers(&db),
+                identity.impl_env(&db),
+            );
+            let instance = get_or_build_semantic_instance(&db, key);
+            let reified = reify_runtime_const(&db, instance, symbolic);
+            assert_eq!(
+                reify_runtime_const_for_ty(&db, instance, sem_const_ty(&db, symbolic), symbolic),
+                reified
+            );
+            let expected = match name {
+                "concrete" => [3, 5, 11].get(index as usize).copied(),
+                "bytes" => b"abc".get(index as usize).map(|byte| usize::from(*byte)),
+                "changed_fixed" => (index < 3).then_some(29),
+                "checked_index" => (index != 0 && 1 / index < len).then_some(7),
+                "checked_element" => (index != 0 && index < len).then(|| 10 / index as usize),
+                _ if index >= len => None,
+                "repeat" => Some(7),
+                "local" => Some(13),
+                "field" => Some(23),
+                "changed" => Some(19),
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                reified.map(|value| scalar(&db, value)),
+                expected,
+                "{name}: len={len}, index={index}"
+            );
+        }
+    }
+}
+
+#[test]
 fn generic_inherent_const_array_repeats_specialize() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

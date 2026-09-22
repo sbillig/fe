@@ -331,7 +331,7 @@ enum CtfeSlot<'db> {
 #[derive(Clone)]
 enum CtfeValue<'db> {
     Value(CtfeConstValue<'db>),
-    Ref(CtfeRef),
+    Ref(CtfeRef<'db>),
 }
 
 #[derive(Clone)]
@@ -854,20 +854,29 @@ impl<'db> CtfeValue<'db> {
 }
 
 #[derive(Clone)]
-struct CtfeRef {
+struct CtfeRef<'db> {
     frame: usize,
     root: SLocalId,
-    path: Box<[CtfePathElem]>,
+    path: Box<[CtfePathElem<'db>]>,
 }
 
 #[derive(Clone)]
-pub(super) enum CtfePathElem {
+enum CtfePathElem<'db> {
     Field(FieldIndex),
     VariantField {
         variant: VariantIndex,
         field: FieldIndex,
     },
-    Index(usize),
+    Index(CtfeIndex<'db>),
+}
+
+#[derive(Clone)]
+enum CtfeIndex<'db> {
+    Concrete(usize),
+    Symbolic {
+        value: TyId<'db>,
+        origin: SemOrigin<'db>,
+    },
 }
 
 impl<'db, 'body> CtfeMachine<'db, 'body> {
@@ -2163,7 +2172,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         frame_idx: usize,
         place: &SPlace<'db>,
         origin: SemOrigin<'db>,
-    ) -> Result<ResolvedPlace, CtfeError<'db>> {
+    ) -> Result<ResolvedPlace<'db>, CtfeError<'db>> {
         let mut resolved = match self.read_slot(frame_idx, place.local, origin)? {
             CtfeValue::Ref(r#ref) => ResolvedPlace {
                 frame: r#ref.frame,
@@ -2202,7 +2211,9 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     let index = self.load_value(frame_idx, SOperand::synthetic(*index), origin)?;
                     CtfePathElem::Index(self.index_from_value(frame_idx, index, origin)?)
                 }
-                Projection::Index(IndexSource::Constant(index)) => CtfePathElem::Index(*index),
+                Projection::Index(IndexSource::Constant(index)) => {
+                    CtfePathElem::Index(CtfeIndex::Concrete(*index))
+                }
                 Projection::Index(IndexSource::Any) => {
                     return Err(CtfeError::InvalidOperation {
                         origin,
@@ -2222,7 +2233,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
 
     fn load_ref(
         &self,
-        r#ref: &CtfeRef,
+        r#ref: &CtfeRef<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<SemConstId<'db>, CtfeError<'db>> {
         Ok(self.load_ref_value(r#ref, origin)?.materialize(self.db))
@@ -2230,7 +2241,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
 
     fn load_ref_value(
         &self,
-        r#ref: &CtfeRef,
+        r#ref: &CtfeRef<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
         let root = match self.frames[r#ref.frame].locals.get(r#ref.root.index()) {
@@ -2244,7 +2255,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
 
     fn store_place(
         &mut self,
-        place: ResolvedPlace,
+        place: ResolvedPlace<'db>,
         value: CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<(), CtfeError<'db>> {
@@ -2284,10 +2295,66 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
     fn project_index(
         &self,
         value: CtfeConstValue<'db>,
-        index: usize,
+        index: CtfeIndex<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
-        self.project_value(value, &[CtfePathElem::Index(index)], origin)
+        let value = self.expand_interned(value);
+        let deferred_origin = value.deferred_origin;
+        let projected = match (&value.kind, index) {
+            (CtfeConstKind::Bytes { bytes, .. }, CtfeIndex::Concrete(index)) => {
+                let byte = *bytes.get(index).ok_or(CtfeError::OutOfBounds { origin })?;
+                CtfeConstValue::int(
+                    self.db,
+                    TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::U8))),
+                    byte.into(),
+                )
+            }
+            (CtfeConstKind::Array { elems, .. }, CtfeIndex::Concrete(index)) => elems
+                .get(index)
+                .cloned()
+                .ok_or(CtfeError::OutOfBounds { origin })?,
+            (_, index) if value.ty(self.db).is_array(self.db) => {
+                // Retain both operands until specialization can check the index
+                // and the array, including their deferred evaluation failures.
+                let (index, index_origin) = match index {
+                    CtfeIndex::Concrete(index) => (
+                        TyId::const_ty(
+                            self.db,
+                            const_ty_from_sem_const(
+                                self.db,
+                                int_const(
+                                    self.db,
+                                    TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Usize))),
+                                    index.into(),
+                                ),
+                            ),
+                        ),
+                        origin,
+                    ),
+                    CtfeIndex::Symbolic { value, origin } => (value, origin),
+                };
+                let projected = self.abstract_const_expr(
+                    ConstExpr::ArrayIndex {
+                        array: TyId::const_ty(
+                            self.db,
+                            const_ty_from_sem_const(self.db, value.materialize(self.db)),
+                        ),
+                        index,
+                    },
+                    value.ty(self.db).generic_args(self.db)[0],
+                );
+                CtfeConstValue::concrete(self.db, projected)
+                    .with_deferred_origin(self.db, Some(index_origin))
+            }
+            _ => {
+                return Err(CtfeError::InvalidOperation {
+                    origin: value.error_origin(origin),
+                    message: "invalid const projection".into(),
+                });
+            }
+        };
+        let deferred_origin = deferred_origin.or(projected.deferred_origin);
+        Ok(self.value_with_origin(projected, deferred_origin))
     }
 
     fn enum_extract(
@@ -2519,12 +2586,40 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         frame_idx: usize,
         value: CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
-    ) -> Result<usize, CtfeError<'db>> {
+    ) -> Result<CtfeIndex<'db>, CtfeError<'db>> {
         let error_origin = value.error_origin(origin);
+        let value = if let CtfeConstKind::Interned(interned) = &value.kind
+            && let SemConstValue::TypeLevel { ty, const_ty } = interned.value(self.db)
+        {
+            let subst = self.frames[frame_idx]
+                .body
+                .owner
+                .key(self.db)
+                .subst(self.db);
+            let value =
+                demand_concrete_const_ty(self.db, const_ty, ty, subst.generic_args(self.db))
+                    .and_then(|value| sem_const_from_ty(self.db, TyId::const_ty(self.db, value)))
+                    .ok_or(CtfeError::InvalidOperation {
+                        origin: error_origin,
+                        message: "invalid const index".into(),
+                    })?;
+            if let SemConstValue::TypeLevel { const_ty, .. } = value.value(self.db) {
+                return Ok(CtfeIndex::Symbolic {
+                    value: const_ty,
+                    origin: error_origin,
+                });
+            }
+            CtfeConstValue::concrete(self.db, value)
+        } else {
+            value
+        };
         let index = self.expect_int(frame_idx, value, origin)?;
-        index.to_usize().ok_or(CtfeError::OutOfBounds {
-            origin: error_origin,
-        })
+        index
+            .to_usize()
+            .map(CtfeIndex::Concrete)
+            .ok_or(CtfeError::OutOfBounds {
+                origin: error_origin,
+            })
     }
 
     fn eval_unary(
@@ -3117,7 +3212,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
     fn project_value(
         &self,
         value: CtfeConstValue<'db>,
-        path: &[CtfePathElem],
+        path: &[CtfePathElem<'db>],
         origin: SemOrigin<'db>,
     ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
         let mut value = value;
@@ -3142,31 +3237,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     .get(field.0 as usize)
                     .cloned()
                     .ok_or(CtfeError::OutOfBounds { origin })?,
-                (CtfeConstKind::Bytes { bytes, .. }, CtfePathElem::Index(index)) => {
-                    let byte = *bytes.get(*index).ok_or(CtfeError::OutOfBounds { origin })?;
-                    CtfeConstValue::int(
-                        self.db,
-                        TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::U8))),
-                        byte.into(),
-                    )
-                }
-                (CtfeConstKind::Array { elems, .. }, CtfePathElem::Index(index)) => elems
-                    .get(*index)
-                    .cloned()
-                    .ok_or(CtfeError::OutOfBounds { origin })?,
-                (CtfeConstKind::Interned(interned), CtfePathElem::Index(index))
-                    if let SemConstValue::TypeLevel { ty, const_ty } = interned.value(self.db)
-                        && ty.is_array(self.db) =>
-                {
-                    // Keep the bounds obligation until the symbolic extent is known.
-                    let projected = self.abstract_const_expr(
-                        ConstExpr::ArrayIndex {
-                            array: const_ty,
-                            index: *index,
-                        },
-                        ty.generic_args(self.db)[0],
-                    );
-                    CtfeConstValue::concrete(self.db, projected)
+                (_, CtfePathElem::Index(index)) => {
+                    self.project_index(value.clone(), index.clone(), origin)?
                 }
                 (CtfeConstKind::Interned(interned), CtfePathElem::Field(field))
                     if let SemConstValue::TypeLevel { ty, const_ty } = interned.value(self.db)
@@ -3201,7 +3273,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     });
                 }
             };
-            value = self.value_with_origin(projected, value.deferred_origin);
+            let deferred_origin = value.deferred_origin.or(projected.deferred_origin);
+            value = self.value_with_origin(projected, deferred_origin);
         }
         Ok(value)
     }
@@ -3254,7 +3327,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
     fn store_const_value_in_place(
         &self,
         root: &mut CtfeConstValue<'db>,
-        path: &[CtfePathElem],
+        path: &[CtfePathElem<'db>],
         new_value: CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<(), CtfeError<'db>> {
@@ -3269,6 +3342,9 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             return Err(CtfeError::NotConstEvaluable {
                 origin: root.error_origin(origin),
             });
+        }
+        if let CtfePathElem::Index(CtfeIndex::Symbolic { origin, .. }) = head {
+            return Err(CtfeError::NotConstEvaluable { origin: *origin });
         }
         let root_origin = root.error_origin(origin);
         let root_deferred_origin = root.deferred_origin;
@@ -3302,7 +3378,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 slot.deferred_origin.or(root_deferred_origin)
             }
             CtfeConstKind::Array { elems, .. } => {
-                let CtfePathElem::Index(index) = head else {
+                let CtfePathElem::Index(CtfeIndex::Concrete(index)) = head else {
                     return Err(CtfeError::InvalidOperation {
                         origin: root_origin,
                         message: "array store requires index projection".into(),
@@ -3420,10 +3496,10 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
 }
 
 #[derive(Clone)]
-struct ResolvedPlace {
+struct ResolvedPlace<'db> {
     frame: usize,
     root: SLocalId,
-    path: Vec<CtfePathElem>,
+    path: Vec<CtfePathElem<'db>>,
 }
 
 fn is_u8_array_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {

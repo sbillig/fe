@@ -150,9 +150,11 @@ where
                 value.visit_with(visitor);
                 len.visit_with(visitor);
             }
-            ConstExpr::ArrayIndex { array: value, .. } | ConstExpr::Field { value, .. } => {
-                value.visit_with(visitor)
+            ConstExpr::ArrayIndex { array, index } => {
+                array.visit_with(visitor);
+                index.visit_with(visitor);
             }
+            ConstExpr::Field { value, .. } => value.visit_with(visitor),
             ConstExpr::TraitConst(assoc) => {
                 assoc.visit_with(visitor);
             }

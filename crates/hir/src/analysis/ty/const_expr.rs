@@ -43,7 +43,7 @@ pub enum ConstExpr<'db> {
     },
     ArrayIndex {
         array: TyId<'db>,
-        index: usize,
+        index: TyId<'db>,
     },
     Field {
         value: TyId<'db>,
@@ -85,7 +85,7 @@ impl<'db> ConstExprId<'db> {
                 format!("[{}; {}]", value.pretty_print(db), len.pretty_print(db))
             }
             ConstExpr::ArrayIndex { array, index } => {
-                format!("{}[{index}]", array.pretty_print(db))
+                format!("{}[{}]", array.pretty_print(db), index.pretty_print(db))
             }
             ConstExpr::Field { value, index } => format!("{}.{index}", value.pretty_print(db)),
             ConstExpr::TraitConst(assoc) => {

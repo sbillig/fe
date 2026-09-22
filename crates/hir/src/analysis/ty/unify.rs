@@ -290,7 +290,10 @@ where
                     array: a2,
                     index: i2,
                 },
-            ) if i1 == i2 => self.unify_ty(*a1, *a2),
+            ) => {
+                self.unify_ty(*a1, *a2)?;
+                self.unify_ty(*i1, *i2)
+            }
             (
                 Field {
                     value: v1,

@@ -254,7 +254,7 @@ where
             db,
             ConstExpr::ArrayIndex {
                 array: folder.fold_ty(db, *array),
-                index: *index,
+                index: folder.fold_ty(db, *index),
             },
         ),
         ConstExpr::Field { value, index } => ConstExprId::new(
