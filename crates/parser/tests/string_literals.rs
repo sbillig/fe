@@ -32,7 +32,7 @@ second"
 #[test]
 fn invalid_escapes_report_byte_spans_and_preserve_following_literals() {
     for recovery in [RecoveryMode::Recover, RecoveryMode::NoRecover] {
-        for escape in [r"\q", r"\x", r"\u", r"\0", r"\é"] {
+        for escape in [r"\q", r"\x", r"\u", r"\0", r"\é", r"\'"] {
             let source =
                 format!("fn literals() {{ let bad =   \"é{escape}\"\nlet good = \"ok\" }}");
             let (green, errors) = parse_source_file(&source, recovery);
@@ -70,6 +70,47 @@ fn incomplete_string_tokens_are_diagnosed_without_panicking() {
         for recovery in [RecoveryMode::Recover, RecoveryMode::NoRecover] {
             let (_, errors) = parse_source_file(source, recovery);
             assert!(!errors.is_empty(), "{source}");
+        }
+    }
+}
+
+#[test]
+fn invalid_string_escapes_recover_in_patterns_and_attributes() {
+    for source in [
+        r#"fn f() { match "ok" { "\q" => (), _ => () } }"#,
+        r#"#[example(value = "\q")]
+fn f() {}"#,
+        r#"#[example = "\q"]
+fn f() {}"#,
+        r#"msg M {
+#[selector = "\q"]
+Bad,
+#[selector = 1]
+Good
+}"#,
+    ] {
+        let source = format!("{source}\nfn following() {{ let text = \"ok\" }}");
+        for recovery in [RecoveryMode::Recover, RecoveryMode::NoRecover] {
+            let (green, errors) = parse_source_file(&source, recovery);
+            assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+            assert_eq!(errors[0].msg(), "invalid string escape");
+            let range = errors[0].range();
+            assert_eq!(
+                &source[usize::from(range.start())..usize::from(range.end())],
+                r"\q"
+            );
+            let root = SyntaxNode::new_root(green);
+            assert_eq!(root.to_string(), source);
+            let values: Vec<_> = root
+                .descendants()
+                .filter_map(Lit::cast)
+                .filter_map(|lit| match lit.kind() {
+                    LitKind::String(string) => Some(string.value()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(values.iter().filter(|value| value.is_err()).count(), 1);
+            assert_eq!(values.last().unwrap().as_deref(), Ok("ok"));
         }
     }
 }
