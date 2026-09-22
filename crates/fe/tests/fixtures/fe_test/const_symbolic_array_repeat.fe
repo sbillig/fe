@@ -77,3 +77,31 @@ fn test_symbolic_aggregate_specialization() {
     let empty = SymbolicAggregates<0>::VALUES
     assert!(empty.len() == 0)
 }
+
+struct Indexed<const N: usize, const I: usize> {}
+impl<const N: usize, const I: usize> Indexed<N, I> {
+    const VALUE: u8 = [7; N][I]
+    const CONCRETE: u8 = [3, 5, 11][I]
+    const FIELD: u8 = [Pair { value: 13 }; N][I].value
+    const CHANGED: [u8; N] = changed_index<N, I>()
+}
+
+const fn changed_index<const N: usize, const I: usize>() -> [u8; N] {
+    let mut values = [0; N]
+    values[I] = 17
+    values
+}
+
+fn generic_index<const N: usize, const I: usize>() -> u8 {
+    Indexed<N, I>::VALUE
+}
+
+#[test]
+fn test_symbolic_index_specialization() {
+    assert!(Indexed<3, 1>::VALUE == 7)
+    assert!(Indexed<3, 2>::CONCRETE == 11)
+    assert!(Indexed<3, 1>::FIELD == 13)
+    assert!(Indexed<3, 1>::CHANGED[1] == 17)
+    assert!(Indexed<3, 1>::CHANGED[2] == 0)
+    assert!(generic_index<3, 1>() == 7)
+}

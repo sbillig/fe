@@ -874,10 +874,13 @@ fn const_expr_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, expr: ConstExprId
         | ConstExpr::ArrayRepeat {
             value: lhs,
             len: rhs,
+        }
+        | ConstExpr::ArrayIndex {
+            array: lhs,
+            index: rhs,
         } => ty_is_fully_ground(db, *lhs) && ty_is_fully_ground(db, *rhs),
         ConstExpr::UnOp { expr, .. }
         | ConstExpr::Cast { expr, .. }
-        | ConstExpr::ArrayIndex { array: expr, .. }
         | ConstExpr::Field { value: expr, .. } => ty_is_fully_ground(db, *expr),
         ConstExpr::TraitConst(assoc) => trait_inst_is_fully_ground(db, assoc.inst()),
         ConstExpr::InherentConst(use_) => ty_is_fully_ground(db, use_.receiver_ty()),
@@ -965,7 +968,7 @@ fn canonicalize_const_expr_for_mode<'db>(
             db,
             ConstExpr::ArrayIndex {
                 array: canonicalize_ty_for_mode(db, *array, env, mode),
-                index: *index,
+                index: canonicalize_ty_for_mode(db, *index, env, mode),
             },
         ),
         ConstExpr::Field { value, index } => ConstExprId::new(
@@ -1104,15 +1107,29 @@ fn evaluate_aggregate_const_expr<'db>(
                 ),
             ))
         }
-        ConstExpr::ArrayIndex {
-            array: value,
-            index,
-        }
-        | ConstExpr::Field { value, index } => {
+        ConstExpr::ArrayIndex { array: value, .. } | ConstExpr::Field { value, .. } => {
             let value = evaluate_const_operand(db, *value)?;
             if value.ty(db).has_invalid(db) {
                 return Some(value);
             }
+            let index = match expr.data(db) {
+                ConstExpr::ArrayIndex { index, .. } => {
+                    let index = evaluate_const_operand(db, *index)?;
+                    if index.ty(db).has_invalid(db) {
+                        return Some(index);
+                    }
+                    let ConstTyData::Evaluated(EvaluatedConstTy::LitInt(index), _) = index.data(db)
+                    else {
+                        return None;
+                    };
+                    let Some(index) = index.data(db).to_usize() else {
+                        return Some(ConstTyId::invalid(db, InvalidCause::Other));
+                    };
+                    index
+                }
+                ConstExpr::Field { index, .. } => *index,
+                _ => unreachable!(),
+            };
             let elems = match (expr.data(db), value.data(db)) {
                 (
                     ConstExpr::ArrayIndex { .. },
@@ -1125,9 +1142,24 @@ fn evaluate_aggregate_const_expr<'db>(
                         _,
                     ),
                 ) => elems,
+                (
+                    ConstExpr::ArrayIndex { .. },
+                    ConstTyData::Evaluated(EvaluatedConstTy::Bytes(bytes), _),
+                ) => {
+                    let Some(byte) = bytes.get(index) else {
+                        return Some(ConstTyId::invalid(db, InvalidCause::Other));
+                    };
+                    return Some(ConstTyId::new(
+                        db,
+                        ConstTyData::Evaluated(
+                            EvaluatedConstTy::LitInt(IntegerId::new(db, BigUint::from(*byte))),
+                            expected_ty,
+                        ),
+                    ));
+                }
                 _ => return None,
             };
-            let Some(elem) = elems.get(*index) else {
+            let Some(elem) = elems.get(index) else {
                 return Some(ConstTyId::invalid(db, InvalidCause::Other));
             };
             let TyData::ConstTy(elem) = elem.data(db) else {

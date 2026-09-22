@@ -549,6 +549,10 @@ fn check_const_expr_wf<'db>(
         | ConstExpr::ArrayRepeat {
             value: lhs,
             len: rhs,
+        }
+        | ConstExpr::ArrayIndex {
+            array: lhs,
+            index: rhs,
         } => {
             for ty in [*lhs, *rhs] {
                 let wf = check_ty_wf(db, solve_cx, ty);
@@ -557,9 +561,7 @@ fn check_const_expr_wf<'db>(
                 }
             }
         }
-        ConstExpr::UnOp { expr, .. }
-        | ConstExpr::ArrayIndex { array: expr, .. }
-        | ConstExpr::Field { value: expr, .. } => {
+        ConstExpr::UnOp { expr, .. } | ConstExpr::Field { value: expr, .. } => {
             let wf = check_ty_wf(db, solve_cx, *expr);
             if !wf.is_wf() {
                 return wf;
