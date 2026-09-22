@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/constructor_values_check_requirements/bind.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ bind.fe:2:33
+  │
+1 │ enum Choice<const N: usize> where N > 0 { Value(u256) }
+  │                                   ----- required by this predicate
+2 │ fn unused() { let constructor = Choice<0>::Value }
+  │                                 ^^^^^^^^^^^^^^^^ condition evaluated to `false`

@@ -1,4 +1,4 @@
-//! Const function requirements are discharged after inference, for every body
+//! Const declaration requirements are discharged after inference, for every body
 //! owner. Concrete discharge uses ordinary CTFE. Symbolic forwarding compares
 //! resolved, typed expressions after scoped substitution, without evaluating
 //! unknown parameters or assuming the obligation being checked.
@@ -137,7 +137,7 @@ pub(super) fn predicate_may_depend_on_params<'db>(
     predicate_flags(db, typed.clone()).contains(TyFlags::HAS_PARAM)
 }
 
-// Requirements scope over function signatures/bodies and record fields, but
+// Requirements scope over function signatures/bodies and ADT fields, but
 // their formation must be checked without those assumptions. In particular,
 // nested anonymous constants inside a predicate are part of its formation.
 fn requirement_premise_owner<'db>(
@@ -157,7 +157,7 @@ fn premise_owner_in_scope<'db>(
     let mut current = Some(origin);
     while let Some(scope) = current {
         match scope.item() {
-            item @ (ItemKind::Func(_) | ItemKind::Struct(_)) => {
+            item @ (ItemKind::Func(_) | ItemKind::Struct(_) | ItemKind::Enum(_)) => {
                 if matches!(item, ItemKind::Func(func) if func.is_associated_func(db)) {
                     return None;
                 }
@@ -235,8 +235,26 @@ pub(super) fn check_body_requirements<'db>(
             };
             (*definition, args)
         };
-        let CallableDef::Func(func) = definition else {
-            continue;
+        let func = match definition {
+            CallableDef::Func(func) => func,
+            // A constructor used as a value enters its enum type here, since no
+            // call expression instantiates it. A called constructor's enum type
+            // enters at the call, which is checked above.
+            CallableDef::VariantCtor(_) => {
+                if matches!(data.borrowed().to_opt(), Some(Expr::Path(..)))
+                    && !direct_callees.contains(&expr)
+                    && let Some((_, diag)) = check_type_requirements(
+                        db,
+                        definition.ret_ty(db).instantiate(db, args),
+                        owner.scope(),
+                        expr.span(body).into(),
+                        &[],
+                    )
+                {
+                    diags.push(diag.into());
+                }
+                continue;
+            }
         };
         // Ground clauses are already mandatory declaration checks. Unsupported
         // associated/generic owner contexts are rejected at their declarations.
@@ -315,20 +333,36 @@ fn check_type_requirements<'db>(
     let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
         return None;
     };
-    let crate::analysis::ty::adt_def::AdtRef::Struct(record) = adt.adt_ref(db) else {
-        return None;
+    use crate::analysis::ty::adt_def::AdtRef;
+    let (declaration, generic_owner, kind) = match adt.adt_ref(db) {
+        AdtRef::Struct(record) => (
+            WhereClauseOwner::Struct(record),
+            GenericParamOwner::Struct(record),
+            "records",
+        ),
+        AdtRef::Enum(enum_) => (
+            WhereClauseOwner::Enum(enum_),
+            GenericParamOwner::Enum(enum_),
+            "enums",
+        ),
     };
-    let declaration = WhereClauseOwner::Struct(record);
     let predicates = declaration.where_clause(db).const_predicates(db);
     if predicates.is_empty() {
         return None;
     }
-    if args.len() != collect_generic_params(db, record.into()).params(db).len() {
-        return Some((ty, crate::analysis::ty::diagnostics::TyLowerDiag::ConstRequirementNotSatisfied {
-            primary: span,
-            predicate: predicates[0].span().into(),
-            reason: "partially applied records with const requirements are not supported; supply all arguments".into(),
-        }.into()));
+    if args.len() != collect_generic_params(db, generic_owner).params(db).len() {
+        return Some((
+            ty,
+            crate::analysis::ty::diagnostics::TyLowerDiag::ConstRequirementNotSatisfied {
+                primary: span,
+                predicate: predicates[0].span().into(),
+                reason: format!(
+                    "partially applied {kind} with const requirements are not supported; \
+                     supply all arguments"
+                ),
+            }
+            .into(),
+        ));
     }
     if args.iter().any(|arg| arg.has_var(db)) {
         return None;
