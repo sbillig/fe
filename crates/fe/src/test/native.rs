@@ -425,11 +425,8 @@ pub(super) fn prepare_tests(
 /// while exited members are still waiting to be reaped.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn process_group_is_gone(error: &io::Error) -> bool {
-    match error.raw_os_error() {
-        Some(libc::ESRCH) => true,
-        Some(libc::EPERM) => cfg!(target_os = "macos"),
-        _ => false,
-    }
+    let code = error.raw_os_error();
+    code == Some(libc::ESRCH) || (cfg!(target_os = "macos") && code == Some(libc::EPERM))
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
