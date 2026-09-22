@@ -1112,6 +1112,12 @@ pub enum InvalidCause<'db> {
         body: Body<'db>,
     },
 
+    ConstRequirementNotSatisfied {
+        primary: crate::span::DynLazySpan<'db>,
+        predicate: crate::span::DynLazySpan<'db>,
+        reason: String,
+    },
+
     ConstEvalUnsupported {
         body: Body<'db>,
         expr: ExprId,
@@ -1267,6 +1273,9 @@ impl InvalidCause<'_> {
             | InvalidCause::Other => format!("{self:?}"),
 
             InvalidCause::InvalidConstTyExpr { body: _ } => "InvalidConstTyExpr".into(),
+            InvalidCause::ConstRequirementNotSatisfied { .. } => {
+                "ConstRequirementNotSatisfied".into()
+            }
             InvalidCause::ConstEvalUnsupported { .. } => "ConstEvalUnsupported".into(),
             InvalidCause::ConstEvalAssertionFailed { .. } => "ConstEvalAssertionFailed".into(),
             InvalidCause::ConstEvalNonConstCall { .. } => "ConstEvalNonConstCall".into(),

@@ -581,6 +581,17 @@ pub(crate) fn diag_from_invalid_cause<'db>(
         }
         .into(),
 
+        InvalidCause::ConstRequirementNotSatisfied {
+            primary,
+            predicate,
+            reason,
+        } => TyLowerDiag::ConstRequirementNotSatisfied {
+            primary,
+            predicate,
+            reason,
+        }
+        .into(),
+
         InvalidCause::InvalidConstTyExpr { body } => {
             TyLowerDiag::InvalidConstTyExpr(body.span().into()).into()
         }

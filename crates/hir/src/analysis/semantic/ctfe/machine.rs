@@ -35,7 +35,7 @@ use crate::{
             provider::ProviderAddressSpace,
             ty_check::{
                 BodyOwner, EffectArgLayoutView, EffectParamSite, EffectPassMode, LocalBinding,
-                ParamSite,
+                ParamSite, infer_body, inference_has_failed_const_requirements,
             },
             ty_def::{InvalidCause, PrimTy, TyBase, TyData, TyId},
         },
@@ -1251,9 +1251,21 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
                 Err(CtfeError::NotConstEvaluable { origin })
             }
-            BodyOwner::Func(_) | BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => instance
-                .admitted_body(self.db)
-                .map_err(|_| CtfeError::InvalidBody { origin }),
+            owner
+            @ (BodyOwner::Func(_) | BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. }) => {
+                let (diags, typed_body) = infer_body(self.db, owner);
+                if inference_has_failed_const_requirements(diags)
+                    || matches!(
+                        typed_body.result_ty().invalid_cause(self.db),
+                        Some(InvalidCause::TypeLoweringCycle)
+                    )
+                {
+                    return Err(CtfeError::InvalidBody { origin });
+                }
+                instance
+                    .admitted_body(self.db)
+                    .map_err(|_| CtfeError::InvalidBody { origin })
+            }
         }
     }
 
