@@ -1,9 +1,9 @@
 //! Const declaration requirements are discharged after inference, for every body
 //! owner. Concrete discharge uses ordinary CTFE. Symbolic forwarding compares
-//! resolved, typed expressions after scoped substitution, without evaluating
+//! resolved, typed expressions after substitution, without evaluating
 //! unknown parameters or assuming the obligation being checked.
 use super::*;
-use crate::analysis::ty::subst::instantiate_scoped_into;
+use crate::analysis::ty::{subst::substitute_complete, ty_lower::CompleteSubst};
 use crate::hir_def::{ItemKind, UnOp, scope_graph::ScopeId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,33 +31,62 @@ enum PredicateTerm<'db> {
     Call(Vec<PredicateKey<'db>>),
 }
 
+// A declaration's full parameter schema also resolves the parameters that
+// lexical lookup keeps owned by an enclosing impl, so one simultaneous
+// substitution instantiates a method's requirement with its callable arguments.
+fn requirement_subst<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    args: &[TyId<'db>],
+) -> Option<CompleteSubst<'db>> {
+    let owner = GenericParamOwner::from_item_opt(scope.item())?;
+    CompleteSubst::for_owner(db, owner, args.to_vec()).ok()
+}
+
+// Arguments inferred in a method body can mention its impl's parameters as the
+// impl owns them. Rebase them onto the method's own formals, which is how the
+// caller's premises are instantiated, so both sides compare in one basis.
+fn caller_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: WhereClauseOwner<'db>,
+    args: Vec<TyId<'db>>,
+) -> Vec<TyId<'db>> {
+    let Some(owner) = GenericParamOwner::from_item_opt(caller.into()) else {
+        return args;
+    };
+    let identity = collect_generic_params(db, owner).params(db).to_vec();
+    CompleteSubst::for_owner(db, owner, identity)
+        .ok()
+        .and_then(|subst| substitute_complete(db, args.clone(), &subst).ok())
+        .unwrap_or(args)
+}
+
 fn predicate_key<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
     typed: &TypedBody<'db>,
     expr: ExprId,
-    scope: ScopeId<'db>,
-    args: &[TyId<'db>],
+    subst: &CompleteSubst<'db>,
 ) -> Option<PredicateKey<'db>> {
-    let subst = |ty| instantiate_scoped_into(db, ty, scope, scope, args);
-    let child = |expr| predicate_key(db, body, typed, expr, scope, args);
+    let instantiate = |ty| substitute_complete(db, ty, subst).ok();
+    let child = |expr| predicate_key(db, body, typed, expr, subst);
     let term = match expr.data(db, body).borrowed().to_opt()? {
         Expr::Lit(lit) => PredicateTerm::Literal(*lit),
         Expr::Path(_) => {
             if let Some(ValuePathRef::TypeConst(ty)) = typed.value_path_ref(expr) {
-                PredicateTerm::TypeConst(subst(ty))
+                PredicateTerm::TypeConst(instantiate(ty)?)
             } else {
                 // A reference's lookup scope is provenance, not its identity.
                 // Keep the resolved declaration and substituted receiver/goal.
                 match typed.expr_const_ref(expr)? {
                     ConstRef::Const(constant) => PredicateTerm::Const(constant),
                     ConstRef::TraitConst(reference) => PredicateTerm::TraitConst(
-                        instantiate_scoped_into(db, reference.inst(), scope, scope, args),
+                        substitute_complete(db, reference.inst(), subst).ok()?,
                         reference.name(),
                     ),
                     ConstRef::InherentConst(reference) => PredicateTerm::InherentConst(
                         reference.impl_(),
-                        subst(reference.receiver_ty()),
+                        instantiate(reference.receiver_ty())?,
                         reference.name(),
                     ),
                 }
@@ -80,16 +109,16 @@ fn predicate_key<'db>(
         _ => return None,
     };
     Some(PredicateKey {
-        ty: subst(typed.expr_ty(db, expr)),
+        ty: instantiate(typed.expr_ty(db, expr))?,
         arithmetic: BodyOwner::AnonConstBody {
             body,
             expected: TyId::bool(db),
         }
         .arithmetic_mode(db),
-        operation: typed
-            .callable_expr(expr)
-            .cloned()
-            .map(|callable| instantiate_scoped_into(db, callable, scope, scope, args)),
+        operation: match typed.callable_expr(expr) {
+            Some(callable) => Some(substitute_complete(db, callable.clone(), subst).ok()?),
+            None => None,
+        },
         term,
     })
 }
@@ -137,6 +166,12 @@ pub(super) fn predicate_may_depend_on_params<'db>(
     predicate_flags(db, typed.clone()).contains(TyFlags::HAS_PARAM)
 }
 
+// Inherent calls keep ordinary method resolution. Requirements constrain the
+// resolved call; they do not participate in candidate selection.
+pub(super) fn function_requirements_supported(db: &dyn HirAnalysisDb, func: Func<'_>) -> bool {
+    !func.is_associated_func(db) || matches!(func.scope().parent_item(db), Some(ItemKind::Impl(_)))
+}
+
 // Requirements scope over function signatures/bodies and ADT fields, but
 // their formation must be checked without those assumptions. In particular,
 // nested anonymous constants inside a predicate are part of its formation.
@@ -158,7 +193,8 @@ fn premise_owner_in_scope<'db>(
     while let Some(scope) = current {
         match scope.item() {
             item @ (ItemKind::Func(_) | ItemKind::Struct(_) | ItemKind::Enum(_)) => {
-                if matches!(item, ItemKind::Func(func) if func.is_associated_func(db)) {
+                if matches!(item, ItemKind::Func(func) if !function_requirements_supported(db, func))
+                {
                     return None;
                 }
                 let candidate = WhereClauseOwner::from_item_opt(item)?;
@@ -262,7 +298,7 @@ pub(super) fn check_body_requirements<'db>(
             .where_clause(db)
             .const_predicates(db);
         if predicates.is_empty()
-            || func.is_associated_func(db)
+            || !function_requirements_supported(db, func)
             || collect_generic_params(db, func.into())
                 .params(db)
                 .is_empty()
@@ -436,49 +472,51 @@ fn discharge_requirement<'db>(
     if !diags.is_empty() && !static_assert_ignorable_type_diags(db, diags) {
         return diags.clone();
     }
-    let declaration_scope = ItemKind::from(declaration).scope();
-    let mut instantiated = instantiate_scoped_into(
-        db,
-        typed.clone(),
-        declaration_scope,
-        declaration_scope,
-        &args,
-    );
+    let args = match caller {
+        Some(caller) => caller_args(db, caller, args),
+        None => args,
+    };
+    let unsubstitutable = || {
+        vec![
+            BodyDiag::ConstRequirementNotSatisfied {
+                primary: predicate.span().into(),
+                predicate: predicate.span().into(),
+                reason: "the condition could not be instantiated with these generic arguments"
+                    .into(),
+            }
+            .into(),
+        ]
+    };
+    let Some(subst) = requirement_subst(db, ItemKind::from(declaration).scope(), &args) else {
+        return unsubstitutable();
+    };
+    let Ok(mut instantiated) = substitute_complete(db, typed.clone(), &subst) else {
+        return unsubstitutable();
+    };
     // TypedBody deliberately preserves formal TypeConst paths for runtime ABI
     // selection. Substitute these references only in this dependency view.
     for reference in instantiated.value_path_refs.values_mut().flatten() {
         if let ValuePathRef::TypeConst(ty) = reference {
-            *ty = instantiate_scoped_into(db, *ty, declaration_scope, declaration_scope, &args);
+            let Ok(substituted) = substitute_complete(db, *ty, &subst) else {
+                return unsubstitutable();
+            };
+            *ty = substituted;
         }
     }
     let symbolic = predicate_flags(db, instantiated).contains(TyFlags::HAS_PARAM);
     if symbolic {
-        let key = predicate_key(
-            db,
-            predicate,
-            typed,
-            predicate.expr(db),
-            ItemKind::from(declaration).scope(),
-            &args,
-        );
-        if let (Some(key), Some(caller)) = (&key, caller) {
-            let caller_args = collect_generic_params(
-                db,
-                GenericParamOwner::from_item_opt(caller.into()).unwrap(),
-            )
-            .params(db);
+        let key = predicate_key(db, predicate, typed, predicate.expr(db), &subst);
+        let caller_subst = caller.and_then(|caller| {
+            let owner = GenericParamOwner::from_item_opt(caller.into())?;
+            let identity = collect_generic_params(db, owner).params(db);
+            requirement_subst(db, ItemKind::from(caller).scope(), identity)
+                .map(|subst| (caller, subst))
+        });
+        if let (Some(key), Some((caller, caller_subst))) = (&key, &caller_subst) {
             for &premise in caller.where_clause(db).const_predicates(db) {
                 let (diags, typed) = check_predicate_formation(db, premise);
                 if (!diags.is_empty() && !static_assert_ignorable_type_diags(db, diags))
-                    || predicate_key(
-                        db,
-                        premise,
-                        typed,
-                        premise.expr(db),
-                        ItemKind::from(caller).scope(),
-                        caller_args,
-                    )
-                    .as_ref()
+                    || predicate_key(db, premise, typed, premise.expr(db), caller_subst).as_ref()
                         != Some(key)
                 {
                     continue;
