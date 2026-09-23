@@ -102,6 +102,8 @@ pub(super) struct Borrowck<'db> {
     pub validation_dependencies: Vec<Vec<bool>>,
     pub loan_facts_changed: bool,
     pub storage_facts_changed: bool,
+    /// Invalidates call-local source resolutions when their inventory changes.
+    pub(super) source_generation: usize,
 }
 
 impl<'db> Borrowck<'db> {
@@ -159,6 +161,7 @@ impl<'db> Borrowck<'db> {
             pending: PendingSemanticValidation::default(),
             loan_facts_changed: false,
             storage_facts_changed: false,
+            source_generation: 0,
         };
         checker.prepare_scalar_demand()?;
         Ok(checker)
@@ -576,8 +579,12 @@ impl<'db> Borrowck<'db> {
             } else {
                 (region.clone(), parents)
             };
-        self.loan_facts_changed |= self.inventory.loans[reference.id.0]
-            .extend_occurrence(self.db, reference, &region, parents);
+        if self.inventory.loans[reference.id.0]
+            .extend_occurrence(self.db, reference, &region, parents)
+        {
+            self.loan_facts_changed = true;
+            self.source_generation += 1;
+        }
     }
 
     pub fn solve(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
@@ -693,6 +700,7 @@ impl<'db> Borrowck<'db> {
                     self.failed_prefix_certificates = false;
                     certificate_application_failed = false;
                     self.inventory.reset_epoch_loans();
+                    self.source_generation += 1;
                     incoming.fill(None);
                     incoming[self.body.entry.index()] = Some(self.inventory.entry.clone());
                     continue;
@@ -742,6 +750,7 @@ impl<'db> Borrowck<'db> {
             self.failed_prefix_certificates = false;
             if self.storage_facts_changed {
                 self.inventory.reset_epoch_loans();
+                self.source_generation += 1;
             }
             // Resolving call effects, held referents, or boundary requirements
             // can discover typed cells.
@@ -792,6 +801,7 @@ impl<'db> Borrowck<'db> {
             })
             .collect();
         if !sources.is_empty() {
+            self.source_generation += 1;
             let changed = self
                 .inventory
                 .add_external_sources(self.db, self.instance, sources.iter().cloned())
