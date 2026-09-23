@@ -214,11 +214,7 @@ impl<'db> IndexCondition<'db> {
         Self(self.0.map(|bit| bit.substitute(subst), |value| *value))
     }
     fn indices(&self) -> BTreeSet<IndexExpr<'db>> {
-        self.0
-            .variables()
-            .into_iter()
-            .map(|bit| bit.index)
-            .collect()
+        self.0.variables().map(|bit| bit.index).collect()
     }
 
     fn restrict(&self, care: &Self) -> Option<Self> {
@@ -468,7 +464,6 @@ impl<'db> Guard<'db> {
     pub fn occurrences(&self) -> BTreeSet<ValueOccurrence> {
         self.condition
             .variables()
-            .iter()
             .map(|bit| bit.choice.occurrence)
             .collect()
     }
@@ -480,13 +475,15 @@ impl<'db> Guard<'db> {
         let occurrences: BTreeSet<_> = self
             .condition
             .variables()
-            .into_iter()
             .map(|bit| bit.choice.occurrence)
             .collect();
         let mappings: BTreeMap<_, _> = occurrences
             .into_iter()
             .map(|occurrence| (occurrence, map(occurrence)))
             .collect();
+        if mappings.iter().all(|(from, to)| from == to) {
+            return Some(self.clone());
+        }
         Self::canonical(
             &self.scope,
             self.condition.map(
@@ -567,8 +564,7 @@ impl<'db> Guard<'db> {
         let indexed: BTreeSet<_> = self
             .condition
             .variables()
-            .into_iter()
-            .flat_map(|bit| bit.choice.path.indices().collect::<Vec<_>>())
+            .flat_map(|bit| bit.choice.path.indices())
             .collect();
         let projected: BTreeSet<_> = self
             .indices()
@@ -647,7 +643,7 @@ impl<'db> Guard<'db> {
         if condition.is_leaf(&IndexCondition::never()) {
             return None;
         }
-        if condition.variables().iter().all(|bit| {
+        if condition.variables().all(|bit| {
             bit.choice
                 .path
                 .indices()
@@ -660,7 +656,6 @@ impl<'db> Guard<'db> {
         }
         let choice_indices: BTreeSet<_> = condition
             .variables()
-            .iter()
             .flat_map(|bit| bit.choice.path.indices())
             .collect();
         let mut canonical = Decision::leaf(IndexCondition::never());
@@ -695,14 +690,10 @@ impl<'db> Guard<'db> {
         // Choice occurrences at equal indices must have equal tags. Complete the
         // graph outside these feasible valuations so equality partitions can reunite
         // without retaining a spurious dependence on an extra indexed choice.
-        let choices: BTreeSet<_> = canonical
-            .variables()
-            .into_iter()
-            .map(|bit| bit.choice)
-            .collect();
+        let choices: BTreeSet<_> = canonical.variables().map(|bit| &bit.choice).collect();
         let mut care = Decision::leaf(IndexCondition::always());
-        for (position, left) in choices.iter().enumerate() {
-            for right in choices.iter().skip(position + 1) {
+        for (position, left) in choices.iter().copied().enumerate() {
+            for right in choices.iter().copied().skip(position + 1) {
                 if let Some(alias) = left.alias_condition(right) {
                     let equality = Decision::equal_bits(
                         (0..u16::BITS as u16).map(|bit| {

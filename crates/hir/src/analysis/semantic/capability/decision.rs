@@ -296,14 +296,14 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         })
     }
 
-    pub(super) fn variables(&self) -> BTreeSet<V> {
-        self.nodes
-            .iter()
-            .filter_map(|node| match node {
-                Node::Branch { variable, .. } => Some(variable.clone()),
-                _ => None,
-            })
-            .collect()
+    /// Borrow decision variables without cloning or sorting their payloads.
+    /// A variable may occur at more than one node; consumers needing unique
+    /// variables collect only those keys they actually use.
+    pub(super) fn variables(&self) -> impl Iterator<Item = &V> {
+        self.nodes.iter().filter_map(|node| match node {
+            Node::Branch { variable, .. } => Some(variable),
+            _ => None,
+        })
     }
 
     pub(super) fn map<W: Clone + Ord + Hash, U: Clone + Eq + Hash>(
@@ -315,9 +315,8 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         // Other substitutions can identify or reorder decisions and need select.
         let mapped_variables: BTreeMap<_, _> = self
             .variables()
-            .into_iter()
             .map(|key| {
-                let mapped = variable(&key);
+                let mapped = variable(key);
                 (key, mapped)
             })
             .collect();
@@ -359,6 +358,16 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         mut selected: impl FnMut(&V) -> bool,
         join: impl Fn(&T, &T) -> T,
     ) -> Self {
+        // Ask about each distinct variable once, in decision order.
+        let selected: BTreeSet<_> = self
+            .variables()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter(|variable| selected(variable))
+            .collect();
+        if selected.is_empty() {
+            return self.clone();
+        }
         let mut builder = Builder::new();
         let mut mapped = Vec::with_capacity(self.nodes.len());
         let mut memo = FxHashMap::default();
@@ -369,7 +378,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
                     variable,
                     low,
                     high,
-                } if selected(variable) => {
+                } if selected.contains(variable) => {
                     builder.apply(mapped[*low], mapped[*high], &join, true, &mut memo)
                 }
                 Node::Branch {
@@ -532,7 +541,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash, F: Fn(&T, &T) -> Option<T>>
 
 #[cfg(test)]
 mod tests {
-    use super::{Decision, Variable};
+    use super::*;
 
     #[test]
     fn ordered_renaming_preserves_correlated_boolean_decisions() {
@@ -585,5 +594,23 @@ mod tests {
             relation.exists(|variable| *variable != 1, |left, right| *left || *right),
             Decision::leaf(true)
         );
+    }
+
+    #[test]
+    fn quantification_visits_shared_variables_once_in_order() {
+        let first = Decision::chain([(0u8, true)], true, false);
+        let second = Decision::chain([(1u8, true)], true, false);
+        let parity = first.apply(&second, |left, right| left ^ right);
+        assert_eq!(parity.variables().count(), 3);
+        let mut observed = Vec::new();
+        let quantified = parity.exists(
+            |variable| {
+                observed.push(*variable);
+                *variable == 1
+            },
+            |left, right| *left || *right,
+        );
+        assert_eq!(observed, [0, 1]);
+        assert!(quantified.is_leaf(&true));
     }
 }
