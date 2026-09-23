@@ -323,12 +323,9 @@ jobs:
         run: |
           set -euo pipefail
           test -d /tmp/docs-out && test ! -L /tmp/docs-out
-          test -f /tmp/docs-out/docs.json && test ! -L /tmp/docs-out/docs.json
-          for name in fe-web.js fe-highlight.css styles.css; do
+          for name in docs.json fe-web.js fe-highlight.css styles.css; do
             file="/tmp/docs-out/$name"
-            if [ -e "$file" ] || [ -L "$file" ]; then
-              test -f "$file" && test ! -L "$file"
-            fi
+            test -f "$file" && test ! -L "$file"
           done
 
       - name: Deploy to doc site
