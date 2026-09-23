@@ -590,6 +590,9 @@ impl<'db> Borrowck<'db> {
         }
         self.prepare_recursive_calls();
         self.prepare_validation_dependencies();
+        // Normalization can allocate joins before their predecessors. Use the
+        // existing DFS order so forward facts propagate within each sweep.
+        let order = self.inventory.loops.reverse_postorder().to_vec();
         loop {
             self.before.fill(Vec::new());
             self.terminal.fill(None);
@@ -602,7 +605,7 @@ impl<'db> Borrowck<'db> {
                 let previous_incoming = incoming.clone();
                 self.loan_facts_changed = false;
                 self.storage_facts_changed = false;
-                for index in 0..self.body.blocks.len() {
+                for &index in &order {
                     let Some(mut state) = incoming[index].clone() else {
                         continue;
                     };

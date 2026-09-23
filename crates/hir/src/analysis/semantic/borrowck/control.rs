@@ -119,6 +119,7 @@ pub(super) fn validated_loops(
 }
 
 pub(super) struct LoopRegions {
+    reverse_postorder: Vec<usize>,
     blocks: Vec<Option<NBlockId>>,
     values: BTreeMap<NBlockId, BTreeSet<NValueId>>,
     feedback: BTreeSet<(NBlockId, NBlockId)>,
@@ -174,7 +175,8 @@ impl LoopRegions {
         }
         let mut assigned = vec![false; edges.len()];
         let mut blocks = vec![None; edges.len()];
-        for first in order.into_iter().rev() {
+        order.reverse();
+        for first in order.iter().copied() {
             if assigned[first] {
                 continue;
             }
@@ -214,6 +216,7 @@ impl LoopRegions {
             }
         }
         Self {
+            reverse_postorder: order,
             blocks,
             values,
             feedback,
@@ -222,6 +225,10 @@ impl LoopRegions {
 
     pub fn has_cycle(&self) -> bool {
         self.blocks.iter().any(Option::is_some)
+    }
+
+    pub fn reverse_postorder(&self) -> &[usize] {
+        &self.reverse_postorder
     }
 
     pub fn for_value(&self, body: &NormalizedBody<'_>, value: NValueId) -> Option<NBlockId> {
@@ -490,6 +497,24 @@ mod tests {
             );
             if let Some(region) = expected {
                 assert!(loops.repeated(region).is_empty());
+            }
+        }
+        // Every forward edge is processed in one sweep, including when block
+        // allocation order puts a branch join before its predecessors.
+        let mut rank = vec![0; edges.len()];
+        assert_eq!(loops.reverse_postorder.len(), edges.len());
+        for (position, block) in loops.reverse_postorder.iter().copied().enumerate() {
+            rank[block] = position;
+        }
+        for (from, targets) in edges.iter().enumerate() {
+            for to in targets {
+                assert!(
+                    rank[from] < rank[*to]
+                        || loops
+                            .feedback
+                            .contains(&(NBlockId::new(from), NBlockId::new(*to))),
+                    "backward edge outside feedback: {from}->{to}, {edges:?}"
+                );
             }
         }
         // Kahn's algorithm is independent of the ancestor-edge construction.
