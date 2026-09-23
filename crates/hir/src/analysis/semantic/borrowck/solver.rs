@@ -297,8 +297,10 @@ impl<'db> Borrowck<'db> {
                 let RegionRoot::External(source) = &clause.payload.root else {
                     return None;
                 };
-                (!state.has_storage(self.db, &clause.payload.root, clause.guard.scope()))
-                    .then(|| (source.clone(), clause.guard.scope().clone()))
+                (!state
+                    .storage_coverage(&clause.payload.root, clause.guard.scope())
+                    .complete(&clause.guard))
+                .then(|| (source.clone(), clause.guard.scope().clone()))
             })
             .collect();
         let completed = if shape.contains_capability(self.db) && !sources.is_empty() {
@@ -505,6 +507,7 @@ impl<'db> Borrowck<'db> {
                     }
                 }
                 if self.storage_facts_changed {
+                    self.inventory.reset_epoch_loans();
                     incoming.fill(None);
                     incoming[self.body.entry.index()] = Some(self.inventory.entry.clone());
                     continue;
@@ -534,6 +537,9 @@ impl<'db> Borrowck<'db> {
             if !self.loan_facts_changed && !self.storage_facts_changed {
                 self.boundary_requirements = Some(boundary_requirements);
                 return Ok(());
+            }
+            if self.storage_facts_changed {
+                self.inventory.reset_epoch_loans();
             }
             // Resolving call effects, held referents, or boundary requirements
             // can discover typed cells.
@@ -576,19 +582,35 @@ impl<'db> Borrowck<'db> {
         let sources: Vec<_> = sources
             .into_iter()
             .filter(|(source, scope)| {
-                !self.inventory.entry.has_storage(
-                    self.db,
-                    &RegionRoot::External(source.clone()),
-                    scope,
-                )
+                !self
+                    .inventory
+                    .entry
+                    .storage_coverage(&RegionRoot::External(source.clone()), scope)
+                    .complete(&Guard::always(scope))
             })
             .collect();
         if !sources.is_empty() {
-            self.inventory
-                .add_external_sources(self.db, self.instance, sources)
+            let changed = self
+                .inventory
+                .add_external_sources(self.db, self.instance, sources.iter().cloned())
                 .map_err(|error| {
                     self.internal_diag(origin, format!("invalid raw memory storage: {error:?}"))
                 })?;
+            if !changed {
+                let (source, scope) = &sources[0];
+                let root = RegionRoot::External(source.clone());
+                let uncovered = self
+                    .inventory
+                    .entry
+                    .storage_coverage(&root, scope)
+                    .uncovered(&Guard::always(scope));
+                return Err(self.internal_diag(
+                    origin,
+                    format!(
+                        "typed storage registration made no progress for {root:?}; uncovered: {uncovered:?}"
+                    ),
+                ));
+            }
             self.storage_facts_changed = true;
         }
         state.extend_storage(&self.inventory.entry);

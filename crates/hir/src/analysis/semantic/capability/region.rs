@@ -117,6 +117,14 @@ impl<'db> RegionRoot<'db> {
             }
         }
     }
+
+    /// Possible overlap of raw byte spans, which may cross typed cell boundaries.
+    pub(super) fn byte_alias_guard(&self, other: &Self, guard: Guard<'db>) -> Option<Guard<'db>> {
+        match (self, other) {
+            (Self::External(left), Self::External(right)) => left.byte_alias_guard(right, guard),
+            _ => self.alias_guard(other, guard, true),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

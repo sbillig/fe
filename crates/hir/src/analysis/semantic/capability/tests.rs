@@ -3,7 +3,8 @@ use std::{collections::BTreeSet, iter::empty};
 
 use super::{
     birth::AllocationBirth,
-    external::{ExternalOrigin, ExternalSource, ReferentContract},
+    external::{ClobberCondition, ExternalOrigin, ExternalSource, ReferentContract},
+    footprint::AccessExtent,
     guard::{ChoiceKey, Guard, ValueOccurrence},
     handle::{
         AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
@@ -71,6 +72,268 @@ fn scope() -> BinderScope {
 }
 fn path<'db>(index: IndexExpr<'db>) -> StructuralPath<IndexExpr<'db>> {
     StructuralPath::new([Projection::Index(index)])
+}
+
+#[test]
+fn typed_storage_matching_binds_an_erased_zero_selector() {
+    let db = HirAnalysisTestDb::default();
+    let ty = TyId::u256(&db);
+    let base = ExternalSource::input(
+        InputSource::slot(0, StructuralPath::default()),
+        ReferentContract::new(
+            &db,
+            ty,
+            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+        ),
+        false,
+    );
+    let source = |source| SourceExpr {
+        source,
+        path: RegionPath::default(),
+        views: Default::default(),
+        invalidated: false,
+    };
+    let empty = BinderScope::default();
+    let (family_scope, member) = empty.bind(IndexNamespace::InputSlot);
+    let family = ExternalSource::memory(&db, source(base.clone()), ty, Some((ty, member)));
+    let zero = ExternalSource::memory(&db, source(base.clone()), ty, None);
+    assert_eq!(zero, base);
+    let witness = family
+        .match_instance(&family_scope, &zero, &empty)
+        .expect("erased zero selector has a structural binding");
+    assert_eq!(witness.substitution.apply(member), IndexExpr::Const(0));
+    assert_eq!(witness.guard, Guard::always(&empty));
+    assert_eq!(
+        witness.write.unwrap().guard,
+        Guard::always(&family_scope)
+            .with_equality(member, IndexExpr::Const(0))
+            .unwrap()
+    );
+
+    let index = runtime(1);
+    let symbolic = ExternalSource::memory(&db, source(base.clone()), ty, Some((ty, index)));
+    let witness = base
+        .match_instance(&empty, &symbolic, &empty)
+        .expect("base and same-type symbolic wrapper match conditionally");
+    assert!(witness.guard.proves_equal(index, IndexExpr::Const(0)));
+    assert!(!Guard::always(&empty).implies(&witness.guard));
+}
+
+#[test]
+fn typed_storage_matching_keeps_repeated_and_distinct_index_roles() {
+    let db = HirAnalysisTestDb::default();
+    let scope = BinderScope::default();
+    let (repeated_scope, member) = scope.bind(IndexNamespace::InputSlot);
+    let contract = ReferentContract::new(
+        &db,
+        TyId::u256(&db),
+        HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+    );
+    let family = ExternalSource::input(
+        InputSource::slot(
+            0,
+            StructuralPath::new([Projection::Index(member), Projection::Index(member)]),
+        ),
+        contract,
+        false,
+    );
+    let first = runtime(1);
+    let second = runtime(2);
+    let request = ExternalSource::input(
+        InputSource::slot(
+            0,
+            StructuralPath::new([Projection::Index(first), Projection::Index(second)]),
+        ),
+        contract,
+        false,
+    );
+    let witness = family
+        .match_instance(&repeated_scope, &request, &scope)
+        .unwrap();
+    assert_eq!(witness.substitution.apply(member), first);
+    assert!(witness.guard.proves_equal(first, second));
+    assert!(!Guard::always(&scope).implies(&witness.guard));
+
+    let byte = TyId::u8(&db);
+    let word = TyId::array_with_len(&db, TyId::ptr_to(&db, TyId::u256(&db)), 4);
+    let (generation_scope, generation) = scope.bind(IndexNamespace::InputSlot);
+    let (family_scope, element) = generation_scope.bind(IndexNamespace::InputSlot);
+    let contract = ReferentContract::new(
+        &db,
+        byte,
+        HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+    );
+    let base =
+        ExternalSource::unknown(contract, AddressOccurrence::Summary(0), [generation].into());
+    let family = ExternalSource::memory(
+        &db,
+        SourceExpr {
+            source: base,
+            path: RegionPath::default(),
+            views: Default::default(),
+            invalidated: false,
+        },
+        word,
+        Some((byte, element)),
+    );
+    let base =
+        ExternalSource::unknown(contract, AddressOccurrence::Summary(0), [runtime(3)].into());
+    let request = ExternalSource::memory(
+        &db,
+        SourceExpr {
+            source: base,
+            path: RegionPath::default(),
+            views: Default::default(),
+            invalidated: false,
+        },
+        word,
+        None,
+    );
+    let witness = family
+        .match_instance(&family_scope, &request, &scope)
+        .unwrap();
+    assert_eq!(witness.substitution.apply(generation), runtime(3));
+    assert_eq!(witness.substitution.apply(element), IndexExpr::Const(0));
+    assert_eq!(witness.guard, Guard::always(&scope));
+
+    let (follow_scope, dereference) = family_scope.bind(IndexNamespace::InputSlot);
+    let pointee = ReferentContract::new(
+        &db,
+        TyId::u256(&db),
+        HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+    );
+    let family = family.follow(
+        RegionPath::new([Projection::Index(dereference)]),
+        pointee,
+        false,
+    );
+    let request = request.follow(
+        RegionPath::new([Projection::Index(runtime(4))]),
+        pointee,
+        false,
+    );
+    let witness = family
+        .match_instance(&follow_scope, &request, &scope)
+        .unwrap();
+    assert_eq!(witness.substitution.apply(generation), runtime(3));
+    assert_eq!(witness.substitution.apply(element), IndexExpr::Const(0));
+    assert_eq!(witness.substitution.apply(dereference), runtime(4));
+    assert_eq!(witness.guard, Guard::always(&scope));
+}
+
+#[test]
+fn typed_storage_matching_transports_metadata_without_selecting_a_cell() {
+    let db = HirAnalysisTestDb::default();
+    let scope = BinderScope::default();
+    let (family_scope, witness_index) = scope.bind(IndexNamespace::Existential);
+    let contract = ReferentContract::new(
+        &db,
+        TyId::u256(&db),
+        HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+    );
+    let mut family = ExternalSource::unknown(contract, AddressOccurrence::Summary(0), Box::new([]));
+    let metadata = ExternalSource::unknown(
+        contract,
+        AddressOccurrence::Summary(1),
+        [witness_index].into(),
+    );
+    let metadata = SourceExpr {
+        source: metadata,
+        path: RegionPath::default(),
+        views: Default::default(),
+        invalidated: false,
+    };
+    family.clobber = Some(Box::new(ClobberCondition {
+        target: metadata.clone(),
+        written: metadata,
+        extent: AccessExtent::Bytes(witness_index),
+    }));
+    let request = family.substitute(
+        &db,
+        &IndexSubst::new(&family_scope, &scope, [(witness_index, runtime(3))]).unwrap(),
+    );
+    let matched = family
+        .match_instance(&family_scope, &request, &scope)
+        .unwrap();
+    assert_eq!(matched.substitution.apply(witness_index), runtime(3));
+    assert_eq!(matched.guard, Guard::always(&scope));
+    assert_eq!(matched.write.unwrap().guard, Guard::always(&family_scope));
+
+    let fixed = family.substitute(
+        &db,
+        &IndexSubst::new(
+            &family_scope,
+            &scope,
+            [(witness_index, IndexExpr::Const(0))],
+        )
+        .unwrap(),
+    );
+    assert!(
+        fixed
+            .match_instance(&scope, &family, &family_scope)
+            .unwrap()
+            .write
+            .is_none(),
+        "a request's payload-only binder cannot be replaced with a metadata constant"
+    );
+}
+
+#[test]
+fn typed_storage_matching_keeps_alpha_roles_and_rejects_distinct_offsets() {
+    let db = HirAnalysisTestDb::default();
+    let scope = BinderScope::default();
+    let (family_scope, formal) = scope.bind(IndexNamespace::InputSlot);
+    let (request_scope, actual) = family_scope.bind(IndexNamespace::InputSlot);
+    let contract = ReferentContract::new(
+        &db,
+        TyId::u256(&db),
+        HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+    );
+    let family = ExternalSource::input(InputSource::slot(0, path(formal)), contract, false);
+    let request = ExternalSource::input(InputSource::slot(0, path(actual)), contract, false);
+    let matched = family
+        .match_instance(&family_scope, &request, &request_scope)
+        .unwrap();
+    assert_eq!(matched.substitution.apply(formal), actual);
+    assert_eq!(matched.guard, Guard::always(&request_scope));
+    assert_eq!(matched.write.unwrap().payload.get(&actual), Some(&formal));
+
+    let base = ExternalSource::input(
+        InputSource::slot(0, StructuralPath::default()),
+        ReferentContract::new(
+            &db,
+            TyId::u8(&db),
+            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+        ),
+        false,
+    );
+    let source = SourceExpr {
+        source: base,
+        path: RegionPath::default(),
+        views: Default::default(),
+        invalidated: false,
+    };
+    let first = ExternalSource::memory(
+        &db,
+        source.clone(),
+        TyId::u256(&db),
+        Some((TyId::u8(&db), IndexExpr::Const(1))),
+    );
+    let second = ExternalSource::memory(
+        &db,
+        source,
+        TyId::u256(&db),
+        Some((TyId::u8(&db), IndexExpr::Const(2))),
+    );
+    assert!(first.match_instance(&scope, &second, &scope).is_none());
+    assert_ne!(
+        RegionSet::singleton(&scope, RegionRoot::External(first), RegionPath::default()).overlap(
+            &db,
+            &RegionSet::singleton(&scope, RegionRoot::External(second), RegionPath::default(),),
+        ),
+        OverlapResult::Disjoint,
+        "distinct typed cells can still overlap physically"
+    );
 }
 
 fn leaf_shape(db: &HirAnalysisTestDb) -> ShapeId<'_> {

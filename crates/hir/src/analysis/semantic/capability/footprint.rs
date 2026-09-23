@@ -142,7 +142,7 @@ impl<'a, 'db> AccessFootprint<'a, 'db> {
                     let right_object = right_address
                         .as_ref()
                         .map_or(&right.payload.root, |address| &address.object);
-                    if let Some(guard) = left_object.alias_guard(right_object, guard, true) {
+                    if let Some(guard) = left_object.byte_alias_guard(right_object, guard) {
                         uncertain = true;
                         overlap = overlap.union(&RegionSet::new(
                             scope,
@@ -318,6 +318,48 @@ mod tests {
             )),
             RegionPath::default(),
         )
+    }
+
+    #[test]
+    fn typed_cells_separate_only_at_the_accessed_location() {
+        let db = HirAnalysisTestDb::default();
+        let ty = TyId::u256(&db);
+        for space in [ProviderAddressSpace::Memory, ProviderAddressSpace::Storage] {
+            let base = ExternalSource::input(
+                InputSource::slot(0, StructuralPath::default()),
+                ReferentContract::new(&db, ty, HandleAddressSpace::Known(space)),
+                false,
+            );
+            let cell = |base, index| {
+                let base = SourceExpr::whole(base);
+                ExternalSource::memory(&db, base, ty, Some((ty, IndexExpr::Const(index))))
+            };
+            let region = |source| {
+                RegionSet::singleton(
+                    &BinderScope::default(),
+                    RegionRoot::External(source),
+                    RegionPath::default(),
+                )
+            };
+            let (first, second) = (cell(base.clone(), 1), cell(base, 2));
+            let (left, right) = (
+                region(cell(first.clone(), 2)),
+                region(cell(first.clone(), 3)),
+            );
+            assert_eq!(left.overlap(&db, &right), OverlapResult::Disjoint);
+            // A raw byte span may cross from one cell into the next.
+            let bytes = AccessFootprint {
+                region: &left,
+                extent: AccessExtent::Bytes(IndexExpr::Const(64)),
+            };
+            assert_ne!(
+                bytes.overlap(&db, AccessFootprint::typed(&right)),
+                OverlapResult::Disjoint
+            );
+            // Offsets compose: distinct intermediate cells reach one address.
+            let (left, right) = (region(cell(first, 2)), region(cell(second, 1)));
+            assert_ne!(left.overlap(&db, &right), OverlapResult::Disjoint);
+        }
     }
 
     #[test]

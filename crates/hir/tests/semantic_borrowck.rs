@@ -678,47 +678,60 @@ fn inspect() {{
 
 #[test]
 fn fresh_slot_discovery_replays_typed_stores_before_reads_in_either_query_order() {
-    for initialized in [false, true] {
-        for query_first in ["inspect", "read", "fresh"] {
-            let store = if initialized {
-                "*slot = ref *owner"
-            } else {
-                ""
-            };
-            let source = format!(
-                r#"
+    for native_result in [false, true] {
+        for initialized in [false, true] {
+            for query_first in ["inspect", "read", "fresh"] {
+                let store = if initialized {
+                    "*slot = ref *owner"
+                } else {
+                    ""
+                };
+                let (read, use_result) = if native_result {
+                    (
+                        "fn read(_ slot: *ref u256) -> ref u256 { *slot }",
+                        "let borrowed = read(ptr::cast(bytes))\n    let observed: u256 = borrowed\n    observed",
+                    )
+                } else {
+                    (
+                        "fn read(_ slot: *ref u256) -> u256 { *slot }",
+                        "read(ptr::cast(bytes))",
+                    )
+                };
+                let source = format!(
+                    r#"
 use core::ptr
 fn fresh() -> *u8 {{ ptr::alloc_bytes(32) }}
-fn read(_ slot: *ref u256) -> u256 {{ *slot }}
+{read}
 fn inspect() -> u256 {{
     let owner = ptr::alloc<u256>()
     *owner = 7
     let bytes = fresh()
     let slot: *ref u256 = ptr::cast(bytes)
     {store}
-    read(ptr::cast(bytes))
+    {use_result}
 }}
 "#
-            );
-            let mut db = HirAnalysisTestDb::default();
-            let file = db.new_stand_alone("fresh_query_order.fe".into(), &source);
-            let (module, _) = db.top_mod(file);
-            db.assert_no_diags(module);
-            let _ = semantic_borrow_summary(&db, func_instance(&db, module, query_first));
-            let diagnostics = format_diagnostics(
-                &db,
-                &collect_semantic_borrow_diagnostic_vouchers(&db, module),
-            );
-            if initialized {
-                assert!(
-                    diagnostics.is_empty(),
-                    "{query_first}: {source}\n{diagnostics}"
                 );
-            } else {
-                assert!(
-                    diagnostics.contains("cannot use a native borrow"),
-                    "{query_first}: {source}\n{diagnostics}"
+                let mut db = HirAnalysisTestDb::default();
+                let file = db.new_stand_alone("fresh_query_order.fe".into(), &source);
+                let (module, _) = db.top_mod(file);
+                db.assert_no_diags(module);
+                let _ = semantic_borrow_summary(&db, func_instance(&db, module, query_first));
+                let diagnostics = format_diagnostics(
+                    &db,
+                    &collect_semantic_borrow_diagnostic_vouchers(&db, module),
                 );
+                if initialized {
+                    assert!(
+                        diagnostics.is_empty(),
+                        "{native_result} {query_first}: {source}\n{diagnostics}"
+                    );
+                } else {
+                    assert!(
+                        diagnostics.contains("cannot use a native borrow"),
+                        "{native_result} {query_first}: {source}\n{diagnostics}"
+                    );
+                }
             }
         }
     }
@@ -9841,12 +9854,208 @@ fn staged(_ cursor: mut u256, _ count: u256, _ initialize: bool) -> u256 {
     cursor += 1
     *ptr::cast<u8, u256>(child.ptr())
 }
+
 fn run(_ count: u256, _ initialize: bool) -> u256 {
     let mut cursor: u256 = 0
     staged(mut cursor, count, initialize)
 }
 "#,
     );
+}
+
+fn typed_heap_source(stored: &str, read: &str, caller: usize) -> String {
+    format!(
+        r#"
+use core::ptr
+fn staged(cursor: mut u256, index: usize) -> u256 {{
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let data = ptr::MemBuffer::alloc(32)
+    *ptr::cast<u8, u256>(data.ptr()) = 7
+    children[{stored}] = data.span()
+    let child = children[{read}]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}}
+pub fn run() -> u256 {{
+    let mut cursor: u256 = 0
+    staged(cursor: mut cursor, index: {caller})
+}}
+"#
+    )
+}
+
+#[test]
+fn typed_heap_constant_store_matches_symbolic_read_at_the_call() {
+    let mut failures = Vec::new();
+    for (stored, read, caller, expected) in [
+        ("0", "index", 0, true),
+        ("1", "index", 1, true),
+        ("index", "index", 0, true),
+        ("0", "0", 0, true),
+        ("1", "1", 1, true),
+        ("0", "index", 1, false),
+        ("1", "index", 0, false),
+        ("0", "1", 0, false),
+        ("1", "0", 1, false),
+    ] {
+        let source = typed_heap_source(stored, read, caller);
+        let diagnostics = checked_borrow_diags(&source);
+        if expected {
+            if !diagnostics.is_empty() {
+                failures.push(format!("{stored}/{read}: {diagnostics}"));
+            }
+        } else {
+            if !diagnostics.contains("borrow conflict")
+                && !diagnostics.contains("cannot use a native borrow")
+            {
+                failures.push(format!("{stored}/{read}: {diagnostics}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn typed_heap_discovery_is_query_order_independent() {
+    for (stored, caller) in [("0", 0), ("1", 1)] {
+        let source = typed_heap_source(stored, "index", caller);
+        for first in ["staged", "run"] {
+            let mut db = HirAnalysisTestDb::default();
+            let file = db.new_stand_alone("typed_heap_order.fe".into(), &source);
+            let (module, _) = db.top_mod(file);
+            db.assert_no_diags(module);
+            semantic_borrow_summary(&db, func_instance(&db, module, first))
+                .unwrap()
+                .expect("function summary");
+            let diagnostics = format_diagnostics(
+                &db,
+                &collect_semantic_borrow_diagnostic_vouchers(&db, module),
+            );
+            assert!(diagnostics.is_empty(), "{stored} {first}: {diagnostics}");
+            semantic_borrow_summary(
+                &db,
+                func_instance(&db, module, if first == "run" { "staged" } else { "run" }),
+            )
+            .unwrap()
+            .expect("other function summary");
+            let repeated = format_diagnostics(
+                &db,
+                &collect_semantic_borrow_diagnostic_vouchers(&db, module),
+            );
+            assert_eq!(repeated, diagnostics, "{stored} {first}");
+        }
+    }
+}
+
+#[test]
+fn typed_heap_generic_summary_keeps_unknown_complement() {
+    for stored in [0, 1] {
+        let source = format!(
+            r#"
+use core::ptr
+fn staged(cursor: mut u256, index: usize) -> u256 {{
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let data = ptr::MemBuffer::alloc(32)
+    *ptr::cast<u8, u256>(data.ptr()) = 7
+    children[{stored}] = data.span()
+    let child = children[index]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}}
+"#
+        );
+        with_borrow_summary(&source, "staged", |_, summary| {
+            let cursor_read = summary.accesses.iter().any(|access| {
+                access.kind == MemoryAccessKind::Read
+                    && access.authorizers.clauses().iter().any(|clause| {
+                        matches!(
+                            &clause.payload.root,
+                            fe_hir::analysis::semantic::capability::region::RegionRoot::External(source)
+                                if source.param() == Some(0)
+                        )
+                    })
+            });
+            assert!(cursor_read, "cursor loan access missing: {summary:#?}");
+            let mut unknown_complement = false;
+            for clause in summary
+                .accesses
+                .iter()
+                .filter(|access| {
+                    access.kind == MemoryAccessKind::Read && access.authorizers.clauses().is_empty()
+                })
+                .flat_map(|access| access.region.clauses())
+            {
+                if let fe_hir::analysis::semantic::capability::region::RegionRoot::External(source) =
+                    &clause.payload.root
+                    && matches!(source.origin, ExternalOrigin::Memory { .. })
+                {
+                    assert!(
+                        source.uncertain(),
+                        "unexpected exact external read: {clause:#?}"
+                    );
+                    assert!(
+                        clause
+                            .guard
+                            .with_equality(IndexExpr::FormalValue(1), IndexExpr::Const(stored))
+                            .is_none(),
+                        "unknown read survives at initialized index {stored}: {clause:#?}"
+                    );
+                    unknown_complement |= clause
+                        .guard
+                        .with_equality(IndexExpr::FormalValue(1), IndexExpr::Const(1 - stored))
+                        .is_some();
+                }
+            }
+            assert!(
+                unknown_complement,
+                "unwritten index lost its unknown read: {summary:#?}"
+            );
+        });
+    }
+}
+
+#[test]
+fn typed_heap_selected_span_summary_preserves_both_branches() {
+    // The first element's cell has no element selector, unlike the second.
+    for (written, unwritten) in [(1, 0), (0, 1)] {
+        let source = format!(
+            r#"
+use core::ptr
+fn select(index: usize) -> ptr::MemSpan {{
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let data = ptr::MemBuffer::alloc(32)
+    children[{written}] = data.span()
+    children[index]
+}}
+"#
+        );
+        with_borrow_summary(&source, "select", |db, summary| {
+            let values = ValueInterner::new(db, ValueLimits::default());
+            let leaves = values.leaves(&summary.result, ValueOccurrence::Summary);
+            let mut initialized = false;
+            let mut unknown = false;
+            for leaf in leaves {
+                let source = &leaf.payload.source;
+                let at = |index| {
+                    leaf.guard
+                        .with_equality(IndexExpr::FormalValue(0), IndexExpr::Const(index))
+                        .is_some()
+                };
+                if matches!(source.origin, ExternalOrigin::Allocation(_)) {
+                    assert!(!at(unwritten), "fresh span at unwritten index: {leaf:#?}");
+                    initialized |= at(written);
+                } else if source.uncertain() {
+                    assert!(
+                        !at(written),
+                        "unknown pointer at initialized index: {leaf:#?}"
+                    );
+                    unknown |= at(unwritten);
+                }
+            }
+            assert!(initialized, "initialized branch missing: {summary:#?}");
+            assert!(unknown, "unknown complement missing: {summary:#?}");
+        });
+    }
 }
 
 #[test]

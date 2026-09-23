@@ -696,6 +696,11 @@ impl<'db> Borrowck<'db> {
             return;
         }
         let region = footprint.region.with_guard(&state.guard);
+        let certified = if footprint.extent == AccessExtent::Typed {
+            borrow_state.certified_initialized_region(&region)
+        } else {
+            RegionSet::empty(region.scope())
+        };
         // Logical SSA holders have no address. Unknown memory effects cannot
         // change their ownership, so these checks never depend on specialization.
         let independent = region

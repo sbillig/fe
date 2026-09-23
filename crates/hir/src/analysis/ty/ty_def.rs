@@ -344,7 +344,7 @@ impl<'db> TyId<'db> {
         Self::app(db, array, elem)
     }
 
-    pub(super) fn array_with_len(db: &'db dyn HirAnalysisDb, elem: TyId<'db>, len: usize) -> Self {
+    pub(crate) fn array_with_len(db: &'db dyn HirAnalysisDb, elem: TyId<'db>, len: usize) -> Self {
         let array = Self::array(db, elem);
 
         let len_ty = array.applicable_ty(db).unwrap().const_ty.unwrap();

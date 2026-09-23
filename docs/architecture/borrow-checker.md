@@ -133,6 +133,41 @@ Array and loop occurrences carry explicit indices or lexical witnesses. Export
 renames occurrences to summary identities; call substitution maps them to the
 call site. Replaying an analysis does not allocate a new opaque identity.
 
+### Typed storage families and discovery epochs
+
+External typed cells retain their original source, including address-space
+contract, projections, dereference boundaries, reachability, and clobber
+dependencies. Matching aligns indices by those structural roles. An omitted
+element offset denotes zero; a symbolic offset matches it only under a proved
+zero guard. Repeated family parameters retain their equality constraints.
+Clobber-only indices are bound for read substitution without becoming physical
+cell selectors. A checked match supplies a read substitution and guard; a
+separate write embedding is available only where a definite family update can
+be represented. A widened reachable source can be read conservatively but is
+not strongly replaced.
+
+Storage coverage is the union of supported typed-cell match guards in the demand's
+scope. The solver compares the actual read guard with that union. An incomplete
+external demand registers a full symbolic family with its appropriate entry,
+fresh, or unknown-byte seed, then replays earlier writes. A restricted read
+guard never establishes that an unrestricted family is already inventoried.
+Registration must grow canonical declarations; an uncovered demand with no
+growth is an internal invariant failure. Missing local storage is not external
+discovery.
+
+Typed stores update every represented family on the guard where the selected
+member is definitely written. Prior unknown contents remain on the complement.
+A possible destination receives a weak update. Physical overlap is checked
+separately: a conditional typed match does not suppress invalidation at other
+byte offsets, while a typed effect already handled for the same reachable
+whole-cell representation does not receive a redundant opaque invalidation.
+
+Discovery restarts the block-state fixed point before snapshots, resolved
+operations, boundary requirements, or summaries are published. Stable loan
+declarations include entry loans and call poststate loan IDs; inferred regions
+and parents are reset to those seeds when the storage inventory grows. This
+prevents facts derived from provisional unknown contents from surviving a replay.
+
 ## Raw range validity
 
 Allocation disjointness and elision of fresh-allocation effects assume each raw

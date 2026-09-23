@@ -194,7 +194,6 @@ impl<'db> Borrowck<'db> {
                         |semantics, _, scope| {
                             let payload = match semantics.class {
                                 CapabilityClass::Borrow(kind) => {
-                                    let id = LoanId(self.inventory.loans.len());
                                     let (loan, args, _) = LoanDef::with_occurrence_arguments(
                                         kind,
                                         BorrowActivation::Immediate,
@@ -202,6 +201,9 @@ impl<'db> Borrowck<'db> {
                                         scope,
                                         self.inventory.loops.arguments(&self.body, result),
                                     );
+                                    let id = LoanId(self.inventory.loans.len());
+                                    assert_eq!(self.inventory.loan_seeds.len(), id.0);
+                                    self.inventory.loan_seeds.push(loan.clone());
                                     self.inventory.loans.push(loan);
                                     CapabilityRef::borrow(kind, LoanRef { id, args })
                                 }
@@ -698,6 +700,97 @@ impl<'db> Borrowck<'db> {
             &handles,
             false,
         )?;
+        let mut returns = self
+            .body
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, block)| matches!(block.terminator.kind, NTerminatorKind::Return(_)))
+            .filter_map(|(index, _)| self.terminal[index].as_ref());
+        let mut common_ranges: Vec<_> = returns
+            .next()
+            .into_iter()
+            .flat_map(BorrowState::certified)
+            .map(|certified| {
+                (
+                    certified.family.clone(),
+                    certified.scope.clone(),
+                    certified.coverage.clone(),
+                    vec![&certified.contents],
+                )
+            })
+            .collect();
+        for state in returns {
+            common_ranges.retain_mut(|(family, scope, coverage, contents)| {
+                let Some(incoming) = state
+                    .certified()
+                    .iter()
+                    .find(|incoming| incoming.family == *family && incoming.scope == *scope)
+                else {
+                    return false;
+                };
+                let Some(shared) = coverage.and(&incoming.coverage) else {
+                    return false;
+                };
+                *coverage = shared;
+                contents.push(&incoming.contents);
+                true
+            });
+        }
+        let mut certified_ranges = Vec::new();
+        for (family, scope, coverage, contents) in common_ranges {
+            if contents.iter().any(|value| {
+                self.inventory
+                    .values
+                    .leaves(value, ValueOccurrence::Summary)
+                    .iter()
+                    .any(|leaf| {
+                        !matches!(
+                            leaf.semantics.class,
+                            CapabilityClass::Pointer | CapabilityClass::Handle
+                        )
+                    })
+            }) {
+                continue;
+            }
+            let RegionRoot::External(source) = family else {
+                continue;
+            };
+            let destination = SourceExpr {
+                source,
+                path: RegionPath::default(),
+                views: Default::default(),
+                invalidated: false,
+            };
+            let Some(summarized) =
+                self.summarize_source(destination, &coverage, &mut choices, &mut handles)
+            else {
+                continue;
+            };
+            if summarized.guard.scope() != &scope {
+                continue;
+            }
+            let mut combined = values.empty(contents[0].shape(), &scope);
+            for value in contents {
+                let mapped = self.summarize_value(
+                    value,
+                    SummaryValueRole::Retained,
+                    origin,
+                    &mut values,
+                    &mut choices,
+                    &mut handles,
+                )?;
+                combined = values.join(&combined, &mapped);
+            }
+            certified_ranges.push(CertifiedRangePoststate {
+                destination: summarized.payload,
+                scope,
+                coverage: summarized.guard,
+                contents: combined,
+            });
+        }
+        let scalar_result =
+            scalar_result.filter(|guard: &Guard<'db>| !Guard::always(guard.scope()).implies(guard));
         let summary = BorrowSummary {
             native_requirements: self.summarize_availability_region(
                 &ownership.native_validity.requirements,

@@ -294,6 +294,17 @@ impl<'db> Guard<'db> {
         self.with_index_condition(&IndexCondition::equal(lhs, rhs))
     }
 
+    pub fn with_equalities(
+        &self,
+        pairs: impl IntoIterator<Item = (IndexExpr<'db>, IndexExpr<'db>)>,
+    ) -> Option<Self> {
+        pairs
+            .into_iter()
+            .try_fold(self.clone(), |guard, (lhs, rhs)| {
+                guard.with_equality(lhs, rhs)
+            })
+    }
+
     pub fn with_disequality(&self, lhs: IndexExpr<'db>, rhs: IndexExpr<'db>) -> Option<Self> {
         self.scope.validate(lhs).expect("free disequality binder");
         self.scope.validate(rhs).expect("free disequality binder");
