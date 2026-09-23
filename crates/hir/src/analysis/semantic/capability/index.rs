@@ -86,6 +86,13 @@ impl BinderScope {
         (nested, index)
     }
 
+    /// The lexical owner of clause-local existential binders.
+    pub fn without_existentials(&self) -> Self {
+        let mut owner = self.clone();
+        owner.counts[IndexNamespace::Existential as usize] = 0;
+        owner
+    }
+
     /// Give an independently quantified occurrence fresh existential binders.
     pub fn freshening<'db>(&self, destination: &Self) -> IndexSubst<'db> {
         let mut destination = destination.clone();

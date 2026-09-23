@@ -14,7 +14,7 @@ use crate::{
                 birth::AllocationBirth,
                 external::{ClobberCondition, ExternalOrigin, ExternalSource, ReferentContract},
                 footprint::{AccessExtent, AccessFootprint},
-                guard::{Guard, ValueOccurrence},
+                guard::{ChoiceKey, Guard, ValueOccurrence},
                 handle::{
                     AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
                     OpaqueWriteSite,
@@ -30,6 +30,7 @@ use crate::{
                 state::{BorrowState, CapabilityValue, CapabilityValues},
                 value::{Guarded, IndexPayload, ValueId, ValueInterner, ValueLimits},
             },
+            definite_assignment::literal_bool_cond,
             get_or_build_semantic_instance, instantiated_effect_env,
             normalized::{
                 NEffectArg, NEffectArgValue, NExpr, NOperand, NRootKind, NStatement,
@@ -617,7 +618,8 @@ impl<'db> Borrowck<'db> {
                 )
             };
             let region = self.summarize_region(
-                &external(&access.region),
+                &external(&access.region)
+                    .forget_occurrences(|occurrence| self.recursive_call_choice(occurrence)),
                 SemOrigin::Body(self.body.template_owner),
                 &mut choices,
                 &mut access_handles,
@@ -819,6 +821,11 @@ impl<'db> Borrowck<'db> {
         definite: bool,
     ) -> Result<RegionSet<'db>, SemanticDiagnostic<'db>> {
         let mut summary = RegionSet::empty(&BinderScope::default());
+        let region = if definite {
+            region.clone()
+        } else {
+            region.forget_occurrences(|occurrence| self.recursive_call_choice(occurrence))
+        };
         for clause in region.clauses() {
             let mut source =
                 SourceExpr::from_place(&clause.payload).expect("filtered availability source");
@@ -942,8 +949,24 @@ impl<'db> Borrowck<'db> {
                         };
                         payload.invalidated =
                             matches!(entry.payload, CapabilityRef::Invalidated { .. });
+                        // A recursive call can return the same caller-supplied
+                        // address after any number of internal choices. Its
+                        // result is a may-alias: projecting the call-local
+                        // choices preserves every possible input source and
+                        // prevents an unbounded chain of identical aliases.
+                        // Do not broaden fresh allocation identities or must
+                        // obligations, which have different quantifiers.
+                        let guard = if matches!(boundary, Boundary::Return)
+                            && matches!(&payload.source.origin, ExternalOrigin::Input(_))
+                        {
+                            clause.guard.forget_occurrences(|occurrence| {
+                                self.recursive_call_choice(occurrence)
+                            })
+                        } else {
+                            clause.guard.clone()
+                        };
                         if let Some(source) =
-                            self.summarize_source(payload, &clause.guard, choices, handles)
+                            self.summarize_source(payload, &guard, choices, handles)
                         {
                             sources.push(source);
                         }
@@ -1685,7 +1708,10 @@ impl<'db> Borrowck<'db> {
                     }
                 };
                 let region = if resolved.invalidated.invalid {
-                    resolved.invalidated.requirements.with_guard(&guard)
+                    let requirements = &resolved.invalidated.requirements;
+                    let lift = IndexSubst::new(requirements.scope(), guard.scope(), [])
+                        .expect("native requirement scope");
+                    requirements.substitute(self.db, &lift).with_guard(&guard)
                 } else {
                     resolved.region.with_guard(&guard)
                 };
@@ -1805,32 +1831,51 @@ impl<'db> Borrowck<'db> {
         )
         .expect("call guard substitution");
         let mut invalid = false;
-        let guard = guard.substitute(&subst).and_then(|guard| {
-            guard.map_occurrences(|occurrence| match occurrence {
-                ValueOccurrence::Argument(param) => {
-                    inputs
+        let guard = guard
+            .substitute(&subst)
+            .and_then(|guard| {
+                guard.map_occurrences(|occurrence| match occurrence {
+                    ValueOccurrence::Argument(param) => inputs
                         .occurrence(param)
+                        .map(|occurrence| match occurrence {
+                            ValueOccurrence::Value(value) => {
+                                ValueOccurrence::Value(self.forwarded_value(value))
+                            }
+                            other => other,
+                        })
                         .unwrap_or(ValueOccurrence::CallChoice {
                             result,
                             choice: param,
-                        })
-                }
-                ValueOccurrence::SummaryChoice(choice) => {
-                    ValueOccurrence::CallChoice { result, choice }
-                }
-                ValueOccurrence::Summary => ValueOccurrence::Value(result),
-                ValueOccurrence::Value(_)
-                | ValueOccurrence::Root(_)
-                | ValueOccurrence::CallChoice { .. } => {
-                    invalid = true;
-                    occurrence
-                }
+                        }),
+                    ValueOccurrence::SummaryChoice(choice) => {
+                        ValueOccurrence::CallChoice { result, choice }
+                    }
+                    ValueOccurrence::Summary => ValueOccurrence::Value(result),
+                    ValueOccurrence::Value(_)
+                    | ValueOccurrence::Root(_)
+                    | ValueOccurrence::CallChoice { .. } => {
+                        invalid = true;
+                        occurrence
+                    }
+                })
             })
-        });
+            .and_then(|mut guard| {
+                for arg in inputs.args {
+                    if let Some(value) = literal_bool_cond(self.db, &self.body, arg.value) {
+                        let occurrence = ValueOccurrence::Value(self.forwarded_value(arg.value));
+                        guard = guard.with_boolean(
+                            ChoiceKey::new(occurrence, StructuralPath::default()),
+                            value,
+                        )?;
+                        guard = guard.forget_occurrences(|candidate| candidate == occurrence);
+                    }
+                }
+                Some(guard)
+            });
         if invalid {
             return Err(self.internal_diag(
                 inputs.origin,
-                "summary retains a local enum occurrence".into(),
+                "summary retains a local choice occurrence".into(),
             ));
         }
         Ok(guard)

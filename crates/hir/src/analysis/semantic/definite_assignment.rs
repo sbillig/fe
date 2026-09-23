@@ -464,7 +464,7 @@ fn block_successors<'db>(
 
 /// The literal boolean value of an immutable SSA definition, chasing exact
 /// forwards. Loads remain unknown because roots may have changed.
-fn literal_bool_cond<'db>(
+pub(crate) fn literal_bool_cond<'db>(
     db: &'db dyn HirAnalysisDb,
     body: &NormalizedBody<'db>,
     mut value: NValueId,

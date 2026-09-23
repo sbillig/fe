@@ -496,6 +496,59 @@ fn variant_collisions_are_checked_after_substitution_and_equality() {
 }
 
 #[test]
+fn boolean_choices_are_complementary_and_freshen_by_occurrence() {
+    let scope = scope();
+    let first = ChoiceKey::new(
+        ValueOccurrence::Value(NValueId::from_u32(0)),
+        Default::default(),
+    );
+    let second = ChoiceKey::new(
+        ValueOccurrence::Value(NValueId::from_u32(1)),
+        Default::default(),
+    );
+    let truth = Guard::always(&scope)
+        .with_boolean(first.clone(), true)
+        .unwrap();
+    let falsehood = Guard::always(&scope)
+        .with_boolean(first.clone(), false)
+        .unwrap();
+    assert!(truth.and(&falsehood).is_none());
+    assert_eq!(truth.or(&falsehood), Guard::always(&scope));
+    assert_eq!(
+        truth.forget_occurrences(|occurrence| {
+            occurrence == ValueOccurrence::Value(NValueId::from_u32(0))
+        }),
+        Guard::always(&scope)
+    );
+    let independent = Guard::always(&scope).with_boolean(second, false).unwrap();
+    assert!(truth.and(&independent).is_some());
+    let renamed = truth
+        .map_occurrences(|_| ValueOccurrence::Value(NValueId::from_u32(1)))
+        .unwrap();
+    assert!(renamed.and(&independent).is_none());
+
+    let summary_choice = ChoiceKey::new(ValueOccurrence::SummaryChoice(0), Default::default());
+    let call = |result, value| {
+        Guard::always(&scope)
+            .with_boolean(summary_choice.clone(), value)
+            .unwrap()
+            .map_occurrences(|_| ValueOccurrence::CallChoice { result, choice: 0 })
+            .unwrap()
+    };
+    let first_call = call(NValueId::from_u32(2), true);
+    assert!(
+        first_call
+            .and(&call(NValueId::from_u32(3), false))
+            .is_some()
+    );
+    assert!(
+        first_call
+            .and(&call(NValueId::from_u32(2), false))
+            .is_none()
+    );
+}
+
+#[test]
 fn guard_conjunction_obeys_lattice_laws_and_concrete_models() {
     let mut guards = vec![Guard::always(&scope())];
     for left in [

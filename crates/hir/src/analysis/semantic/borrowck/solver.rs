@@ -8,6 +8,7 @@ use std::{collections::BTreeMap, slice};
 
 use cranelift_entity::EntityRef;
 use num_traits::ToPrimitive;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::{
     HirAnalysisDb,
@@ -29,9 +30,11 @@ use crate::analysis::{
             state::{BorrowState, CapabilityValue},
             value::Guarded,
         },
+        definite_assignment::literal_bool_cond,
+        get_or_build_semantic_instance,
         normalized::{
-            HandleOrigin, NBlock, NBlockId, NDataPath, NDataProjection, NExpr, NIndex, NOperand,
-            NPlace, NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind, NSuccessor,
+            HandleOrigin, NBlockId, NDataPath, NDataProjection, NExpr, NIndex, NOperand, NPlace,
+            NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind, NSuccessor,
             NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, ReadMode,
             literal_allocation, normalize_semantic_body,
         },
@@ -80,6 +83,7 @@ pub(super) struct Borrowck<'db> {
     pub inventory: Inventory<'db>,
     pub summary_mode: BorrowSummaryMode,
     pub calls: BTreeMap<NValueId, CallSummary<'db>>,
+    recursive_calls: FxHashSet<NValueId>,
     /// Published only after the joint structural/loan fixed point converges.
     pub before: Vec<Vec<BorrowState<'db>>>,
     pub terminal: Vec<Option<BorrowState<'db>>>,
@@ -139,6 +143,7 @@ impl<'db> Borrowck<'db> {
             inventory,
             summary_mode,
             calls: BTreeMap::new(),
+            recursive_calls: FxHashSet::default(),
             blocked: None,
             pending: PendingSemanticValidation::default(),
             loan_facts_changed: false,
@@ -363,9 +368,95 @@ impl<'db> Borrowck<'db> {
                 if self.calls.get(result).is_some_and(|call| !call.summary.may_return))
     }
 
-    pub fn edge_guard(&self, block: &NBlock<'db>, successor: &NSuccessor) -> Option<Guard<'db>> {
+    pub(super) fn forwarded_value(&self, mut value: NValueId) -> NValueId {
+        while let NValueDefinition::Statement { block, statement } =
+            self.body.values[value.index()].definition
+        {
+            let NStatementKind::Define {
+                expr: NExpr::Forward { src },
+                ..
+            } = &self.body.blocks[block.index()].statements[statement as usize].kind
+            else {
+                break;
+            };
+            value = src.value;
+        }
+        value
+    }
+
+    fn boolean_choice(&self, value: NValueId) -> ChoiceKey<'db> {
+        ChoiceKey::new(
+            ValueOccurrence::Value(self.forwarded_value(value)),
+            StructuralPath::default(),
+        )
+    }
+
+    pub(super) fn recursive_call_choice(&self, occurrence: ValueOccurrence) -> bool {
+        matches!(
+            occurrence,
+            ValueOccurrence::CallChoice { result, .. }
+                if self.recursive_calls.contains(&result)
+        )
+    }
+
+    fn prepare_recursive_calls(&mut self) {
+        let mut reaches_self = FxHashMap::default();
+        for (result, call) in &self.calls {
+            let recursive = *reaches_self.entry(call.instance).or_insert_with(|| {
+                let mut seen = FxHashSet::default();
+                let mut pending = vec![call.instance];
+                while let Some(instance) = pending.pop() {
+                    if instance == self.instance {
+                        return true;
+                    }
+                    if seen.len() >= 1024 {
+                        // Unknown reachability leaves the call's choices intact.
+                        return false;
+                    }
+                    if seen.insert(instance) {
+                        pending.extend(
+                            instance
+                                .provisional_callees(self.db)
+                                .iter()
+                                .map(|callee| get_or_build_semantic_instance(self.db, callee.key)),
+                        );
+                    }
+                }
+                false
+            });
+            if recursive {
+                self.recursive_calls.insert(*result);
+            }
+        }
+    }
+
+    pub fn edge_guard(&self, from: NBlockId, successor: &NSuccessor) -> Option<Guard<'db>> {
+        let block = &self.body.blocks[from.index()];
         let always = Guard::always(&BinderScope::default());
-        match &block.terminator.kind {
+        let mut selected = match &block.terminator.kind {
+            NTerminatorKind::Branch {
+                cond,
+                then_target,
+                else_target,
+            } => {
+                let choice = self.boolean_choice(cond.value);
+                let constant = literal_bool_cond(self.db, &self.body, cond.value);
+                let mut selected: Option<Guard<'db>> = None;
+                for (target, value) in [(then_target, true), (else_target, false)] {
+                    if target == successor && constant.is_none_or(|known| known == value) {
+                        let guard = if constant.is_some() {
+                            always.clone()
+                        } else {
+                            always
+                                .with_boolean(choice.clone(), value)
+                                .expect("boolean alternative is feasible")
+                        };
+                        selected =
+                            Some(selected.map_or_else(|| guard.clone(), |old| old.or(&guard)));
+                    }
+                }
+                selected
+            }
             NTerminatorKind::MatchEnum {
                 value,
                 cases,
@@ -373,7 +464,7 @@ impl<'db> Borrowck<'db> {
                 ..
             } => {
                 let choice = ChoiceKey::new(
-                    ValueOccurrence::Value(value.value),
+                    ValueOccurrence::Value(self.forwarded_value(value.value)),
                     StructuralPath::default(),
                 );
                 let mut selected: Option<Guard<'db>> = None;
@@ -396,8 +487,43 @@ impl<'db> Borrowck<'db> {
                 }
                 selected
             }
-            _ => Some(always),
+            _ => Some(always.clone()),
+        }?;
+        // A feedback edge binds the next iteration's header parameters while
+        // the state still describes this iteration's values of those names.
+        if self
+            .inventory
+            .loops
+            .feedback(from, successor.block)
+            .is_some()
+        {
+            return Some(selected);
         }
+        for (parameter, argument) in self.body.blocks[successor.block.index()]
+            .params
+            .iter()
+            .zip(&successor.args)
+        {
+            if self.body.values[parameter.index()].ty.is_bool(self.db) {
+                let parameter = self.boolean_choice(*parameter);
+                let equal =
+                    if let Some(value) = literal_bool_cond(self.db, &self.body, argument.value) {
+                        always.with_boolean(parameter, value)?
+                    } else {
+                        let argument = self.boolean_choice(argument.value);
+                        [true, false]
+                            .into_iter()
+                            .filter_map(|value| {
+                                always
+                                    .with_boolean(parameter.clone(), value)?
+                                    .with_boolean(argument.clone(), value)
+                            })
+                            .reduce(|left, right| left.or(&right))?
+                    };
+                selected = selected.and(&equal)?;
+            }
+        }
+        Some(selected)
     }
 
     pub fn extend_loan(
@@ -433,6 +559,7 @@ impl<'db> Borrowck<'db> {
 
     pub fn solve(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
         self.prepare_calls()?;
+        self.prepare_recursive_calls();
         self.prepare_validation_dependencies();
         loop {
             self.before.fill(Vec::new());
@@ -464,7 +591,7 @@ impl<'db> Borrowck<'db> {
                     }
                     for successor in block.terminator.kind.successors() {
                         let mut edge = state.clone();
-                        let edge_guard = self.edge_guard(&block, successor);
+                        let edge_guard = self.edge_guard(NBlockId::new(index), successor);
                         let Some(edge_guard) = edge_guard else {
                             continue;
                         };

@@ -345,6 +345,30 @@ impl<'db> Guard<'db> {
         )
     }
 
+    /// Restrict an actual boolean value occurrence to one of its two outcomes.
+    pub fn with_boolean(&self, choice: ChoiceKey<'db>, value: bool) -> Option<Self> {
+        for index in choice.path.indices() {
+            self.scope
+                .validate(index)
+                .expect("free boolean choice binder");
+        }
+        let condition = Decision::chain(
+            [(
+                ChoiceBit {
+                    choice,
+                    bit: Reverse(0),
+                },
+                value,
+            )],
+            IndexCondition::always(),
+            IndexCondition::never(),
+        );
+        Self::canonical(
+            &self.scope,
+            self.condition.apply(&condition, IndexCondition::and),
+        )
+    }
+
     pub fn substitute(&self, subst: &IndexSubst<'db>) -> Option<Self> {
         assert_eq!(
             &self.scope,

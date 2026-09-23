@@ -321,7 +321,7 @@ impl<'db> Borrowck<'db> {
                     continue;
                 };
                 for successor in block.terminator.kind.successors() {
-                    let Some(guard) = self.edge_guard(block, successor) else {
+                    let Some(guard) = self.edge_guard(NBlockId::new(block_index), successor) else {
                         continue;
                     };
                     let mut edge = state.clone();
@@ -474,7 +474,7 @@ impl<'db> Borrowck<'db> {
                 }
             }
             for successor in block.terminator.kind.successors() {
-                let Some(guard) = self.edge_guard(block, successor) else {
+                let Some(guard) = self.edge_guard(NBlockId::new(block_index), successor) else {
                     continue;
                 };
                 let mut edge = state.clone();
@@ -502,7 +502,23 @@ impl<'db> Borrowck<'db> {
             }
         }
         if let Some(returned) = returned {
-            analysis.summary.reinitialized = returned.initialized;
+            // Call poststates apply only after a normal return. A write whose
+            // guard covers every returning path is therefore unconditional at
+            // the caller, even when other paths loop or do not return.
+            analysis.summary.reinitialized = RegionSet::new(
+                returned.initialized.scope(),
+                returned.initialized.clauses().iter().map(|clause| {
+                    let return_guard = returned.guard.in_scope(clause.guard.scope());
+                    Guarded {
+                        guard: if return_guard.implies(&clause.guard) {
+                            Guard::always(clause.guard.scope())
+                        } else {
+                            clause.guard.clone()
+                        },
+                        payload: clause.payload.clone(),
+                    }
+                }),
+            );
             for fact in returned.moved.values() {
                 analysis.summary.unavailable = analysis.summary.unavailable.union(&fact.region);
             }

@@ -3,11 +3,10 @@ source: crates/uitest/tests/semantic_borrowck.rs
 expression: diags
 input_file: fixtures/semantic_borrowck/boolean_factory_loop.fe
 ---
-error[16-0002]: move conflict in `fn example`
-   ┌─ boolean_factory_loop.fe:16:17
+error[16-0002]: move conflict in `fn duplicate_move`
+   ┌─ boolean_factory_loop.fe:27:17
    │
-16 │         consume(*p)
-   │                 ^^
-   │                 │
-   │                 cannot use a value after it was moved
-   │                 value is moved here
+26 │         consume(*p)
+   │                 -- value is moved here
+27 │         consume(*p)
+   │                 ^^ cannot use a value after it was moved

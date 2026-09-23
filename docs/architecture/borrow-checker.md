@@ -430,13 +430,22 @@ Every cyclic region has a repeated-value set, including an empty set when the
 verified normalized cycle defines no values. Such cycles still participate in
 feedback and no-normal-return analysis.
 
-Boolean branch predicates currently have no edge guards. Selecting between
-allocating factories with a boolean in a loop can therefore remain conservatively
-rejected, although enum-selected factories retain their correlation. Recursive
-pointer forwarding converges, but recursively returning newly allocated pointers
-can grow summary allocation choices and reach the existing bounded convergence
-diagnostic. These are tracked precision limitations; nonconvergence never grants
-validation through an opaque fallback.
+Boolean branch edges carry complementary guards keyed by the actual normalized
+boolean value. Exact SSA forwards retain that identity; boolean block parameters
+are related to their incoming values under each predecessor guard. Summary guards
+over formal boolean inputs map to the caller's actual value, while internal
+choices receive a distinct identity at each call. Repeated values computed in a
+loop are forgotten on feedback, so one iteration's choice cannot certify another.
+This preserves the allocation alternative selected by a boolean through a join
+without reviving a previously moved pointer or turning one-path native
+initialization into an unconditional fact. Arithmetic comparisons remain opaque
+boolean producers until scalar predicate reasoning is implemented. Possible
+input aliases and memory effects from calls in a recursive component project
+their internal call choices; distinct nonrecursive calls keep independent choices.
+Recursive pointer forwarding converges, but recursively returning newly
+allocated pointers can grow summary allocation choices and reach the existing
+bounded convergence diagnostic. Nonconvergence never grants validation through
+an opaque fallback.
 
 The must-initialization set contains caller-visible external storage whose type
 can become moved or contain native validity obligations. Local moved facts still
@@ -564,7 +573,7 @@ program acceptable.
 | Zero or byte-copy a native-reference slot, then load it | Raw bytes do not establish a valid native reference. Typed reference stores and copies are accepted. | [Native slot initialization](../../crates/uitest/fixtures/semantic_borrowck/native_slot_initialization.fe) |
 | Move one cell, then write through a pointer selecting that cell or another | The write cannot definitely restore the moved cell. An exact destination is accepted. | [Ambiguous reinitialization](../../crates/uitest/fixtures/semantic_borrowck/ambiguous_reinitialization.fe) |
 | Keep a storage borrow live across an external call | CALL conflicts with shared and mutable state loans; STATICCALL conflicts with mutable state loans. Ending the loan before the call and reborrowing afterward is accepted. | [External call state borrows](../../crates/uitest/fixtures/semantic_borrowck/external_call_state_borrows.fe) |
-| Select an allocating factory with a boolean inside a loop, then consume the joined result | Lost branch correlation can cause a conservative move conflict. Consuming inside each branch or retaining enum guards is accepted. | [Boolean factory loop](../../crates/uitest/fixtures/semantic_borrowck/boolean_factory_loop.fe) |
+| Select an allocating factory with a boolean inside a loop, then consume the joined result | Complementary branch guards preserve the selected fresh allocation and accept the move. Moving it twice still conflicts. | [Boolean factory loop](../../crates/uitest/fixtures/semantic_borrowck/boolean_factory_loop.fe) |
 | Recursively return freshly allocated objects | Summary allocation choices can fail bounded convergence. Recursively forwarding an existing pointer is accepted. | [Recursive fresh return](../../crates/uitest/fixtures/semantic_borrowck/recursive_fresh_return.fe) |
 | Use a raw pointee after an unresolved generic operation | Template validation remains pending. A concrete implementation that consumes the pointee makes the subsequent use invalid. | [Generic ownership specialization](../../crates/uitest/fixtures/semantic_borrowck/generic_ownership_specialization.fe) |
 | Execute a bodyless, untrusted function | The call remains pending even without arguments; its signature supplies no effect bound. | [Opaque executable call](../../crates/uitest/fixtures/semantic_borrowck/opaque_executable_call.fe) |

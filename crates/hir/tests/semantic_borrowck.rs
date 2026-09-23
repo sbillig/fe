@@ -14,7 +14,7 @@ use fe_hir::{
             capability::{
                 external::ExternalOrigin,
                 footprint::AccessExtent,
-                guard::ValueOccurrence,
+                guard::{ChoiceKey, ValueOccurrence},
                 handle::{AddressOccurrence, HandleAddressSpace},
                 index::IndexExpr,
                 path::{Projection as CapabilityProjection, RegionPath, StructuralPath},
@@ -885,12 +885,165 @@ fn allocation_birth_retains_older_moved_pointers_before_the_next_move() {
 }
 
 #[test]
-fn boolean_selected_factory_loops_retain_conservative_move_diagnostics() {
-    // Boolean predicates are not represented by the existing edge guards. This
-    // precision limit is separate from allocation lifetime transfer.
+fn boolean_selected_factory_loops_preserve_move_correlation() {
     let source =
         allocation_birth_loop_source("let p = if i == 0 { initialized(i) } else { forward(i) }");
     let diagnostics = checked_borrow_diags(&source);
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn boolean_factory_summaries_follow_forwarded_and_phi_inputs() {
+    let mut failures = Vec::new();
+    for (name, declaration, condition) in [
+        ("direct", "", "flag"),
+        ("forwarded", "let choice = flag", "choice"),
+        (
+            "phi",
+            "let choice = if flag { true } else { false }",
+            "choice",
+        ),
+    ] {
+        let source = format!(
+            r#"
+struct Item {{ n: u256 }}
+fn consume(_ value: own Item) {{}}
+fn initialized(_ n: u256) -> *Item {{
+    let p = core::ptr::alloc<Item>()
+    *p = Item {{ n }}
+    p
+}}
+fn select(flag: bool, old: *Item) -> *Item {{
+    {declaration}
+    if {condition} {{ initialized(1) }} else {{ old }}
+}}
+fn check(flag: bool) {{
+    let old = initialized(0)
+    let chosen = select(flag, old)
+    if flag {{ consume(*chosen) }}
+    consume(*old)
+}}
+"#
+        );
+        with_borrow_summary(&source, "select", |db, summary| {
+            let values = ValueInterner::new(db, ValueLimits::default());
+            let leaves = values.leaves(&summary.result, ValueOccurrence::Summary);
+            let input = ChoiceKey::new(ValueOccurrence::Argument(0), StructuralPath::default());
+            let mut old_seen = false;
+            let mut fresh_seen = false;
+            for leaf in &leaves {
+                if leaf.payload.source.param() == Some(1) {
+                    old_seen = true;
+                    assert!(
+                        leaf.guard.with_boolean(input.clone(), true).is_none(),
+                        "{name}: old result remains possible when input is true: {leaf:#?}"
+                    );
+                } else if leaf.payload.source.is_fresh_allocation() {
+                    fresh_seen = true;
+                    assert!(
+                        leaf.guard.with_boolean(input.clone(), false).is_none(),
+                        "{name}: fresh result remains possible when input is false: {leaf:#?}"
+                    );
+                }
+            }
+            assert!(
+                old_seen && fresh_seen,
+                "{name}: incomplete summary: {leaves:#?}"
+            );
+        });
+        let diagnostics = checked_borrow_diags(&source);
+        if !diagnostics.is_empty() {
+            failures.push(format!("{name}: {diagnostics}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn boolean_factory_calls_preserve_old_moves_and_independent_choices() {
+    let prelude = r#"
+struct Item { n: u256 }
+fn consume(_ value: own Item) {}
+fn initialized(_ n: u256) -> *Item {
+    let p = core::ptr::alloc<Item>()
+    *p = Item { n }
+    p
+}
+fn maybe(_ flag: bool, _ old: *Item) -> *Item {
+    if flag { initialized(1) } else { old }
+}
+"#;
+    for body in [
+        "let old = initialized(0)\nconsume(*old)\nlet selected = maybe(flag, old)\nconsume(*selected)",
+        "let old = initialized(0)\nlet first = maybe(flag, old)\nlet second = maybe(other, old)\nconsume(*first)\nconsume(*second)",
+    ] {
+        let source = format!("{prelude}\nfn check(flag: bool, other: bool) {{\n{body}\n}}");
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(
+            diagnostics.contains("move conflict"),
+            "{source}\n{diagnostics}"
+        );
+        assert!(!diagnostics.contains("internal"), "{diagnostics}");
+    }
+    let source = format!(
+        "{prelude}\nfn check(flag: bool, other: bool) {{\n\
+         let old = initialized(0)\n\
+         let first = maybe(flag, old)\n\
+         let second = maybe(other, old)\n\
+         if flag {{ consume(*first) }}\n\
+         if other {{ consume(*second) }}\n\
+         consume(*old)\n}}"
+    );
+    let diagnostics = checked_borrow_diags(&source);
+    assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+}
+
+#[test]
+fn boolean_guarded_native_initialization_remains_conditional() {
+    let prelude = r#"
+fn read(_ slot: *ref u256) -> u256 { *slot }
+fn inspect(flag: bool) -> u256 {
+    let owner = core::ptr::alloc<u256>()
+    *owner = 7
+    let native = ref *owner
+    let slot = core::ptr::alloc<ref u256>()
+    if flag { *slot = native }
+"#;
+    let source = format!("{prelude}\n    if flag {{ read(slot) }} else {{ 0 }}\n}}");
+    let diagnostics = checked_borrow_diags(&source);
+    assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+
+    let source = format!("{prelude}\n    read(slot)\n}}");
+    let diagnostics = checked_borrow_diags(&source);
+    assert!(
+        diagnostics.contains("cannot use a native borrow"),
+        "{source}\n{diagnostics}"
+    );
+}
+
+#[test]
+fn repeated_boolean_loads_cannot_reuse_an_earlier_iteration_choice() {
+    let source = r#"
+struct Item { n: u256 }
+fn consume(_ value: own Item) {}
+fn initialized(_ n: u256) -> *Item {
+    let p = core::ptr::alloc<Item>()
+    *p = Item { n }
+    p
+}
+fn check(count: u256) {
+    let old = initialized(0)
+    let mut flag = true
+    let mut i: u256 = 0
+    while i < count {
+        let selected = if flag { initialized(i) } else { old }
+        flag = false
+        consume(*selected)
+        i += 1
+    }
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
     assert!(diagnostics.contains("move conflict"), "{diagnostics}");
     assert!(!diagnostics.contains("internal"), "{diagnostics}");
 }
@@ -2702,9 +2855,9 @@ fn add(by: u256) -> u256 uses (value: mut u256) {
 pub contract Mixed {
     mut ledger: Ledger
 
-    init() uses (mut ledger) {
+    init(cond: bool) uses (mut ledger) {
         let mut local: u256 = 0
-        let target = ledger.pick_mixed(cond: true, value: mut local)
+        let target = ledger.pick_mixed(cond, value: mut local)
         with (target) {
             add(by: 1)
         }

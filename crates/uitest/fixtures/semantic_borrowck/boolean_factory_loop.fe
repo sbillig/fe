@@ -1,4 +1,4 @@
-// Known precision limit: boolean joins lose allocation-family correlation.
+// Boolean choices keep allocation-family alternatives correlated through joins.
 struct Item { n: u256 }
 fn consume(_ item: own Item) {}
 fn initialized(_ n: u256) -> *Item {
@@ -8,11 +8,22 @@ fn initialized(_ n: u256) -> *Item {
 }
 fn forward(_ n: u256) -> *Item { initialized(n) }
 
-// Rejected conservatively: joining boolean branches loses allocation correlation.
+// Accepted: the joined pointer is fresh on either boolean branch.
 fn example(count: u256) {
     let mut i: u256 = 0
     while i < count {
         let p = if i == 0 { initialized(i) } else { forward(i) }
+        consume(*p)
+        i += 1
+    }
+}
+
+// Rejected: consuming the selected pointer twice still moves the same object.
+fn duplicate_move(count: u256) {
+    let mut i: u256 = 0
+    while i < count {
+        let p = if i == 0 { initialized(i) } else { forward(i) }
+        consume(*p)
         consume(*p)
         i += 1
     }
