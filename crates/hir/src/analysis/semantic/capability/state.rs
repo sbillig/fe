@@ -680,9 +680,10 @@ impl<'db> BorrowState<'db> {
                     (&certificate.contents, substitution, guard)
                 });
             for (contents, substitution, guard) in possible.chain(certified) {
-                let contents = values.substitute(contents, &substitution);
                 let path = StructuralPath::new(clause.payload.path.as_slice());
-                let Some(selected) = values.project(&contents, &path, occurrence) else {
+                let Some(selected) =
+                    values.project_substituted(contents, &substitution, &path, occurrence)
+                else {
                     continue;
                 };
                 let selected = clause
