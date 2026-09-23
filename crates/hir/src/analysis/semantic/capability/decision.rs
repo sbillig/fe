@@ -1,10 +1,18 @@
 //! Reduced ordered decision graphs with canonical, allocation-independent node numbering.
+#[cfg(test)]
+use std::cell::Cell;
+
 use rustc_hash::FxHashMap;
 use std::{
     collections::{BTreeMap, BTreeSet},
     hash::Hash,
     sync::Arc,
 };
+
+#[cfg(test)]
+thread_local! {
+    static INTERN_ATTEMPTS: Cell<usize> = const { Cell::new(0) };
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Node<V, T> {
@@ -44,6 +52,8 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
     }
 
     fn intern(&mut self, node: Node<V, T>) -> usize {
+        #[cfg(test)]
+        INTERN_ATTEMPTS.set(INTERN_ATTEMPTS.get() + 1);
         if let Some(id) = self.interned.get(&node) {
             return *id;
         }
@@ -541,6 +551,8 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash, F: Fn(&T, &T) -> Option<T>>
 
 #[cfg(test)]
 mod tests {
+    use std::array;
+
     use super::*;
 
     #[test]
@@ -594,6 +606,80 @@ mod tests {
             relation.exists(|variable| *variable != 1, |left, right| *left || *right),
             Decision::leaf(true)
         );
+    }
+
+    #[test]
+    fn quantification_shares_work_across_selected_variables() {
+        let decision = Decision::chain((0..256).map(|variable| (variable, true)), true, false);
+        for select_all in [true, false] {
+            let before = INTERN_ATTEMPTS.get();
+            let quantified = decision.exists(
+                |variable| select_all || variable % 2 == 0,
+                |left, right| *left || *right,
+            );
+            let attempts = INTERN_ATTEMPTS.get() - before;
+            let expected = Decision::chain(
+                (0..256)
+                    .filter(|variable| !select_all && variable % 2 != 0)
+                    .map(|variable| (variable, true)),
+                true,
+                false,
+            );
+            assert_eq!(quantified, expected);
+            assert!(
+                attempts <= decision.node_count() * 8,
+                "{attempts} interning attempts for {} source nodes",
+                decision.node_count()
+            );
+        }
+    }
+
+    #[test]
+    fn quantification_matches_exhaustive_terminal_unions() {
+        // Every Boolean function of three variables, plus distinct singleton
+        // sets at all eight terminals to exercise non-Boolean joins.
+        let tables = (0u16..256)
+            .map(|bits| array::from_fn::<_, 8, _>(|assignment| ((bits >> assignment) & 1) as u8))
+            .chain([array::from_fn(|assignment| 1u8 << assignment)]);
+        for table in tables {
+            let mut builder = Builder::new();
+            let mut level: Vec<_> = table
+                .iter()
+                .map(|value| builder.intern(Node::Leaf(*value)))
+                .collect();
+            for variable in (0u8..3).rev() {
+                level = level
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|children| builder.branch(variable, children[0], children[1]))
+                    .collect();
+            }
+            let decision = builder.finish(level[0]);
+            for selected in 0u8..8 {
+                let quantified = decision.exists(
+                    |variable| selected & (1 << (2 - variable)) != 0,
+                    |left, right| left | right,
+                );
+                for assignment in 0u8..8 {
+                    let expected = table
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, _)| *other as u8 & !selected == assignment & !selected)
+                        .fold(0, |union, (_, value)| union | value);
+                    let actual = quantified.map(
+                        |variable| {
+                            Variable::<u8>::Constant(assignment & (1 << (2 - variable)) != 0)
+                        },
+                        Clone::clone,
+                    );
+                    assert!(
+                        actual.is_leaf(&expected),
+                        "table={table:?}, selected={selected}, assignment={assignment}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
