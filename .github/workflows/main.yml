@@ -267,6 +267,12 @@ jobs:
     timeout-minutes: 20
     needs: [release]
     steps:
+      - name: Validate release tag
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Docs deployment requires a stable version tag" >&2
+            exit 1
+          fi
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
