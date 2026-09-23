@@ -412,12 +412,9 @@ impl<'db> Guard<'db> {
             subst.source(),
             "substitution source scope must match"
         );
-        if subst.preserves_indices()
-            || self
-                .indices()
-                .into_iter()
-                .all(|index| subst.apply(index) == index)
-        {
+        // A substitution without entries only extends the scope; the decision
+        // graph and its variables are unchanged.
+        if subst.preserves_indices() {
             return Some(Self {
                 scope: subst.destination().clone(),
                 condition: self.condition.clone(),
