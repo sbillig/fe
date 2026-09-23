@@ -167,6 +167,8 @@ pub trait AbiSize {
     }
 }
 
+/// End of the required input bytes; byte and string tails exclude trailing padding.
+/// Owned dynamic arrays round this extent up and initialize their final padding.
 pub trait AbiSpan<A: Abi>: AbiSize {
     fn payload_end<I: ByteInput>(_: I, base: u256, pos: u256) -> u256
 
@@ -477,11 +479,13 @@ fn round_up_words(_ len: u256) -> u256 {
 #[inline(always)]
 fn checked_dynamic_payload_after_head<A: Abi, I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> (u256, u256) {
     let data_len = input.word_at(pos)
-    let payload_size = 32 + round_up_words(data_len)
-    let payload_end = pos + payload_size
-    if payload_end < pos || payload_end > input_len {
+    // Solidity requires the actual bytes, but accepts omitted trailing padding.
+    checked_frame_end<A>(pos + 32, data_len, input_len)
+    let rounded = round_up_words(data_len)
+    if rounded < data_len || rounded > 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffdf {
         A::decode_error()
     }
+    let payload_size = 32 + rounded
 
     (data_len, payload_size)
 }
@@ -508,13 +512,28 @@ fn copy_dynamic_payload_from<A: Abi, I: ByteInput>(_ input: I, _ pos: u256) -> (
     copy_dynamic_payload_from_with_input_len<A, I>(input, pos, input_len)
 }
 
+// Copy only validated payload bytes and clear the final allocated padding word.
+// In particular, a bounded memory input may have unrelated data after its end.
+fn copy_dynamic_bytes<I: ByteInput>(_ input: I, _ pos: u256, _ dest: *u8, _ data_len: u256, _ size: u256) {
+    copy_padded_payload(input, pos, dest, 32 + data_len, size)
+}
+
+fn copy_padded_payload<I: ByteInput>(_ input: I, _ pos: u256, _ dest: *u8, _ actual_size: u256, _ size: u256) {
+    if actual_size % 32 == 0 {
+        input.copy_to_memory_unchecked_aligned(dest: dest, src_offset: pos, len: actual_size)
+    } else {
+        store_word(ptr: ptr_offset(dest, size - 32), value: 0)
+        input.copy_to_memory(dest: dest, src_offset: pos, len: actual_size)
+    }
+}
+
 fn copy_dynamic_payload_from_with_input_len<A: Abi, I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> (*u8, u256, u256) {
     let payload: (u256, u256) = checked_dynamic_payload_with_input_len<A, I>(input, pos, input_len)
     let data_len = payload.0
     let payload_size = payload.1
     let data_ptr = A::alloc(payload_size)
 
-    input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: pos, len: payload_size)
+    copy_dynamic_bytes(input, pos, data_ptr, data_len, payload_size)
 
     (data_ptr, data_len, payload_size)
 }
@@ -547,8 +566,16 @@ fn decode_string_payload_after_head<A: Abi, I: ByteInput, const N: usize>(_ inpu
     let packed = if data_len == 0 {
         0
     } else {
-        let shift = if data_len >= 32 { 0 } else { (32 - data_len) * 8 }
-        input.word_at(data_start) >> shift
+        if data_len == 32 {
+            input.word_at(data_start)
+        } else {
+            // The input may end immediately after the last string byte.
+            // Load from a full scratch word only after a bounded copy.
+            let scratch = A::alloc(32)
+            store_word(ptr: scratch, value: 0)
+            input.copy_to_memory(dest: scratch, src_offset: data_start, len: data_len)
+            mem_word_at(base: scratch, offset: 0) >> ((32 - data_len) * 8)
+        }
     }
 
     packed as String<N>
@@ -1650,7 +1677,7 @@ impl<A: Abi, const N: usize> AbiSpan<A> for String<N> {
     fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
         let _ = base
         let payload = checked_dynamic_payload_with_input_len<A, I>(input, pos, input_len)
-        pos + payload.1
+        pos + 32 + payload.0
     }
 }
 
@@ -1663,7 +1690,7 @@ impl<A: Abi> AbiSpan<A> for Bytes {
     fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
         let _ = base
         let payload = checked_dynamic_payload_with_input_len<A, I>(input, pos, input_len)
-        pos + payload.1
+        pos + 32 + payload.0
     }
 }
 
@@ -1676,7 +1703,7 @@ impl<A: Abi> AbiSpan<A> for DynString {
     fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
         let _ = base
         let payload = checked_dynamic_payload_with_input_len<A, I>(input, pos, input_len)
-        pos + payload.1
+        pos + 32 + payload.0
     }
 }
 
@@ -1841,7 +1868,7 @@ impl<A: Abi> Decode<A> for DynString {
         let payload: (u256, u256) = checked_dynamic_payload_with_input_len<A, D::Input>(input, payload_at, input.len())
         let data_ptr = d.alloc(payload.1)
 
-        input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: payload_at, len: payload.1)
+        copy_dynamic_bytes(input, payload_at, data_ptr, payload.0, payload.1)
 
         DynString::from_validated_abi_tail(
             data: data_ptr,
@@ -1870,7 +1897,7 @@ impl<A: Abi> Decode<A> for DynString {
         let payload: (u256, u256) = checked_dynamic_payload_after_head<A, I>(input, pos, input_len)
         let data_ptr = A::alloc(payload.1)
 
-        input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: pos, len: payload.1)
+        copy_dynamic_bytes(input, pos, data_ptr, payload.0, payload.1)
 
         DynString::from_validated_abi_tail(
             data: data_ptr,
@@ -2166,7 +2193,7 @@ impl<A: Abi> Decode<A> for Bytes {
         let payload: (u256, u256) = checked_dynamic_payload_with_input_len<A, D::Input>(input, payload_at, input.len())
         let data_ptr = d.alloc(payload.1)
 
-        input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: payload_at, len: payload.1)
+        copy_dynamic_bytes(input, payload_at, data_ptr, payload.0, payload.1)
 
         Bytes::from_validated_abi_tail(
             data: data_ptr,
@@ -2195,7 +2222,7 @@ impl<A: Abi> Decode<A> for Bytes {
         let payload: (u256, u256) = checked_dynamic_payload_after_head<A, I>(input, pos, input_len)
         let data_ptr = A::alloc(payload.1)
 
-        input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: pos, len: payload.1)
+        copy_dynamic_bytes(input, pos, data_ptr, payload.0, payload.1)
 
         Bytes::from_validated_abi_tail(
             data: data_ptr,
@@ -2282,6 +2309,14 @@ fn dyn_array_payload_end_with_input_len<A: Abi, T, I>(_ input: I, tail_at: u256,
     max_u256(a: head_end, b: prev_end)
 }
 
+// Owned tails must remain word-aligned when embedded before another field.
+fn checked_padded_size<A: Abi>(_ size: u256) -> u256 {
+    if size > 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0 {
+        A::decode_error()
+    }
+    round_up_words(size)
+}
+
 impl<A: Abi, T> Decode<A> for DynArray<T>
     where T: AbiSpan<A> + AbiSize
 {
@@ -2292,10 +2327,15 @@ impl<A: Abi, T> Decode<A> for DynArray<T>
         checked_frame_end<A>(payload_at, Self::HEAD_SIZE, input_len)
         let elem_count = input.word_at(payload_at)
         let payload_end = dyn_array_payload_end_with_input_len<A, T, D::Input>(input, tail_at: payload_at, elem_count: elem_count, input_len: input_len)
-        let payload_size = payload_end - payload_at
+        let actual_size = payload_end - payload_at
+        let payload_size = if T::IS_DYNAMIC { checked_padded_size<A>(actual_size) } else { actual_size }
         let data_ptr = d.alloc(payload_size)
 
-        input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: payload_at, len: payload_size)
+        if T::IS_DYNAMIC {
+            copy_padded_payload(input, payload_at, data_ptr, actual_size, payload_size)
+        } else {
+            input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: payload_at, len: payload_size)
+        }
 
         DynArray::from_validated_abi_tail(
             data: data_ptr,
@@ -2319,10 +2359,15 @@ impl<A: Abi, T> Decode<A> for DynArray<T>
         let elem_count = input.word_at(pos)
         let payload_end = dyn_array_payload_end_with_input_len<A, T, I>(input, tail_at: pos, elem_count: elem_count, input_len: input_len)
 
-        let payload_size = payload_end - pos
+        let actual_size = payload_end - pos
+        let payload_size = if T::IS_DYNAMIC { checked_padded_size<A>(actual_size) } else { actual_size }
         let data_ptr = A::alloc(payload_size)
 
-        input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: pos, len: payload_size)
+        if T::IS_DYNAMIC {
+            copy_padded_payload(input, pos, data_ptr, actual_size, payload_size)
+        } else {
+            input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: pos, len: payload_size)
+        }
 
         DynArray::from_validated_abi_tail(
             data: data_ptr,

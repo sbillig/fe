@@ -1,0 +1,177 @@
+use core::abi::{Abi, AbiDecoder, AbiSize, ByteInput, Decode, Encode, store_word}
+use core::ptr::{self, MemSpan}
+use std::abi::{Sol, Bytes, DynString, DynArray}
+
+fn input(_ size: u256) -> MemSpan {
+    let p = ptr::alloc_bytes(96)
+    store_word(ptr: p, value: 33)
+    store_word(ptr: ptr::offset_bytes(p, 32), value: 0x1111111111111111111111111111111111111111111111111111111111111111)
+    store_word(ptr: ptr::offset_bytes(p, 64), value: 0x22ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+    MemSpan::from_raw_parts(ptr: p, len: size)
+}
+fn check(_ bytes: Bytes) {
+    assert!(bytes.len() == 33)
+    assert!(bytes.encoded_size() == 96)
+    assert!(bytes.byte_at(32) == 0x22)
+    assert!(bytes.encoded_span().word_at(64) == (0x22 as u256) << 248)
+}
+#[test]
+fn unpadded_bytes_all_decode_paths() {
+    let data = input(65)
+    check(<Bytes as Decode<Sol>>::decode_from(data, 0))
+    check(<Bytes as Decode<Sol>>::decode_from_bounded(input(96), 0, 65))
+    check(<Bytes as Decode<Sol>>::decode_from_prechecked_head(data, 0, 65))
+    let mut d = Sol::decoder_with_base(data, 0)
+    check(<Bytes as Decode<Sol>>::decode_payload(mut d))
+}
+#[test]
+fn dirty_padding_is_cleared() {
+    check(<Bytes as Decode<Sol>>::decode_from(input(96), 0))
+}
+#[test]
+fn unpadded_strings() {
+    let data = input(65)
+    let text = <DynString as Decode<Sol>>::decode_from(data, 0)
+    assert!(text.len() == 33)
+    assert!(text.encoded_span().word_at(64) == (0x22 as u256) << 248)
+    let p = ptr::alloc_bytes(64)
+    store_word(ptr: p, value: 1)
+    store_word(ptr: ptr::offset_bytes(p, 32), value: (0x61 as u256) << 248)
+    let short = MemSpan::from_raw_parts(ptr: p, len: 33)
+    assert!(<String<1> as Decode<Sol>>::decode_from(short, 0) == "a")
+}
+fn array_input(_ size: u256) -> MemSpan {
+    let p = ptr::alloc_bytes(128)
+    store_word(ptr: p, value: 1)
+    store_word(ptr: ptr::offset_bytes(p, 32), value: 32)
+    store_word(ptr: ptr::offset_bytes(p, 64), value: 1)
+    store_word(ptr: ptr::offset_bytes(p, 96), value: 0xaaffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+    MemSpan::from_raw_parts(ptr: p, len: size)
+}
+#[test]
+fn unpadded_nested_bytes() {
+    let array = <DynArray<Bytes> as Decode<Sol>>::decode_from(array_input(97), 0)
+    assert!(array.len() == 1)
+    assert!(array.encoded_size() == 128)
+    assert!(array.encoded_span().word_at(96) == (0xaa as u256) << 248)
+    let leaf = <Bytes as Decode<Sol>>::decode_from(array.encoded_span(), 64)
+    assert!(leaf.byte_at(0) == 0xaa)
+    assert!(leaf.encoded_span().word_at(32) == (0xaa as u256) << 248)
+}
+#[test(should_revert)]
+fn missing_actual_bytes_rejected() {
+    let _ = <Bytes as Decode<Sol>>::decode_from(input(64), 0)
+}
+#[test(should_revert)]
+fn missing_nested_bytes_rejected() {
+    let _ = <DynArray<Bytes> as Decode<Sol>>::decode_from(array_input(96), 0)
+}
+#[test]
+fn aligned_and_empty_bytes() {
+    let p = ptr::alloc_bytes(64)
+    store_word(ptr: p, value: 32)
+    store_word(ptr: ptr::offset_bytes(p, 32), value: 123)
+    let data = MemSpan::from_raw_parts(ptr: p, len: 64)
+    let bytes = <Bytes as Decode<Sol>>::decode_from(data, 0)
+    assert!(bytes.len() == 32)
+    assert!(bytes.encoded_span().word_at(32) == 123)
+    store_word(ptr: p, value: 0)
+    let empty = <Bytes as Decode<Sol>>::decode_from(MemSpan::from_raw_parts(ptr: p, len: 32), 0)
+    assert!(empty.len() == 0)
+    assert!(empty.encoded_size() == 32)
+}
+#[test]
+fn canonical_array_keeps_full_span() {
+    let array = <DynArray<Bytes> as Decode<Sol>>::decode_from(array_input(128), 0)
+    assert!(array.encoded_size() == 128)
+}
+#[test(should_revert)]
+fn missing_length_word_rejected() {
+    let _ = <Bytes as Decode<Sol>>::decode_from(input(31), 0)
+}
+#[test(should_revert)]
+fn overflowing_length_rejected() {
+    let p = ptr::alloc_bytes(32)
+    store_word(ptr: p, value: 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+    let _ = <Bytes as Decode<Sol>>::decode_from(MemSpan::from_raw_parts(ptr: p, len: 32), 0)
+}
+
+fn check_array_reencoding(_ array: own DynArray<Bytes>) {
+    assert!(array.encoded_size() == 128)
+    assert!(array.encoded_span().word_at(96) == (0xaa as u256) << 248)
+    let pair = (array, Bytes::from_word_prefix(word: 0, len: 1))
+    let size = pair.payload_size()
+    assert!(size == 256)
+    let output = ptr::alloc_bytes(size)
+    <(DynArray<Bytes>, Bytes) as Encode<Sol>>::encode(pair, output)
+    let encoded = MemSpan::from_raw_parts(ptr: output, len: size)
+    assert!(encoded.word_at(0) == 64)
+    assert!(encoded.word_at(32) == 192)
+    assert!(encoded.word_at(160) == (0xaa as u256) << 248)
+    assert!(encoded.word_at(192) == 1)
+    let decoded = <(DynArray<Bytes>, Bytes) as Decode<Sol>>::decode_from(encoded, 0)
+    assert!(decoded.0.len() == 1)
+    assert!(decoded.1.len() == 1)
+    assert!(decoded.1.byte_at(0) == 0)
+}
+#[test]
+fn unpadded_array_all_decode_paths_reencode_aligned() {
+    check_array_reencoding(<DynArray<Bytes> as Decode<Sol>>::decode_from(array_input(97), 0))
+    check_array_reencoding(<DynArray<Bytes> as Decode<Sol>>::decode_from_bounded(array_input(128), 0, 97))
+    check_array_reencoding(<DynArray<Bytes> as Decode<Sol>>::decode_from_prechecked_head(array_input(128), 0, 97))
+    let mut d = Sol::decoder_with_base(array_input(97), 0)
+    check_array_reencoding(<DynArray<Bytes> as Decode<Sol>>::decode_payload(mut d))
+}
+
+// Enforce the input extent even on an EVM, where an out-of-range MLOAD
+// would otherwise silently read adjacent memory instead of trapping.
+struct BoundedInput { span: MemSpan }
+impl Copy for BoundedInput {}
+impl ByteInput for BoundedInput {
+    fn len(self) -> u256 { self.span.len() }
+    fn word_at(self, _ offset: u256) -> u256 {
+        assert!(offset <= self.len() && 32 <= self.len() - offset)
+        self.span.word_at(offset)
+    }
+    fn byte_at(self, _ offset: u256) -> u8 {
+        assert!(offset < self.len())
+        *ptr::offset_bytes(self.span.ptr(), offset)
+    }
+    fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
+        self.span.copy_to_memory(dest: dest, src_offset: src_offset, len: len)
+    }
+}
+#[test]
+fn short_string_all_decode_paths_respect_input_extent() {
+    let p = ptr::alloc_bytes(33)
+    store_word(ptr: p, value: 1)
+    *ptr::offset_bytes(p, 32) = 0x61
+    let data = BoundedInput { span: MemSpan::from_raw_parts(ptr: p, len: 33) }
+    assert!(<String<1> as Decode<Sol>>::decode_from(data, 0) == "a")
+    assert!(<String<1> as Decode<Sol>>::decode_from_bounded(data, 0, 33) == "a")
+    assert!(<String<1> as Decode<Sol>>::decode_from_prechecked_head(data, 0, 33) == "a")
+    let mut d = Sol::decoder_with_base(data, 0)
+    assert!(<String<1> as Decode<Sol>>::decode_payload(mut d) == "a")
+}
+
+#[test]
+fn partially_padded_array_all_decode_paths_clear_padding() {
+    check_array_reencoding(<DynArray<Bytes> as Decode<Sol>>::decode_from(array_input(110), 0))
+    check_array_reencoding(<DynArray<Bytes> as Decode<Sol>>::decode_from_bounded(array_input(128), 0, 110))
+    check_array_reencoding(<DynArray<Bytes> as Decode<Sol>>::decode_from_prechecked_head(array_input(128), 0, 110))
+    let mut d = Sol::decoder_with_base(array_input(110), 0)
+    check_array_reencoding(<DynArray<Bytes> as Decode<Sol>>::decode_payload(mut d))
+    check_array_reencoding(<DynArray<Bytes> as Decode<Sol>>::decode_from(array_input(128), 0))
+}
+
+#[test]
+fn deeply_nested_array_clears_partial_padding() {
+    let p = ptr::alloc_bytes(192)
+    store_word(ptr: p, value: 1)
+    store_word(ptr: ptr::offset_bytes(p, 32), value: 32)
+    array_input(128).copy_to_memory(dest: ptr::offset_bytes(p, 64), src_offset: 0, len: 128)
+    let data = MemSpan::from_raw_parts(ptr: p, len: 174)
+    let array = <DynArray<DynArray<Bytes>> as Decode<Sol>>::decode_from(data, 0)
+    assert!(array.encoded_size() == 192)
+    assert!(array.encoded_span().word_at(160) == (0xaa as u256) << 248)
+}
