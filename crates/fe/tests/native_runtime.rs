@@ -9,8 +9,11 @@
 use std::{
     fs,
     io::Write,
+    os::unix::process::CommandExt,
     path::Path,
     process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use tempfile::tempdir;
@@ -180,6 +183,7 @@ fn pass_wide() {
     let high: u256 = 1 << 192
     core::assert(difference(left: high + 7, right: high) == 7)
 }
+
 #[test]
 fn fail_assertion() { core::assert(false) }
 "#,
@@ -258,6 +262,71 @@ fn fail_assertion() { core::assert(false) }
         );
         assert!(listing.contains("test-0/status.txt"), "{listing}");
         assert!(listing.contains("test-1/status.txt"), "{listing}");
+    }
+}
+
+#[test]
+fn native_runner_bounds_time_and_combined_output() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("limits.fe");
+    fs::write(
+        &source,
+        r#"
+use std::io::{Write, host, write_char}
+#[test]
+fn spin() { while true {} }
+#[test]
+fn noisy() {
+    with (Write = host()) {
+        let mut i: u32 = 0
+        while i < 2048 {
+            write_char(65)
+            i += 1
+        }
+    }
+}
+"#,
+    )
+    .unwrap();
+
+    for (filter, limit_args, expected) in [
+        (
+            "spin",
+            &["--native-timeout-secs", "1"][..],
+            "exceeded the time limit",
+        ),
+        (
+            "noisy",
+            &["--native-output-limit-kib", "1"][..],
+            "exceeded the output limit",
+        ),
+    ] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "--filter", filter])
+            .args(limit_args)
+            .arg(&source)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+                child.wait().unwrap();
+                panic!("native {filter} test did not terminate within 15 seconds");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let result = child.wait_with_output().unwrap();
+        let output = String::from_utf8_lossy(&result.stdout);
+        assert!(!result.status.success(), "{result:?}");
+        assert!(output.contains(expected), "{result:?}");
+        assert!(result.stdout.len() < 8 * 1024, "{result:?}");
     }
 }
 

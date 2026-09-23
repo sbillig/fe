@@ -2255,6 +2255,7 @@ dependencies = [
  "gix",
  "glob",
  "hex",
+ "libc",
  "petgraph",
  "protobuf",
  "rayon",

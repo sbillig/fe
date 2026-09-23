@@ -1,4 +1,13 @@
-use std::{fmt::Write, fs, process::Command, sync::Arc, time::Instant};
+use std::{fmt::Write, fs, sync::Arc, time::Instant};
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::{
+    io::{self, Read},
+    os::fd::AsRawFd,
+    os::unix::process::CommandExt,
+    process::{Command, Stdio},
+    time::Duration,
+};
 
 use camino::Utf8PathBuf;
 use codegen::{OptLevel, emit_test_module_native};
@@ -9,10 +18,15 @@ use tempfile::{Builder, TempDir};
 use crate::native::link_executable;
 
 use super::{
-    CompiledTest, ReportContext, SingleTestJob, SuitePreparation, TestEmitSelection, TestOutcome,
-    TestResult, default_test_emit_dir, emit_with_catch_unwind, has_test_functions, test_emit_stem,
-    write_test_emit_artifact,
+    CompiledTest, NativeTestLimits, ReportContext, SingleTestJob, SuitePreparation,
+    TestEmitSelection, TestOutcome, TestResult, default_test_emit_dir, emit_with_catch_unwind,
+    has_test_functions, test_emit_stem, write_test_emit_artifact,
 };
+
+#[cfg(target_os = "linux")]
+const NATIVE_TEST_ADDRESS_SPACE_LIMIT: libc::rlim_t = 2 * 1024 * 1024 * 1024;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const NATIVE_TEST_DIAGNOSTIC_LIMIT: usize = 4096;
 
 #[derive(Debug)]
 struct NativeExecutable {
@@ -28,31 +42,199 @@ pub(super) struct NativeTestCase {
 }
 
 impl NativeTestCase {
-    pub(super) fn run(&self, report: Option<&ReportContext>) -> TestOutcome {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn run(
+        &self,
+        report: Option<&ReportContext>,
+        limits: NativeTestLimits,
+    ) -> TestOutcome {
         let started = Instant::now();
-        let result = Command::new(self.executable.directory.path().join("tests"))
-            .arg(self.entry_index.to_string())
-            .output();
+        let result = (|| -> io::Result<_> {
+            let mut command = Command::new(self.executable.directory.path().join("tests"));
+            command
+                .arg(self.entry_index.to_string())
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .process_group(0);
+            // Set resource limits in the child, before it runs generated code.
+            // macOS cannot reliably lower RLIMIT_AS below its mapped shared cache;
+            // memory quotas there must be enforced by the caller's OS isolation.
+            unsafe {
+                command.pre_exec(move || {
+                    let limits = [
+                        (
+                            libc::RLIMIT_CPU,
+                            limits.timeout.as_secs().saturating_add(1) as libc::rlim_t,
+                        ),
+                        (libc::RLIMIT_CORE, 0),
+                    ];
+                    for (resource, limit) in limits {
+                        let mut value = libc::rlimit {
+                            rlim_cur: 0,
+                            rlim_max: 0,
+                        };
+                        if libc::getrlimit(resource, &mut value) != 0 {
+                            return Err(io::Error::last_os_error());
+                        }
+                        value.rlim_cur = value.rlim_cur.min(limit);
+                        value.rlim_max = value.rlim_max.min(limit);
+                        if libc::setrlimit(resource, &value) != 0 {
+                            return Err(io::Error::last_os_error());
+                        }
+                    }
+                    #[cfg(target_os = "linux")]
+                    {
+                        let mut value = libc::rlimit {
+                            rlim_cur: 0,
+                            rlim_max: 0,
+                        };
+                        if libc::getrlimit(libc::RLIMIT_AS, &mut value) != 0 {
+                            return Err(io::Error::last_os_error());
+                        }
+                        value.rlim_cur = value.rlim_cur.min(NATIVE_TEST_ADDRESS_SPACE_LIMIT);
+                        value.rlim_max = value.rlim_max.min(NATIVE_TEST_ADDRESS_SPACE_LIMIT);
+                        if libc::setrlimit(libc::RLIMIT_AS, &value) != 0 {
+                            return Err(io::Error::last_os_error());
+                        }
+                    }
+                    Ok(())
+                });
+            }
+            let mut child = command
+                .spawn()
+                .map_err(|err| io::Error::new(err.kind(), format!("spawn native test: {err}")))?;
+            let child_pid = child.id() as i32;
+            let mut stdout = child.stdout.take().expect("piped stdout");
+            let mut stderr = child.stderr.take().expect("piped stderr");
+            let mut stdout_bytes = Vec::new();
+            let mut stderr_bytes = Vec::new();
+            let mut pipes = [
+                libc::pollfd {
+                    fd: stdout.as_raw_fd(),
+                    events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: stderr.as_raw_fd(),
+                    events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+                    revents: 0,
+                },
+            ];
+            for pipe in &pipes {
+                let flags = unsafe { libc::fcntl(pipe.fd, libc::F_GETFL) };
+                if flags < 0
+                    || unsafe { libc::fcntl(pipe.fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+                {
+                    let error = io::Error::last_os_error();
+                    let _ = unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+                    let _ = child.wait();
+                    return Err(error);
+                }
+            }
+            let deadline = started + limits.timeout;
+            let execution = (|| -> io::Result<Option<&'static str>> {
+                let mut exited = false;
+                let mut captured = 0;
+                loop {
+                    if !exited && child.try_wait()?.is_some() {
+                        exited = true;
+                        // Descendants can outlive the launcher and hold pipes open.
+                        let _ = unsafe { libc::killpg(child_pid, libc::SIGKILL) };
+                    }
+                    if exited && pipes.iter().all(|pipe| pipe.fd == -1) {
+                        break Ok(None);
+                    }
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        break Ok(Some("native test exceeded the time limit"));
+                    }
+                    let timeout = remaining.min(Duration::from_millis(10)).as_millis() as i32;
+                    let ready =
+                        unsafe { libc::poll(pipes.as_mut_ptr(), pipes.len() as _, timeout) };
+                    if ready < 0 {
+                        let error = io::Error::last_os_error();
+                        if error.kind() == io::ErrorKind::Interrupted {
+                            continue;
+                        }
+                        return Err(error);
+                    }
+                    for (pipe, (reader, bytes)) in pipes.iter_mut().zip([
+                        (&mut stdout as &mut dyn Read, &mut stdout_bytes),
+                        (&mut stderr as &mut dyn Read, &mut stderr_bytes),
+                    ]) {
+                        if pipe.fd == -1 || pipe.revents == 0 {
+                            continue;
+                        }
+                        let mut buffer = [0_u8; 8192];
+                        loop {
+                            match reader.read(&mut buffer) {
+                                Ok(0) => {
+                                    pipe.fd = -1;
+                                    break;
+                                }
+                                Ok(n) => {
+                                    let remaining = limits.output_bytes - captured;
+                                    bytes.extend_from_slice(&buffer[..n.min(remaining)]);
+                                    captured += n.min(remaining);
+                                    if n > remaining {
+                                        return Ok(Some("native test exceeded the output limit"));
+                                    }
+                                }
+                                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                                Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+                                Err(err) => return Err(err),
+                            }
+                        }
+                    }
+                }
+            })();
+            // The launcher can exit while descendants still run. Stop the whole
+            // process group on every path, then reap the launcher.
+            let kill_result = unsafe { libc::killpg(child_pid, libc::SIGKILL) };
+            let kill_error = io::Error::last_os_error();
+            let status = child.wait()?;
+            if kill_result != 0 && kill_error.raw_os_error() != Some(libc::ESRCH) {
+                let group_probe = unsafe { libc::killpg(child_pid, 0) };
+                let group_probe_error = io::Error::last_os_error();
+                if group_probe == 0 || group_probe_error.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(io::Error::new(
+                        kill_error.kind(),
+                        format!("terminate native test process group: {kill_error}"),
+                    ));
+                }
+            }
+            let reason = execution?;
+            Ok((status, stdout_bytes, stderr_bytes, reason))
+        })();
         let (passed, error_message) = match result {
-            Ok(output) => {
+            Ok((status, stdout, stderr, reason)) => {
                 if let Some(report) = report {
                     let dir = report.root_dir.join(format!(
                         "artifacts/native/module-{}/test-{}",
                         self.module_index, self.entry_index
                     ));
                     let _ = fs::create_dir_all(&dir);
-                    let _ = fs::write(dir.join("stdout.txt"), &output.stdout);
-                    let _ = fs::write(dir.join("stderr.txt"), &output.stderr);
-                    let _ = fs::write(dir.join("status.txt"), output.status.to_string());
+                    let _ = fs::write(dir.join("stdout.txt"), &stdout);
+                    let _ = fs::write(dir.join("stderr.txt"), &stderr);
+                    let _ = fs::write(dir.join("status.txt"), status.to_string());
                 }
                 (
-                    output.status.success(),
-                    (!output.status.success()).then(|| {
+                    status.success() && reason.is_none(),
+                    (!status.success() || reason.is_some()).then(|| {
+                        let stdout_preview = String::from_utf8_lossy(
+                            &stdout[..stdout.len().min(NATIVE_TEST_DIAGNOSTIC_LIMIT)],
+                        );
+                        let stderr_preview = String::from_utf8_lossy(
+                            &stderr[..stderr.len().min(NATIVE_TEST_DIAGNOSTIC_LIMIT)],
+                        );
                         format!(
-                            "native test failed ({})\nstdout:\n{}\nstderr:\n{}",
-                            output.status,
-                            String::from_utf8_lossy(&output.stdout),
-                            String::from_utf8_lossy(&output.stderr)
+                            "native test failed ({status}){}\nstdout:\n{stdout_preview}{}\nstderr:\n{stderr_preview}{}",
+                            reason
+                                .map(|reason| format!(": {reason}"))
+                                .unwrap_or_default(),
+                            if stdout.len() > NATIVE_TEST_DIAGNOSTIC_LIMIT { "\n[output truncated]" } else { "" },
+                            if stderr.len() > NATIVE_TEST_DIAGNOSTIC_LIMIT { "\n[output truncated]" } else { "" },
                         )
                     }),
                 )
@@ -68,6 +250,24 @@ impl NativeTestCase {
             logs: Vec::new(),
             trace: None,
             elapsed: started.elapsed(),
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    pub(super) fn run(
+        &self,
+        _report: Option<&ReportContext>,
+        _limits: NativeTestLimits,
+    ) -> TestOutcome {
+        TestOutcome {
+            result: TestResult {
+                name: self.name.clone(),
+                passed: false,
+                error_message: Some("native tests require Linux or macOS".to_string()),
+            },
+            logs: Vec::new(),
+            trace: None,
+            elapsed: Default::default(),
         }
     }
 }
@@ -216,5 +416,44 @@ pub(super) fn prepare_tests(
             results,
             single_jobs: Vec::new(),
         },
+    }
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod tests {
+    use std::{os::unix::fs::PermissionsExt, thread, time::Duration};
+
+    use super::*;
+
+    #[test]
+    fn native_runner_stops_descendants_after_launcher_exits() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("child-survived");
+        let executable = directory.path().join("tests");
+        fs::write(
+            &executable,
+            format!(
+                "#!/bin/sh\nnohup sh -c 'sleep 2; echo survived > \"$1\"' sh '{}' >/dev/null 2>&1 &\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let case = NativeTestCase {
+            name: "forking".to_string(),
+            module_index: 0,
+            entry_index: 0,
+            executable: Arc::new(NativeExecutable { directory }),
+        };
+        let outcome = case.run(
+            None,
+            NativeTestLimits {
+                timeout: Duration::from_secs(5),
+                output_bytes: 1024,
+            },
+        );
+        assert!(outcome.result.passed, "{:?}", outcome.result);
+        thread::sleep(Duration::from_secs(3));
+        assert!(!marker.exists(), "native test descendant survived cleanup");
     }
 }

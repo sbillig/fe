@@ -47,6 +47,13 @@ const MAX_STREAMED_SUITE_LABEL_CHARS: usize = 20;
 const STREAMED_SUITE_LABEL_ELLIPSIS: &str = "..";
 const STREAMED_STATUS_COLUMN_WIDTH: usize = 16;
 
+#[cfg(feature = "cranelift")]
+#[derive(Debug, Clone, Copy)]
+struct NativeTestLimits {
+    timeout: Duration,
+    output_bytes: usize,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct TestEmitSelection {
     ir: bool,
@@ -229,6 +236,8 @@ struct WorkerSharedConfig {
     profile: String,
     opt_level: OptLevel,
     backend: BuildBackend,
+    #[cfg(feature = "cranelift")]
+    native_limits: NativeTestLimits,
     emit: TestEmitSelection,
     debug: TestDebugOptions,
     report_failed_only: bool,
@@ -710,6 +719,8 @@ pub fn run_tests(
     profile: &str,
     opt_level: OptLevel,
     backend: BuildBackend,
+    native_timeout_secs: Option<u64>,
+    native_output_limit_kib: Option<usize>,
     emit: &[TestEmit],
     debug: &TestDebugOptions,
     report_out: Option<&Utf8PathBuf>,
@@ -721,6 +732,20 @@ pub fn run_tests(
     if backend.is_native() && (show_logs || debug.trace_evm || call_trace) {
         return Err("native tests do not support EVM logs or tracing options".to_string());
     }
+    if !backend.is_native() && (native_timeout_secs.is_some() || native_output_limit_kib.is_some())
+    {
+        return Err("native test limits require `--backend native`".to_string());
+    }
+    let timeout_secs = native_timeout_secs.unwrap_or(60);
+    let output_limit_kib = native_output_limit_kib.unwrap_or(1024);
+    if !(1..=3600).contains(&timeout_secs) || !(1..=16384).contains(&output_limit_kib) {
+        return Err("native test limits require 1–3600 seconds and 1–16384 KiB".to_string());
+    }
+    #[cfg(feature = "cranelift")]
+    let native_limits = NativeTestLimits {
+        timeout: Duration::from_secs(timeout_secs),
+        output_bytes: output_limit_kib * 1024,
+    };
     let expanded_paths = expand_test_paths(paths)?;
     if ingot.is_some() && expanded_paths.len() != 1 {
         return Err(INGOT_REQUIRES_WORKSPACE_ROOT.to_string());
@@ -769,6 +794,8 @@ pub fn run_tests(
         profile: profile.to_string(),
         opt_level,
         backend,
+        #[cfg(feature = "cranelift")]
+        native_limits,
         emit: TestEmitSelection::from_requested(emit),
         debug: debug.clone(),
         report_failed_only,
@@ -1461,7 +1488,7 @@ fn run_single_test_job(job: SingleTestJob, shared: &WorkerSharedConfig) -> Singl
             shared.call_trace,
         ),
         #[cfg(feature = "cranelift")]
-        CompiledTest::Native(case) => case.run(report_ctx.as_ref()),
+        CompiledTest::Native(case) => case.run(report_ctx.as_ref(), shared.native_limits),
     };
     let elapsed = outcome.elapsed;
     let mut output = String::new();

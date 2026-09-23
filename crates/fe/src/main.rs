@@ -288,6 +288,12 @@ pub enum Command {
         /// Execution backend for tests.
         #[arg(long, value_enum, default_value_t = BuildBackend::Sonatina)]
         backend: BuildBackend,
+        /// Native test wall-time limit in seconds (default: 60, maximum: 3600).
+        #[arg(long, value_name = "SECONDS")]
+        native_timeout_secs: Option<u64>,
+        /// Combined native test stdout/stderr limit in KiB (default: 1024, maximum: 16384).
+        #[arg(long, value_name = "KIB")]
+        native_output_limit_kib: Option<usize>,
         /// Path(s) to .fe files or directories containing ingots with tests.
         ///
         /// Supports glob patterns (e.g. `crates/fe/tests/fixtures/fe_test/*.fe`).
@@ -759,6 +765,8 @@ pub fn run(opts: &Options) {
         }
         Command::Test {
             backend,
+            native_timeout_secs,
+            native_output_limit_kib,
             paths,
             ingot,
             filter,
@@ -807,6 +815,8 @@ pub fn run(opts: &Options) {
                 profile,
                 opt_level,
                 *backend,
+                *native_timeout_secs,
+                *native_output_limit_kib,
                 emit,
                 &debug,
                 (*report).then_some(report_out),
