@@ -29,8 +29,11 @@ fn merkle_verification_gas_and_correctness() {
     let source = include_str!("evm_compiler_bench/merkle_verifier.fe");
     let bytecode = compile_fe_sonatina_bytecode(source, "MerkleVerifier", "MerkleVerifier")
         .expect("compile Merkle benchmark");
-    eprintln!("Merkle runtime bytes: {}", bytecode.runtime.len());
-    assert!(bytecode.runtime.len() <= 420, "Merkle bytecode regressed");
+    assert!(
+        bytecode.runtime.len() <= 420,
+        "Merkle bytecode regressed to {} bytes",
+        bytecode.runtime.len()
+    );
     let mut runtime = RuntimeInstance::deploy(&hex::encode(bytecode.deploy)).unwrap();
     let siblings: Vec<_> = (0u32..64).map(|i| keccak256(i.to_be_bytes())).collect();
     let leaf = keccak256("leaf");
@@ -60,7 +63,6 @@ fn merkle_verification_gas_and_correctness() {
                 let gas = runtime
                     .call_raw_gas_profile(&input, ExecutionOptions::default())
                     .total_step_gas;
-                eprintln!("Merkle proof {length}: {gas} execution gas");
                 // Includes decoding/copying the proof. In particular, growing
                 // proofs must not regain per-element frame/overflow checks.
                 assert!(gas <= 700 + 175 * length as u64, "proof {length}: {gas}");
