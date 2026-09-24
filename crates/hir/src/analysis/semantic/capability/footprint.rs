@@ -296,11 +296,7 @@ mod tests {
     ) -> RegionSet<'db> {
         let source = ExternalSource::input(
             InputSource::slot(0, StructuralPath::default()),
-            ReferentContract::new(
-                db,
-                TyId::u8(db),
-                HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-            ),
+            ReferentContract::memory(db, TyId::u8(db)),
             false,
         );
         RegionSet::singleton(

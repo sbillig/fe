@@ -83,40 +83,62 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
         }
     }
 
+    fn import(&mut self, decision: &Decision<V, T>) -> usize {
+        let mut mapped = Vec::with_capacity(decision.nodes.len());
+        for node in decision.nodes.iter() {
+            let id = match node {
+                Node::Leaf(value) => self.intern(Node::Leaf(value.clone())),
+                Node::Branch {
+                    variable,
+                    low,
+                    high,
+                } => self.branch(variable.clone(), mapped[*low], mapped[*high]),
+            };
+            mapped.push(id);
+        }
+        mapped[decision.root()]
+    }
+
+    /// An `idempotent` join is also commutative, as in quantification, so
+    /// equal operands and swapped pairs share work.
     fn apply(
         &mut self,
         lhs: usize,
         rhs: usize,
         join: &impl Fn(&T, &T) -> T,
+        idempotent: bool,
         memo: &mut FxHashMap<(usize, usize), usize>,
     ) -> usize {
-        if let Some(result) = memo.get(&(lhs, rhs)) {
+        if idempotent && lhs == rhs {
+            return lhs;
+        }
+        let key = if idempotent {
+            (lhs.min(rhs), lhs.max(rhs))
+        } else {
+            (lhs, rhs)
+        };
+        if let Some(result) = memo.get(&key) {
             return *result;
         }
-        let result = match (self.nodes[lhs].clone(), self.nodes[rhs].clone()) {
-            (Node::Leaf(left), Node::Leaf(right)) => self.intern(Node::Leaf(join(&left, &right))),
-            (left, right) => {
-                let variable = match (&left, &right) {
-                    (
-                        Node::Branch { variable: left, .. },
-                        Node::Branch {
-                            variable: right, ..
-                        },
-                    ) => left.min(right),
-                    (Node::Branch { variable, .. }, _) | (_, Node::Branch { variable, .. }) => {
-                        variable
-                    }
-                    _ => unreachable!(),
+        // Keep recursive frames small: only the split variable lives across calls.
+        let result =
+            if let (Node::Leaf(left), Node::Leaf(right)) = (&self.nodes[lhs], &self.nodes[rhs]) {
+                let leaf = join(left, right);
+                self.intern(Node::Leaf(leaf))
+            } else {
+                let variable = match (self.variable(lhs), self.variable(rhs)) {
+                    (Some(left), Some(right)) => left.min(right),
+                    (Some(variable), None) | (None, Some(variable)) => variable,
+                    (None, None) => unreachable!("two leaves are joined directly"),
                 }
                 .clone();
                 let (left_low, left_high) = self.cofactors(lhs, &variable);
                 let (right_low, right_high) = self.cofactors(rhs, &variable);
-                let low = self.apply(left_low, right_low, join, memo);
-                let high = self.apply(left_high, right_high, join, memo);
+                let low = self.apply(left_low, right_low, join, idempotent, memo);
+                let high = self.apply(left_high, right_high, join, idempotent, memo);
                 self.branch(variable, low, high)
-            }
-        };
-        memo.insert((lhs, rhs), result);
+            };
+        memo.insert(key, result);
         result
     }
 
@@ -330,7 +352,8 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         builder.finish(mapped[self.root()])
     }
 
-    /// Existentially quantify selected decisions using the terminal join.
+    /// Existentially quantify selected decisions using an associative,
+    /// commutative, idempotent terminal join.
     pub(super) fn exists(
         &self,
         mut selected: impl FnMut(&V) -> bool,
@@ -347,7 +370,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
                     low,
                     high,
                 } if selected(variable) => {
-                    builder.apply(mapped[*low], mapped[*high], &join, &mut memo)
+                    builder.apply(mapped[*low], mapped[*high], &join, true, &mut memo)
                 }
                 Node::Branch {
                     variable,
@@ -362,53 +385,10 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
 
     pub(super) fn apply(&self, other: &Self, leaf: impl Fn(&T, &T) -> T) -> Self {
         let mut builder = Builder::new();
-        let root = self.apply_nodes(
-            self.root(),
-            other,
-            other.root(),
-            &leaf,
-            &mut builder,
-            &mut FxHashMap::default(),
-        );
+        let lhs = builder.import(self);
+        let rhs = builder.import(other);
+        let root = builder.apply(lhs, rhs, &leaf, false, &mut FxHashMap::default());
         builder.finish(root)
-    }
-
-    fn apply_nodes(
-        &self,
-        lhs: usize,
-        other: &Self,
-        rhs: usize,
-        leaf: &impl Fn(&T, &T) -> T,
-        builder: &mut Builder<V, T>,
-        memo: &mut FxHashMap<(usize, usize), usize>,
-    ) -> usize {
-        if let Some(result) = memo.get(&(lhs, rhs)) {
-            return *result;
-        }
-        let result = match (&self.nodes[lhs], &other.nodes[rhs]) {
-            (Node::Leaf(left), Node::Leaf(right)) => builder.intern(Node::Leaf(leaf(left, right))),
-            (left, right) => {
-                let variable = match (left, right) {
-                    (
-                        Node::Branch { variable: left, .. },
-                        Node::Branch {
-                            variable: right, ..
-                        },
-                    ) => left.min(right),
-                    (Node::Branch { variable, .. }, _) | (_, Node::Branch { variable, .. }) => {
-                        variable
-                    }
-                    _ => unreachable!(),
-                };
-                let (left_low, left_high) = self.cofactors(lhs, variable);
-                let (right_low, right_high) = other.cofactors(rhs, variable);
-                let low = self.apply_nodes(left_low, other, right_low, leaf, builder, memo);
-                let high = self.apply_nodes(left_high, other, right_high, leaf, builder, memo);
-                builder.branch(variable.clone(), low, high)
-            }
-        };
-        memo.insert((lhs, rhs), result);
-        result
     }
 
     fn cofactors(&self, node: usize, split: &V) -> (usize, usize) {

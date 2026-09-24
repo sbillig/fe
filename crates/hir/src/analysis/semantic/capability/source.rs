@@ -23,6 +23,16 @@ pub struct SourceExpr<'db> {
 }
 
 impl<'db> SourceExpr<'db> {
+    /// The whole referent of a source, with no projection or conversion.
+    pub fn whole(source: ExternalSource<'db>) -> Self {
+        Self {
+            source,
+            path: RegionPath::default(),
+            views: Default::default(),
+            invalidated: false,
+        }
+    }
+
     pub fn referent_ty(
         &self,
         db: &'db dyn HirAnalysisDb,

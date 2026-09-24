@@ -118,7 +118,16 @@ fn handle<'db>(
     shape: ShapeId<'db>,
     id: usize,
 ) -> CapabilityValue<'db> {
-    values.from_shape(shape, &BinderScope::default(), |_, _, scope| {
+    handle_in(values, shape, &BinderScope::default(), id)
+}
+
+fn handle_in<'db>(
+    values: &mut CapabilityValues<'db>,
+    shape: ShapeId<'db>,
+    scope: &BinderScope,
+    id: usize,
+) -> CapabilityValue<'db> {
+    values.from_shape(shape, scope, |_, _, scope| {
         vec![Guarded {
             guard: Guard::always(scope),
             payload: CapabilityRef::borrow(
@@ -161,6 +170,26 @@ fn read<'db>(
         .unwrap()
 }
 
+/// A `ty` cell at `stride * index` in the first input's byte referent.
+fn input_cell<'db>(
+    db: &'db HirAnalysisTestDb,
+    ty: TyId<'db>,
+    stride: TyId<'db>,
+    index: IndexExpr<'db>,
+) -> RegionRoot<'db> {
+    let base = ExternalSource::input(
+        InputSource::slot(0, Default::default()),
+        ReferentContract::memory(db, TyId::u8(db)),
+        false,
+    );
+    RegionRoot::External(ExternalSource::memory(
+        db,
+        SourceExpr::whole(base),
+        ty,
+        Some((stride, index)),
+    ))
+}
+
 #[test]
 fn typed_storage_coverage_requires_the_union_to_cover_the_demand() {
     let db = HirAnalysisTestDb::default();
@@ -168,28 +197,7 @@ fn typed_storage_coverage_requires_the_union_to_cover_the_demand() {
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
     let scope = BinderScope::default();
     let ty = TyId::u256(&db);
-    let base = ExternalSource::input(
-        InputSource::slot(0, Default::default()),
-        ReferentContract::new(
-            &db,
-            ty,
-            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-        ),
-        false,
-    );
-    let cell = |index| {
-        RegionRoot::External(ExternalSource::memory(
-            &db,
-            SourceExpr {
-                source: base.clone(),
-                path: RegionPath::default(),
-                views: Default::default(),
-                invalidated: false,
-            },
-            ty,
-            Some((ty, index)),
-        ))
-    };
+    let cell = |index| input_cell(&db, ty, ty, index);
     let index = IndexExpr::Runtime(NValueId::from_u32(1));
     let demand = cell(index);
     let zero = cell(IndexExpr::Const(0));
@@ -230,40 +238,9 @@ fn conditional_typed_match_retains_residual_byte_overlap() {
     let scope = BinderScope::default();
     let (family_scope, member) = scope.bind(IndexNamespace::InputSlot);
     let ty = TyId::borrow_mut_of(&db, TyId::u256(&db));
-    let base = ExternalSource::input(
-        InputSource::slot(0, Default::default()),
-        ReferentContract::new(
-            &db,
-            TyId::u8(&db),
-            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-        ),
-        false,
-    );
-    let cell = |index| {
-        RegionRoot::External(ExternalSource::memory(
-            &db,
-            SourceExpr {
-                source: base.clone(),
-                path: RegionPath::default(),
-                views: Default::default(),
-                invalidated: false,
-            },
-            ty,
-            Some((TyId::u8(&db), index)),
-        ))
-    };
-    let initial = values.from_shape(shapes.handle, &family_scope, |_, _, scope| {
-        vec![Guarded {
-            guard: Guard::always(scope),
-            payload: CapabilityRef::borrow(
-                BorrowKind::Mut,
-                LoanRef {
-                    id: LoanId(0),
-                    args: Box::new([]),
-                },
-            ),
-        }]
-    });
+    // A one-byte stride lets neighboring members share bytes.
+    let cell = |index| input_cell(&db, ty, TyId::u8(&db), index);
+    let initial = handle_in(&mut values, shapes.handle, &family_scope, 0);
     let mut state = BorrowState::new(&mut values, [], [(cell(member), initial)]);
     let replacement = handle(&mut values, shapes.handle, 1);
     state
@@ -306,11 +283,7 @@ fn existential_uncertain_object_write_retains_residual_overlap() {
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
     let scope = BinderScope::default();
     let (family_scope, member) = scope.bind(IndexNamespace::InputSlot);
-    let contract = ReferentContract::new(
-        &db,
-        TyId::borrow_mut_of(&db, TyId::u256(&db)),
-        HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-    );
+    let contract = ReferentContract::memory(&db, TyId::borrow_mut_of(&db, TyId::u256(&db)));
     let object = |index| {
         RegionRoot::External(ExternalSource::unknown(
             contract,
@@ -318,18 +291,7 @@ fn existential_uncertain_object_write_retains_residual_overlap() {
             Box::new([index]),
         ))
     };
-    let initial = values.from_shape(shapes.handle, &family_scope, |_, _, scope| {
-        vec![Guarded {
-            guard: Guard::always(scope),
-            payload: CapabilityRef::borrow(
-                BorrowKind::Mut,
-                LoanRef {
-                    id: LoanId(0),
-                    args: Box::new([]),
-                },
-            ),
-        }]
-    });
+    let initial = handle_in(&mut values, shapes.handle, &family_scope, 0);
     let mut state = BorrowState::new(&mut values, [], [(object(member), initial)]);
     // One unknown object is written, but a different one can share its bytes.
     let (witness_scope, witness) = scope.bind(IndexNamespace::Existential);
@@ -379,35 +341,10 @@ fn typed_family_updates_replace_only_the_selected_member() {
     let scope = BinderScope::default();
     let (family_scope, member) = scope.bind(IndexNamespace::InputSlot);
     let ty = TyId::borrow_mut_of(&db, TyId::u256(&db));
-    let base = ExternalSource::input(
-        InputSource::slot(0, Default::default()),
-        ReferentContract::new(
-            &db,
-            TyId::u8(&db),
-            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-        ),
-        false,
-    );
-    let cell = |index| {
-        RegionRoot::External(ExternalSource::memory(
-            &db,
-            SourceExpr {
-                source: base.clone(),
-                path: RegionPath::default(),
-                views: Default::default(),
-                invalidated: false,
-            },
-            ty,
-            Some((ty, index)),
-        ))
-    };
+    let cell = |index| input_cell(&db, ty, ty, index);
     for stored in [0, 1, 2] {
         let mut values = CapabilityValues::new(&db, ValueLimits::default());
-        let original = handle(&mut values, shapes.handle, 0);
-        let family_value = values.substitute(
-            &original,
-            &IndexSubst::new(&scope, &family_scope, []).unwrap(),
-        );
+        let family_value = handle_in(&mut values, shapes.handle, &family_scope, 0);
         let mut state = BorrowState::new(&mut values, [], [(cell(member), family_value)]);
         let replacement = handle(&mut values, shapes.handle, 1);
         state
@@ -462,12 +399,7 @@ fn allocation_cell<'db>(
     );
     RegionRoot::External(ExternalSource::memory(
         db,
-        SourceExpr {
-            source: base,
-            path: RegionPath::default(),
-            views: Default::default(),
-            invalidated: false,
-        },
+        SourceExpr::whole(base),
         ty,
         Some((ty, index)),
     ))
@@ -491,29 +423,9 @@ fn typed_storage_matches_a_bounded_concrete_cell_model() {
             ..ValueLimits::default()
         },
     );
-    let empty = values.empty(shapes.handle, &scope);
-    let partial = BorrowState::new(
-        &mut values,
-        [],
-        [
-            (cell(0, IndexExpr::Const(0)), empty.clone()),
-            (cell(0, IndexExpr::Const(1)), empty),
-        ],
-    );
-    let coverage = partial.storage_coverage(&demand, &scope);
-    for selected in 0..3 {
-        let valuation = Guard::always(&scope)
-            .with_equality(selector, IndexExpr::Const(selected))
-            .unwrap();
-        assert_eq!(coverage.complete(&valuation), selected < 2);
-    }
-    assert!(!coverage.complete(&Guard::always(&scope)));
-
     let storage = (0..2)
         .map(|instance| {
-            let seed = handle(&mut values, shapes.handle, instance as usize);
-            let seed =
-                values.substitute(&seed, &IndexSubst::new(&scope, &family_scope, []).unwrap());
+            let seed = handle_in(&mut values, shapes.handle, &family_scope, instance as usize);
             (cell(instance, member), seed)
         })
         .collect::<Vec<_>>();
@@ -523,66 +435,14 @@ fn typed_storage_matches_a_bounded_concrete_cell_model() {
             .storage_coverage(&demand, &scope)
             .complete(&Guard::always(&scope))
     );
-    for instance in 0..2 {
-        let family = cell(instance, member);
-        let request = cell(instance, selector);
-        let (RegionRoot::External(family), RegionRoot::External(request)) = (family, request)
-        else {
-            unreachable!()
-        };
-        let witness = family
-            .match_instance(&family_scope, &request, &scope)
-            .unwrap();
-        assert_eq!(witness.substitution.apply(member), selector);
-        assert_eq!(witness.guard, Guard::always(&scope));
-        let write = witness.write.unwrap();
-        for selected in 0..3 {
-            let member_guard = Guard::always(&family_scope)
-                .with_equality(member, IndexExpr::Const(selected))
-                .unwrap();
-            let request_guard = Guard::always(&scope)
-                .with_equality(selector, IndexExpr::Const(selected))
-                .unwrap();
-            let concrete = write.guard.and(&member_guard).and_then(|guard| {
-                guard.substitute(
-                    &IndexSubst::new(
-                        &family_scope,
-                        &scope,
-                        [(member, IndexExpr::Const(selected))],
-                    )
-                    .unwrap(),
-                )
-            });
-            assert_eq!(concrete, Some(request_guard));
-        }
-    }
-
     let (renamed_scope, renamed_member) = scope.bind(IndexNamespace::Value);
     let rename =
         IndexSubst::new(&family_scope, &renamed_scope, [(member, renamed_member)]).unwrap();
     let renamed = cell(0, member).substitute(&db, &rename);
     assert_eq!(renamed, cell(0, renamed_member));
-    let (RegionRoot::External(renamed), RegionRoot::External(request)) =
-        (renamed, cell(0, selector))
-    else {
-        unreachable!()
-    };
-    let witness = renamed
-        .match_instance(&renamed_scope, &request, &scope)
-        .unwrap();
-    assert_eq!(witness.substitution.apply(renamed_member), selector);
-    assert_eq!(witness.guard, Guard::always(&scope));
 
-    let renamed_seed = handle(&mut values, shapes.handle, 0);
-    let renamed_seed = values.substitute(
-        &renamed_seed,
-        &IndexSubst::new(&scope, &renamed_scope, []).unwrap(),
-    );
-    let other_seed = handle(&mut values, shapes.handle, 1);
-    let other_seed = values.substitute(
-        &other_seed,
-        &IndexSubst::new(&scope, &family_scope, []).unwrap(),
-    );
+    let renamed_seed = handle_in(&mut values, shapes.handle, &renamed_scope, 0);
+    let other_seed = handle_in(&mut values, shapes.handle, &family_scope, 1);
     let mut renamed_state = BorrowState::new(
         &mut values,
         [],

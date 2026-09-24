@@ -45,6 +45,14 @@ impl<'db> ReferentContract<'db> {
         }
     }
 
+    pub fn memory(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Self {
+        Self::new(
+            db,
+            ty,
+            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+        )
+    }
+
     pub fn substitute(self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
         Self::new(
             db,

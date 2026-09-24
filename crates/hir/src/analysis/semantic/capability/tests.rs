@@ -68,6 +68,14 @@ fn runtime<'db>(index: u32) -> IndexExpr<'db> {
     IndexExpr::Runtime(NValueId::from_u32(index))
 }
 
+fn scope() -> BinderScope {
+    BinderScope::default()
+}
+
+fn path<'db>(index: IndexExpr<'db>) -> StructuralPath<IndexExpr<'db>> {
+    StructuralPath::new([Projection::Index(index)])
+}
+
 #[test]
 fn scalar_version_join_preserves_an_untracked_path() {
     let db = HirAnalysisTestDb::default();
@@ -107,10 +115,6 @@ fn scalar_version_join_preserves_an_untracked_path() {
     );
 }
 
-fn scope() -> BinderScope {
-    BinderScope::default()
-}
-
 #[test]
 fn extending_a_guard_scope_preserves_scalar_and_boolean_facts() {
     let choice = ChoiceKey::new(
@@ -138,21 +142,13 @@ fn extending_a_guard_scope_preserves_scalar_and_boolean_facts() {
     );
 }
 
-fn path<'db>(index: IndexExpr<'db>) -> StructuralPath<IndexExpr<'db>> {
-    StructuralPath::new([Projection::Index(index)])
-}
-
 #[test]
 fn typed_storage_matching_binds_an_erased_zero_selector() {
     let db = HirAnalysisTestDb::default();
     let ty = TyId::u256(&db);
     let base = ExternalSource::input(
         InputSource::slot(0, StructuralPath::default()),
-        ReferentContract::new(
-            &db,
-            ty,
-            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-        ),
+        ReferentContract::memory(&db, ty),
         false,
     );
     let source = |source| SourceExpr {
@@ -192,11 +188,7 @@ fn typed_storage_matching_keeps_repeated_and_distinct_index_roles() {
     let db = HirAnalysisTestDb::default();
     let scope = BinderScope::default();
     let (repeated_scope, member) = scope.bind(IndexNamespace::InputSlot);
-    let contract = ReferentContract::new(
-        &db,
-        TyId::u256(&db),
-        HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-    );
+    let contract = ReferentContract::memory(&db, TyId::u256(&db));
     let family = ExternalSource::input(
         InputSource::slot(
             0,
@@ -226,37 +218,13 @@ fn typed_storage_matching_keeps_repeated_and_distinct_index_roles() {
     let word = TyId::array_with_len(&db, TyId::ptr_to(&db, TyId::u256(&db)), 4);
     let (generation_scope, generation) = scope.bind(IndexNamespace::InputSlot);
     let (family_scope, element) = generation_scope.bind(IndexNamespace::InputSlot);
-    let contract = ReferentContract::new(
-        &db,
-        byte,
-        HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-    );
+    let contract = ReferentContract::memory(&db, byte);
     let base =
         ExternalSource::unknown(contract, AddressOccurrence::Summary(0), [generation].into());
-    let family = ExternalSource::memory(
-        &db,
-        SourceExpr {
-            source: base,
-            path: RegionPath::default(),
-            views: Default::default(),
-            invalidated: false,
-        },
-        word,
-        Some((byte, element)),
-    );
+    let family = ExternalSource::memory(&db, SourceExpr::whole(base), word, Some((byte, element)));
     let base =
         ExternalSource::unknown(contract, AddressOccurrence::Summary(0), [runtime(3)].into());
-    let request = ExternalSource::memory(
-        &db,
-        SourceExpr {
-            source: base,
-            path: RegionPath::default(),
-            views: Default::default(),
-            invalidated: false,
-        },
-        word,
-        None,
-    );
+    let request = ExternalSource::memory(&db, SourceExpr::whole(base), word, None);
     let witness = family
         .match_instance(&family_scope, &request, &scope)
         .unwrap();
@@ -265,11 +233,7 @@ fn typed_storage_matching_keeps_repeated_and_distinct_index_roles() {
     assert_eq!(witness.guard, Guard::always(&scope));
 
     let (follow_scope, dereference) = family_scope.bind(IndexNamespace::InputSlot);
-    let pointee = ReferentContract::new(
-        &db,
-        TyId::u256(&db),
-        HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-    );
+    let pointee = ReferentContract::memory(&db, TyId::u256(&db));
     let family = family.follow(
         RegionPath::new([Projection::Index(dereference)]),
         pointee,
@@ -294,23 +258,14 @@ fn typed_storage_matching_transports_metadata_without_selecting_a_cell() {
     let db = HirAnalysisTestDb::default();
     let scope = BinderScope::default();
     let (family_scope, witness_index) = scope.bind(IndexNamespace::Existential);
-    let contract = ReferentContract::new(
-        &db,
-        TyId::u256(&db),
-        HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-    );
+    let contract = ReferentContract::memory(&db, TyId::u256(&db));
     let mut family = ExternalSource::unknown(contract, AddressOccurrence::Summary(0), Box::new([]));
     let metadata = ExternalSource::unknown(
         contract,
         AddressOccurrence::Summary(1),
         [witness_index].into(),
     );
-    let metadata = SourceExpr {
-        source: metadata,
-        path: RegionPath::default(),
-        views: Default::default(),
-        invalidated: false,
-    };
+    let metadata = SourceExpr::whole(metadata);
     family.clobber = Some(Box::new(ClobberCondition {
         target: metadata.clone(),
         written: metadata,
@@ -352,11 +307,7 @@ fn typed_storage_matching_keeps_alpha_roles_and_rejects_distinct_offsets() {
     let scope = BinderScope::default();
     let (family_scope, formal) = scope.bind(IndexNamespace::InputSlot);
     let (request_scope, actual) = family_scope.bind(IndexNamespace::InputSlot);
-    let contract = ReferentContract::new(
-        &db,
-        TyId::u256(&db),
-        HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-    );
+    let contract = ReferentContract::memory(&db, TyId::u256(&db));
     let family = ExternalSource::input(InputSource::slot(0, path(formal)), contract, false);
     let request = ExternalSource::input(InputSource::slot(0, path(actual)), contract, false);
     let matched = family
@@ -368,19 +319,10 @@ fn typed_storage_matching_keeps_alpha_roles_and_rejects_distinct_offsets() {
 
     let base = ExternalSource::input(
         InputSource::slot(0, StructuralPath::default()),
-        ReferentContract::new(
-            &db,
-            TyId::u8(&db),
-            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-        ),
+        ReferentContract::memory(&db, TyId::u8(&db)),
         false,
     );
-    let source = SourceExpr {
-        source: base,
-        path: RegionPath::default(),
-        views: Default::default(),
-        invalidated: false,
-    };
+    let source = SourceExpr::whole(base);
     let first = ExternalSource::memory(
         &db,
         source.clone(),
@@ -426,11 +368,7 @@ fn physical_offsets_do_not_prove_disjoint_wide_accesses() {
     let db = HirAnalysisTestDb::default();
     let base = ExternalSource::input(
         InputSource::slot(0, StructuralPath::default()),
-        ReferentContract::new(
-            &db,
-            TyId::u8(&db),
-            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-        ),
+        ReferentContract::memory(&db, TyId::u8(&db)),
         false,
     );
     let region = |offset| {
@@ -2467,14 +2405,7 @@ fn inspect<T, const N: usize>(
         .values
         .iter()
         .filter(|value| matches!(value.definition, NValueDefinition::EntryParam { .. }))
-        .map(|value| {
-            ReferentContract::new(
-                &db,
-                value.ty,
-                HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-            )
-            .is_abstract(&db)
-        })
+        .map(|value| ReferentContract::memory(&db, value.ty).is_abstract(&db))
         .collect();
     assert_eq!(abstract_inputs, [false, true, false, false, false, true]);
 }
@@ -2513,12 +2444,7 @@ fn allocation_birth_selects_guarded_full_families_and_only_their_own_bytes() {
     );
     let viewed = ExternalSource::memory(
         &db,
-        SourceExpr {
-            source: source.clone(),
-            path: RegionPath::default(),
-            views: Default::default(),
-            invalidated: false,
-        },
+        SourceExpr::whole(source.clone()),
         TyId::u8(&db),
         Some((TyId::u8(&db), IndexExpr::Const(1))),
     );
@@ -2638,12 +2564,7 @@ fn allocation_birth_selection_commutes_with_index_substitution() {
                     let direct = ExternalSource::allocation(&db, allocation);
                     let viewed = ExternalSource::memory(
                         &db,
-                        SourceExpr {
-                            source: direct.clone(),
-                            path: RegionPath::default(),
-                            views: Default::default(),
-                            invalidated: false,
-                        },
+                        SourceExpr::whole(direct.clone()),
                         TyId::u8(&db),
                         Some((TyId::u8(&db), IndexExpr::Const(1))),
                     );

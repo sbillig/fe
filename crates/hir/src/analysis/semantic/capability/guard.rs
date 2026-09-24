@@ -335,43 +335,33 @@ impl<'db> Guard<'db> {
     }
 
     pub fn with_variant(&self, choice: ChoiceKey<'db>, variant: VariantIndex) -> Option<Self> {
+        self.with_choice_bits(choice, u16::BITS as u16, |bit| variant.0 & (1 << bit) != 0)
+    }
+
+    /// Restrict an actual boolean value occurrence to one of its two outcomes.
+    pub fn with_boolean(&self, choice: ChoiceKey<'db>, value: bool) -> Option<Self> {
+        self.with_choice_bits(choice, 1, |_| value)
+    }
+
+    fn with_choice_bits(
+        &self,
+        choice: ChoiceKey<'db>,
+        bits: u16,
+        value: impl Fn(u16) -> bool,
+    ) -> Option<Self> {
         for index in choice.path.indices() {
-            self.scope.validate(index).expect("free enum choice binder");
+            self.scope.validate(index).expect("free choice binder");
         }
         let condition = Decision::chain(
-            (0..u16::BITS as u16).map(|bit| {
+            (0..bits).map(|bit| {
                 (
                     ChoiceBit {
                         choice: choice.clone(),
                         bit: Reverse(bit),
                     },
-                    variant.0 & (1 << bit) != 0,
+                    value(bit),
                 )
             }),
-            IndexCondition::always(),
-            IndexCondition::never(),
-        );
-        Self::canonical(
-            &self.scope,
-            self.condition.apply(&condition, IndexCondition::and),
-        )
-    }
-
-    /// Restrict an actual boolean value occurrence to one of its two outcomes.
-    pub fn with_boolean(&self, choice: ChoiceKey<'db>, value: bool) -> Option<Self> {
-        for index in choice.path.indices() {
-            self.scope
-                .validate(index)
-                .expect("free boolean choice binder");
-        }
-        let condition = Decision::chain(
-            [(
-                ChoiceBit {
-                    choice,
-                    bit: Reverse(0),
-                },
-                value,
-            )],
             IndexCondition::always(),
             IndexCondition::never(),
         );

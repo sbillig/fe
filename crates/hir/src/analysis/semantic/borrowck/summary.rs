@@ -38,7 +38,6 @@ use crate::{
             },
         },
         ty::{
-            ProviderAddressSpace,
             corelib::{MemoryAccessKind, intrinsic_contract},
             provider::ProviderKind,
             ty_check::BodyOwner,
@@ -707,6 +706,14 @@ impl<'db> Borrowck<'db> {
                         AddressOccurrence::Summary(*handles.entry(*occurrence).or_insert(next));
                 });
         }
+        let return_states: Vec<_> = self
+            .body
+            .blocks
+            .iter()
+            .zip(&self.terminal)
+            .filter(|(block, _)| matches!(block.terminator.kind, NTerminatorKind::Return(_)))
+            .filter_map(|(_, state)| state.as_ref())
+            .collect();
         let scalar_inputs = self
             .inventory
             .inputs
@@ -719,26 +726,16 @@ impl<'db> Borrowck<'db> {
                     return None;
                 }
                 let root = RegionRoot::External(input.source.clone());
-                let mut returns = self
-                    .body
-                    .blocks
+                let (first, rest) = return_states.split_first()?;
+                let value = first.scalar_constant(&root)?;
+                if !rest
                     .iter()
-                    .enumerate()
-                    .filter(|(_, block)| {
-                        matches!(block.terminator.kind, NTerminatorKind::Return(_))
-                    })
-                    .filter_map(|(index, _)| self.terminal[index].as_ref());
-                let value = returns.next()?.scalar_constant(&root)?;
-                if !returns.all(|state| state.scalar_constant(&root) == Some(value)) {
+                    .all(|state| state.scalar_constant(&root) == Some(value))
+                {
                     return None;
                 }
                 Some(ScalarInputPoststate {
-                    destination: SourceExpr {
-                        source: input.source.clone(),
-                        path: RegionPath::default(),
-                        views: Default::default(),
-                        invalidated: false,
-                    },
+                    destination: SourceExpr::whole(input.source.clone()),
                     value,
                 })
             })
@@ -881,17 +878,11 @@ impl<'db> Borrowck<'db> {
             &handles,
             false,
         )?;
-        let mut returns = self
-            .body
-            .blocks
-            .iter()
-            .enumerate()
-            .filter(|(_, block)| matches!(block.terminator.kind, NTerminatorKind::Return(_)))
-            .filter_map(|(index, _)| self.terminal[index].as_ref());
+        let mut returns = return_states.iter();
         let mut common_ranges: Vec<_> = returns
             .next()
             .into_iter()
-            .flat_map(BorrowState::certified)
+            .flat_map(|state| state.certified())
             .map(|certified| {
                 (
                     certified.family.clone(),
@@ -1145,25 +1136,20 @@ impl<'db> Borrowck<'db> {
                         // Forwarded inputs remain may-aliases. Invalid native
                         // contents of that new object also stay invalid when
                         // their deeper selection is projected.
-                        let guard = if (matches!(
-                            role,
-                            SummaryValueRole::Return | SummaryValueRole::MirroredResult
-                        )
-                            && (matches!(&payload.source.origin, ExternalOrigin::Input(_))
-                                || payload.source.is_fresh_allocation()))
-                            || (matches!(
-                                role,
-                                SummaryValueRole::FreshInvalidPoststate
-                                    | SummaryValueRole::MirroredResult
-                            ) && payload.invalidated)
-                        {
+                        let input = matches!(&payload.source.origin, ExternalOrigin::Input(_));
+                        let result = input || payload.source.is_fresh_allocation();
+                        let projected = match role {
+                            SummaryValueRole::Return => result,
+                            SummaryValueRole::MirroredResult => result || payload.invalidated,
+                            SummaryValueRole::FreshInvalidPoststate => payload.invalidated,
+                            SummaryValueRole::Retained => false,
+                        };
+                        let guard = if projected {
                             clause.guard.forget_occurrences(|occurrence| {
                                 self.recursive_call_choice(occurrence)
-                                    && (matches!(
-                                        &payload.source.origin,
-                                        ExternalOrigin::Input(_)
-                                    ) || matches!(occurrence, ValueOccurrence::CallChoice { result, .. }
-                                        if self.calls[&result].single_result_port))
+                                    && (input
+                                        || matches!(occurrence, ValueOccurrence::CallChoice { result, .. }
+                                            if self.calls[&result].single_result_port))
                             })
                         } else {
                             clause.guard.clone()
@@ -2715,12 +2701,12 @@ impl<'db> SignatureValues<'_, 'db> {
                         // Reinterpreting a raw address preserves that address;
                         // it does not inherit loans reachable through its bytes.
                         // Arbitrary other referents have their own alternative.
-                        source = SourceExpr {
-                            source: ExternalSource::memory(db, source, semantics.target_ty, None),
-                            path: RegionPath::default(),
-                            views: Default::default(),
-                            invalidated: false,
-                        };
+                        source = SourceExpr::whole(ExternalSource::memory(
+                            db,
+                            source,
+                            semantics.target_ty,
+                            None,
+                        ));
                     } else if candidate.ty != semantics.target_ty {
                         source.source = source.source.widen();
                         source.source.contract = ReferentContract::new(
@@ -2746,11 +2732,7 @@ impl<'db> SignatureValues<'_, 'db> {
                 // Native results obey the language's memory-transport contract.
                 // Instantiation creates a result loan; this is no inherited parent.
                 Some(ExternalSource::unknown(
-                    ReferentContract::new(
-                        db,
-                        semantics.target_ty,
-                        HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-                    ),
+                    ReferentContract::memory(db, semantics.target_ty),
                     occurrence,
                     scope.variables().collect(),
                 ))
@@ -3071,12 +3053,7 @@ fn raw(_ ptr: *Outer) {}
                 })
                 .expect("nested mutable input target");
             assert_eq!(target.source.contract.address_space, expected, "{name}");
-            let mut source = SourceExpr {
-                source: target.source.clone(),
-                path: RegionPath::default(),
-                views: Default::default(),
-                invalidated: false,
-            };
+            let mut source = SourceExpr::whole(target.source.clone());
             assert_eq!(
                 checker
                     .verify_source(&source, &target.scope, None, false)
