@@ -1,7 +1,10 @@
 //! Immutable structural input and borrow-occurrence inventory.
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use super::control::LoopRegions;
+use super::{
+    control::LoopRegions,
+    transport::{InputTransportContract, referent_contract},
+};
 
 use cranelift_entity::EntityRef;
 
@@ -14,16 +17,16 @@ use crate::{
                 external::{ExternalOrigin, ExternalSource, ReferentContract},
                 guard::Guard,
                 handle::{
-                    AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
-                    OpaqueWriteSite, SeedOrigin,
+                    AddressOccurrence, HandleAddressSpace, OpaqueHandleRef, OpaqueWriteSite,
+                    SeedOrigin,
                 },
                 index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
                 loan::{CapabilityRef, LoanDef, LoanId, LoanRef},
                 opaque::OpaqueWrite,
                 path::{RegionPath, StructuralPath},
                 region::{ProviderRegionId, RegionRoot, RegionSet},
-                semantics::{CapabilityClass, CapabilitySemantics},
-                shape::{ShapeError, ShapeId, capability_shape},
+                semantics::CapabilityClass,
+                shape::{ShapeError, ShapeId},
                 source::InputSource,
                 state::{BorrowState, CapabilityValue, CapabilityValues},
                 value::{Guarded, ValueLimits},
@@ -55,6 +58,7 @@ pub(super) struct InputTarget<'db> {
 }
 
 pub(super) struct Inventory<'db> {
+    pub transport: InputTransportContract<'db>,
     pub loops: LoopRegions,
     pub values: CapabilityValues<'db>,
     pub shapes: Vec<ShapeId<'db>>,
@@ -108,6 +112,7 @@ impl CellSeed {
 struct InputBuilder<'db> {
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
+    transport: InputTransportContract<'db>,
     values: CapabilityValues<'db>,
     loans: Vec<LoanDef<'db>>,
     input_loans: BTreeMap<(ExternalSource<'db>, bool), LoanId>,
@@ -126,6 +131,7 @@ impl<'db> Inventory<'db> {
         let mut inputs = InputBuilder {
             db,
             instance,
+            transport: InputTransportContract::new(body),
             values: CapabilityValues::new(db, ValueLimits::default()),
             loans: Vec::new(),
             input_loans: BTreeMap::new(),
@@ -298,6 +304,7 @@ impl<'db> Inventory<'db> {
             inputs.storage,
         );
         let mut result = Self {
+            transport: inputs.transport,
             loops,
             values: inputs.values,
             shapes,
@@ -333,6 +340,7 @@ impl<'db> Inventory<'db> {
         let mut builder = InputBuilder {
             db,
             instance,
+            transport: self.transport.clone(),
             values: std::mem::replace(
                 &mut self.values,
                 CapabilityValues::new(db, ValueLimits::default()),
@@ -483,15 +491,7 @@ impl<'db> Inventory<'db> {
 
 impl<'db> InputBuilder<'db> {
     fn shape(&self, ty: TyId<'db>) -> Result<ShapeId<'db>, ShapeError<'db>> {
-        capability_shape(
-            self.db,
-            self.instance
-                .key(self.db)
-                .impl_env(self.db)
-                .normalization_scope(self.db),
-            self.instance.assumptions(self.db),
-            ty,
-        )
+        self.transport.shape(self.db, ty)
     }
 
     fn register(
@@ -600,10 +600,18 @@ impl<'db> InputBuilder<'db> {
         let mut failure = None;
         let db = self.db;
         let instance = self.instance;
+        let cursor = match &origin {
+            InputOrigin::Parameter(param) => Some(self.transport.parameter(db, *param)),
+            InputOrigin::Referent(source) => self
+                .transport
+                .route(db, source)?
+                .and_then(|route| route.cursor),
+        };
+        let transport = &self.transport;
         let value = self
             .values
             .from_shape(shape, scope, |semantics, path, scope| {
-                let contract = match referent_contract(db, instance, semantics) {
+                let contract = match transport.referent(db, semantics, cursor) {
                     Ok(contract) => contract,
                     Err(error) => {
                         failure = Some(error);
@@ -704,32 +712,6 @@ impl<'db> InputBuilder<'db> {
         }
         Ok(value)
     }
-}
-
-pub(super) fn referent_contract<'db>(
-    db: &'db dyn HirAnalysisDb,
-    instance: SemanticInstance<'db>,
-    semantics: CapabilitySemantics<'db>,
-) -> Result<ReferentContract<'db>, ShapeError<'db>> {
-    let space = if matches!(
-        semantics.class,
-        CapabilityClass::Handle | CapabilityClass::Pointer
-    ) {
-        OpaqueHandleContract::for_ty(
-            db,
-            instance.key(db).impl_env(db).normalization_scope(db),
-            instance.assumptions(db),
-            semantics.representation_ty,
-        )
-        .map_err(|error| ShapeError::UnresolvedCapability(error.0))?
-        .ok_or(ShapeError::UnresolvedCapability(
-            semantics.representation_ty,
-        ))?
-        .address_space
-    } else {
-        HandleAddressSpace::Unspecified
-    };
-    Ok(ReferentContract::new(db, semantics.target_ty, space))
 }
 
 fn canonical_source<'db>(
@@ -836,8 +818,8 @@ mod tests {
     use crate::{
         analysis::{
             semantic::{
-                capability::guard::ValueOccurrence, get_or_build_semantic_instance,
-                identity_semantic_instance_key,
+                capability::{guard::ValueOccurrence, handle::OpaqueHandleContract},
+                get_or_build_semantic_instance, identity_semantic_instance_key,
             },
             ty::ProviderAddressSpace,
         },

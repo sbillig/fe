@@ -13,6 +13,7 @@ mod memory;
 mod scalar;
 mod solver;
 mod summary;
+mod transport;
 mod validation;
 mod validity;
 

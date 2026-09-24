@@ -11286,6 +11286,121 @@ fn conditional(index: usize, flag: bool) -> u256 {
 }
 
 #[test]
+fn ordinary_memory_transport_reaches_owned_viewed_and_borrowed_aggregates() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::abi::ByteInput
+use std::evm::CallData
+
+struct Wrapped { cursor: mut u256 }
+fn read(_ cursor: mut u256) -> u256 {
+    let word = CallData::new().word_at(cursor)
+    cursor += 32
+    word
+}
+fn direct(_ cursor: mut u256) -> u256 { read(mut cursor) }
+fn owned(_ wrapped: own Wrapped) -> u256 { read(wrapped.cursor) }
+fn viewed(_ wrapped: Wrapped) -> u256 { read(wrapped.cursor) }
+fn borrowed(_ wrapped: mut Wrapped) -> u256 { read(mut wrapped.cursor) }
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn ordinary_memory_transport_preserves_nested_optional_array_and_generic_paths() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::abi::ByteInput
+use std::evm::CallData
+
+struct Inner { cursor: mut u256 }
+struct Outer { inner: mut Inner }
+struct Wrapped<T> { cursor: mut T }
+enum Maybe { Empty, Full(mut u256) }
+fn read(_ cursor: mut u256) -> u256 {
+    let word = CallData::new().word_at(cursor)
+    cursor += 32
+    word
+}
+fn nested(_ outer: mut Outer) -> u256 { read(mut outer.inner.cursor) }
+fn tuple(_ value: own (mut u256, u256)) -> u256 { read(value.0) }
+fn array(_ values: own [mut u256; 1]) -> u256 { read(values[0]) }
+fn optional(_ value: own Maybe) -> u256 {
+    match value { Maybe::Empty => 0, Maybe::Full(cursor) => read(cursor) }
+}
+fn generic(_ wrapped: own Wrapped<u256>) -> u256 { read(wrapped.cursor) }
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn ordinary_memory_transport_crosses_a_module_boundary() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+mod reader {
+    use core::abi::ByteInput
+    use std::evm::CallData
+    pub fn read(_ cursor: mut u256) -> u256 {
+        let word = CallData::new().word_at(cursor)
+        cursor += 32
+        word
+    }
+}
+struct Wrapped { cursor: mut u256 }
+fn forward(_ wrapped: mut Wrapped) -> u256 { reader::read(mut wrapped.cursor) }
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn ordinary_memory_transport_does_not_persist_after_a_typed_replacement() {
+    let source = boundary_provider_source(
+        "Storage",
+        "u256",
+        r#"
+struct Wrapped { cursor: mut u256 }
+fn consume(_ cursor: mut u256) {}
+fn replace(_ wrapped: mut Wrapped) uses (value: mut u256) {
+    wrapped.cursor = mut value
+    consume(mut wrapped.cursor)
+}
+
+fn caller(_ wrapped: mut Wrapped) {
+    let ptr = Ptr { addr: 32 }
+    with (ptr) { replace(mut wrapped) }
+}
+"#,
+    );
+    let diagnostics = checked_trusted_borrow_diags(&source);
+    assert!(diagnostics.contains("transport violation"), "{diagnostics}");
+    assert!(
+        diagnostics.contains("from storage as function argument"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn ordinary_transport_stops_at_a_recursive_nominal_handle() {
+    let diagnostics = checked_trusted_borrow_diags(
+        r#"
+use core::{AddressSpace, EffectHandle}
+struct Ptr { addr: u256 }
+impl EffectHandle for Ptr {
+    type Target = Ptr
+    const SPACE: AddressSpace = AddressSpace::Storage
+    type Raw = u256
+    fn raw(self) -> u256 { self.addr }
+}
+fn keep(_ value: Ptr) {}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
 fn host_import_contracts_preserve_live_native_borrows() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

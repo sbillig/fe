@@ -22,7 +22,7 @@ use crate::{
                 index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
                 loan::{CapabilityRef, LoanDef, LoanId, LoanRef},
                 opaque::OpaqueWrite,
-                path::{Projection, RegionPath, StructuralPath, project_referent_ty},
+                path::{Projection, RegionPath, StructuralPath},
                 region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace, substitute_clause},
                 semantics::{CapabilityClass, CapabilitySemantics},
                 shape::{ShapeChildren, ShapeId},
@@ -33,8 +33,8 @@ use crate::{
             definite_assignment::literal_bool_cond,
             get_or_build_semantic_instance, instantiated_effect_env,
             normalized::{
-                NEffectArg, NEffectArgValue, NExpr, NOperand, NRootKind, NStatement,
-                NStatementKind, NTerminatorKind, NValueDefinition, NValueId,
+                NEffectArg, NEffectArgValue, NExpr, NOperand, NStatement, NStatementKind,
+                NTerminatorKind, NValueDefinition, NValueId,
             },
         },
         ty::{
@@ -55,13 +55,13 @@ use super::{
         BorrowSummaryComputation, BorrowSummaryVoucher, provisional_borrow_summary_voucher,
         semantic_borrow_summary_voucher,
     },
-    inventory::referent_contract,
     ir::{
         AvailabilityRequirement, AvailabilitySummary, BorrowSummary, BoundaryRequirement,
         CertifiedRangePoststate, InputPoststate, MemoryAccess, PendingSemanticValidation,
         ScalarInputPoststate,
     },
     solver::{BorrowSummaryMode, Borrowck, Resolution},
+    transport::{TransportRoute, referent_contract},
     validation::can_specialize,
 };
 
@@ -439,15 +439,15 @@ impl<'db> Borrowck<'db> {
                         .storage()
                         .find(|(root, _)| **root == RegionRoot::External(input.source.clone()))
                 })
-                .map(|(_, value)| (value, Boundary::Retained));
-            for (value, boundary) in returned
+                .map(|(_, value)| (value, SummaryValueRole::Retained));
+            for (value, role) in returned
                 .into_iter()
-                .map(|returned| (state.value(returned.value), Boundary::Return))
+                .map(|returned| (state.value(returned.value), SummaryValueRole::Return))
                 .chain(retained)
             {
                 self.summarize_value(
                     value,
-                    boundary,
+                    role,
                     block.terminator.origin,
                     &mut values,
                     &mut choices,
@@ -1172,20 +1172,7 @@ impl<'db> Borrowck<'db> {
     }
 
     pub(super) fn summary_param_ty(&self, param: u32) -> Option<TyId<'db>> {
-        self.body
-            .values
-            .iter()
-            .find_map(|value| {
-                matches!(value.definition,
-            NValueDefinition::EntryParam { param: actual } if actual == param)
-                .then_some(value.ty)
-            })
-            .or_else(|| {
-                self.body.roots.iter().find_map(|root| {
-                    matches!(root.kind, NRootKind::ParamPlace { param: actual } if actual == param)
-                        .then_some(root.ty)
-                })
-            })
+        self.inventory.transport.param_ty(param)
     }
 
     fn reachable_source_class(
@@ -1301,8 +1288,7 @@ impl<'db> Borrowck<'db> {
             }
             ExternalOrigin::Local(_) => return Err(invalid("source contains local storage")),
             ExternalOrigin::Input(input) => {
-                let param_ty = self
-                    .summary_param_ty(input.param())
+                self.summary_param_ty(input.param())
                     .ok_or_else(|| invalid("source parameter does not exist"))?;
                 if external.is_reachable() {
                     let class = self
@@ -1310,21 +1296,26 @@ impl<'db> Borrowck<'db> {
                         .ok_or_else(|| {
                             invalid("reachable source has no compatible input authority")
                         })?;
+                    // A widened source keeps only an address space that an
+                    // entry route from the same parameter established.
+                    if external.contract.address_space != HandleAddressSpace::Unspecified
+                        && !self.inventory.inputs.iter().any(|target| {
+                            matches!(&target.source.origin, ExternalOrigin::Input(entry)
+                                if entry.param() == input.param())
+                                && target.source.contract == external.contract
+                        })
+                    {
+                        return Err(invalid("widened source address space has no entry route"));
+                    }
                     (external.contract.ty, class, external.contract.address_space)
                 } else {
-                    let semantics = match input.origin() {
-                        InputOrigin::Place(_) => self.shape(param_ty)?.direct(db),
-                        InputOrigin::Slot { slot, .. } => {
-                            let param_ty = param_ty.as_view(db).unwrap_or(param_ty);
-                            let ty =
-                                project_referent_ty(db, self.instance, param_ty, slot.as_slice())
-                                    .ok_or_else(|| invalid("input slot path is invalid"))?;
-                            self.shape(ty)?.direct(db)
-                        }
-                    }
-                    .ok_or_else(|| invalid("input source does not select a capability"))?;
-                    let contract = referent_contract(db, self.instance, semantics)
-                        .map_err(|_| invalid("input referent contract is unresolved"))?;
+                    let (semantics, contract) = self
+                        .inventory
+                        .transport
+                        .route(db, external)
+                        .map_err(|_| invalid("input referent contract is unresolved"))?
+                        .and_then(|route| route.selected)
+                        .ok_or_else(|| invalid("input source does not select a capability"))?;
                     (contract.ty, semantics.class, contract.address_space)
                 }
             }
@@ -1401,18 +1392,19 @@ impl<'db> Borrowck<'db> {
             }
         };
         if !external.is_reachable() {
-            let steps = match &external.origin {
-                ExternalOrigin::Input(input) => input.dereferences(),
-                _ => &[],
-            };
-            for path in steps.iter().chain(external.dereferences()) {
-                let slot = project_referent_ty(db, self.instance, ty, path.as_slice())
-                    .ok_or_else(|| invalid("followed source path is invalid"))?;
-                let semantics = self.shape(slot)?.direct(db).ok_or_else(|| {
-                    invalid("followed source does not select a stored capability")
-                })?;
-                let contract = referent_contract(db, self.instance, semantics)
-                    .map_err(|_| invalid("followed referent contract is unresolved"))?;
+            if !matches!(&external.origin, ExternalOrigin::Input(_))
+                && let Some((semantics, contract)) = self
+                    .inventory
+                    .transport
+                    .follow(
+                        db,
+                        TransportRoute::untransported(ty),
+                        external.dereferences().iter().map(RegionPath::as_slice),
+                    )
+                    .map_err(|_| invalid("followed referent contract is unresolved"))?
+                    .ok_or_else(|| invalid("followed source does not select a stored capability"))?
+                    .selected
+            {
                 ty = contract.ty;
                 class = semantics.class;
                 space = contract.address_space;
@@ -2935,6 +2927,91 @@ mod tests {
                 },
             }],
         )
+    }
+
+    #[test]
+    fn followed_input_transport_matches_entry_and_summary_verification() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "followed_input_transport.fe".into(),
+            r#"
+struct Inner { cursor: mut u256 }
+struct Outer { inner: mut Inner }
+fn nested(_ outer: mut Outer) {}
+fn raw(_ ptr: *Outer) {}
+"#,
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        for (name, expected) in [
+            (
+                "nested",
+                HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+            ),
+            ("raw", HandleAddressSpace::Unspecified),
+        ] {
+            let instance = get_or_build_semantic_instance(
+                &db,
+                identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, name))),
+            );
+            let checker = Borrowck::new(&db, instance).unwrap();
+            let target = checker
+                .inventory
+                .inputs
+                .iter()
+                .find(|target| {
+                    target.ty == TyId::u256(&db)
+                        && target
+                            .classes
+                            .contains(&CapabilityClass::Borrow(BorrowKind::Mut))
+                        && matches!(&target.source.origin, ExternalOrigin::Input(input)
+                            if !input.dereferences().is_empty()
+                                || !target.source.dereferences().is_empty())
+                })
+                .expect("nested mutable input target");
+            assert_eq!(target.source.contract.address_space, expected, "{name}");
+            let mut source = SourceExpr {
+                source: target.source.clone(),
+                path: RegionPath::default(),
+                views: Default::default(),
+                invalidated: false,
+            };
+            assert_eq!(
+                checker
+                    .verify_source(&source, &target.scope, None, false)
+                    .unwrap(),
+                TyId::u256(&db),
+                "{name}"
+            );
+            let forged = if expected == HandleAddressSpace::Unspecified {
+                HandleAddressSpace::Known(ProviderAddressSpace::Memory)
+            } else {
+                HandleAddressSpace::Unspecified
+            };
+            source.source.contract.address_space = forged;
+            assert!(
+                checker
+                    .verify_source(&source, &target.scope, None, false)
+                    .is_err(),
+                "{name}: forged transport contract was accepted"
+            );
+            // Widening loses the route, so only an entry-established space survives.
+            source.source = target.source.clone().widen();
+            assert!(
+                checker
+                    .verify_source(&source, &BinderScope::default(), None, false)
+                    .is_ok(),
+                "{name}: widened entry contract was rejected"
+            );
+            source.source.contract.address_space = forged;
+            assert_eq!(
+                checker
+                    .verify_source(&source, &BinderScope::default(), None, false)
+                    .is_err(),
+                forged != HandleAddressSpace::Unspecified,
+                "{name}: widened forged transport contract"
+            );
+        }
     }
 
     #[test]

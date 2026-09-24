@@ -287,6 +287,25 @@ storage path, so writing a scalar field does not corrupt a disjoint pointer fiel
 Sealed EVM effect witnesses retain their trusted zero-sized representation and
 do not acquire invented hidden fields.
 
+### Structural input transport
+
+The input transport contract uses each parameter's role and interned capability
+shape to interpret exact input and followed-source paths. An ordinary parameter's
+held mutable native borrow has a Memory referent precondition, including borrows
+inside owned, viewed, or borrowed aggregates. Native shared borrows and views
+keep their read-only provider policy. Following a raw pointer or nominal handle
+ends inherited held transport; receiver and effect arguments retain their
+provider-aware write obligations. Array selectors and enum presence remain in
+the existing structural value guards.
+
+Entry seeding applies this policy to each input-derived capability. Summary
+verification replays the same source path and checks the final referent contract.
+At calls, held and effect capability traversal evaluates the same transport mode
+against actual guarded regions, forwarding unknown requirements or rejecting an
+incompatible provider. The policy constrains entry contents only; a later typed
+write replaces their provenance. It never makes a same-Memory pointer distinct
+from a mutable Memory borrow.
+
 ## Definite writes
 
 `RegionSet::definite_write` provides the shared certificate for strong provenance

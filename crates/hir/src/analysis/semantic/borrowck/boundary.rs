@@ -14,7 +14,7 @@ use crate::analysis::{
             index::IndexSubst,
             path::Projection,
             region::{RegionRoot, RegionSet, SymbolicPlace},
-            semantics::{CapabilitySemantics, StorageClass, TransportClass},
+            semantics::{CapabilitySemantics, StorageClass},
             source::{InputOrigin, SourceExpr},
             state::{BorrowState, CapabilityValue},
         },
@@ -22,7 +22,7 @@ use crate::analysis::{
     },
     ty::{
         ProviderAddressSpace,
-        ty_check::{BodyOwner, EffectPassMode},
+        ty_check::EffectPassMode,
         ty_def::{BorrowKind, TyId},
     },
 };
@@ -35,6 +35,7 @@ use super::{
     ir::{BoundaryRequirement, BoundaryRule, SemanticBorrowCheckResult},
     solver::Borrowck,
     summary::CallInputs,
+    transport::{InputTransportMode, TransportCursor, TransportObligation},
 };
 
 pub fn check_semantic_boundaries<'db>(
@@ -73,18 +74,8 @@ pub(super) fn semantic_boundary_check_query<'db>(
     }
 }
 
-/// Ordinary parameters cannot carry native mutable access to provider storage.
-/// A receiver explicitly supports provider transport. Read-only views transport
-/// their contents; they do not turn nested native handles into plain values.
-#[derive(Clone, Copy)]
-pub(super) enum ParamTransportMode {
-    Ordinary,
-    Receiver,
-}
-
 #[derive(Clone, Copy)]
 pub(super) enum Boundary {
-    CallArg(ParamTransportMode),
     EffectArg {
         mode: EffectPassMode,
         required_mut: bool,
@@ -130,21 +121,12 @@ impl<'db> BoundaryCheck<'_, 'db> {
                             },
                     } => {
                         for (param, arg) in args.iter().copied().enumerate() {
-                            let mode = match callee.key.owner(self.borrowck.db) {
-                                BodyOwner::Func(func)
-                                    if param == 0
-                                        && func.receiver_ty(self.borrowck.db).is_some() =>
-                                {
-                                    ParamTransportMode::Receiver
-                                }
-                                _ => ParamTransportMode::Ordinary,
-                            };
-                            self.check_call_arg(
-                                state,
-                                statement.origin,
-                                arg,
-                                Boundary::CallArg(mode),
-                            )?;
+                            let mode = InputTransportMode::for_param(
+                                self.borrowck.db,
+                                callee.key.owner(self.borrowck.db),
+                                param.try_into().expect("parameter count"),
+                            );
+                            self.check_call_arg(state, statement.origin, arg, mode)?;
                         }
                         for effect in effect_args {
                             self.check_effect_arg(state, statement.origin, effect)?;
@@ -353,7 +335,7 @@ impl<'db> BoundaryCheck<'_, 'db> {
         state: &BorrowState<'db>,
         origin: SemOrigin<'db>,
         operand: NOperand,
-        boundary: Boundary,
+        mode: InputTransportMode,
     ) -> Result<(), SemanticDiagnostic<'db>> {
         let capabilities = self.borrowck.capabilities(
             state,
@@ -363,19 +345,23 @@ impl<'db> BoundaryCheck<'_, 'db> {
             CapabilityTraversal::Held,
         )?;
         for capability in capabilities {
-            if capability.semantics.transport != TransportClass::MemoryBorrow {
+            let Some(obligation) = TransportCursor::new(mode).obligation(capability.semantics)
+            else {
                 continue;
-            }
+            };
             let region = capability.region.with_guard(state.guard());
-            if matches!(boundary, Boundary::CallArg(ParamTransportMode::Receiver)) {
-                self.check_write(origin, &region, capability.semantics.target_ty)?;
-            } else {
-                let ty = self.borrowck.body.values[operand.value.index()].ty;
-                self.require(
-                    BoundaryRule::MemoryTransport(ty),
-                    operand_origin(operand, origin),
-                    region,
-                )?;
+            match obligation {
+                TransportObligation::Writable => {
+                    self.check_write(origin, &region, capability.semantics.target_ty)?;
+                }
+                TransportObligation::Memory => {
+                    let ty = self.borrowck.body.values[operand.value.index()].ty;
+                    self.require(
+                        BoundaryRule::MemoryTransport(ty),
+                        operand_origin(operand, origin),
+                        region,
+                    )?;
+                }
             }
         }
         Ok(())
