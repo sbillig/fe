@@ -3660,7 +3660,11 @@ pub contract FixedDynamicArrayBoundary {{
         let mut truncated =
             encode_function_call("ok(string)", &[Token::String("hello".to_string())])
                 .expect("calldata should encode");
-        truncated.truncate(truncated.len() - 1);
+        truncated.truncate(4 + 32 + 32 + 5);
+        harness
+            .call_raw(&truncated, ExecutionOptions::default())
+            .expect("string without trailing padding should decode");
+        truncated.pop();
         let err = harness
             .call_raw(&truncated, ExecutionOptions::default())
             .expect_err("truncated string tail should revert during decode");
