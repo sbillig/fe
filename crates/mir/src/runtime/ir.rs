@@ -1261,6 +1261,9 @@ pub enum RuntimeBuiltin<'db> {
         rhs: RValueId,
         modulus: RValueId,
     },
+    LeadingZeros {
+        value: RValueId,
+    },
     Byte {
         pos: RValueId,
         value: RValueId,

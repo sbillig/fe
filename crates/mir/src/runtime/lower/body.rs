@@ -4531,6 +4531,13 @@ impl<'db> RmirEmitter<'db> {
                     Some(word.clone()),
                 )
             }
+            RuntimeBuiltinFuncKind::LeadingZeros => {
+                let [value] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::LeadingZeros { value: *value },
+                    Some(word.clone()),
+                )
+            }
             RuntimeBuiltinFuncKind::Byte => {
                 let [pos, value] = args else { return None };
                 builtin(

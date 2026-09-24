@@ -1,0 +1,115 @@
+// Tests for `core::num::leading_zeros` (EVM `CLZ`) and `core::num::trailing_zeros`.
+// Expected values were computed with Python integers.
+
+use std::evm::{Address, Evm}
+use core::num::{leading_zeros, trailing_zeros}
+
+const MAX: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+// (value, leading zeros, trailing zeros)
+const CASES: [(u256, u256, u256); 33] = [
+    (0x0, 256, 256),
+    (0x1, 255, 0),
+    (0x2, 254, 1),
+    (0x3, 254, 0),
+    (MAX, 0, 0),
+    (0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe, 0, 1),
+    (0x8000000000000000000000000000000000000000000000000000000000000000, 0, 255),
+    (0x8000000000000000000000000000000000000000000000000000000000000001, 0, 0),
+    (0xffffffffffffffffffffffffffffffff, 128, 0),
+    (0x100000000000000000000000000000000, 127, 128),
+    (0x80, 248, 7),
+    (0xff00, 240, 8),
+    (0x2, 254, 1),
+    (0x80, 248, 7),
+    (0x100, 247, 8),
+    (0x8000000000000000, 192, 63),
+    (0x10000000000000000, 191, 64),
+    (0x10000000000000000000000000, 155, 100),
+    (0x80000000000000000000000000000000, 128, 127),
+    (0x100000000000000000000000000000000000000000000000000, 55, 200),
+    (0x4000000000000000000000000000000000000000000000000000000000000000, 1, 254),
+    (0xca0cae1e88e358df9284828cc2a866ab65ac76aedaa500b825e8ed5f6942d6c8, 0, 3),
+    (0xa913e53d541ba0083c68bda4e43e6dac088916b7bc25255b62dea8fd236, 20, 1),
+    (0x1bd30c99ec350e8043da1f8958b749ff626fdbe42b0efac9d3f1c5, 43, 0),
+    (0xed2222f5ce20066465cfc3a61383a004a1e8f7ebeb9d39a71, 60, 0),
+    (0xb9263cbd1fc4c8eac21ae350ad844e80e1faf1527cde, 80, 1),
+    (0x68bdd1bba4e03bc1ed7dba91f45416dd8276899, 101, 0),
+    (0x8a5e1dae4e2d06bcd9ed12d4b9158d83ed, 120, 0),
+    (0x5d8102d2b896e70bf2d0b8e24ff4e, 141, 1),
+    (0x4e9d9f982c4e69ff99ff330, 165, 4),
+    (0xa20612acd6b8a1d47cf, 180, 0),
+    (0x31507994812032, 202, 1),
+    (0xef6e03528, 220, 3),
+]
+
+#[test]
+fn bit_count_cases() {
+    for (value, leading, trailing) in CASES {
+        assert!(leading_zeros(value) == leading)
+        assert!(trailing_zeros(value) == trailing)
+    }
+}
+
+#[test]
+fn every_bit_position() {
+    let mut bit: u256 = 0
+    while bit < 256 {
+        let power: u256 = 1 << bit
+        assert!(leading_zeros(power) == 255 - bit)
+        assert!(trailing_zeros(power) == bit)
+        assert!(leading_zeros(power | 1) == 255 - bit)
+        assert!(trailing_zeros(MAX << bit) == bit)
+        bit += 1
+    }
+}
+
+const COMPILE_TIME: (u256, u256) = (leading_zeros(1 << 100), trailing_zeros(1 << 100))
+
+#[test]
+fn bit_counts_are_const() {
+    assert!(COMPILE_TIME == (155, 100))
+}
+
+// Calldata arguments keep the operand out of constant evaluation, so these
+// cases execute the `CLZ` instruction.
+msg BitsMsg {
+    #[selector = 0x11111111]
+    Leading { value: u256 } -> u256,
+    #[selector = 0x22222222]
+    Trailing { value: u256 } -> u256,
+}
+
+pub contract BitsProbe {
+    recv BitsMsg {
+        Leading { value } -> u256 {
+            leading_zeros(value)
+        }
+        Trailing { value } -> u256 {
+            trailing_zeros(value)
+        }
+    }
+}
+
+#[test]
+fn bit_counts_runtime() uses (evm: mut Evm) {
+    let probe = evm.create2<BitsProbe>(value: 0, args: (), salt: 0)
+    for (value, leading, trailing) in CASES {
+        let got_leading: u256 = evm
+            .call(
+                addr: probe,
+                gas: 100000,
+                value: 0,
+                message: BitsMsg::Leading { value },
+            )
+        let got_trailing: u256 = evm
+            .call(
+                addr: probe,
+                gas: 100000,
+                value: 0,
+                message: BitsMsg::Trailing { value },
+            )
+        assert!(got_leading == leading)
+        assert!(got_trailing == trailing)
+    }
+}

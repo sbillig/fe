@@ -9,13 +9,13 @@ use revm::{
     InspectCommitEvm,
     bytecode::Bytecode,
     context::{
-        Context, TxEnv,
+        CfgEnv, Context, TxEnv,
         result::{ExecutionResult, HaltReason, Output},
     },
     database::InMemoryDB,
     handler::{ExecuteCommitEvm, MainBuilder, MainContext, MainnetContext, MainnetEvm},
     interpreter::interpreter_types::Jumps,
-    primitives::{Bytes as EvmBytes, TxKind},
+    primitives::{Bytes as EvmBytes, TxKind, hardfork::SpecId},
     state::AccountInfo,
 };
 use std::{
@@ -33,6 +33,17 @@ const MEMORY_SOURCE_URL: &str = "file:///contract.fe";
 /// Tests may emit oversized helper contracts that would never be deployed on-chain.
 const TEST_CONTRACT_CODE_SIZE_LIMIT: usize = 1024 * 1024;
 const TEST_CONTRACT_INITCODE_SIZE_LIMIT: usize = 2 * TEST_CONTRACT_CODE_SIZE_LIMIT;
+
+/// Configures the test EVM for the revision Fe code generation targets.
+fn configure_test_cfg(cfg: &mut CfgEnv) {
+    // Sonatina emits Osaka bytecode (e.g. `CLZ`), so tests must run Osaka rules.
+    cfg.spec = SpecId::OSAKA;
+    // Keep test gas limits above the Osaka per-transaction cap (EIP-7825).
+    cfg.tx_gas_limit_cap = Some(u64::MAX);
+    cfg.limit_contract_code_size = Some(TEST_CONTRACT_CODE_SIZE_LIMIT);
+    cfg.limit_contract_initcode_size = Some(TEST_CONTRACT_INITCODE_SIZE_LIMIT);
+}
+
 /// Test-only execution budget for deploying and calling generated helper contracts.
 const TEST_GAS_LIMIT: u64 = 1_000_000_000;
 
@@ -634,10 +645,9 @@ impl RuntimeInstance {
             address,
             AccountInfo::new(U256::ZERO, 0, code_hash, bytecode),
         );
-        let ctx = Context::mainnet().with_db(db).modify_cfg_chained(|cfg| {
-            cfg.limit_contract_code_size = Some(TEST_CONTRACT_CODE_SIZE_LIMIT);
-            cfg.limit_contract_initcode_size = Some(TEST_CONTRACT_INITCODE_SIZE_LIMIT);
-        });
+        let ctx = Context::mainnet()
+            .with_db(db)
+            .modify_cfg_chained(configure_test_cfg);
         let evm = ctx.build_mainnet();
         Ok(Self {
             evm,
@@ -688,10 +698,9 @@ impl RuntimeInstance {
             ),
         );
 
-        let ctx = Context::mainnet().with_db(db).modify_cfg_chained(|cfg| {
-            cfg.limit_contract_code_size = Some(TEST_CONTRACT_CODE_SIZE_LIMIT);
-            cfg.limit_contract_initcode_size = Some(TEST_CONTRACT_INITCODE_SIZE_LIMIT);
-        });
+        let ctx = Context::mainnet()
+            .with_db(db)
+            .modify_cfg_chained(configure_test_cfg);
         let mut evm = ctx.build_mainnet();
 
         // Create deployment transaction (TxKind::Create means contract creation)
@@ -1357,6 +1366,14 @@ pub fn bytes_to_string(bytes: &[u8]) -> Result<String, HarnessError> {
 #[allow(clippy::print_stderr)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_executes_osaka_clz() {
+        // PUSH1 1, CLZ, PUSH0, MSTORE, PUSH1 32, PUSH0, RETURN
+        let mut instance = RuntimeInstance::new("60011e5f5260205ff3").unwrap();
+        let result = instance.call_raw(&[], ExecutionOptions::default()).unwrap();
+        assert_eq!(U256::from_be_slice(&result.return_data), U256::from(255));
+    }
     use ethers_core::{
         abi::{AbiParser, Function, Param, ParamType, StateMutability, Token, decode},
         types::U256 as AbiU256,

@@ -1642,6 +1642,9 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             Some(CtfeExternIntrinsic::MulMod) => {
                 self.eval_evm_modular_arithmetic(result_ty, args, EvmModularArithmetic::Mul, origin)
             }
+            Some(CtfeExternIntrinsic::LeadingZeros) => {
+                self.eval_leading_zeros(result_ty, args, origin)
+            }
             Some(CtfeExternIntrinsic::SizeOf) => {
                 self.eval_intrinsic_size_of(instance, result_ty, args, origin)
             }
@@ -1937,6 +1940,23 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             EvmModularArithmetic::Mul => lhs.mul_mod(rhs, modulus),
         };
         Ok(CtfeConstValue::int_word(self.db, result_ty, value))
+    }
+
+    fn eval_leading_zeros(
+        &self,
+        result_ty: TyId<'db>,
+        args: &[CtfeConstValue<'db>],
+        origin: SemOrigin<'db>,
+    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
+        if result_ty != TyId::u256(self.db) {
+            return Err(CtfeError::NotConstEvaluable { origin });
+        }
+        let [value] = args else {
+            return Err(CtfeError::NotConstEvaluable { origin });
+        };
+        let value = self.expect_u256_const(value, origin)?;
+        let zeros = U256::from(value.leading_zeros());
+        Ok(CtfeConstValue::int_word(self.db, result_ty, zeros))
     }
 
     fn expect_u256_const(
