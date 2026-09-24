@@ -6,6 +6,11 @@ use mir::{
     RefView, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, RuntimePlace, build_runtime_package,
     verify_runtime_body,
 };
+#[cfg(all(
+    feature = "cranelift",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+use mir::{RuntimeLinkage, build_native_executable_package};
 use sonatina_ir::{builder::ModuleBuilder, isa::Isa, module::ModuleCtx};
 use url::Url;
 
@@ -14,6 +19,56 @@ use crate::{
     OptLevel,
     sonatina::{create_evm_isa, emit_runtime_module_sonatina_bytecode_with_options},
 };
+
+#[cfg(all(
+    feature = "cranelift",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
+fn native_extern_cannot_claim_the_memory_copy_symbol() {
+    let mut db = DriverDataBase::default();
+    let file = db.workspace().touch(
+        &mut db,
+        Url::parse("file:///native_memmove_extern_collision.fe").unwrap(),
+        Some(
+            r#"
+use core::ptr
+use std::io::{Write, host, write_char}
+pub fn main() -> i32 {
+    let data = ptr::alloc_bytes(1)
+    ptr::copy_raw(dest: data, source: data, len: 1)
+    with (Write = host()) { write_char(65) }
+    0
+}
+"#
+            .into(),
+        ),
+    );
+    let package = build_native_executable_package(&db, db.top_mod(file)).unwrap();
+    let host_import = package
+        .functions(&db)
+        .into_iter()
+        .find(|function| function.linkage(&db) == RuntimeLinkage::External)
+        .expect("reachable host import");
+    // Model a fixed host import claiming the symbol reserved by native copy lowering.
+    let isa = crate::sonatina::create_native_isa().unwrap();
+    let mut lowerer = ModuleLowerer::new(
+        &db,
+        ModuleBuilder::new(ModuleCtx::new(&isa)),
+        isa.inst_set(),
+        &package,
+        Some((host_import.instance(&db), "memmove")),
+    );
+    let error = lowerer
+        .declare_functions()
+        .expect_err("extern memmove must not collide with the memory-copy host symbol");
+    assert!(
+        error
+            .to_string()
+            .contains("native extern symbol `memmove` is reserved for memory copies"),
+        "unexpected error: {error}"
+    );
+}
 
 #[test]
 fn stack_native_reference_borrows_preserve_slot_contents_and_identity() {

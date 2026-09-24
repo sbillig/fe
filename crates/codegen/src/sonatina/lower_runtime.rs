@@ -305,6 +305,14 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             .transpose()?;
         let instance = function.instance(self.db);
         let symbol = self.function_symbol(instance);
+        if self.is_native_target()
+            && function.linkage(self.db) == RuntimeLinkage::External
+            && symbol == "memmove"
+        {
+            return Err(LowerError::Unsupported(
+                "native extern symbol `memmove` is reserved for memory copies".to_string(),
+            ));
+        }
         if function.linkage(self.db) == RuntimeLinkage::External
             && (!self.is_native_target()
                 || args
