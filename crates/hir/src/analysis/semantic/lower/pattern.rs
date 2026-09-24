@@ -734,7 +734,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             LitKind::Bool(value) => bool_const(self.db, value),
         };
-        self.emit_expr(ty, SExpr::Const(SConst::Value(value)))
+        self.emit_expr(
+            ty,
+            SExpr::Const(SConst::from_trusted_source(self.db, value)),
+        )
     }
 }
 

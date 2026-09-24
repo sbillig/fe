@@ -24,6 +24,7 @@ fn hash_pair(a: [u8; 32], b: [u8; 32]) -> [u8; 32] {
 }
 
 #[test]
+#[allow(clippy::print_stderr)] // Report benchmark measurements with --nocapture.
 fn merkle_verification_gas_and_correctness() {
     let source = include_str!("evm_compiler_bench/merkle_verifier.fe");
     let bytecode = compile_fe_sonatina_bytecode(source, "MerkleVerifier", "MerkleVerifier")

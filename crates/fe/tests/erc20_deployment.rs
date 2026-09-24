@@ -17,6 +17,7 @@ fn calldata(signature: &str, args: &[Token]) -> Vec<u8> {
 }
 
 #[test]
+#[allow(clippy::print_stderr)] // Report benchmark measurements with --nocapture.
 fn erc20_deployment_size_and_behavior() {
     let source = include_str!("evm_compiler_bench/erc20_minimal.fe");
     let bytecode = compile_fe_sonatina_bytecode(source, "Erc20Minimal", "Erc20Minimal")

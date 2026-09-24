@@ -5,10 +5,10 @@ use super::{
 use crate::{
     analysis::{
         HirAnalysisDb,
-        semantic::{FieldIndex, VariantIndex},
+        semantic::{FieldIndex, SemConstValue, VariantIndex},
         ty::{
             adt_def::{AdtRef, instantiate_adt_field_shape},
-            const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
+            const_ty::{ConstTyData, ConstTyId},
             fold::TyFoldable,
             normalize::normalize_ty,
             trait_resolution::PredicateListId,
@@ -29,14 +29,24 @@ pub enum ArrayLength<'db> {
 
 impl<'db> ArrayLength<'db> {
     fn from_const(db: &'db dyn HirAnalysisDb, value: ConstTyId<'db>) -> Option<Self> {
+        if let Some(integer) = value.integer_value(db) {
+            return integer.to_usize().map(Self::Known);
+        }
         match value.data(db) {
-            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => {
-                value.data(db).to_usize().map(Self::Known)
-            }
             ConstTyData::TyParam(..)
             | ConstTyData::Abstract(..)
+            | ConstTyData::Computation { .. }
             | ConstTyData::UnEvaluated { .. } => Some(Self::Symbolic(value)),
-            ConstTyData::TyVar(..) | ConstTyData::Hole(..) | ConstTyData::Evaluated(..) => None,
+            ConstTyData::Description(description)
+                if matches!(description.value(db), SemConstValue::Description(..)) =>
+            {
+                Some(Self::Symbolic(value))
+            }
+            ConstTyData::TyVar(..)
+            | ConstTyData::Hole(..)
+            | ConstTyData::Value(..)
+            | ConstTyData::Description(..)
+            | ConstTyData::Invalid(..) => None,
         }
     }
 

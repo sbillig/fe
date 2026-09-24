@@ -1230,7 +1230,7 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                 SConst::Value(value) => runtime_const_value_class(
                     db,
                     type_env,
-                    *value,
+                    value.value(),
                     !local_disallows_const_ref_storage(body, dst),
                 ),
                 SConst::Ref(cref) => {
@@ -1239,6 +1239,14 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                         db,
                         type_env,
                         value,
+                        !local_disallows_const_ref_storage(body, dst),
+                    )
+                }
+                SConst::Description(value) | SConst::Evidence(value) | SConst::Invalid(value) => {
+                    runtime_const_value_class(
+                        db,
+                        type_env,
+                        *value,
                         !local_disallows_const_ref_storage(body, dst),
                     )
                 }

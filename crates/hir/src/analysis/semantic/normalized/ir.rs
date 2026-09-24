@@ -626,7 +626,7 @@ pub fn literal_allocation<'db>(
     };
     if !ty.is_core_dyn_string(db)
         || !matches!(
-            value.value(db),
+            value.value().value(db),
             SemConstValue::Scalar {
                 value: SemConstScalar::Bytes(_),
                 ..

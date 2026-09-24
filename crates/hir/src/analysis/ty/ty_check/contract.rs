@@ -14,7 +14,8 @@ use crate::{
         HirAnalysisDb,
         name_resolution::{ExpectedPathKind, PathRes, resolve_path},
         semantic::{
-            SemConstScalar, SemConstValue, contract_init_assigned_fields, eval_body_owner_const,
+            EvalOutcome, SemConstScalar, SemConstValue, contract_init_assigned_fields,
+            eval_body_owner_const,
         },
         ty::{
             adt_def::AdtRef,
@@ -754,7 +755,7 @@ pub(crate) fn eval_msg_variant_selector<'db>(
         },
         Vec::new(),
     ) {
-        Ok(value) => match value.value(db) {
+        EvalOutcome::Ready(value) => match value.value(db) {
             SemConstValue::Scalar {
                 value: SemConstScalar::Int { value },
                 ..
@@ -764,7 +765,7 @@ pub(crate) fn eval_msg_variant_selector<'db>(
                 None
             }
         },
-        Err(_) => {
+        EvalOutcome::Blocked(_) | EvalOutcome::Failed(_) => {
             diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
             None
         }

@@ -2,13 +2,12 @@ use std::collections::HashSet;
 
 use hir::analysis::{
     semantic::{
-        SConst, SemConstId, SemConstScalar, SemConstValue, SemanticConstRef, SemanticInstance,
-        VariantIndex, eval_const_ref, normalize_int_to_shape,
+        EvalOutcome, SConst, SemConstId, SemConstScalar, SemConstValue, SemanticConstRef,
+        SemanticInstance, VariantIndex, eval_const_ref, normalize_int_to_shape,
         normalized::{NExpr, NStatementKind},
         reify_runtime_const_for_ty, sem_const_ty,
     },
-    ty::const_ty::{ConstTyData, EvaluatedConstTy, evaluate_type_level_int_const_expr},
-    ty::ty_def::{TyData, TyId},
+    ty::ty_def::TyId,
 };
 
 use crate::{
@@ -32,7 +31,12 @@ pub(super) fn evaluated_const_ref_value<'db>(
     db: &'db dyn MirDb,
     cref: SemanticConstRef<'db>,
 ) -> SemConstId<'db> {
-    eval_const_ref(db, cref).unwrap_or_else(|err| panic!("CTFE failed for {cref:?}: {err:?}"))
+    match eval_const_ref(db, cref) {
+        EvalOutcome::Ready(value) => value,
+        outcome => {
+            panic!("runtime constant was not validated before lowering: {cref:?}: {outcome:?}")
+        }
+    }
 }
 
 pub(super) fn reified_const_ref_value_for_ty<'db>(
@@ -42,7 +46,8 @@ pub(super) fn reified_const_ref_value_for_ty<'db>(
     expected_ty: TyId<'db>,
 ) -> SemConstId<'db> {
     let value = evaluated_const_ref_value(db, cref);
-    reify_runtime_const_for_ty(db, semantic, expected_ty, value).unwrap_or(value)
+    reify_runtime_const_for_ty(db, semantic, expected_ty, value)
+        .expect("runtime constant reification was validated before lowering")
 }
 
 pub(super) fn collect_const_ref_regions<'db>(
@@ -102,7 +107,8 @@ pub(crate) fn const_scalar_from_value<'db>(
         | SemConstValue::Tuple { .. }
         | SemConstValue::Struct { .. }
         | SemConstValue::Array { .. }
-        | SemConstValue::Enum { .. } => None,
+        | SemConstValue::Enum { .. }
+        | SemConstValue::Description(..) => None,
         SemConstValue::Scalar { value, .. } => match value {
             SemConstScalar::Bool(value) => Some(ConstScalar::Bool(value)),
             SemConstScalar::Int { value } => {
@@ -128,59 +134,6 @@ pub(crate) fn const_scalar_from_value<'db>(
                 })
             }
         },
-        SemConstValue::TypeLevel { ty, const_ty } => {
-            let TyData::ConstTy(const_ty) = const_ty.data(db) else {
-                return None;
-            };
-            let evaluated = const_ty.evaluate(db, Some(ty));
-            let evaluated = if let ConstTyData::Abstract(expr, expected_ty) = evaluated.data(db) {
-                evaluate_type_level_int_const_expr(db, *expr, *expected_ty).unwrap_or(evaluated)
-            } else {
-                evaluated
-            };
-            match evaluated.data(db) {
-                ConstTyData::Evaluated(EvaluatedConstTy::LitBool(value), _) => {
-                    Some(ConstScalar::Bool(*value))
-                }
-                ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => {
-                    let value = num_bigint::BigInt::from(int_id.data(db).clone());
-                    let scalar = scalar_class_for_ty_in_env(db, env, ty)?;
-                    match scalar.repr {
-                        ScalarRepr::Bool => None,
-                        ScalarRepr::Int { bits, signed } => Some(ConstScalar::Int {
-                            bits,
-                            signed,
-                            words: encode_int_words(&value, bits, signed),
-                        }),
-                        ScalarRepr::FixedBytes { .. } => None,
-                        ScalarRepr::Address { bits } => Some(ConstScalar::Address {
-                            bits,
-                            bytes: encode_int_words(&value, bits, false),
-                        }),
-                    }
-                }
-                ConstTyData::Evaluated(EvaluatedConstTy::Bytes(bytes), _) => {
-                    scalar_class_for_ty_in_env(db, env, ty).and_then(|scalar| {
-                        matches!(scalar.repr, ScalarRepr::FixedBytes { .. })
-                            .then(|| ConstScalar::FixedBytes(bytes.clone()))
-                    })
-                }
-                ConstTyData::Evaluated(
-                    EvaluatedConstTy::Unit
-                    | EvaluatedConstTy::Tuple(_)
-                    | EvaluatedConstTy::Array(_)
-                    | EvaluatedConstTy::Record(_)
-                    | EvaluatedConstTy::EnumVariant(_)
-                    | EvaluatedConstTy::Invalid,
-                    _,
-                )
-                | ConstTyData::TyVar(_, _)
-                | ConstTyData::TyParam(_, _)
-                | ConstTyData::Hole(_, _)
-                | ConstTyData::Abstract(_, _)
-                | ConstTyData::UnEvaluated { .. } => None,
-            }
-        }
     }
 }
 
@@ -305,9 +258,7 @@ fn lower_const_node<'db>(
         });
     }
     match value.value(db) {
-        SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::TypeLevel { .. } => {
-            None
-        }
+        SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Description(..) => None,
         SemConstValue::Tuple { elems, .. }
         | SemConstValue::Struct { fields: elems, .. }
         | SemConstValue::Array { elems, .. } => Some(ConstNode::Aggregate {

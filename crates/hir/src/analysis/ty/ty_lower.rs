@@ -15,10 +15,10 @@ use super::{
     assoc_const::{AssocConstUse, InherentConstUse},
     const_ty::{
         CallableInputLayoutHoleOrigin, CallableLayoutOwner, ConstBodyLowering, ConstTyData,
-        ConstTyId, EvaluatedConstTy, HoleAnchor, HoleId, HoleMinter, LayoutBoundaryIdentity,
-        LayoutHoleArgSite, LayoutInstantiationContext, LayoutInstantiationId, LayoutIntroSite,
-        LayoutOccurrencePath, LayoutOccurrenceStep, LayoutRootId, LayoutRootIdentity,
-        StructuralHoleOrigin,
+        ConstTyId, HoleAnchor, HoleId, HoleMinter, LayoutBoundaryIdentity, LayoutHoleArgSite,
+        LayoutInstantiationContext, LayoutInstantiationId, LayoutIntroSite, LayoutOccurrencePath,
+        LayoutOccurrenceStep, LayoutRootId, LayoutRootIdentity, StructuralHoleOrigin,
+        const_ty_from_sem_const,
     },
     effects::{ResolvedEffectKey, TraitKeySchema},
     fold::{TyFoldable, TyFolder},
@@ -53,7 +53,11 @@ use crate::analysis::name_resolution::{
     NameDomain, NameResKind, PathRes, PathResErrorKind, resolve_ident_to_bucket, resolve_path,
     resolve_path_with_minter,
 };
-use crate::analysis::{HirAnalysisDb, ty::binder::Binder};
+use crate::analysis::{
+    HirAnalysisDb,
+    semantic::{VariantIndex, enum_const},
+    ty::binder::Binder,
+};
 
 /// Lowers the given HirTy to `TyId`.
 #[salsa::tracked(cycle_fn=lower_hir_ty_cycle_recover, cycle_initial=lower_hir_ty_cycle_initial)]
@@ -405,9 +409,14 @@ fn lower_opt_const_body<'db>(
             }
         }
         Ok(PathRes::EnumVariant(variant)) if variant.ty.is_unit_variant_only_enum(db) => {
-            ConstTyId::new(
+            const_ty_from_sem_const(
                 db,
-                ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant(variant.variant), variant.ty),
+                enum_const(
+                    db,
+                    variant.ty,
+                    VariantIndex(variant.variant.idx),
+                    Box::new([]),
+                ),
             )
         }
         _ => ConstTyId::from_body(db, body, None, None),
@@ -1159,13 +1168,16 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                         Some(LayoutBundleComponentKey::Param(arg)),
                         Some(layout_hole_fallback_ty(self.db, *ty)),
                     ),
-                    ConstTyData::Evaluated(_, ty) => (
+                    ConstTyData::Value(..)
+                    | ConstTyData::Description(..)
+                    | ConstTyData::Invalid(..)
+                    | ConstTyData::Computation { .. } => (
                         Some(if arg.has_param(self.db) || arg.has_var(self.db) {
                             LayoutBundleComponentKey::Param(arg)
                         } else {
                             LayoutBundleComponentKey::Static(arg)
                         }),
-                        Some(layout_hole_fallback_ty(self.db, *ty)),
+                        Some(layout_hole_fallback_ty(self.db, const_ty.ty(self.db))),
                     ),
                     ConstTyData::UnEvaluated { ty: Some(ty), .. } => (
                         Some(if arg.has_param(self.db) || arg.has_var(self.db) {
@@ -3520,9 +3532,15 @@ pub(crate) fn lower_generic_arg_list<'db>(
                         PathRes::EnumVariant(variant)
                             if variant.ty.is_unit_variant_only_enum(db) =>
                         {
-                            let evaluated = EvaluatedConstTy::EnumVariant(variant.variant);
-                            let const_ty =
-                                ConstTyId::new(db, ConstTyData::Evaluated(evaluated, variant.ty));
+                            let const_ty = const_ty_from_sem_const(
+                                db,
+                                enum_const(
+                                    db,
+                                    variant.ty,
+                                    VariantIndex(variant.variant.idx),
+                                    Box::new([]),
+                                ),
+                            );
                             return TyId::const_ty(db, const_ty);
                         }
                         _ => {}

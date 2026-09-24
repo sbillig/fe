@@ -2,7 +2,7 @@
 mod layout_test_support;
 
 use fe_hir::analysis::ty::{
-    const_ty::{ConstTyData, EvaluatedConstTy},
+    const_ty::ConstTyData,
     ty_check::{check_contract_recv_arm_body, check_func_body},
     ty_contains_const_hole,
     ty_def::TyData,
@@ -24,13 +24,9 @@ fn const_lit_usize<'db>(
     let TyData::ConstTy(const_ty) = ty.data(db) else {
         panic!("expected const type, got {ty:?}");
     };
-    let ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int), _) = const_ty.data(db) else {
-        panic!(
-            "expected evaluated integer const type, got {:?}",
-            const_ty.data(db)
-        );
-    };
-    int.data(db)
+    const_ty
+        .integer_value(db)
+        .expect("expected evaluated integer const type")
         .to_string()
         .parse()
         .expect("integer const should fit in usize")

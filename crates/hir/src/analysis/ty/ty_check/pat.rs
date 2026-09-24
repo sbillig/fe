@@ -240,7 +240,7 @@ impl<'db> TyChecker<'db> {
             .as_capability(self.db)
             .map_or(expected, |(_, inner)| inner);
         let cref = resolve_semantic_const_ref(self.db, cref, expected, SemOrigin::Synthetic)?;
-        match eval_const_ref(self.db, cref).ok()?.value(self.db) {
+        match eval_const_ref(self.db, cref).into_ready()?.value(self.db) {
             SemConstValue::Scalar {
                 value: SemConstScalar::Int { value },
                 ..
@@ -256,7 +256,7 @@ impl<'db> TyChecker<'db> {
                 ..
             } => Some(LitKind::Bool(flag)),
             SemConstValue::Unit
-            | SemConstValue::TypeLevel { .. }
+            | SemConstValue::Description(..)
             | SemConstValue::Tuple { .. }
             | SemConstValue::Struct { .. }
             | SemConstValue::Array { .. }

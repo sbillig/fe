@@ -464,7 +464,10 @@ fn verify_expr<'db>(
         }
         NExpr::Const(value) => {
             let value_ty = match value {
-                SConst::Value(value) => sem_const_ty(db, *value),
+                SConst::Value(value) => sem_const_ty(db, value.value()),
+                SConst::Description(value) | SConst::Evidence(value) | SConst::Invalid(value) => {
+                    sem_const_ty(db, *value)
+                }
                 SConst::Ref(value) => value.ty(db),
             };
             let value_ty = body.owner.normalized_ty(db, value_ty);

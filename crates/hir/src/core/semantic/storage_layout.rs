@@ -1,5 +1,5 @@
 use common::indexmap::IndexMap;
-use num_bigint::BigUint;
+use num_bigint::{BigInt, BigUint};
 use num_traits::ToPrimitive;
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
@@ -7,15 +7,16 @@ use salsa::Update;
 use crate::{
     analysis::{
         HirAnalysisDb,
+        semantic::int_const,
         ty::{
             ProviderAddressSpace,
             adt_def::{AdtDef, AdtRef, instantiate_adt_field_layout, instantiate_adt_field_shape},
             binder::Binder,
             const_ty::{
-                ConstCanonEnv, ConstCanonMode, ConstTyData, ConstTyId, EvaluatedConstTy,
-                HoleAnchor, HoleMinter, LayoutBoundaryIdentity, LayoutInstantiationContext,
-                LayoutInstantiationId, LayoutOccurrenceStep, LayoutRootId, StructuralHoleOrigin,
-                canonicalize_ty_for_mode,
+                ConstCanonEnv, ConstCanonMode, ConstTyData, ConstTyId, HoleAnchor, HoleMinter,
+                LayoutBoundaryIdentity, LayoutInstantiationContext, LayoutInstantiationId,
+                LayoutOccurrenceStep, LayoutRootId, StructuralHoleOrigin, canonicalize_ty_for_mode,
+                const_ty_from_sem_const,
             },
             layout_holes::{
                 LayoutIndexDimension, LayoutInstantiation, LayoutViewRecurrence,
@@ -1271,13 +1272,9 @@ impl<'db> ContractStorageLayoutResult<'db> {
 }
 
 fn slot_const_ty<'db>(db: &'db dyn HirAnalysisDb, value: usize, ty: TyId<'db>) -> TyId<'db> {
-    let int = IntegerId::new(db, BigUint::from(value));
     TyId::const_ty(
         db,
-        ConstTyId::new(
-            db,
-            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int), ty),
-        ),
+        const_ty_from_sem_const(db, int_const(db, ty, BigInt::from(value))),
     )
 }
 
@@ -1285,10 +1282,7 @@ fn const_ty_to_usize<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<u
     let TyData::ConstTy(const_ty) = ty.data(db) else {
         return None;
     };
-    match const_ty.data(db) {
-        ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int), _) => int.data(db).to_usize(),
-        _ => None,
-    }
+    const_ty.integer_value(db)?.to_usize()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1642,21 +1636,25 @@ impl<'db> FieldCollector<'db> {
             self.push_error(ContractLayoutError::InternalLayoutGraph);
             return;
         };
-        let ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), ty) = const_ty.data(self.db)
+        let Some(value) = const_ty
+            .integer_value(self.db)
+            .and_then(|value| value.to_biguint())
         else {
             self.push_error(ContractLayoutError::UnresolvedConcreteLayoutRoot { value });
             return;
         };
-        if *ty != expected_ty {
+        let ty = const_ty.ty(self.db);
+        if ty != expected_ty {
             self.push_error(ContractLayoutError::InternalLayoutGraph);
             return;
         }
+        let value = IntegerId::new(self.db, value);
         let Some(space) = self.root_space_for_owner(owner, default_space) else {
             return;
         };
         if self.concrete_occurrences.iter().any(|occurrence| {
-            occurrence.value == *value
-                && occurrence.ty == *ty
+            occurrence.value == value
+                && occurrence.ty == ty
                 && occurrence.owner == owner
                 && occurrence.place == place
                 && occurrence.selector == selector
@@ -1669,8 +1667,8 @@ impl<'db> FieldCollector<'db> {
         let id = ConcreteRootOccurrenceId(self.concrete_occurrences.len() as u32);
         self.concrete_occurrences.push(ConcreteRootOccurrence {
             id,
-            value: *value,
-            ty: *ty,
+            value,
+            ty,
             owner,
             place,
             selector,

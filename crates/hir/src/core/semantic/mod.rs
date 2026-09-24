@@ -2600,7 +2600,9 @@ pub(crate) fn get_variant_selector_info<'db>(
     variant_ty: TyId<'db>,
     scope: ScopeId<'db>,
 ) -> VariantSelectorInfo {
-    use crate::analysis::semantic::{SemConstScalar, SemConstValue, eval_body_owner_const};
+    use crate::analysis::semantic::{
+        EvalOutcome, SemConstScalar, SemConstValue, eval_body_owner_const,
+    };
     use crate::analysis::ty::{
         canonical::Canonical,
         corelib::resolve_core_trait,
@@ -2673,14 +2675,14 @@ pub(crate) fn get_variant_selector_info<'db>(
         },
         Vec::new(),
     ) {
-        Ok(value) => match value.value(db) {
+        EvalOutcome::Ready(value) => match value.value(db) {
             SemConstValue::Scalar {
                 value: SemConstScalar::Int { value },
                 ..
             } => value.to_u32(),
             _ => None,
         },
-        Err(_) => None,
+        EvalOutcome::Blocked(_) | EvalOutcome::Failed(_) => None,
     };
 
     VariantSelectorInfo { value, signature }

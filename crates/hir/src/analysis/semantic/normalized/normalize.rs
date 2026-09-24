@@ -7,7 +7,7 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            BorrowActivation, FieldIndex, LayoutBackingPlace, LayoutBackingProjection,
+            BorrowActivation, EvalOutcome, FieldIndex, LayoutBackingPlace, LayoutBackingProjection,
             PlaceProvenance, SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmtId,
             SStmtKind, STerminatorKind, SemConstValue, SemOrigin, SemanticBody, SemanticInstance,
             SemanticLocalRole, ValueProvenance, VariantIndex,
@@ -1092,11 +1092,16 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             return Ok(NExpr::Const(constant));
         }
         let value = match constant {
-            SConst::Value(value) => value,
-            SConst::Ref(reference) => eval_const_ref(self.db, reference)
-                .map_err(|_| NormalizeError::UnresolvedHandleOrigin(ty))?,
+            SConst::Value(value) => value.value(),
+            SConst::Description(value) | SConst::Evidence(value) | SConst::Invalid(value) => value,
+            SConst::Ref(reference) => match eval_const_ref(self.db, reference) {
+                EvalOutcome::Ready(value) => value,
+                EvalOutcome::Blocked(_) | EvalOutcome::Failed(_) => {
+                    return Err(NormalizeError::UnresolvedHandleOrigin(ty));
+                }
+            },
         };
-        let constant = SConst::Value(value);
+        let constant = SConst::from_trusted_source(self.db, value);
         if literal_allocation(self.db, ty, &constant).is_some() {
             return Ok(NExpr::Const(constant));
         }
@@ -1108,9 +1113,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             SemConstValue::Enum {
                 variant, fields, ..
             } => (Some(variant), fields),
-            SemConstValue::Scalar { .. }
-            | SemConstValue::Unit
-            | SemConstValue::TypeLevel { .. } => {
+            SemConstValue::Scalar { .. } | SemConstValue::Unit | SemConstValue::Description(..) => {
                 return Err(NormalizeError::UnresolvedHandleOrigin(ty));
             }
         };
@@ -1120,8 +1123,13 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 let ty = self
                     .instance
                     .normalized_ty(self.db, sem_const_ty(self.db, *field));
-                let expr =
-                    self.normalize_constant(block, origin, source, ty, SConst::Value(*field))?;
+                let expr = self.normalize_constant(
+                    block,
+                    origin,
+                    source,
+                    ty,
+                    SConst::from_trusted_source(self.db, *field),
+                )?;
                 let value = self.emit_define(block, None, origin, ty, source, expr)?;
                 Ok(self.operand(value, origin, ReadMode::Move))
             })
@@ -4071,7 +4079,7 @@ fn generic_boundaries<T>(pair: (T, T), array: [T; 2]) -> (T, T) {
                 _ => None,
             })
             .expect("constant expression");
-        *const_value = SConst::Value(unit_const(&db));
+        *const_value = SConst::from_trusted_source(&db, unit_const(&db));
         assert_eq!(
             verify_normalized_body(&db, &invalid_const),
             Err(NormalizedBodyVerifyError::ExpressionType)

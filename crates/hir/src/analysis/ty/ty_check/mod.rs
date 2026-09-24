@@ -89,15 +89,15 @@ use super::{
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
 use crate::analysis::semantic::{
-    EffectProviderSubst, GenericSubst, ImplEnv, SemConstId, SemConstScalar, SemConstValue,
-    SemanticInstanceKey, eval_body_owner_const, get_or_build_semantic_instance,
-    reify_runtime_const_for_ty,
+    BlockedInfo, ConstDependency, ConstUsePolicy, EffectProviderSubst, EvalOutcome, GenericSubst,
+    ImplEnv, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticInstanceKey,
+    eval_body_owner_const, get_or_build_semantic_instance, reify_runtime_const_for_ty,
 };
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
     const_ty::{
         BodyHoleSite, CallableInputLayoutHoleOrigin, ConstTyData, HoleAnchor, HoleMinter,
-        invalid_cause_from_ctfe_error,
+        invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag,
     },
     fold::AssocTySubst,
     normalize::normalize_ty,
@@ -172,6 +172,13 @@ pub fn check_impl_trait_const_bodies<'db>(
     let implementor = implementor.instantiate_identity();
     let trait_hir = implementor.trait_def(db);
     let trait_args = implementor.trait_(db).args(db);
+    let policy = if generated_origin.is_some() {
+        ConstUsePolicy::RequireValue
+    } else {
+        // Associated values may retain a contextual selection until use.
+        // Reached body failures still report under AllowDependent.
+        ConstUsePolicy::AllowDependent
+    };
 
     let mut diags = Vec::new();
     for impl_const in impl_trait.assoc_consts(db) {
@@ -194,23 +201,28 @@ pub fn check_impl_trait_const_bodies<'db>(
         if generated_origin.is_none() {
             diags.extend(body_diags.iter().cloned());
         }
-        if body_diags.is_empty()
-            && let Some(origin) = generated_origin
-        {
-            let const_name = impl_const.name(db).map_or_else(
-                || "<associated const>".to_string(),
-                |name| name.data(db).clone(),
+        if body_diags.is_empty() {
+            let context = generated_origin.map(|origin| ConstDiagContext {
+                const_name: impl_const.name(db).map_or_else(
+                    || "<associated const>".to_string(),
+                    |name| name.data(db).clone(),
+                ),
+                origin: origin.to_string(),
+            });
+            diags.extend(
+                const_body_ctfe_diags_with_context(db, body, expected_ty, policy, context)
+                    .into_iter()
+                    .filter(|diag| {
+                        // ImplTrait::diags_assoc_const_evaluability owns the
+                        // dedicated cycle diagnostic for these declarations.
+                        !matches!(
+                            diag,
+                            FuncBodyDiag::Ty(TyDiagCollection::Ty(
+                                TyLowerDiag::ConstEvalRecursiveConst(_)
+                            ))
+                        )
+                    }),
             );
-            diags.extend(const_body_ctfe_diags_with_context(
-                db,
-                body,
-                expected_ty,
-                false,
-                Some(ConstDiagContext {
-                    const_name,
-                    origin: origin.to_string(),
-                }),
-            ));
         }
     }
     diags
@@ -258,6 +270,14 @@ pub fn check_trait_const_default_bodies<'db>(
         } else {
             diags.extend(body_diags.iter().cloned());
         }
+        if body_diags.is_empty() {
+            diags.extend(const_body_ctfe_diags(
+                db,
+                body,
+                expected_ty,
+                ConstUsePolicy::AllowDependent,
+            ));
+        }
     }
     diags
 }
@@ -295,7 +315,7 @@ pub fn check_static_assert<'db>(
     }
 
     match eval_body_owner_const(db, owner, Vec::new()) {
-        Ok(value) => match static_assert_bool_value(db, value) {
+        EvalOutcome::Ready(value) => match static_assert_bool_value(db, value) {
             Some(true) => {}
             Some(false) => {
                 let mut diags = body_diags.clone();
@@ -316,14 +336,31 @@ pub fn check_static_assert<'db>(
                 return diags;
             }
             None => {
-                return vec![BodyDiag::ConstValueMustBeKnown(condition.span().into()).into()];
+                let cause = InvalidCause::ConstEvalInvariant {
+                    body: condition,
+                    expr: condition.expr(db),
+                    message: "static assertion CTFE returned a non-boolean value".into(),
+                };
+                let ty = TyId::invalid(db, cause);
+                return ty
+                    .emit_diag(db, condition.span().into())
+                    .into_iter()
+                    .map(Into::into)
+                    .collect();
             }
         },
-        Err(crate::analysis::semantic::CtfeError::NotConstEvaluable { .. }) => {
-            return vec![BodyDiag::ConstValueMustBeKnown(condition.span().into()).into()];
+        EvalOutcome::Blocked(info) => {
+            let (primary, dependency) = blocked_const_detail(db, condition, &info);
+            return vec![
+                BodyDiag::ConstDependencyMustBeKnown {
+                    primary,
+                    dependency,
+                }
+                .into(),
+            ];
         }
-        Err(err) => {
-            let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, owner, err));
+        EvalOutcome::Failed(failure) => {
+            let ty = TyId::invalid(db, invalid_cause_from_eval_failure(db, owner, failure));
             if let Some(diag) = ty.emit_diag(db, condition.span().into()) {
                 return vec![diag.into()];
             }
@@ -407,7 +444,7 @@ fn eval_static_assert_comparison_operand<'db>(
     if !body_diags.is_empty() && !static_assert_ignorable_type_diags(db, body_diags) {
         return None;
     }
-    eval_body_owner_const(db, owner, Vec::new()).ok()
+    eval_body_owner_const(db, owner, Vec::new()).into_ready()
 }
 
 pub(super) fn check_body<'db>(
@@ -467,7 +504,7 @@ pub fn check_const_value<'db>(
         return Vec::new();
     }
 
-    const_body_ctfe_diags(db, body, const_.ty(db), false)
+    const_body_ctfe_diags(db, body, const_.ty(db), ConstUsePolicy::RequireValue)
 }
 
 /// CTFE-validates an anonymous const body (a top-level `const` initializer or
@@ -476,18 +513,18 @@ pub fn check_const_value<'db>(
 /// `const C: u256 = ordinary_fn()`) is rejected here rather than only when
 /// referenced.
 ///
-/// `allow_type_level` must be true for consts on generic impls: their value
+/// `AllowDependent` applies to consts on generic impls: their value
 /// (e.g. `256 / BITS`) is legitimately parametric and is fully evaluated per
-/// instantiation, so a `TypeLevel` result is expected, not an error. A
+/// instantiation, so a dependent description is expected. A
 /// genuinely non-const body still yields `NotConstEvaluable` and is flagged
 /// regardless.
 pub(crate) fn const_body_ctfe_diags<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
     expected: TyId<'db>,
-    allow_type_level: bool,
+    policy: ConstUsePolicy,
 ) -> Vec<FuncBodyDiag<'db>> {
-    const_body_ctfe_diags_with_context(db, body, expected, allow_type_level, None)
+    const_body_ctfe_diags_with_context(db, body, expected, policy, None)
 }
 
 struct ConstDiagContext {
@@ -499,16 +536,45 @@ fn const_body_ctfe_diags_with_context<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
     expected: TyId<'db>,
-    allow_type_level: bool,
+    policy: ConstUsePolicy,
     context: Option<ConstDiagContext>,
 ) -> Vec<FuncBodyDiag<'db>> {
+    if expected.has_invalid(db) {
+        return Vec::new();
+    }
     let owner = BodyOwner::AnonConstBody { body, expected };
     let mut diags = Vec::new();
+    let require_value = match policy {
+        ConstUsePolicy::AllowDependent => false,
+        ConstUsePolicy::RequireValue => true,
+        ConstUsePolicy::OptionalFold => {
+            unreachable!("optional folding does not produce declaration diagnostics")
+        }
+    };
     match eval_body_owner_const(db, owner, Vec::new()) {
-        Ok(value) => {
-            if !allow_type_level && matches!(value.value(db), SemConstValue::TypeLevel { .. }) {
-                push_const_eval_diag(&mut diags, body, context, "could not be fully resolved");
-            } else if !allow_type_level {
+        EvalOutcome::Ready(value) => {
+            if matches!(value.value(db), SemConstValue::Description(..)) {
+                let cause = InvalidCause::ConstEvalInvariant {
+                    body,
+                    expr: body.expr(db),
+                    message: "CTFE published an unresolved value as complete".into(),
+                };
+                if let Some(context) = context {
+                    diags.push(
+                        BodyDiag::ConstEvaluationFailed {
+                            primary: body.span().into(),
+                            const_name: context.const_name,
+                            origin: context.origin,
+                            reason: "hit a compiler invariant: CTFE published an unresolved value as complete".into(),
+                        }
+                        .into(),
+                    );
+                } else if let Some(diag) =
+                    TyId::invalid(db, cause).emit_diag(db, body.span().into())
+                {
+                    diags.push(diag.into());
+                }
+            } else if require_value {
                 let key = SemanticInstanceKey::new(
                     db,
                     owner,
@@ -527,29 +593,126 @@ fn const_body_ctfe_diags_with_context<'db>(
                 }
             }
         }
-        Err(crate::analysis::semantic::CtfeError::NotConstEvaluable { .. }) => {
-            push_const_eval_diag(&mut diags, body, context, "is not const-evaluable");
+        EvalOutcome::Blocked(info) => {
+            if require_value {
+                let (primary, dependency) = blocked_const_detail(db, body, &info);
+                if let Some(context) = context {
+                    diags.push(
+                        BodyDiag::ConstEvaluationFailed {
+                            primary,
+                            const_name: context.const_name,
+                            origin: context.origin,
+                            reason: format!("requires unresolved {dependency}"),
+                        }
+                        .into(),
+                    );
+                } else {
+                    diags.push(
+                        BodyDiag::ConstDependencyMustBeKnown {
+                            primary,
+                            dependency,
+                        }
+                        .into(),
+                    );
+                }
+            }
         }
-        Err(err) => {
+        EvalOutcome::Failed(failure) => {
+            let cause = invalid_cause_from_eval_failure(db, owner, failure);
             if let Some(context) = context {
+                let reason = match &cause {
+                    InvalidCause::ConstEvalAssertionFailed { message, .. } => {
+                        message.as_ref().map_or_else(
+                            || "failed an assertion".to_string(),
+                            |message| format!("failed an assertion: {message}"),
+                        )
+                    }
+                    InvalidCause::ConstEvalDivisionByZero { .. } => "divided by zero".into(),
+                    InvalidCause::ConstEvalOutOfBounds { .. } => "indexed out of bounds".into(),
+                    InvalidCause::ConstEvalInvalidOperation { message, .. } => message.clone(),
+                    InvalidCause::ConstEvalInvalidBorrow { .. } => "used an invalid borrow".into(),
+                    InvalidCause::ConstEvalInvalidProviderUse { .. } => {
+                        "used an invalid effect provider".into()
+                    }
+                    InvalidCause::ConstEvalVariantMismatch { .. } => {
+                        "selected the wrong enum variant".into()
+                    }
+                    InvalidCause::ConstEvalUninitializedLocal { .. } => {
+                        "read an uninitialized value".into()
+                    }
+                    InvalidCause::ConstEvalArithmeticOverflow { .. } => "overflowed".into(),
+                    InvalidCause::ConstEvalNegativeExponent { .. } => {
+                        "used a negative exponent".into()
+                    }
+                    InvalidCause::ConstEvalStepLimitExceeded { .. } => {
+                        "exceeded the CTFE step limit".into()
+                    }
+                    InvalidCause::ConstEvalRecursionLimitExceeded { .. } => {
+                        "exceeded the CTFE recursion limit".into()
+                    }
+                    InvalidCause::ConstEvalRecursiveConst { .. } => {
+                        "depends recursively on itself".into()
+                    }
+                    InvalidCause::ConstEvalNonConstCall { .. } => {
+                        "called a non-const function".into()
+                    }
+                    InvalidCause::ConstEvalInvariant { message, .. } => {
+                        format!("hit a compiler invariant: {message}")
+                    }
+                    _ => "failed during compile-time evaluation".into(),
+                };
                 diags.push(
                     BodyDiag::ConstEvaluationFailed {
                         primary: body.span().into(),
                         const_name: context.const_name,
                         origin: context.origin,
-                        reason: "failed during compile-time evaluation".to_string(),
+                        reason,
                     }
                     .into(),
                 );
             } else {
-                let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, owner, err));
-                if let Some(diag) = ty.emit_diag(db, body.span().into()) {
+                if let Some(diag) = TyId::invalid(db, cause).emit_diag(db, body.span().into()) {
                     diags.push(diag.into());
                 }
             }
         }
     }
     diags
+}
+
+fn blocked_const_detail<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    info: &BlockedInfo<'db>,
+) -> (DynLazySpan<'db>, String) {
+    let origin_body = info
+        .trace
+        .first()
+        .and_then(|key| key.owner(db).body(db))
+        .or_else(|| match info.origin {
+            SemOrigin::Body(owner) => owner.body(db),
+            SemOrigin::Expr(_) | SemOrigin::Stmt(_) | SemOrigin::Synthetic => None,
+        })
+        .unwrap_or(body);
+    let primary = origin_expr_for_const_eval_diag(db, origin_body, info.origin)
+        .span(origin_body)
+        .into();
+    let dependency = match info.first_dependency {
+        ConstDependency::Value(ty) => format!("value `{}`", ty.pretty_print(db)),
+        ConstDependency::Type(ty) => format!("type `{}`", ty.pretty_print(db)),
+        ConstDependency::Selection(expr) => format!("selection `{}`", expr.pretty_print(db)),
+        ConstDependency::Computation(computation) => format!(
+            "constant computation producing `{}`",
+            computation.result_ty(db).pretty_print(db)
+        ),
+        ConstDependency::AssociatedSelection(use_) => {
+            format!("associated constant `{}`", use_.name().data(db))
+        }
+        ConstDependency::InherentSelection(use_) => {
+            format!("inherent constant `{}`", use_.name().data(db))
+        }
+    };
+    (primary, dependency)
 }
 
 fn push_const_eval_diag<'db>(

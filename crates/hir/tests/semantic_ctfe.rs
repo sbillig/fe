@@ -6,10 +6,10 @@ use fe_hir::test_db::{HirAnalysisTestDb, find_func};
 use fe_hir::{
     analysis::{
         semantic::{
-            CtfeError, SConst, SExpr, SStmtKind, SemConstId, SemConstScalar, SemConstValue,
-            canonicalize_semantic_consts, eval_body_owner_const, eval_body_owner_const_with_args,
-            get_or_build_semantic_instance, identity_semantic_instance_key,
-            reify_runtime_const_for_ty,
+            CtfeError, EvalFailure, EvalOutcome, SConst, SExpr, SStmtKind, SemConstId,
+            SemConstScalar, SemConstValue, canonicalize_semantic_consts, eval_body_owner_const,
+            eval_body_owner_const_with_args, get_or_build_semantic_instance,
+            identity_semantic_instance_key, reify_runtime_const_for_ty,
         },
         ty::{
             diagnostics::{BodyDiag, FuncBodyDiag, TyDiagCollection, TyLowerDiag},
@@ -20,6 +20,36 @@ use fe_hir::{
     span::LazySpan,
 };
 use num_traits::ToPrimitive;
+
+#[test]
+fn semantic_const_operands_keep_formal_evidence_distinct() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_const_evidence.fe".into(),
+        "fn echo<const N: usize>() -> usize { N }",
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let func = module.all_funcs(&db)[0];
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    assert!(
+        instance
+            .body(&db)
+            .blocks
+            .iter()
+            .flat_map(|block| &block.stmts)
+            .any(|stmt| matches!(
+                &stmt.kind,
+                SStmtKind::Assign {
+                    expr: SExpr::Const(SConst::Evidence(_)),
+                    ..
+                }
+            ))
+    );
+}
 
 #[test]
 fn canonicalize_folds_const_calls_into_nested_aggregate_consts() {
@@ -68,7 +98,7 @@ fn wrap() {
             else {
                 return false;
             };
-            let SemConstValue::Tuple { elems, .. } = value.value(&db) else {
+            let SemConstValue::Tuple { elems, .. } = value.value().value(&db) else {
                 return false;
             };
             let [array] = elems.as_ref() else {
@@ -105,11 +135,13 @@ fn semantic_ctfe_evaluates_as_bytes_const_fns() {
             .copied()
             .unwrap_or_else(|| panic!("missing const fn `{name}`"));
 
-        let value = eval_body_owner_const(&db, BodyOwner::Func(func), Vec::new())
-            .unwrap_or_else(|err| panic!("semantic CTFE failed for `{name}`: {err:?}"));
+        let value = match eval_body_owner_const(&db, BodyOwner::Func(func), Vec::new()) {
+            EvalOutcome::Ready(value) => value,
+            outcome => panic!("semantic CTFE failed for `{name}`: {outcome:?}"),
+        };
         let ty = fe_hir::analysis::semantic::sem_const_ty(&db, value);
         assert!(
-            !matches!(value.value(&db), SemConstValue::TypeLevel { .. }),
+            !matches!(value.value(&db), SemConstValue::Description(..)),
             "`{name}` should lower to a value const, got {:?} with ty {}",
             value.value(&db),
             ty.pretty_print(&db)
@@ -245,8 +277,9 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
     }
 
     fn eval_bytes<'db>(db: &'db HirAnalysisTestDb, func: fe_hir::hir_def::Func<'db>) -> Vec<u8> {
-        let value = eval_body_owner_const(db, BodyOwner::Func(func), Vec::new()).unwrap_or_else(
-            |err| {
+        let value = match eval_body_owner_const(db, BodyOwner::Func(func), Vec::new()) {
+            EvalOutcome::Ready(value) => value,
+            err => {
                 let name = func
                     .name(db)
                     .to_opt()
@@ -259,8 +292,8 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
                     }
                 }
                 panic!("semantic CTFE failed for `{name}`: {err:?}\n{note}{diags:#?}");
-            },
-        );
+            }
+        };
         match value.value(db) {
             SemConstValue::Scalar {
                 value: SemConstScalar::Bytes(bytes),
@@ -283,15 +316,17 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
     }
 
     fn eval_usize<'db>(db: &'db HirAnalysisTestDb, func: fe_hir::hir_def::Func<'db>) -> usize {
-        let value =
-            eval_body_owner_const(db, BodyOwner::Func(func), Vec::new()).unwrap_or_else(|err| {
+        let value = match eval_body_owner_const(db, BodyOwner::Func(func), Vec::new()) {
+            EvalOutcome::Ready(value) => value,
+            err => {
                 let name = func
                     .name(db)
                     .to_opt()
                     .map_or("<anon>", |n| n.data(db).as_str());
                 let (diags, _) = check_func_body(db, func).clone();
                 panic!("semantic CTFE failed for `{name}`: {err:?}\n{diags:#?}");
-            });
+            }
+        };
         match value.value(db) {
             SemConstValue::Scalar {
                 value: SemConstScalar::Int { value },
@@ -304,15 +339,17 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
     }
 
     fn eval_bool<'db>(db: &'db HirAnalysisTestDb, func: fe_hir::hir_def::Func<'db>) -> bool {
-        let value =
-            eval_body_owner_const(db, BodyOwner::Func(func), Vec::new()).unwrap_or_else(|err| {
+        let value = match eval_body_owner_const(db, BodyOwner::Func(func), Vec::new()) {
+            EvalOutcome::Ready(value) => value,
+            err => {
                 let name = func
                     .name(db)
                     .to_opt()
                     .map_or("<anon>", |n| n.data(db).as_str());
                 let (diags, _) = check_func_body(db, func).clone();
                 panic!("semantic CTFE failed for `{name}`: {err:?}\n{diags:#?}");
-            });
+            }
+        };
         match value.value(db) {
             SemConstValue::Scalar {
                 value: SemConstScalar::Bool(flag),
@@ -349,18 +386,21 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
         BodyOwner::Func(find_func(&db, top_mod, "from_bytes_value")),
         Vec::new(),
     )
+    .into_ready()
     .expect("expected const evaluation success");
     let literal_4_const = eval_body_owner_const(
         &db,
         BodyOwner::Func(find_func(&db, top_mod, "literal_value_4")),
         Vec::new(),
     )
+    .into_ready()
     .expect("expected const evaluation success");
     let literal_8_const = eval_body_owner_const(
         &db,
         BodyOwner::Func(find_func(&db, top_mod, "literal_value_8")),
         Vec::new(),
     )
+    .into_ready()
     .expect("expected const evaluation success");
     let sem_eq = fe_hir::analysis::semantic::sem_const_eq(&db, from_bytes_const, literal_4_const);
     let sem_eq_lit8 =
@@ -385,7 +425,7 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
             BodyOwner::Func(find_func(&db, top_mod, "rhs_word_in_eq_from_bytes")),
             Vec::new(),
         )
-        .ok()
+        .into_ready()
         .and_then(|value| match value.value(&db) {
             SemConstValue::Scalar {
                 value: SemConstScalar::Int { value },
@@ -398,7 +438,7 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
             BodyOwner::Func(find_func(&db, top_mod, "s_word_in_eq_from_bytes")),
             Vec::new(),
         )
-        .ok()
+        .into_ready()
         .and_then(|value| match value.value(&db) {
             SemConstValue::Scalar {
                 value: SemConstScalar::Int { value },
@@ -411,14 +451,14 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
             BodyOwner::Func(find_func(&db, top_mod, "rhs_value_in_eq_from_bytes")),
             Vec::new(),
         )
-        .ok()
+        .into_ready()
         .map(|value| value.value(&db).clone());
         let s_value_eq = eval_body_owner_const(
             &db,
             BodyOwner::Func(find_func(&db, top_mod, "s_value_in_eq_from_bytes")),
             Vec::new(),
         )
-        .ok()
+        .into_ready()
         .map(|value| value.value(&db).clone());
         panic!(
             "unexpected equality results: eq_from_bytes_matches_literal={eq_from_bytes} sem_const_eq(lit4)={sem_eq} sem_const_eq(lit8)={sem_eq_lit8}\nfrom_bytes_value={from_dbg}\nliteral_value_4={lit_dbg}\nliteral_value_8={:?}\ns_word_in_eq_from_bytes={s_word:?}\nrhs_word_in_eq_from_bytes={rhs_word:?}\ns_value_in_eq_from_bytes={s_value_eq:?}\nrhs_value_in_eq_from_bytes={rhs_value_eq:?}",
@@ -431,6 +471,7 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
         BodyOwner::Func(find_func(&db, top_mod, "high_word_string_roundtrip")),
         Vec::new(),
     )
+    .into_ready()
     .expect("expected const evaluation success");
     match high_roundtrip.value(&db) {
         SemConstValue::Scalar {
@@ -448,6 +489,7 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
         BodyOwner::Func(find_func(&db, top_mod, "high_word_string_value")),
         Vec::new(),
     )
+    .into_ready()
     .expect("expected const evaluation success");
     assert!(
         fe_hir::analysis::semantic::sem_const_eq(&db, high_word_const, literal_4_const),
@@ -481,7 +523,9 @@ const fn truncated_concat() -> [u8; 6] {
         })
         .expect("missing const fn `truncated_concat`");
 
-    let value = eval_body_owner_const(&db, BodyOwner::Func(func), Vec::new()).unwrap();
+    let value = eval_body_owner_const(&db, BodyOwner::Func(func), Vec::new())
+        .into_ready()
+        .unwrap();
     match value.value(&db) {
         SemConstValue::Scalar {
             value: SemConstScalar::Bytes(bytes),
@@ -563,7 +607,10 @@ const fn invalid_const() -> usize {
         eval_body_owner_const_with_args(&db, BodyOwner::Func(func), Vec::new(), Vec::new());
 
     assert!(
-        matches!(result, Err(CtfeError::InvalidBody { .. })),
+        matches!(
+            result,
+            EvalOutcome::Failed(EvalFailure::Ctfe(CtfeError::InvalidBody { .. }))
+        ),
         "expected invalid body CTFE error, got {result:?}"
     );
 }
@@ -603,7 +650,10 @@ const fn invalid_call_like_expr() -> u256 {
         eval_body_owner_const_with_args(&db, BodyOwner::Func(func), Vec::new(), Vec::new());
 
     assert!(
-        matches!(result, Err(CtfeError::InvalidBody { .. })),
+        matches!(
+            result,
+            EvalOutcome::Failed(EvalFailure::Ctfe(CtfeError::InvalidBody { .. }))
+        ),
         "expected invalid body CTFE error, got {result:?}"
     );
 }
@@ -637,6 +687,32 @@ fn type_alias_len_reports_nested_const_eval_error() {
         &text[resolved.range.start().into()..resolved.range.end().into()],
         "intrinsic::__as_bytes(Mixed::B)"
     );
+}
+
+#[test]
+fn type_alias_len_preserves_specialized_bounds_failure() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_bounds_diagnostic.fe".into(),
+        r#"
+const fn first<const N: usize>() -> usize { [7 as usize; N][0] }
+const BAD: usize = first<0>()
+type ViaConst = [u8; BAD]
+type Direct = [u8; first<0>()]
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    for alias in module.all_type_aliases(&db) {
+        let diags = alias.diags(&db);
+        assert!(
+            diags.iter().any(|diag| matches!(
+                diag,
+                TyDiagCollection::Ty(TyLowerDiag::ConstEvalOutOfBounds(_))
+            )),
+            "expected a bounds diagnostic for {}: {diags:#?}",
+            alias.name(&db).to_opt().unwrap().data(&db),
+        );
+    }
 }
 
 fn owner_name(db: &HirAnalysisTestDb, owner: BodyOwner<'_>) -> String {
@@ -732,10 +808,10 @@ fn contract_init_fixed_array_arg_fixture_has_no_type_level_semantic_consts() {
             .expect("valid semantic body should be canonicalizable");
         for stmt in body.blocks.iter().flat_map(|block| block.stmts.iter()) {
             if let SStmtKind::Assign {
-                expr: SExpr::Const(SConst::Value(value)),
+                expr: SExpr::Const(SConst::Description(value) | SConst::Evidence(value)),
                 ..
             } = &stmt.kind
-                && matches!(value.value(&db), SemConstValue::TypeLevel { .. })
+                && matches!(value.value(&db), SemConstValue::Description(..))
             {
                 offenders.push(format!(
                     "{} args={:?} {:?} ty={} {:?}",
@@ -749,9 +825,7 @@ fn contract_init_fixed_array_arg_fixture_has_no_type_level_semantic_consts() {
                         .collect::<Vec<_>>(),
                     stmt.origin,
                     match value.value(&db) {
-                        SemConstValue::TypeLevel { const_ty, .. } => {
-                            const_ty.pretty_print(&db).to_string()
-                        }
+                        SemConstValue::Description(term) => term.pretty_print_concrete(&db),
                         _ => "<non-typelevel>".to_string(),
                     },
                     value.value(&db)
@@ -816,6 +890,56 @@ fn test_add_overflow_u8() {
 }
 
 #[test]
+fn optional_fold_miss_keeps_runtime_input_and_independent_const_fact() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "optional_fold_miss.fe".into(),
+        r#"
+fn evaluate(x: u8) -> u8 {
+    let y: u8 = 7
+    let unknown: u8 = x + 1
+    let known: u8 = y + 1
+    known
+}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    let func = module.all_funcs(&db)[0];
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    let body = canonicalize_semantic_consts(&db, instance).unwrap();
+    let expressions = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .filter_map(|stmt| {
+            let SStmtKind::Assign { expr, .. } = &stmt.kind else {
+                return None;
+            };
+            Some(expr)
+        });
+    let mut runtime_operation = false;
+    let mut folded_eight = false;
+    for expr in expressions {
+        runtime_operation |= matches!(expr, SExpr::Call { .. } | SExpr::Binary { .. });
+        folded_eight |= matches!(
+            expr,
+            SExpr::Const(SConst::Value(value))
+                if matches!(value.value().value(&db), SemConstValue::Scalar {
+                    value: SemConstScalar::Int { value }, ..
+                } if value.to_u8() == Some(8))
+        );
+    }
+    assert!(
+        runtime_operation,
+        "unknown input operation must remain executable"
+    );
+    assert!(folded_eight, "independent constant fact must still fold");
+}
+
+#[test]
 fn canonicalize_compares_semantically_equal_consts_structurally() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -855,7 +979,7 @@ fn signed_mul_no_overflow_i8_neg_neg() {
                         expr: SExpr::Const(SConst::Value(value)),
                         ..
                     } if matches!(
-                        value.value(&db),
+                        value.value().value(&db),
                         SemConstValue::Scalar {
                             value: SemConstScalar::Bool(true),
                             ..
@@ -870,7 +994,7 @@ fn signed_mul_no_overflow_i8_neg_neg() {
 fn sem_const_has_type_level_leaf(db: &HirAnalysisTestDb, value: SemConstId<'_>) -> bool {
     match value.value(db) {
         SemConstValue::Unit | SemConstValue::Scalar { .. } => false,
-        SemConstValue::TypeLevel { .. } => true,
+        SemConstValue::Description(..) => true,
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => elems
             .iter()
             .copied()
@@ -884,7 +1008,7 @@ fn sem_const_has_type_level_leaf(db: &HirAnalysisTestDb, value: SemConstId<'_>) 
 
 fn sem_const_has_abstract_scalar_leaf(db: &HirAnalysisTestDb, value: SemConstId<'_>) -> bool {
     match value.value(db) {
-        SemConstValue::Unit | SemConstValue::TypeLevel { .. } => false,
+        SemConstValue::Unit | SemConstValue::Description(..) => false,
         SemConstValue::Scalar { ty, .. } => ty.pretty_print(db) == "{integer}",
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => elems
             .iter()
@@ -947,7 +1071,7 @@ fn entry() -> u256 {
             else {
                 return None;
             };
-            matches!(value.value(&db), SemConstValue::Array { .. }).then_some(*value)
+            matches!(value.value().value(&db), SemConstValue::Array { .. }).then_some(value.value())
         })
         .expect("expected array constant in canonicalized body");
 
@@ -955,7 +1079,7 @@ fn entry() -> u256 {
         .expect("array constant should reify");
     assert!(
         !sem_const_has_type_level_leaf(&db, reified),
-        "reified runtime const should not contain nested TypeLevel leaves: {:?}",
+        "reified runtime const should not contain nested descriptions: {:?}",
         reified.value(&db)
     );
     assert!(
@@ -1009,7 +1133,7 @@ fn wraps_after_aug_assign() -> bool {
             expr,
             SExpr::Const(SConst::Value(value))
                 if matches!(
-                    value.value(&db),
+                    value.value().value(&db),
                     SemConstValue::Scalar {
                         value: SemConstScalar::Bool(false),
                         ..
@@ -1071,7 +1195,7 @@ fn negated_min_i8_compares_equal() -> bool {
             expr,
             SExpr::Const(SConst::Value(value))
                 if matches!(
-                    value.value(&db),
+                    value.value().value(&db),
                     SemConstValue::Scalar {
                         value: SemConstScalar::Bool(true),
                         ..
@@ -1082,7 +1206,7 @@ fn negated_min_i8_compares_equal() -> bool {
             expr,
             SExpr::Const(SConst::Value(value))
                 if matches!(
-                    value.value(&db),
+                    value.value().value(&db),
                     SemConstValue::Scalar {
                         value: SemConstScalar::Bool(false),
                         ..
@@ -1203,7 +1327,7 @@ fn probe(index: usize) -> bool {{
                     SExpr::Const(SConst::Value(value)) => {
                         assert!(
                             !matches!(
-                                value.value(&db),
+                                value.value().value(&db),
                                 SemConstValue::Scalar {
                                     value: SemConstScalar::Bool(false),
                                     ..
@@ -1212,7 +1336,7 @@ fn probe(index: usize) -> bool {{
                             "{name}: stale comparison folded to false: {body:#?}"
                         );
                         constant_true |= matches!(
-                            value.value(&db),
+                            value.value().value(&db),
                             SemConstValue::Scalar {
                                 value: SemConstScalar::Bool(true),
                                 ..
@@ -1264,6 +1388,7 @@ fn check_length() {
             BodyOwner::Func(find_func(&db, top_mod, name)),
             Vec::new(),
         )
+        .into_ready()
         .expect("selected associated constant should evaluate");
         let SemConstValue::Scalar {
             value: SemConstScalar::Int { value },
@@ -1310,6 +1435,7 @@ const fn inherent() -> u8 { Marker<3>::OTHER.value }
             BodyOwner::Func(find_func(&db, top_mod, name)),
             Vec::new(),
         )
+        .into_ready()
         .expect("generic const record should evaluate");
         let SemConstValue::Scalar {
             value: SemConstScalar::Int { value },

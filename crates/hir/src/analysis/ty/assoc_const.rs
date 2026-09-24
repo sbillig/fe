@@ -128,6 +128,14 @@ impl<'db> InherentConstUse<'db> {
         self.origin_scope
     }
 
+    pub fn with_env(self, origin_scope: ScopeId<'db>, assumptions: PredicateListId<'db>) -> Self {
+        Self {
+            origin_scope,
+            assumptions,
+            ..self
+        }
+    }
+
     pub fn assumptions(self) -> PredicateListId<'db> {
         self.assumptions
     }

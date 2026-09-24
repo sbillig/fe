@@ -3,14 +3,17 @@ use common::indexmap::IndexSet;
 use super::{
     adt_def::AdtDef,
     const_expr::ConstExpr,
-    const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
+    const_ty::{ConstTyData, ConstTyId},
     trait_def::{ImplementorId, TraitInstId},
     trait_resolution::{PredicateListId, TraitGoalSolution, TraitSolverQuery},
     ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
     ty_def::{AssocTy, InvalidCause, PrimTy, TyBase, TyData, TyFlags, TyId, TyParam, TyVar},
 };
-use crate::analysis::HirAnalysisDb;
 use crate::analysis::place::{Place, PlaceBase, PlaceProjection};
+use crate::analysis::{
+    HirAnalysisDb,
+    semantic::{SemConstId, SemConstValue, SemanticInstanceKey, sem_const_ty},
+};
 use crate::hir_def::CallableDef;
 
 pub trait TyVisitable<'db> {
@@ -113,26 +116,20 @@ where
         ConstTyData::TyVar(var, _) => visitor.visit_var(var),
         ConstTyData::TyParam(param, ty) => visitor.visit_const_param(param, *ty),
         ConstTyData::Hole(..) => {}
-        ConstTyData::Evaluated(val, _) => match val {
-            EvaluatedConstTy::Tuple(elems)
-            | EvaluatedConstTy::Array(elems)
-            | EvaluatedConstTy::Record(elems) => {
-                elems.visit_with(visitor);
-            }
-            _ => {}
-        },
+        ConstTyData::Value(value) => walk_sem_const(visitor, value.value()),
+        ConstTyData::Description(value) => walk_sem_const(visitor, *value),
+        ConstTyData::Computation {
+            description,
+            source,
+        } => {
+            description.visit_with(visitor);
+            source.visit_with(visitor);
+        }
+        ConstTyData::Invalid(..) => {}
         ConstTyData::Abstract(expr, _) => match expr.data(db) {
-            ConstExpr::ExternConstFnCall {
-                generic_args, args, ..
-            } => {
-                generic_args.visit_with(visitor);
-                args.visit_with(visitor);
-            }
-            ConstExpr::UserConstFnCall {
-                generic_args, args, ..
-            } => {
-                generic_args.visit_with(visitor);
-                args.visit_with(visitor);
+            ConstExpr::Invocation(invocation) => {
+                invocation.key.visit_with(visitor);
+                invocation.args.visit_with(visitor);
             }
             ConstExpr::ArithBinOp { lhs, rhs, .. } => {
                 lhs.visit_with(visitor);
@@ -145,15 +142,46 @@ where
                 expr.visit_with(visitor);
                 to.visit_with(visitor);
             }
+            ConstExpr::ArrayRepeat { value, len } => {
+                value.visit_with(visitor);
+                len.visit_with(visitor);
+            }
+            ConstExpr::ArrayIndex { array, index } => {
+                array.visit_with(visitor);
+                index.visit_with(visitor);
+            }
+            ConstExpr::Field { value, .. } => value.visit_with(visitor),
             ConstExpr::TraitConst(assoc) => {
                 assoc.visit_with(visitor);
             }
             ConstExpr::InherentConst(use_) => {
                 use_.visit_with(visitor);
             }
-            ConstExpr::LocalBinding(_) => {}
         },
         ConstTyData::UnEvaluated { .. } => {}
+    }
+}
+
+fn walk_sem_const<'db, V>(visitor: &mut V, value: SemConstId<'db>)
+where
+    V: TyVisitor<'db> + ?Sized,
+{
+    let db = visitor.db();
+    match value.value(db) {
+        SemConstValue::Description(term) => visitor.visit_ty(TyId::const_ty(db, term)),
+        SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => {
+            for child in elems.iter().copied() {
+                visitor.visit_ty(sem_const_ty(db, child));
+                walk_sem_const(visitor, child);
+            }
+        }
+        SemConstValue::Struct { fields, .. } | SemConstValue::Enum { fields, .. } => {
+            for child in fields.iter().copied() {
+                visitor.visit_ty(sem_const_ty(db, child));
+                walk_sem_const(visitor, child);
+            }
+        }
+        SemConstValue::Unit | SemConstValue::Scalar { .. } => {}
     }
 }
 
@@ -206,6 +234,23 @@ where
         V: TyVisitor<'db> + ?Sized,
     {
         self.iter().for_each(|ty| ty.visit_with(visitor))
+    }
+}
+
+impl<'db> TyVisitable<'db> for SemanticInstanceKey<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        let db = visitor.db();
+        if let super::ty_check::BodyOwner::AnonConstBody { expected, .. } = self.owner(db) {
+            expected.visit_with(visitor);
+        }
+        self.subst(db).generic_args(db).visit_with(visitor);
+        self.effect_providers(db).providers(db).visit_with(visitor);
+        let env = self.impl_env(db);
+        env.assumptions(db).visit_with(visitor);
+        env.witnesses(db).visit_with(visitor);
     }
 }
 

@@ -484,7 +484,7 @@ fn literal_bool_cond<'db>(
         match expr {
             NExpr::Forward { src } => value = src.value,
             NExpr::Const(SConst::Value(value)) => {
-                return match value.value(db) {
+                return match value.value().value(db) {
                     SemConstValue::Scalar {
                         value: SemConstScalar::Bool(value),
                         ..

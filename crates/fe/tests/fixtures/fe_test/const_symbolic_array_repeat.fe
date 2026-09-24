@@ -1,0 +1,107 @@
+struct Repeated<const N: usize> {
+    values: [u8; N],
+}
+
+impl<const N: usize> Repeated<N> {
+    const VALUE: Repeated<N> = Repeated<N> { values: [7; N] }
+    const ROWS: [[u8; N]; 2] = [[9; N]; 2]
+    const FIRST: u8 = Self::VALUE.values[0]
+    const CHANGED_VALUES: [u8; N] = changed_values<N>()
+    const CHANGED_ROWS: [[u8; N]; 2] = changed_rows<N>()
+}
+
+const fn changed_values<const N: usize>() -> [u8; N] {
+    let mut value = Repeated<N> { values: [0; N] }
+    value.values[0] = 1
+    value.values
+}
+
+const fn changed_rows<const N: usize>() -> [[u8; N]; 2] {
+    let mut rows = Repeated<N>::ROWS
+    rows[0][1] = 2
+    rows
+}
+
+fn generic_changed_rows<const N: usize>() -> [[u8; N]; 2] {
+    Repeated<N>::CHANGED_ROWS
+}
+
+const CHANGED: [[u8; 3]; 2] = Repeated<3>::CHANGED_ROWS
+
+#[test]
+fn test_symbolic_repeat_specialization() {
+    assert!(Repeated<1>::FIRST == 7)
+    assert!(Repeated<3>::VALUE.values[2] == 7)
+    assert!(Repeated<4>::ROWS[1][3] == 9)
+    assert!(CHANGED[0][1] == 2)
+    assert!(CHANGED[1][1] == 9)
+    assert!(Repeated<1>::CHANGED_VALUES[0] == 1)
+    assert!(Repeated<3>::CHANGED_VALUES[2] == 0)
+    let changed = generic_changed_rows<4>()
+    assert!(changed[0][1] == 2)
+    assert!(changed[1][1] == 9)
+    let empty: [u8; 0] = Repeated<0>::VALUE.values
+    assert!(empty.len() == 0)
+}
+
+enum Maybe<T> { None, Some(T) }
+impl<T: Copy> Copy for Maybe<T> {}
+struct Pair { value: u8 }
+impl Copy for Pair {}
+struct SymbolicAggregates<const N: usize> {}
+impl<const N: usize> SymbolicAggregates<N> {
+    const VALUES: [Maybe<u8>; N] = [Maybe::Some(7); N]
+    const NESTED: [(Maybe<u8>, [Maybe<u8>; 1]); N] = [(Maybe::Some(9), [Maybe::Some(11); 1]); N]
+    const FIELD: u8 = [Pair { value: 13 }; N][0].value
+    const TUPLE: u8 = [(17 as u8, 19 as u8); N][0].1
+}
+
+#[test]
+fn test_symbolic_aggregate_specialization() {
+    let values = SymbolicAggregates<3>::VALUES
+    match values[2] {
+        Maybe::Some(value) => assert!(value == 7),
+        Maybe::None => assert!(false),
+    }
+    let nested = SymbolicAggregates<2>::NESTED
+    match nested[1].0 {
+        Maybe::Some(value) => assert!(value == 9),
+        Maybe::None => assert!(false),
+    }
+    match nested[0].1[0] {
+        Maybe::Some(value) => assert!(value == 11),
+        Maybe::None => assert!(false),
+    }
+    assert!(SymbolicAggregates<3>::FIELD == 13)
+    assert!(SymbolicAggregates<1>::TUPLE == 19)
+    let empty = SymbolicAggregates<0>::VALUES
+    assert!(empty.len() == 0)
+}
+
+struct Indexed<const N: usize, const I: usize> {}
+impl<const N: usize, const I: usize> Indexed<N, I> {
+    const VALUE: u8 = [7; N][I]
+    const CONCRETE: u8 = [3, 5, 11][I]
+    const FIELD: u8 = [Pair { value: 13 }; N][I].value
+    const CHANGED: [u8; N] = changed_index<N, I>()
+}
+
+const fn changed_index<const N: usize, const I: usize>() -> [u8; N] {
+    let mut values = [0; N]
+    values[I] = 17
+    values
+}
+
+fn generic_index<const N: usize, const I: usize>() -> u8 {
+    Indexed<N, I>::VALUE
+}
+
+#[test]
+fn test_symbolic_index_specialization() {
+    assert!(Indexed<3, 1>::VALUE == 7)
+    assert!(Indexed<3, 2>::CONCRETE == 11)
+    assert!(Indexed<3, 1>::FIELD == 13)
+    assert!(Indexed<3, 1>::CHANGED[1] == 17)
+    assert!(Indexed<3, 1>::CHANGED[2] == 0)
+    assert!(generic_index<3, 1>() == 7)
+}

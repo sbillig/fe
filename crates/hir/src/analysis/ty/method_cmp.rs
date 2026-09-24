@@ -855,7 +855,7 @@ fn normalize_compare_assoc_consts<'db>(
             }
             if !matches!(
                 evaluated.data(db),
-                ConstTyData::Evaluated(..) | ConstTyData::Abstract(..)
+                ConstTyData::Value(..) | ConstTyData::Description(..) | ConstTyData::Abstract(..)
             ) {
                 return None;
             }

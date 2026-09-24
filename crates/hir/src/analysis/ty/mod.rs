@@ -20,6 +20,7 @@ use ty_def::{BorrowKind, InvalidCause, TyData, TyId};
 use ty_lower::{collect_generic_params, lower_hir_ty, lower_type_alias};
 
 use crate::analysis::name_resolution::{PathRes, resolve_path};
+use crate::analysis::semantic::ConstUsePolicy;
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
 };
@@ -420,9 +421,14 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             // Consts on generic impls have legitimately parametric values
             // (e.g. `256 / BITS`), validated per instantiation; only flag a
             // non-evaluable body, not a type-level result.
-            let allow_type_level = !collect_generic_params(db, impl_.into())
+            let policy = if collect_generic_params(db, impl_.into())
                 .params(db)
-                .is_empty();
+                .is_empty()
+            {
+                ConstUsePolicy::RequireValue
+            } else {
+                ConstUsePolicy::AllowDependent
+            };
             for c in impl_.assoc_consts(db) {
                 let (Some(body), Some(expected_ty)) = (c.value_body(db), c.ty(db)) else {
                     continue;
@@ -433,7 +439,7 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                 // (otherwise the type error is the real diagnostic).
                 if body_diags.is_empty() {
                     diags.extend(
-                        ty_check::const_body_ctfe_diags(db, body, expected_ty, allow_type_level)
+                        ty_check::const_body_ctfe_diags(db, body, expected_ty, policy)
                             .iter()
                             .map(|diag| diag.to_voucher()),
                     );
