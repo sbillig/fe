@@ -29,11 +29,11 @@ pub trait ByteInput: Copy {
     /// The checked operation accepts arbitrary byte lengths.
     fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256)
 
-    /// Copy an already validated, word-aligned range into linear memory.
+    /// Copy an already validated byte range into linear memory.
     ///
-    /// Callers must validate bounds and `len % 32 == 0` before using this fast
-    /// path. Implementations may skip all checks.
-    fn copy_to_memory_unchecked_aligned(self, dest: *u8, src_offset: u256, len: u256) {
+    /// Callers must validate bounds before using this fast path.
+    /// Implementations may skip all checks; arbitrary byte lengths are supported.
+    fn copy_to_memory_unchecked(self, dest: *u8, src_offset: u256, len: u256) {
         self.copy_to_memory(dest: dest, src_offset: src_offset, len: len)
     }
 }
@@ -479,13 +479,12 @@ fn round_up_words(_ len: u256) -> u256 {
 #[inline(always)]
 fn checked_dynamic_payload_after_head<A: Abi, I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> (u256, u256) {
     let data_len = input.word_at(pos)
-    // Solidity requires the actual bytes, but accepts omitted trailing padding.
-    checked_frame_end<A>(pos + 32, data_len, input_len)
-    let rounded = round_up_words(data_len)
-    if rounded < data_len || rounded > 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffdf {
+    // The caller has already validated the length word. Require the actual
+    // bytes and ensure that rounding plus the length word cannot overflow.
+    if data_len > input_len - (pos + 32) || data_len > 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc0 {
         A::decode_error()
     }
-    let payload_size = 32 + rounded
+    let payload_size = (data_len + 63) & 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0
 
     (data_len, payload_size)
 }
@@ -519,12 +518,10 @@ fn copy_dynamic_bytes<I: ByteInput>(_ input: I, _ pos: u256, _ dest: *u8, _ data
 }
 
 fn copy_padded_payload<I: ByteInput>(_ input: I, _ pos: u256, _ dest: *u8, _ actual_size: u256, _ size: u256) {
-    if actual_size % 32 == 0 {
-        input.copy_to_memory_unchecked_aligned(dest: dest, src_offset: pos, len: actual_size)
-    } else {
-        store_word(ptr: ptr_offset(dest, size - 32), value: 0)
-        input.copy_to_memory(dest: dest, src_offset: pos, len: actual_size)
-    }
+    // Every owned tail includes a length word, so size >= 32. The copy
+    // restores actual bytes in this word, including the whole word if aligned.
+    store_word(ptr: ptr_offset(dest, size - 32), value: 0)
+    input.copy_to_memory_unchecked(dest: dest, src_offset: pos, len: actual_size)
 }
 
 fn copy_dynamic_payload_from_with_input_len<A: Abi, I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> (*u8, u256, u256) {
@@ -972,7 +969,7 @@ impl ByteInput for ptr::MemSpan {
         )
     }
 
-    fn copy_to_memory_unchecked_aligned(self, dest: *u8, src_offset: u256, len: u256) {
+    fn copy_to_memory_unchecked(self, dest: *u8, src_offset: u256, len: u256) {
         ptr::copy(
             dest,
             source: ptr::MemSpan::from_raw_parts(
@@ -2334,7 +2331,7 @@ impl<A: Abi, T> Decode<A> for DynArray<T>
         if T::IS_DYNAMIC {
             copy_padded_payload(input, payload_at, data_ptr, actual_size, payload_size)
         } else {
-            input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: payload_at, len: payload_size)
+            input.copy_to_memory_unchecked(dest: data_ptr, src_offset: payload_at, len: payload_size)
         }
 
         DynArray::from_validated_abi_tail(
@@ -2366,7 +2363,7 @@ impl<A: Abi, T> Decode<A> for DynArray<T>
         if T::IS_DYNAMIC {
             copy_padded_payload(input, pos, data_ptr, actual_size, payload_size)
         } else {
-            input.copy_to_memory_unchecked_aligned(dest: data_ptr, src_offset: pos, len: payload_size)
+            input.copy_to_memory_unchecked(dest: data_ptr, src_offset: pos, len: payload_size)
         }
 
         DynArray::from_validated_abi_tail(
