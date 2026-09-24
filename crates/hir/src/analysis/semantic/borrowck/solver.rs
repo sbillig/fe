@@ -90,7 +90,7 @@ pub(super) struct Borrowck<'db> {
     pub inventory: Inventory<'db>,
     pub summary_mode: BorrowSummaryMode,
     pub calls: BTreeMap<NValueId, CallSummary<'db>>,
-    recursive_calls: FxHashSet<NValueId>,
+    pub(super) recursive_calls: FxHashSet<NValueId>,
     /// Published only after the joint structural/loan fixed point converges.
     pub before: Vec<Vec<BorrowState<'db>>>,
     pub terminal: Vec<Option<BorrowState<'db>>>,

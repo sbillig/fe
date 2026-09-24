@@ -503,10 +503,29 @@ their unsigned bound only after a corresponding fill certificate is established.
 
 The joint solver checks its complete incoming states after each sweep so a
 temporary join/widen change within a sweep does not prevent convergence.
-Recursive pointer forwarding converges, but recursively returning newly
-allocated pointers can grow summary allocation choices and reach the existing
-bounded convergence diagnostic. Nonconvergence never grants validation through
-an opaque fallback.
+
+Recursive forwarding of an input preserves that input's may-alias identity.
+For a call returning one direct capability, fresh alternatives use one finite
+call-result port when exported poststates either mirror that result or describe
+invalid contents of fresh storage. Other exported regions cannot carry a
+separate fresh object, and certified ranges and native requirements retain
+their existing stricter representation. The port is keyed by the caller's
+semantic instance and call-result value; the enclosing loop generation
+distinguishes actual evaluations. A shared port is used for the result and a
+stored copy, while independent input sources retain their identities.
+
+This is a finite source graph for the supported recursive component: each
+function has finitely many allocation and call sites, and recursively forwarded
+fresh alternatives reuse their call site's port instead of adding a choice at
+each depth. Internal recursive choices are projected only from may-result
+sources, exactly mirrored stored values, and invalid fresh contents. The
+remaining local predicates and external obligations retain their guarded
+meaning. Allocation births remain separate events matched to the dynamic
+call-result occurrence and loop arguments; sharing a port does not revive an
+older moved instance or initialize native bytes. Equal instantiated poststate
+destinations join their possible contents before one update. Unsupported
+poststates can still reach the bounded convergence diagnostic; neither that
+failure nor a pending/blocked body validates through a signature fallback.
 
 The must-initialization set contains caller-visible external storage whose type
 can become moved or contain native validity obligations. Local moved facts still
@@ -622,11 +641,9 @@ records the baseline for future changes under the same harness.
 
 ## Source diagnostics and compatibility
 
-The UI fixtures below preserve complete diagnostics, including source labels, for
-these rules and current precision limits. Each fixture contains both the rejected
-case and accepted alternatives, labeled in the source. A precision-limit snapshot
-records current behavior; it should change when a sound improvement makes the
-program acceptable.
+The UI fixtures below preserve complete diagnostics, including source labels,
+for rejected cases. They also record accepted alternatives and precision
+improvements with empty snapshots. Source comments identify each case.
 
 | Source pattern | Current behavior | Diagnostic fixture |
 | --- | --- | --- |
@@ -635,7 +652,7 @@ program acceptable.
 | Move one cell, then write through a pointer selecting that cell or another | The write cannot definitely restore the moved cell. An exact destination is accepted. | [Ambiguous reinitialization](../../crates/uitest/fixtures/semantic_borrowck/ambiguous_reinitialization.fe) |
 | Keep a storage borrow live across an external call | CALL conflicts with shared and mutable state loans; STATICCALL conflicts with mutable state loans. Ending the loan before the call and reborrowing afterward is accepted. | [External call state borrows](../../crates/uitest/fixtures/semantic_borrowck/external_call_state_borrows.fe) |
 | Select an allocating factory with a boolean inside a loop, then consume the joined result | Complementary branch guards preserve the selected fresh allocation and accept the move. Moving it twice still conflicts. | [Boolean factory loop](../../crates/uitest/fixtures/semantic_borrowck/boolean_factory_loop.fe) |
-| Recursively return freshly allocated objects | Summary allocation choices can fail bounded convergence. Recursively forwarding an existing pointer is accepted. | [Recursive fresh return](../../crates/uitest/fixtures/semantic_borrowck/recursive_fresh_return.fe) |
+| Recursively return one freshly allocated object | Direct and mutual fresh returns converge through a finite result port; forwarding an existing pointer retains its alias identity. Unsupported poststate growth still fails closed. | [Recursive fresh return](../../crates/uitest/fixtures/semantic_borrowck/recursive_fresh_return.fe) |
 | Use a raw pointee after an unresolved generic operation | Template validation remains pending. A concrete implementation that consumes the pointee makes the subsequent use invalid. | [Generic ownership specialization](../../crates/uitest/fixtures/semantic_borrowck/generic_ownership_specialization.fe) |
 | Execute a bodyless, untrusted function | The call remains pending even without arguments; its signature supplies no effect bound. | [Opaque executable call](../../crates/uitest/fixtures/semantic_borrowck/opaque_executable_call.fe) |
 | Leave a function-local reference in a fresh raw heap slot when returning | The retained-storage boundary rejects the local borrow even when only a copied integer is returned. A heap-owned referent has a different lifetime and is accepted. | [Retained local reference](../../crates/uitest/fixtures/semantic_borrowck/retained_local_reference.fe) |

@@ -1,4 +1,4 @@
-// Known precision limit: recursive fresh-result summaries may not converge.
+// Fresh recursive results converge through a finite call-result port.
 struct Item { n: u256 }
 fn consume(_ item: own Item) {}
 fn initialized(_ n: u256) -> *Item {
@@ -7,7 +7,7 @@ fn initialized(_ n: u256) -> *Item {
     p
 }
 
-// Rejected conservatively: summaries of fresh recursive results do not converge.
+// Accepted: the recursive call returns one newly allocated object.
 fn recursive(_ n: u256, depth: u256) -> *Item {
     if depth == 0 { initialized(n) }
     else { recursive(n, depth: depth - 1) }
@@ -20,3 +20,25 @@ fn forward_recursive(_ pointer: *Item, depth: u256) -> *Item {
     else { forward_recursive(pointer, depth: depth - 1) }
 }
 fn forward_existing() { consume(*forward_recursive(initialized(7), depth: 2)) }
+
+// Rejected: the stored pointer can be an older object from the same loop
+// allocation site, so reinitializing the result does not restore it.
+fn make_with_previous(_ slot: **Item, _ n: u256) -> *Item {
+    let mut current = core::ptr::alloc<Item>()
+    *slot = current
+    let mut i: u256 = 0
+    while i < n {
+        current = core::ptr::alloc<Item>()
+        if i + 1 < n { *slot = current }
+        i += 1
+    }
+    current
+}
+fn stored_previous_object() {
+    let slot = core::ptr::alloc<*Item>()
+    let result = make_with_previous(slot, 3)
+    *result = Item { n: 1 }
+    consume(*(*slot))
+    *result = Item { n: 1 }
+    consume(*(*slot))
+}

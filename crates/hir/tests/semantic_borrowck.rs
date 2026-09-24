@@ -1049,9 +1049,7 @@ fn check(count: u256) {
 }
 
 #[test]
-fn recursive_fresh_allocation_returns_fail_closed_on_nonconvergence() {
-    // Existing summary choices can grow through recursive allocation returns.
-    // Keep the bounded diagnostic instead of accepting an opaque fallback.
+fn recursive_fresh_allocation_returns_converge() {
     let source = allocation_birth_loop_source("let p = recursive(i, depth: 2)")
         + r#"
 fn recursive(_ n: u256, depth: u256) -> *Item {
@@ -1059,12 +1057,332 @@ fn recursive(_ n: u256, depth: u256) -> *Item {
 }
 "#;
     let diagnostics = checked_borrow_diags(&source);
+    assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+}
+
+#[test]
+fn mutual_recursive_fresh_allocation_returns_converge() {
+    let source = allocation_birth_loop_source("let p = first(i, depth: 2)")
+        + r#"
+fn first(_ n: u256, depth: u256) -> *Item {
+    if depth == 0 { initialized(n) } else { second(n, depth: depth - 1) }
+}
+fn second(_ n: u256, depth: u256) -> *Item {
+    if depth == 0 { initialized(n) } else { first(n, depth: depth - 1) }
+}
+"#;
+    let diagnostics = checked_borrow_diags(&source);
+    assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+}
+
+#[test]
+fn recursive_fresh_allocation_does_not_revive_older_moved_result() {
+    let source = r#"
+struct Item { n: u256 }
+fn consume(_ value: own Item) {}
+fn initialized(_ n: u256) -> *Item {
+    let p = core::ptr::alloc<Item>()
+    *p = Item { n }
+    p
+}
+fn recursive(_ n: u256, depth: u256) -> *Item {
+    if depth == 0 { initialized(n) } else { recursive(n, depth: depth - 1) }
+}
+fn check() {
+    let old = recursive(0, depth: 2)
+    consume(*old)
+    let fresh = recursive(1, depth: 2)
+    consume(*fresh)
+    consume(*old)
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(diagnostics.contains("move conflict"), "{diagnostics}");
+    assert!(
+        !diagnostics.contains("recursive boundary requirements"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn recursive_fresh_or_old_result_does_not_revive_old_alternative() {
+    let source = r#"
+struct Item { n: u256 }
+fn consume(_ value: own Item) {}
+fn initialized(_ n: u256) -> *Item {
+    let p = core::ptr::alloc<Item>()
+    *p = Item { n }
+    p
+}
+fn maybe(_ old: *Item, _ n: u256, depth: u256, pick: bool) -> *Item {
+    if depth == 0 {
+        if pick { initialized(n) } else { old }
+    } else { maybe(old, n, depth: depth - 1, pick) }
+}
+fn check() {
+    let old = initialized(0)
+    consume(*old)
+    let selected = maybe(old, 1, depth: 2, pick: false)
+    consume(*selected)
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(diagnostics.contains("move conflict"), "{diagnostics}");
+    assert!(
+        !diagnostics.contains("recursive boundary requirements"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn recursive_fresh_result_keeps_native_invalidity() {
+    let source = r#"
+fn recursive(depth: u256) -> *ref u256 {
+    if depth == 0 { core::ptr::alloc<ref u256>() }
+    else { recursive(depth: depth - 1) }
+}
+fn check() {
+    let slot = recursive(depth: 2)
+    let loaded: u256 = *slot
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(
+        diagnostics.contains("cannot use a native borrow"),
+        "{diagnostics}"
+    );
+    assert!(
+        !diagnostics.contains("recursive boundary requirements"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn recursive_fresh_result_stored_in_slot_preserves_alias() {
+    let source = r#"
+struct Item { n: u256 }
+fn consume(_ value: own Item) {}
+fn initialized(_ n: u256) -> *Item {
+    let p = core::ptr::alloc<Item>()
+    *p = Item { n }
+    p
+}
+
+fn recursive(_ n: u256, depth: u256) -> *Item {
+    if depth == 0 { initialized(n) } else { recursive(n, depth: depth - 1) }
+}
+fn store(_ slot: **Item) -> *Item {
+    let p = recursive(1, depth: 2)
+    *slot = p
+    p
+}
+fn check() {
+    let slot = core::ptr::alloc<*Item>()
+    let p = store(slot)
+    consume(*p)
+    consume(*(*slot))
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(diagnostics.contains("move conflict"), "{diagnostics}");
+    assert!(
+        !diagnostics.contains("recursive boundary requirements"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn recursive_fresh_result_stored_inside_cycle_preserves_alias() {
+    let source = r#"
+struct Item { n: u256 }
+fn consume(_ value: own Item) {}
+fn initialized() -> *Item {
+    let p = core::ptr::alloc<Item>()
+    *p = Item { n: 1 }
+    p
+}
+
+fn recursive(_ slot: **Item, depth: u256) -> *Item {
+    let p = if depth == 0 { initialized() }
+        else { recursive(slot, depth: depth - 1) }
+    *slot = p
+    p
+}
+fn check() {
+    let slot = core::ptr::alloc<*Item>()
+    let p = recursive(slot, depth: 2)
+    consume(*p)
+    consume(*(*slot))
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(diagnostics.contains("move conflict"), "{diagnostics}");
+    assert!(
+        !diagnostics.contains("recursive boundary requirements"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn recursive_fresh_result_keeps_reachable_call_effects() {
+    let source = r#"
+struct Item { n: u256 }
+fn initialized() -> *Item {
+    let p = core::ptr::alloc<Item>()
+    *p = Item { n: 1 }
+    p
+}
+fn recursive(depth: u256) -> *Item {
+    if depth == 0 { initialized() }
+    else { recursive(depth: depth - 1) }
+}
+fn write(_ p: *Item) { (*p).n = 7 }
+fn check() {
+    let p = recursive(depth: 2)
+    let loan = mut (*p).n
+    write(p)
+    loan = 3
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+    assert!(
+        !diagnostics.contains("recursive boundary requirements"),
+        "{diagnostics}"
+    );
+}
+#[test]
+fn mutual_recursive_fresh_return_is_query_order_independent() {
+    let source = r#"
+struct Item { n: u256 }
+fn consume(_ value: own Item) {}
+fn initialized() -> *Item {
+    let p = core::ptr::alloc<Item>()
+    *p = Item { n: 1 }
+    p
+}
+fn first(depth: u256) -> *Item {
+    if depth == 0 { initialized() }
+    else { second(depth: depth - 1) }
+}
+fn second(depth: u256) -> *Item {
+    if depth == 0 { initialized() }
+    else { first(depth: depth - 1) }
+}
+fn check() { consume(*first(depth: 2)) }
+"#;
+    for first in ["first", "second", "initialized", "check"] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("recursive_query_order.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        semantic_borrow_summary(&db, func_instance(&db, module, first)).unwrap();
+        let diagnostics = format_diagnostics(
+            &db,
+            &collect_semantic_borrow_diagnostic_vouchers(&db, module),
+        );
+        assert!(diagnostics.is_empty(), "{first}: {diagnostics}");
+    }
+}
+#[test]
+fn unsupported_recursive_fresh_poststate_still_fails_closed() {
+    let source = r#"
+struct Item { n: u256 }
+fn initialized() -> *Item {
+    let p = core::ptr::alloc<Item>()
+    *p = Item { n: 1 }
+    p
+}
+fn recursive(_ slot: **Item, depth: u256) -> *Item {
+    if depth == 0 { initialized() }
+    else {
+        let p = recursive(slot, depth: depth - 1)
+        *slot = p
+        p
+    }
+}
+fn check() {
+    let slot = core::ptr::alloc<*Item>()
+    let p = recursive(slot, depth: 2)
+    let n = (*p).n
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
     assert!(
         diagnostics.contains("recursive boundary requirements did not converge"),
         "{diagnostics}"
     );
-    assert!(diagnostics.contains("transport violation"), "{diagnostics}");
     assert!(!diagnostics.contains("internal"), "{diagnostics}");
+}
+
+#[test]
+fn nonreturning_recursive_fresh_summary_has_no_birth() {
+    let source = r#"
+struct Item { n: u256 }
+fn never() -> *Item { never() }
+"#;
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("nonreturning_recursive_fresh.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let summary = semantic_borrow_summary(&db, func_instance(&db, module, "never"))
+        .unwrap()
+        .unwrap();
+    assert!(!summary.may_return);
+    assert!(summary.availability.reinitialized.is_empty());
+}
+
+#[test]
+fn recursive_fresh_return_with_pending_base_remains_pending() {
+    let source = r#"
+struct Item { n: u256 }
+extern { fn unresolved() -> *Item }
+fn recursive(depth: u256) -> *Item {
+    if depth == 0 { unresolved() }
+    else { recursive(depth: depth - 1) }
+}
+"#;
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("pending_recursive_fresh.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let instance = func_instance(&db, module, "recursive");
+    assert!(matches!(
+        semantic_borrow_summary(&db, instance),
+        Err(SemanticAnalysisError::Pending(_))
+    ));
+    assert!(matches!(
+        check_semantic_borrows(&db, instance),
+        Err(SemanticAnalysisError::Pending(_))
+    ));
+}
+
+#[test]
+fn recursive_fresh_return_with_blocked_base_remains_blocked() {
+    let source = r#"
+struct Item { n: u256 }
+fn invalid() -> *Item {
+    missing = 1
+    core::ptr::alloc<Item>()
+}
+fn recursive(depth: u256) -> *Item {
+    if depth == 0 { invalid() }
+    else { recursive(depth: depth - 1) }
+}
+"#;
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("blocked_recursive_fresh.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    let instance = func_instance(&db, module, "recursive");
+    let summary = semantic_borrow_summary(&db, instance);
+    assert!(
+        matches!(summary, Err(SemanticAnalysisError::Blocked(_))),
+        "{summary:?}"
+    );
+    assert!(matches!(
+        check_semantic_borrows(&db, instance),
+        Err(SemanticAnalysisError::Blocked(_))
+    ));
 }
 
 #[test]

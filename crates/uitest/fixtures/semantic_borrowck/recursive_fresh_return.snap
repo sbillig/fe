@@ -3,12 +3,10 @@ source: crates/uitest/tests/semantic_borrowck.rs
 expression: diags
 input_file: fixtures/semantic_borrowck/recursive_fresh_return.fe
 ---
-error[16-0007]: transport violation in `fn recursive`
-   ┌─ recursive_fresh_return.fe:11:47
+error[16-0002]: move conflict in `fn stored_previous_object`
+   ┌─ recursive_fresh_return.fe:42:5
    │
-11 │   fn recursive(_ n: u256, depth: u256) -> *Item {
-   │ ╭───────────────────────────────────────────────^
-12 │ │     if depth == 0 { initialized(n) }
-13 │ │     else { recursive(n, depth: depth - 1) }
-14 │ │ }
-   │ ╰─^ recursive boundary requirements did not converge
+41 │     consume(*(*slot))
+   │             -------- value is moved here
+42 │     *result = Item { n: 1 }
+   │     ^^^^^^^^^^^^^^^^^^^^^^^ cannot write through a moved value

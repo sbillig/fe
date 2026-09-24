@@ -69,6 +69,14 @@ pub type SourceValue<'db> = ValueId<'db, SourceExpr<'db>>;
 type SourceValues<'db> = ValueInterner<'db, SourceExpr<'db>>;
 
 #[derive(Clone, Copy)]
+enum SummaryValueRole {
+    Return,
+    Retained,
+    FreshInvalidPoststate,
+    MirroredResult,
+}
+
+#[derive(Clone, Copy)]
 pub(super) struct CallInputs<'a, 'db> {
     pub args: &'a [NOperand],
     pub effects: &'a [NEffectArg<'db>],
@@ -89,6 +97,25 @@ impl CallInputs<'_, '_> {
     }
 }
 
+/// How a summary component may refer to the single object a call returns.
+#[derive(Clone, Copy)]
+enum PortUse {
+    Result,
+    Copy,
+    Other,
+}
+
+fn contains_allocation_origin(source: &ExternalSource<'_>) -> bool {
+    source.clobber.as_ref().is_some_and(|clobber| {
+        contains_allocation_origin(&clobber.target.source)
+            || contains_allocation_origin(&clobber.written.source)
+    }) || match &source.origin {
+        ExternalOrigin::Allocation(_) => true,
+        ExternalOrigin::Memory { base, .. } => contains_allocation_origin(&base.source),
+        _ => false,
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct CallSummary<'db> {
     pub instance: SemanticInstance<'db>,
@@ -96,6 +123,7 @@ pub(super) struct CallSummary<'db> {
     pub pending: bool,
     updates: Vec<CapabilityValue<'db>>,
     births: Vec<AllocationBirth<'db>>,
+    single_result_port: bool,
 }
 
 impl<'db> Borrowck<'db> {
@@ -104,14 +132,16 @@ impl<'db> Borrowck<'db> {
         mut source: ExternalSource<'db>,
         result: NValueId,
         origin: SemOrigin<'db>,
+        single_result_port: bool,
     ) -> Result<ExternalSource<'db>, SemanticDiagnostic<'db>> {
         let mut invalid = false;
+        let fresh = single_result_port && source.is_fresh_allocation();
         source.map_occurrences(&mut |occurrence, arguments| {
             let AddressOccurrence::Summary(choice) = *occurrence else {
                 invalid = true;
                 return;
             };
-            *arguments = arguments
+            *arguments = (if fresh { &[][..] } else { arguments.as_ref() })
                 .iter()
                 .copied()
                 .chain(
@@ -124,7 +154,7 @@ impl<'db> Borrowck<'db> {
             *occurrence = AddressOccurrence::Value {
                 instance: self.instance,
                 value: result,
-                choice,
+                choice: if fresh { 0 } else { choice },
             };
         });
         if invalid {
@@ -226,51 +256,70 @@ impl<'db> Borrowck<'db> {
                 .collect();
             let sources = SourceValues::new(self.db, ValueLimits::default());
             let mut external = Vec::new();
-            for value in std::iter::once(&summary.result)
-                .chain(summary.mutable_inputs.iter().map(|update| &update.value))
-                .chain(summary.certified_ranges.iter().map(|range| &range.contents))
-            {
-                for leaf in sources.leaves(value, ValueOccurrence::Summary) {
-                    external.push((
-                        leaf.payload.source,
-                        leaf.guard.scope().clone(),
-                        Some(leaf.guard),
-                    ));
-                }
+            for leaf in sources.leaves(&summary.result, ValueOccurrence::Summary) {
+                let scope = leaf.guard.scope().clone();
+                external.push((
+                    leaf.payload.source,
+                    scope,
+                    Some(leaf.guard),
+                    PortUse::Result,
+                ));
             }
-            external.extend(summary.mutable_inputs.iter().map(|update| {
-                (
-                    update.destination.source.clone(),
-                    update.value.scope().clone(),
-                    None,
-                )
-            }));
-            external.extend(summary.certified_ranges.iter().map(|range| {
-                (
+            for update in &summary.mutable_inputs {
+                let leaves = sources.leaves(&update.value, ValueOccurrence::Summary);
+                let port = if update.value == summary.result
+                    || (update.destination.source.fresh_allocation().is_some()
+                        && leaves.iter().all(|leaf| leaf.payload.invalidated))
+                {
+                    PortUse::Copy
+                } else {
+                    PortUse::Other
+                };
+                for leaf in leaves {
+                    let scope = leaf.guard.scope().clone();
+                    external.push((leaf.payload.source, scope, Some(leaf.guard), port));
+                }
+                let destination = update.destination.source.clone();
+                external.push((destination, update.value.scope().clone(), None, port));
+            }
+            for range in &summary.certified_ranges {
+                for leaf in sources.leaves(&range.contents, ValueOccurrence::Summary) {
+                    let scope = leaf.guard.scope().clone();
+                    external.push((leaf.payload.source, scope, Some(leaf.guard), PortUse::Other));
+                }
+                external.push((
                     range.destination.source.clone(),
                     range.scope.clone(),
                     Some(range.coverage.clone()),
+                    PortUse::Other,
+                ));
+            }
+            let regions = summary
+                .requirements
+                .iter()
+                .flat_map(|requirement| {
+                    std::iter::once(&requirement.region).chain(requirement.populated.iter())
+                })
+                .chain(
+                    summary
+                        .accesses
+                        .iter()
+                        .flat_map(|access| [&access.region, &access.authorizers]),
                 )
-            }));
-            external.extend(summary.requirements.iter().flat_map(|requirement| {
-                std::iter::once(&requirement.region)
-                    .chain(requirement.populated.iter())
-                    .flat_map(|region| region.clauses())
-                    .filter_map(|clause| {
-                        SourceExpr::from_place(&clause.payload).map(|source| {
-                            (
-                                source.source,
-                                clause.guard.scope().clone(),
-                                Some(clause.guard.clone()),
-                            )
-                        })
-                    })
-            }));
+                .chain(
+                    summary
+                        .availability
+                        .incoming
+                        .iter()
+                        .map(|requirement| &requirement.region),
+                )
+                .chain([
+                    &summary.availability.reinitialized,
+                    &summary.availability.unavailable,
+                    &summary.native_requirements,
+                ]);
             external.extend(
-                summary
-                    .accesses
-                    .iter()
-                    .flat_map(|access| [&access.region, &access.authorizers])
+                regions
                     .flat_map(|region| region.clauses())
                     .filter_map(|clause| {
                         SourceExpr::from_place(&clause.payload).map(|source| {
@@ -278,34 +327,34 @@ impl<'db> Borrowck<'db> {
                                 source.source,
                                 clause.guard.scope().clone(),
                                 Some(clause.guard.clone()),
+                                PortUse::Other,
                             )
                         })
                     }),
             );
-            external.extend(
-                summary
-                    .availability
-                    .incoming
-                    .iter()
-                    .map(|requirement| &requirement.region)
-                    .chain([
-                        &summary.availability.reinitialized,
-                        &summary.availability.unavailable,
-                        &summary.native_requirements,
-                    ])
-                    .flat_map(|region| region.clauses())
-                    .filter_map(|clause| {
-                        SourceExpr::from_place(&clause.payload).map(|source| {
-                            (
-                                source.source,
-                                clause.guard.scope().clone(),
-                                Some(clause.guard.clone()),
-                            )
+            // A direct capability result carries only one object in a call
+            // evaluation. Its fresh alternatives therefore share one finite
+            // call-result port when every other exported fresh object is that
+            // same object: a stored copy of the result or invalid contents of
+            // its fresh storage. Allocation arguments bound by a family or an
+            // existential can name several objects in one evaluation, so an
+            // equal abstract value does not identify a copy with the result.
+            // The Value occurrence and enclosing loop arguments still
+            // distinguish different calls.
+            let single_result_port = summary.result.shape().direct(self.db).is_some()
+                && summary.certified_ranges.is_empty()
+                && summary.native_requirements.is_empty()
+                && external.iter().all(|(source, _, _, port)| match port {
+                    PortUse::Result => true,
+                    PortUse::Copy => source.fresh_allocation().is_none_or(|handle| {
+                        handle.arguments.iter().all(|argument| {
+                            !matches!(argument, IndexExpr::Bound(_) | IndexExpr::Iteration(_))
                         })
                     }),
-            );
+                    PortUse::Other => !contains_allocation_origin(source),
+                });
             let mut births = Vec::new();
-            for (source, scope, guard) in external {
+            for (source, scope, guard, _) in external {
                 if let Some(guard) = guard
                     && let Some(birth) = AllocationBirth::from_source(&source, guard)
                     && !births.contains(&birth)
@@ -313,7 +362,7 @@ impl<'db> Borrowck<'db> {
                     births.push(birth);
                 }
                 let base = if let Some(base) = source.address_base(self.db) {
-                    self.instantiate_address_base(base, result, origin)?
+                    self.instantiate_address_base(base, result, origin, single_result_port)?
                 } else {
                     match source.origin {
                         ExternalOrigin::Provider {
@@ -347,6 +396,7 @@ impl<'db> Borrowck<'db> {
                     pending,
                     updates,
                     births,
+                    single_result_port,
                 },
             );
         }
@@ -388,7 +438,11 @@ impl<'db> Borrowck<'db> {
             });
         }
         self.solve()?;
-        let summary = if !self.pending.callees.is_empty() && can_specialize(self.db, self.instance)
+        let recursive_unresolved = !self.recursive_calls.is_empty()
+            && (self.blocked.is_some() || !self.pending.callees.is_empty());
+        let summary = if (!self.pending.callees.is_empty()
+            && can_specialize(self.db, self.instance))
+            || recursive_unresolved
         {
             if self.summary_mode == BorrowSummaryMode::Final && self.blocked.is_none() {
                 if let Some(diagnostic) = self.analyze_availability().diagnostic {
@@ -400,6 +454,11 @@ impl<'db> Borrowck<'db> {
                     .clone()?;
                 self.validate_pending_exports()?;
             }
+            // A recursive component with unresolved callees has no validated
+            // body contract to iterate. Keep its visible result opaque and
+            // its Pending or Blocked status until those callees are resolved.
+            // Independent final returning paths were checked above when the
+            // component was pending rather than blocked.
             signature_summary(self.db, self.instance, true)?
         } else {
             self.build_summary()?
@@ -604,7 +663,7 @@ impl<'db> Borrowck<'db> {
                 }
                 let sources = self.summarize_value(
                     returned,
-                    Boundary::Return,
+                    SummaryValueRole::Return,
                     origin,
                     &mut values,
                     &mut choices,
@@ -619,9 +678,17 @@ impl<'db> Borrowck<'db> {
                     .find(|(root, _)| *root == &RegionRoot::External(source.clone()))
                     .expect("inventoried mutable input")
                     .1;
+                let role =
+                    if returned.is_some_and(|returned| contents == state.value(returned.value)) {
+                        SummaryValueRole::MirroredResult
+                    } else if source.fresh_allocation().is_some() {
+                        SummaryValueRole::FreshInvalidPoststate
+                    } else {
+                        SummaryValueRole::Retained
+                    };
                 let sources = self.summarize_value(
                     contents,
-                    Boundary::Retained,
+                    role,
                     origin,
                     &mut values,
                     &mut choices,
@@ -1023,12 +1090,17 @@ impl<'db> Borrowck<'db> {
     fn summarize_value(
         &self,
         value: &CapabilityValue<'db>,
-        boundary: Boundary,
+        role: SummaryValueRole,
         origin: SemOrigin<'db>,
         values: &mut SourceValues<'db>,
         choices: &mut BTreeMap<ValueOccurrence, u32>,
         handles: &mut BTreeMap<AddressOccurrence<'db>, u32>,
     ) -> Result<SourceValue<'db>, SemanticDiagnostic<'db>> {
+        let boundary = if matches!(role, SummaryValueRole::Return) {
+            Boundary::Return
+        } else {
+            Boundary::Retained
+        };
         let mut failure = None;
         let result =
             self.inventory
@@ -1064,18 +1136,34 @@ impl<'db> Borrowck<'db> {
                         };
                         payload.invalidated =
                             matches!(entry.payload, CapabilityRef::Invalidated { .. });
-                        // A recursive call can return the same caller-supplied
-                        // address after any number of internal choices. Its
-                        // result is a may-alias: projecting the call-local
-                        // choices preserves every possible input source and
-                        // prevents an unbounded chain of identical aliases.
-                        // Do not broaden fresh allocation identities or must
-                        // obligations, which have different quantifiers.
-                        let guard = if matches!(boundary, Boundary::Return)
-                            && matches!(&payload.source.origin, ExternalOrigin::Input(_))
+                        // A direct result contains one address per call evaluation.
+                        // The finite call-result port names that fresh address;
+                        // deeper recursive choices only select which fresh
+                        // alternative reached it. Project those choices from
+                        // the may-source, while the call result and loop
+                        // generation still isolate this birth from older ones.
+                        // Forwarded inputs remain may-aliases. Invalid native
+                        // contents of that new object also stay invalid when
+                        // their deeper selection is projected.
+                        let guard = if (matches!(
+                            role,
+                            SummaryValueRole::Return | SummaryValueRole::MirroredResult
+                        )
+                            && (matches!(&payload.source.origin, ExternalOrigin::Input(_))
+                                || payload.source.is_fresh_allocation()))
+                            || (matches!(
+                                role,
+                                SummaryValueRole::FreshInvalidPoststate
+                                    | SummaryValueRole::MirroredResult
+                            ) && payload.invalidated)
                         {
                             clause.guard.forget_occurrences(|occurrence| {
                                 self.recursive_call_choice(occurrence)
+                                    && (matches!(
+                                        &payload.source.origin,
+                                        ExternalOrigin::Input(_)
+                                    ) || matches!(occurrence, ValueOccurrence::CallChoice { result, .. }
+                                        if self.calls[&result].single_result_port))
                             })
                         } else {
                             clause.guard.clone()
@@ -1735,7 +1823,12 @@ impl<'db> Borrowck<'db> {
             .expect("birth scalar substitution");
             let source = ExternalSource::allocation(self.db, template.allocation.clone())
                 .substitute(self.db, &subst);
-            let source = self.instantiate_address_base(source, result, inputs.origin)?;
+            let source = self.instantiate_address_base(
+                source,
+                result,
+                inputs.origin,
+                call.single_result_port,
+            )?;
             let birth =
                 AllocationBirth::from_source(&source, guard).expect("allocation birth origin");
             if !births.contains(&birth) {
@@ -1778,7 +1871,7 @@ impl<'db> Borrowck<'db> {
         };
         let returned =
             self.instantiate_value(state, &call.summary.result, &template, result, inputs)?;
-        let mut updates = Vec::new();
+        let mut updates: Vec<(RegionSet<'db>, CapabilityValue<'db>)> = Vec::new();
         for (update, template) in call.summary.mutable_inputs.iter().zip(&call.updates) {
             let value = self.instantiate_value(state, &update.value, template, result, inputs)?;
             let target = self.instantiate_source(
@@ -1788,7 +1881,14 @@ impl<'db> Borrowck<'db> {
                 update.value.scope(),
                 inputs,
             )?;
-            updates.push((target.region, value));
+            if let Some((_, existing)) = updates
+                .iter_mut()
+                .find(|(region, _)| *region == target.region)
+            {
+                *existing = self.inventory.values.join(existing, &value);
+            } else {
+                updates.push((target.region, value));
+            }
         }
         let mut certified_ranges = Vec::new();
         for range in &call.summary.certified_ranges {
@@ -2250,6 +2350,7 @@ impl<'db> Borrowck<'db> {
                     external.address_base(self.db).expect("address origin"),
                     result,
                     origin,
+                    self.calls[&result].single_result_port,
                 )?;
                 let ty = source.contract.ty;
                 let region = if let Some((target, written, extent)) = clobber {
