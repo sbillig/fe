@@ -686,3 +686,106 @@ pub fn main() -> i32 {
         }
     }
 }
+
+#[test]
+fn native_bit_counts_match_runtime_inputs() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("bits.fe");
+    fs::write(
+        &source,
+        r#"
+use std::io::{HostIo, Read, Write, host, read_char}
+use core::num::{leading_zeros, trailing_zeros}
+fn read_word() -> u256 uses (input: mut Read) {
+    let mut value: u256 = 0
+    let mut i: u256 = 0
+    while i < 32 {
+        let byte = read_char()
+        core::assert(byte >= 0)
+        let bits: u256 = byte.downcast_unchecked()
+        value = value | (bits << (i * 8))
+        i += 1
+    }
+    value
+}
+fn write_word(_ value: u256) uses (output: mut HostIo) {
+    let mut i: u256 = 0
+    while i < 32 {
+        output.write_char(c: ((value >> (i * 8)) & 255).downcast_unchecked())
+        core::assert(!output.failed())
+        i += 1
+    }
+}
+pub fn main() -> i32 {
+    with (Read = host(), HostIo = host()) {
+        let mut marker = read_char()
+        while marker != -1 {
+            core::assert(marker == 64)
+            let value = read_word()
+            write_word(leading_zeros(value))
+            write_word(trailing_zeros(value))
+            marker = read_char()
+        }
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    let one = BigUint::from(1u8);
+    let max = (&one << 256usize) - &one;
+    let mut cases = vec![BigUint::from(0u8), max.clone()];
+    for bit in 0..256usize {
+        let power = &one << bit;
+        cases.push(&power - &one);
+        cases.push(&power + &one);
+        cases.push(power);
+    }
+    let mut seed = 0x5eed_c1a2_0000_0001u64;
+    for index in 0..128usize {
+        let mut bytes = [0u8; 32];
+        for chunk in bytes.as_chunks_mut::<8>().0 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            chunk.copy_from_slice(&seed.to_le_bytes());
+        }
+        cases.push(BigUint::from_bytes_le(&bytes) >> (index * 2));
+    }
+    let mut input = Vec::new();
+    let mut expected = Vec::new();
+    for value in cases {
+        let value = value & &max;
+        input.push(64);
+        let mut bytes = value.to_bytes_le();
+        bytes.resize(32, 0);
+        input.extend(bytes);
+        let leading = 256 - value.bits();
+        let trailing = value.trailing_zeros().unwrap_or(256);
+        for count in [leading, trailing] {
+            let mut bytes = BigUint::from(count).to_bytes_le();
+            bytes.resize(32, 0);
+            expected.extend(bytes);
+        }
+    }
+    let input_path = temp.path().join("input.bin");
+    fs::write(&input_path, input).unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("bits"))
+            .stdin(fs::File::open(&input_path).unwrap())
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(result.stdout.len(), expected.len());
+        for (index, (actual, expected)) in result
+            .stdout
+            .as_chunks::<64>()
+            .0
+            .iter()
+            .zip(expected.as_chunks::<64>().0)
+            .enumerate()
+        {
+            assert_eq!(actual, expected, "case {index} at O{level}");
+        }
+    }
+}

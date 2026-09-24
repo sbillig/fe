@@ -974,6 +974,23 @@ pub fn isqrt(_ x: u256) -> u256 {
     z - ((z > q) as u256)
 }
 
+extern {
+    /// Returns the number of leading zero bits in `x`, or 256 if `x == 0`.
+    ///
+    /// Lowers to the EVM `CLZ` instruction (EIP-7939).
+    pub const fn leading_zeros(_ x: u256) -> u256
+}
+
+/// Returns the number of trailing zero bits in `x`, or 256 if `x == 0`.
+#[arithmetic(unchecked)]
+pub const fn trailing_zeros(_ x: u256) -> u256 {
+    if x == 0 {
+        return 256
+    }
+    // `x & -x` isolates the lowest set bit.
+    255 - leading_zeros(x & (0 - x))
+}
+
 const fn pow_checked<T>(_ base: own T, _ exp: own T) -> T
     where T: IntWord, T: Mul<Output = T>
 {

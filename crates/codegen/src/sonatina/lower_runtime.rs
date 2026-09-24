@@ -47,7 +47,7 @@ use sonatina_ir::{
         evm::{
             EvmAddMod, EvmAddress, EvmBalance, EvmBaseFee, EvmBlobBaseFee, EvmBlobHash,
             EvmBlockHash, EvmByte, EvmCall, EvmCallValue, EvmCalldataCopy, EvmCalldataLoad,
-            EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy, EvmCodeSize, EvmCoinBase,
+            EvmCalldataSize, EvmCaller, EvmChainId, EvmClz, EvmCodeCopy, EvmCodeSize, EvmCoinBase,
             EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmExtCodeCopy, EvmExtCodeHash,
             EvmExtCodeSize, EvmGas, EvmGasLimit, EvmGasPrice, EvmInvalid, EvmKeccak256, EvmLog0,
             EvmLog1, EvmLog2, EvmLog3, EvmLog4, EvmMalloc, EvmMcopy, EvmMsize, EvmMstore8,
@@ -2375,6 +2375,17 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                             rhs,
                             modulus,
                         ),
+                        Type::I256,
+                    )
+                }
+            }
+            RuntimeBuiltin::LeadingZeros { value } => {
+                let value = self.local_value(*value)?;
+                if self.module.is_native_target() {
+                    self.lower_leading_zeros(value)
+                } else {
+                    self.fb.insert_inst(
+                        EvmClz::new(self.module.required_inst::<EvmClz>()?, value),
                         Type::I256,
                     )
                 }
@@ -5408,6 +5419,47 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     /// Full-width mathematical sum/product modulo m, including m == 0 -> 0.
     /// Reducing operands first and keeping the accumulator below m preserves
     /// the high product bits without requiring a target-specific 512-bit type.
+    /// Branch-free binary search for the most significant set bit, for targets
+    /// without a count-leading-zeros instruction. Returns 256 for zero.
+    fn lower_leading_zeros(&mut self, value: ValueId) -> ValueId {
+        let inst_set = self.module.inst_set();
+        let mut remaining = value;
+        let mut msb = self.fb.make_imm_value(I256::zero());
+        for bits in [128u32, 64, 32, 16, 8, 4, 2, 1] {
+            let bits = self.fb.make_imm_value(I256::from(bits));
+            let high = self
+                .fb
+                .insert_inst(Shr::new(inst_set, bits, remaining), Type::I256);
+            let high_is_zero = self.fb.insert_inst(IsZero::new(inst_set, high), Type::I1);
+            let high_is_set = self
+                .fb
+                .insert_inst(IsZero::new(inst_set, high_is_zero), Type::I1);
+            let set = self
+                .fb
+                .insert_inst(Zext::new(inst_set, high_is_set, Type::I256), Type::I256);
+            let shift = self
+                .fb
+                .insert_inst(Mul::new(inst_set, set, bits), Type::I256);
+            remaining = self
+                .fb
+                .insert_inst(Shr::new(inst_set, shift, remaining), Type::I256);
+            msb = self
+                .fb
+                .insert_inst(Add::new(inst_set, msb, shift), Type::I256);
+        }
+        // 255 - msb, plus one more when the input is zero (msb is then 0).
+        let max_bit = self.fb.make_imm_value(I256::from(255u32));
+        let zeros = self
+            .fb
+            .insert_inst(Sub::new(inst_set, max_bit, msb), Type::I256);
+        let is_zero = self.fb.insert_inst(IsZero::new(inst_set, value), Type::I1);
+        let extra = self
+            .fb
+            .insert_inst(Zext::new(inst_set, is_zero, Type::I256), Type::I256);
+        self.fb
+            .insert_inst(Add::new(inst_set, zeros, extra), Type::I256)
+    }
+
     fn lower_modular_arithmetic(
         &mut self,
         lhs: ValueId,

@@ -486,6 +486,7 @@ define_runtime_intrinsics! {
     Keccak256 => (Std, ["evm", "ops", "keccak256"], READ_POINTEE_0, None),
     AddMod => (Std, ["evm", "ops", "addmod"], NO_MEMORY_ACCESSES, None),
     MulMod => (Std, ["evm", "ops", "mulmod"], NO_MEMORY_ACCESSES, None),
+    LeadingZeros => (Core, ["num", "leading_zeros"], NO_MEMORY_ACCESSES, None),
     Byte => (Std, ["evm", "ops", "byte"], NO_MEMORY_ACCESSES, None),
     SignExtend => (Std, ["evm", "ops", "signextend"], NO_MEMORY_ACCESSES, None),
     Address => (Std, ["evm", "ops", "address"], NO_MEMORY_ACCESSES, None),
@@ -549,6 +550,7 @@ pub(crate) enum CtfeExternIntrinsic {
     Numeric(NumericExternIntrinsic),
     AddMod,
     MulMod,
+    LeadingZeros,
 }
 
 pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
@@ -561,6 +563,9 @@ pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
     match runtime_builtin_func_kind(db, func) {
         Some(RuntimeBuiltinFuncKind::AddMod) => return Some(CtfeExternIntrinsic::AddMod),
         Some(RuntimeBuiltinFuncKind::MulMod) => return Some(CtfeExternIntrinsic::MulMod),
+        Some(RuntimeBuiltinFuncKind::LeadingZeros) => {
+            return Some(CtfeExternIntrinsic::LeadingZeros);
+        }
         _ => {}
     }
     if lib_func_matches(db, func, "core::intrinsic::size_of") {
