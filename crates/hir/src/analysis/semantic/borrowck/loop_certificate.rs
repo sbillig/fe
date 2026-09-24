@@ -5,7 +5,6 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            SemOrigin,
             capability::{
                 external::ExternalOrigin,
                 footprint::{AccessExtent, AccessFootprint},
@@ -16,7 +15,6 @@ use crate::{
                 state::CapabilityValue,
                 value::Guarded,
             },
-            diagnostics::SemanticDiagnostic,
             normalized::{
                 NBlockId, NExpr, NPlaceBase, NRootKind, NStatementKind, NTerminatorKind,
                 NValueDefinition, NValueId, NormalizedBody, NormalizedBodyVerifyError,
@@ -117,6 +115,10 @@ fn frontier_candidate<'db>(
     body: &NormalizedBody<'db>,
     loop_region: ValidatedLoop,
 ) -> Result<FrontierCandidate, FrontierRejection> {
+    // The supported loop is a header and one straight-line body block.
+    if loop_region.blocks.len() != 2 {
+        return Err(FrontierRejection::UnsupportedLoopShape);
+    }
     let NTerminatorKind::Branch {
         cond,
         then_target,
@@ -217,8 +219,7 @@ impl<'db> Borrowck<'db> {
     ) -> Result<FrontierStep, FrontierRejection> {
         let loop_region = &candidate.loop_region;
         let header = &self.body.blocks[loop_region.header.index()];
-        if loop_region.blocks.len() != 2
-            || !loop_region.blocks.contains(&candidate.body)
+        if !loop_region.blocks.contains(&candidate.body)
             || loop_region.backedges.len() != 1
             || loop_region.backedges[0].from != candidate.body
             || loop_region.backedges[0].to != loop_region.header
@@ -314,14 +315,8 @@ impl<'db> Borrowck<'db> {
             .iter()
             .take(increment_statement)
             .enumerate()
-            .filter_map(|(index, statement)| {
-                let NStatementKind::Store { destination, value } = &statement.kind else {
-                    return None;
-                };
-                (matches!(destination.base, NPlaceBase::CapabilityTarget { .. })
-                    && self.inventory.shapes[value.value.index()].contains_capability(self.db))
-                .then_some(index)
-            })
+            .filter(|(_, statement)| self.stores_capability(statement))
+            .map(|(index, _)| index)
             .collect();
         let [store_statement] = stores.as_slice() else {
             return Err(FrontierRejection::MissingStore);
@@ -598,40 +593,31 @@ impl<'db> Borrowck<'db> {
         })
     }
 
-    pub(super) fn prove_prefix_certificates(
-        &mut self,
-    ) -> Result<Vec<PrefixCertificate<'db>>, SemanticDiagnostic<'db>> {
-        if self.summary_mode != BorrowSummaryMode::Final
-            || !self.inventory.loops.has_cycle()
-            || !self.has_capability_target_store()
-        {
-            return Ok(Vec::new());
+    /// Candidates are proved only for a final summary, over the conservative
+    /// fixed point of a stable inventory.
+    pub(super) fn prove_prefix_certificates(&mut self) -> Vec<PrefixCertificate<'db>> {
+        if self.summary_mode != BorrowSummaryMode::Final {
+            return Vec::new();
         }
-        let candidates = frontier_candidates(self.db, &self.body).map_err(|error| {
-            self.internal_diag(
-                SemOrigin::Body(self.body.template_owner),
-                format!("invalid normalized loop control flow: {error:?}"),
-            )
-        })?;
         let mut certificates = Vec::new();
-        for candidate in candidates {
-            if let Ok(candidate) = candidate
-                && let Ok(step) = self.verify_frontier_structure(candidate)
-            {
-                for kind in [
+        for candidate in self.frontiers.clone() {
+            let Ok(step) = self.verify_frontier_structure(candidate) else {
+                continue;
+            };
+            certificates.extend(
+                [
                     ContentsCertificateKind::Prefix,
                     ContentsCertificateKind::LastWrite,
-                ] {
-                    if let Ok(effects) = self.verify_frontier_effects(step.clone(), kind)
-                        && let Ok(certificate) = self.complete_prefix_certificate(effects)
-                    {
-                        certificates.push(certificate);
-                        break;
-                    }
-                }
-            }
+                ]
+                .into_iter()
+                .find_map(|kind| {
+                    self.verify_frontier_effects(step.clone(), kind)
+                        .and_then(|effects| self.complete_prefix_certificate(effects))
+                        .ok()
+                }),
+            );
         }
-        Ok(certificates)
+        certificates
     }
 }
 
@@ -643,21 +629,79 @@ mod tests {
             semantic::{
                 capability::{guard::ValueOccurrence, loan::CapabilityRef},
                 get_or_build_semantic_instance, identity_semantic_instance_key,
-                normalized::normalize_semantic_body,
             },
             ty::ty_check::BodyOwner,
         },
         test_db::{HirAnalysisTestDb, find_func},
     };
 
+    fn solved<'db>(db: &'db mut HirAnalysisTestDb, source: &str, name: &str) -> Borrowck<'db> {
+        let file = db.new_stand_alone(format!("{name}.fe").into(), source);
+        let db = &*db;
+        let (module, _) = db.top_mod(file);
+        let instance = get_or_build_semantic_instance(
+            db,
+            identity_semantic_instance_key(db, BodyOwner::Func(find_func(db, module, name))),
+        );
+        let mut checker = Borrowck::new(db, instance).unwrap();
+        checker.solve().unwrap();
+        checker
+    }
+
+    /// Every pointer in the value names a fresh allocation, never an unknown seed.
+    fn only_fresh_pointers(
+        checker: &Borrowck<'_>,
+        value: &CapabilityValue<'_>,
+        at: NValueId,
+    ) -> bool {
+        let leaves = checker
+            .inventory
+            .values
+            .leaves(value, ValueOccurrence::Value(at));
+        !leaves.is_empty()
+            && leaves.iter().all(|leaf| {
+                matches!(&leaf.payload, CapabilityRef::Address(region)
+                    if region.clauses().iter().all(|clause| {
+                        matches!(&clause.payload.root,
+                            RegionRoot::External(source) if source.is_fresh_allocation() && !source.uncertain())
+                    }))
+            })
+    }
+
+    /// Capability-returning calls in `block` with an integer argument: the
+    /// statement index, the result, and that argument's index.
+    fn indexed_reads<'a, 'db>(
+        checker: &'a Borrowck<'db>,
+        block: NBlockId,
+    ) -> impl Iterator<Item = (usize, NValueId, IndexExpr<'db>)> + 'a {
+        checker.body.blocks[block.index()]
+            .statements
+            .iter()
+            .enumerate()
+            .filter_map(|(index, statement)| match &statement.kind {
+                NStatementKind::Define {
+                    result,
+                    expr: NExpr::Call { args, .. },
+                } if checker.inventory.shapes[result.index()].contains_capability(checker.db) => {
+                    args.iter()
+                        .find(|argument| {
+                            checker.body.values[argument.value.index()]
+                                .ty
+                                .is_integral(checker.db)
+                        })
+                        .map(|argument| (index, *result, checker.index(argument.value)))
+                }
+                _ => None,
+            })
+    }
+
     #[test]
-    fn staged_span_loop_has_unsigned_frontier_candidate() {
+    fn staged_span_loop_certifies_fresh_prefix_contents() {
         let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            "staged_span_frontier.fe".into(),
+        let mut checker = solved(
+            &mut db,
             r#"
 use core::ptr
-
 fn stage_and_read(_ cursor: mut u256, _ count: u256) -> u256 {
     let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
     let mut i: u256 = 0
@@ -667,107 +711,91 @@ fn stage_and_read(_ cursor: mut u256, _ count: u256) -> u256 {
         children[i as usize] = data.span()
         i += 1
     }
-
     if count == 0 { return 0 }
     let child = children[0]
     cursor += 1
     *ptr::cast<u8, u256>(child.ptr())
 }
 "#,
+            "stage_and_read",
         );
-        let (module, _) = db.top_mod(file);
-        let instance = get_or_build_semantic_instance(
-            &db,
-            identity_semantic_instance_key(
-                &db,
-                BodyOwner::Func(find_func(&db, module, "stage_and_read")),
-            ),
-        );
-        let body = normalize_semantic_body(&db, instance).unwrap().body;
-        let candidates = frontier_candidates(&db, &body).unwrap();
-        let [Ok(candidate)] = candidates.as_slice() else {
-            panic!("expected one frontier candidate: {candidates:?}");
+        let db = checker.db;
+        let [candidate] = checker.frontiers.as_slice() else {
+            panic!("expected one frontier candidate: {:?}", checker.frontiers);
         };
-        assert_eq!(candidate.loop_region.backedges.len(), 1);
-        assert_eq!(candidate.loop_region.exits.len(), 1);
-        assert_eq!(candidate.loop_region.header, NBlockId::new(1));
-        assert_eq!(candidate.body, NBlockId::new(2));
-        assert_eq!(candidate.full_exit, NBlockId::new(3));
-        let mut checker = Borrowck::new(&db, instance).unwrap();
-        checker.solve().unwrap();
+        let candidate = candidate.clone();
         assert!(!checker.failed_prefix_certificates);
         assert_eq!(checker.prefix_certificates.len(), 1);
-        let step = checker
-            .verify_frontier_structure(candidate.clone())
-            .unwrap();
-        assert_eq!(step.store_statement, 16);
-        assert_eq!(step.increment_statement, 20);
+        let step = checker.verify_frontier_structure(candidate).unwrap();
+        let statements = &checker.body.blocks[step.candidate.body.index()].statements;
+        assert!(checker.stores_capability(&statements[step.store_statement]));
+        assert_eq!(step.increment_statement, statements.len() - 1);
         let proof = checker
             .verify_frontier_effects(step, ContentsCertificateKind::Prefix)
             .unwrap();
         let certificate = checker.complete_prefix_certificate(proof).unwrap();
-        assert!(matches!(certificate.family, RegionRoot::External(_)));
         let member = certificate.family_scope.variables().next().unwrap();
         assert_eq!(member.bound_namespace(), Some(IndexNamespace::InputSlot));
         assert!(certificate.coverage.indices().contains(&member));
-        let child = NValueId::new(35);
-        let returned = checker.terminal[6].as_ref().unwrap();
-        let zero_subst = IndexSubst::new(
+
+        // `children[0]` after the loop reads certified fresh contents.
+        let fill = checker.frontiers[0].loop_region.blocks.clone();
+        let (read_block, (statement, child, _)) = (0..checker.body.blocks.len())
+            .map(NBlockId::new)
+            .filter(|block| !fill.contains(block))
+            .find_map(|block| {
+                indexed_reads(&checker, block)
+                    .find(|(_, _, selector)| *selector == IndexExpr::Const(0))
+                    .map(|read| (block, read))
+            })
+            .expect("read of the first staged member");
+        let state = checker.before[read_block.index()][statement].clone();
+        let zero = IndexSubst::new(
             &certificate.family_scope,
             &BinderScope::default(),
             [(member, IndexExpr::Const(0))],
         )
         .unwrap();
-        let zero_root = certificate.family.substitute(&db, &zero_subst);
-        let zero_region =
-            RegionSet::singleton(&BinderScope::default(), zero_root, RegionPath::default());
-        let zero_coverage = certificate.coverage.substitute(&zero_subst).unwrap();
-        assert!(returned.guard().implies(&zero_coverage));
-        let reachable_zero = zero_region.with_guard(returned.guard());
         assert!(
-            returned
+            state
+                .guard()
+                .implies(&certificate.coverage.substitute(&zero).unwrap())
+        );
+        let zero_region = RegionSet::singleton(
+            &BinderScope::default(),
+            certificate.family.substitute(db, &zero),
+            RegionPath::default(),
+        );
+        let reachable_zero = zero_region.with_guard(state.guard());
+        assert!(
+            state
                 .certified_initialized_region(&reachable_zero)
                 .provably_covers(&reachable_zero)
         );
-        let direct_zero = returned
+        let direct = state
             .read_region(
-                &db,
+                db,
                 &mut checker.inventory.values,
                 &zero_region,
                 certificate.contents.shape(),
                 ValueOccurrence::Value(child),
             )
             .unwrap();
-        for (index, value) in [&direct_zero, returned.value(child)]
-            .into_iter()
-            .enumerate()
-        {
-            let leaves = checker
-                .inventory
-                .values
-                .leaves(value, ValueOccurrence::Value(child));
-            assert!(!leaves.is_empty(), "certified read {index} has no pointer");
-            assert!(
-                leaves.iter().all(|leaf| {
-                    matches!(&leaf.payload, CapabilityRef::Address(region)
-                        if region.clauses().iter().all(|clause| {
-                            matches!(&clause.payload.root,
-                                RegionRoot::External(source) if source.is_fresh_allocation() && !source.uncertain())
-                        }))
-                }),
-                "certified read {index} retains a nonfresh pointer"
-            );
-        }
+        let after = &checker.before[read_block.index()][statement + 1];
+        assert!(only_fresh_pointers(&checker, &direct, child), "typed read");
+        assert!(
+            only_fresh_pointers(&checker, after.value(child), child),
+            "index result"
+        );
     }
 
     #[test]
     fn repeated_single_slot_has_a_nonempty_last_write_certificate() {
         let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            "last_write_frontier.fe".into(),
+        let mut checker = solved(
+            &mut db,
             r#"
 use core::ptr
-
 fn repeat_cell(_ cursor: mut u256, _ count: u256) -> u256 {
     let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(1)
     let mut i: u256 = 0
@@ -785,24 +813,20 @@ fn repeat_cell(_ cursor: mut u256, _ count: u256) -> u256 {
     *ptr::cast<u8, u256>(child.ptr())
 }
 "#,
+            "repeat_cell",
         );
-        let (module, _) = db.top_mod(file);
-        let instance = get_or_build_semantic_instance(
-            &db,
-            identity_semantic_instance_key(
-                &db,
-                BodyOwner::Func(find_func(&db, module, "repeat_cell")),
-            ),
-        );
-        let mut checker = Borrowck::new(&db, instance).unwrap();
-        checker.solve().unwrap();
-        let candidates = frontier_candidates(&db, &checker.body).unwrap();
-        let [Ok(candidate)] = candidates.as_slice() else {
-            panic!("expected last-write frontier: {candidates:?}");
-        };
+        let candidate = checker.frontiers[0].clone();
         let step = checker
             .verify_frontier_structure(candidate.clone())
             .unwrap();
+        assert_eq!(
+            checker
+                .verify_frontier_effects(step.clone(), ContentsCertificateKind::Prefix)
+                .map(|_| ())
+                .unwrap_err(),
+            FrontierRejection::UnsupportedFamily,
+            "a fixed cell has no member to extend a prefix over"
+        );
         let proof = checker
             .verify_frontier_effects(step, ContentsCertificateKind::LastWrite)
             .unwrap();
@@ -818,10 +842,75 @@ fn repeat_cell(_ cursor: mut u256, _ count: u256) -> u256 {
     }
 
     #[test]
+    fn unsupported_fill_loops_report_their_rejection() {
+        let mut db = HirAnalysisTestDb::default();
+        for (case, (header, store, increment, expected)) in [
+            (
+                "let mut i: u256 = 0\n    while i <= count {",
+                "children[i as usize] = data.span()",
+                "i += 1",
+                FrontierRejection::UnsupportedCondition,
+            ),
+            (
+                "let mut i: u256 = 0\n    while i < 4 {",
+                "children[i as usize] = data.span()",
+                "i += 1",
+                FrontierRejection::UnsupportedBound,
+            ),
+            (
+                "let mut i: u256 = 0\n    while i < count {",
+                "if i > 0 { children[i as usize] = data.span() }",
+                "i += 1",
+                FrontierRejection::UnsupportedLoopShape,
+            ),
+            (
+                "let mut i: u256 = 1\n    while i < count {",
+                "children[i as usize] = data.span()",
+                "i += 1",
+                FrontierRejection::MissingZeroBase,
+            ),
+            (
+                "let mut i: u256 = 0\n    while i < count {",
+                "children[i as usize] = data.span()",
+                "i += 2",
+                FrontierRejection::MissingIncrement,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let source = format!(
+                r#"
+use core::ptr
+fn fill{case}(_ count: u256) {{
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    {header}
+        let data = ptr::MemBuffer::alloc(32)
+        {store}
+        {increment}
+    }}
+}}
+"#
+            );
+            let checker = solved(&mut db, &source, &format!("fill{case}"));
+            let rejection = frontier_candidates(checker.db, &checker.body)
+                .unwrap()
+                .into_iter()
+                .next()
+                .expect("one loop")
+                .and_then(|candidate| checker.verify_frontier_structure(candidate))
+                .map(|_| ())
+                .unwrap_err();
+            assert_eq!(rejection, expected, "{header} / {store} / {increment}");
+            assert!(checker.prefix_certificates.is_empty());
+        }
+    }
+
+    #[test]
     fn staged_span_second_reader_uses_certified_prefix() {
         let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            "staged_span_second_reader.fe".into(),
+        let mut checker = solved(
+            &mut db,
             r#"
 use core::ptr
 fn stage_and_sum(_ cursor: mut u256, _ count: u256) -> u256 {
@@ -844,33 +933,26 @@ fn stage_and_sum(_ cursor: mut u256, _ count: u256) -> u256 {
     sum
 }
 "#,
+            "stage_and_sum",
         );
-        let (module, _) = db.top_mod(file);
-        let instance = get_or_build_semantic_instance(
-            &db,
-            identity_semantic_instance_key(
-                &db,
-                BodyOwner::Func(find_func(&db, module, "stage_and_sum")),
-            ),
-        );
-        let mut checker = Borrowck::new(&db, instance).unwrap();
-        let candidates = frontier_candidates(&db, &checker.body).unwrap();
-        let reader = candidates
-            .into_iter()
-            .filter_map(Result::ok)
+        let db = checker.db;
+        let reader = checker
+            .frontiers
+            .iter()
             .find(|candidate| {
                 !checker.body.blocks[candidate.body.index()]
                     .statements
                     .iter()
-                    .any(|statement| {
-                        matches!(&statement.kind, NStatementKind::Store { destination, .. }
-                            if matches!(destination.base, NPlaceBase::CapabilityTarget { .. }))
-                    })
+                    .any(|statement| checker.stores_capability(statement))
             })
-            .unwrap();
-        let reader_index = checker.index(reader.header_value);
-        checker.solve().unwrap();
-        assert!(checker.selector_indices.contains(&reader_index));
+            .unwrap()
+            .clone();
+        assert!(
+            checker
+                .scalar
+                .selectors
+                .contains(&checker.index(reader.header_value))
+        );
         assert!(!checker.failed_prefix_certificates);
         let [certificate] = checker.prefix_certificates.as_slice() else {
             panic!("expected one fill-loop certificate");
@@ -885,26 +967,8 @@ fn stage_and_sum(_ cursor: mut u256, _ count: u256) -> u256 {
                     .iter()
                     .any(|certified| certified.family == certificate.family))
         );
-        let (statement_index, result, selector) = checker.body.blocks[reader.body.index()]
-            .statements
-            .iter()
-            .enumerate()
-            .find_map(|(index, statement)| match &statement.kind {
-                NStatementKind::Define {
-                    result,
-                    expr: NExpr::Call { args, .. },
-                } if checker.inventory.shapes[result.index()].contains_capability(&db) => args
-                    .iter()
-                    .find(|argument| {
-                        checker.body.values[argument.value.index()]
-                            .ty
-                            .is_integral(&db)
-                    })
-                    .map(|argument| (index, *result, checker.index(argument.value))),
-                _ => None,
-            })
-            .unwrap();
-        let state = checker.before[reader.body.index()][statement_index].clone();
+        let (statement, result, selector) = indexed_reads(&checker, reader.body).next().unwrap();
+        let state = checker.before[reader.body.index()][statement].clone();
         let member = certificate.family_scope.variables().next().unwrap();
         let substitution = IndexSubst::new(
             &certificate.family_scope,
@@ -912,53 +976,30 @@ fn stage_and_sum(_ cursor: mut u256, _ count: u256) -> u256 {
             [(member, selector)],
         )
         .unwrap();
-        let coverage = certificate.coverage.substitute(&substitution).unwrap();
-        assert!(state.guard().implies(&coverage));
-        let active = &state
-            .certified()
-            .iter()
-            .find(|certified| certified.family == certificate.family)
-            .unwrap()
-            .coverage;
         assert!(
             state
                 .guard()
-                .implies(&active.substitute(&substitution).unwrap())
+                .implies(&certificate.coverage.substitute(&substitution).unwrap())
         );
         let selected = RegionSet::singleton(
             &BinderScope::default(),
-            certificate.family.substitute(&db, &substitution),
+            certificate.family.substitute(db, &substitution),
             RegionPath::default(),
         );
         let direct = state
             .read_region(
-                &db,
+                db,
                 &mut checker.inventory.values,
                 &selected,
                 certificate.contents.shape(),
                 ValueOccurrence::Value(result),
             )
             .unwrap();
-        let after = &checker.before[reader.body.index()][statement_index + 1];
-        for (name, value) in [
-            ("typed read", &direct),
-            ("index result", after.value(result)),
-        ] {
-            let leaves = checker
-                .inventory
-                .values
-                .leaves(value, ValueOccurrence::Value(result));
-            assert!(!leaves.is_empty(), "{name} has no pointer");
-            assert!(
-                leaves.iter().all(|leaf| {
-                    matches!(&leaf.payload, CapabilityRef::Address(region)
-                        if region.clauses().iter().all(|clause| {
-                            matches!(&clause.payload.root,
-                                RegionRoot::External(source) if source.is_fresh_allocation() && !source.uncertain())
-                        }))
-                }),
-                "{name} retains a nonfresh pointer"
-            );
-        }
+        let after = &checker.before[reader.body.index()][statement + 1];
+        assert!(only_fresh_pointers(&checker, &direct, result), "typed read");
+        assert!(
+            only_fresh_pointers(&checker, after.value(result), result),
+            "index result"
+        );
     }
 }

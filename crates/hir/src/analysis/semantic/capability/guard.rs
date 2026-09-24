@@ -273,6 +273,12 @@ impl<'db> Guard<'db> {
 
     pub fn and(&self, other: &Self) -> Option<Self> {
         assert_eq!(self.scope, other.scope, "guard scopes must match");
+        if self == other || other.condition.is_leaf(&IndexCondition::always()) {
+            return Some(self.clone());
+        }
+        if self.condition.is_leaf(&IndexCondition::always()) {
+            return Some(other.clone());
+        }
         Self::canonical(
             &self.scope,
             self.condition.apply(&other.condition, IndexCondition::and),
@@ -281,6 +287,12 @@ impl<'db> Guard<'db> {
 
     pub fn or(&self, other: &Self) -> Self {
         assert_eq!(self.scope, other.scope, "guard scopes must match");
+        if self == other || self.condition.is_leaf(&IndexCondition::always()) {
+            return self.clone();
+        }
+        if other.condition.is_leaf(&IndexCondition::always()) {
+            return other.clone();
+        }
         Self::canonical(
             &self.scope,
             self.condition.apply(&other.condition, IndexCondition::or),
@@ -375,6 +387,17 @@ impl<'db> Guard<'db> {
             subst.source(),
             "substitution source scope must match"
         );
+        if subst.preserves_indices()
+            || self
+                .indices()
+                .into_iter()
+                .all(|index| subst.apply(index) == index)
+        {
+            return Some(Self {
+                scope: subst.destination().clone(),
+                condition: self.condition.clone(),
+            });
+        }
         Self::canonical(
             subst.destination(),
             self.condition.map(
@@ -390,6 +413,9 @@ impl<'db> Guard<'db> {
     }
 
     pub fn in_scope(&self, scope: &BinderScope) -> Self {
+        if &self.scope == scope {
+            return self.clone();
+        }
         self.substitute(&IndexSubst::new(&self.scope, scope, []).expect("guard scope extension"))
             .expect("scope extension preserves satisfiability")
     }
@@ -435,6 +461,9 @@ impl<'db> Guard<'db> {
 
     /// A new execution of a loop may choose another enum alternative.
     pub fn forget_occurrences(&self, mut repeated: impl FnMut(ValueOccurrence) -> bool) -> Self {
+        if !self.occurrences().into_iter().any(&mut repeated) {
+            return self.clone();
+        }
         Self::canonical(
             &self.scope,
             self.condition
@@ -450,6 +479,9 @@ impl<'db> Guard<'db> {
             .into_iter()
             .filter(|index| repeated(*index))
             .collect();
+        if indices.is_empty() {
+            return self.clone();
+        }
         let condition = self
             .condition
             .exists(
@@ -493,13 +525,21 @@ impl<'db> Guard<'db> {
             .into_iter()
             .flat_map(|bit| bit.choice.path.indices().collect::<Vec<_>>())
             .collect();
+        let projected: BTreeSet<_> = self
+            .indices()
+            .into_iter()
+            .filter(|index| hidden(*index) && !indexed.contains(index))
+            .collect();
+        if projected.is_empty() {
+            return self.clone();
+        }
         Self::canonical(
             &self.scope,
             self.condition.map(
                 |bit| Variable::Symbol(bit.clone()),
                 |condition| {
                     IndexCondition(condition.0.exists(
-                        |bit| hidden(bit.index) && !indexed.contains(&bit.index),
+                        |bit| projected.contains(&bit.index),
                         |left, right| *left || *right,
                     ))
                 },

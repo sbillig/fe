@@ -247,6 +247,10 @@ impl<'db> IndexSubst<'db> {
         &self.destination
     }
 
+    pub fn preserves_indices(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub fn then(&self, next: &Self) -> Result<Self, IndexError<'db>> {
         if self.destination != next.source {
             return Err(IndexError::ScopeMismatch);

@@ -392,7 +392,10 @@ impl<'db> Borrowck<'db> {
             native_requirements: RegionSet::empty(&scope),
             may_return: !self.instance.is_intrinsically_never_returning(self.db),
             result,
+            scalar_result: None,
             mutable_inputs: Vec::new(),
+            certified_ranges: Vec::new(),
+            scalar_inputs: Vec::new(),
             requirements: Vec::new(),
             availability: AvailabilitySummary {
                 incoming: accesses

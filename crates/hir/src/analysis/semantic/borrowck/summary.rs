@@ -58,7 +58,8 @@ use super::{
     inventory::referent_contract,
     ir::{
         AvailabilityRequirement, AvailabilitySummary, BorrowSummary, BoundaryRequirement,
-        InputPoststate, MemoryAccess, PendingSemanticValidation,
+        CertifiedRangePoststate, InputPoststate, MemoryAccess, PendingSemanticValidation,
+        ScalarInputPoststate,
     },
     solver::{BorrowSummaryMode, Borrowck, Resolution},
     validation::can_specialize,
@@ -227,6 +228,7 @@ impl<'db> Borrowck<'db> {
             let mut external = Vec::new();
             for value in std::iter::once(&summary.result)
                 .chain(summary.mutable_inputs.iter().map(|update| &update.value))
+                .chain(summary.certified_ranges.iter().map(|range| &range.contents))
             {
                 for leaf in sources.leaves(value, ValueOccurrence::Summary) {
                     external.push((
@@ -241,6 +243,13 @@ impl<'db> Borrowck<'db> {
                     update.destination.source.clone(),
                     update.value.scope().clone(),
                     None,
+                )
+            }));
+            external.extend(summary.certified_ranges.iter().map(|range| {
+                (
+                    range.destination.source.clone(),
+                    range.scope.clone(),
+                    Some(range.coverage.clone()),
                 )
             }));
             external.extend(summary.requirements.iter().flat_map(|requirement| {
@@ -506,6 +515,9 @@ impl<'db> Borrowck<'db> {
             }
         }
         let mut may_return = false;
+        let scalar_ty = self.instance.normalized_result_ty(self.db);
+        let scalar_scope = BinderScope::default().bind(IndexNamespace::Result);
+        let mut scalar_result = None;
         let mut choices = BTreeMap::new();
         let mut handles = BTreeMap::new();
         for index in 0..self.body.blocks.len() {
@@ -518,6 +530,70 @@ impl<'db> Borrowck<'db> {
             };
             may_return = true;
             let origin = block.terminator.origin;
+            // Facts over formal arguments hold on every normal return; an
+            // integer result also relates to the value this path returns.
+            let actual = returned
+                .filter(|_| scalar_ty.is_integral(self.db))
+                .map(|returned| self.index(returned.value));
+            let uninformative = actual.is_some_and(|actual| {
+                matches!(actual, IndexExpr::Runtime(value)
+                    if !matches!(self.body.values[value.index()].definition,
+                        NValueDefinition::EntryParam { .. })
+                        && !state.guard().indices().contains(&actual))
+            });
+            let guard = if uninformative {
+                Guard::always(&scalar_scope.0)
+            } else {
+                let guard = state.guard().in_scope(&scalar_scope.0);
+                let guard = match actual {
+                    Some(actual) => guard
+                        .with_equality(scalar_scope.1, actual)
+                        .expect("a fresh result can equal a returned scalar"),
+                    None => guard,
+                };
+                let subst = IndexSubst::new(
+                    &scalar_scope.0,
+                    &scalar_scope.0,
+                    guard.indices().into_iter().filter_map(|index| {
+                        let IndexExpr::Runtime(value) = index else {
+                            return None;
+                        };
+                        let replacement = match self.body.values[value.index()].definition {
+                            NValueDefinition::EntryParam { param } => IndexExpr::FormalValue(param),
+                            _ if Some(index) == actual => scalar_scope.1,
+                            _ => return None,
+                        };
+                        Some((index, replacement))
+                    }),
+                )
+                .expect("scalar result substitution");
+                guard
+                    .substitute(&subst)
+                    .expect("renaming a feasible scalar return preserves feasibility")
+                    .map_occurrences(|occurrence| match occurrence {
+                        ValueOccurrence::Value(value)
+                            if let NValueDefinition::EntryParam { param } =
+                                self.body.values[value.index()].definition
+                                && self
+                                    .summary_param_ty(param)
+                                    .is_some_and(|ty| ty.is_bool(self.db)) =>
+                        {
+                            ValueOccurrence::Argument(param)
+                        }
+                        other => other,
+                    })
+                    .expect("scalar choice renaming preserves feasibility")
+                    .forget_occurrences(|occurrence| {
+                        !matches!(occurrence, ValueOccurrence::Argument(_))
+                    })
+                    .forget_indices(|index| {
+                        matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_))
+                    })
+            };
+            scalar_result = Some(
+                scalar_result
+                    .map_or_else(|| guard.clone(), |previous: Guard<'db>| previous.or(&guard)),
+            );
             if let Some(returned) = returned {
                 let returned = state.value(returned.value);
                 if returned.shape() != result_shape {
@@ -564,6 +640,42 @@ impl<'db> Borrowck<'db> {
                         AddressOccurrence::Summary(*handles.entry(*occurrence).or_insert(next));
                 });
         }
+        let scalar_inputs = self
+            .inventory
+            .inputs
+            .iter()
+            .filter_map(|input| {
+                if !input.writable
+                    || !input.source.contract.ty.is_integral(self.db)
+                    || !matches!(&input.source.origin, ExternalOrigin::Input(_))
+                {
+                    return None;
+                }
+                let root = RegionRoot::External(input.source.clone());
+                let mut returns = self
+                    .body
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, block)| {
+                        matches!(block.terminator.kind, NTerminatorKind::Return(_))
+                    })
+                    .filter_map(|(index, _)| self.terminal[index].as_ref());
+                let value = returns.next()?.scalar_constant(&root)?;
+                if !returns.all(|state| state.scalar_constant(&root) == Some(value)) {
+                    return None;
+                }
+                Some(ScalarInputPoststate {
+                    destination: SourceExpr {
+                        source: input.source.clone(),
+                        path: RegionPath::default(),
+                        views: Default::default(),
+                        invalidated: false,
+                    },
+                    value,
+                })
+            })
+            .collect();
         let mut requirements: Vec<BoundaryRequirement<'db>> = Vec::new();
         for mut requirement in pending {
             requirement.region = self.summarize_region(
@@ -805,7 +917,10 @@ impl<'db> Borrowck<'db> {
             availability,
             may_return,
             result,
+            scalar_result,
             mutable_inputs: updates,
+            certified_ranges,
+            scalar_inputs,
             requirements,
         };
         self.verify_summary(&summary)?;
@@ -1377,12 +1492,59 @@ impl<'db> Borrowck<'db> {
                 "summary result shape or scope differs from its signature".into(),
             ));
         }
+        if let Some(guard) = &summary.scalar_result {
+            let (scope, _) = BinderScope::default().bind(IndexNamespace::Result);
+            // Only an integer result can be named by the postcondition.
+            let integral = self
+                .instance
+                .normalized_result_ty(self.db)
+                .is_integral(self.db);
+            if guard.scope() != &scope
+                || guard.occurrences().into_iter().any(|occurrence| {
+                    !matches!(occurrence, ValueOccurrence::Argument(param) if self.summary_param_ty(param).is_some_and(|ty| ty.is_bool(self.db)))
+                })
+                || guard.indices().into_iter().any(|index| match index {
+                    IndexExpr::Bound(_) => !integral || scope.validate(index).is_err(),
+                    IndexExpr::FormalValue(param) => !self
+                        .summary_param_ty(param)
+                        .is_some_and(|ty| ty.as_view(self.db).unwrap_or(ty).is_integral(self.db)),
+                    IndexExpr::Const(_) | IndexExpr::TypeConst(_) => false,
+                    IndexExpr::Runtime(_) | IndexExpr::Iteration(_) => true,
+                })
+            {
+                return Err(self.internal_diag(
+                    SemOrigin::Body(self.body.template_owner),
+                    "scalar postcondition retains a callee-local fact".into(),
+                ));
+            }
+        }
         for update in &summary.mutable_inputs {
             let ty = self.verify_source(&update.destination, update.value.scope(), None, true)?;
             if self.shape(ty)? != update.value.shape() {
                 return Err(self.internal_diag(
                     SemOrigin::Body(self.body.template_owner),
                     "summary poststate differs from its destination shape".into(),
+                ));
+            }
+        }
+        for update in &summary.scalar_inputs {
+            let ExternalOrigin::Input(_) = &update.destination.source.origin else {
+                return Err(self.internal_diag(
+                    SemOrigin::Body(self.body.template_owner),
+                    "scalar poststate retains a non-input destination".into(),
+                ));
+            };
+            if !self.inventory.inputs.iter().any(|target| {
+                target.writable
+                    && target.source == update.destination.source
+                    && target.source.contract.ty.is_integral(self.db)
+            }) || !update.destination.path.is_empty()
+                || update.destination.views.iter().next().is_some()
+                || update.destination.invalidated
+            {
+                return Err(self.internal_diag(
+                    SemOrigin::Body(self.body.template_owner),
+                    "scalar poststate has an invalid destination".into(),
                 ));
             }
         }
@@ -1472,6 +1634,25 @@ impl<'db> Borrowck<'db> {
             .chain(summary.mutable_inputs.iter().map(|input| &input.value))
         {
             for leaf in values.leaves(value, ValueOccurrence::Summary) {
+                self.verify_source(
+                    &leaf.payload,
+                    leaf.guard.scope(),
+                    Some(leaf.semantics),
+                    false,
+                )?;
+                self.verify_summary_guard(&leaf.guard, &leaf.payload)?;
+            }
+        }
+        for range in &summary.certified_ranges {
+            if range.coverage.scope() != &range.scope || range.contents.scope() != &range.scope {
+                return Err(self.internal_diag(
+                    SemOrigin::Body(self.body.template_owner),
+                    "certified range has inconsistent binders".into(),
+                ));
+            }
+            self.verify_source(&range.destination, &range.scope, None, true)?;
+            self.verify_summary_guard(&range.coverage, &range.destination)?;
+            for leaf in values.leaves(&range.contents, ValueOccurrence::Summary) {
                 self.verify_source(
                     &leaf.payload,
                     leaf.guard.scope(),
@@ -1617,6 +1798,49 @@ impl<'db> Borrowck<'db> {
             )?;
             updates.push((target.region, value));
         }
+        let mut certified_ranges = Vec::new();
+        for range in &call.summary.certified_ranges {
+            let Some(coverage) = self.instantiate_guard(&range.coverage, result, inputs)? else {
+                continue;
+            };
+            let target =
+                self.instantiate_source(state, &range.destination, result, &range.scope, inputs)?;
+            let template = self
+                .inventory
+                .values
+                .empty(range.contents.shape(), &range.scope);
+            let contents =
+                self.instantiate_value(state, &range.contents, &template, result, inputs)?;
+            certified_ranges.push((target.region, coverage, contents));
+        }
+        let mut scalar_updates = BTreeMap::new();
+        for update in &call.summary.scalar_inputs {
+            let resolved = self.instantiate_source(
+                state,
+                &update.destination,
+                result,
+                &BinderScope::default(),
+                inputs,
+            )?;
+            let [clause] = resolved.region.clauses() else {
+                continue;
+            };
+            if !clause.payload.path.is_empty()
+                || clause.payload.views.iter().next().is_some()
+                || clause.guard.scope() != state.guard().scope()
+                || !state.guard().implies(&clause.guard)
+            {
+                continue;
+            }
+            scalar_updates
+                .entry(clause.payload.root.clone())
+                .and_modify(|value: &mut Option<usize>| {
+                    if *value != Some(update.value) {
+                        *value = None;
+                    }
+                })
+                .or_insert(Some(update.value));
+        }
         let storage = updates
             .iter()
             .flat_map(|(region, _)| region.clauses())
@@ -1670,6 +1894,43 @@ impl<'db> Borrowck<'db> {
                     format!("unresolved call poststate: {error:?}"),
                 )
             })?;
+        for (region, coverage, contents) in certified_ranges {
+            let [clause] = region.clauses() else {
+                continue;
+            };
+            let Some(coverage) = coverage
+                .and(&clause.guard)
+                .and_then(|guard| guard.and(&state.guard().in_scope(region.scope())))
+            else {
+                continue;
+            };
+            state.certify_family_contents(
+                &clause.payload.root,
+                region.scope(),
+                &coverage,
+                &contents,
+            );
+        }
+        for (root, value) in scalar_updates {
+            if let Some(value) = value {
+                state.store_scalar(root, IndexExpr::Const(value));
+            }
+        }
+        if let Some(postcondition) = &call.summary.scalar_result {
+            let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
+            let subst = IndexSubst::new(
+                postcondition.scope(),
+                &BinderScope::default(),
+                [(returned, IndexExpr::Runtime(result))],
+            )
+            .expect("scalar call result substitution");
+            if let Some(postcondition) = postcondition.substitute(&subst)
+                && let Some(postcondition) =
+                    self.instantiate_guard(&postcondition, result, inputs)?
+            {
+                state.constrain(&postcondition, &mut self.inventory.values);
+            }
+        }
         Ok(returned)
     }
 
@@ -2631,7 +2892,10 @@ pub(super) fn signature_summary<'db>(
         native_requirements: RegionSet::empty(&BinderScope::default()),
         may_return: opaque && !instance.is_intrinsically_never_returning(db),
         result,
+        scalar_result: None,
         mutable_inputs,
+        certified_ranges: Vec::new(),
+        scalar_inputs: Vec::new(),
         requirements: Vec::new(),
         accesses,
         availability,

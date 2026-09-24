@@ -47,6 +47,8 @@ use super::{
     boundary::resolve_boundary_requirements,
     inventory::Inventory,
     ir::{BoundaryRequirement, PendingSemanticValidation},
+    loop_certificate::{FrontierCandidate, PrefixCertificate},
+    scalar::{CONDITION_BUDGET, ScalarDemand},
     summary::CallSummary,
 };
 
@@ -80,6 +82,11 @@ pub(super) struct Borrowck<'db> {
     pub db: &'db dyn HirAnalysisDb,
     pub instance: SemanticInstance<'db>,
     pub body: NormalizedBody<'db>,
+    pub(super) scalar: ScalarDemand<'db>,
+    /// Loops whose frontier shape can support a certified range.
+    pub(super) frontiers: Vec<FrontierCandidate>,
+    pub(super) prefix_certificates: Vec<PrefixCertificate<'db>>,
+    pub(super) failed_prefix_certificates: bool,
     pub inventory: Inventory<'db>,
     pub summary_mode: BorrowSummaryMode,
     pub calls: BTreeMap<NValueId, CallSummary<'db>>,
@@ -127,7 +134,7 @@ impl<'db> Borrowck<'db> {
                 },
             )
         })?;
-        Ok(Self {
+        let mut checker = Self {
             db,
             instance,
             before: vec![Vec::new(); body.blocks.len()],
@@ -140,6 +147,10 @@ impl<'db> Borrowck<'db> {
                 .map(|block| vec![false; block.statements.len() + 1])
                 .collect(),
             body,
+            scalar: ScalarDemand::default(),
+            frontiers: Vec::new(),
+            prefix_certificates: Vec::new(),
+            failed_prefix_certificates: false,
             inventory,
             summary_mode,
             calls: BTreeMap::new(),
@@ -148,7 +159,9 @@ impl<'db> Borrowck<'db> {
             pending: PendingSemanticValidation::default(),
             loan_facts_changed: false,
             storage_facts_changed: false,
-        })
+        };
+        checker.prepare_scalar_demand()?;
+        Ok(checker)
     }
 
     pub fn shape(&self, ty: TyId<'db>) -> Result<ShapeId<'db>, SemanticDiagnostic<'db>> {
@@ -190,16 +203,11 @@ impl<'db> Borrowck<'db> {
     }
 
     pub fn index(&self, value: NValueId) -> IndexExpr<'db> {
-        let NValueDefinition::Statement { block, statement } =
-            self.body.values[value.index()].definition
-        else {
+        let Some((_, expr)) = self.body.defining_expr(value) else {
             return IndexExpr::Runtime(value);
         };
-        match &self.body.blocks[block.index()].statements[statement as usize].kind {
-            NStatementKind::Define {
-                expr: NExpr::Const(SConst::Value(constant)),
-                ..
-            } => {
+        match expr {
+            NExpr::Const(SConst::Value(constant)) => {
                 if let SemConstValue::Scalar {
                     value: SemConstScalar::Int { value: integer },
                     ..
@@ -210,32 +218,30 @@ impl<'db> Borrowck<'db> {
                 }
                 IndexExpr::Runtime(value)
             }
-            NStatementKind::Define {
-                expr: NExpr::Forward { src },
-                ..
-            } => self.index(src.value),
-            NStatementKind::Define {
-                expr: NExpr::Load { place, .. },
-                ..
-            } if place.path.is_empty() && place.ty.is_integral(self.db) => match place.base {
-                NPlaceBase::CapabilityTarget { carrier }
-                    if self.body.values[carrier.index()]
-                        .ty
-                        .as_view(self.db)
-                        .is_some()
-                        && matches!(
-                            self.body.values[carrier.index()].definition,
-                            NValueDefinition::EntryParam { .. }
-                        ) =>
-                {
-                    self.index(carrier)
-                }
-                _ => IndexExpr::Runtime(value),
-            },
-
-            NStatementKind::Define { .. } | NStatementKind::Store { .. } => {
-                IndexExpr::Runtime(value)
+            NExpr::Forward { src } => self.index(src.value),
+            NExpr::ScalarCast { value: source, to }
+                if self.lossless_scalar_cast(source.value, *to) =>
+            {
+                self.index(source.value)
             }
+            NExpr::Load { place, .. } if place.path.is_empty() && place.ty.is_integral(self.db) => {
+                match place.base {
+                    NPlaceBase::CapabilityTarget { carrier }
+                        if self.body.values[carrier.index()]
+                            .ty
+                            .as_view(self.db)
+                            .is_some()
+                            && matches!(
+                                self.body.values[carrier.index()].definition,
+                                NValueDefinition::EntryParam { .. }
+                            ) =>
+                    {
+                        self.index(carrier)
+                    }
+                    _ => IndexExpr::Runtime(value),
+                }
+            }
+            _ => IndexExpr::Runtime(value),
         }
     }
 
@@ -369,22 +375,13 @@ impl<'db> Borrowck<'db> {
     }
 
     pub(super) fn forwarded_value(&self, mut value: NValueId) -> NValueId {
-        while let NValueDefinition::Statement { block, statement } =
-            self.body.values[value.index()].definition
-        {
-            let NStatementKind::Define {
-                expr: NExpr::Forward { src },
-                ..
-            } = &self.body.blocks[block.index()].statements[statement as usize].kind
-            else {
-                break;
-            };
+        while let Some((_, NExpr::Forward { src })) = self.body.defining_expr(value) {
             value = src.value;
         }
         value
     }
 
-    fn boolean_choice(&self, value: NValueId) -> ChoiceKey<'db> {
+    pub(super) fn boolean_choice(&self, value: NValueId) -> ChoiceKey<'db> {
         ChoiceKey::new(
             ValueOccurrence::Value(self.forwarded_value(value)),
             StructuralPath::default(),
@@ -451,6 +448,22 @@ impl<'db> Borrowck<'db> {
                                 .with_boolean(choice.clone(), value)
                                 .expect("boolean alternative is feasible")
                         };
+                        let include_bounds =
+                            self.inventory
+                                .loops
+                                .for_value(&self.body, cond.value)
+                                .is_none()
+                                || (self.scalar.bounded_readers.contains(&cond.value)
+                                    && (!self.prefix_certificates.is_empty()
+                                        || self.calls.values().any(|call| {
+                                            !call.summary.certified_ranges.is_empty()
+                                        })));
+                        let guard = guard.and(&self.condition_guard(
+                            cond.value,
+                            value,
+                            include_bounds,
+                            CONDITION_BUDGET,
+                        )?)?;
                         selected =
                             Some(selected.map_or_else(|| guard.clone(), |old| old.or(&guard)));
                     }
@@ -521,6 +534,15 @@ impl<'db> Borrowck<'db> {
                             .reduce(|left, right| left.or(&right))?
                     };
                 selected = selected.and(&equal)?;
+            } else if self.scalar.values.contains(parameter)
+                && (self.scalar.selectors.contains(&self.index(*parameter))
+                    || self.scalar.phis.contains(parameter))
+                && self.body.values[parameter.index()].ty.is_integral(self.db)
+                && self.body.values[parameter.index()].ty
+                    == self.body.values[argument.value.index()].ty
+            {
+                selected =
+                    selected.with_equality(self.index(*parameter), self.index(argument.value))?;
             }
         }
         Some(selected)
@@ -559,6 +581,13 @@ impl<'db> Borrowck<'db> {
 
     pub fn solve(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
         self.prepare_calls()?;
+        if self
+            .calls
+            .values()
+            .any(|call| !call.summary.certified_ranges.is_empty())
+        {
+            self.enable_bounded_readers();
+        }
         self.prepare_recursive_calls();
         self.prepare_validation_dependencies();
         loop {
@@ -568,10 +597,11 @@ impl<'db> Borrowck<'db> {
             self.boundary_requirements = None;
             let mut incoming = vec![None; self.body.blocks.len()];
             incoming[self.body.entry.index()] = Some(self.inventory.entry.clone());
+            let mut certificate_application_failed = false;
             loop {
+                let previous_incoming = incoming.clone();
                 self.loan_facts_changed = false;
                 self.storage_facts_changed = false;
-                let mut state_changed = false;
                 for index in 0..self.body.blocks.len() {
                     let Some(mut state) = incoming[index].clone() else {
                         continue;
@@ -589,7 +619,9 @@ impl<'db> Borrowck<'db> {
                     if !returns {
                         continue;
                     }
-                    for successor in block.terminator.kind.successors() {
+                    for (successor_index, successor) in
+                        block.terminator.kind.successors().into_iter().enumerate()
+                    {
                         let mut edge = state.clone();
                         let edge_guard = self.edge_guard(NBlockId::new(index), successor);
                         let Some(edge_guard) = edge_guard else {
@@ -597,6 +629,26 @@ impl<'db> Borrowck<'db> {
                         };
                         if !edge.constrain(&edge_guard, &mut self.inventory.values) {
                             continue;
+                        }
+                        for certificate in self.prefix_certificates.iter().filter(|certificate| {
+                            certificate.exit.from == NBlockId::new(index)
+                                && certificate.exit.successor == successor_index
+                                && certificate.exit.to == successor.block
+                        }) {
+                            let Some(coverage) = certificate
+                                .coverage
+                                .and(&edge.guard().in_scope(&certificate.family_scope))
+                            else {
+                                continue;
+                            };
+                            if !edge.certify_family_contents(
+                                &certificate.family,
+                                &certificate.family_scope,
+                                &coverage,
+                                &certificate.contents,
+                            ) {
+                                certificate_application_failed = true;
+                            }
                         }
 
                         let arguments: Vec<_> = successor
@@ -626,22 +678,31 @@ impl<'db> Borrowck<'db> {
                         }
                         if let Some(previous) = &mut incoming[successor.block.index()] {
                             previous.extend_storage(&self.inventory.entry);
-                            state_changed |= previous.join(&edge, &mut self.inventory.values);
+                            previous.join(&edge, &mut self.inventory.values);
                         } else {
                             incoming[successor.block.index()] = Some(edge);
-                            state_changed = true;
                         }
                     }
                 }
                 if self.storage_facts_changed {
+                    self.prefix_certificates.clear();
+                    self.failed_prefix_certificates = false;
+                    certificate_application_failed = false;
                     self.inventory.reset_epoch_loans();
                     incoming.fill(None);
                     incoming[self.body.entry.index()] = Some(self.inventory.entry.clone());
                     continue;
                 }
-                if !state_changed && !self.loan_facts_changed {
+                if incoming == previous_incoming && !self.loan_facts_changed {
                     break;
                 }
+            }
+            // A certificate that no longer fits the replayed state is dropped
+            // for this body; the conservative analysis is replayed without it.
+            if certificate_application_failed {
+                self.prefix_certificates.clear();
+                self.failed_prefix_certificates = true;
+                continue;
             }
             for (index, entry) in incoming.into_iter().enumerate() {
                 let Some(mut state) = entry else { continue };
@@ -662,9 +723,19 @@ impl<'db> Borrowck<'db> {
             self.resolve_operations()?;
             let boundary_requirements = resolve_boundary_requirements(self);
             if !self.loan_facts_changed && !self.storage_facts_changed {
+                if self.prefix_certificates.is_empty() && !self.failed_prefix_certificates {
+                    let certificates = self.prove_prefix_certificates();
+                    if !certificates.is_empty() {
+                        self.prefix_certificates = certificates;
+                        self.enable_bounded_readers();
+                        continue;
+                    }
+                }
                 self.boundary_requirements = Some(boundary_requirements);
                 return Ok(());
             }
+            self.prefix_certificates.clear();
+            self.failed_prefix_certificates = false;
             if self.storage_facts_changed {
                 self.inventory.reset_epoch_loans();
             }
@@ -801,8 +872,15 @@ impl<'db> Borrowck<'db> {
             };
             let replacement = state.value(value.value).clone();
             let region = self.resolve_region(state, destination);
+            let scalar = self
+                .scalar_cell(destination, &region, state)
+                .map(|root| (root, self.index(value.value)));
             self.consume(state, *value);
-            return self.write_region(state, &region, &replacement, statement);
+            self.write_region(state, &region, &replacement, statement)?;
+            if let Some((root, value)) = scalar {
+                state.store_scalar(root, value);
+            }
+            return Ok(());
         };
         let shape = self.inventory.shapes[result.index()];
         let occurrence = ValueOccurrence::Value(*result);
@@ -835,6 +913,9 @@ impl<'db> Borrowck<'db> {
                 let region = self.resolve_region(state, place);
                 let value =
                     self.read_region(state, &region, shape, occurrence, statement.origin)?;
+                if let Some(root) = self.scalar_cell(place, &region, state) {
+                    state.load_scalar(root, *result, &mut self.inventory.values);
+                }
                 if *mode == ReadMode::Move && place.ty.as_capability(self.db).is_none() {
                     let empty = self.inventory.values.empty(shape, &scope);
                     self.write_region(state, &region, &empty, statement)?;

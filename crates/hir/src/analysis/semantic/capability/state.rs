@@ -14,7 +14,7 @@ use super::{
     loan::{CapabilityRef, LoanDef},
     opaque::OpaqueWrite,
     path::{RegionPath, StructuralPath},
-    region::{OverlapResult, RegionRoot, RegionSet},
+    region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace},
     repack::RepackError,
     semantics::UnresolvedCapability,
     shape::ShapeId,
@@ -96,6 +96,8 @@ impl<'db> BorrowState<'db> {
             guard: Guard::always(&scope),
             values: BTreeMap::new(),
             contents: BTreeMap::new(),
+            certified_contents: Vec::new(),
+            scalar_cells: BTreeMap::new(),
         };
         for (id, shape) in holders {
             assert!(
@@ -144,6 +146,11 @@ impl<'db> BorrowState<'db> {
         births: &[AllocationBirth<'db>],
     ) {
         for birth in births {
+            self.certified_contents.retain(|certificate| {
+                birth
+                    .selector(&certificate.family, &certificate.scope)
+                    .is_none()
+            });
             let Some(roots) = families.get(&birth.allocation.occurrence) else {
                 continue;
             };
@@ -196,8 +203,115 @@ impl<'db> BorrowState<'db> {
         for value in self.values.values_mut().chain(self.contents.values_mut()) {
             *value = values.with_guard(value, &guard.in_scope(value.scope()));
         }
+        for alternatives in self.scalar_cells.values_mut() {
+            *alternatives = alternatives
+                .iter()
+                .filter_map(|entry| {
+                    Some(Guarded {
+                        guard: entry.guard.and(&guard)?,
+                        payload: entry.payload,
+                    })
+                })
+                .collect();
+        }
+        self.scalar_cells
+            .retain(|_, alternatives| !alternatives.is_empty());
         self.guard = guard;
         true
+    }
+
+    pub fn load_scalar(
+        &mut self,
+        root: RegionRoot<'db>,
+        result: NValueId,
+        values: &mut CapabilityValues<'db>,
+    ) {
+        if let Some(alternatives) = self.scalar_cells.get(&root) {
+            let relation = alternatives
+                .iter()
+                .filter_map(|entry| {
+                    let guard = self.guard.and(&entry.guard)?;
+                    entry.payload.map_or(Some(guard.clone()), |stored| {
+                        guard.with_equality(IndexExpr::Runtime(result), stored)
+                    })
+                })
+                .reduce(|left, right| left.or(&right));
+            if let Some(relation) = relation
+                && relation != self.guard
+            {
+                self.constrain(&relation, values);
+            }
+        }
+        self.scalar_cells.insert(
+            root,
+            vec![Guarded {
+                guard: self.guard.clone(),
+                payload: Some(IndexExpr::Runtime(result)),
+            }],
+        );
+    }
+
+    pub fn store_scalar(&mut self, root: RegionRoot<'db>, value: IndexExpr<'db>) {
+        self.scalar_cells.insert(
+            root,
+            vec![Guarded {
+                guard: self.guard.clone(),
+                payload: Some(value),
+            }],
+        );
+    }
+
+    pub fn scalar_constant(&self, root: &RegionRoot<'db>) -> Option<usize> {
+        let alternatives = self.scalar_cells.get(root)?;
+        let Some(IndexExpr::Const(value)) = alternatives.first()?.payload else {
+            return None;
+        };
+        let mut covered: Option<Guard<'db>> = None;
+        for entry in alternatives {
+            if entry.payload != Some(IndexExpr::Const(value)) {
+                return None;
+            }
+            covered = Some(covered.map_or_else(|| entry.guard.clone(), |old| old.or(&entry.guard)));
+        }
+        self.guard.implies(&covered?).then_some(value)
+    }
+
+    fn invalidate_scalar_memory(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        footprint: AccessFootprint<'_, 'db>,
+    ) {
+        self.scalar_cells.retain(|root, _| {
+            let region = RegionSet::singleton(
+                footprint.region.scope(),
+                root.clone(),
+                RegionPath::default(),
+            );
+            matches!(
+                AccessFootprint::typed(&region).overlap(db, footprint),
+                OverlapResult::Disjoint
+            )
+        });
+    }
+
+    fn invalidate_certified_contents(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        footprint: AccessFootprint<'_, 'db>,
+    ) {
+        self.certified_contents.retain(|certificate| {
+            let family = RegionSet::singleton(
+                &certificate.scope,
+                certificate.family.clone(),
+                RegionPath::default(),
+            )
+            .substitute(db, &certificate.scope.freshening(footprint.region.scope()))
+            .close_existentials(footprint.region.scope());
+            matches!(
+                AccessFootprint::typed(&family).overlap(db, footprint),
+                OverlapResult::Disjoint
+            )
+        });
     }
 
     pub fn forget_iteration(
@@ -206,10 +320,45 @@ impl<'db> BorrowState<'db> {
         repeated: impl Fn(IndexExpr<'db>) -> bool + Copy,
         occurrence: impl Fn(ValueOccurrence) -> bool + Copy,
     ) {
+        self.certified_contents.retain(|certificate| {
+            let family = RegionSet::singleton(
+                &certificate.scope,
+                certificate.family.clone(),
+                RegionPath::default(),
+            );
+            !certificate.family.indices().any(repeated)
+                && family.forget_occurrences(occurrence) == family
+                && !certificate.coverage.indices().into_iter().any(repeated)
+                && !certificate
+                    .coverage
+                    .occurrences()
+                    .into_iter()
+                    .any(occurrence)
+                && !values
+                    .leaves(&certificate.contents, ValueOccurrence::Summary)
+                    .iter()
+                    .any(|leaf| {
+                        leaf.guard.indices().into_iter().any(repeated)
+                            || leaf.guard.occurrences().into_iter().any(occurrence)
+                            || leaf.payload.indices().any(repeated)
+                            || leaf.payload.forget_occurrences(occurrence) != leaf.payload
+                    })
+        });
         self.guard = self
             .guard
             .forget_occurrences(occurrence)
             .forget_indices(repeated);
+        for alternatives in self.scalar_cells.values_mut() {
+            for entry in alternatives.iter_mut() {
+                entry.guard = entry
+                    .guard
+                    .forget_occurrences(occurrence)
+                    .forget_indices(repeated);
+                if entry.payload.is_some_and(repeated) {
+                    entry.payload = None;
+                }
+            }
+        }
         let mut destination = CapabilityValues::new(values.db, ValueLimits::default());
         for value in self.values.values_mut().chain(self.contents.values_mut()) {
             let mapped = values.map_payloads(value, &mut destination, |_, _, entry, domain| {
@@ -359,9 +508,93 @@ impl<'db> BorrowState<'db> {
             self.contents.keys().eq(other.contents.keys()),
             "storage inventory mismatch"
         );
+        let previous_guard = self.guard.clone();
         let joined_guard = self.guard.or(&other.guard);
         let mut changed = joined_guard != self.guard;
         self.guard = joined_guard;
+        let mut certified = Vec::new();
+        for prior in &self.certified_contents {
+            let matching = other.certified_contents.iter().find(|incoming| {
+                incoming.family == prior.family
+                    && incoming.scope == prior.scope
+                    && incoming.contents == prior.contents
+            });
+            let old_only = prior
+                .coverage
+                .difference(&other.guard.in_scope(&prior.scope));
+            let covered = matching.and_then(|incoming| prior.coverage.and(&incoming.coverage));
+            let new_only = matching.and_then(|incoming| {
+                incoming
+                    .coverage
+                    .difference(&previous_guard.in_scope(&incoming.scope))
+            });
+            if let Some(coverage) = old_only
+                .into_iter()
+                .chain(covered)
+                .chain(new_only)
+                .reduce(|left, right| left.or(&right))
+            {
+                let mut retained = prior.clone();
+                retained.coverage = coverage;
+                certified.push(retained);
+            }
+        }
+        for incoming in &other.certified_contents {
+            if self.certified_contents.iter().any(|prior| {
+                prior.family == incoming.family
+                    && prior.scope == incoming.scope
+                    && prior.contents == incoming.contents
+            }) {
+                continue;
+            }
+            if let Some(coverage) = incoming
+                .coverage
+                .difference(&previous_guard.in_scope(&incoming.scope))
+            {
+                let mut retained = incoming.clone();
+                retained.coverage = coverage;
+                certified.push(retained);
+            }
+        }
+        changed |= certified != self.certified_contents;
+        self.certified_contents = certified;
+        let mut scalar_cells = BTreeMap::new();
+        for root in self
+            .scalar_cells
+            .keys()
+            .chain(other.scalar_cells.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+        {
+            let mut alternatives = self.scalar_cells.get(&root).cloned().unwrap_or_else(|| {
+                vec![Guarded {
+                    guard: previous_guard.clone(),
+                    payload: None,
+                }]
+            });
+            alternatives.extend(other.scalar_cells.get(&root).cloned().unwrap_or_else(|| {
+                vec![Guarded {
+                    guard: other.guard.clone(),
+                    payload: None,
+                }]
+            }));
+            let mut by_value = BTreeMap::new();
+            for entry in alternatives {
+                by_value
+                    .entry(entry.payload)
+                    .and_modify(|guard: &mut Guard<'db>| *guard = guard.or(&entry.guard))
+                    .or_insert(entry.guard);
+            }
+            scalar_cells.insert(
+                root,
+                by_value
+                    .into_iter()
+                    .map(|(payload, guard)| Guarded { guard, payload })
+                    .collect(),
+            );
+        }
+        changed |= scalar_cells != self.scalar_cells;
+        self.scalar_cells = scalar_cells;
         for (old, incoming) in self
             .values
             .values_mut()
@@ -512,6 +745,8 @@ impl<'db> BorrowState<'db> {
             }
         }
         self.contents.extend(updates);
+        self.invalidate_certified_contents(values.db, footprint);
+        self.invalidate_scalar_memory(values.db, footprint);
         Ok(())
     }
 
@@ -726,6 +961,10 @@ impl<'db> BorrowState<'db> {
             }
         }
         self.contents.extend(updates);
+        for (region, _) in replacements {
+            self.invalidate_certified_contents(values.db, AccessFootprint::typed(region));
+            self.invalidate_scalar_memory(values.db, AccessFootprint::typed(region));
+        }
         Ok(())
     }
 }

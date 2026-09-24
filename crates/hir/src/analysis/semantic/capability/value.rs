@@ -561,6 +561,9 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             guard.scope(),
             "guard scope must match its value"
         );
+        if value.is_empty() {
+            return value.clone();
+        }
         let direct = value
             .0
             .direct

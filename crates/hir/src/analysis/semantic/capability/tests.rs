@@ -67,9 +67,77 @@ impl<'db> IndexPayload<'db> for Payload<'db> {
 fn runtime<'db>(index: u32) -> IndexExpr<'db> {
     IndexExpr::Runtime(NValueId::from_u32(index))
 }
+
+#[test]
+fn scalar_version_join_preserves_an_untracked_path() {
+    let db = HirAnalysisTestDb::default();
+    let mut values = ValueInterner::new(&db, ValueLimits::default());
+    let root = test_roots::local(&db, NRootId::from_u32(0));
+    let choice = ChoiceKey::new(
+        ValueOccurrence::Value(NValueId::from_u32(1)),
+        StructuralPath::default(),
+    );
+    let yes = Guard::always(&scope())
+        .with_boolean(choice.clone(), true)
+        .unwrap();
+    let no = Guard::always(&scope()).with_boolean(choice, false).unwrap();
+    let mut known = BorrowState::new(&mut values, [], []);
+    let mut unknown = known.clone();
+    assert!(known.constrain(&yes, &mut values));
+    known.store_scalar(root.clone(), IndexExpr::Const(1));
+    assert!(unknown.constrain(&no, &mut values));
+    assert!(known.join(&unknown, &mut values));
+    known.load_scalar(root, NValueId::from_u32(2), &mut values);
+    let zero = Guard::always(&scope())
+        .with_equality(runtime(2), IndexExpr::Const(0))
+        .unwrap();
+    assert!(
+        known
+            .guard()
+            .and(&no)
+            .and_then(|guard| guard.and(&zero))
+            .is_some()
+    );
+    assert!(
+        known
+            .guard()
+            .and(&yes)
+            .and_then(|guard| guard.and(&zero))
+            .is_none()
+    );
+}
+
 fn scope() -> BinderScope {
     BinderScope::default()
 }
+
+#[test]
+fn extending_a_guard_scope_preserves_scalar_and_boolean_facts() {
+    let choice = ChoiceKey::new(
+        ValueOccurrence::Value(NValueId::from_u32(1)),
+        StructuralPath::default(),
+    );
+    let guard = Guard::always(&scope())
+        .with_boolean(choice.clone(), true)
+        .unwrap()
+        .with_equality(runtime(2), IndexExpr::Const(7))
+        .unwrap();
+    assert_eq!(guard.in_scope(&scope()), guard);
+    let (extended, _) = scope().bind(IndexNamespace::Value);
+    let moved = guard.in_scope(&extended);
+    assert_eq!(moved.scope(), &extended);
+    assert!(moved.proves_equal(runtime(2), IndexExpr::Const(7)));
+    assert!(
+        moved
+            .and(
+                &Guard::always(&extended)
+                    .with_boolean(choice, false)
+                    .unwrap()
+            )
+            .is_none()
+    );
+}
+
 fn path<'db>(index: IndexExpr<'db>) -> StructuralPath<IndexExpr<'db>> {
     StructuralPath::new([Projection::Index(index)])
 }

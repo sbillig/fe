@@ -60,6 +60,17 @@ impl<'db> NormalizedBody<'db> {
         self.blocks.get(id.index())
     }
 
+    /// The block and expression that define a statement-defined value.
+    pub fn defining_expr(&self, value: NValueId) -> Option<(NBlockId, &NExpr<'db>)> {
+        let NValueDefinition::Statement { block, statement } = self.value(value)?.definition else {
+            return None;
+        };
+        match &self.block(block)?.statements.get(statement as usize)?.kind {
+            NStatementKind::Define { expr, .. } => Some((block, expr)),
+            NStatementKind::Store { .. } => None,
+        }
+    }
+
     pub fn place_base_ty(&self, db: &'db dyn HirAnalysisDb, base: NPlaceBase) -> Option<TyId<'db>> {
         match base {
             NPlaceBase::Root(root) => Some(self.root(root)?.ty),

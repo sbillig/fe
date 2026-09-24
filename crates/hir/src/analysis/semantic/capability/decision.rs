@@ -1,6 +1,10 @@
 //! Reduced ordered decision graphs with canonical, allocation-independent node numbering.
 use rustc_hash::FxHashMap;
-use std::{collections::BTreeSet, hash::Hash, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    hash::Hash,
+    sync::Arc,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Node<V, T> {
@@ -77,6 +81,43 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
             } if variable == split => (*low, *high),
             _ => (node, node),
         }
+    }
+
+    fn apply(
+        &mut self,
+        lhs: usize,
+        rhs: usize,
+        join: &impl Fn(&T, &T) -> T,
+        memo: &mut FxHashMap<(usize, usize), usize>,
+    ) -> usize {
+        if let Some(result) = memo.get(&(lhs, rhs)) {
+            return *result;
+        }
+        let result = match (self.nodes[lhs].clone(), self.nodes[rhs].clone()) {
+            (Node::Leaf(left), Node::Leaf(right)) => self.intern(Node::Leaf(join(&left, &right))),
+            (left, right) => {
+                let variable = match (&left, &right) {
+                    (
+                        Node::Branch { variable: left, .. },
+                        Node::Branch {
+                            variable: right, ..
+                        },
+                    ) => left.min(right),
+                    (Node::Branch { variable, .. }, _) | (_, Node::Branch { variable, .. }) => {
+                        variable
+                    }
+                    _ => unreachable!(),
+                }
+                .clone();
+                let (left_low, left_high) = self.cofactors(lhs, &variable);
+                let (right_low, right_high) = self.cofactors(rhs, &variable);
+                let low = self.apply(left_low, right_low, join, memo);
+                let high = self.apply(left_high, right_high, join, memo);
+                self.branch(variable, low, high)
+            }
+        };
+        memo.insert((lhs, rhs), result);
+        result
     }
 
     // Substitution may reorder variables or identify two decisions. Rebuild by Shannon
@@ -248,6 +289,25 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         mut variable: impl FnMut(&V) -> Variable<W>,
         mut leaf: impl FnMut(&T) -> U,
     ) -> Decision<W, U> {
+        // An injective, order-preserving rename keeps every branch ordered.
+        // Other substitutions can identify or reorder decisions and need select.
+        let mapped_variables: BTreeMap<_, _> = self
+            .variables()
+            .into_iter()
+            .map(|key| {
+                let mapped = variable(&key);
+                (key, mapped)
+            })
+            .collect();
+        let mut previous = None;
+        let ordered = mapped_variables.values().all(|mapped| match mapped {
+            Variable::Constant(_) => true,
+            Variable::Symbol(key) => {
+                let increasing = previous.is_none_or(|old| old < key);
+                previous = Some(key);
+                increasing
+            }
+        });
         let mut builder = Builder::new();
         let mut mapped = Vec::with_capacity(self.nodes.len());
         for node in self.nodes.iter() {
@@ -257,8 +317,11 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
                     variable: key,
                     low,
                     high,
-                } => match variable(key) {
+                } => match mapped_variables[key].clone() {
                     Variable::Constant(value) => mapped[if value { *high } else { *low }],
+                    Variable::Symbol(key) if ordered => {
+                        builder.branch(key, mapped[*low], mapped[*high])
+                    }
                     Variable::Symbol(key) => builder.select(key, mapped[*low], mapped[*high]),
                 },
             };
@@ -273,27 +336,28 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         mut selected: impl FnMut(&V) -> bool,
         join: impl Fn(&T, &T) -> T,
     ) -> Self {
-        let mut result = self.clone();
-        for variable in self
-            .variables()
-            .into_iter()
-            .filter(|variable| selected(variable))
-        {
-            let cofactor = |assignment| {
-                result.map(
-                    |key| {
-                        if *key == variable {
-                            Variable::Constant(assignment)
-                        } else {
-                            Variable::Symbol(key.clone())
-                        }
-                    },
-                    Clone::clone,
-                )
+        let mut builder = Builder::new();
+        let mut mapped = Vec::with_capacity(self.nodes.len());
+        let mut memo = FxHashMap::default();
+        for node in self.nodes.iter() {
+            let result = match node {
+                Node::Leaf(value) => builder.intern(Node::Leaf(value.clone())),
+                Node::Branch {
+                    variable,
+                    low,
+                    high,
+                } if selected(variable) => {
+                    builder.apply(mapped[*low], mapped[*high], &join, &mut memo)
+                }
+                Node::Branch {
+                    variable,
+                    low,
+                    high,
+                } => builder.branch(variable.clone(), mapped[*low], mapped[*high]),
             };
-            result = cofactor(false).apply(&cofactor(true), &join);
+            mapped.push(result);
         }
-        result
+        builder.finish(mapped[self.root()])
     }
 
     pub(super) fn apply(&self, other: &Self, leaf: impl Fn(&T, &T) -> T) -> Self {
@@ -483,5 +547,63 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash, F: Fn(&T, &T) -> Option<T>>
         };
         self.memo.insert((source, care), result);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Decision, Variable};
+
+    #[test]
+    fn ordered_renaming_preserves_correlated_boolean_decisions() {
+        let choice = |variable| Decision::chain([(variable, true)], true, false);
+        let source = choice(0).apply(
+            &choice(1).apply(&choice(2), |left, right| *left || *right),
+            |left, right| *left && *right,
+        );
+        let expected = choice(10).apply(
+            &choice(11).apply(&choice(12), |left, right| *left || *right),
+            |left, right| *left && *right,
+        );
+        assert_eq!(
+            source.map(|key| Variable::Symbol(*key + 10), |value| *value),
+            expected
+        );
+        assert_eq!(
+            source.map(
+                |key| {
+                    if *key == 1 {
+                        Variable::Constant(false)
+                    } else {
+                        Variable::Symbol(*key + 10)
+                    }
+                },
+                |value| *value
+            ),
+            choice(10).apply(&choice(12), |left, right| *left && *right)
+        );
+    }
+
+    #[test]
+    fn existential_projection_preserves_correlated_alternatives() {
+        let choice = |variable| Decision::chain([(variable, true)], true, false);
+        let (x, y, z) = (choice(0), choice(1), choice(2));
+        let not_x = x.map(
+            |variable| super::Variable::Symbol(*variable),
+            |value| !value,
+        );
+        let left = x.apply(&y, |left, right| *left && *right);
+        let right = not_x.apply(&z, |left, right| *left && *right);
+        let relation = left.apply(&right, |left, right| *left || *right);
+        let union = y.apply(&z, |left, right| *left || *right);
+
+        assert_eq!(
+            relation.exists(|variable| *variable == 0, |left, right| *left || *right),
+            union
+        );
+        assert_eq!(
+            relation.exists(|variable| *variable != 1, |left, right| *left || *right),
+            Decision::leaf(true)
+        );
     }
 }

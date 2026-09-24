@@ -8,8 +8,115 @@ use cranelift_entity::EntityRef;
 
 use crate::analysis::semantic::{
     capability::{guard::ValueOccurrence, index::IndexExpr},
-    normalized::{NBlockId, NValueDefinition, NValueId, NormalizedBody},
+    normalized::{
+        NBlockId, NValueDefinition, NValueId, NormalizedBody, NormalizedBodyVerifyError,
+        normalized_cfg,
+    },
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct LoopEdge {
+    pub from: NBlockId,
+    pub successor: usize,
+    pub to: NBlockId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ValidatedLoop {
+    pub header: NBlockId,
+    pub blocks: BTreeSet<NBlockId>,
+    pub entries: Vec<LoopEdge>,
+    pub backedges: Vec<LoopEdge>,
+    pub exits: Vec<LoopEdge>,
+}
+
+/// Natural loops are identified by dominance, independently of the SCC used for
+/// feedback forgetting. Walking back from each backedge stops at its dominating
+/// header, so only the header has entries from outside the loop.
+pub(super) fn validated_loops(
+    body: &NormalizedBody<'_>,
+) -> Result<Vec<ValidatedLoop>, NormalizedBodyVerifyError> {
+    let cfg = normalized_cfg(body)?;
+    let mut headers: BTreeMap<NBlockId, Vec<LoopEdge>> = BTreeMap::new();
+    for (index, block) in body.blocks.iter().enumerate() {
+        if !cfg.reachable[index] {
+            continue;
+        }
+        let from = NBlockId::new(index);
+        for (successor, edge) in block.terminator.kind.successors().into_iter().enumerate() {
+            if cfg.dominators[index].contains(&edge.block) {
+                headers.entry(edge.block).or_default().push(LoopEdge {
+                    from,
+                    successor,
+                    to: edge.block,
+                });
+            }
+        }
+    }
+    let mut result = Vec::new();
+    for (header, backedges) in headers {
+        let mut blocks = BTreeSet::from([header]);
+        let mut pending: Vec<_> = backedges.iter().map(|edge| edge.from).collect();
+        while let Some(block) = pending.pop() {
+            if blocks.insert(block) {
+                pending.extend(
+                    cfg.predecessors[block.index()]
+                        .iter()
+                        .filter(|predecessor| cfg.reachable[predecessor.index()])
+                        .copied(),
+                );
+            }
+        }
+        let entries = body
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| cfg.reachable[*index] && !blocks.contains(&NBlockId::new(*index)))
+            .flat_map(|(index, block)| {
+                block
+                    .terminator
+                    .kind
+                    .successors()
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(move |(successor, edge)| {
+                        (edge.block == header).then_some(LoopEdge {
+                            from: NBlockId::new(index),
+                            successor,
+                            to: header,
+                        })
+                    })
+            })
+            .collect();
+        let exits = blocks
+            .iter()
+            .flat_map(|from| {
+                body.blocks[from.index()]
+                    .terminator
+                    .kind
+                    .successors()
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(successor, edge)| {
+                        (!blocks.contains(&edge.block)).then_some(LoopEdge {
+                            from: *from,
+                            successor,
+                            to: edge.block,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        result.push(ValidatedLoop {
+            header,
+            blocks,
+            entries,
+            backedges,
+            exits,
+        });
+    }
+    Ok(result)
+}
 
 pub(super) struct LoopRegions {
     blocks: Vec<Option<NBlockId>>,
@@ -111,6 +218,10 @@ impl LoopRegions {
             values,
             feedback,
         }
+    }
+
+    pub fn has_cycle(&self) -> bool {
+        self.blocks.iter().any(Option::is_some)
     }
 
     pub fn for_value(&self, body: &NormalizedBody<'_>, value: NValueId) -> Option<NBlockId> {
@@ -481,6 +592,57 @@ mod tests {
                     .feedback(NBlockId::new(permutation[4]), NBlockId::new(permutation[0]))
                     .is_some()
             );
+        }
+    }
+
+    #[test]
+    fn validated_natural_loops_require_a_dominating_single_entry_header() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "natural_loops.fe".into(),
+            "enum Choice { A, B, C, D }\nimpl Copy for Choice {}\nfn anchor(_ choice: own Choice) {}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "anchor"))),
+        );
+        let template = normalize_semantic_body(&db, instance).unwrap().body;
+        let edge = |from, successor, to| LoopEdge {
+            from: NBlockId::new(from),
+            successor,
+            to: NBlockId::new(to),
+        };
+        let blocks = |ids: &[usize]| ids.iter().copied().map(NBlockId::new).collect();
+        let cases = [
+            (
+                vec![vec![1], vec![2, 3], vec![1], vec![]],
+                vec![ValidatedLoop {
+                    header: NBlockId::new(1),
+                    blocks: blocks(&[1, 2]),
+                    entries: vec![edge(0, 0, 1)],
+                    backedges: vec![edge(2, 0, 1)],
+                    exits: vec![edge(1, 1, 3)],
+                }],
+            ),
+            // Two entries into the cycle leave no dominating header.
+            (vec![vec![1, 2], vec![2], vec![1]], vec![]),
+            (
+                vec![vec![1], vec![2, 3, 4], vec![1], vec![1], vec![]],
+                vec![ValidatedLoop {
+                    header: NBlockId::new(1),
+                    blocks: blocks(&[1, 2, 3]),
+                    entries: vec![edge(0, 0, 1)],
+                    backedges: vec![edge(2, 0, 1), edge(3, 0, 1)],
+                    exits: vec![edge(1, 2, 4)],
+                }],
+            ),
+        ];
+        for (edges, expected) in cases {
+            let body = graph_body(&template, &edges, 0);
+            verify_normalized_body(&db, &body).unwrap();
+            assert_eq!(validated_loops(&body).unwrap(), expected);
         }
     }
 }

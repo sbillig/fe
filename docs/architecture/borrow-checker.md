@@ -211,8 +211,8 @@ manufactured addresses contain unknown bytes. The latter two use the same
 structural arbitrary-contents constructor as byte writes. Native leaves have an
 unconditional invalidity marker, with no disjoint-clobber condition that could
 restore authority. Pointer/handle leaves contain stable unknown addresses and do
-not inherit the containing allocation's freshness. Scalar initialization is not
-tracked by this capability analysis.
+not inherit the containing allocation's freshness. Scalar facts track exact
+stores and loads separately; raw scalar bytes do not establish native authority.
 
 Inventory presence is separate from runtime birth. Immutable call birth templates
 come from trusted Allocation sources in existing summaries, including results
@@ -438,10 +438,52 @@ choices receive a distinct identity at each call. Repeated values computed in a
 loop are forgotten on feedback, so one iteration's choice cannot certify another.
 This preserves the allocation alternative selected by a boolean through a join
 without reviving a previously moved pointer or turning one-path native
-initialization into an unconditional fact. Arithmetic comparisons remain opaque
-boolean producers until scalar predicate reasoning is implemented. Possible
-input aliases and memory effects from calls in a recursive component project
+initialization into an unconditional fact. Trusted primitive comparisons add
+same-type integer equality and unsigned ordering to those guards when their
+operands feed a tracked selector or representable return. Negation,
+conjunction, and disjunction carry bounded relations; user methods with similar
+names do not. Exact scalar cells remember guarded store versions, and a load
+binds a new SSA value only while no possible write has invalidated that cell.
+Unsigned widening and same-width same-signedness casts share index identity;
+truncation and signed widening do not. Indexed selectors and supported return
+relations seed scalar demand; unsupported return-only phis stay opaque, and
+ordinary loop feedback omits unsigned bounds until a loop proof can justify
+them. Integer block parameters retain guarded incoming equalities, and
+normal-return summaries can export scalar result
+relations and definite constant values for writable scalar inputs. Local scalar
+choices are projected before summary export, while public boolean choices map
+to the caller's actual arguments. Possible input aliases and memory effects from
+calls in a recursive component project
 their internal call choices; distinct nonrecursive calls keep independent choices.
+Hidden index witnesses are projected in one shared decision-graph traversal.
+Injective, order-preserving decision renames reuse the existing branch order;
+renames that reorder or identify decisions use Shannon expansion.
+
+### Certified loop contents
+
+A separate loop proof recognizes a narrow unsigned `i < count` fill loop with a
+zero entry value, a unit increment, one definite typed store to the indexed
+family, and one normal exit. It checks the normalized control flow and every
+write, move, availability update, allocation birth, and call effect that could
+change the frontier or earlier members. A certificate then records a must
+coverage guard for `member < count` and a pointer-content template from the
+store, after forgetting facts that depend on the current iteration. A store
+to the same concrete cell on every iteration has a separate last-write proof;
+its coverage is only `member == 0 && 0 < count`.
+
+Certified coverage is separate from possible contents, allocation births, and
+native authority. The checked typed-cell match applies the content template
+only to covered members; zero iterations, skipped stores, changed selectors,
+clobbers, and overlapping writes cannot create a larger guarantee. Feedback,
+births, and subsequent writes invalidate affected certificates. Availability
+uses certified initialized members for reads without treating the entire fresh
+allocation as initialized. Normal-return summaries export a range only when
+all returning paths establish it, and calls instantiate its destination,
+coverage, and contents against the same pre-call state. Reader loops may use
+their unsigned bound only after a corresponding fill certificate is established.
+
+The joint solver checks its complete incoming states after each sweep so a
+temporary join/widen change within a sweep does not prevent convergence.
 Recursive pointer forwarding converges, but recursively returning newly
 allocated pointers can grow summary allocation choices and reach the existing
 bounded convergence diagnostic. Nonconvergence never grants validation through

@@ -7,6 +7,8 @@ use crate::analysis::{
         SemOrigin, SemanticInstance, SemanticInstanceKey,
         capability::{
             footprint::{AccessExtent, AccessFootprint},
+            guard::Guard,
+            index::BinderScope,
             region::RegionSet,
             source::SourceExpr,
             value::ValueId,
@@ -20,7 +22,15 @@ pub struct BorrowSummary<'db> {
     /// Whether any admitted path reaches a return.
     pub may_return: bool,
     pub result: ValueId<'db, SourceExpr<'db>>,
+    /// Scalar facts shared by all normal returns. The Result binder names this
+    /// call's returned value; formal values name immutable argument SSA values.
+    pub scalar_result: Option<Guard<'db>>,
     pub mutable_inputs: Vec<InputPoststate<'db>>,
+    /// A normal-return must range and its structural contents. The member
+    /// binder, guarded coverage, and value share one source-witness namespace.
+    pub certified_ranges: Vec<CertifiedRangePoststate<'db>>,
+    /// Definite scalar values written to addressable inputs on every normal return.
+    pub scalar_inputs: Vec<ScalarInputPoststate<'db>>,
     /// Preconditions on the actual regions supplied by callers. They are
     /// independent of the callee's return value and mutable-input poststates.
     pub requirements: Vec<BoundaryRequirement<'db>>,
@@ -97,6 +107,20 @@ pub struct BoundaryRequirement<'db> {
 pub struct InputPoststate<'db> {
     pub destination: SourceExpr<'db>,
     pub value: ValueId<'db, SourceExpr<'db>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CertifiedRangePoststate<'db> {
+    pub destination: SourceExpr<'db>,
+    pub scope: BinderScope,
+    pub coverage: Guard<'db>,
+    pub contents: ValueId<'db, SourceExpr<'db>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ScalarInputPoststate<'db> {
+    pub destination: SourceExpr<'db>,
+    pub value: usize,
 }
 
 #[salsa::interned]

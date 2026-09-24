@@ -10016,6 +10016,541 @@ fn run(_ count: u256, _ initialize: bool) -> u256 {
     );
 }
 
+#[test]
+fn certified_staged_spans_preserve_fresh_contents_after_the_fill_loop() {
+    let source = r#"
+use core::ptr
+
+fn stage_and_read(_ cursor: mut u256, _ count: u256) -> u256 {
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut i: u256 = 0
+    while i < count {
+        let data = ptr::MemBuffer::alloc(32)
+        *ptr::cast<u8, u256>(data.ptr()) = 7
+        children[i as usize] = data.span()
+        i += 1
+    }
+    if count == 0 { return 0 }
+    let child = children[0]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}
+
+pub fn run(_ count: u256) -> u256 {
+    let mut cursor: u256 = 0
+    stage_and_read(mut cursor, count)
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn certified_staged_spans_survive_a_second_reader_loop() {
+    let source = r#"
+use core::ptr
+
+fn stage_and_sum(_ cursor: mut u256, _ count: u256) -> u256 {
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut i: u256 = 0
+    while i < count {
+        let data = ptr::MemBuffer::alloc(32)
+        *ptr::cast<u8, u256>(data.ptr()) = 7
+        children[i as usize] = data.span()
+        i += 1
+    }
+    let mut j: u256 = 0
+    let mut sum: u256 = 0
+    while j < count {
+        let child = children[j as usize]
+        cursor += 1
+        sum += *ptr::cast<u8, u256>(child.ptr())
+        j += 1
+    }
+    sum
+}
+
+pub fn run(_ count: u256) -> u256 {
+    let mut cursor: u256 = 0
+    stage_and_sum(mut cursor, count)
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn certified_staged_spans_cross_a_returned_array_summary() {
+    let source = r#"
+use core::ptr
+
+fn make_children(_ count: u256) -> ptr::MemArray<ptr::MemSpan> {
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut i: u256 = 0
+    while i < count {
+        let data = ptr::MemBuffer::alloc(32)
+        *ptr::cast<u8, u256>(data.ptr()) = 7
+        children[i as usize] = data.span()
+        i += 1
+    }
+    children
+}
+
+fn read_children(_ cursor: mut u256, _ count: u256) -> u256 {
+    let children = make_children(count)
+    if count == 0 { return 0 }
+    let child = children[0]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}
+
+pub fn run(_ count: u256) -> u256 {
+    let mut cursor: u256 = 0
+    read_children(mut cursor, count)
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn certified_staged_spans_cross_a_returned_array_summary_for_every_member() {
+    let source = r#"
+use core::ptr
+
+fn make_children(_ count: u256) -> ptr::MemArray<ptr::MemSpan> {
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut i: u256 = 0
+    while i < count {
+        let data = ptr::MemBuffer::alloc(32)
+        *ptr::cast<u8, u256>(data.ptr()) = 7
+        children[i as usize] = data.span()
+        i += 1
+    }
+    children
+}
+
+fn read_children(_ cursor: mut u256, _ count: u256) -> u256 {
+    let children = make_children(count)
+    let mut j: u256 = 0
+    let mut sum: u256 = 0
+    while j < count {
+        let child = children[j as usize]
+        cursor += 1
+        sum += *ptr::cast<u8, u256>(child.ptr())
+        j += 1
+    }
+    sum
+}
+
+pub fn run(_ count: u256) -> u256 {
+    let mut cursor: u256 = 0
+    read_children(mut cursor, count)
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn returned_uninitialized_array_does_not_gain_certified_contents() {
+    assert_borrow_conflict(
+        r#"
+use core::ptr
+
+fn make_children() -> ptr::MemArray<ptr::MemSpan> {
+    ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+}
+
+fn read_children(_ cursor: mut u256) -> u256 {
+    let children = make_children()
+    let child = children[0]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}
+
+pub fn run() -> u256 {
+    let mut cursor: u256 = 0
+    read_children(mut cursor)
+}
+"#,
+    );
+}
+
+#[test]
+fn certified_range_is_not_exported_from_only_one_return_path() {
+    assert_borrow_conflict(
+        r#"
+use core::ptr
+
+fn maybe_children(_ count: u256, _ fill: bool) -> ptr::MemArray<ptr::MemSpan> {
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    if !fill { return children }
+    let mut i: u256 = 0
+    while i < count {
+        let data = ptr::MemBuffer::alloc(32)
+        *ptr::cast<u8, u256>(data.ptr()) = 7
+        children[i as usize] = data.span()
+        i += 1
+    }
+    children
+}
+
+fn read_children(_ cursor: mut u256, _ fill: bool) -> u256 {
+    let children = maybe_children(2, fill)
+    let child = children[0]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}
+
+pub fn run(_ fill: bool) -> u256 {
+    let mut cursor: u256 = 0
+    read_children(mut cursor, fill)
+}
+"#,
+    );
+}
+
+#[test]
+fn later_input_pointer_overwrite_invalidates_certified_member() {
+    assert_borrow_conflict(
+        r#"
+use core::ptr
+
+fn fill_and_overwrite(_ cursor: mut u256, _ incoming: ptr::MemSpan, _ count: u256) -> u256 {
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut i: u256 = 0
+    while i < count {
+        let data = ptr::MemBuffer::alloc(32)
+        *ptr::cast<u8, u256>(data.ptr()) = 7
+        children[i as usize] = data.span()
+        i += 1
+    }
+    children[0] = incoming
+    let child = children[0]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}
+
+pub fn run() -> u256 {
+    let cursor = ptr::alloc<u256>()
+    *cursor = 0
+    let incoming = ptr::MemSpan::from_raw_parts(ptr: ptr::byte_ptr(cursor), len: 32)
+    fill_and_overwrite(mut *cursor, incoming, 2)
+}
+"#,
+    );
+}
+
+#[test]
+fn input_span_can_alias_a_mutable_cursor_without_a_fill_loop() {
+    assert_borrow_conflict(
+        r#"
+use core::ptr
+
+fn read_input(_ cursor: mut u256, _ incoming: ptr::MemSpan) -> u256 {
+    cursor += 1
+    *ptr::cast<u8, u256>(incoming.ptr())
+}
+
+pub fn run() -> u256 {
+    let cursor = ptr::alloc<u256>()
+    *cursor = 0
+    let incoming = ptr::MemSpan::from_raw_parts(ptr: ptr::byte_ptr(cursor), len: 32)
+    read_input(mut *cursor, incoming)
+}
+"#,
+    );
+}
+
+#[test]
+fn repeated_single_slot_write_preserves_the_last_fresh_value_after_a_nonempty_loop() {
+    let source = r#"
+use core::ptr
+
+fn repeat_cell(_ cursor: mut u256, _ count: u256) -> u256 {
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(1)
+    let mut i: u256 = 0
+    while i < count {
+        let noise = ptr::MemBuffer::alloc(32)
+        *ptr::cast<u8, u256>(noise.ptr()) = 4
+        let data = ptr::MemBuffer::alloc(32)
+        *ptr::cast<u8, u256>(data.ptr()) = 7
+        children[0] = data.span()
+        i += 1
+    }
+    if count == 0 { return 0 }
+    let child = children[0]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}
+
+pub fn run(_ count: u256) -> u256 {
+    let mut cursor: u256 = 0
+    repeat_cell(mut cursor, count)
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn staged_span_certificate_does_not_cover_unwritten_members() {
+    for (body, read, count) in [
+        (
+            "children[i as usize] = data.span()",
+            "let child = children[0]",
+            0,
+        ),
+        (
+            "children[0] = data.span()",
+            "if count == 0 { return 0 }\n    let child = children[1]",
+            2,
+        ),
+        (
+            "if i != 0 { children[i as usize] = data.span() }",
+            "if count == 0 { return 0 }\n    let child = children[0]",
+            2,
+        ),
+        (
+            "if i == 1 { break }\n        children[i as usize] = data.span()",
+            "let child = children[1]",
+            2,
+        ),
+    ] {
+        let source = format!(
+            r#"
+use core::ptr
+fn staged(_ cursor: mut u256, _ count: u256) -> u256 {{
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut i: u256 = 0
+    while i < count {{
+        let data = ptr::MemBuffer::alloc(32)
+        *ptr::cast<u8, u256>(data.ptr()) = 7
+        {body}
+        i += 1
+    }}
+    {read}
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}}
+pub fn run() -> u256 {{
+    let mut cursor: u256 = 0
+    staged(mut cursor, {count})
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(
+            diagnostics.contains("borrow conflict")
+                || diagnostics.contains("cannot use a native borrow"),
+            "{body}: {diagnostics}"
+        );
+    }
+}
+
+#[test]
+fn single_slot_zero_iterations_keep_unwritten_contents() {
+    assert_borrow_conflict(
+        r#"
+use core::ptr
+
+fn repeat_cell(_ cursor: mut u256, _ count: u256) -> u256 {
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(1)
+    let mut i: u256 = 0
+    while i < count {
+        let data = ptr::MemBuffer::alloc(32)
+        children[0] = data.span()
+        i += 1
+    }
+    let child = children[0]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}
+
+pub fn run() -> u256 {
+    let mut cursor: u256 = 0
+    repeat_cell(mut cursor, 0)
+}
+"#,
+    );
+}
+
+#[test]
+fn opaque_clobber_after_fill_invalidates_certified_contents() {
+    assert_borrow_conflict(
+        r#"
+use core::ptr
+
+fn fill_and_clobber(_ cursor: mut u256, _ count: u256) -> u256 {
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut i: u256 = 0
+    while i < count {
+        let data = ptr::MemBuffer::alloc(32)
+        *ptr::cast<u8, u256>(data.ptr()) = 7
+        children[i as usize] = data.span()
+        i += 1
+    }
+    ptr::zero_bytes(ptr::byte_ptr(children.ptr()), 32)
+    if count == 0 { return 0 }
+    let child = children[0]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}
+
+pub fn run() -> u256 {
+    let mut cursor: u256 = 0
+    fill_and_clobber(mut cursor, 2)
+}
+"#,
+    );
+}
+
+#[test]
+fn repeated_stores_of_one_pointee_keep_their_shared_identity() {
+    assert_borrow_conflict(
+        r#"
+use core::ptr
+
+fn same_pointer(_ count: u256) -> u256 {
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let data = ptr::MemBuffer::alloc(32)
+    *ptr::cast<u8, u256>(data.ptr()) = 7
+    let mut i: u256 = 0
+    while i < count {
+        children[i as usize] = data.span()
+        i += 1
+    }
+    let first = children[0]
+    let second = children[1]
+    let borrowed = mut *ptr::cast<u8, u256>(first.ptr())
+    let value = *ptr::cast<u8, u256>(second.ptr())
+    borrowed = value
+    value
+}
+
+pub fn run() -> u256 { same_pointer(2) }
+"#,
+    );
+}
+
+#[test]
+fn reborn_array_does_not_inherit_earlier_prefix_contents() {
+    assert_borrow_conflict(
+        r#"
+use core::ptr
+
+fn reset_cells(_ cursor: mut u256, _ count: u256) -> u256 {
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut i: u256 = 0
+    while i < count {
+        children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+        let data = ptr::MemBuffer::alloc(32)
+        *ptr::cast<u8, u256>(data.ptr()) = 7
+        children[i as usize] = data.span()
+        i += 1
+    }
+    if count == 0 { return 0 }
+    let child = children[0]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}
+
+pub fn run() -> u256 {
+    let mut cursor: u256 = 0
+    reset_cells(mut cursor, 2)
+}
+"#,
+    );
+}
+
+#[test]
+fn zeroed_native_array_cells_do_not_gain_authority_from_a_loop() {
+    let source = r#"
+use core::ptr
+
+fn discard(_ value: ref u256) {}
+
+fn zero_cells(_ count: u256) {
+    let mut cells = ptr::MemArray<ref u256>::new_uninit(count)
+    let mut i: u256 = 0
+    while i < count {
+        ptr::zero_bytes(ptr::byte_ptr(cells.ptr_at(i as usize)), 32)
+        i += 1
+    }
+    if count == 0 { return }
+    discard(cells[0])
+}
+
+pub fn run() { zero_cells(2) }
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(
+        diagnostics.contains("native borrow") || diagnostics.contains("invalidated by a raw write"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn changed_loop_bound_does_not_certify_unwritten_members() {
+    assert_borrow_conflict(
+        r#"
+use core::ptr
+
+fn changed_bound(_ cursor: mut u256, _ count: u256) -> u256 {
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut limit: u256 = count
+    let mut i: u256 = 0
+    while i < limit {
+        let data = ptr::MemBuffer::alloc(32)
+        *ptr::cast<u8, u256>(data.ptr()) = 7
+        children[i as usize] = data.span()
+        limit = 1
+        i += 1
+    }
+    if count < 2 { return 0 }
+    let child = children[1]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}
+
+pub fn run() -> u256 {
+    let mut cursor: u256 = 0
+    changed_bound(mut cursor, 2)
+}
+"#,
+    );
+}
+
+#[test]
+fn storing_a_real_cursor_alias_in_each_member_does_not_gain_freshness() {
+    assert_borrow_conflict(
+        r#"
+use core::ptr
+
+fn store_alias(_ cursor: mut u256, _ incoming: ptr::MemSpan, _ count: u256) -> u256 {
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut i: u256 = 0
+    while i < count {
+        children[i as usize] = incoming
+        i += 1
+    }
+    if count == 0 { return 0 }
+    let child = children[0]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}
+
+pub fn run() -> u256 {
+    let cursor = ptr::alloc<u256>()
+    *cursor = 0
+    let incoming = ptr::MemSpan::from_raw_parts(ptr: ptr::byte_ptr(cursor), len: 32)
+    store_alias(mut *cursor, incoming, 2)
+}
+"#,
+    );
+}
+
 fn typed_heap_source(stored: &str, read: &str, caller: usize) -> String {
     format!(
         r#"
@@ -10355,6 +10890,398 @@ fn run() -> i32 {
     assert_eq!(
         verify_normalized_body(&db, &normalized),
         Err(NormalizedBodyVerifyError::ExpressionType),
+    );
+}
+
+#[test]
+fn asserted_index_facts_separate_only_unchanged_scalar_cells() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::ptr
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+
+fn asserted(index: usize) -> u256 {
+    assert!(index == 1)
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[index].n
+}
+
+fn loaded(index: usize) -> u256 {
+    let mut selector: usize = index
+    assert!(selector == 1)
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+
+fn unproved(index: usize) -> u256 {
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[index].n
+}
+
+fn changed(index: usize) -> u256 {
+    let mut selector: usize = index
+    assert!(selector == 1)
+    selector = 0
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+"#,
+    );
+    assert!(!diagnostics.contains("in `fn asserted`"), "{diagnostics}");
+    assert!(!diagnostics.contains("in `fn loaded`"), "{diagnostics}");
+    assert!(
+        diagnostics.contains("move conflict in `fn unproved`"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("move conflict in `fn changed`"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn scalar_cell_facts_follow_call_writes_and_guarded_joins() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::ptr
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+fn observe(_ value: usize) {}
+fn overwrite(value: mut usize) { value = 0 }
+
+fn call_unchanged(index: usize) -> u256 {
+    let mut selector: usize = index
+    assert!(selector == 1)
+    observe(selector)
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+
+fn call_changed(index: usize) -> u256 {
+    let mut selector: usize = index
+    assert!(selector == 1)
+    overwrite(value: mut selector)
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+
+fn branch_unchanged(index: usize, flag: bool) -> u256 {
+    let mut selector: usize = index
+    assert!(selector == 1)
+    if flag { selector = 1 } else { selector = 1 }
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+
+fn branch_changed(index: usize, flag: bool) -> u256 {
+    let mut selector: usize = index
+    assert!(selector == 1)
+    if flag { selector = 0 }
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+
+fn alias_changed(index: usize) -> u256 {
+    let mut selector: usize = index
+    assert!(selector == 1)
+    let alias = mut selector
+    alias = 0
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+"#,
+    );
+    assert!(
+        !diagnostics.contains("in `fn call_unchanged`"),
+        "{diagnostics}"
+    );
+    assert!(
+        !diagnostics.contains("in `fn branch_unchanged`"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("move conflict in `fn call_changed`"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("move conflict in `fn branch_changed`"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("move conflict in `fn alias_changed`"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn scalar_predicates_respect_casts_and_trusted_boolean_operations() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::ptr
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+fn pretend(_ index: usize) -> bool { true }
+
+fn widened(index: u8) -> u256 {
+    assert!(index == 1)
+    let selector: usize = index as usize
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+
+fn boolean_combination(index: usize, flag: bool) -> u256 {
+    assert!(index == 1 && flag)
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[index].n
+}
+
+fn negated_inequality(index: usize) -> u256 {
+    assert!(!(index != 1))
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[index].n
+}
+
+fn truncated(index: usize) -> u256 {
+    let narrow: u8 = index.downcast_truncate()
+    assert!(narrow == 1)
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[index].n
+}
+
+fn signed_cast(index: i8) -> u256 {
+    assert!(index == 1)
+    let selector: usize = index.downcast_truncate()
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+
+fn lookalike(index: usize) -> u256 {
+    assert!(pretend(index))
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[index].n
+}
+"#,
+    );
+    for function in ["widened", "boolean_combination", "negated_inequality"] {
+        assert!(
+            !diagnostics.contains(&format!("in `fn {function}`")),
+            "{diagnostics}"
+        );
+    }
+    for function in ["truncated", "signed_cast", "lookalike"] {
+        assert!(
+            diagnostics.contains(&format!("move conflict in `fn {function}`")),
+            "{diagnostics}"
+        );
+    }
+}
+
+#[test]
+fn scalar_return_summary_preserves_proved_index() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::ptr
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+fn prove_one(index: usize) -> usize {
+    assert!(index == 1)
+    index
+}
+fn identity(index: usize) -> usize { index }
+
+fn proved(index: usize) -> u256 {
+    let selector = prove_one(index)
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+
+fn unproved(index: usize) -> u256 {
+    let selector = identity(index)
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+"#,
+    );
+    assert!(!diagnostics.contains("in `fn proved`"), "{diagnostics}");
+    assert!(
+        diagnostics.contains("move conflict in `fn unproved`"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn scalar_versions_keep_old_values_and_forget_changed_loop_cells() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::ptr
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+
+fn old_value(index: usize) -> u256 {
+    let mut selector: usize = index
+    assert!(selector == 1)
+    let old = selector
+    selector = 0
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[old].n
+}
+
+fn stable_cell(index: usize, count: usize) -> u256 {
+    let mut selector: usize = index
+    assert!(selector == 1)
+    let mut step: usize = 0
+    while step < count { step += 1 }
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+
+fn changed_cell(index: usize, flag: bool) -> u256 {
+    let mut selector: usize = index
+    assert!(selector == 1)
+    while flag {
+        selector = 0
+        break
+    }
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+"#,
+    );
+    for function in ["old_value", "stable_cell"] {
+        assert!(
+            !diagnostics.contains(&format!("in `fn {function}`")),
+            "{diagnostics}"
+        );
+    }
+    assert!(
+        diagnostics.contains("move conflict in `fn changed_cell`"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn scalar_result_summaries_keep_public_boolean_choices_distinct() {
+    with_borrow_summary(
+        "fn selected(flag: bool) -> usize { if flag { 1 } else { 0 } }",
+        "selected",
+        |_, summary| assert!(summary.scalar_result.is_some(), "{summary:#?}"),
+    );
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::ptr
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+fn selected(flag: bool) -> usize {
+    if flag { 1 } else { 0 }
+}
+
+fn matched(flag: bool) -> u256 {
+    assert!(flag)
+    let selector = selected(flag)
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+
+fn unrelated(known: bool, other: bool) -> u256 {
+    assert!(known)
+    let selector = selected(flag: other)
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+"#,
+    );
+    assert!(!diagnostics.contains("in `fn matched`"), "{diagnostics}");
+    assert!(
+        diagnostics.contains("move conflict in `fn unrelated`"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn scalar_mutable_input_poststates_require_a_definite_value() {
+    with_borrow_summary(
+        "fn set_one(value: mut usize) { value = 1 }",
+        "set_one",
+        |_, summary| assert!(!summary.scalar_inputs.is_empty(), "{summary:#?}"),
+    );
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::ptr
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+fn set_one(value: mut usize) { value = 1 }
+fn maybe_set_one(value: mut usize, flag: bool) {
+    if flag { value = 1 }
+}
+
+fn definite(index: usize) -> u256 {
+    let mut selector: usize = index
+    set_one(value: mut selector)
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+
+fn conditional(index: usize, flag: bool) -> u256 {
+    let mut selector: usize = index
+    maybe_set_one(value: mut selector, flag)
+    let items = ptr::alloc<[Item; 2]>()
+    *items = [Item { n: 10 }, Item { n: 20 }]
+    consume((*items)[0])
+    (*items)[selector].n
+}
+"#,
+    );
+    assert!(!diagnostics.contains("in `fn definite`"), "{diagnostics}");
+    assert!(
+        diagnostics.contains("move conflict in `fn conditional`"),
+        "{diagnostics}"
     );
 }
 
