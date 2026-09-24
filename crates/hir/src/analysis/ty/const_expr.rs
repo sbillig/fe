@@ -1,8 +1,8 @@
-use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::assoc_const::{AssocConstUse, InherentConstUse};
-use crate::analysis::ty::ty_check::LocalBinding;
 use crate::analysis::ty::ty_def::TyId;
-use crate::hir_def::{ArithBinOp, Func, UnOp};
+use crate::analysis::ty::{corelib::ctfe_extern_intrinsic_kind, ty_check::BodyOwner};
+use crate::analysis::{HirAnalysisDb, semantic::SemanticInstanceKey};
+use crate::hir_def::{ArithBinOp, UnOp, attr::ArithmeticMode, scope_graph::ScopeId};
 use salsa::Update;
 
 #[salsa::interned]
@@ -14,23 +14,16 @@ pub struct ConstExprId<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum ConstExpr<'db> {
-    ExternConstFnCall {
-        func: Func<'db>,
-        generic_args: Vec<TyId<'db>>,
-        args: Vec<TyId<'db>>,
-    },
-    UserConstFnCall {
-        func: Func<'db>,
-        generic_args: Vec<TyId<'db>>,
-        args: Vec<TyId<'db>>,
-    },
+    Invocation(ConstInvocation<'db>),
     ArithBinOp {
         op: ArithBinOp,
+        mode: ArithmeticMode,
         lhs: TyId<'db>,
         rhs: TyId<'db>,
     },
     UnOp {
         op: UnOp,
+        mode: ArithmeticMode,
         expr: TyId<'db>,
     },
     Cast {
@@ -51,23 +44,31 @@ pub enum ConstExpr<'db> {
     },
     TraitConst(AssocConstUse<'db>),
     InherentConst(InherentConstUse<'db>),
-    LocalBinding(LocalBinding<'db>),
+}
+
+/// A call's final selected instance and original owned arguments. The result
+/// type belongs to the enclosing `ConstTyData::Abstract`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct ConstInvocation<'db> {
+    pub key: SemanticInstanceKey<'db>,
+    pub args: Vec<TyId<'db>>,
+    pub parameter_owner: ScopeId<'db>,
 }
 
 impl<'db> ConstExprId<'db> {
+    /// Bodyless user externs can participate in type identity, although the
+    /// compiler has no implementation with which to force their values.
+    pub(crate) fn is_opaque_extern(self, db: &'db dyn HirAnalysisDb) -> bool {
+        matches!(self.data(db), ConstExpr::Invocation(invocation)
+            if matches!(invocation.key.owner(db), BodyOwner::Func(func)
+                if func.is_extern(db) && func.body(db).is_none()
+                    && ctfe_extern_intrinsic_kind(db, func).is_none()))
+    }
+
     pub fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
         match self.data(db) {
-            ConstExpr::ExternConstFnCall {
-                func,
-                generic_args,
-                args,
-            }
-            | ConstExpr::UserConstFnCall {
-                func,
-                generic_args,
-                args,
-            } => pretty_print_const_fn_call(db, *func, generic_args, args),
-            ConstExpr::ArithBinOp { op, lhs, rhs } => {
+            ConstExpr::Invocation(invocation) => pretty_print_const_fn_call(db, invocation),
+            ConstExpr::ArithBinOp { op, lhs, rhs, .. } => {
                 format!(
                     "({} {} {})",
                     lhs.pretty_print(db),
@@ -75,7 +76,7 @@ impl<'db> ConstExprId<'db> {
                     rhs.pretty_print(db)
                 )
             }
-            ConstExpr::UnOp { op, expr } => {
+            ConstExpr::UnOp { op, expr, .. } => {
                 pretty_print_un_op(*op, expr.pretty_print(db).to_string())
             }
             ConstExpr::Cast { expr, to } => {
@@ -100,27 +101,31 @@ impl<'db> ConstExprId<'db> {
                     use_.name().data(db)
                 )
             }
-            ConstExpr::LocalBinding(binding) => format!("{binding:?}"),
         }
     }
 }
 
 fn pretty_print_const_fn_call<'db>(
     db: &'db dyn HirAnalysisDb,
-    func: Func<'db>,
-    generic_args: &[TyId<'db>],
-    args: &[TyId<'db>],
+    invocation: &ConstInvocation<'db>,
 ) -> String {
-    let name = func
-        .name(db)
-        .to_opt()
-        .map(|n| n.data(db).as_str())
-        .unwrap_or("<unknown>");
-    let generic_args = generic_args
+    let name = match invocation.key.owner(db) {
+        BodyOwner::Func(func) => func
+            .name(db)
+            .to_opt()
+            .map(|n| n.data(db).as_str())
+            .unwrap_or("<unknown>"),
+        _ => "<constant>",
+    };
+    let generic_args = invocation
+        .key
+        .subst(db)
+        .generic_args(db)
         .iter()
         .map(|arg| arg.pretty_print(db).to_string())
         .collect::<Vec<_>>();
-    let args = args
+    let args = invocation
+        .args
         .iter()
         .map(|arg| arg.pretty_print(db).to_string())
         .collect::<Vec<_>>();

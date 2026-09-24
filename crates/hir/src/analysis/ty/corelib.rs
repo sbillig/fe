@@ -541,6 +541,42 @@ pub(crate) enum NumericExternIntrinsic {
 }
 
 #[derive(Clone, Copy)]
+pub(crate) enum CtfeExternIntrinsic {
+    SizeOf,
+    AsBytes,
+    Keccak256,
+    Bitcast,
+    Numeric(NumericExternIntrinsic),
+    AddMod,
+    MulMod,
+}
+
+pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> Option<CtfeExternIntrinsic> {
+    if !func.is_extern(db) || func.body(db).is_some() {
+        return None;
+    }
+    match runtime_builtin_func_kind(db, func) {
+        Some(RuntimeBuiltinFuncKind::AddMod) => return Some(CtfeExternIntrinsic::AddMod),
+        Some(RuntimeBuiltinFuncKind::MulMod) => return Some(CtfeExternIntrinsic::MulMod),
+        _ => {}
+    }
+    if lib_func_matches(db, func, "core::intrinsic::size_of") {
+        Some(CtfeExternIntrinsic::SizeOf)
+    } else if lib_func_matches(db, func, "core::intrinsic::__as_bytes") {
+        Some(CtfeExternIntrinsic::AsBytes)
+    } else if lib_func_matches(db, func, "core::intrinsic::__keccak256") {
+        Some(CtfeExternIntrinsic::Keccak256)
+    } else if lib_func_matches(db, func, "core::num::__bitcast") {
+        Some(CtfeExternIntrinsic::Bitcast)
+    } else {
+        core_numeric_const_intrinsic(db, func).map(CtfeExternIntrinsic::Numeric)
+    }
+}
+
+#[derive(Clone, Copy)]
 pub(crate) enum SaturatingArithmetic {
     Add,
     Sub,
@@ -615,6 +651,21 @@ pub(crate) fn numeric_extern_intrinsic(name: &str) -> Option<NumericExternIntrin
     })
 }
 
+pub(crate) fn core_numeric_const_intrinsic<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> Option<NumericExternIntrinsic> {
+    if func.top_mod(db).ingot(db).kind(db) != IngotKind::Core || func.body(db).is_some() {
+        return None;
+    }
+    let path = runtime_builtin_func_path(db, func)?;
+    let [module @ ("num" | "num_intrinsics"), name] = path.as_slice() else {
+        return None;
+    };
+    let kind = numeric_extern_intrinsic(name)?;
+    lib_func_matches(db, func, &format!("core::{module}::{name}")).then_some(kind)
+}
+
 fn has_integer_numeric_suffix(suffix: &str) -> bool {
     matches!(
         suffix,
@@ -642,13 +693,8 @@ pub fn intrinsic_contract<'db>(
     if let Some(runtime) = runtime_builtin_func_kind(db, func) {
         return Some(runtime_intrinsic_contract(runtime));
     }
-    let numeric = func.top_mod(db).ingot(db).kind(db) == IngotKind::Core
-        && func.body(db).is_none()
-        && runtime_builtin_func_path(db, func).is_some_and(|path| {
-            matches!(path.as_slice(), ["num" | "num_intrinsics", name]
-                if (*name == "__bitcast" || numeric_extern_intrinsic(name).is_some())
-                    && lib_func_matches(db, func, &format!("core::{}::{name}", path[0])))
-        });
+    let numeric = core_numeric_const_intrinsic(db, func).is_some()
+        || lib_func_matches(db, func, "core::num::__bitcast");
     // These exact std declarations call host C I/O and process accounting.
     // They can observe/change host state, but cannot access or retain Fe memory.
     // A same-named user extern or a scalar-only signature carries no such trust.

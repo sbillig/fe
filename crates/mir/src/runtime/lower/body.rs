@@ -3,7 +3,7 @@ use std::{collections::HashSet, mem::size_of};
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        EffectProviderSubst, FieldIndex, GenericSubst, ImplEnv, LayoutEvidenceBase,
+        EffectProviderSubst, EvalOutcome, FieldIndex, GenericSubst, ImplEnv, LayoutEvidenceBase,
         LayoutEvidenceBody, LayoutEvidenceComponentValue, LayoutEvidenceConstBinding,
         LayoutEvidenceConstant, LayoutEvidenceExpr, LayoutEvidenceIndex, LayoutEvidenceOperand,
         SBlockId, SConst, SLocalId, SStmtId, SemConstId, SemConstScalar, SemConstValue, SemOrigin,
@@ -163,18 +163,50 @@ fn check_runtime_body_supported<'db>(
     key: SemanticInstanceKey<'db>,
     body: &RuntimeSemanticBody<'db>,
 ) -> Result<(), LowerError> {
+    let evidence = layout_evidence_body(db, body.owner()).map_err(|error| {
+        LowerError::Unsupported(format!(
+            "layout evidence lowering failed for {key:?}: {error:?}"
+        ))
+    })?;
     for block in &body.normalized.blocks {
         for stmt in &block.statements {
             if let NStatementKind::Define {
-                expr: NExpr::Const(SConst::Value(value)),
-                ..
+                result: dst,
+                expr: NExpr::Const(constant),
             } = &stmt.kind
-                && let Some(ty) = oversized_size_of_ty(db, key, *value)
+                && !matches!(constant, SConst::Ref(..))
             {
-                return Err(LowerError::Unsupported(format!(
-                    "type `{}` exceeds the supported 64-bit raw-memory layout size",
-                    ty.pretty_print(db)
-                )));
+                let value = match constant {
+                    SConst::Value(value) => value.value(),
+                    SConst::Description(value) | SConst::Evidence(value) => *value,
+                    SConst::Invalid(value) => {
+                        return Err(LowerError::Unsupported(format!(
+                            "invalid semantic constant from {:?}: {value:?}",
+                            stmt.origin
+                        )));
+                    }
+                    SConst::Ref(..) => unreachable!(),
+                };
+                if let Some(ty) = oversized_size_of_ty(db, key, value) {
+                    return Err(LowerError::Unsupported(format!(
+                        "type `{}` exceeds the supported 64-bit raw-memory layout size",
+                        ty.pretty_print(db)
+                    )));
+                }
+                let bindings = evidence
+                    .constant_bindings
+                    .get(dst.index())
+                    .map_or(&[][..], AsRef::as_ref);
+                let expected_ty = body.normalized.values[dst.index()].ty;
+                if formal_runtime_layout_root_binding(db, value, bindings).is_none()
+                    && reify_runtime_const_for_ty(db, body.owner(), expected_ty, value).is_none()
+                {
+                    return Err(LowerError::Unsupported(format!(
+                        "semantic value from {:?} cannot be reified as `{}` for runtime lowering",
+                        stmt.origin,
+                        expected_ty.pretty_print(db)
+                    )));
+                }
             }
             if let NStatementKind::Define {
                 result: dst,
@@ -182,14 +214,31 @@ fn check_runtime_body_supported<'db>(
             } = &stmt.kind
             {
                 let const_name = semantic_const_ref_name(db, key, *cref);
-                let value = eval_const_ref(db, *cref).map_err(|err| {
-                    LowerError::Unsupported(format!(
-                        "semantic constant `{const_name}` referenced from {:?} failed CTFE: {err:?}",
-                        cref.origin(db)
-                    ))
-                })?;
+                let value = match eval_const_ref(db, *cref) {
+                    EvalOutcome::Ready(value) => value,
+                    EvalOutcome::Blocked(info) => {
+                        return Err(LowerError::Unsupported(format!(
+                            "semantic constant `{const_name}` referenced from {:?} requires {:?}: {:?}",
+                            cref.origin(db),
+                            info.demand,
+                            info.first_dependency
+                        )));
+                    }
+                    EvalOutcome::Failed(failure) => {
+                        return Err(LowerError::Unsupported(format!(
+                            "semantic constant `{const_name}` referenced from {:?} failed CTFE: {failure:?}",
+                            cref.origin(db)
+                        )));
+                    }
+                };
                 let expected_ty = body.normalized.values[dst.index()].ty;
-                if reify_runtime_const_for_ty(db, body.owner(), expected_ty, value).is_none() {
+                let bindings = evidence
+                    .constant_bindings
+                    .get(dst.index())
+                    .map_or(&[][..], AsRef::as_ref);
+                if formal_runtime_layout_root_binding(db, value, bindings).is_none()
+                    && reify_runtime_const_for_ty(db, body.owner(), expected_ty, value).is_none()
+                {
                     return Err(LowerError::Unsupported(format!(
                         "semantic constant `{const_name}` referenced from {:?} failed to reify as `{}` for runtime lowering",
                         cref.origin(db),
@@ -217,31 +266,40 @@ fn check_runtime_body_supported<'db>(
     Ok(())
 }
 
+fn formal_runtime_layout_root_binding<'a, 'db>(
+    db: &'db dyn MirDb,
+    value: SemConstId<'db>,
+    bindings: &'a [LayoutEvidenceConstBinding<'db>],
+) -> Option<&'a LayoutEvidenceConstBinding<'db>> {
+    let SemConstValue::Description(term) = value.value(db) else {
+        return None;
+    };
+    if !matches!(term.data(db), ConstTyData::TyParam(_, _)) {
+        return None;
+    }
+    let param_ty = TyId::new(db, TyData::ConstTy(term));
+    bindings.iter().find(|binding| binding.param == param_ty)
+}
+
 fn oversized_size_of_ty<'db>(
     db: &'db dyn MirDb,
     key: SemanticInstanceKey<'db>,
     value: SemConstId<'db>,
 ) -> Option<TyId<'db>> {
-    let SemConstValue::TypeLevel { const_ty, .. } = value.value(db) else {
+    let SemConstValue::Description(term) = value.value(db) else {
         return None;
     };
-    let TyData::ConstTy(const_ty) = const_ty.data(db) else {
+    let ConstTyData::Abstract(expr, _) = term.data(db) else {
         return None;
     };
-    let ConstTyData::Abstract(expr, _) = const_ty.data(db) else {
-        return None;
-    };
-    let ConstExpr::ExternConstFnCall {
-        func, generic_args, ..
-    } = expr.data(db)
-    else {
+    let ConstExpr::Invocation(invocation) = expr.data(db) else {
         return None;
     };
     let size_of = resolve_lib_func_path(db, key.owner(db).scope(), "core::size_of")?;
-    if *func != size_of {
+    if invocation.key.owner(db) != BodyOwner::Func(size_of) {
         return None;
     }
-    let ty = *generic_args.first()?;
+    let ty = *invocation.key.subst(db).generic_args(db).first()?;
     runtime_size_bytes(db, ty).is_err().then_some(ty)
 }
 
@@ -733,8 +791,7 @@ impl<'db> RmirEmitter<'db> {
                     panic!("static layout root must be a const value: {root:?}")
                 };
                 let ty = const_ty.ty(self.db);
-                let value =
-                    SemConstId::new(self.db, SemConstValue::TypeLevel { ty, const_ty: root });
+                let value = SemConstId::new(self.db, SemConstValue::Description(*const_ty));
                 self.lower_sem_const_as_class(
                     bb,
                     value,
@@ -1743,32 +1800,24 @@ impl<'db> RmirEmitter<'db> {
         const_: &SConst<'db>,
         bindings: &[LayoutEvidenceConstBinding<'db>],
     ) {
-        match const_ {
-            SConst::Value(value) => {
-                if sem_const_ty(self.db, *value) == TyId::unit(self.db) {
-                    return;
-                }
-                let target = self
-                    .value_class(dst)
-                    .cloned()
-                    .expect("const destination should have a runtime class");
-                let expected_ty =
-                    self.const_lowering_ty(self.locals[dst.index()].semantic_ty, &target);
-                self.lower_sem_const_for_class(bb, dst, *value, expected_ty, &target, bindings);
-            }
-            SConst::Ref(cref) => {
-                let value = evaluated_const_ref_value(self.db, *cref);
-                if sem_const_ty(self.db, value) == TyId::unit(self.db) {
-                    return;
-                }
-                let target = self
-                    .value_class(dst)
-                    .cloned()
-                    .expect("const destination should have a runtime class");
-                let expected_ty =
-                    self.const_lowering_ty(self.locals[dst.index()].semantic_ty, &target);
-                self.lower_const_ref_for_class(bb, dst, value, expected_ty, &target, bindings);
-            }
+        let value = match const_ {
+            SConst::Value(value) => value.value(),
+            SConst::Description(value) | SConst::Evidence(value) => *value,
+            SConst::Invalid(_) => unreachable!("invalid constant passed runtime admission"),
+            SConst::Ref(cref) => evaluated_const_ref_value(self.db, *cref),
+        };
+        if sem_const_ty(self.db, value) == TyId::unit(self.db) {
+            return;
+        }
+        let target = self
+            .value_class(dst)
+            .cloned()
+            .expect("const destination should have a runtime class");
+        let expected_ty = self.const_lowering_ty(self.locals[dst.index()].semantic_ty, &target);
+        if matches!(const_, SConst::Ref(..)) {
+            self.lower_const_ref_for_class(bb, dst, value, expected_ty, &target, bindings);
+        } else {
+            self.lower_sem_const_for_class(bb, dst, value, expected_ty, &target, bindings);
         }
     }
 
@@ -1988,9 +2037,7 @@ impl<'db> RmirEmitter<'db> {
                 &RuntimeClass::AggregateValue { layout },
                 bindings,
             ),
-            SemConstValue::Unit
-            | SemConstValue::Scalar { .. }
-            | SemConstValue::TypeLevel { .. } => {
+            SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Description(..) => {
                 panic!("semantic const should lower as a natural runtime value: {value:?}")
             }
         }
@@ -2400,9 +2447,7 @@ impl<'db> RmirEmitter<'db> {
                 self.lower_enum_values(bb, dst, layout, variant, &field_values);
                 dst
             }
-            SemConstValue::Unit
-            | SemConstValue::Scalar { .. }
-            | SemConstValue::TypeLevel { .. } => {
+            SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Description(..) => {
                 panic!("expected non-scalar semantic const, found {value:?}")
             }
         }
@@ -6218,19 +6263,7 @@ impl<'db> RmirEmitter<'db> {
         value: SemConstId<'db>,
         bindings: &[LayoutEvidenceConstBinding<'db>],
     ) -> Option<RLocalId> {
-        let SemConstValue::TypeLevel {
-            const_ty: param_ty, ..
-        } = value.value(self.db)
-        else {
-            return None;
-        };
-        let TyData::ConstTy(const_ty) = param_ty.data(self.db) else {
-            return None;
-        };
-        let ConstTyData::TyParam(_, _) = const_ty.data(self.db) else {
-            return None;
-        };
-        let binding = bindings.iter().find(|binding| binding.param == param_ty)?;
+        let binding = formal_runtime_layout_root_binding(self.db, value, bindings)?;
         let map_ty = match &binding.value {
             LayoutEvidenceOperand::Local(local) => {
                 &self.layout_evidence.locals[local.index()].map_ty

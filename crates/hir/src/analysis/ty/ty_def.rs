@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::{
     hir_def::{
-        Body, Enum, ExprId, GenericParamOwner, IdentId, IntegerId, ItemKind, PathId,
+        Body, Enum, ExprId, GenericParamOwner, IdentId, ItemKind, PathId,
         TypeAlias as HirTypeAlias, VariantKind,
         prim_ty::{IntTy as HirIntTy, PrimTy as HirPrimTy, UintTy as HirUintTy},
         scope_graph::ScopeId,
@@ -16,7 +16,7 @@ use common::{
     indexmap::IndexSet,
     ingot::{Ingot, IngotKind},
 };
-use num_bigint::BigUint;
+use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 use rustc_hash::FxHashSet;
 use salsa::Update;
@@ -24,18 +24,19 @@ use smallvec::SmallVec;
 
 use super::{
     adt_def::{AdtDef, instantiate_adt_field_shape},
-    const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, TypePrintMode},
+    const_ty::{ConstTyData, ConstTyId, TypePrintMode, const_ty_from_sem_const},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     effects::place_effect_provider_param_index_map,
     trait_def::TraitInstId,
     trait_resolution::{PredicateListId, WellFormedness},
     ty_lower::collect_generic_params,
     unify::{InferenceKey, UnificationTable},
-    visitor::{TyVisitable, TyVisitor, walk_ty},
+    visitor::{TyVisitable, TyVisitor, walk_const_ty, walk_ty},
 };
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::PathRes,
+    semantic::int_const,
     ty::{
         adt_def::AdtRef,
         trait_resolution::{TraitSolveCx, check_ty_wf},
@@ -195,6 +196,10 @@ impl<'db> TyId<'db> {
         self.flags(db).contains(TyFlags::HAS_PROJECTION)
     }
 
+    pub fn has_hole(self, db: &dyn HirAnalysisDb) -> bool {
+        self.flags(db).contains(TyFlags::HAS_HOLE)
+    }
+
     /// Returns `true` if the type has a `*` kind.
     pub fn has_star_kind(self, db: &dyn HirAnalysisDb) -> bool {
         !matches!(self.kind(db), Kind::Abs(..))
@@ -342,18 +347,18 @@ impl<'db> TyId<'db> {
     pub(super) fn array_with_len(db: &'db dyn HirAnalysisDb, elem: TyId<'db>, len: usize) -> Self {
         let array = Self::array(db, elem);
 
-        let len = EvaluatedConstTy::LitInt(IntegerId::new(db, BigUint::from(len)));
-        let len = ConstTyData::Evaluated(len, array.applicable_ty(db).unwrap().const_ty.unwrap());
-        let len = TyId::const_ty(db, ConstTyId::new(db, len));
+        let len_ty = array.applicable_ty(db).unwrap().const_ty.unwrap();
+        let len = const_ty_from_sem_const(db, int_const(db, len_ty, BigInt::from(len)));
+        let len = TyId::const_ty(db, len);
 
         TyId::app(db, array, len)
     }
 
     pub fn string_with_len(db: &'db dyn HirAnalysisDb, len: usize) -> Self {
         let string = Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::String)));
-        let len = EvaluatedConstTy::LitInt(IntegerId::new(db, BigUint::from(len)));
-        let len = ConstTyData::Evaluated(len, string.applicable_ty(db).unwrap().const_ty.unwrap());
-        let len = TyId::const_ty(db, ConstTyId::new(db, len));
+        let len_ty = string.applicable_ty(db).unwrap().const_ty.unwrap();
+        let len = const_ty_from_sem_const(db, int_const(db, len_ty, BigInt::from(len)));
+        let len = TyId::const_ty(db, len);
         TyId::app(db, string, len)
     }
 
@@ -454,12 +459,7 @@ impl<'db> TyId<'db> {
         let TyData::ConstTy(const_ty) = len_ty.data(db) else {
             return None;
         };
-        match const_ty.data(db) {
-            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => {
-                int_id.data(db).to_usize()
-            }
-            _ => None,
-        }
+        const_ty.integer_value(db)?.to_usize()
     }
 
     /// Returns `true` if this type is known to have no runtime representation.
@@ -588,8 +588,10 @@ impl<'db> TyId<'db> {
                 ConstTyData::TyVar(..) => None,
                 ConstTyData::TyParam(ty_param, _) => Some(ty_param.scope(db)),
                 ConstTyData::Hole(..) => None,
-                ConstTyData::Evaluated(..) => None,
-                ConstTyData::Abstract(..) => None,
+                ConstTyData::Value(..)
+                | ConstTyData::Description(..)
+                | ConstTyData::Invalid(..) => None,
+                ConstTyData::Abstract(..) | ConstTyData::Computation { .. } => None,
                 ConstTyData::UnEvaluated { body, .. } => Some(body.scope()),
             },
 
@@ -1109,6 +1111,43 @@ pub enum InvalidCause<'db> {
         expr: ExprId,
     },
 
+    ConstEvalOutOfBounds {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
+    ConstEvalInvalidOperation {
+        body: Body<'db>,
+        expr: ExprId,
+        message: String,
+    },
+
+    ConstEvalInvalidBorrow {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
+    ConstEvalInvalidProviderUse {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
+    ConstEvalVariantMismatch {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
+    ConstEvalUninitializedLocal {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
+    ConstEvalInvariant {
+        body: Body<'db>,
+        expr: ExprId,
+        message: String,
+    },
+
     ConstEvalArithmeticOverflow {
         body: Body<'db>,
         expr: ExprId,
@@ -1210,6 +1249,17 @@ impl InvalidCause<'_> {
             InvalidCause::ConstEvalAssertionFailed { .. } => "ConstEvalAssertionFailed".into(),
             InvalidCause::ConstEvalNonConstCall { .. } => "ConstEvalNonConstCall".into(),
             InvalidCause::ConstEvalDivisionByZero { .. } => "ConstEvalDivisionByZero".into(),
+            InvalidCause::ConstEvalOutOfBounds { .. } => "ConstEvalOutOfBounds".into(),
+            InvalidCause::ConstEvalInvalidOperation { .. } => "ConstEvalInvalidOperation".into(),
+            InvalidCause::ConstEvalInvalidBorrow { .. } => "ConstEvalInvalidBorrow".into(),
+            InvalidCause::ConstEvalInvalidProviderUse { .. } => {
+                "ConstEvalInvalidProviderUse".into()
+            }
+            InvalidCause::ConstEvalVariantMismatch { .. } => "ConstEvalVariantMismatch".into(),
+            InvalidCause::ConstEvalUninitializedLocal { .. } => {
+                "ConstEvalUninitializedLocal".into()
+            }
+            InvalidCause::ConstEvalInvariant { .. } => "ConstEvalInvariant".into(),
             InvalidCause::ConstEvalArithmeticOverflow { .. } => {
                 "ConstEvalArithmeticOverflow".into()
             }
@@ -1228,10 +1278,7 @@ fn string_capacity_from_const_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option
     let TyData::ConstTy(const_ty) = ty.data(db) else {
         return None;
     };
-    let ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) = const_ty.data(db) else {
-        return None;
-    };
-    value.data(db).try_into().ok()
+    const_ty.integer_value(db)?.to_usize()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2045,6 +2092,7 @@ bitflags! {
         const HAS_VAR = 0b0000_0010;
         const HAS_PARAM = 0b0000_0100;
         const HAS_PROJECTION = 0b0000_1000;
+        const HAS_HOLE = 0b0001_0000;
     }
 }
 
@@ -2084,6 +2132,13 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
 
         fn visit_invalid(&mut self, _: &InvalidCause) {
             self.flags.insert(TyFlags::HAS_INVALID);
+        }
+
+        fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
+            if matches!(const_ty.data(self.db), ConstTyData::Hole(..)) {
+                self.flags.insert(TyFlags::HAS_HOLE);
+            }
+            walk_const_ty(self, const_ty);
         }
     }
 

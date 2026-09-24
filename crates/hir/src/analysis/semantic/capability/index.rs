@@ -1,18 +1,18 @@
 //! Lexically scoped symbolic indices. Binder numbers are lexical levels, never allocator IDs.
-use num_bigint::BigUint;
+use num_bigint::BigInt;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{
-    analysis::{
-        HirAnalysisDb,
-        semantic::normalized::{NBlockId, NIndex, NValueId},
-        ty::{
-            const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
-            fold::{TyFoldable, TyFolder},
-            ty_def::{TyData, TyId},
-        },
+use crate::analysis::{
+    HirAnalysisDb,
+    semantic::{
+        int_const,
+        normalized::{NBlockId, NIndex, NValueId},
     },
-    hir_def::IntegerId,
+    ty::{
+        const_ty::{ConstTyId, const_ty_from_sem_const},
+        fold::{TyFoldable, TyFolder},
+        ty_def::{TyData, TyId},
+    },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -296,13 +296,7 @@ impl<'db> TyFolder<'db> for IndexSubst<'db> {
             return match self.apply(IndexExpr::TypeConst(*value)) {
                 IndexExpr::Const(integer) => TyId::const_ty(
                     db,
-                    ConstTyId::new(
-                        db,
-                        ConstTyData::Evaluated(
-                            EvaluatedConstTy::LitInt(IntegerId::new(db, BigUint::from(integer))),
-                            value.ty(db),
-                        ),
-                    ),
+                    const_ty_from_sem_const(db, int_const(db, value.ty(db), BigInt::from(integer))),
                 ),
                 IndexExpr::TypeConst(value) => TyId::const_ty(db, value),
                 _ => unreachable!("checked const substitution"),

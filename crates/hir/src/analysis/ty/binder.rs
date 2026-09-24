@@ -95,7 +95,28 @@ where
         owner: ScopeId<'db>,
         args: &[TyId<'db>],
     ) -> T {
-        let mut folder = InstantiateScopedFolder { owner, args };
+        let mut folder = InstantiateScopedFolder {
+            owner,
+            args,
+            new_owner: None,
+        };
+        self.value.fold_with(db, &mut folder)
+    }
+
+    /// Instantiates params owned by `owner` and transfers retained context to
+    /// `new_owner`. Other contexts keep their original ownership.
+    pub fn instantiate_scoped_into(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        owner: ScopeId<'db>,
+        new_owner: ScopeId<'db>,
+        args: &[TyId<'db>],
+    ) -> T {
+        let mut folder = InstantiateScopedFolder {
+            owner,
+            args,
+            new_owner: Some(new_owner),
+        };
         self.value.fold_with(db, &mut folder)
     }
 
@@ -193,9 +214,18 @@ impl<'db> TyFolder<'db> for InstantiateFolder<'db, '_> {
 struct InstantiateScopedFolder<'db, 'a> {
     owner: ScopeId<'db>,
     args: &'a [TyId<'db>],
+    new_owner: Option<ScopeId<'db>>,
 }
 
 impl<'db> TyFolder<'db> for InstantiateScopedFolder<'db, '_> {
+    fn fold_scope(&mut self, scope: ScopeId<'db>) -> ScopeId<'db> {
+        if scope == self.owner {
+            self.new_owner.unwrap_or(scope)
+        } else {
+            scope
+        }
+    }
+
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         match ty.data(db) {
             TyData::TyParam(param) if param.owner == self.owner && !param.is_effect() => {
@@ -255,7 +285,7 @@ impl<'db> TyFolder<'db> for InstantiateScopedFolder<'db, '_> {
     }
 }
 
-fn backfill_unevaluated_const_generic_args<'db>(
+pub(crate) fn backfill_unevaluated_const_generic_args<'db>(
     db: &'db dyn HirAnalysisDb,
     const_ty: ConstTyId<'db>,
     args: &[TyId<'db>],
@@ -293,7 +323,10 @@ fn backfill_unevaluated_const_generic_args<'db>(
     ))
 }
 
-fn bound_value_owner<'db, T>(db: &'db dyn HirAnalysisDb, value: &T) -> Option<ScopeId<'db>>
+pub(crate) fn bound_value_owner<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: &T,
+) -> Option<ScopeId<'db>>
 where
     T: TyVisitable<'db>,
 {

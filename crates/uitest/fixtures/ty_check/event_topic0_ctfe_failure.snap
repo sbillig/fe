@@ -3,9 +3,15 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/event_topic0_ctfe_failure.fe
 ---
+error[3-0024]: non-const function call in const context
+   ┌─ event_topic0_ctfe_failure.fe:23:31
+   │
+23 │     const SOL_TYPE: Self::S = runtime_name()
+   │                               ^^^^^^^^^^^^^^ calls in const context must be `const fn`
+
 error[8-0089]: failed to evaluate constant `TOPIC0`
    ┌─ event_topic0_ctfe_failure.fe:26:1
    │
 26 │ ╭ #[event]
 27 │ │ struct Broken { value: Bad }
-   │ ╰────────────────────────────^ `TOPIC0` from generated `#[event]` implementation failed during compile-time evaluation
+   │ ╰────────────────────────────^ `TOPIC0` from generated `#[event]` implementation called a non-const function

@@ -1,13 +1,15 @@
 use super::{
     canonical::{Canonical, Canonicalized, Solution},
     const_expr::ConstExpr,
-    const_ty::{ConstTyData, EvaluatedConstTy},
+    const_ty::ConstTyData,
     fold::{AssocTySubst, TyFoldable},
     trait_def::{ImplementorId, TraitInstId},
     ty_def::{TyData, TyFlags, TyId},
+    visitor::{TyVisitable, TyVisitor},
 };
 use crate::analysis::{
     HirAnalysisDb,
+    semantic::{ConstRepr, SemConstId, SemConstValue, sem_const_ty},
     ty::{
         trait_resolution::{
             constraint::ty_constraints,
@@ -499,17 +501,17 @@ fn check_const_ty_wf<'db>(
     }
 
     match const_ty.data(db) {
-        ConstTyData::Evaluated(EvaluatedConstTy::Tuple(elems), _)
-        | ConstTyData::Evaluated(EvaluatedConstTy::Array(elems), _)
-        | ConstTyData::Evaluated(EvaluatedConstTy::Record(elems), _)
-        | ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant { fields: elems, .. }, _) => {
-            for &elem in elems {
-                let wf = check_ty_wf(db, solve_cx, elem);
-                if !wf.is_wf() {
-                    return wf;
-                }
+        ConstTyData::Computation { description, .. } => {
+            let evaluated = const_ty.evaluate(db, Some(description.ty()));
+            if evaluated != const_ty {
+                return check_ty_wf(db, solve_cx, TyId::const_ty(db, evaluated));
+            }
+            if let ConstRepr::Term(term) = description.repr() {
+                return check_ty_wf(db, solve_cx, TyId::const_ty(db, *term));
             }
         }
+        ConstTyData::Value(value) => return check_sem_const_wf(db, solve_cx, value.value()),
+        ConstTyData::Description(value) => return check_sem_const_wf(db, solve_cx, *value),
         ConstTyData::Abstract(expr, _) => {
             let wf = check_const_expr_wf(db, solve_cx, *expr);
             if !wf.is_wf() {
@@ -519,11 +521,48 @@ fn check_const_ty_wf<'db>(
         ConstTyData::TyVar(..)
         | ConstTyData::TyParam(..)
         | ConstTyData::Hole(..)
-        | ConstTyData::Evaluated(..)
+        | ConstTyData::Invalid(..)
         | ConstTyData::UnEvaluated { .. } => {}
     }
 
     WellFormedness::WellFormed
+}
+
+fn check_sem_const_wf<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    value: SemConstId<'db>,
+) -> WellFormedness<'db> {
+    match value.value(db) {
+        SemConstValue::Description(term) => check_ty_wf(db, solve_cx, TyId::const_ty(db, term)),
+        SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => {
+            for child in elems.iter().copied() {
+                let wf = check_ty_wf(db, solve_cx, sem_const_ty(db, child));
+                if !wf.is_wf() {
+                    return wf;
+                }
+                let wf = check_sem_const_wf(db, solve_cx, child);
+                if !wf.is_wf() {
+                    return wf;
+                }
+            }
+            WellFormedness::WellFormed
+        }
+        SemConstValue::Struct { fields, .. } | SemConstValue::Enum { fields, .. } => {
+            for child in fields.iter().copied() {
+                let wf = check_ty_wf(db, solve_cx, sem_const_ty(db, child));
+                if !wf.is_wf() {
+                    return wf;
+                }
+                let wf = check_sem_const_wf(db, solve_cx, child);
+                if !wf.is_wf() {
+                    return wf;
+                }
+            }
+            WellFormedness::WellFormed
+        }
+        SemConstValue::Unit | SemConstValue::Scalar { .. } => WellFormedness::WellFormed,
+    }
 }
 
 fn check_const_expr_wf<'db>(
@@ -531,14 +570,30 @@ fn check_const_expr_wf<'db>(
     solve_cx: TraitSolveCx<'db>,
     expr: super::const_expr::ConstExprId<'db>,
 ) -> WellFormedness<'db> {
-    match expr.data(db) {
-        ConstExpr::ExternConstFnCall {
-            generic_args, args, ..
+    struct TyCollector<'db> {
+        db: &'db dyn HirAnalysisDb,
+        tys: Vec<TyId<'db>>,
+    }
+
+    impl<'db> TyVisitor<'db> for TyCollector<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
         }
-        | ConstExpr::UserConstFnCall {
-            generic_args, args, ..
-        } => {
-            for &ty in generic_args.iter().chain(args.iter()) {
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            self.tys.push(ty);
+        }
+    }
+
+    match expr.data(db) {
+        ConstExpr::Invocation(invocation) => {
+            let mut collector = TyCollector {
+                db,
+                tys: Vec::new(),
+            };
+            invocation.key.visit_with(&mut collector);
+            invocation.args.visit_with(&mut collector);
+            for ty in collector.tys {
                 let wf = check_ty_wf(db, solve_cx, ty);
                 if !wf.is_wf() {
                     return wf;
@@ -587,7 +642,6 @@ fn check_const_expr_wf<'db>(
                 return wf;
             }
         }
-        ConstExpr::LocalBinding(_) => {}
     }
 
     WellFormedness::WellFormed

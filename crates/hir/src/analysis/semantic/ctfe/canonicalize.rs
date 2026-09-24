@@ -7,15 +7,21 @@ use crate::analysis::{
     HirAnalysisDb,
     semantic::{
         LayoutBackingPlace, SBlock, SBlockId, SConst, SEffectArgValue, SExpr, SLocalId, SStmt,
-        SStmtKind, STerminatorKind, SemConstId, SemConstValue, SemanticBody, array_const,
-        consts::demand_concrete_const_ty, enum_const, instance::SemanticInstance,
-        reify_runtime_const_for_ty, sem_const_from_ty, struct_const, tuple_const,
+        SStmtKind, STerminatorKind, SemConstId, SemConstValue, SemanticBody, SemanticLocalRole,
+        array_const, enum_const, instance::SemanticInstance, reify_runtime_const_for_ty,
+        sem_const_from_ty, struct_const, tuple_const,
     },
-    ty::ty_def::{BorrowKind, TyId},
+    ty::{
+        const_ty::evaluate_type_level_const_ty,
+        ty_def::{BorrowKind, TyId},
+        ty_is_copy,
+    },
 };
 use crate::projection::{IndexSource, Projection};
 
-use super::{CtfeError, eval_const_ref, machine::try_eval_expr_to_const};
+use super::{
+    CtfeError, EvalOutcome, FoldAttempt, eval_const_ref, machine::attempt_optional_const_fold,
+};
 
 type LocalConstMap<'db> = Vec<Option<SemConstId<'db>>>;
 type LocalRoots = Vec<FxHashSet<SLocalId>>;
@@ -156,13 +162,32 @@ fn canonicalize_stmt<'db>(
 ) -> SStmt<'db> {
     let kind = match &stmt.kind {
         SStmtKind::Assign { dst, expr } => {
-            let (canonical, value) = canonicalize_expr(
-                cx,
-                expr,
-                cx.body.locals[dst.index()].ty,
-                locals,
-                cx.layout_index_locals[dst.index()],
-            );
+            // A non-Copy carrier preserves access to storage. Replacing it
+            // with the current payload would erase the move at that place.
+            let carrier_ty = match &cx.body.locals[dst.index()].role {
+                SemanticLocalRole::PlaceCarrier { value_ty, .. } => Some(*value_ty),
+                SemanticLocalRole::DirectCarrier { target_ty, .. } => Some(*target_ty),
+                _ => None,
+            };
+            let preserve_carrier = carrier_ty.is_some_and(|ty| {
+                !ty_is_copy(
+                    cx.db,
+                    cx.instance.key(cx.db).owner(cx.db).scope(),
+                    ty,
+                    cx.instance.assumptions(cx.db),
+                )
+            });
+            let (canonical, value) = if preserve_carrier {
+                (expr.clone(), None)
+            } else {
+                canonicalize_expr(
+                    cx,
+                    expr,
+                    cx.body.locals[dst.index()].ty,
+                    locals,
+                    cx.layout_index_locals[dst.index()],
+                )
+            };
             locals[dst.index()] = value;
             if let SExpr::Call {
                 args, effect_args, ..
@@ -334,13 +359,16 @@ fn canonicalize_expr<'db>(
     preserves_layout_index: bool,
 ) -> (SExpr<'db>, Option<SemConstId<'db>>) {
     if let SExpr::Const(SConst::Ref(cref)) = expr {
-        let Ok(value) = eval_const_ref(cx.db, *cref) else {
+        let EvalOutcome::Ready(value) = eval_const_ref(cx.db, *cref) else {
             return (SExpr::Const(SConst::Ref(*cref)), None);
         };
-        let value = canonicalize_const_value(cx.db, cx.instance, value);
+        let value = canonicalize_const_value(cx.db, value);
         let runtime = reify_runtime_const_for_ty(cx.db, cx.instance, result_ty, value);
         return (
-            SExpr::Const(runtime.map_or(SConst::Value(value), |_| SConst::Ref(*cref))),
+            SExpr::Const(runtime.map_or_else(
+                || SConst::from_trusted_source(cx.db, value),
+                |_| SConst::Ref(*cref),
+            )),
             runtime,
         );
     }
@@ -356,24 +384,54 @@ fn canonicalize_expr<'db>(
                 .has_runtime_evidence(),
             _ => false,
         };
-        if !has_runtime_evidence
-            && let Some(value) =
-                try_eval_expr_to_const(cx.db, cx.body, result_ty, expr, locals, synthetic())
-            && !matches!(value.value(cx.db), SemConstValue::TypeLevel { .. })
-        {
-            let value = canonicalize_const_value(cx.db, cx.instance, value);
-            if let Some(value) = reify_runtime_const_for_ty(cx.db, cx.instance, result_ty, value) {
-                return (SExpr::Const(SConst::Value(value)), Some(value));
+        if !has_runtime_evidence {
+            match attempt_optional_const_fold(cx.db, cx.body, result_ty, expr, locals, synthetic())
+            {
+                FoldAttempt::Folded(value) => {
+                    let value = canonicalize_const_value(cx.db, value.value());
+                    if let Some(value) =
+                        reify_runtime_const_for_ty(cx.db, cx.instance, result_ty, value)
+                    {
+                        return (
+                            SExpr::Const(SConst::from_trusted_source(cx.db, value)),
+                            Some(value),
+                        );
+                    }
+                }
+                FoldAttempt::NotFoldable(_) => {}
+                FoldAttempt::InvariantFailure(failure) => {
+                    panic!("optional CTFE fold invariant failed: {failure:?}")
+                }
             }
         }
     }
 
     match expr {
-        SExpr::Const(SConst::Value(value)) => {
-            let value = canonicalize_const_value(cx.db, cx.instance, *value);
-            let runtime = reify_runtime_const_for_ty(cx.db, cx.instance, result_ty, value);
-            let value = runtime.unwrap_or(value);
-            (SExpr::Const(SConst::Value(value)), runtime)
+        SExpr::Const(constant) => {
+            let value = match constant {
+                SConst::Value(value) => value.value(),
+                SConst::Description(value) | SConst::Evidence(value) | SConst::Invalid(value) => {
+                    *value
+                }
+                SConst::Ref(..) => unreachable!(),
+            };
+            let value = canonicalize_const_value(cx.db, value);
+            match reify_runtime_const_for_ty(cx.db, cx.instance, result_ty, value) {
+                Some(runtime) => (
+                    SExpr::Const(SConst::from_trusted_source(cx.db, runtime)),
+                    Some(runtime),
+                ),
+                // Formal layout evidence may remain symbolic here. It is not a
+                // constant fact; runtime admission checks it before lowering.
+                None => (
+                    SExpr::Const(if matches!(constant, SConst::Evidence(_)) {
+                        constant.clone()
+                    } else {
+                        SConst::from_trusted_source(cx.db, value)
+                    }),
+                    None,
+                ),
+            }
         }
         _ => (expr.clone(), None),
     }
@@ -425,24 +483,16 @@ fn synthetic<'db>() -> crate::analysis::semantic::SemOrigin<'db> {
 
 fn canonicalize_const_value<'db>(
     db: &'db dyn HirAnalysisDb,
-    instance: SemanticInstance<'db>,
     value: SemConstId<'db>,
 ) -> SemConstId<'db> {
     match value.value(db) {
         SemConstValue::Unit | SemConstValue::Scalar { .. } => value,
-        SemConstValue::TypeLevel { ty, const_ty } => {
-            let Some(evaluated) = demand_concrete_const_ty(
-                db,
-                const_ty,
-                ty,
-                instance.key(db).subst(db).generic_args(db),
-            ) else {
-                return value;
-            };
+        SemConstValue::Description(term) => {
+            let evaluated = evaluate_type_level_const_ty(db, term, Some(term.ty(db)));
             let Some(evaluated) = sem_const_from_ty(db, TyId::const_ty(db, evaluated)) else {
                 return value;
             };
-            if matches!(evaluated.value(db), SemConstValue::TypeLevel { .. }) {
+            if matches!(evaluated.value(db), SemConstValue::Description(..)) {
                 // Canonicalization did not produce a runtime value. Preserve
                 // the original symbolic reference so a formal const-parameter
                 // use keeps its exact parameter identity; replacing it with
@@ -459,7 +509,7 @@ fn canonicalize_const_value<'db>(
             elems
                 .iter()
                 .copied()
-                .map(|elem| canonicalize_const_value(db, instance, elem))
+                .map(|elem| canonicalize_const_value(db, elem))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         ),
@@ -469,7 +519,7 @@ fn canonicalize_const_value<'db>(
             fields
                 .iter()
                 .copied()
-                .map(|field| canonicalize_const_value(db, instance, field))
+                .map(|field| canonicalize_const_value(db, field))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         ),
@@ -479,7 +529,7 @@ fn canonicalize_const_value<'db>(
             elems
                 .iter()
                 .copied()
-                .map(|elem| canonicalize_const_value(db, instance, elem))
+                .map(|elem| canonicalize_const_value(db, elem))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         ),
@@ -494,7 +544,7 @@ fn canonicalize_const_value<'db>(
             fields
                 .iter()
                 .copied()
-                .map(|field| canonicalize_const_value(db, instance, field))
+                .map(|field| canonicalize_const_value(db, field))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         ),

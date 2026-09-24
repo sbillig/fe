@@ -1,6 +1,7 @@
 use std::hash::Hash;
 
 use crate::core::hir_def::IdentId;
+use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{ItemKind, Trait};
 use common::indexmap::{IndexMap, IndexSet};
 
@@ -14,8 +15,12 @@ use super::{
 use crate::analysis::{
     HirAnalysisDb,
     place::{Place, PlaceBase, PlaceProjection},
-    ty::const_expr::{ConstExpr, ConstExprId},
-    ty::const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
+    semantic::{
+        EffectProviderSubst, GenericSubst, ImplEnv, SemConstId, SemConstValue, SemanticInstanceKey,
+        sem_const_from_ty,
+    },
+    ty::const_expr::{ConstExpr, ConstExprId, ConstInvocation},
+    ty::const_ty::{ConstTyData, ConstTyId, const_ty_from_sem_const},
 };
 
 pub trait TyFoldable<'db>
@@ -36,6 +41,10 @@ where
 
 pub trait TyFolder<'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db>;
+
+    fn fold_scope(&mut self, scope: ScopeId<'db>) -> ScopeId<'db> {
+        scope
+    }
 
     fn fold_ty_app(
         &mut self,
@@ -77,44 +86,24 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         let ty = folder.fold_ty(db, *ty);
                         Hole(ty, *hole_id)
                     }
-                    Evaluated(val, ty) => {
-                        let ty = folder.fold_ty(db, *ty);
-                        let val = match val {
-                            EvaluatedConstTy::Tuple(elems) => EvaluatedConstTy::Tuple(
-                                elems
-                                    .iter()
-                                    .copied()
-                                    .map(|elem| folder.fold_ty(db, elem))
-                                    .collect(),
-                            ),
-                            EvaluatedConstTy::Array(elems) => EvaluatedConstTy::Array(
-                                elems
-                                    .iter()
-                                    .copied()
-                                    .map(|elem| folder.fold_ty(db, elem))
-                                    .collect(),
-                            ),
-                            EvaluatedConstTy::Record(fields) => EvaluatedConstTy::Record(
-                                fields
-                                    .iter()
-                                    .copied()
-                                    .map(|field| folder.fold_ty(db, field))
-                                    .collect(),
-                            ),
-                            EvaluatedConstTy::EnumVariant { variant, fields } => {
-                                EvaluatedConstTy::EnumVariant {
-                                    variant: *variant,
-                                    fields: fields
-                                        .iter()
-                                        .copied()
-                                        .map(|field| folder.fold_ty(db, field))
-                                        .collect(),
-                                }
-                            }
-                            _ => val.clone(),
-                        };
-                        Evaluated(val, ty)
+                    Value(value) => {
+                        const_ty_from_sem_const(db, fold_sem_const(db, folder, value.value()))
+                            .data(db)
+                            .clone()
                     }
+                    Description(value) => {
+                        const_ty_from_sem_const(db, fold_sem_const(db, folder, *value))
+                            .data(db)
+                            .clone()
+                    }
+                    Computation {
+                        description,
+                        source,
+                    } => Computation {
+                        description: Box::new(description.as_ref().clone().fold_with(db, folder)),
+                        source: source.fold_with(db, folder),
+                    },
+                    Invalid(ty) => Invalid(folder.fold_ty(db, *ty)),
                     Abstract(expr, ty) => {
                         let ty = folder.fold_ty(db, *ty);
                         let expr = fold_const_expr_id(db, folder, *expr);
@@ -172,6 +161,112 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
     }
 }
 
+fn fold_sem_const<'db, F>(
+    db: &'db dyn HirAnalysisDb,
+    folder: &mut F,
+    value: SemConstId<'db>,
+) -> SemConstId<'db>
+where
+    F: TyFolder<'db>,
+{
+    if let SemConstValue::Description(term) = value.value(db) {
+        let folded = folder.fold_ty(db, TyId::const_ty(db, term));
+        let TyData::ConstTy(term) = folded.data(db) else {
+            unreachable!("folding a dependent description lost its constant representation")
+        };
+        return sem_const_from_ty(db, folded)
+            .unwrap_or_else(|| SemConstId::new(db, SemConstValue::Description(*term)));
+    }
+    let value = match value.value(db) {
+        SemConstValue::Unit => SemConstValue::Unit,
+        SemConstValue::Scalar { ty, value } => SemConstValue::Scalar {
+            ty: folder.fold_ty(db, ty),
+            value,
+        },
+        SemConstValue::Description(..) => unreachable!(),
+        SemConstValue::Tuple { ty, elems } => SemConstValue::Tuple {
+            ty: folder.fold_ty(db, ty),
+            elems: elems
+                .iter()
+                .copied()
+                .map(|elem| fold_sem_const(db, folder, elem))
+                .collect(),
+        },
+        SemConstValue::Struct { ty, fields } => SemConstValue::Struct {
+            ty: folder.fold_ty(db, ty),
+            fields: fields
+                .iter()
+                .copied()
+                .map(|field| fold_sem_const(db, folder, field))
+                .collect(),
+        },
+        SemConstValue::Array { ty, elems } => SemConstValue::Array {
+            ty: folder.fold_ty(db, ty),
+            elems: elems
+                .iter()
+                .copied()
+                .map(|elem| fold_sem_const(db, folder, elem))
+                .collect(),
+        },
+        SemConstValue::Enum {
+            ty,
+            variant,
+            fields,
+        } => SemConstValue::Enum {
+            ty: folder.fold_ty(db, ty),
+            variant,
+            fields: fields
+                .iter()
+                .copied()
+                .map(|field| fold_sem_const(db, folder, field))
+                .collect(),
+        },
+    };
+    SemConstId::new(db, value)
+}
+
+impl<'db> TyFoldable<'db> for SemanticInstanceKey<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        let owner = match self.owner(db) {
+            super::ty_check::BodyOwner::AnonConstBody { body, expected } => {
+                super::ty_check::BodyOwner::AnonConstBody {
+                    body,
+                    expected: expected.fold_with(db, folder),
+                }
+            }
+            owner => owner,
+        };
+        let env = self.impl_env(db);
+        Self::new(
+            db,
+            owner,
+            GenericSubst::new(
+                db,
+                self.subst(db)
+                    .generic_args(db)
+                    .clone()
+                    .fold_with(db, folder),
+            ),
+            EffectProviderSubst::new(
+                db,
+                self.effect_providers(db)
+                    .providers(db)
+                    .clone()
+                    .fold_with(db, folder),
+            ),
+            ImplEnv::new(
+                db,
+                folder.fold_scope(env.normalization_scope(db)),
+                env.assumptions(db).fold_with(db, folder),
+                env.witnesses(db).clone().fold_with(db, folder),
+            ),
+        )
+    }
+}
+
 fn fold_const_expr_id<'db, F>(
     db: &'db dyn HirAnalysisDb,
     folder: &mut F,
@@ -181,62 +276,37 @@ where
     F: TyFolder<'db>,
 {
     match expr.data(db) {
-        ConstExpr::ExternConstFnCall {
-            func,
-            generic_args,
-            args,
-        } => {
-            let generic_args = generic_args
-                .iter()
-                .copied()
-                .map(|arg| folder.fold_ty(db, arg))
-                .collect();
-            let args = args
-                .iter()
-                .copied()
-                .map(|arg| folder.fold_ty(db, arg))
-                .collect();
-            ConstExprId::new(
-                db,
-                ConstExpr::ExternConstFnCall {
-                    func: *func,
-                    generic_args,
-                    args,
-                },
-            )
-        }
-        ConstExpr::UserConstFnCall {
-            func,
-            generic_args,
-            args,
-        } => {
-            let generic_args = generic_args
-                .iter()
-                .copied()
-                .map(|arg| folder.fold_ty(db, arg))
-                .collect();
-            let args = args
-                .iter()
-                .copied()
-                .map(|arg| folder.fold_ty(db, arg))
-                .collect();
-            ConstExprId::new(
-                db,
-                ConstExpr::UserConstFnCall {
-                    func: *func,
-                    generic_args,
-                    args,
-                },
-            )
-        }
-        ConstExpr::ArithBinOp { op, lhs, rhs } => {
+        ConstExpr::Invocation(invocation) => ConstExprId::new(
+            db,
+            ConstExpr::Invocation(ConstInvocation {
+                key: invocation.key.fold_with(db, folder),
+                args: invocation.args.clone().fold_with(db, folder),
+                parameter_owner: folder.fold_scope(invocation.parameter_owner),
+            }),
+        ),
+        ConstExpr::ArithBinOp { op, mode, lhs, rhs } => {
             let lhs = folder.fold_ty(db, *lhs);
             let rhs = folder.fold_ty(db, *rhs);
-            ConstExprId::new(db, ConstExpr::ArithBinOp { op: *op, lhs, rhs })
+            ConstExprId::new(
+                db,
+                ConstExpr::ArithBinOp {
+                    op: *op,
+                    mode: *mode,
+                    lhs,
+                    rhs,
+                },
+            )
         }
-        ConstExpr::UnOp { op, expr } => {
+        ConstExpr::UnOp { op, mode, expr } => {
             let expr = folder.fold_ty(db, *expr);
-            ConstExprId::new(db, ConstExpr::UnOp { op: *op, expr })
+            ConstExprId::new(
+                db,
+                ConstExpr::UnOp {
+                    op: *op,
+                    mode: *mode,
+                    expr,
+                },
+            )
         }
         ConstExpr::Cast { expr, to } => {
             let expr = folder.fold_ty(db, *expr);
@@ -272,7 +342,6 @@ where
             let use_ = use_.fold_with(db, folder);
             ConstExprId::new(db, ConstExpr::InherentConst(use_))
         }
-        ConstExpr::LocalBinding(binding) => ConstExprId::new(db, ConstExpr::LocalBinding(*binding)),
     }
 }
 

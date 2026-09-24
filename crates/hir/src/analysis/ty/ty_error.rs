@@ -466,6 +466,46 @@ fn diag_from_invalid_cause<'db>(
             TyLowerDiag::ConstEvalDivisionByZero(expr.span(body).into()).into()
         }
 
+        InvalidCause::ConstEvalOutOfBounds { body, expr } => {
+            TyLowerDiag::ConstEvalOutOfBounds(expr.span(body).into()).into()
+        }
+
+        InvalidCause::ConstEvalInvalidOperation {
+            body,
+            expr,
+            message,
+        } => TyLowerDiag::ConstEvalInvalidOperation {
+            span: expr.span(body).into(),
+            message,
+        }
+        .into(),
+
+        InvalidCause::ConstEvalInvalidBorrow { body, expr } => {
+            TyLowerDiag::ConstEvalInvalidBorrow(expr.span(body).into()).into()
+        }
+
+        InvalidCause::ConstEvalInvalidProviderUse { body, expr } => {
+            TyLowerDiag::ConstEvalInvalidProviderUse(expr.span(body).into()).into()
+        }
+
+        InvalidCause::ConstEvalVariantMismatch { body, expr } => {
+            TyLowerDiag::ConstEvalVariantMismatch(expr.span(body).into()).into()
+        }
+
+        InvalidCause::ConstEvalUninitializedLocal { body, expr } => {
+            TyLowerDiag::ConstEvalUninitializedLocal(expr.span(body).into()).into()
+        }
+
+        InvalidCause::ConstEvalInvariant {
+            body,
+            expr,
+            message,
+        } => TyLowerDiag::ConstEvalInvariant {
+            span: expr.span(body).into(),
+            message,
+        }
+        .into(),
+
         InvalidCause::ConstEvalArithmeticOverflow { body, expr } => {
             TyLowerDiag::ConstEvalArithmeticOverflow(expr.span(body).into()).into()
         }

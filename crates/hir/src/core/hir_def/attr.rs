@@ -2,7 +2,7 @@ use crate::HirDb;
 
 use super::{IdentId, Partial, PathId, StringId};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum ArithmeticMode {
     Checked,
     Unchecked,

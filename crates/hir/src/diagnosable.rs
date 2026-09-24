@@ -924,7 +924,10 @@ impl<'db> ImplTrait<'db> {
                 .ty_binder(db)
                 .map(|binder| binder.instantiate(db, inst.args(db)));
             let evaluated = const_ty.evaluate(db, declared_ty);
-            if matches!(evaluated.data(db), ConstTyData::Evaluated(..)) {
+            if matches!(
+                evaluated.data(db),
+                ConstTyData::Value(..) | ConstTyData::Description(..)
+            ) {
                 continue;
             }
             if evaluated.ty(db).has_invalid(db) {

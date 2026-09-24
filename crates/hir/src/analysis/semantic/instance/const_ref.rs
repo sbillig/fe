@@ -310,7 +310,7 @@ fn semantic_const_key_for_assoc_const<'db>(
     db: &'db dyn HirAnalysisDb,
     assoc: AssocConstUse<'db>,
 ) -> Option<SemanticInstanceKey<'db>> {
-    let (body, ty, impl_args) = assoc_const_body_template_for_trait_inst(
+    let (body, ty, body_args) = assoc_const_body_template_for_trait_inst(
         db,
         assoc.solve_cx(db),
         assoc.inst(),
@@ -319,7 +319,7 @@ fn semantic_const_key_for_assoc_const<'db>(
     Some(SemanticInstanceKey::new(
         db,
         BodyOwner::AnonConstBody { body, expected: ty },
-        GenericSubst::new(db, impl_args),
+        GenericSubst::new(db, body_args),
         EffectProviderSubst::empty(db),
         ImplEnv::new(
             db,

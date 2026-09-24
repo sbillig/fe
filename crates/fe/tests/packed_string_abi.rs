@@ -68,6 +68,7 @@ pub contract PackedStrings {
 }
 
 #[test]
+#[allow(clippy::print_stderr)] // Report benchmark measurements with --nocapture.
 fn constant_string_getters_stay_compact() {
     let source = r#"
 msg Metadata {

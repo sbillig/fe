@@ -1,22 +1,22 @@
 use fe_hir::{
     analysis::{
         semantic::{
-            CtfeError, GenericSubst, SConst, SExpr, SStmtKind, SemConstId, SemConstScalar,
-            SemConstValue, SemanticInstanceKey, canonicalize_semantic_consts,
-            eval_body_owner_const, get_or_build_semantic_instance, identity_semantic_instance_key,
-            instantiate_with_generic_args, reify_runtime_const, reify_runtime_const_for_ty,
-            sem_const_ty,
+            CtfeError, EvalFailure, EvalOutcome, GenericSubst, SConst, SExpr, SStmtKind,
+            SemConstId, SemConstScalar, SemConstValue, SemanticInstanceKey,
+            canonicalize_semantic_consts, eval_body_owner_const, eval_const_instance,
+            get_or_build_semantic_instance, identity_semantic_instance_key, reify_runtime_const,
+            reify_runtime_const_for_ty, sem_const_ty,
         },
         ty::{
-            const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
+            const_ty::ConstTyId,
             ty_check::BodyOwner,
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
-    hir_def::{Func, IntegerId, Partial, TopLevelMod},
+    hir_def::{Func, Partial, TopLevelMod},
     test_db::{HirAnalysisTestDb, format_diagnostics},
 };
-use num_bigint::BigUint;
+use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 fn function<'db>(db: &'db HirAnalysisTestDb, module: TopLevelMod<'db>, name: &str) -> Func<'db> {
@@ -43,12 +43,10 @@ fn const_args<'db>(db: &'db HirAnalysisTestDb, len: u32, element: u32) -> [TyId<
     [(PrimTy::Usize, len), (PrimTy::U8, element)].map(|(prim, value)| {
         TyId::new(
             db,
-            TyData::ConstTy(ConstTyId::new(
+            TyData::ConstTy(ConstTyId::integer(
                 db,
-                ConstTyData::Evaluated(
-                    EvaluatedConstTy::LitInt(IntegerId::new(db, BigUint::from(value))),
-                    TyId::new(db, TyData::TyBase(TyBase::Prim(prim))),
-                ),
+                TyId::new(db, TyData::TyBase(TyBase::Prim(prim))),
+                BigInt::from(value),
             )),
         )
     })
@@ -102,6 +100,7 @@ const fn unchanged_value() -> u8 { Marker<3, 1>::CHANGED[2] }
     ] {
         let value =
             eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, name)), vec![])
+                .into_ready()
                 .unwrap();
         assert_eq!(scalar(&db, value), expected, "{name}");
     }
@@ -199,23 +198,20 @@ const fn changed_fixed<const N: usize, const I: usize>() -> u8 { fixed_store<N, 
         "changed_fixed",
     ] {
         let owner = BodyOwner::Func(function(&db, module, name));
-        let symbolic = eval_body_owner_const(&db, owner, vec![]).unwrap();
+        let symbolic = eval_body_owner_const(&db, owner, vec![]);
         let identity = identity_semantic_instance_key(&db, owner);
         assert!(
-            reify_runtime_const(&db, get_or_build_semantic_instance(&db, identity), symbolic)
-                .is_none(),
-            "{name} must retain its unresolved index"
+            matches!(symbolic, EvalOutcome::Blocked(_)),
+            "{name} must retain its unresolved index: {symbolic:?}"
         );
         for (len, index) in [(0, 0), (0, 1), (1, 0), (1, 1), (3, 1), (3, 2), (3, 3)] {
             let args = [len, index].map(|value: u32| {
                 TyId::new(
                     &db,
-                    TyData::ConstTy(ConstTyId::new(
+                    TyData::ConstTy(ConstTyId::integer(
                         &db,
-                        ConstTyData::Evaluated(
-                            EvaluatedConstTy::LitInt(IntegerId::new(&db, BigUint::from(value))),
-                            TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize))),
-                        ),
+                        TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize))),
+                        BigInt::from(value),
                     )),
                 )
             });
@@ -227,11 +223,7 @@ const fn changed_fixed<const N: usize, const I: usize>() -> u8 { fixed_store<N, 
                 identity.impl_env(&db),
             );
             let instance = get_or_build_semantic_instance(&db, key);
-            let reified = reify_runtime_const(&db, instance, symbolic);
-            assert_eq!(
-                reify_runtime_const_for_ty(&db, instance, sem_const_ty(&db, symbolic), symbolic),
-                reified
-            );
+            let reified = eval_const_instance(&db, instance).into_ready();
             let expected = match name {
                 "concrete" => [3, 5, 11].get(index as usize).copied(),
                 "bytes" => b"abc".get(index as usize).map(|byte| usize::from(*byte)),
@@ -278,10 +270,12 @@ const fn empty_nested() -> [[u8; 0]; 2] { Marker<0>::MATRIX }
     for (name, expected) in [("first", 7), ("last", 7), ("nested", 9)] {
         let value =
             eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, name)), vec![])
+                .into_ready()
                 .unwrap();
         assert_eq!(scalar(&db, value), expected, "{name}");
     }
     let empty = eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, "empty")), vec![])
+        .into_ready()
         .unwrap();
     assert!(matches!(empty.value(&db), SemConstValue::Array { elems, .. } if elems.is_empty()));
     let nested = eval_body_owner_const(
@@ -289,6 +283,7 @@ const fn empty_nested() -> [[u8; 0]; 2] { Marker<0>::MATRIX }
         BodyOwner::Func(function(&db, module, "empty_nested")),
         vec![],
     )
+    .into_ready()
     .unwrap();
     let SemConstValue::Array { elems, .. } = nested.value(&db) else {
         panic!("expected array")
@@ -315,6 +310,7 @@ const fn value() -> u8 { Marker<3>::VALUE.values[2] }
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
     let value = eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, "value")), vec![])
+        .into_ready()
         .unwrap();
     assert_eq!(scalar(&db, value), 9);
 }
@@ -365,6 +361,7 @@ const fn empty_replacement() -> [u8; 0] { Marker<0>::REPLACED }
     ] {
         let value =
             eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, name)), vec![])
+                .into_ready()
                 .unwrap();
         assert_eq!(scalar(&db, value), expected, "{name}");
     }
@@ -373,6 +370,7 @@ const fn empty_replacement() -> [u8; 0] { Marker<0>::REPLACED }
         BodyOwner::Func(function(&db, module, "empty_replacement")),
         vec![],
     )
+    .into_ready()
     .unwrap();
     assert!(matches!(empty.value(&db), SemConstValue::Array { elems, .. } if elems.is_empty()));
 }
@@ -404,9 +402,11 @@ const BAD: [u8; {len}] = Marker<{len}>::VALUES
         let rendered = format_diagnostics(&db, &diags);
         assert!(!diags.is_empty(), "out-of-bounds store must be diagnosed");
         assert!(!rendered.contains("internal"), "{rendered}");
-        let mut err =
-            eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, "bad")), vec![])
-                .unwrap_err();
+        let result =
+            eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, "bad")), vec![]);
+        let EvalOutcome::Failed(EvalFailure::Ctfe(mut err)) = result else {
+            panic!("expected CTFE failure: {result:?}");
+        };
         while let CtfeError::CalleeError { source, .. } = err {
             err = *source;
         }
@@ -450,12 +450,9 @@ const fn record<const N: usize, const X: u8>() -> Rows<N> { store_record<N>(X) }
         "record",
     ] {
         let owner = BodyOwner::Func(function(&db, module, name));
-        let value = eval_body_owner_const(&db, owner, vec![]).unwrap();
+        let template = eval_body_owner_const(&db, owner, vec![]);
         let identity = identity_semantic_instance_key(&db, owner);
-        assert!(
-            reify_runtime_const(&db, get_or_build_semantic_instance(&db, identity), value)
-                .is_none()
-        );
+        assert!(matches!(template, EvalOutcome::Blocked(_)), "{template:?}");
         for (len, element) in [(0, 0), (0, 5), (1, 5), (2, 5), (4, 9)] {
             let args = const_args(&db, len, element);
             let key = SemanticInstanceKey::new(
@@ -465,14 +462,23 @@ const fn record<const N: usize, const X: u8>() -> Rows<N> { store_record<N>(X) }
                 identity.effect_providers(&db),
                 identity.impl_env(&db),
             );
-            let expected = instantiate_with_generic_args(&db, sem_const_ty(&db, value), &args);
+            let expected = key.typed_body(&db).result_ty();
             let instance = get_or_build_semantic_instance(&db, key);
-            let reified = reify_runtime_const_for_ty(&db, instance, expected, value);
-            assert_eq!(
-                reify_runtime_const(&db, instance, value),
-                reified,
-                "{name} inferred result type"
-            );
+            let reified = match eval_const_instance(&db, instance) {
+                EvalOutcome::Ready(value) => {
+                    let reified = reify_runtime_const_for_ty(&db, instance, expected, value);
+                    assert_eq!(
+                        reify_runtime_const(&db, instance, value),
+                        reified,
+                        "{name} inferred result type"
+                    );
+                    reified
+                }
+                EvalOutcome::Failed(_) => None,
+                blocked @ EvalOutcome::Blocked(_) => {
+                    panic!("concrete instance blocked: {blocked:?}")
+                }
+            };
             if (matches!(name, "project" | "changed" | "checked_changed" | "record") && len < 2)
                 || (matches!(name, "checked" | "checked_changed") && element == 0)
             {
@@ -551,7 +557,7 @@ const BAD: u8 = Marker<0>::FIRST
     let result =
         eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, "empty")), vec![]);
     assert!(
-        result.is_err(),
+        matches!(result, EvalOutcome::Failed(_)),
         "empty repeated array must not produce an element: {result:?}"
     );
     assert!(
@@ -605,6 +611,7 @@ const fn value() -> u8 { Buffer<Large>::VALUES[3] }
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
     let value = eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, "value")), vec![])
+        .into_ready()
         .unwrap();
     assert_eq!(scalar(&db, value), 9);
 }
@@ -636,6 +643,7 @@ const fn empty() -> [Maybe<u8>; 0] { Marker<0>::VALUES }
     for (name, len) in [("values", 3), ("none", 2), ("nested", 2), ("empty", 0)] {
         let value =
             eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, name)), vec![])
+                .into_ready()
                 .unwrap();
         let SemConstValue::Array { elems, .. } = value.value(&db) else {
             panic!("expected array")
@@ -691,12 +699,9 @@ const fn checked<const N: usize, const X: u8>() -> [Wrapped; N] { [Wrapped { ite
     db.assert_no_diags(module);
     for name in ["repeat", "checked"] {
         let owner = BodyOwner::Func(function(&db, module, name));
-        let symbolic = eval_body_owner_const(&db, owner, vec![]).unwrap();
+        let symbolic = eval_body_owner_const(&db, owner, vec![]);
         let identity = identity_semantic_instance_key(&db, owner);
-        assert!(
-            reify_runtime_const(&db, get_or_build_semantic_instance(&db, identity), symbolic)
-                .is_none()
-        );
+        assert!(matches!(symbolic, EvalOutcome::Blocked(_)), "{symbolic:?}");
         for (len, element) in [(0, 0), (0, 5), (2, 0), (3, 5)] {
             let args = const_args(&db, len, element);
             let key = SemanticInstanceKey::new(
@@ -707,7 +712,7 @@ const fn checked<const N: usize, const X: u8>() -> [Wrapped; N] { [Wrapped { ite
                 identity.impl_env(&db),
             );
             let reified =
-                reify_runtime_const(&db, get_or_build_semantic_instance(&db, key), symbolic);
+                eval_const_instance(&db, get_or_build_semantic_instance(&db, key)).into_ready();
             if name == "checked" && element == 0 {
                 assert!(
                     reified.is_none(),
@@ -773,6 +778,7 @@ const fn array() -> u8 { Marker<2>::ARRAY }
     for (name, expected) in [("field", 7), ("tuple", 11), ("nested", 13), ("array", 17)] {
         let value =
             eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, name)), vec![])
+                .into_ready()
                 .unwrap();
         assert_eq!(scalar(&db, value), expected, "{name}");
     }
@@ -821,12 +827,9 @@ const fn checked<const N: usize, const X: u8>() -> u8 { [(Pair { value: X }, [10
     db.assert_no_diags(module);
     for name in ["project", "checked"] {
         let owner = BodyOwner::Func(function(&db, module, name));
-        let symbolic = eval_body_owner_const(&db, owner, vec![]).unwrap();
+        let symbolic = eval_body_owner_const(&db, owner, vec![]);
         let identity = identity_semantic_instance_key(&db, owner);
-        assert!(
-            reify_runtime_const(&db, get_or_build_semantic_instance(&db, identity), symbolic)
-                .is_none()
-        );
+        assert!(matches!(symbolic, EvalOutcome::Blocked(_)), "{symbolic:?}");
         for (len, element) in [(0, 5), (1, 0), (2, 5)] {
             let args = const_args(&db, len, element);
             let key = SemanticInstanceKey::new(
@@ -837,7 +840,7 @@ const fn checked<const N: usize, const X: u8>() -> u8 { [(Pair { value: X }, [10
                 identity.impl_env(&db),
             );
             let reified =
-                reify_runtime_const(&db, get_or_build_semantic_instance(&db, key), symbolic);
+                eval_const_instance(&db, get_or_build_semantic_instance(&db, key)).into_ready();
             if len == 0 || (name == "checked" && element == 0) {
                 assert!(
                     reified.is_none(),
@@ -874,7 +877,9 @@ fn outer<const A: usize, const B: usize>() {}
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
     let owner = BodyOwner::Func(function(&db, module, "value"));
-    let template_value = eval_body_owner_const(&db, owner, vec![]).unwrap();
+    let template_value = eval_body_owner_const(&db, owner, vec![])
+        .into_ready()
+        .unwrap();
     let identity = identity_semantic_instance_key(&db, owner);
     let outer =
         identity_semantic_instance_key(&db, BodyOwner::Func(function(&db, module, "outer")));
@@ -940,7 +945,7 @@ fn outer<const A: usize, const B: usize>() {}
                 expr: SExpr::Const(SConst::Value(value)),
             } = &stmt.kind
                 && matches!(
-                    value.value(&db),
+                    value.value().value(&db),
                     SemConstValue::Tuple { .. }
                         | SemConstValue::Array { .. }
                         | SemConstValue::Struct { .. }
@@ -949,7 +954,7 @@ fn outer<const A: usize, const B: usize>() {}
             {
                 aggregate_count += 1;
                 assert_eq!(
-                    sem_const_ty(&db, *value),
+                    sem_const_ty(&db, value.value()),
                     body.local(*dst).unwrap().ty,
                     "canonicalized constant must retain its instantiated local type"
                 );

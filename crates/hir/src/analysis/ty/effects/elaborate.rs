@@ -265,9 +265,11 @@ fn wildcard_const_fallback_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) ->
                 *fallback_ty
             }
             ConstTyData::Hole(hole_ty, _) => layout_hole_fallback_ty(db, *hole_ty),
-            ConstTyData::Evaluated(_, fallback_ty) | ConstTyData::Abstract(_, fallback_ty) => {
-                *fallback_ty
-            }
+            ConstTyData::Value(..)
+            | ConstTyData::Description(..)
+            | ConstTyData::Invalid(..)
+            | ConstTyData::Computation { .. } => const_ty.ty(db),
+            ConstTyData::Abstract(_, fallback_ty) => *fallback_ty,
             ConstTyData::UnEvaluated {
                 ty: Some(fallback_ty),
                 ..

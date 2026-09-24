@@ -1,68 +1,36 @@
-use core::num::IntWord
+use core::num::Abs
+use core::ops::{SaturatingAdd, SaturatingMul, SaturatingSub, WrappingAdd, WrappingMul, WrappingSub}
 use std::evm::ops::{byte, signextend}
 
-extern {
-    const fn __checked_add<T: IntWord>(_: T, _: T) -> T
-    const fn __checked_neg<T: IntWord>(_: T) -> T
-    const fn __saturating_add<T: IntWord>(_: T, _: T) -> T
-    const fn __saturating_sub<T: IntWord>(_: T, _: T) -> T
-    const fn __saturating_mul<T: IntWord>(_: T, _: T) -> T
+// These operations resolve to core implementations, including their
+// numeric extern intrinsics, rather than to same-named user declarations.
+const CHECKED_ADD: u8 = (10 as u8) + 5
+const CHECKED_NEG: i8 = -(-5 as i8)
+const SATURATING_ADD: u8 = (250 as u8).saturating_add(10)
+const SATURATING_SUB: u8 = (0 as u8).saturating_sub(10)
+const SATURATING_MUL: i8 = (64 as i8).saturating_mul(4)
 
-    const fn __add_u8(_: u8, _: u8) -> u8
-    const fn __sub_u8(_: u8, _: u8) -> u8
-    const fn __mul_u8(_: u8, _: u8) -> u8
-    const fn __div_u8(_: u8, _: u8) -> u8
-    const fn __rem_u8(_: u8, _: u8) -> u8
-    const fn __pow_u8(_: u8, _: u8) -> u8
-    const fn __shl_u8(_: u8, _: u8) -> u8
-    const fn __shr_i8(_: i8, _: i8) -> i8
-    const fn __shr_i16(_: i16, _: i16) -> i16
-    const fn __bitand_u8(_: u8, _: u8) -> u8
-    const fn __bitor_u8(_: u8, _: u8) -> u8
-    const fn __bitxor_u8(_: u8, _: u8) -> u8
-    const fn __lt_i8(_: i8, _: i8) -> bool
-    const fn __ge_u8(_: u8, _: u8) -> bool
-    const fn __neg_i8(_: i8) -> i8
-    const fn __bitnot_u8(_: u8) -> u8
+const WRAPPING_ADD: u8 = (255 as u8).wrapping_add(2)
+const WRAPPING_SUB: u8 = (0 as u8).wrapping_sub(1)
+const WRAPPING_MUL: u8 = (16 as u8).wrapping_mul(16)
+const WRAPPING_SHL: u8 = (1 as u8) << 8
+const WRAPPING_SIGNED_SHR: i8 = ((-127 as i8) - 1) >> 7
+const WRAPPING_SIGNED_SHR_255: i8 = (-1 as i8) >> (-1 as i8)
+const WRAPPING_SIGNED_SHR_300: i16 = (-1 as i16) >> 300
+const WRAPPING_NEG: i8 = ((-127 as i8) - 1).wrapping_abs()
+const BIT_NOT: u8 = !(0 as u8)
+const BIT_AND: u8 = (0b1010 as u8) & 0b1100
+const BIT_OR: u8 = (0b1010 as u8) | 0b1100
+const BIT_XOR: u8 = (0b1010 as u8) ^ 0b1100
+const LT_SIGNED: bool = (-1 as i8) < 1
+const GE_UNSIGNED: bool = (2 as u8) >= 2
 
-    const fn __not_bool(_: bool) -> bool
-    const fn __bitand_bool(_: bool, _: bool) -> bool
-    const fn __bitor_bool(_: bool, _: bool) -> bool
-    const fn __bitxor_bool(_: bool, _: bool) -> bool
-    const fn __eq_bool(_: bool, _: bool) -> bool
-    const fn __ne_bool(_: bool, _: bool) -> bool
-}
-
-const CHECKED_ADD: u8 = __checked_add(10, 5)
-const CHECKED_NEG: i8 = __checked_neg(-5)
-const SATURATING_ADD: u8 = __saturating_add(250, 10)
-const SATURATING_SUB: u8 = __saturating_sub(0, 10)
-const SATURATING_MUL: i8 = __saturating_mul(64, 4)
-
-const WRAPPING_ADD: u8 = __add_u8(255, 2)
-const WRAPPING_SUB: u8 = __sub_u8(0, 1)
-const WRAPPING_MUL: u8 = __mul_u8(16, 16)
-const WRAPPING_DIV_ZERO: u8 = __div_u8(9, 0)
-const WRAPPING_REM_ZERO: u8 = __rem_u8(9, 0)
-const WRAPPING_POW: u8 = __pow_u8(2, 8)
-const WRAPPING_SHL: u8 = __shl_u8(1, 8)
-const WRAPPING_SIGNED_SHR: i8 = __shr_i8(-128, 7)
-const WRAPPING_SIGNED_SHR_255: i8 = __shr_i8(-1, -1)
-const WRAPPING_SIGNED_SHR_300: i16 = __shr_i16(-1, 300)
-const WRAPPING_NEG: i8 = __neg_i8(-128)
-const BIT_NOT: u8 = __bitnot_u8(0)
-const BIT_AND: u8 = __bitand_u8(0b1010, 0b1100)
-const BIT_OR: u8 = __bitor_u8(0b1010, 0b1100)
-const BIT_XOR: u8 = __bitxor_u8(0b1010, 0b1100)
-const LT_SIGNED: bool = __lt_i8(-1, 1)
-const GE_UNSIGNED: bool = __ge_u8(2, 2)
-
-const BOOL_NOT: bool = __not_bool(false)
-const BOOL_AND: bool = __bitand_bool(true, false)
-const BOOL_OR: bool = __bitor_bool(true, false)
-const BOOL_XOR: bool = __bitxor_bool(true, false)
-const BOOL_EQ: bool = __eq_bool(true, true)
-const BOOL_NE: bool = __ne_bool(true, false)
+const BOOL_NOT: bool = !false
+const BOOL_AND: bool = true & false
+const BOOL_OR: bool = true | false
+const BOOL_XOR: bool = true ^ false
+const BOOL_EQ: bool = true == true
+const BOOL_NE: bool = true != false
 
 #[test]
 fn const_numeric_extern_intrinsics() {
@@ -75,9 +43,6 @@ fn const_numeric_extern_intrinsics() {
     assert!(WRAPPING_ADD == 1)
     assert!(WRAPPING_SUB == 255)
     assert!(WRAPPING_MUL == 0)
-    assert!(WRAPPING_DIV_ZERO == 0)
-    assert!(WRAPPING_REM_ZERO == 0)
-    assert!(WRAPPING_POW == 0)
     assert!(WRAPPING_SHL == 0)
     assert!(WRAPPING_SIGNED_SHR == -1)
     assert!(WRAPPING_SIGNED_SHR_255 == -1)

@@ -107,8 +107,8 @@ pub(crate) fn is_ty_visible_from(db: &dyn HirAnalysisDb, ty: TyId, from_scope: S
                 is_scope_visible_from(db, param.scope(db), from_scope)
             }
             ConstTyData::Hole(..) => true,
-            ConstTyData::Evaluated(_, _) => true,
-            ConstTyData::Abstract(_, _) => true,
+            ConstTyData::Value(_) | ConstTyData::Description(_) | ConstTyData::Invalid(_) => true,
+            ConstTyData::Abstract(_, _) | ConstTyData::Computation { .. } => true,
             ConstTyData::UnEvaluated { body, .. } => {
                 is_scope_visible_from(db, body.scope(), from_scope)
             }

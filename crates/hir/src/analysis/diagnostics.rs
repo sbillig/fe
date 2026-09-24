@@ -2418,6 +2418,62 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::ConstEvalOutOfBounds(span) => primary_diag(
+                Severity::Error,
+                "index out of bounds in const context",
+                "index is outside the evaluated value",
+                span.resolve(db),
+                error_code,
+            ),
+
+            Self::ConstEvalInvalidOperation { span, message } => primary_diag(
+                Severity::Error,
+                "invalid operation in const context",
+                message,
+                span.resolve(db),
+                error_code,
+            ),
+
+            Self::ConstEvalInvalidBorrow(span) => primary_diag(
+                Severity::Error,
+                "invalid borrow in const context",
+                "this borrow cannot be evaluated at compile time",
+                span.resolve(db),
+                error_code,
+            ),
+
+            Self::ConstEvalInvalidProviderUse(span) => primary_diag(
+                Severity::Error,
+                "invalid effect provider in const context",
+                "this provider cannot be used at compile time",
+                span.resolve(db),
+                error_code,
+            ),
+
+            Self::ConstEvalVariantMismatch(span) => primary_diag(
+                Severity::Error,
+                "variant mismatch in const context",
+                "the evaluated value has a different enum variant",
+                span.resolve(db),
+                error_code,
+            ),
+
+            Self::ConstEvalUninitializedLocal(span) => primary_diag(
+                Severity::Error,
+                "uninitialized value in const context",
+                "this value was read before initialization",
+                span.resolve(db),
+                error_code,
+            ),
+
+            Self::ConstEvalInvariant { span, message } => primary_diag(
+                Severity::Error,
+                "compiler invariant failed during const evaluation",
+                message,
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::ConstEvalArithmeticOverflow(span) => primary_diag(
                 Severity::Error,
                 "arithmetic overflow in const context",
@@ -3356,6 +3412,17 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 "const value must be resolvable during type checking",
                 "requires fully-resolved const value",
                 span.resolve(db),
+                error_code,
+            ),
+
+            Self::ConstDependencyMustBeKnown {
+                primary,
+                dependency,
+            } => primary_diag(
+                severity,
+                "const value must be resolvable during type checking",
+                &format!("requires {dependency}"),
+                primary.resolve(db),
                 error_code,
             ),
 

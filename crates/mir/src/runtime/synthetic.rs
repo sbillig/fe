@@ -3,8 +3,8 @@ use hir::analysis::semantic::SemOrigin;
 use hir::{
     analysis::{
         semantic::{
-            GenericSubst, ImplEnv, LayoutEvidenceBase, LayoutEvidenceConstant, SemConstId,
-            SemConstValue, SemanticInstanceKey, get_or_build_semantic_instance,
+            GenericSubst, ImplEnv, LayoutEvidenceBase, LayoutEvidenceConstant, SemanticInstanceKey,
+            get_or_build_semantic_instance, prepare_static_layout_root_value,
         },
         ty::{
             corelib::{resolve_core_trait, resolve_lib_type_path},
@@ -932,13 +932,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 let TyData::ConstTy(_) = root.data(self.db) else {
                     panic!("static layout root must be a const value: {root:?}")
                 };
-                let value = SemConstId::new(
-                    self.db,
-                    SemConstValue::TypeLevel {
-                        ty: map.scalar_ty(),
-                        const_ty: root,
-                    },
-                );
+                let value = prepare_static_layout_root_value(self.db, root, map.scalar_ty())
+                    .expect("static entry layout root must evaluate to a scalar");
                 let scalar = const_scalar_from_value(self.db, env, value)
                     .expect("static entry layout root must evaluate to a scalar");
                 self.push_layout_const_scalar(bb, &map, scalar)

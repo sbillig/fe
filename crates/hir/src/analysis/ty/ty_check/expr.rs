@@ -1,5 +1,5 @@
 use either::Either;
-use num_bigint::{BigUint, Sign};
+use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::ToPrimitive;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
@@ -82,13 +82,13 @@ use crate::analysis::{
     },
     place::resolve_place_field,
     semantic::{
-        SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
-        instance::resolve_semantic_const_ref,
+        ConstRepr, EvalOutcome, SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
+        instance::resolve_semantic_const_ref, int_const,
     },
     ty::{
         LayoutBundlePathStep,
         const_expr::ConstExpr,
-        const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, try_eval_const_int_expr},
+        const_ty::{ConstTyData, ConstTyId, const_ty_from_sem_const, try_eval_const_int_expr},
         normalize::normalize_ty,
         ty_check::{RecordInitLowering, TyChecker, path::RecordInitChecker},
         ty_def::{InvalidCause, TyId},
@@ -1239,7 +1239,7 @@ impl<'db> TyChecker<'db> {
         if let Some(const_ref) = self.env.expr_const_ref(expr)
             && let Some(const_ref) =
                 resolve_semantic_const_ref(self.db, const_ref, expected, SemOrigin::Expr(expr))
-            && let Ok(value) = eval_const_ref(self.db, const_ref)
+            && let EvalOutcome::Ready(value) = eval_const_ref(self.db, const_ref)
             && let SemConstValue::Scalar {
                 value: SemConstScalar::Int { value },
                 ..
@@ -1266,9 +1266,14 @@ impl<'db> TyChecker<'db> {
         match lit {
             Some(int_id) => {
                 // Create Known<N> where N is the literal value
-                let const_value = EvaluatedConstTy::LitInt(int_id);
-                let const_data = ConstTyData::Evaluated(const_value, usize_ty);
-                let const_ty = ConstTyId::new(self.db, const_data);
+                let const_ty = const_ty_from_sem_const(
+                    self.db,
+                    int_const(
+                        self.db,
+                        usize_ty,
+                        BigInt::from(int_id.data(self.db).clone()),
+                    ),
+                );
                 let const_ty_id = TyId::const_ty(self.db, const_ty);
                 TyId::app(self.db, known_base, const_ty_id)
             }
@@ -4650,10 +4655,22 @@ impl<'db> TyChecker<'db> {
     /// two stay symbolic during checking and become concrete once the owning
     /// type parameters are.
     fn array_len_const_is_acceptable(&self, const_ty: ConstTyId<'db>) -> bool {
+        if const_ty.integer_value(self.db).is_some() {
+            return true;
+        }
         match const_ty.data(self.db) {
-            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(_), _) | ConstTyData::TyParam(..) => {
-                true
-            }
+            ConstTyData::TyParam(..) => true,
+            ConstTyData::Computation { description, .. } => match description.repr() {
+                ConstRepr::Term(term) => self.array_len_const_is_acceptable(*term),
+                ConstRepr::Value(value) => matches!(
+                    value.value().value(self.db),
+                    SemConstValue::Scalar {
+                        value: SemConstScalar::Int { .. },
+                        ..
+                    }
+                ),
+                ConstRepr::Deferred(_) => false,
+            },
             ConstTyData::Abstract(expr, _) => {
                 matches!(expr.data(self.db), ConstExpr::TraitConst(_))
             }

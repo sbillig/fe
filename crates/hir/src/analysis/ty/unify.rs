@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 
 use either::Either;
 use ena::unify::{InPlace, UnifyKey, UnifyValue};
-use num_bigint::BigUint;
+use num_bigint::BigInt;
 
 use super::{
     binder::Binder,
@@ -16,7 +16,7 @@ use super::{
 };
 use crate::analysis::{
     HirAnalysisDb,
-    ty::const_ty::{ConstTyData, EvaluatedConstTy, normalize_const_tys_for_comparison},
+    ty::const_ty::{ConstTyData, normalize_const_tys_for_comparison},
 };
 
 pub(crate) type UnificationTable<'db> = UnificationTableBase<'db, InPlace<InferenceKey<'db>>>;
@@ -184,7 +184,8 @@ where
                     (ConstTyData::Hole(..), _) | (_, ConstTyData::Hole(..)) => Ok(()),
 
                     (ConstTyData::TyParam(..), ConstTyData::TyParam(..))
-                    | (ConstTyData::Evaluated(..), ConstTyData::Evaluated(..))
+                    | (ConstTyData::Value(..), ConstTyData::Value(..))
+                    | (ConstTyData::Description(..), ConstTyData::Description(..))
                     | (ConstTyData::Abstract(..), ConstTyData::Abstract(..)) => {
                         if const_ty1 == const_ty2 {
                             Ok(())
@@ -247,16 +248,18 @@ where
             (
                 ArithBinOp {
                     op: op1,
+                    mode: mode1,
                     lhs: lhs1,
                     rhs: rhs1,
                 },
                 ArithBinOp {
                     op: op2,
+                    mode: mode2,
                     lhs: lhs2,
                     rhs: rhs2,
                 },
             ) => {
-                if op1 != op2 {
+                if op1 != op2 || mode1 != mode2 {
                     return Err(UnificationError::TypeMismatch);
                 }
                 self.unify_ty(*lhs1, *lhs2)?;
@@ -265,14 +268,16 @@ where
             (
                 UnOp {
                     op: op1,
+                    mode: mode1,
                     expr: inner1,
                 },
                 UnOp {
                     op: op2,
+                    mode: mode2,
                     expr: inner2,
                 },
             ) => {
-                if op1 != op2 {
+                if op1 != op2 || mode1 != mode2 {
                     return Err(UnificationError::TypeMismatch);
                 }
                 self.unify_ty(*inner1, *inner2)
@@ -308,48 +313,28 @@ where
                 self.unify_ty(*t1, *t2)?;
                 self.unify_ty(*e1, *e2)
             }
-            (
-                ExternConstFnCall {
-                    func: f1,
-                    generic_args: ga1,
-                    args: a1,
-                },
-                ExternConstFnCall {
-                    func: f2,
-                    generic_args: ga2,
-                    args: a2,
-                },
-            )
-            | (
-                UserConstFnCall {
-                    func: f1,
-                    generic_args: ga1,
-                    args: a1,
-                },
-                UserConstFnCall {
-                    func: f2,
-                    generic_args: ga2,
-                    args: a2,
-                },
-            ) => {
-                if f1 != f2 || ga1.len() != ga2.len() || a1.len() != a2.len() {
+            (Invocation(i1), Invocation(i2)) => {
+                let k1 = i1.key;
+                let k2 = i2.key;
+                let ga1 = k1.subst(self.db).generic_args(self.db);
+                let ga2 = k2.subst(self.db).generic_args(self.db);
+                if k1.owner(self.db) != k2.owner(self.db)
+                    || k1.effect_providers(self.db) != k2.effect_providers(self.db)
+                    || k1.impl_env(self.db) != k2.impl_env(self.db)
+                    || i1.parameter_owner != i2.parameter_owner
+                    || ga1.len() != ga2.len()
+                    || i1.args.len() != i2.args.len()
+                {
                     return Err(UnificationError::TypeMismatch);
                 }
 
                 for (&g1, &g2) in ga1.iter().zip(ga2.iter()) {
                     self.unify_ty(g1, g2)?;
                 }
-                for (&arg1, &arg2) in a1.iter().zip(a2.iter()) {
+                for (&arg1, &arg2) in i1.args.iter().zip(&i2.args) {
                     self.unify_ty(arg1, arg2)?;
                 }
                 Ok(())
-            }
-            (LocalBinding(b1), LocalBinding(b2)) => {
-                if b1 == b2 {
-                    Ok(())
-                } else {
-                    Err(UnificationError::TypeMismatch)
-                }
             }
             _ => Err(UnificationError::TypeMismatch),
         }
@@ -534,13 +519,11 @@ where
                     return Ok(());
                 };
 
-                let ConstTyData::Evaluated(EvaluatedConstTy::LitInt(n_value), _) =
-                    const_ty.data(self.db)
-                else {
+                let Some(n_value) = const_ty.integer_value(self.db) else {
                     return Ok(());
                 };
 
-                if &BigUint::from(min_len) <= n_value.data(self.db) {
+                if BigInt::from(min_len) <= n_value {
                     self.table
                         .unify_var_value(root_var.key, InferenceValue::Bound(value))
                 } else {

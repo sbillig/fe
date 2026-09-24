@@ -7,6 +7,7 @@ use salsa::Update;
 use crate::{
     analysis::{
         HirAnalysisDb,
+        semantic::{SemConstValue, sem_const_from_ty},
         ty::{
             corelib::resolve_lib_type_path,
             normalize::normalize_ty,
@@ -630,22 +631,26 @@ pub(crate) fn effect_space_from_const_ty<'db>(
     scope: ScopeId<'db>,
     const_ty: super::const_ty::ConstTyId<'db>,
 ) -> Option<ProviderAddressSpace> {
-    use super::const_ty::{ConstTyData, EvaluatedConstTy};
-
     let evaluated = const_ty.evaluate(db, None);
-    let ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant { variant, .. }, _) =
-        evaluated.data(db)
-    else {
+    let value = sem_const_from_ty(db, TyId::const_ty(db, evaluated))?;
+    let SemConstValue::Enum { ty, variant, .. } = value.value(db) else {
         return None;
     };
+    let enum_ = ty.as_enum(db)?;
 
     let space_enum = resolve_lib_type_path(db, scope, "core::effect_ref::AddressSpace")?;
     let space_adt = space_enum.adt_def(db)?;
-    if super::adt_def::AdtRef::Enum(variant.enum_) != space_adt.adt_ref(db) {
+    if super::adt_def::AdtRef::Enum(enum_) != space_adt.adt_ref(db) {
         return None;
     }
 
-    match variant.ident(db)?.data(db).as_str() {
+    match enum_
+        .variants(db)
+        .nth(variant.0 as usize)?
+        .name(db)?
+        .data(db)
+        .as_str()
+    {
         "Memory" => Some(ProviderAddressSpace::Memory),
         "Calldata" => Some(ProviderAddressSpace::Calldata),
         "Storage" => Some(ProviderAddressSpace::Storage),

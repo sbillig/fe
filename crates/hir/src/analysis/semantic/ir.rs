@@ -15,7 +15,7 @@ use crate::{
     semantic::ProviderBinding,
 };
 
-use super::consts::SemConstId;
+use super::{consts::SemConstId, ctfe::VerifiedConstValueId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub enum Mutability {
@@ -553,7 +553,10 @@ pub enum SExpr<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SConst<'db> {
-    Value(SemConstId<'db>),
+    Value(VerifiedConstValueId<'db>),
+    Description(SemConstId<'db>),
+    Evidence(SemConstId<'db>),
+    Invalid(SemConstId<'db>),
     Ref(SemanticConstRef<'db>),
 }
 

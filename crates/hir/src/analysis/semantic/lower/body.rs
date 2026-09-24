@@ -5,7 +5,8 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     analysis::semantic::instance::{
-        CallSiteLowering, ForLoopCallSites, SemanticInstance, resolve_semantic_const_ref,
+        CallSiteLowering, ForLoopCallSites, SemanticInstance, provisional_semantic_callee_key,
+        resolve_semantic_const_ref, semantic_callee_key_with_effect_providers,
     },
     analysis::{
         HirAnalysisDb,
@@ -14,14 +15,13 @@ use crate::{
             Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt,
             SStmtId, SStmtKind, STerminator, STerminatorKind, SValueId, SemConstId, SemConstValue,
             SemOrigin, SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex,
-            bool_const, bytes_const, int_const, reify_runtime_const_for_ty, runtime_size_bytes,
-            sem_const_from_ty, unit_const,
+            bool_const, bytes_const, consts::instantiate_const_template, int_const,
+            reify_runtime_const_for_ty, runtime_size_bytes, sem_const_from_ty, unit_const,
         },
         ty::{
-            const_expr::{ConstExpr, ConstExprId},
+            const_expr::{ConstExpr, ConstExprId, ConstInvocation},
             const_ty::{
-                ConstTyData, ConstTyId, EvaluatedConstTy,
-                const_ty_or_abstract_from_assoc_const_use,
+                ConstTyData, ConstTyId, const_ty_or_abstract_from_assoc_const_use,
                 const_ty_or_abstract_from_inherent_const_use,
             },
             normalize::normalize_ty,
@@ -228,12 +228,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let TyData::ConstTy(const_ty) = len_ty.data(self.db) else {
             return None;
         };
-        match const_ty.data(self.db) {
-            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => {
-                int_id.data(self.db).to_usize()
-            }
-            _ => None,
-        }
+        const_ty.integer_value(self.db)?.to_usize()
     }
 
     fn new(
@@ -489,7 +484,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     pub(super) fn unit_value(&mut self) -> SValueId {
         self.emit_expr(
             TyId::unit(self.db),
-            SExpr::Const(SConst::Value(unit_const(self.db))),
+            SExpr::Const(SConst::from_trusted_source(self.db, unit_const(self.db))),
         )
     }
 
@@ -751,7 +746,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.emit_expr_with_origin(
             SemOrigin::Expr(expr),
             ty,
-            SExpr::Const(SConst::Value(value)),
+            SExpr::Const(SConst::from_trusted_source(self.db, value)),
         )
     }
 
@@ -765,51 +760,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         Some(self.emit_expr_with_origin(
             SemOrigin::Expr(expr),
             ty,
-            SExpr::Const(SConst::Value(value)),
+            SExpr::Const(SConst::from_trusted_source(self.db, value)),
         ))
     }
 
     fn lower_const_ref(&mut self, expr: ExprId, const_ref: ConstRef<'db>) -> SValueId {
         let ty = self.expr_ty(expr);
-        let mut type_level_fallback = None;
-        let symbolic_const_ty = match const_ref {
-            ConstRef::TraitConst(assoc) => {
-                const_ty_or_abstract_from_assoc_const_use(self.db, assoc, ty)
-            }
-            ConstRef::InherentConst(use_) => {
-                const_ty_or_abstract_from_inherent_const_use(self.db, use_, ty)
-            }
-            ConstRef::Const(_) => None,
-        };
-        if let Some(const_ty) = symbolic_const_ty.map(|const_ty| TyId::const_ty(self.db, const_ty))
-            && let Some(mut symbolic) = sem_const_from_ty(self.db, const_ty)
-        {
-            if matches!(symbolic.value(self.db), SemConstValue::TypeLevel { .. })
-                && let Some(runtime) =
-                    reify_runtime_const_for_ty(self.db, self.instance, ty, symbolic)
-            {
-                symbolic = runtime;
-            }
-
-            let instance_has_generic_args = self
-                .instance
-                .key(self.db)
-                .subst(self.db)
-                .generic_args(self.db)
-                .iter()
-                .any(|arg| arg.has_param(self.db) || arg.has_var(self.db));
-            if !matches!(symbolic.value(self.db), SemConstValue::TypeLevel { .. })
-                || instance_has_generic_args
-            {
-                return self.emit_expr_with_origin(
-                    SemOrigin::Expr(expr),
-                    ty,
-                    SExpr::Const(SConst::Value(symbolic)),
-                );
-            }
-            type_level_fallback = Some(symbolic);
-        }
-
         if let Some(const_ref) =
             resolve_semantic_const_ref(self.db, const_ref, ty, SemOrigin::Expr(expr))
         {
@@ -819,16 +775,25 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 SExpr::Const(SConst::Ref(const_ref)),
             );
         }
-
-        // The associated const cannot be resolved to a concrete instance in
-        // this context (e.g. a const on a still-generic `Self` inside a
-        // CTFE-evaluated anon const body). Emit the type-level symbolic value
-        // so const evaluation yields the abstract form instead of panicking.
-        if let Some(symbolic) = type_level_fallback {
+        // Unresolved selection remains a typed description. Resolved constants
+        // above retain their reference identity until the body is complete, so
+        // evaluation can use the machine's const cycle detection.
+        let symbolic_const_ty = match const_ref {
+            ConstRef::TraitConst(assoc) => {
+                const_ty_or_abstract_from_assoc_const_use(self.db, assoc, ty)
+            }
+            ConstRef::InherentConst(use_) => {
+                const_ty_or_abstract_from_inherent_const_use(self.db, use_, ty)
+            }
+            ConstRef::Const(_) => None,
+        };
+        if let Some(const_ty) = symbolic_const_ty
+            && let Some(symbolic) = sem_const_from_ty(self.db, TyId::const_ty(self.db, const_ty))
+        {
             return self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),
                 ty,
-                SExpr::Const(SConst::Value(symbolic)),
+                SExpr::Const(SConst::from_trusted_source(self.db, symbolic)),
             );
         }
 
@@ -884,17 +849,34 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             ),
             Some(ValuePathRef::TypeConst(ty)) => {
                 if let Some(value) = sem_const_from_ty(self.db, ty) {
-                    let value = reify_runtime_const_for_ty(
+                    let TyData::ConstTy(template) = ty.data(self.db) else {
+                        unreachable!("type-level value paths contain constant templates")
+                    };
+                    let instantiated =
+                        instantiate_const_template(self.db, self.instance, *template);
+                    let instantiated =
+                        sem_const_from_ty(self.db, TyId::const_ty(self.db, instantiated))
+                            .expect("instantiated constant template retains its value description");
+                    let constant = reify_runtime_const_for_ty(
                         self.db,
                         self.instance,
                         self.expr_ty(expr),
-                        value,
+                        instantiated,
                     )
-                    .unwrap_or(value);
+                    .map(|value| SConst::from_trusted_source(self.db, value))
+                    .unwrap_or_else(|| {
+                        // Only a value path naming a declaration parameter
+                        // retains formal identity for runtime ABI evidence.
+                        if matches!(template.data(self.db), ConstTyData::TyParam(..)) {
+                            SConst::Evidence(value)
+                        } else {
+                            SConst::from_trusted_source(self.db, instantiated)
+                        }
+                    });
                     self.emit_expr_with_origin(
                         SemOrigin::Expr(expr),
                         self.expr_ty(expr),
-                        SExpr::Const(SConst::Value(value)),
+                        SExpr::Const(constant),
                     )
                 } else {
                     panic!(
@@ -1219,41 +1201,44 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             ),
         };
         let Some(size) = size else {
-            let CallableDef::Func(func) = callable.callable_def() else {
-                panic!("const intrinsic should resolve to a function");
-            };
+            let caller = self.instance.key(self.db);
+            let key = match self.binding_role_mode {
+                BindingRoleMode::Final => semantic_callee_key_with_effect_providers(
+                    self.db,
+                    caller,
+                    callable,
+                    callable.effect_providers(),
+                ),
+                BindingRoleMode::Provisional => {
+                    provisional_semantic_callee_key(self.db, caller, callable, self.assumptions)
+                }
+            }
+            .expect("const intrinsic should resolve to a function");
             let const_expr = match kind {
-                ConstIntrinsicKind::SizeOf => ConstExpr::ExternConstFnCall {
-                    func,
-                    generic_args: callable.generic_args().to_vec(),
+                ConstIntrinsicKind::SizeOf => ConstExpr::Invocation(ConstInvocation {
+                    key,
                     args: Vec::new(),
-                },
+                    parameter_owner: caller.owner(self.db).scope(),
+                }),
             };
             let const_ty = ConstTyId::new(
                 self.db,
                 ConstTyData::Abstract(ConstExprId::new(self.db, const_expr), result_ty),
             );
-            let value = SemConstId::new(
-                self.db,
-                SemConstValue::TypeLevel {
-                    ty: result_ty,
-                    const_ty: TyId::const_ty(self.db, const_ty),
-                },
-            );
+            let value = SemConstId::new(self.db, SemConstValue::Description(const_ty));
             return self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),
                 result_ty,
-                SExpr::Const(SConst::Value(value)),
+                SExpr::Const(SConst::from_trusted_source(self.db, value)),
             );
         };
         self.emit_expr_with_origin(
             SemOrigin::Expr(expr),
             result_ty,
-            SExpr::Const(SConst::Value(int_const(
+            SExpr::Const(SConst::from_trusted_source(
                 self.db,
-                result_ty,
-                BigInt::from(size),
-            ))),
+                int_const(self.db, result_ty, BigInt::from(size)),
+            )),
         )
     }
 
@@ -1367,11 +1352,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let idx_local = self.alloc_temp(usize_ty);
         self.push_synthetic_stmt(SStmtKind::Assign {
             dst: idx_local,
-            expr: SExpr::Const(SConst::Value(int_const(
+            expr: SExpr::Const(SConst::from_trusted_source(
                 self.db,
-                usize_ty,
-                BigInt::default(),
-            ))),
+                int_const(self.db, usize_ty, BigInt::default()),
+            )),
         });
         let len_effect_args = self.lower_effect_arg_slice(&for_loop_call_sites.len.effect_args);
         let len_value = self.emit_expr(
@@ -1440,11 +1424,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         if !self.is_terminated(self.current) {
             let one = self.emit_expr(
                 usize_ty,
-                SExpr::Const(SConst::Value(int_const(
+                SExpr::Const(SConst::from_trusted_source(
                     self.db,
-                    usize_ty,
-                    BigInt::from(1u8),
-                ))),
+                    int_const(self.db, usize_ty, BigInt::from(1u8)),
+                )),
             );
             let next = self.emit_expr(
                 usize_ty,
@@ -1537,7 +1520,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             let value = self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),
                 TyId::bool(self.db),
-                SExpr::Const(SConst::Value(bool_const(self.db, true))),
+                SExpr::Const(SConst::from_trusted_source(
+                    self.db,
+                    bool_const(self.db, true),
+                )),
             );
             self.push_synthetic_stmt(SStmtKind::Assign {
                 dst: result,
@@ -1552,7 +1538,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             let value = self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),
                 TyId::bool(self.db),
-                SExpr::Const(SConst::Value(bool_const(self.db, false))),
+                SExpr::Const(SConst::from_trusted_source(
+                    self.db,
+                    bool_const(self.db, false),
+                )),
             );
             self.push_synthetic_stmt(SStmtKind::Assign {
                 dst: result,

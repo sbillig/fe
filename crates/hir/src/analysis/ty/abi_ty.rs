@@ -10,7 +10,6 @@ use common::ingot::IngotKind;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::{
     adt_def::AdtRef,
-    const_ty::{ConstTyData, EvaluatedConstTy},
     ty_def::{PrimTy, TyBase, TyData, TyId},
 };
 
@@ -258,11 +257,9 @@ pub fn semantic_ty_to_abi_desc<'db>(
 
 fn array_len_to_string(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Result<String, AbiTypeError> {
     match ty.data(db) {
-        TyData::ConstTy(const_ty) => match const_ty.data(db) {
-            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => {
-                Ok(value.data(db).to_string())
-            }
-            _ => Err(AbiTypeError::unsupported(format!(
+        TyData::ConstTy(const_ty) => match const_ty.integer_value(db) {
+            Some(value) => Ok(value.to_string()),
+            None => Err(AbiTypeError::unsupported(format!(
                 "array length `{}` is not a concrete integer",
                 ty.pretty_print(db)
             ))),
@@ -401,9 +398,9 @@ fn std_sol_compat_abi_type(
 
 fn fixed_bytes_len_to_string(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<String> {
     match ty.data(db) {
-        TyData::ConstTy(const_ty) => match const_ty.data(db) {
-            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => {
-                let len = value.data(db).to_string().parse::<u16>().ok()?;
+        TyData::ConstTy(const_ty) => match const_ty.integer_value(db) {
+            Some(value) => {
+                let len = value.to_string().parse::<u16>().ok()?;
                 (1..=32).contains(&len).then(|| len.to_string())
             }
             _ => None,

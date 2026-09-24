@@ -198,7 +198,7 @@ impl<'db> Borrowck<'db> {
                 if let SemConstValue::Scalar {
                     value: SemConstScalar::Int { value: integer },
                     ..
-                } = constant.value(self.db)
+                } = constant.value().value(self.db)
                     && let Some(integer) = integer.to_usize()
                 {
                     return IndexExpr::Const(integer);

@@ -1669,8 +1669,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                         ..
                     } => (self.enum_transfer_bundle(dst, variant.0, fields)?, None),
                     NExpr::Const(_) if !result_used => (LayoutTransferBundle::default(), None),
-                    NExpr::Const(SConst::Value(_)) => (self.ambient_transfer_bundle(dst)?, None),
-                    NExpr::Const(SConst::Ref(_)) => (self.ambient_transfer_bundle(dst)?, None),
+                    NExpr::Const(_) => (self.ambient_transfer_bundle(dst)?, None),
                     NExpr::CodeRegionRef { .. }
                     | NExpr::Unary { .. }
                     | NExpr::Binary { .. }
@@ -2674,7 +2673,7 @@ fn layout_evidence_body_query<'db>(
     for statement in normalized.blocks.iter().flat_map(|block| &block.statements) {
         if let NStatementKind::Define {
             result,
-            expr: NExpr::Const(SConst::Value(value)),
+            expr: NExpr::Const(SConst::Evidence(value) | SConst::Description(value)),
         } = &statement.kind
         {
             constant_bindings[result.index()] = builder.const_bindings(*value, statement.origin)?;

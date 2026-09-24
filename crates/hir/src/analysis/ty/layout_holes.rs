@@ -1,6 +1,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{
+    binder::{backfill_unevaluated_const_generic_args, bound_value_owner},
     const_ty::{
         BoundHoleId, CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleAnchor, HoleId,
         LayoutBoundaryIdentity, LayoutInstantiationContext, LayoutInstantiationId,
@@ -665,7 +666,18 @@ impl<'a, 'db> TyFolder<'db> for LayoutTemplateInstantiator<'a, 'db> {
             });
         }
 
-        ty.super_fold_with(db, self)
+        let folded = ty.super_fold_with(db, self);
+        if let TyData::ConstTy(const_ty) = folded.data(db)
+            && let Some(const_ty) = backfill_unevaluated_const_generic_args(
+                db,
+                *const_ty,
+                self.args,
+                bound_value_owner(db, &self.params),
+            )
+        {
+            return TyId::const_ty(db, const_ty);
+        }
+        folded
     }
 
     fn fold_ty_app(

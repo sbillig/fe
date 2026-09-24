@@ -303,7 +303,7 @@ fn verify_const_bindings<'db>(
 ) -> Result<(), LayoutEvidenceVerifyError> {
     let uses = match kind {
         NStatementKind::Define {
-            expr: NExpr::Const(SConst::Value(value)),
+            expr: NExpr::Const(SConst::Evidence(value) | SConst::Description(value)),
             ..
         } => layout_const_param_uses(db, *value),
         NStatementKind::Define { .. } | NStatementKind::Store { .. } => Vec::new(),
