@@ -137,14 +137,15 @@ call site. Replaying an analysis does not allocate a new opaque identity.
 
 External typed cells retain their original source, including address-space
 contract, projections, dereference boundaries, reachability, and clobber
-dependencies. Matching aligns indices by those structural roles. An omitted
-element offset denotes zero; a symbolic offset matches it only under a proved
-zero guard. Repeated family parameters retain their equality constraints.
-Clobber-only indices are bound for read substitution without becoming physical
-cell selectors. A checked match supplies a read substitution and guard; a
-separate write embedding is available only where a definite family update can
-be represented. A widened reachable source can be read conservatively but is
-not strongly replaced.
+dependencies. Matching walks two sources once, checking every structural role
+and aligning their indices by role rather than by flattened position. An omitted
+element offset denotes zero, and a same-type zero-offset wrapper corresponds to
+its base; a symbolic offset matches either only under a zero guard. Exact
+identity is the conjunction of the aligned index equalities, and the same pairs
+supply the read substitution and the write embedding. Repeated family
+parameters retain their equality constraints. Clobber-only indices are bound for
+read substitution without becoming physical cell selectors. A widened reachable
+source can be read conservatively but is not strongly replaced.
 
 Storage coverage is the union of supported typed-cell match guards in the demand's
 scope. The solver compares the actual read guard with that union. An incomplete
@@ -158,15 +159,20 @@ discovery.
 Typed stores update every represented family on the guard where the selected
 member is definitely written. Prior unknown contents remain on the complement.
 A possible destination receives a weak update. Physical overlap is checked
-separately: a conditional typed match does not suppress invalidation at other
-byte offsets, while a typed effect already handled for the same reachable
-whole-cell representation does not receive a redundant opaque invalidation.
+separately. Each match records the family members the store reaches as the
+same typed cell, and only that domain is spared an opaque invalidation; other
+members that may share written bytes still receive one. A destination that
+chooses an uncertain object or a loaded pointer through a quantified binder
+reaches no member as the same typed cell, because an unequal choice can overlap
+a member at another offset.
 
 Discovery restarts the block-state fixed point before snapshots, resolved
 operations, boundary requirements, or summaries are published. Stable loan
 declarations include entry loans and call poststate loan IDs; inferred regions
 and parents are reset to those seeds when the storage inventory grows. This
 prevents facts derived from provisional unknown contents from surviving a replay.
+The joint solver compares its complete incoming states after each sweep, so a
+temporary join or widening change within a sweep does not prevent convergence.
 
 ## Raw range validity
 
@@ -298,13 +304,21 @@ ends inherited held transport; receiver and effect arguments retain their
 provider-aware write obligations. Array selectors and enum presence remain in
 the existing structural value guards.
 
-Entry seeding applies this policy to each input-derived capability. Summary
-verification replays the same source path and checks the final referent contract.
-At calls, held and effect capability traversal evaluates the same transport mode
-against actual guarded regions, forwarding unknown requirements or rejecting an
-incompatible provider. The policy constrains entry contents only; a later typed
-write replaces their provenance. It never makes a same-Memory pointer distinct
-from a mutable Memory borrow.
+Entry seeding and summary verification follow each input-derived source through
+one route walker from its parameter, so both derive the same referent contract;
+the verifier also follows non-input sources with the same walker, without
+transport refinement. A widened source has lost its route, so the verifier
+accepts a known address space on it only when an entry target of the same
+parameter has that exact contract. At calls, held capability traversal evaluates
+the same transport obligation against actual guarded regions, forwarding unknown
+requirements or rejecting an incompatible provider; effect arguments keep their
+write-only check. The policy constrains entry contents only; a later typed write
+replaces their provenance. It never makes a same-Memory pointer distinct from a
+mutable Memory borrow.
+
+The route is recomputed per source rather than memoized as a graph. Every route
+is bounded by the dereference limit, and capability shapes are cached queries, so
+recursive held types cannot expand it without bound.
 
 ## Definite writes
 
@@ -449,83 +463,109 @@ Every cyclic region has a repeated-value set, including an empty set when the
 verified normalized cycle defines no values. Such cycles still participate in
 feedback and no-normal-return analysis.
 
+### Boolean and scalar predicates
+
 Boolean branch edges carry complementary guards keyed by the actual normalized
-boolean value. Exact SSA forwards retain that identity; boolean block parameters
-are related to their incoming values under each predecessor guard. Summary guards
-over formal boolean inputs map to the caller's actual value, while internal
-choices receive a distinct identity at each call. Repeated values computed in a
+boolean value. Exact SSA forwards keep that identity, and boolean block
+parameters are related to their incoming values under each predecessor guard.
+Summary guards over formal boolean inputs map to the caller's actual value, while
+internal choices receive a distinct identity at each call. Values computed in a
 loop are forgotten on feedback, so one iteration's choice cannot certify another.
-This preserves the allocation alternative selected by a boolean through a join
-without reviving a previously moved pointer or turning one-path native
-initialization into an unconditional fact. Trusted primitive comparisons add
-same-type integer equality and unsigned ordering to those guards when their
-operands feed a tracked selector or representable return. Negation,
-conjunction, and disjunction carry bounded relations; user methods with similar
-names do not. Exact scalar cells remember guarded store versions, and a load
-binds a new SSA value only while no possible write has invalidated that cell.
-Unsigned widening and same-width same-signedness casts share index identity;
-truncation and signed widening do not. Indexed selectors and supported return
-relations seed scalar demand; unsupported return-only phis stay opaque, and
-ordinary loop feedback omits unsigned bounds until a loop proof can justify
-them. Integer block parameters retain guarded incoming equalities, and
-normal-return summaries can export scalar result
-relations and definite constant values for writable scalar inputs. Local scalar
-choices are projected before summary export, while public boolean choices map
-to the caller's actual arguments. Possible input aliases and memory effects from
-calls in a recursive component project
-their internal call choices; distinct nonrecursive calls keep independent choices.
-Hidden index witnesses are projected in one shared decision-graph traversal.
-Injective, order-preserving decision renames reuse the existing branch order;
-renames that reorder or identify decisions use Shannon expansion.
+A feedback edge also carries no block-parameter equalities: the parameter names
+the next iteration's value while the state still describes the current one. This
+preserves the allocation selected by a boolean through a join without reviving a
+moved pointer or turning one-path native initialization into an unconditional
+fact.
+
+Trusted primitive comparisons add same-type integer equality and unsigned
+ordering to those guards. Recognition uses resolved primitive operations and core
+wrapper calls; user methods with similar names contribute nothing. Negation,
+conjunction, and disjunction carry bounded relations. Unsigned widening and
+same-width same-signedness casts share index identity; truncation and signed
+widening do not. Signed comparisons contribute equality only.
+
+Scalar facts are generated on demand. Index selectors, loop frontiers,
+representable integer returns, and the integer parameters of a body whose
+branch guards a failed assertion seed the demand; loads, forwards, lossless
+casts, and block parameters close over it. Ordinary loop feedback omits unsigned
+bounds until a loop certificate justifies them. Exact scalar cells remember
+guarded store versions, and a load binds a new SSA value only while no possible
+write has invalidated that cell.
+
+A summary exports the facts that hold on every normal return over formal
+arguments, including the relation to an integer result. A helper whose
+assertion pins a parameter therefore separates the caller's selector, while a
+helper that can return without asserting does not. Summaries also export
+definite constant values for writable scalar inputs. Local scalar choices are
+projected before export; public boolean choices map to the caller's actual
+arguments. Calls in a recursive component project their internal call choices
+from possible input aliases and memory effects; distinct nonrecursive calls keep
+independent choices. Hidden index witnesses are projected in one shared
+decision-graph traversal. Injective, order-preserving decision renames reuse the
+existing branch order; renames that reorder or identify decisions use Shannon
+expansion.
 
 ### Certified loop contents
 
-A separate loop proof recognizes a narrow unsigned `i < count` fill loop with a
-zero entry value, a unit increment, one definite typed store to the indexed
-family, and one normal exit. It checks the normalized control flow and every
-write, move, availability update, allocation birth, and call effect that could
-change the frontier or earlier members. A certificate then records a must
-coverage guard for `member < count` and a pointer-content template from the
-store, after forgetting facts that depend on the current iteration. A store
-to the same concrete cell on every iteration has a separate last-write proof;
-its coverage is only `member == 0 && 0 < count`.
+A separate loop proof recognizes a narrow fill loop: a natural loop of exactly a
+header and one straight-line body block, an unsigned `i < count` condition with
+an entry-parameter bound, a zero store to the frontier on every entry, one
+definite typed store of a capability to the member selected by the frontier, and
+a trailing unit increment through the core `+=` wrapper. It checks every write,
+move, availability update, allocation birth, and call effect in the body that
+could change the frontier or earlier members. Multiple latches, early exits,
+nested bodies, and other shapes keep the conservative analysis. Each unsupported
+obligation has a specific rejection reason.
+
+This is narrower than a general inductive verifier. The content template is the
+stored value in the conservative fixed point, after forgetting facts that depend
+on the current iteration. That fixed point already overapproximates every
+iteration's store, so the template is a sound possible-contents description; the
+structural checks supply the must part. A certificate records a must coverage
+guard for `member < count`. A store to the same concrete cell on every iteration
+has a separate last-write proof; its coverage is only `member == 0 && 0 < count`.
 
 Certified coverage is separate from possible contents, allocation births, and
-native authority. The checked typed-cell match applies the content template
-only to covered members; zero iterations, skipped stores, changed selectors,
+native authority. The checked typed-cell match applies the content template only
+to covered members; zero iterations, skipped stores, changed selectors,
 clobbers, and overlapping writes cannot create a larger guarantee. Feedback,
 births, and subsequent writes invalidate affected certificates. Availability
 uses certified initialized members for reads without treating the entire fresh
-allocation as initialized. Normal-return summaries export a range only when
-all returning paths establish it, and calls instantiate its destination,
-coverage, and contents against the same pre-call state. Reader loops may use
-their unsigned bound only after a corresponding fill certificate is established.
+allocation as initialized. Normal-return summaries export a range only when all
+returning paths establish it, and calls instantiate its destination, coverage,
+and contents against the same pre-call state. Reader loops may use their
+unsigned bound only after a corresponding fill certificate is established.
 
-The joint solver checks its complete incoming states after each sweep so a
-temporary join/widen change within a sweep does not prevent convergence.
+### Recursive fresh results
 
-Recursive forwarding of an input preserves that input's may-alias identity.
-For a call returning one direct capability, fresh alternatives use one finite
-call-result port when exported poststates either mirror that result or describe
-invalid contents of fresh storage. Other exported regions cannot carry a
-separate fresh object, and certified ranges and native requirements retain
-their existing stricter representation. The port is keyed by the caller's
-semantic instance and call-result value; the enclosing loop generation
-distinguishes actual evaluations. A shared port is used for the result and a
-stored copy, while independent input sources retain their identities.
+Recursive forwarding of an input preserves that input's may-alias identity. For a
+call returning one direct capability, fresh alternatives share one call-result
+port: the returned object of that call evaluation. The port is keyed by the
+caller's semantic instance and call-result value, and the enclosing loop
+generation distinguishes actual evaluations. Other exported components may name
+fresh storage only as a stored copy of the result or as invalid contents of fresh
+storage; certified ranges and native requirements disable the port. An
+allocation whose summary arguments are family or existential binders can name
+several objects in one evaluation, so a stored copy of such a family member is
+not identified with the result. Equal abstract values alone never merge objects.
 
-This is a finite source graph for the supported recursive component: each
-function has finitely many allocation and call sites, and recursively forwarded
-fresh alternatives reuse their call site's port instead of adding a choice at
-each depth. Internal recursive choices are projected only from may-result
-sources, exactly mirrored stored values, and invalid fresh contents. The
-remaining local predicates and external obligations retain their guarded
-meaning. Allocation births remain separate events matched to the dynamic
-call-result occurrence and loop arguments; sharing a port does not revive an
+Convergence: each function in a recursive component has finitely many allocation
+and call sites. Fresh alternatives that reach the result reuse their call site's
+port instead of adding a summary choice per recursion depth, and the internal
+recursive choices are projected only from the result's may-sources, stored copies
+of the result, and invalid fresh contents. The source identities reachable in a
+component summary are therefore drawn from a finite set, and the guards over them
+join monotonically. Growth outside this representation, such as a poststate that
+exports a distinct fresh object, still reaches the bounded convergence
+diagnostic; neither that failure nor a pending or blocked body validates through
+a signature fallback.
+
+Allocation births remain events keyed by the dynamic call-result occurrence and
+loop arguments. A birth instantiated through the port may apply under a guard
+from which recursive choices were projected, but it resets only the port
+identity, which no state before the call can name. It therefore cannot revive an
 older moved instance or initialize native bytes. Equal instantiated poststate
-destinations join their possible contents before one update. Unsupported
-poststates can still reach the bounded convergence diagnostic; neither that
-failure nor a pending/blocked body validates through a signature fallback.
+destinations join their possible contents before one update.
 
 The must-initialization set contains caller-visible external storage whose type
 can become moved or contain native validity obligations. Local moved facts still
@@ -647,12 +687,18 @@ improvements with empty snapshots. Source comments identify each case.
 
 | Source pattern | Current behavior | Diagnostic fixture |
 | --- | --- | --- |
-| Read `items[index]` after moving `items[0]`, even after `assert!(index == 1)` | The assertion does not supply an index-separation proof. A literal disjoint index is accepted. | [Asserted index separation](../../crates/uitest/fixtures/semantic_borrowck/asserted_index_separation.fe) |
-| Zero or byte-copy a native-reference slot, then load it | Raw bytes do not establish a valid native reference. Typed reference stores and copies are accepted. | [Native slot initialization](../../crates/uitest/fixtures/semantic_borrowck/native_slot_initialization.fe) |
+| Read `items[index]` after moving `items[0]` | `assert!(index == 1)`, directly or on a helper's normal return, separates the index from element zero. An unproved or changed index, a weaker assertion, or a helper that can return without asserting still conflicts. | [Asserted index separation](../../crates/uitest/fixtures/semantic_borrowck/asserted_index_separation.fe) |
+| Zero or byte-copy a native-reference slot, then load it | Raw bytes do not establish a valid native reference, nor does returning an uninitialized slot from a loop. Typed reference stores and copies are accepted. | [Native slot initialization](../../crates/uitest/fixtures/semantic_borrowck/native_slot_initialization.fe) |
 | Move one cell, then write through a pointer selecting that cell or another | The write cannot definitely restore the moved cell. An exact destination is accepted. | [Ambiguous reinitialization](../../crates/uitest/fixtures/semantic_borrowck/ambiguous_reinitialization.fe) |
 | Keep a storage borrow live across an external call | CALL conflicts with shared and mutable state loans; STATICCALL conflicts with mutable state loans. Ending the loan before the call and reborrowing afterward is accepted. | [External call state borrows](../../crates/uitest/fixtures/semantic_borrowck/external_call_state_borrows.fe) |
 | Select an allocating factory with a boolean inside a loop, then consume the joined result | Complementary branch guards preserve the selected fresh allocation and accept the move. Moving it twice still conflicts. | [Boolean factory loop](../../crates/uitest/fixtures/semantic_borrowck/boolean_factory_loop.fe) |
-| Recursively return one freshly allocated object | Direct and mutual fresh returns converge through a finite result port; forwarding an existing pointer retains its alias identity. Unsupported poststate growth still fails closed. | [Recursive fresh return](../../crates/uitest/fixtures/semantic_borrowck/recursive_fresh_return.fe) |
+| Recursively return one freshly allocated object | Direct and mutual fresh returns converge through a single-object result port; forwarding an existing pointer retains its alias identity. A stored older object from the same loop allocation is not the result, and unsupported poststate growth still fails closed. | [Recursive fresh return](../../crates/uitest/fixtures/semantic_borrowck/recursive_fresh_return.fe) |
+| Store one typed heap cell, then read `children[index]` | A constant or symbolic store is recovered by a symbolic read when the caller's index matches; an unwritten member keeps unknown contents that may alias the mutable cursor. | [Typed heap cells](../../crates/uitest/fixtures/semantic_borrowck/typed_heap_cells.fe) |
+| Compare, cast, store, and reload scalar selectors | Trusted comparisons, unsigned widening, unchanged scalar-cell versions, summarized return and boolean relations, and definite scalar poststates separate array members. Truncation, signed values, user functions, writes through calls or borrows, loop changes, and one-path poststates do not. | [Scalar predicates](../../crates/uitest/fixtures/semantic_borrowck/scalar_predicates.fe) |
+| Fill fresh spans in a loop, then read them while holding a mutable cursor | A verified fill loop certifies fresh member contents for later reads, reader loops, and callers of a function returning the filled array. An unfilled array and a range established on only one return path certify nothing. | [Certified staged spans](../../crates/uitest/fixtures/semantic_borrowck/certified_staged_spans.fe) |
+| Read a member that some fill iteration may leave unwritten | Zero iterations, a skipped first store, an early break, a changed bound, a single-slot write, and a reborn array certify no unwritten member. | [Staged span loop counterexamples](../../crates/uitest/fixtures/semantic_borrowck/staged_span_loop_counterexamples.fe) |
+| Overwrite, alias, or clobber a certified member | A later input store, an input span stored by the loop, one span stored in every member, an opaque clobber, and zeroed bytes all leave members that may alias or hold no native reference. | [Staged span contents counterexamples](../../crates/uitest/fixtures/semantic_borrowck/staged_span_contents_counterexamples.fe) |
+| Read calldata while holding a nested mutable Memory cursor | Held mutable borrows in ordinary parameters, including nested and cross-module aggregates, have Memory referents that do not alias calldata. | [Memory transport](../../crates/uitest/fixtures/semantic_borrowck/memory_transport.fe) |
 | Use a raw pointee after an unresolved generic operation | Template validation remains pending. A concrete implementation that consumes the pointee makes the subsequent use invalid. | [Generic ownership specialization](../../crates/uitest/fixtures/semantic_borrowck/generic_ownership_specialization.fe) |
 | Execute a bodyless, untrusted function | The call remains pending even without arguments; its signature supplies no effect bound. | [Opaque executable call](../../crates/uitest/fixtures/semantic_borrowck/opaque_executable_call.fe) |
 | Leave a function-local reference in a fresh raw heap slot when returning | The retained-storage boundary rejects the local borrow even when only a copied integer is returned. A heap-owned referent has a different lifetime and is accepted. | [Retained local reference](../../crates/uitest/fixtures/semantic_borrowck/retained_local_reference.fe) |
