@@ -10,10 +10,10 @@ use crate::analysis::{
     HirAnalysisDb,
     semantic::{FieldIndex, VariantIndex},
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxBuildHasher, FxHashMap};
 use std::{
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
-    hash::Hash,
+    hash::{BuildHasher, Hash, Hasher},
     sync::Arc,
 };
 
@@ -29,8 +29,23 @@ pub struct Guarded<'db, P> {
     pub payload: P,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ValueId<'db, P>(Arc<StructuredValue<'db, P>>);
+// Values nest deeply and key many maps, so each ID carries its node's hash.
+#[derive(Clone, Debug)]
+pub struct ValueId<'db, P>(Arc<StructuredValue<'db, P>>, u64);
+
+impl<P: PartialEq> PartialEq for ValueId<'_, P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.1 == other.1 && self.0 == other.0
+    }
+}
+
+impl<P: Eq> Eq for ValueId<'_, P> {}
+
+impl<P> Hash for ValueId<'_, P> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.1);
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct StructuredValue<'db, P> {
@@ -91,6 +106,7 @@ pub struct ValueMetrics {
 pub struct ValueInterner<'db, P> {
     pub(super) db: &'db dyn HirAnalysisDb,
     nodes: FxHashMap<StructuredValue<'db, P>, ValueId<'db, P>>,
+    normalized: FxHashMap<(BinderScope, Guarded<'db, P>), Guarded<'db, P>>,
     guards: GuardCache<'db>,
     limits: ValueLimits,
     metrics: ValueMetrics,
@@ -167,6 +183,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         Self {
             db,
             nodes: FxHashMap::default(),
+            normalized: FxHashMap::default(),
             guards: GuardCache::default(),
             limits,
             metrics: ValueMetrics::default(),
@@ -1523,37 +1540,38 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         );
     }
 
-    fn intern(&mut self, mut node: StructuredValue<'db, P>) -> ValueId<'db, P> {
-        for entry in &mut node.direct {
-            let subst = entry.guard.scope().canonical_existentials(
-                &node.scope,
-                entry
-                    .guard
-                    .indices()
-                    .into_iter()
-                    .chain(entry.payload.indices()),
-            );
-            entry.guard = entry
+    // Values are rebuilt from the same clauses, and alpha normalization is pure.
+    fn alpha_normalize(&mut self, scope: &BinderScope, entry: Guarded<'db, P>) -> Guarded<'db, P> {
+        let key = (scope.clone(), entry);
+        if let Some(normal) = self.normalized.get(&key) {
+            return normal.clone();
+        }
+        let (_, entry) = &key;
+        let subst = entry.guard.scope().canonical_existentials(scope, || {
+            entry
+                .guard
+                .indices()
+                .into_iter()
+                .chain(entry.payload.indices())
+        });
+        let normal = Guarded {
+            guard: entry
                 .guard
                 .substitute(&subst)
-                .expect("clause alpha normalization");
-            entry.payload = entry.payload.substitute(self.db, &subst);
-            assert!(
-                node.shape
-                    .direct(self.db)
-                    .is_some_and(|semantics| entry.payload.accepts_class(semantics.class)),
-                "payload capability class mismatch"
-            );
-            for index in entry.payload.indices() {
-                entry
-                    .guard
-                    .scope()
-                    .validate(index)
-                    .expect("free payload binder");
-            }
+                .expect("clause alpha normalization"),
+            payload: entry.payload.substitute(self.db, &subst),
+        };
+        if self.normalized.len() >= self.limits.interned_nodes {
+            self.normalized.clear();
         }
+        self.normalized.insert(key, normal.clone());
+        normal
+    }
+
+    fn intern(&mut self, mut node: StructuredValue<'db, P>) -> ValueId<'db, P> {
         let mut canonical = BTreeMap::<(BinderScope, P), Guard<'db>>::new();
-        for entry in node.direct {
+        for entry in std::mem::take(&mut node.direct) {
+            let entry = self.alpha_normalize(&node.scope, entry);
             match canonical.entry((entry.guard.scope().clone(), entry.payload)) {
                 Entry::Vacant(vacant) => {
                     vacant.insert(entry.guard);
@@ -1571,13 +1589,30 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         if let Some(value) = self.nodes.get(&node) {
             return value.clone();
         }
+        // An interned node was validated when it was first created.
+        for entry in &node.direct {
+            assert!(
+                node.shape
+                    .direct(self.db)
+                    .is_some_and(|semantics| entry.payload.accepts_class(semantics.class)),
+                "payload capability class mismatch"
+            );
+            for index in entry.payload.indices() {
+                entry
+                    .guard
+                    .scope()
+                    .validate(index)
+                    .expect("free payload binder");
+            }
+        }
         // IDs have structural equality, so cache eviction never changes domain equality.
         // Live values keep their nodes alive independently of the interning cache.
         if self.nodes.len() >= self.limits.interned_nodes {
             self.nodes.clear();
             self.metrics.interner_evictions += 1;
         }
-        let value = ValueId(Arc::new(node.clone()));
+        let hash = FxBuildHasher.hash_one(&node);
+        let value = ValueId(Arc::new(node.clone()), hash);
         self.nodes.insert(node, value.clone());
         self.metrics.nodes_created += 1;
         value

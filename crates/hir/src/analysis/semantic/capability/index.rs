@@ -124,14 +124,20 @@ impl BinderScope {
             .flatten()
     }
 
-    pub fn canonical_existentials<'db>(
+    pub fn canonical_existentials<'db, I: IntoIterator<Item = IndexExpr<'db>>>(
         &self,
         parent: &Self,
-        used: impl IntoIterator<Item = IndexExpr<'db>>,
+        used: impl FnOnce() -> I,
     ) -> IndexSubst<'db> {
-        self.existential_extension_of(parent)
+        let existentials = self
+            .existential_extension_of(parent)
             .expect("clause scope must extend its owner");
-        let used: BTreeSet<_> = used.into_iter().collect();
+        // Only clause-local binders are renamed, so only they need their uses.
+        let used: BTreeSet<_> = if existentials == 0 {
+            BTreeSet::new()
+        } else {
+            used().into_iter().collect()
+        };
         let mut destination = parent.clone();
         let entries = self
             .variables()

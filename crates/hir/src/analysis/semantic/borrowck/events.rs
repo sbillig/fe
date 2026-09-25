@@ -850,14 +850,16 @@ impl<'db> Borrowck<'db> {
             for parent in self.ancestors(authority.iter().cloned()) {
                 // Access offsets can introduce witnesses unused by the authority.
                 // Drop only those unused binders before comparing exact loan occurrences.
-                let canonical = parent.guard.scope().canonical_existentials(
-                    region.scope(),
-                    parent
-                        .guard
-                        .indices()
-                        .into_iter()
-                        .chain(parent.payload.args.iter().copied()),
-                );
+                let canonical = parent
+                    .guard
+                    .scope()
+                    .canonical_existentials(region.scope(), || {
+                        parent
+                            .guard
+                            .indices()
+                            .into_iter()
+                            .chain(parent.payload.args.iter().copied())
+                    });
                 let parent = Guarded {
                     guard: parent
                         .guard

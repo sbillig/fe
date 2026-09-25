@@ -340,14 +340,16 @@ impl<'db> LoanDef<'db> {
         let mut changed = joined != self.region;
         self.region = joined;
         for mut parent in parents {
-            let subst = parent.guard.scope().canonical_existentials(
-                &self.parameters,
-                parent
-                    .guard
-                    .indices()
-                    .into_iter()
-                    .chain(parent.payload.args.iter().copied()),
-            );
+            let subst = parent
+                .guard
+                .scope()
+                .canonical_existentials(&self.parameters, || {
+                    parent
+                        .guard
+                        .indices()
+                        .into_iter()
+                        .chain(parent.payload.args.iter().copied())
+                });
             parent.guard = parent
                 .guard
                 .substitute(&subst)

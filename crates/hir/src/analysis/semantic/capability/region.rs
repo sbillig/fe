@@ -224,15 +224,14 @@ impl<'db> RegionSet<'db> {
                     scope.validate(index).is_err() && !observed.contains(&index)
                 });
             }
-            let substitution = clause.guard.scope().canonical_existentials(
-                scope,
+            let substitution = clause.guard.scope().canonical_existentials(scope, || {
                 clause
                     .guard
                     .indices()
                     .into_iter()
                     .chain(clause.payload.path.indices())
-                    .chain(clause.payload.root.indices()),
-            );
+                    .chain(clause.payload.root.indices())
+            });
             clause.guard = clause
                 .guard
                 .substitute(&substitution)
