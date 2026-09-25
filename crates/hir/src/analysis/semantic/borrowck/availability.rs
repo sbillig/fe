@@ -321,7 +321,7 @@ impl<'db> Borrowck<'db> {
                     continue;
                 };
                 for successor in block.terminator.kind.successors() {
-                    let Some(guard) = self.edge_guard(block, successor) else {
+                    let Some(guard) = self.edge_guard(NBlockId::new(block_index), successor) else {
                         continue;
                     };
                     let mut edge = state.clone();
@@ -464,7 +464,7 @@ impl<'db> Borrowck<'db> {
             };
             if let Some(access) = block.terminator.kind.access(self.db, &self.body) {
                 let access = self.resolve_access(terminal, access, block.terminator.origin);
-                self.require_access(&mut analysis, &state, &access);
+                self.require_access(&mut analysis, &state, terminal, &access);
                 if access.kind == MemoryAccessKind::Move {
                     state.consume(
                         (block_index, block.statements.len(), 0),
@@ -474,7 +474,7 @@ impl<'db> Borrowck<'db> {
                 }
             }
             for successor in block.terminator.kind.successors() {
-                let Some(guard) = self.edge_guard(block, successor) else {
+                let Some(guard) = self.edge_guard(NBlockId::new(block_index), successor) else {
                     continue;
                 };
                 let mut edge = state.clone();
@@ -483,7 +483,7 @@ impl<'db> Borrowck<'db> {
                 }
                 for (index, access) in successor.accesses(self.db, &self.body).enumerate() {
                     let access = self.resolve_access(terminal, access, block.terminator.origin);
-                    self.require_access(&mut analysis, &edge, &access);
+                    self.require_access(&mut analysis, &edge, terminal, &access);
                     if access.kind == MemoryAccessKind::Move {
                         edge.consume(
                             (block_index, block.statements.len(), index + 1),
@@ -502,7 +502,23 @@ impl<'db> Borrowck<'db> {
             }
         }
         if let Some(returned) = returned {
-            analysis.summary.reinitialized = returned.initialized;
+            // Call poststates apply only after a normal return. A write whose
+            // guard covers every returning path is therefore unconditional at
+            // the caller, even when other paths loop or do not return.
+            analysis.summary.reinitialized = RegionSet::new(
+                returned.initialized.scope(),
+                returned.initialized.clauses().iter().map(|clause| {
+                    let return_guard = returned.guard.in_scope(clause.guard.scope());
+                    Guarded {
+                        guard: if return_guard.implies(&clause.guard) {
+                            Guard::always(clause.guard.scope())
+                        } else {
+                            clause.guard.clone()
+                        },
+                        payload: clause.payload.clone(),
+                    }
+                }),
+            );
             for fact in returned.moved.values() {
                 analysis.summary.unavailable = analysis.summary.unavailable.union(&fact.region);
             }
@@ -562,6 +578,7 @@ impl<'db> Borrowck<'db> {
     ) {
         let statement = &self.body.blocks[block].statements[index];
         let operation = &self.operations[block][index];
+        let borrow_state = &self.before[block][index];
         if let Some(analysis) = analysis.as_deref_mut() {
             analysis.native_validity |= operation.native_validity.clone();
             for call in &operation.calls {
@@ -580,7 +597,7 @@ impl<'db> Borrowck<'db> {
             for phase in [AccessPhase::Address, AccessPhase::Operand] {
                 for access in &operation.accesses {
                     if access.phase == phase && access.kind != MemoryAccessKind::Move {
-                        self.require_access(analysis, state, access);
+                        self.require_access(analysis, state, borrow_state, access);
                     }
                 }
             }
@@ -595,7 +612,7 @@ impl<'db> Borrowck<'db> {
             }
             debug_assert_eq!(access.phase, AccessPhase::Operand);
             if let Some(analysis) = analysis.as_deref_mut() {
-                self.require_access(analysis, state, access);
+                self.require_access(analysis, state, borrow_state, access);
             }
             state.consume(
                 (block, index, access_index),
@@ -615,6 +632,7 @@ impl<'db> Borrowck<'db> {
                 self.require_available(
                     analysis,
                     state,
+                    borrow_state,
                     requirement.kind,
                     requirement.footprint(),
                     statement.origin,
@@ -630,7 +648,7 @@ impl<'db> Borrowck<'db> {
             if access.phase == AccessPhase::Write {
                 debug_assert_eq!(access.kind, MemoryAccessKind::Write);
                 if let Some(analysis) = analysis.as_deref_mut() {
-                    self.require_access(analysis, state, access);
+                    self.require_access(analysis, state, borrow_state, access);
                 }
                 if let Some(write) = access.region.definite_write() {
                     self.initialize_availability(state, write.region());
@@ -661,12 +679,14 @@ impl<'db> Borrowck<'db> {
         &self,
         analysis: &mut AvailabilityAnalysis<'db>,
         state: &AvailabilityState<'db>,
+        borrow_state: &BorrowState<'db>,
         access: &ResolvedAccess<'db>,
     ) {
         analysis.native_validity |= access.invalidated.clone();
         self.require_available(
             analysis,
             state,
+            borrow_state,
             access.kind,
             AccessFootprint::typed(&access.region),
             access.origin,
@@ -688,6 +708,7 @@ impl<'db> Borrowck<'db> {
         &self,
         analysis: &mut AvailabilityAnalysis<'db>,
         state: &AvailabilityState<'db>,
+        borrow_state: &BorrowState<'db>,
         kind: MemoryAccessKind,
         footprint: AccessFootprint<'_, 'db>,
         origin: SemOrigin<'db>,
@@ -696,6 +717,11 @@ impl<'db> Borrowck<'db> {
             return;
         }
         let region = footprint.region.with_guard(&state.guard);
+        let certified = if footprint.extent == AccessExtent::Typed {
+            borrow_state.certified_initialized_region(&region)
+        } else {
+            RegionSet::empty(region.scope())
+        };
         // Logical SSA holders have no address. Unknown memory effects cannot
         // change their ownership, so these checks never depend on specialization.
         let independent = region
@@ -768,7 +794,9 @@ impl<'db> Borrowck<'db> {
             matches!(&clause.payload.root, RegionRoot::External(source) if !matches!(source.origin, ExternalOrigin::Local(_)) && !source.is_fresh_allocation())
         }).cloned());
         let region = if footprint.extent == AccessExtent::Typed {
-            region.remove_covered(&state.initialized)
+            region
+                .remove_covered(&state.initialized)
+                .remove_covered(&certified)
         } else {
             region
         };

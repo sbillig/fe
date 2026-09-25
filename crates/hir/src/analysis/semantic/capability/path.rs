@@ -15,6 +15,19 @@ pub enum Projection<I> {
     Index(I),
 }
 
+impl<I> Projection<I> {
+    pub fn map_index<J>(&self, map: impl FnOnce(&I) -> J) -> Projection<J> {
+        match self {
+            Self::Field(field) => Projection::Field(*field),
+            Self::VariantField { variant, field } => Projection::VariantField {
+                variant: *variant,
+                field: *field,
+            },
+            Self::Index(index) => Projection::Index(map(index)),
+        }
+    }
+}
+
 /// Slots within a semantic value. A path never implicitly dereferences a capability.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StructuralPath<I>(Box<[Projection<I>]>);
@@ -41,21 +54,7 @@ macro_rules! path_impl {
                 self.0.is_empty()
             }
             pub fn map_indices<J>(&self, mut map: impl FnMut(&I) -> J) -> $path<J> {
-                $path(
-                    self.0
-                        .iter()
-                        .map(|step| match step {
-                            Projection::Field(field) => Projection::Field(*field),
-                            Projection::VariantField { variant, field } => {
-                                Projection::VariantField {
-                                    variant: *variant,
-                                    field: *field,
-                                }
-                            }
-                            Projection::Index(index) => Projection::Index(map(index)),
-                        })
-                        .collect(),
-                )
+                $path(self.0.iter().map(|step| step.map_index(&mut map)).collect())
             }
         }
         impl<I: Clone> $path<I> {
@@ -83,6 +82,35 @@ macro_rules! path_impl {
 }
 path_impl!(StructuralPath);
 path_impl!(RegionPath);
+
+/// Align selector roles without treating the flattened index order as location identity.
+pub(super) fn aligned_index_pairs<'db>(
+    left: &[Projection<IndexExpr<'db>>],
+    right: &[Projection<IndexExpr<'db>>],
+    pairs: &mut Vec<(IndexExpr<'db>, IndexExpr<'db>)>,
+) -> Option<()> {
+    if left.len() != right.len() {
+        return None;
+    }
+    for (left, right) in left.iter().zip(right) {
+        match (left, right) {
+            (Projection::Index(left), Projection::Index(right)) => pairs.push((*left, *right)),
+            (Projection::Field(left), Projection::Field(right)) if left == right => {}
+            (
+                Projection::VariantField {
+                    variant: left_variant,
+                    field: left_field,
+                },
+                Projection::VariantField {
+                    variant: right_variant,
+                    field: right_field,
+                },
+            ) if left_variant == right_variant && left_field == right_field => {}
+            _ => return None,
+        }
+    }
+    Some(())
+}
 
 /// Project a referent type through structural storage, without following capabilities.
 pub fn project_referent_ty<'db>(

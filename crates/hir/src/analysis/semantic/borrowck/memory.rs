@@ -5,7 +5,7 @@ use super::validity::NativeValidity;
 use super::{
     ir::{AvailabilityRequirement, AvailabilitySummary, BorrowSummary, MemoryAccess},
     solver::Borrowck,
-    summary::CallInputs,
+    summary::{CallInputs, SourceInstantiations},
 };
 use crate::analysis::semantic::diagnostics::SemanticDiagnostic;
 use crate::analysis::{
@@ -58,14 +58,15 @@ impl<'db> Borrowck<'db> {
             return Ok(Vec::new());
         };
         let mut resolved = Vec::new();
+        let mut instantiations = SourceInstantiations::new(state, result, inputs);
         for access in &call.summary.accesses {
             let mut invalidated = NativeValidity::default();
             let mut authority = Vec::new();
             let mut regions = Vec::new();
             for source_region in [&access.region, &access.authorizers] {
-                let mut region = RegionSet::empty(source_region.scope());
+                let mut alternatives = Vec::new();
                 for clause in source_region.clauses() {
-                    let Some(guard) = self.instantiate_guard(&clause.guard, result, inputs)? else {
+                    let Some(guard) = instantiations.guard(self, &clause.guard)? else {
                         continue;
                     };
                     let source = SourceExpr::from_place(&clause.payload)
@@ -80,8 +81,7 @@ impl<'db> Borrowck<'db> {
                         continue;
                     }
 
-                    let target =
-                        self.instantiate_source(state, &source, result, guard.scope(), inputs)?;
+                    let target = instantiations.resolve(self, &source, guard.scope())?;
                     invalidated |= target.invalidated;
                     authority.extend(
                         target
@@ -104,14 +104,14 @@ impl<'db> Borrowck<'db> {
                                 })
                             }),
                     );
-                    region = region.union(
-                        &target
+                    alternatives.push(
+                        target
                             .region
                             .with_guard(&guard)
                             .close_existentials(source_region.scope()),
                     );
                 }
-                regions.push(region);
+                regions.push(RegionSet::union_all(source_region.scope(), alternatives));
             }
             let authorizers = regions.pop().expect("authorizers");
             let region = regions.pop().expect("access target");
@@ -392,7 +392,10 @@ impl<'db> Borrowck<'db> {
             native_requirements: RegionSet::empty(&scope),
             may_return: !self.instance.is_intrinsically_never_returning(self.db),
             result,
+            scalar_result: None,
             mutable_inputs: Vec::new(),
+            certified_ranges: Vec::new(),
+            scalar_inputs: Vec::new(),
             requirements: Vec::new(),
             availability: AvailabilitySummary {
                 incoming: accesses

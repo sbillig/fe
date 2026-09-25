@@ -1,14 +1,12 @@
 //! External referents retain every load-and-dereference transition.
-use std::collections::BTreeMap;
 
 use crate::analysis::{HirAnalysisDb, semantic::SemanticInstance, ty::ty_def::TyId};
 
 use super::{
     external::{ExternalOrigin, ExternalSource},
-    guard::Guard,
-    index::{BinderScope, IndexExpr, IndexSubst},
-    path::{RegionPath, StructuralPath, project_referent_ty},
-    region::{RegionRoot, SymbolicPlace, path_alias_guard},
+    index::{IndexExpr, IndexSubst},
+    path::{RegionPath, StructuralPath, aligned_index_pairs, project_referent_ty},
+    region::{RegionRoot, SymbolicPlace},
     repack::{ReferentRepackId, ReferentViews, RepackPayload},
     semantics::CapabilityClass,
     value::IndexPayload,
@@ -25,6 +23,16 @@ pub struct SourceExpr<'db> {
 }
 
 impl<'db> SourceExpr<'db> {
+    /// The whole referent of a source, with no projection or conversion.
+    pub fn whole(source: ExternalSource<'db>) -> Self {
+        Self {
+            source,
+            path: RegionPath::default(),
+            views: Default::default(),
+            invalidated: false,
+        }
+    }
+
     pub fn referent_ty(
         &self,
         db: &'db dyn HirAnalysisDb,
@@ -201,64 +209,28 @@ impl<'db> InputSource<'db> {
         }
     }
 
-    /// Match one occurrence against an inventoried family. Family binders are
-    /// instantiated; repeated indices and constant selectors remain guard facts.
-    /// A reachable source is an overapproximation, never a typed storage cell.
-    pub fn match_instance(
-        &self,
-        scope: &BinderScope,
-        instance: &Self,
-        instance_scope: &BinderScope,
-    ) -> Option<(IndexSubst<'db>, Guard<'db>)> {
-        if self.reachable || instance.reachable {
-            return None;
-        }
-        let mut bindings = BTreeMap::new();
-        for (formal, actual) in self.indices().zip(instance.indices()) {
-            if matches!(formal, IndexExpr::Bound(_)) {
-                bindings.entry(formal).or_insert(actual);
-            }
-        }
-        let substitution = IndexSubst::new(scope, instance_scope, bindings).ok()?;
-        let guard = self.substitute(&substitution).alias_guard(
-            instance,
-            Guard::always(instance_scope),
-            false,
-        )?;
-        Some((substitution, guard))
-    }
-
-    pub(super) fn alias_guard(
+    pub(super) fn correspondence(
         &self,
         other: &Self,
-        mut guard: Guard<'db>,
-        allow_unknown: bool,
-    ) -> Option<Guard<'db>> {
-        if self.param() != other.param() {
+        pairs: &mut Vec<(IndexExpr<'db>, IndexExpr<'db>)>,
+    ) -> Option<()> {
+        if self.param() != other.param() || self.dereferences.len() != other.dereferences.len() {
             return None;
         }
         if self.reachable || other.reachable {
-            return allow_unknown.then_some(guard);
-        }
-        if self.dereferences.len() != other.dereferences.len() {
-            return None;
+            return (self.reachable && other.reachable).then_some(());
         }
         match (&self.origin, &other.origin) {
             (InputOrigin::Place(_), InputOrigin::Place(_)) => {}
-            (InputOrigin::Slot { slot: left, .. }, InputOrigin::Slot { slot: right, .. })
-                if left.as_slice().len() == right.as_slice().len() =>
-            {
-                guard = path_alias_guard(left.as_slice(), right.as_slice(), guard, false)?;
+            (InputOrigin::Slot { slot: left, .. }, InputOrigin::Slot { slot: right, .. }) => {
+                aligned_index_pairs(left.as_slice(), right.as_slice(), pairs)?;
             }
             _ => return None,
         }
         for (left, right) in self.dereferences.iter().zip(&other.dereferences) {
-            if left.as_slice().len() != right.as_slice().len() {
-                return None;
-            }
-            guard = path_alias_guard(left.as_slice(), right.as_slice(), guard, false)?;
+            aligned_index_pairs(left.as_slice(), right.as_slice(), pairs)?;
         }
-        Some(guard)
+        Some(())
     }
 }
 
@@ -271,6 +243,7 @@ mod tests {
     use crate::analysis::semantic::{
         FieldIndex,
         capability::{
+            guard::Guard,
             index::{BinderScope, IndexNamespace},
             path::Projection,
             region::{OverlapResult, RegionRoot, RegionSet},

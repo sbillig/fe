@@ -18,10 +18,10 @@ use super::{
     guard::Guard,
     handle::{AddressOccurrence, HandleAddressSpace, OpaqueHandleRef},
     index::{BinderScope, IndexExpr, IndexSubst},
-    path::RegionPath,
-    region::{ProviderRegionId, RegionRoot, path_alias_guard},
+    path::{RegionPath, aligned_index_pairs},
+    region::{ProviderRegionId, RegionRoot},
     source::{InputSource, SourceExpr},
-    value::IndexPayload,
+    value::{Guarded, IndexPayload},
 };
 
 /// Physical referent typing is independent of a capability's conversion views.
@@ -43,6 +43,14 @@ impl<'db> ReferentContract<'db> {
             address_space,
             addressable: !ty.is_zero_sized(db),
         }
+    }
+
+    pub fn memory(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Self {
+        Self::new(
+            db,
+            ty,
+            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+        )
     }
 
     pub fn substitute(self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
@@ -140,6 +148,55 @@ pub struct ClobberCondition<'db> {
     pub target: SourceExpr<'db>,
     pub written: SourceExpr<'db>,
     pub extent: AccessExtent<'db>,
+}
+
+/// Checked read and write projections of one structural typed-cell relation.
+pub struct StorageMatch<'db> {
+    pub substitution: IndexSubst<'db>,
+    pub guard: Guard<'db>,
+    /// Family members reached as the same typed cell, in the family scope.
+    /// Absent when another selection could overlap a member physically.
+    pub typed: Option<Guard<'db>>,
+    /// The definite-update embedding; a widened representation has none.
+    pub write: Option<Guarded<'db, BTreeMap<IndexExpr<'db>, IndexExpr<'db>>>>,
+}
+
+fn element_offset<'db>(element: Option<(TyId<'db>, IndexExpr<'db>)>) -> IndexExpr<'db> {
+    element.map_or(IndexExpr::Const(0), |(_, index)| index)
+}
+
+/// Transport a definite write into family coordinates. Request binders map to
+/// family positions; a repeated binder or a fixed selector constrains the
+/// replaced members. Clobber-only binders must map one-to-one.
+fn write_embedding<'db>(
+    scope: &BinderScope,
+    location: &[(IndexExpr<'db>, IndexExpr<'db>)],
+    metadata: &[(IndexExpr<'db>, IndexExpr<'db>)],
+) -> Option<Guarded<'db, BTreeMap<IndexExpr<'db>, IndexExpr<'db>>>> {
+    let mut guard = Guard::always(scope);
+    let mut bindings = BTreeMap::new();
+    for &(formal, actual) in location {
+        guard = match (actual, bindings.get(&actual)) {
+            (IndexExpr::Bound(_), None) => {
+                bindings.insert(actual, formal);
+                guard
+            }
+            (IndexExpr::Bound(_), Some(&previous)) => guard.with_equality(previous, formal)?,
+            _ => guard.with_equality(formal, actual)?,
+        };
+    }
+    for &(formal, actual) in metadata {
+        if matches!(actual, IndexExpr::Bound(_))
+            && (!matches!(formal, IndexExpr::Bound(_))
+                || *bindings.entry(actual).or_insert(formal) != formal)
+        {
+            return None;
+        }
+    }
+    Some(Guarded {
+        guard,
+        payload: bindings,
+    })
 }
 
 impl<'db> ClobberCondition<'db> {
@@ -598,35 +655,143 @@ impl<'db> ExternalSource<'db> {
     }
 
     /// Storage-family matching is distinct from a semantic coverage proof.
-    /// A widened typed cell can be read, but never supports a strong update.
+    /// One structural correspondence supplies the read substitution, its
+    /// identity guard, and the optional write embedding. A widened typed cell
+    /// can be read, but never supports a strong update.
     pub fn match_instance(
         &self,
-        db: &'db dyn HirAnalysisDb,
         scope: &BinderScope,
         instance: &Self,
         instance_scope: &BinderScope,
-    ) -> Option<(IndexSubst<'db>, Guard<'db>)> {
+    ) -> Option<StorageMatch<'db>> {
+        let mut location = Vec::new();
+        self.correspondence(instance, &mut location)?;
+        let mut metadata = Vec::new();
+        self.metadata_correspondence(instance, &mut metadata)?;
         let mut bindings = BTreeMap::new();
-        for (formal, actual) in self.indices().zip(instance.indices()) {
+        for &(formal, actual) in location.iter().chain(&metadata) {
+            scope.validate(formal).ok()?;
+            instance_scope.validate(actual).ok()?;
             if matches!(formal, IndexExpr::Bound(_)) {
                 bindings.entry(formal).or_insert(actual);
             }
         }
-        let subst = IndexSubst::new(scope, instance_scope, bindings).ok()?;
-        let guard = self
-            .substitute(db, &subst)
-            .identity_guard(instance, Guard::always(instance_scope))?;
-        Some((subst, guard))
+        let substitution = IndexSubst::new(scope, instance_scope, bindings).ok()?;
+        let guard = Guard::always(instance_scope).with_equalities(
+            location
+                .iter()
+                .map(|&(formal, actual)| (substitution.apply(formal), actual)),
+        )?;
+        let embedding = write_embedding(scope, &location, &metadata);
+        // Unequal selections of an uncertain object or of a loaded pointer can
+        // overlap a member at another byte offset.
+        let typed = embedding
+            .as_ref()
+            .filter(|_| {
+                !instance
+                    .overlapping_object_indices()
+                    .iter()
+                    .any(|index| matches!(index, IndexExpr::Bound(_)))
+            })
+            .map(|embedding| embedding.guard.clone());
+        let write = embedding.filter(|_| !self.reachable && !instance.reachable);
+        Some(StorageMatch {
+            substitution,
+            guard,
+            typed,
+            write,
+        })
     }
 
-    fn identity_guard(&self, other: &Self, mut guard: Guard<'db>) -> Option<Guard<'db>> {
+    /// Indices choosing an object that another choice may overlap at an
+    /// unknown offset: uncertain handle arguments and loaded pointers.
+    fn overlapping_object_indices(&self) -> Vec<IndexExpr<'db>> {
+        let mut indices = match &self.origin {
+            ExternalOrigin::Unknown { arguments, .. } => arguments.to_vec(),
+            ExternalOrigin::OpaqueHandle(handle) => handle.arguments.to_vec(),
+            ExternalOrigin::Input(input) => input
+                .dereferences()
+                .iter()
+                .flat_map(|path| path.indices())
+                .collect(),
+            ExternalOrigin::Memory { base, .. } => base.source.overlapping_object_indices(),
+            _ => Vec::new(),
+        };
+        indices.extend(self.dereferences.iter().flat_map(|path| path.indices()));
+        indices
+    }
+
+    fn zero_wrapper_base(&self) -> Option<(&SourceExpr<'db>, IndexExpr<'db>)> {
+        let ExternalOrigin::Memory {
+            base,
+            element,
+            target_ty,
+        } = &self.origin
+        else {
+            return None;
+        };
+        (self.dereferences.is_empty()
+            && !self.reachable
+            && base.path.is_empty()
+            && base.views.iter().next().is_none()
+            && base.source.dereferences.is_empty()
+            && !base.source.reachable
+            && base.source.contract.ty == *target_ty)
+            .then_some((base.as_ref(), element_offset(*element)))
+    }
+
+    /// Align the index roles of two structurally identical typed locations.
+    /// An omitted element offset is logical zero, and a same-type zero-offset
+    /// wrapper corresponds to its base. Exact identity is the conjunction of
+    /// the aligned index equalities.
+    fn correspondence(
+        &self,
+        other: &Self,
+        pairs: &mut Vec<(IndexExpr<'db>, IndexExpr<'db>)>,
+    ) -> Option<()> {
         if self.contract != other.contract
             || self.reachable != other.reachable
             || self.dereferences.len() != other.dereferences.len()
         {
             return None;
         }
-        guard = match (&self.origin, &other.origin) {
+        match (&self.origin, &other.origin) {
+            (
+                ExternalOrigin::Memory {
+                    base: left,
+                    element: left_element,
+                    target_ty: left_ty,
+                },
+                ExternalOrigin::Memory {
+                    base: right,
+                    element: right_element,
+                    target_ty: right_ty,
+                },
+            ) => {
+                if left_ty != right_ty
+                    || left.views != right.views
+                    || matches!((left_element, right_element),
+                        (Some((left, _)), Some((right, _))) if left != right)
+                {
+                    return None;
+                }
+                left.source.correspondence(&right.source, pairs)?;
+                aligned_index_pairs(left.path.as_slice(), right.path.as_slice(), pairs)?;
+                pairs.push((
+                    element_offset(*left_element),
+                    element_offset(*right_element),
+                ));
+            }
+            (ExternalOrigin::Memory { .. }, _) => {
+                let (base, selector) = self.zero_wrapper_base()?;
+                base.source.correspondence(other, pairs)?;
+                pairs.push((selector, IndexExpr::Const(0)));
+            }
+            (_, ExternalOrigin::Memory { .. }) => {
+                let (base, selector) = other.zero_wrapper_base()?;
+                self.correspondence(&base.source, pairs)?;
+                pairs.push((IndexExpr::Const(0), selector));
+            }
             (
                 ExternalOrigin::Unknown {
                     contract: left_contract,
@@ -642,18 +807,22 @@ impl<'db> ExternalSource<'db> {
                 && left == right
                 && left_args.len() == right_args.len() =>
             {
-                for (left, right) in left_args.iter().zip(right_args) {
-                    guard = guard.with_equality(*left, *right)?;
-                }
-                guard
+                pairs.extend(left_args.iter().copied().zip(right_args.iter().copied()));
             }
-            (ExternalOrigin::Local(left), ExternalOrigin::Local(right)) if left == right => guard,
-            (ExternalOrigin::Input(left), ExternalOrigin::Input(right)) if self.reachable => {
-                (left.param() == right.param()).then_some(guard)?
+            (ExternalOrigin::OpaqueHandle(left), ExternalOrigin::OpaqueHandle(right))
+            | (ExternalOrigin::Allocation(left), ExternalOrigin::Allocation(right))
+                if left.occurrence == right.occurrence
+                    && left.contract == right.contract
+                    && left.arguments.len() == right.arguments.len() =>
+            {
+                pairs.extend(
+                    left.arguments
+                        .iter()
+                        .copied()
+                        .zip(right.arguments.iter().copied()),
+                );
             }
-            (ExternalOrigin::Input(left), ExternalOrigin::Input(right)) => {
-                left.alias_guard(right, guard, false)?
-            }
+            (ExternalOrigin::Local(left), ExternalOrigin::Local(right)) if left == right => {}
             (
                 ExternalOrigin::Provider {
                     provider: left,
@@ -663,53 +832,98 @@ impl<'db> ExternalSource<'db> {
                     provider: right,
                     target_ty: right_ty,
                 },
-            ) if left == right && left_ty == right_ty => guard,
+            ) if left == right && left_ty == right_ty => {}
+            (ExternalOrigin::Input(left), ExternalOrigin::Input(right)) => {
+                left.correspondence(right, pairs)?;
+            }
+            _ => return None,
+        }
+        for (left, right) in self.dereferences.iter().zip(&other.dereferences) {
+            aligned_index_pairs(left.as_slice(), right.as_slice(), pairs)?;
+        }
+        Some(())
+    }
+
+    /// Bind clobber dependencies for read substitution without treating them as
+    /// selectors that restrict a definite typed-cell write.
+    fn metadata_correspondence(
+        &self,
+        other: &Self,
+        pairs: &mut Vec<(IndexExpr<'db>, IndexExpr<'db>)>,
+    ) -> Option<()> {
+        match (&self.origin, &other.origin) {
             (
-                ExternalOrigin::Memory {
-                    base: left,
-                    element: left_element,
-                    target_ty: left_ty,
-                },
-                ExternalOrigin::Memory {
-                    base: right,
-                    element: right_element,
-                    target_ty: right_ty,
-                },
-            ) if left_ty == right_ty
-                && left.views == right.views
-                && left.path.as_slice().len() == right.path.as_slice().len() =>
-            {
-                guard = left.source.identity_guard(&right.source, guard)?;
-                guard =
-                    path_alias_guard(left.path.as_slice(), right.path.as_slice(), guard, false)?;
-                match (left_element, right_element) {
-                    (None, None) => guard,
-                    (Some((left_ty, left)), Some((right_ty, right))) if left_ty == right_ty => {
-                        guard.with_equality(*left, *right)?
+                ExternalOrigin::Memory { base: left, .. },
+                ExternalOrigin::Memory { base: right, .. },
+            ) => left.source.metadata_correspondence(&right.source, pairs)?,
+            (ExternalOrigin::Memory { .. }, _) => {
+                self.zero_wrapper_base()?
+                    .0
+                    .source
+                    .metadata_correspondence(other, pairs)?;
+            }
+            (_, ExternalOrigin::Memory { .. }) => {
+                self.metadata_correspondence(&other.zero_wrapper_base()?.0.source, pairs)?;
+            }
+            _ => {}
+        }
+        match (&self.clobber, &other.clobber) {
+            (None, None) => {}
+            (Some(left), Some(right)) => {
+                for (left, right) in [
+                    (&left.target, &right.target),
+                    (&left.written, &right.written),
+                ] {
+                    if left.invalidated != right.invalidated || left.views != right.views {
+                        return None;
                     }
+                    left.source.correspondence(&right.source, pairs)?;
+                    left.source.metadata_correspondence(&right.source, pairs)?;
+                    aligned_index_pairs(left.path.as_slice(), right.path.as_slice(), pairs)?;
+                }
+                match (left.extent, right.extent) {
+                    (AccessExtent::Bytes(left), AccessExtent::Bytes(right)) => {
+                        pairs.push((left, right));
+                    }
+                    (AccessExtent::Typed, AccessExtent::Typed)
+                    | (AccessExtent::Unknown, AccessExtent::Unknown) => {}
                     _ => return None,
                 }
             }
-            (ExternalOrigin::OpaqueHandle(left), ExternalOrigin::OpaqueHandle(right))
-            | (ExternalOrigin::Allocation(left), ExternalOrigin::Allocation(right))
-                if left.occurrence == right.occurrence
-                    && left.contract == right.contract
-                    && left.arguments.len() == right.arguments.len() =>
-            {
-                for (left, right) in left.arguments.iter().zip(&right.arguments) {
-                    guard = guard.with_equality(*left, *right)?;
-                }
-                guard
-            }
             _ => return None,
-        };
-        for (left, right) in self.dereferences.iter().zip(&other.dereferences) {
-            if left.as_slice().len() != right.as_slice().len() {
-                return None;
-            }
-            guard = path_alias_guard(left.as_slice(), right.as_slice(), guard, false)?;
         }
-        Some(guard)
+        Some(())
+    }
+
+    /// A typed cell over a certain base: an element of its own type, or the
+    /// base's first cell. A widened or uncertain base may name several objects.
+    fn typed_cell(&self) -> Option<(&SourceExpr<'db>, TyId<'db>)> {
+        match &self.origin {
+            ExternalOrigin::Memory {
+                base,
+                element,
+                target_ty,
+            } if element.is_none_or(|(stride, _)| stride == *target_ty)
+                && self.dereferences.is_empty()
+                && !self.reachable
+                && !base.source.uncertain() =>
+            {
+                Some((base, *target_ty))
+            }
+            _ => None,
+        }
+    }
+
+    /// The guard under which two cells of one element type index the same base.
+    fn same_base_cells(&self, other: &Self, guard: &Guard<'db>) -> Option<Guard<'db>> {
+        let ((left, left_ty), (right, right_ty)) = (self.typed_cell()?, other.typed_cell()?);
+        if self.contract != other.contract || left_ty != right_ty || left.views != right.views {
+            return None;
+        }
+        let mut pairs = Vec::new();
+        left.source.correspondence(&right.source, &mut pairs)?;
+        aligned_index_pairs(left.path.as_slice(), right.path.as_slice(), &mut pairs)?;
+        guard.with_equalities(pairs)
     }
 
     pub(super) fn alias_guard(
@@ -718,16 +932,36 @@ impl<'db> ExternalSource<'db> {
         guard: Guard<'db>,
         allow_unknown: bool,
     ) -> Option<Guard<'db>> {
-        if !self.reachable
-            && !other.reachable
-            && let Some(exact) = self.identity_guard(other, guard.clone())
-        {
-            return Some(exact);
-        }
+        self.alias_guard_in(other, guard, allow_unknown, true)
+    }
+
+    /// A raw byte span may cross from one cell into the next, so cells of one
+    /// base are never separated by their elements.
+    pub(super) fn byte_alias_guard(&self, other: &Self, guard: Guard<'db>) -> Option<Guard<'db>> {
+        self.alias_guard_in(other, guard, true, false)
+    }
+
+    fn alias_guard_in(
+        &self,
+        other: &Self,
+        guard: Guard<'db>,
+        allow_unknown: bool,
+        typed: bool,
+    ) -> Option<Guard<'db>> {
+        let mut pairs = Vec::new();
+        let exact = if !self.reachable && !other.reachable {
+            self.correspondence(other, &mut pairs)
+                .and_then(|()| guard.with_equalities(pairs))
+        } else {
+            None
+        };
         if !allow_unknown {
-            return None;
+            return exact;
         }
-        if self.dereferences.is_empty()
+        if exact.as_ref().is_some_and(|exact| guard.implies(exact)) {
+            return exact;
+        }
+        let possible = if self.dereferences.is_empty()
             && !self.reachable
             && let ExternalOrigin::Memory { base: left, .. } = &self.origin
         {
@@ -740,32 +974,46 @@ impl<'db> ExternalSource<'db> {
                 _ => None,
             };
             let right = other_base.map_or(other, |base| &base.source);
-            return left.source.alias_guard(right, guard, true);
-        }
-        if other.dereferences.is_empty()
+            // Offsets compose: distinct intermediate cells can reach one final
+            // address, so bases are compared without cell separation.
+            let possible = left
+                .source
+                .alias_guard_in(right, guard.clone(), true, false);
+            // Where the bases are one object, the accessed typed cells of one
+            // layout overlap only at an equal element, which `exact` states.
+            match (
+                possible,
+                typed.then(|| self.same_base_cells(other, &guard)).flatten(),
+            ) {
+                (Some(possible), Some(same)) => possible.difference(&same),
+                (possible, _) => possible,
+            }
+        } else if other.dereferences.is_empty()
             && !other.reachable
             && let ExternalOrigin::Memory { base: right, .. } = &other.origin
         {
-            return self.alias_guard(&right.source, guard, true);
+            self.alias_guard_in(&right.source, guard, true, false)
+        } else {
+            // Distinct fresh allocations and incoming pointers cannot identify the
+            // same object. Unknown manufactured addresses remain conservative.
+            // This assumes each raw operation's entire footprint is within its
+            // allocated object. Allocation identity is not a raw bounds certificate.
+            let disjoint = matches!(
+                (&self.origin, &other.origin),
+                (
+                    ExternalOrigin::Allocation(_),
+                    ExternalOrigin::Input(_) | ExternalOrigin::Allocation(_)
+                ) | (ExternalOrigin::Input(_), ExternalOrigin::Allocation(_))
+            ) && self.dereferences.is_empty()
+                && other.dereferences.is_empty();
+            (!disjoint && (self.uncertain() || other.uncertain()))
+                .then_some(guard)
+                .filter(|_| self.contract.may_alias(other.contract))
+        };
+        match (exact, possible) {
+            (Some(exact), Some(possible)) => Some(exact.or(&possible)),
+            (Some(exact), None) => Some(exact),
+            (None, possible) => possible,
         }
-        // Distinct fresh allocations and incoming pointers cannot identify the
-        // same object. Unknown manufactured addresses remain conservative.
-        // This assumes each raw operation's entire footprint is within its
-        // allocated object. Allocation identity is not a raw bounds certificate.
-        if matches!(
-            (&self.origin, &other.origin),
-            (
-                ExternalOrigin::Allocation(_),
-                ExternalOrigin::Input(_) | ExternalOrigin::Allocation(_)
-            ) | (ExternalOrigin::Input(_), ExternalOrigin::Allocation(_))
-        ) && self.dereferences.is_empty()
-            && other.dereferences.is_empty()
-        {
-            return None;
-        }
-        (allow_unknown
-            && (self.uncertain() || other.uncertain())
-            && self.contract.may_alias(other.contract))
-        .then_some(guard)
     }
 }

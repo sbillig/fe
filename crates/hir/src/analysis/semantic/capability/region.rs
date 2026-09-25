@@ -1,4 +1,6 @@
 //! Canonical guarded referent regions. Structural slots and storage paths are distinct.
+#[cfg(test)]
+use std::cell::Cell;
 use std::{
     cmp::{Ordering, min},
     collections::{BTreeMap, BTreeSet},
@@ -21,6 +23,11 @@ use crate::{
     },
     semantic::ProviderBinding,
 };
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CANONICALIZED_REGION_CLAUSES: Cell<usize> = const { Cell::new(0) };
+}
 
 /// Interning uses the complete binding, including its source and semantic contract.
 #[salsa::interned]
@@ -117,6 +124,14 @@ impl<'db> RegionRoot<'db> {
             }
         }
     }
+
+    /// Possible overlap of raw byte spans, which may cross typed cell boundaries.
+    pub(super) fn byte_alias_guard(&self, other: &Self, guard: Guard<'db>) -> Option<Guard<'db>> {
+        match (self, other) {
+            (Self::External(left), Self::External(right)) => left.byte_alias_guard(right, guard),
+            _ => self.alias_guard(other, guard, true),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -192,6 +207,8 @@ impl<'db> RegionSet<'db> {
     ) -> Self {
         let mut canonical = BTreeMap::<(BinderScope, SymbolicPlace<'db>), Guard<'db>>::new();
         for mut clause in clauses {
+            #[cfg(test)]
+            CANONICALIZED_REGION_CLAUSES.set(CANONICALIZED_REGION_CLAUSES.get() + 1);
             // A clause owns its extra existential witnesses. Keeping witnesses
             // used only in guards accumulates an unbounded history of previous
             // generations (old != previous != ...), despite denoting the same
@@ -207,15 +224,14 @@ impl<'db> RegionSet<'db> {
                     scope.validate(index).is_err() && !observed.contains(&index)
                 });
             }
-            let substitution = clause.guard.scope().canonical_existentials(
-                scope,
+            let substitution = clause.guard.scope().canonical_existentials(scope, || {
                 clause
                     .guard
                     .indices()
                     .into_iter()
                     .chain(clause.payload.path.indices())
-                    .chain(clause.payload.root.indices()),
-            );
+                    .chain(clause.payload.root.indices())
+            });
             clause.guard = clause
                 .guard
                 .substitute(&substitution)
@@ -332,6 +348,18 @@ impl<'db> RegionSet<'db> {
         )
     }
 
+    /// Canonicalize a collection of regions once, rather than repeatedly
+    /// copying and normalizing an ever-growing prefix of alternatives.
+    pub fn union_all(scope: &BinderScope, regions: impl IntoIterator<Item = Self>) -> Self {
+        Self::new(
+            scope,
+            regions.into_iter().flat_map(|region| {
+                assert_eq!(&region.scope, scope, "region scopes must match");
+                region.clauses.into_vec()
+            }),
+        )
+    }
+
     pub fn with_guard(&self, guard: &Guard<'db>) -> Self {
         Self::new(
             &self.scope,
@@ -410,6 +438,9 @@ impl<'db> RegionSet<'db> {
             subst.source(),
             "region substitution scope mismatch"
         );
+        if subst.is_identity() {
+            return self.clone();
+        }
         Self::new(
             subst.destination(),
             self.clauses.iter().filter_map(|clause| {
@@ -428,6 +459,16 @@ impl<'db> RegionSet<'db> {
 
     pub fn close_existentials(&self, scope: &BinderScope) -> Self {
         Self::new(scope, self.clauses.iter().cloned())
+    }
+
+    /// Express this region in `owner`, a lexical ancestor of its scope. Binders
+    /// `owner` lacks become clause-local witnesses; `owner`'s own are kept.
+    pub fn quantify_into(&self, db: &'db dyn HirAnalysisDb, owner: &BinderScope) -> Self {
+        if &self.scope == owner {
+            return self.clone();
+        }
+        self.substitute(db, &self.scope.quantifying(owner))
+            .close_existentials(owner)
     }
 
     /// Conservatively intersect regions. Unknown enum overlays retain both paths:

@@ -45,9 +45,14 @@ impl<'db> Borrowck<'db> {
         occurrence: ValueOccurrence,
     ) -> NativeValidity<'db> {
         let mut validity = NativeValidity::default();
+        // Leaves below arrays add element binders; requirements share the value's.
         for leaf in self.inventory.values.leaves(value, occurrence) {
             if let CapabilityRef::Invalidated { region, .. } = leaf.payload {
-                validity |= NativeValidity::from_region(&region.with_guard(&leaf.guard));
+                validity |= NativeValidity::from_region(
+                    &region
+                        .with_guard(&leaf.guard)
+                        .quantify_into(self.db, value.scope()),
+                );
             }
         }
         validity
@@ -70,8 +75,14 @@ impl Default for NativeValidity<'_> {
 }
 
 impl<'db> NativeValidity<'db> {
+    /// Requirements keep the region's family binders and close only its
+    /// clause-local existential witnesses.
     pub fn from_region(region: &RegionSet<'db>) -> Self {
-        let mut result = Self::default();
+        let owner = region.scope().without_existentials();
+        let mut result = Self {
+            invalid: false,
+            requirements: RegionSet::empty(&owner),
+        };
         for clause in region.clauses() {
             let deferred = if let RegionRoot::External(source) = &clause.payload.root
                 && let Some(clobber) = &source.clobber
@@ -86,8 +97,7 @@ impl<'db> NativeValidity<'db> {
                 false
             };
             result.requirements = result.requirements.union(
-                &RegionSet::new(region.scope(), [clause.clone()])
-                    .close_existentials(&BinderScope::default()),
+                &RegionSet::new(region.scope(), [clause.clone()]).close_existentials(&owner),
             );
             result.invalid |= !deferred;
         }
@@ -98,7 +108,12 @@ impl<'db> NativeValidity<'db> {
 impl<'db> BitOrAssign for NativeValidity<'db> {
     fn bitor_assign(&mut self, other: Self) {
         self.invalid |= other.invalid;
-        self.requirements = self.requirements.union(&other.requirements);
+        // An empty requirement set means the same thing in every scope.
+        if self.requirements.is_empty() {
+            self.requirements = other.requirements;
+        } else if !other.requirements.is_empty() {
+            self.requirements = self.requirements.union(&other.requirements);
+        }
     }
 }
 

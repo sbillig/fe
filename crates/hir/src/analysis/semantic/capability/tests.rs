@@ -1,9 +1,13 @@
 use crate::analysis::semantic::capability::test_roots;
-use std::{collections::BTreeSet, iter::empty};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    iter::empty,
+};
 
 use super::{
     birth::AllocationBirth,
-    external::{ExternalOrigin, ExternalSource, ReferentContract},
+    external::{ClobberCondition, ExternalOrigin, ExternalSource, ReferentContract},
+    footprint::AccessExtent,
     guard::{ChoiceKey, Guard, ValueOccurrence},
     handle::{
         AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
@@ -66,11 +70,283 @@ impl<'db> IndexPayload<'db> for Payload<'db> {
 fn runtime<'db>(index: u32) -> IndexExpr<'db> {
     IndexExpr::Runtime(NValueId::from_u32(index))
 }
+
 fn scope() -> BinderScope {
     BinderScope::default()
 }
+
 fn path<'db>(index: IndexExpr<'db>) -> StructuralPath<IndexExpr<'db>> {
     StructuralPath::new([Projection::Index(index)])
+}
+
+#[test]
+fn scalar_version_join_preserves_an_untracked_path() {
+    let db = HirAnalysisTestDb::default();
+    let mut values = ValueInterner::new(&db, ValueLimits::default());
+    let root = test_roots::local(&db, NRootId::from_u32(0));
+    let choice = ChoiceKey::new(
+        ValueOccurrence::Value(NValueId::from_u32(1)),
+        StructuralPath::default(),
+    );
+    let yes = Guard::always(&scope())
+        .with_boolean(choice.clone(), true)
+        .unwrap();
+    let no = Guard::always(&scope()).with_boolean(choice, false).unwrap();
+    let mut known = BorrowState::new(&mut values, [], []);
+    let mut unknown = known.clone();
+    assert!(known.constrain(&yes, &mut values));
+    known.store_scalar(root.clone(), IndexExpr::Const(1));
+    assert!(unknown.constrain(&no, &mut values));
+    assert!(known.join(&unknown, &mut values));
+    known.load_scalar(root, NValueId::from_u32(2), &mut values);
+    let zero = Guard::always(&scope())
+        .with_equality(runtime(2), IndexExpr::Const(0))
+        .unwrap();
+    assert!(
+        known
+            .guard()
+            .and(&no)
+            .and_then(|guard| guard.and(&zero))
+            .is_some()
+    );
+    assert!(
+        known
+            .guard()
+            .and(&yes)
+            .and_then(|guard| guard.and(&zero))
+            .is_none()
+    );
+}
+
+#[test]
+fn extending_a_guard_scope_preserves_scalar_and_boolean_facts() {
+    let choice = ChoiceKey::new(
+        ValueOccurrence::Value(NValueId::from_u32(1)),
+        StructuralPath::default(),
+    );
+    let guard = Guard::always(&scope())
+        .with_boolean(choice.clone(), true)
+        .unwrap()
+        .with_equality(runtime(2), IndexExpr::Const(7))
+        .unwrap();
+    assert_eq!(guard.in_scope(&scope()), guard);
+    let (extended, _) = scope().bind(IndexNamespace::Value);
+    let moved = guard.in_scope(&extended);
+    assert_eq!(moved.scope(), &extended);
+    assert!(moved.proves_equal(runtime(2), IndexExpr::Const(7)));
+    assert!(
+        moved
+            .and(
+                &Guard::always(&extended)
+                    .with_boolean(choice, false)
+                    .unwrap()
+            )
+            .is_none()
+    );
+}
+
+#[test]
+fn typed_storage_matching_binds_an_erased_zero_selector() {
+    let db = HirAnalysisTestDb::default();
+    let ty = TyId::u256(&db);
+    let base = ExternalSource::input(
+        InputSource::slot(0, StructuralPath::default()),
+        ReferentContract::memory(&db, ty),
+        false,
+    );
+    let source = |source| SourceExpr {
+        source,
+        path: RegionPath::default(),
+        views: Default::default(),
+        invalidated: false,
+    };
+    let empty = BinderScope::default();
+    let (family_scope, member) = empty.bind(IndexNamespace::InputSlot);
+    let family = ExternalSource::memory(&db, source(base.clone()), ty, Some((ty, member)));
+    let zero = ExternalSource::memory(&db, source(base.clone()), ty, None);
+    assert_eq!(zero, base);
+    let witness = family
+        .match_instance(&family_scope, &zero, &empty)
+        .expect("erased zero selector has a structural binding");
+    assert_eq!(witness.substitution.apply(member), IndexExpr::Const(0));
+    assert_eq!(witness.guard, Guard::always(&empty));
+    assert_eq!(
+        witness.write.unwrap().guard,
+        Guard::always(&family_scope)
+            .with_equality(member, IndexExpr::Const(0))
+            .unwrap()
+    );
+
+    let index = runtime(1);
+    let symbolic = ExternalSource::memory(&db, source(base.clone()), ty, Some((ty, index)));
+    let witness = base
+        .match_instance(&empty, &symbolic, &empty)
+        .expect("base and same-type symbolic wrapper match conditionally");
+    assert!(witness.guard.proves_equal(index, IndexExpr::Const(0)));
+    assert!(!Guard::always(&empty).implies(&witness.guard));
+}
+
+#[test]
+fn typed_storage_matching_keeps_repeated_and_distinct_index_roles() {
+    let db = HirAnalysisTestDb::default();
+    let scope = BinderScope::default();
+    let (repeated_scope, member) = scope.bind(IndexNamespace::InputSlot);
+    let contract = ReferentContract::memory(&db, TyId::u256(&db));
+    let family = ExternalSource::input(
+        InputSource::slot(
+            0,
+            StructuralPath::new([Projection::Index(member), Projection::Index(member)]),
+        ),
+        contract,
+        false,
+    );
+    let first = runtime(1);
+    let second = runtime(2);
+    let request = ExternalSource::input(
+        InputSource::slot(
+            0,
+            StructuralPath::new([Projection::Index(first), Projection::Index(second)]),
+        ),
+        contract,
+        false,
+    );
+    let witness = family
+        .match_instance(&repeated_scope, &request, &scope)
+        .unwrap();
+    assert_eq!(witness.substitution.apply(member), first);
+    assert!(witness.guard.proves_equal(first, second));
+    assert!(!Guard::always(&scope).implies(&witness.guard));
+
+    let byte = TyId::u8(&db);
+    let word = TyId::array_with_len(&db, TyId::ptr_to(&db, TyId::u256(&db)), 4);
+    let (generation_scope, generation) = scope.bind(IndexNamespace::InputSlot);
+    let (family_scope, element) = generation_scope.bind(IndexNamespace::InputSlot);
+    let contract = ReferentContract::memory(&db, byte);
+    let base =
+        ExternalSource::unknown(contract, AddressOccurrence::Summary(0), [generation].into());
+    let family = ExternalSource::memory(&db, SourceExpr::whole(base), word, Some((byte, element)));
+    let base =
+        ExternalSource::unknown(contract, AddressOccurrence::Summary(0), [runtime(3)].into());
+    let request = ExternalSource::memory(&db, SourceExpr::whole(base), word, None);
+    let witness = family
+        .match_instance(&family_scope, &request, &scope)
+        .unwrap();
+    assert_eq!(witness.substitution.apply(generation), runtime(3));
+    assert_eq!(witness.substitution.apply(element), IndexExpr::Const(0));
+    assert_eq!(witness.guard, Guard::always(&scope));
+
+    let (follow_scope, dereference) = family_scope.bind(IndexNamespace::InputSlot);
+    let pointee = ReferentContract::memory(&db, TyId::u256(&db));
+    let family = family.follow(
+        RegionPath::new([Projection::Index(dereference)]),
+        pointee,
+        false,
+    );
+    let request = request.follow(
+        RegionPath::new([Projection::Index(runtime(4))]),
+        pointee,
+        false,
+    );
+    let witness = family
+        .match_instance(&follow_scope, &request, &scope)
+        .unwrap();
+    assert_eq!(witness.substitution.apply(generation), runtime(3));
+    assert_eq!(witness.substitution.apply(element), IndexExpr::Const(0));
+    assert_eq!(witness.substitution.apply(dereference), runtime(4));
+    assert_eq!(witness.guard, Guard::always(&scope));
+}
+
+#[test]
+fn typed_storage_matching_transports_metadata_without_selecting_a_cell() {
+    let db = HirAnalysisTestDb::default();
+    let scope = BinderScope::default();
+    let (family_scope, witness_index) = scope.bind(IndexNamespace::Existential);
+    let contract = ReferentContract::memory(&db, TyId::u256(&db));
+    let mut family = ExternalSource::unknown(contract, AddressOccurrence::Summary(0), Box::new([]));
+    let metadata = ExternalSource::unknown(
+        contract,
+        AddressOccurrence::Summary(1),
+        [witness_index].into(),
+    );
+    let metadata = SourceExpr::whole(metadata);
+    family.clobber = Some(Box::new(ClobberCondition {
+        target: metadata.clone(),
+        written: metadata,
+        extent: AccessExtent::Bytes(witness_index),
+    }));
+    let request = family.substitute(
+        &db,
+        &IndexSubst::new(&family_scope, &scope, [(witness_index, runtime(3))]).unwrap(),
+    );
+    let matched = family
+        .match_instance(&family_scope, &request, &scope)
+        .unwrap();
+    assert_eq!(matched.substitution.apply(witness_index), runtime(3));
+    assert_eq!(matched.guard, Guard::always(&scope));
+    assert_eq!(matched.write.unwrap().guard, Guard::always(&family_scope));
+
+    let fixed = family.substitute(
+        &db,
+        &IndexSubst::new(
+            &family_scope,
+            &scope,
+            [(witness_index, IndexExpr::Const(0))],
+        )
+        .unwrap(),
+    );
+    assert!(
+        fixed
+            .match_instance(&scope, &family, &family_scope)
+            .unwrap()
+            .write
+            .is_none(),
+        "a request's payload-only binder cannot be replaced with a metadata constant"
+    );
+}
+
+#[test]
+fn typed_storage_matching_keeps_alpha_roles_and_rejects_distinct_offsets() {
+    let db = HirAnalysisTestDb::default();
+    let scope = BinderScope::default();
+    let (family_scope, formal) = scope.bind(IndexNamespace::InputSlot);
+    let (request_scope, actual) = family_scope.bind(IndexNamespace::InputSlot);
+    let contract = ReferentContract::memory(&db, TyId::u256(&db));
+    let family = ExternalSource::input(InputSource::slot(0, path(formal)), contract, false);
+    let request = ExternalSource::input(InputSource::slot(0, path(actual)), contract, false);
+    let matched = family
+        .match_instance(&family_scope, &request, &request_scope)
+        .unwrap();
+    assert_eq!(matched.substitution.apply(formal), actual);
+    assert_eq!(matched.guard, Guard::always(&request_scope));
+    assert_eq!(matched.write.unwrap().payload.get(&actual), Some(&formal));
+
+    let base = ExternalSource::input(
+        InputSource::slot(0, StructuralPath::default()),
+        ReferentContract::memory(&db, TyId::u8(&db)),
+        false,
+    );
+    let source = SourceExpr::whole(base);
+    let first = ExternalSource::memory(
+        &db,
+        source.clone(),
+        TyId::u256(&db),
+        Some((TyId::u8(&db), IndexExpr::Const(1))),
+    );
+    let second = ExternalSource::memory(
+        &db,
+        source,
+        TyId::u256(&db),
+        Some((TyId::u8(&db), IndexExpr::Const(2))),
+    );
+    assert!(first.match_instance(&scope, &second, &scope).is_none());
+    assert_ne!(
+        RegionSet::singleton(&scope, RegionRoot::External(first), RegionPath::default()).overlap(
+            &db,
+            &RegionSet::singleton(&scope, RegionRoot::External(second), RegionPath::default(),),
+        ),
+        OverlapResult::Disjoint,
+        "distinct typed cells can still overlap physically"
+    );
 }
 
 fn leaf_shape(db: &HirAnalysisTestDb) -> ShapeId<'_> {
@@ -95,11 +371,7 @@ fn physical_offsets_do_not_prove_disjoint_wide_accesses() {
     let db = HirAnalysisTestDb::default();
     let base = ExternalSource::input(
         InputSource::slot(0, StructuralPath::default()),
-        ReferentContract::new(
-            &db,
-            TyId::u8(&db),
-            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-        ),
+        ReferentContract::memory(&db, TyId::u8(&db)),
         false,
     );
     let region = |offset| {
@@ -230,6 +502,59 @@ fn variant_collisions_are_checked_after_substitution_and_equality() {
         )
         .unwrap();
     assert!(first.and(&independent).is_some());
+}
+
+#[test]
+fn boolean_choices_are_complementary_and_freshen_by_occurrence() {
+    let scope = scope();
+    let first = ChoiceKey::new(
+        ValueOccurrence::Value(NValueId::from_u32(0)),
+        Default::default(),
+    );
+    let second = ChoiceKey::new(
+        ValueOccurrence::Value(NValueId::from_u32(1)),
+        Default::default(),
+    );
+    let truth = Guard::always(&scope)
+        .with_boolean(first.clone(), true)
+        .unwrap();
+    let falsehood = Guard::always(&scope)
+        .with_boolean(first.clone(), false)
+        .unwrap();
+    assert!(truth.and(&falsehood).is_none());
+    assert_eq!(truth.or(&falsehood), Guard::always(&scope));
+    assert_eq!(
+        truth.forget_occurrences(|occurrence| {
+            occurrence == ValueOccurrence::Value(NValueId::from_u32(0))
+        }),
+        Guard::always(&scope)
+    );
+    let independent = Guard::always(&scope).with_boolean(second, false).unwrap();
+    assert!(truth.and(&independent).is_some());
+    let renamed = truth
+        .map_occurrences(|_| ValueOccurrence::Value(NValueId::from_u32(1)))
+        .unwrap();
+    assert!(renamed.and(&independent).is_none());
+
+    let summary_choice = ChoiceKey::new(ValueOccurrence::SummaryChoice(0), Default::default());
+    let call = |result, value| {
+        Guard::always(&scope)
+            .with_boolean(summary_choice.clone(), value)
+            .unwrap()
+            .map_occurrences(|_| ValueOccurrence::CallChoice { result, choice: 0 })
+            .unwrap()
+    };
+    let first_call = call(NValueId::from_u32(2), true);
+    assert!(
+        first_call
+            .and(&call(NValueId::from_u32(3), false))
+            .is_some()
+    );
+    assert!(
+        first_call
+            .and(&call(NValueId::from_u32(2), false))
+            .is_none()
+    );
 }
 
 #[test]
@@ -2083,14 +2408,7 @@ fn inspect<T, const N: usize>(
         .values
         .iter()
         .filter(|value| matches!(value.definition, NValueDefinition::EntryParam { .. }))
-        .map(|value| {
-            ReferentContract::new(
-                &db,
-                value.ty,
-                HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-            )
-            .is_abstract(&db)
-        })
+        .map(|value| ReferentContract::memory(&db, value.ty).is_abstract(&db))
         .collect();
     assert_eq!(abstract_inputs, [false, true, false, false, false, true]);
 }
@@ -2129,12 +2447,7 @@ fn allocation_birth_selects_guarded_full_families_and_only_their_own_bytes() {
     );
     let viewed = ExternalSource::memory(
         &db,
-        SourceExpr {
-            source: source.clone(),
-            path: RegionPath::default(),
-            views: Default::default(),
-            invalidated: false,
-        },
+        SourceExpr::whole(source.clone()),
         TyId::u8(&db),
         Some((TyId::u8(&db), IndexExpr::Const(1))),
     );
@@ -2254,12 +2567,7 @@ fn allocation_birth_selection_commutes_with_index_substitution() {
                     let direct = ExternalSource::allocation(&db, allocation);
                     let viewed = ExternalSource::memory(
                         &db,
-                        SourceExpr {
-                            source: direct.clone(),
-                            path: RegionPath::default(),
-                            views: Default::default(),
-                            invalidated: false,
-                        },
+                        SourceExpr::whole(direct.clone()),
                         TyId::u8(&db),
                         Some((TyId::u8(&db), IndexExpr::Const(1))),
                     );
@@ -2326,6 +2634,382 @@ fn guard_projection_agrees_with_finite_witness_enumeration() {
                 assert_eq!(projected, enumerated);
                 assert!(projected.indices().contains(&indexed));
                 assert!(!projected.indices().contains(&hidden));
+            }
+        }
+    }
+}
+
+#[test]
+fn independent_enum_choice_unions_have_linear_size() {
+    let scope = scope();
+    // Both different roots and different fields within one root are independent.
+    for fields in [false, true] {
+        let choice = |index| {
+            if fields {
+                ChoiceKey::new(
+                    ValueOccurrence::Argument(0),
+                    StructuralPath::new([Projection::Field(FieldIndex(index as u16))]),
+                )
+            } else {
+                ChoiceKey::new(ValueOccurrence::Argument(index), StructuralPath::default())
+            }
+        };
+        let alternatives: Vec<_> = (0..10)
+            .map(|index| {
+                Guard::always(&scope)
+                    .with_variant(choice(index), VariantIndex(1))
+                    .unwrap()
+            })
+            .collect();
+        let union = alternatives
+            .iter()
+            .cloned()
+            .reduce(|left, right| left.or(&right))
+            .unwrap();
+        assert!(
+            union.node_count() <= alternatives.len() * 32,
+            "{} nodes for {} choices",
+            union.node_count(),
+            alternatives.len()
+        );
+        for alternative in &alternatives {
+            assert!(alternative.implies(&union));
+        }
+        let excluded = (0..10).fold(Guard::always(&scope), |guard, index| {
+            guard.with_variant(choice(index), VariantIndex(2)).unwrap()
+        });
+        assert!(union.and(&excluded).is_none());
+    }
+}
+
+#[test]
+fn grouped_enum_choices_preserve_index_aliases_and_full_tags() {
+    let scope = scope();
+    let choice = |field, index| {
+        ChoiceKey::new(
+            ValueOccurrence::Argument(0),
+            StructuralPath::new([
+                Projection::Field(FieldIndex(field)),
+                Projection::Index(index),
+            ]),
+        )
+    };
+    for (left_tag, right_tag) in [(0, 1), (0, 32768), (1, u16::MAX)] {
+        let left = Guard::always(&scope)
+            .with_variant(choice(0, runtime(0)), VariantIndex(left_tag))
+            .unwrap();
+        let right = Guard::always(&scope)
+            .with_variant(choice(0, runtime(1)), VariantIndex(right_tag))
+            .unwrap();
+        let pair = left.and(&right).unwrap();
+        assert!(pair.with_equality(runtime(0), runtime(1)).is_none());
+        assert!(pair.with_disequality(runtime(0), runtime(1)).is_some());
+        let separate_field = Guard::always(&scope)
+            .with_variant(choice(1, runtime(1)), VariantIndex(right_tag))
+            .unwrap();
+        assert!(
+            left.and(&separate_field)
+                .unwrap()
+                .with_equality(runtime(0), runtime(1))
+                .is_some()
+        );
+        let partition = left.with_equality(runtime(0), runtime(1)).unwrap();
+        assert_eq!(
+            partition.or(&left.with_disequality(runtime(0), runtime(1)).unwrap()),
+            left
+        );
+    }
+}
+
+#[test]
+fn identity_substitution_reuses_nested_values_without_interning() {
+    let db = HirAnalysisTestDb::default();
+    let element = leaf_shape(&db);
+    let shape = array_shape(&db, array_shape(&db, element, 3), 1_000_000);
+    let mut values = ValueInterner::new(
+        &db,
+        ValueLimits {
+            interned_nodes: 0,
+            ..ValueLimits::default()
+        },
+    );
+    let ShapeChildren::Array { element: inner, .. } = shape.children(&db) else {
+        panic!("array")
+    };
+    let value = values.array(shape, &scope(), |values, outer, i| {
+        values.array(*inner, outer, |values, inner, j| {
+            leaf(values, element, inner, 1, vec![i, j, runtime(0)])
+        })
+    });
+    let identity = IndexSubst::new(&scope(), &scope(), [(runtime(0), runtime(0))]).unwrap();
+    let before = values.metrics();
+    assert_eq!(values.substitute(&value, &identity), value);
+    assert_eq!(values.metrics(), before);
+
+    let (extended, _) = scope().bind(IndexNamespace::Result);
+    let extension = IndexSubst::new(&scope(), &extended, []).unwrap();
+    let lifted = values.substitute(&value, &extension);
+    assert_eq!(lifted.scope(), &extended);
+    let changed = IndexSubst::new(&scope(), &scope(), [(runtime(0), 7.into())]).unwrap();
+    let changed = values.substitute(&value, &changed);
+    let leaves = values.leaves(&changed, ValueOccurrence::Argument(0));
+    assert_eq!(leaves[0].payload.indices[2], IndexExpr::Const(7));
+}
+
+#[test]
+fn caller_and_callee_choice_unions_stay_compact_through_summary_renaming() {
+    let scope = scope();
+    let alternatives: Vec<_> = (0..10)
+        .map(|index| {
+            Guard::always(&scope)
+                .with_variant(
+                    ChoiceKey::new(
+                        ValueOccurrence::Value(NValueId::from_u32(index * 2)),
+                        StructuralPath::default(),
+                    ),
+                    VariantIndex(1),
+                )
+                .unwrap()
+                .with_variant(
+                    ChoiceKey::new(
+                        ValueOccurrence::CallChoice {
+                            result: NValueId::from_u32(index * 2 + 1),
+                            choice: 0,
+                        },
+                        StructuralPath::default(),
+                    ),
+                    VariantIndex(1),
+                )
+                .unwrap()
+        })
+        .collect();
+    let union = alternatives
+        .iter()
+        .cloned()
+        .reduce(|left, right| left.or(&right))
+        .unwrap();
+    assert!(
+        union.node_count() <= alternatives.len() * 64,
+        "{} caller/callee nodes",
+        union.node_count()
+    );
+    for alternative in &alternatives {
+        assert!(alternative.implies(&union));
+    }
+    let mut choices = BTreeMap::new();
+    let summary = union
+        .map_occurrences(|occurrence| {
+            let next = choices.len() as u32;
+            ValueOccurrence::SummaryChoice(*choices.entry(occurrence).or_insert(next))
+        })
+        .unwrap();
+    assert!(
+        summary.node_count() <= alternatives.len() * 64,
+        "{} summary nodes",
+        summary.node_count()
+    );
+    let instantiated = summary
+        .map_occurrences(|occurrence| {
+            let ValueOccurrence::SummaryChoice(choice) = occurrence else {
+                panic!("summary choice")
+            };
+            ValueOccurrence::CallChoice {
+                result: NValueId::from_u32(100),
+                choice,
+            }
+        })
+        .unwrap();
+    assert!(
+        instantiated.node_count() <= alternatives.len() * 64,
+        "{} instantiated nodes",
+        instantiated.node_count()
+    );
+}
+
+#[test]
+fn guard_identity_operations_preserve_indexed_choice_constraints() {
+    let always = Guard::always(&scope());
+    let choice = |index| {
+        ChoiceKey::new(
+            ValueOccurrence::Argument(0),
+            StructuralPath::new([Projection::Index(index)]),
+        )
+    };
+    let guard = always
+        .with_variant(choice(runtime(0)), VariantIndex(0))
+        .unwrap()
+        .with_variant(choice(runtime(1)), VariantIndex(u16::MAX))
+        .unwrap();
+    assert_eq!(always.and(&guard), Some(guard.clone()));
+    assert_eq!(guard.and(&always), Some(guard.clone()));
+    assert_eq!(guard.and(&guard), Some(guard.clone()));
+    assert_eq!(guard.or(&always), always);
+    assert_eq!(always.or(&guard), always);
+    assert_eq!(guard.or(&guard), guard);
+    let mut observed = Vec::new();
+    let identity = guard
+        .map_occurrences(|occurrence| {
+            observed.push(occurrence);
+            occurrence
+        })
+        .unwrap();
+    assert_eq!(observed, [ValueOccurrence::Argument(0)]);
+    assert_eq!(identity, guard);
+    assert!(identity.with_equality(runtime(0), runtime(1)).is_none());
+}
+
+#[test]
+fn batched_region_union_preserves_guarded_existential_alternatives() {
+    let db = HirAnalysisTestDb::default();
+    let base = scope();
+    let (nested, selected) = base.bind(IndexNamespace::Existential);
+    let root = test_roots::local(&db, NRootId::from_u32(0));
+    let regions: Vec<_> = [runtime(0), runtime(1), selected]
+        .into_iter()
+        .flat_map(|index| {
+            let root = &root;
+            let nested = &nested;
+            let base = &base;
+            [0, u16::MAX].into_iter().map(move |variant| {
+                RegionSet::new(
+                    base,
+                    [Guarded {
+                        guard: Guard::always(nested)
+                            .with_variant(
+                                ChoiceKey::new(ValueOccurrence::Argument(0), path(index)),
+                                VariantIndex(variant),
+                            )
+                            .unwrap(),
+                        payload: SymbolicPlace {
+                            root: root.clone(),
+                            path: RegionPath::new([Projection::Index(index)]),
+                            views: Default::default(),
+                        },
+                    }],
+                )
+            })
+        })
+        .chain([RegionSet::empty(&base)])
+        .collect();
+    // Include missing alternatives, repeated regions, and differently ordered
+    // prefixes. Compare the complete guarded result, not just overlap status.
+    for first in &regions {
+        for second in &regions {
+            for third in &regions {
+                let expected = first.union(second).union(third);
+                assert_eq!(
+                    RegionSet::union_all(&base, [first.clone(), second.clone(), third.clone()]),
+                    expected,
+                );
+            }
+        }
+    }
+    assert_eq!(RegionSet::union_all(&base, []), RegionSet::empty(&base));
+}
+
+#[test]
+fn substituted_projection_prunes_siblings_and_preserves_enum_and_index_domains() {
+    let db = HirAnalysisTestDb::default();
+    let element = leaf_shape(&db);
+    let variant = ShapeId::new(
+        &db,
+        CapabilityShape {
+            direct: None,
+            children: ShapeChildren::Product([(FieldIndex(0), element)].into()),
+        },
+    );
+    let sum = ShapeId::new(
+        &db,
+        CapabilityShape {
+            direct: None,
+            children: ShapeChildren::Sum(
+                [(VariantIndex(0), variant), (VariantIndex(1), variant)].into(),
+            ),
+        },
+    );
+    let array = array_shape(&db, sum, 2);
+    let pair = ShapeId::new(
+        &db,
+        CapabilityShape {
+            direct: None,
+            children: ShapeChildren::Product([(FieldIndex(0), array), (FieldIndex(1), sum)].into()),
+        },
+    );
+    let wide = ShapeId::new(
+        &db,
+        CapabilityShape {
+            direct: None,
+            children: ShapeChildren::Product(
+                (0..32).map(|field| (FieldIndex(field), pair)).collect(),
+            ),
+        },
+    );
+    let (source, input) = scope().bind(IndexNamespace::Value);
+    let (destination, output) = scope().bind(IndexNamespace::Result);
+    let subst = IndexSubst::new(
+        &source,
+        &destination,
+        [(input, output), (runtime(0), IndexExpr::Const(1))],
+    )
+    .unwrap();
+    let mut values = ValueInterner::new(
+        &db,
+        ValueLimits {
+            interned_nodes: 0,
+            ..ValueLimits::default()
+        },
+    );
+    let value = values.from_shape(wide, &source, |_, _, scope| {
+        vec![Guarded {
+            guard: Guard::always(scope),
+            payload: Payload {
+                tag: 1,
+                indices: vec![input, runtime(0)],
+            },
+        }]
+    });
+    let before = values.metrics().nodes_created;
+    let full = values.substitute(&value, &subst);
+    assert!(values.metrics().nodes_created - before > 200);
+    for field in [FieldIndex(0), FieldIndex(31)] {
+        for variant in [VariantIndex(0), VariantIndex(1)] {
+            let paths = [
+                IndexExpr::Const(0),
+                IndexExpr::Const(1),
+                IndexExpr::Const(2),
+                runtime(0),
+                output,
+            ]
+            .into_iter()
+            .map(|index| {
+                StructuralPath::new([
+                    Projection::Field(field),
+                    Projection::Field(FieldIndex(0)),
+                    Projection::Index(index),
+                    Projection::VariantField {
+                        variant,
+                        field: FieldIndex(0),
+                    },
+                ])
+            })
+            .chain([StructuralPath::new([
+                Projection::Field(field),
+                Projection::Field(FieldIndex(1)),
+                Projection::VariantField {
+                    variant,
+                    field: FieldIndex(0),
+                },
+            ])]);
+            for path in paths {
+                let occurrence = ValueOccurrence::Argument(3);
+                let expected = values.project(&full, &path, occurrence);
+                let before = values.metrics().nodes_created;
+                let selected = values.project_substituted(&value, &subst, &path, occurrence);
+                assert_eq!(selected, expected, "{path:?}");
+                assert!(
+                    values.metrics().nodes_created - before < 32,
+                    "unselected siblings were rebuilt"
+                );
             }
         }
     }

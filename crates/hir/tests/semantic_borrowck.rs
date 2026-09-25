@@ -14,10 +14,11 @@ use fe_hir::{
             capability::{
                 external::ExternalOrigin,
                 footprint::AccessExtent,
-                guard::ValueOccurrence,
+                guard::{ChoiceKey, ValueOccurrence},
                 handle::{AddressOccurrence, HandleAddressSpace},
                 index::IndexExpr,
                 path::{Projection as CapabilityProjection, RegionPath, StructuralPath},
+                region::RegionRoot,
                 source::InputSource,
                 value::{ValueInterner, ValueLimits},
             },
@@ -678,47 +679,60 @@ fn inspect() {{
 
 #[test]
 fn fresh_slot_discovery_replays_typed_stores_before_reads_in_either_query_order() {
-    for initialized in [false, true] {
-        for query_first in ["inspect", "read", "fresh"] {
-            let store = if initialized {
-                "*slot = ref *owner"
-            } else {
-                ""
-            };
-            let source = format!(
-                r#"
+    for native_result in [false, true] {
+        for initialized in [false, true] {
+            for query_first in ["inspect", "read", "fresh"] {
+                let store = if initialized {
+                    "*slot = ref *owner"
+                } else {
+                    ""
+                };
+                let (read, use_result) = if native_result {
+                    (
+                        "fn read(_ slot: *ref u256) -> ref u256 { *slot }",
+                        "let borrowed = read(ptr::cast(bytes))\n    let observed: u256 = borrowed\n    observed",
+                    )
+                } else {
+                    (
+                        "fn read(_ slot: *ref u256) -> u256 { *slot }",
+                        "read(ptr::cast(bytes))",
+                    )
+                };
+                let source = format!(
+                    r#"
 use core::ptr
 fn fresh() -> *u8 {{ ptr::alloc_bytes(32) }}
-fn read(_ slot: *ref u256) -> u256 {{ *slot }}
+{read}
 fn inspect() -> u256 {{
     let owner = ptr::alloc<u256>()
     *owner = 7
     let bytes = fresh()
     let slot: *ref u256 = ptr::cast(bytes)
     {store}
-    read(ptr::cast(bytes))
+    {use_result}
 }}
 "#
-            );
-            let mut db = HirAnalysisTestDb::default();
-            let file = db.new_stand_alone("fresh_query_order.fe".into(), &source);
-            let (module, _) = db.top_mod(file);
-            db.assert_no_diags(module);
-            let _ = semantic_borrow_summary(&db, func_instance(&db, module, query_first));
-            let diagnostics = format_diagnostics(
-                &db,
-                &collect_semantic_borrow_diagnostic_vouchers(&db, module),
-            );
-            if initialized {
-                assert!(
-                    diagnostics.is_empty(),
-                    "{query_first}: {source}\n{diagnostics}"
                 );
-            } else {
-                assert!(
-                    diagnostics.contains("cannot use a native borrow"),
-                    "{query_first}: {source}\n{diagnostics}"
+                let mut db = HirAnalysisTestDb::default();
+                let file = db.new_stand_alone("fresh_query_order.fe".into(), &source);
+                let (module, _) = db.top_mod(file);
+                db.assert_no_diags(module);
+                let _ = semantic_borrow_summary(&db, func_instance(&db, module, query_first));
+                let diagnostics = format_diagnostics(
+                    &db,
+                    &collect_semantic_borrow_diagnostic_vouchers(&db, module),
                 );
+                if initialized {
+                    assert!(
+                        diagnostics.is_empty(),
+                        "{native_result} {query_first}: {source}\n{diagnostics}"
+                    );
+                } else {
+                    assert!(
+                        diagnostics.contains("cannot use a native borrow"),
+                        "{native_result} {query_first}: {source}\n{diagnostics}"
+                    );
+                }
             }
         }
     }
@@ -872,33 +886,187 @@ fn allocation_birth_retains_older_moved_pointers_before_the_next_move() {
 }
 
 #[test]
-fn boolean_selected_factory_loops_retain_conservative_move_diagnostics() {
-    // Boolean predicates are not represented by the existing edge guards. This
-    // precision limit is separate from allocation lifetime transfer.
-    let source =
-        allocation_birth_loop_source("let p = if i == 0 { initialized(i) } else { forward(i) }");
-    let diagnostics = checked_borrow_diags(&source);
-    assert!(diagnostics.contains("move conflict"), "{diagnostics}");
-    assert!(!diagnostics.contains("internal"), "{diagnostics}");
+fn boolean_factory_summaries_follow_forwarded_and_phi_inputs() {
+    let mut failures = Vec::new();
+    for (name, declaration, condition) in [
+        ("direct", "", "flag"),
+        ("forwarded", "let choice = flag", "choice"),
+        (
+            "phi",
+            "let choice = if flag { true } else { false }",
+            "choice",
+        ),
+    ] {
+        let source = format!(
+            r#"
+struct Item {{ n: u256 }}
+fn consume(_ value: own Item) {{}}
+fn initialized(_ n: u256) -> *Item {{
+    let p = core::ptr::alloc<Item>()
+    *p = Item {{ n }}
+    p
+}}
+fn select(flag: bool, old: *Item) -> *Item {{
+    {declaration}
+    if {condition} {{ initialized(1) }} else {{ old }}
+}}
+fn check(flag: bool) {{
+    let old = initialized(0)
+    let chosen = select(flag, old)
+    if flag {{ consume(*chosen) }}
+    consume(*old)
+}}
+"#
+        );
+        with_borrow_summary(&source, "select", |db, summary| {
+            let values = ValueInterner::new(db, ValueLimits::default());
+            let leaves = values.leaves(&summary.result, ValueOccurrence::Summary);
+            let input = ChoiceKey::new(ValueOccurrence::Argument(0), StructuralPath::default());
+            let mut old_seen = false;
+            let mut fresh_seen = false;
+            for leaf in &leaves {
+                if leaf.payload.source.param() == Some(1) {
+                    old_seen = true;
+                    assert!(
+                        leaf.guard.with_boolean(input.clone(), true).is_none(),
+                        "{name}: old result remains possible when input is true: {leaf:#?}"
+                    );
+                } else if leaf.payload.source.is_fresh_allocation() {
+                    fresh_seen = true;
+                    assert!(
+                        leaf.guard.with_boolean(input.clone(), false).is_none(),
+                        "{name}: fresh result remains possible when input is false: {leaf:#?}"
+                    );
+                }
+            }
+            assert!(
+                old_seen && fresh_seen,
+                "{name}: incomplete summary: {leaves:#?}"
+            );
+        });
+        let diagnostics = checked_borrow_diags(&source);
+        if !diagnostics.is_empty() {
+            failures.push(format!("{name}: {diagnostics}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
-fn recursive_fresh_allocation_returns_fail_closed_on_nonconvergence() {
-    // Existing summary choices can grow through recursive allocation returns.
-    // Keep the bounded diagnostic instead of accepting an opaque fallback.
-    let source = allocation_birth_loop_source("let p = recursive(i, depth: 2)")
-        + r#"
-fn recursive(_ n: u256, depth: u256) -> *Item {
-    if depth == 0 { initialized(n) } else { recursive(n, depth: depth - 1) }
+fn mutual_recursive_fresh_return_is_query_order_independent() {
+    let source = r#"
+struct Item { n: u256 }
+fn consume(_ value: own Item) {}
+fn initialized() -> *Item {
+    let p = core::ptr::alloc<Item>()
+    *p = Item { n: 1 }
+    p
+}
+fn first(depth: u256) -> *Item {
+    if depth == 0 { initialized() }
+    else { second(depth: depth - 1) }
+}
+fn second(depth: u256) -> *Item {
+    if depth == 0 { initialized() }
+    else { first(depth: depth - 1) }
+}
+fn check() { consume(*first(depth: 2)) }
+"#;
+    for first in ["first", "second", "initialized", "check"] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("recursive_query_order.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        semantic_borrow_summary(&db, func_instance(&db, module, first)).unwrap();
+        let diagnostics = format_diagnostics(
+            &db,
+            &collect_semantic_borrow_diagnostic_vouchers(&db, module),
+        );
+        assert!(diagnostics.is_empty(), "{first}: {diagnostics}");
+    }
+}
+#[test]
+fn nonreturning_recursive_fresh_summary_has_no_birth() {
+    let source = r#"
+struct Item { n: u256 }
+fn never() -> *Item {
+    let p = core::ptr::alloc<Item>()
+    *p = Item { n: 1 }
+    never()
 }
 "#;
-    let diagnostics = checked_borrow_diags(&source);
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("nonreturning_recursive_fresh.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let summary = semantic_borrow_summary(&db, func_instance(&db, module, "never"))
+        .unwrap()
+        .unwrap();
+    assert!(!summary.may_return);
+    // A nonreturning cycle can allocate, but it exports no normal-return
+    // result, poststate, or reinitialization that a caller could treat as
+    // a birth.
+    let values = ValueInterner::new(&db, ValueLimits::default());
     assert!(
-        diagnostics.contains("recursive boundary requirements did not converge"),
-        "{diagnostics}"
+        values
+            .leaves(&summary.result, ValueOccurrence::Summary)
+            .is_empty()
     );
-    assert!(diagnostics.contains("transport violation"), "{diagnostics}");
-    assert!(!diagnostics.contains("internal"), "{diagnostics}");
+    assert!(summary.mutable_inputs.is_empty());
+    assert!(summary.availability.reinitialized.is_empty());
+}
+
+#[test]
+fn recursive_fresh_return_with_pending_base_remains_pending() {
+    let source = r#"
+struct Item { n: u256 }
+extern { fn unresolved() -> *Item }
+fn recursive(depth: u256) -> *Item {
+    if depth == 0 { unresolved() }
+    else { recursive(depth: depth - 1) }
+}
+"#;
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("pending_recursive_fresh.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let instance = func_instance(&db, module, "recursive");
+    assert!(matches!(
+        semantic_borrow_summary(&db, instance),
+        Err(SemanticAnalysisError::Pending(_))
+    ));
+    assert!(matches!(
+        check_semantic_borrows(&db, instance),
+        Err(SemanticAnalysisError::Pending(_))
+    ));
+}
+
+#[test]
+fn recursive_fresh_return_with_blocked_base_remains_blocked() {
+    let source = r#"
+struct Item { n: u256 }
+fn invalid() -> *Item {
+    missing = 1
+    core::ptr::alloc<Item>()
+}
+fn recursive(depth: u256) -> *Item {
+    if depth == 0 { invalid() }
+    else { recursive(depth: depth - 1) }
+}
+"#;
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("blocked_recursive_fresh.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    let instance = func_instance(&db, module, "recursive");
+    let summary = semantic_borrow_summary(&db, instance);
+    assert!(
+        matches!(summary, Err(SemanticAnalysisError::Blocked(_))),
+        "{summary:?}"
+    );
+    assert!(matches!(
+        check_semantic_borrows(&db, instance),
+        Err(SemanticAnalysisError::Blocked(_))
+    ));
 }
 
 #[test]
@@ -2689,9 +2857,9 @@ fn add(by: u256) -> u256 uses (value: mut u256) {
 pub contract Mixed {
     mut ledger: Ledger
 
-    init() uses (mut ledger) {
+    init(cond: bool) uses (mut ledger) {
         let mut local: u256 = 0
-        let target = ledger.pick_mixed(cond: true, value: mut local)
+        let target = ledger.pick_mixed(cond, value: mut local)
         with (target) {
             add(by: 1)
         }
@@ -2962,7 +3130,7 @@ fn replace_and_return(slot: **u256, value: *u256) -> *u256 {
     );
     assert_eq!(summary.mutable_inputs[0].value, summary.result);
     for kind in [MemoryAccessKind::Read, MemoryAccessKind::Write] {
-        assert!(summary.accesses.iter().any(|access| access.kind == kind && access.region.clauses().iter().any(|clause| matches!(&clause.payload.root, fe_hir::analysis::semantic::capability::region::RegionRoot::External(source) if source.param() == Some(0)))));
+        assert!(summary.accesses.iter().any(|access| access.kind == kind && access.region.clauses().iter().any(|clause| matches!(&clause.payload.root, RegionRoot::External(source) if source.param() == Some(0)))));
     }
 }
 
@@ -2992,7 +3160,7 @@ fn raw_mem_read(p: *u256) -> u256 uses (mem: RawMem) {
         let summary = semantic_borrow_summary(&db, instance)
             .expect("summary")
             .expect("access summary");
-        let access = summary.accesses.iter().find(|access| access.kind == MemoryAccessKind::Read && access.region.clauses().iter().any(|clause| matches!(&clause.payload.root, fe_hir::analysis::semantic::capability::region::RegionRoot::External(source) if source.param() == Some(0)))).expect("pointee access");
+        let access = summary.accesses.iter().find(|access| access.kind == MemoryAccessKind::Read && access.region.clauses().iter().any(|clause| matches!(&clause.payload.root, RegionRoot::External(source) if source.param() == Some(0)))).expect("pointee access");
         assert_eq!(
             !access.authorizers.is_empty(),
             has_authority,
@@ -9841,12 +10009,176 @@ fn staged(_ cursor: mut u256, _ count: u256, _ initialize: bool) -> u256 {
     cursor += 1
     *ptr::cast<u8, u256>(child.ptr())
 }
+
 fn run(_ count: u256, _ initialize: bool) -> u256 {
     let mut cursor: u256 = 0
     staged(mut cursor, count, initialize)
 }
 "#,
     );
+}
+
+fn typed_heap_source(stored: &str, read: &str, caller: usize) -> String {
+    format!(
+        r#"
+use core::ptr
+fn staged(cursor: mut u256, index: usize) -> u256 {{
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let data = ptr::MemBuffer::alloc(32)
+    *ptr::cast<u8, u256>(data.ptr()) = 7
+    children[{stored}] = data.span()
+    let child = children[{read}]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}}
+pub fn run() -> u256 {{
+    let mut cursor: u256 = 0
+    staged(cursor: mut cursor, index: {caller})
+}}
+"#
+    )
+}
+
+#[test]
+fn typed_heap_discovery_is_query_order_independent() {
+    for (stored, caller) in [("0", 0), ("1", 1)] {
+        let source = typed_heap_source(stored, "index", caller);
+        for first in ["staged", "run"] {
+            let mut db = HirAnalysisTestDb::default();
+            let file = db.new_stand_alone("typed_heap_order.fe".into(), &source);
+            let (module, _) = db.top_mod(file);
+            db.assert_no_diags(module);
+            semantic_borrow_summary(&db, func_instance(&db, module, first))
+                .unwrap()
+                .expect("function summary");
+            let diagnostics = format_diagnostics(
+                &db,
+                &collect_semantic_borrow_diagnostic_vouchers(&db, module),
+            );
+            assert!(diagnostics.is_empty(), "{stored} {first}: {diagnostics}");
+            semantic_borrow_summary(
+                &db,
+                func_instance(&db, module, if first == "run" { "staged" } else { "run" }),
+            )
+            .unwrap()
+            .expect("other function summary");
+            let repeated = format_diagnostics(
+                &db,
+                &collect_semantic_borrow_diagnostic_vouchers(&db, module),
+            );
+            assert_eq!(repeated, diagnostics, "{stored} {first}");
+        }
+    }
+}
+
+#[test]
+fn typed_heap_generic_summary_keeps_unknown_complement() {
+    for stored in [0, 1] {
+        let source = format!(
+            r#"
+use core::ptr
+fn staged(cursor: mut u256, index: usize) -> u256 {{
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let data = ptr::MemBuffer::alloc(32)
+    *ptr::cast<u8, u256>(data.ptr()) = 7
+    children[{stored}] = data.span()
+    let child = children[index]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}}
+"#
+        );
+        with_borrow_summary(&source, "staged", |_, summary| {
+            let cursor_read = summary.accesses.iter().any(|access| {
+                access.kind == MemoryAccessKind::Read
+                    && access.authorizers.clauses().iter().any(|clause| {
+                        matches!(
+                            &clause.payload.root,
+                            RegionRoot::External(source)
+                                if source.param() == Some(0)
+                        )
+                    })
+            });
+            assert!(cursor_read, "cursor loan access missing: {summary:#?}");
+            let mut unknown_complement = false;
+            for clause in summary
+                .accesses
+                .iter()
+                .filter(|access| {
+                    access.kind == MemoryAccessKind::Read && access.authorizers.clauses().is_empty()
+                })
+                .flat_map(|access| access.region.clauses())
+            {
+                if let RegionRoot::External(source) = &clause.payload.root
+                    && matches!(source.origin, ExternalOrigin::Memory { .. })
+                {
+                    assert!(
+                        source.uncertain(),
+                        "unexpected exact external read: {clause:#?}"
+                    );
+                    assert!(
+                        clause
+                            .guard
+                            .with_equality(IndexExpr::FormalValue(1), IndexExpr::Const(stored))
+                            .is_none(),
+                        "unknown read survives at initialized index {stored}: {clause:#?}"
+                    );
+                    unknown_complement |= clause
+                        .guard
+                        .with_equality(IndexExpr::FormalValue(1), IndexExpr::Const(1 - stored))
+                        .is_some();
+                }
+            }
+            assert!(
+                unknown_complement,
+                "unwritten index lost its unknown read: {summary:#?}"
+            );
+        });
+    }
+}
+
+#[test]
+fn typed_heap_selected_span_summary_preserves_both_branches() {
+    // The first element's cell has no element selector, unlike the second.
+    for (written, unwritten) in [(1, 0), (0, 1)] {
+        let source = format!(
+            r#"
+use core::ptr
+fn select(index: usize) -> ptr::MemSpan {{
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let data = ptr::MemBuffer::alloc(32)
+    children[{written}] = data.span()
+    children[index]
+}}
+"#
+        );
+        with_borrow_summary(&source, "select", |db, summary| {
+            let values = ValueInterner::new(db, ValueLimits::default());
+            let leaves = values.leaves(&summary.result, ValueOccurrence::Summary);
+            let mut initialized = false;
+            let mut unknown = false;
+            for leaf in leaves {
+                let source = &leaf.payload.source;
+                let at = |index| {
+                    leaf.guard
+                        .with_equality(IndexExpr::FormalValue(0), IndexExpr::Const(index))
+                        .is_some()
+                };
+                if matches!(source.origin, ExternalOrigin::Allocation(_)) {
+                    assert!(!at(unwritten), "fresh span at unwritten index: {leaf:#?}");
+                    initialized |= at(written);
+                } else if source.uncertain() {
+                    assert!(
+                        !at(written),
+                        "unknown pointer at initialized index: {leaf:#?}"
+                    );
+                    unknown |= at(unwritten);
+                }
+            }
+            assert!(initialized, "initialized branch missing: {summary:#?}");
+            assert!(unknown, "unknown complement missing: {summary:#?}");
+        });
+    }
 }
 
 #[test]
@@ -9994,6 +10326,51 @@ fn run() -> i32 {
         verify_normalized_body(&db, &normalized),
         Err(NormalizedBodyVerifyError::ExpressionType),
     );
+}
+
+#[test]
+fn ordinary_memory_transport_does_not_persist_after_a_typed_replacement() {
+    let source = boundary_provider_source(
+        "Storage",
+        "u256",
+        r#"
+struct Wrapped { cursor: mut u256 }
+fn consume(_ cursor: mut u256) {}
+fn replace(_ wrapped: mut Wrapped) uses (value: mut u256) {
+    wrapped.cursor = mut value
+    consume(mut wrapped.cursor)
+}
+
+fn caller(_ wrapped: mut Wrapped) {
+    let ptr = Ptr { addr: 32 }
+    with (ptr) { replace(mut wrapped) }
+}
+"#,
+    );
+    let diagnostics = checked_trusted_borrow_diags(&source);
+    assert!(diagnostics.contains("transport violation"), "{diagnostics}");
+    assert!(
+        diagnostics.contains("from storage as function argument"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn ordinary_transport_stops_at_a_recursive_nominal_handle() {
+    let diagnostics = checked_trusted_borrow_diags(
+        r#"
+use core::{AddressSpace, EffectHandle}
+struct Ptr { addr: u256 }
+impl EffectHandle for Ptr {
+    type Target = Ptr
+    const SPACE: AddressSpace = AddressSpace::Storage
+    type Raw = u256
+    fn raw(self) -> u256 { self.addr }
+}
+fn keep(_ value: Ptr) {}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
 }
 
 #[test]

@@ -86,6 +86,13 @@ impl BinderScope {
         (nested, index)
     }
 
+    /// The lexical owner of clause-local existential binders.
+    pub fn without_existentials(&self) -> Self {
+        let mut owner = self.clone();
+        owner.counts[IndexNamespace::Existential as usize] = 0;
+        owner
+    }
+
     /// Give an independently quantified occurrence fresh existential binders.
     pub fn freshening<'db>(&self, destination: &Self) -> IndexSubst<'db> {
         let mut destination = destination.clone();
@@ -98,6 +105,32 @@ impl BinderScope {
             })
             .collect();
         IndexSubst::new(self, &destination, entries).expect("fresh binders are scoped")
+    }
+
+    /// Keep `owner`'s binders and give the binders local to this scope, such as
+    /// an array leaf's element binders, fresh existential witnesses. `owner`
+    /// must be a lexical ancestor; unrelated scopes are never matched by count.
+    pub fn quantifying<'db>(&self, owner: &Self) -> IndexSubst<'db> {
+        assert!(
+            self.counts
+                .iter()
+                .zip(owner.counts)
+                .all(|(count, owner)| owner <= *count),
+            "quantified scope must extend its owner"
+        );
+        let mut destination = owner.clone();
+        let entries: Vec<_> = self
+            .variables()
+            .map(|source| {
+                if owner.validate(source).is_ok() {
+                    return (source, source);
+                }
+                let (nested, target) = destination.bind(IndexNamespace::Existential);
+                destination = nested;
+                (source, target)
+            })
+            .collect();
+        IndexSubst::new(self, &destination, entries).expect("quantified binders are scoped")
     }
 
     /// Extra existential variables are owned by a clause, not by its surrounding
@@ -117,14 +150,20 @@ impl BinderScope {
             .flatten()
     }
 
-    pub fn canonical_existentials<'db>(
+    pub fn canonical_existentials<'db, I: IntoIterator<Item = IndexExpr<'db>>>(
         &self,
         parent: &Self,
-        used: impl IntoIterator<Item = IndexExpr<'db>>,
+        used: impl FnOnce() -> I,
     ) -> IndexSubst<'db> {
-        self.existential_extension_of(parent)
+        let existentials = self
+            .existential_extension_of(parent)
             .expect("clause scope must extend its owner");
-        let used: BTreeSet<_> = used.into_iter().collect();
+        // Only clause-local binders are renamed, so only they need their uses.
+        let used: BTreeSet<_> = if existentials == 0 {
+            BTreeSet::new()
+        } else {
+            used().into_iter().collect()
+        };
         let mut destination = parent.clone();
         let entries = self
             .variables()
@@ -188,7 +227,7 @@ impl BinderScope {
 }
 
 /// A simultaneous, scope-checked substitution. Applying it never follows chains.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct IndexSubst<'db> {
     source: BinderScope,
     destination: BinderScope,
@@ -229,6 +268,10 @@ impl<'db> IndexSubst<'db> {
         Ok(substitution)
     }
 
+    pub fn is_identity(&self) -> bool {
+        self.source == self.destination && self.entries.is_empty()
+    }
+
     pub fn apply(&self, index: IndexExpr<'db>) -> IndexExpr<'db> {
         self.entries.get(&index).copied().unwrap_or(index)
     }
@@ -238,6 +281,10 @@ impl<'db> IndexSubst<'db> {
     }
     pub fn destination(&self) -> &BinderScope {
         &self.destination
+    }
+
+    pub fn preserves_indices(&self) -> bool {
+        self.entries.is_empty()
     }
 
     pub fn then(&self, next: &Self) -> Result<Self, IndexError<'db>> {

@@ -1104,7 +1104,15 @@ fn value_has_mutable_view_origin<'db>(
     source.is_some_and(|source| value_has_mutable_view_origin(db, body, source, visiting))
 }
 
-fn verify_value_dominance(body: &NormalizedBody<'_>) -> Result<(), NormalizedBodyVerifyError> {
+pub(crate) struct NormalizedCfg {
+    pub predecessors: Vec<Vec<NBlockId>>,
+    pub reachable: Vec<bool>,
+    pub dominators: Vec<FxHashSet<NBlockId>>,
+}
+
+pub(crate) fn normalized_cfg(
+    body: &NormalizedBody<'_>,
+) -> Result<NormalizedCfg, NormalizedBodyVerifyError> {
     let mut predecessors = vec![Vec::new(); body.blocks.len()];
     for (block_index, block) in body.blocks.iter().enumerate() {
         for successor in terminator_successors(&block.terminator.kind) {
@@ -1170,7 +1178,15 @@ fn verify_value_dominance(body: &NormalizedBody<'_>) -> Result<(), NormalizedBod
             break;
         }
     }
+    Ok(NormalizedCfg {
+        predecessors,
+        reachable,
+        dominators,
+    })
+}
 
+fn verify_value_dominance(body: &NormalizedBody<'_>) -> Result<(), NormalizedBodyVerifyError> {
+    let dominators = normalized_cfg(body)?.dominators;
     for (block_index, block) in body.blocks.iter().enumerate() {
         let block_id = NBlockId::new(block_index);
         for (statement_index, statement) in block.statements.iter().enumerate() {

@@ -936,6 +936,16 @@ impl<'db> SemanticInstance<'db> {
 }
 
 impl<'db> SemanticInstance<'db> {
+    pub(crate) fn provisional_callees(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<SemanticCalleeRef<'db>> {
+        collect_callees(
+            provisional_call_sites(db, self),
+            provisional_for_loop_call_sites(db, self),
+        )
+    }
+
     fn ensure_body_admitted(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1429,16 +1439,23 @@ fn collect_semantic_callees<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Vec<SemanticCalleeRef<'db>> {
+    collect_callees(instance.call_sites(db), instance.for_loop_call_sites(db))
+}
+
+fn collect_callees<'db>(
+    call_sites: &[Option<CallSiteLowering<'db>>],
+    for_loop_call_sites: &[Option<ForLoopCallSites<'db>>],
+) -> Vec<SemanticCalleeRef<'db>> {
     let mut seen = FxHashSet::default();
     let mut callees = Vec::new();
-    for site in instance.call_sites(db).iter().flatten() {
+    for site in call_sites.iter().flatten() {
         if let Some(callee) = site.callee
             && seen.insert(callee.key)
         {
             callees.push(callee);
         }
     }
-    for sites in instance.for_loop_call_sites(db).iter().flatten() {
+    for sites in for_loop_call_sites.iter().flatten() {
         if let Some(callee) = sites.len.callee
             && seen.insert(callee.key)
         {

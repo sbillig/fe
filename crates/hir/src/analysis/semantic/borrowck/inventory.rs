@@ -1,7 +1,10 @@
 //! Immutable structural input and borrow-occurrence inventory.
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use super::control::LoopRegions;
+use super::{
+    control::LoopRegions,
+    transport::{InputTransportContract, referent_contract},
+};
 
 use cranelift_entity::EntityRef;
 
@@ -14,16 +17,16 @@ use crate::{
                 external::{ExternalOrigin, ExternalSource, ReferentContract},
                 guard::Guard,
                 handle::{
-                    AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
-                    OpaqueWriteSite, SeedOrigin,
+                    AddressOccurrence, HandleAddressSpace, OpaqueHandleRef, OpaqueWriteSite,
+                    SeedOrigin,
                 },
                 index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
                 loan::{CapabilityRef, LoanDef, LoanId, LoanRef},
                 opaque::OpaqueWrite,
                 path::{RegionPath, StructuralPath},
                 region::{ProviderRegionId, RegionRoot, RegionSet},
-                semantics::{CapabilityClass, CapabilitySemantics},
-                shape::{ShapeError, ShapeId, capability_shape},
+                semantics::CapabilityClass,
+                shape::{ShapeError, ShapeId},
                 source::InputSource,
                 state::{BorrowState, CapabilityValue, CapabilityValues},
                 value::{Guarded, ValueLimits},
@@ -44,7 +47,7 @@ use crate::{
     hir_def::FuncParamMode,
 };
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct InputTarget<'db> {
     pub source: ExternalSource<'db>,
     pub scope: BinderScope,
@@ -55,11 +58,14 @@ pub(super) struct InputTarget<'db> {
 }
 
 pub(super) struct Inventory<'db> {
+    pub transport: InputTransportContract<'db>,
     pub loops: LoopRegions,
     pub values: CapabilityValues<'db>,
     pub shapes: Vec<ShapeId<'db>>,
     pub roots: Vec<RegionRoot<'db>>,
     pub loans: Vec<LoanDef<'db>>,
+    /// Entry loans and immutable normalized loan templates, without solver-derived facts.
+    pub(super) loan_seeds: Vec<LoanDef<'db>>,
     /// Native input loans carry a separation precondition. Calls discharge it
     /// against the exported accesses using the caller's concrete provenance.
     pub input_loans: BTreeSet<LoanId>,
@@ -106,6 +112,7 @@ impl CellSeed {
 struct InputBuilder<'db> {
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
+    transport: InputTransportContract<'db>,
     values: CapabilityValues<'db>,
     loans: Vec<LoanDef<'db>>,
     input_loans: BTreeMap<(ExternalSource<'db>, bool), LoanId>,
@@ -124,6 +131,7 @@ impl<'db> Inventory<'db> {
         let mut inputs = InputBuilder {
             db,
             instance,
+            transport: InputTransportContract::new(body),
             values: CapabilityValues::new(db, ValueLimits::default()),
             loans: Vec::new(),
             input_loans: BTreeMap::new(),
@@ -296,10 +304,12 @@ impl<'db> Inventory<'db> {
             inputs.storage,
         );
         let mut result = Self {
+            transport: inputs.transport,
             loops,
             values: inputs.values,
             shapes,
             roots,
+            loan_seeds: inputs.loans.clone(),
             loans: inputs.loans,
             input_loans: inputs
                 .input_loans
@@ -326,15 +336,16 @@ impl<'db> Inventory<'db> {
         db: &'db dyn HirAnalysisDb,
         instance: SemanticInstance<'db>,
         sources: impl IntoIterator<Item = (ExternalSource<'db>, BinderScope)>,
-    ) -> Result<(), ShapeError<'db>> {
+    ) -> Result<bool, ShapeError<'db>> {
         let mut builder = InputBuilder {
             db,
             instance,
+            transport: self.transport.clone(),
             values: std::mem::replace(
                 &mut self.values,
                 CapabilityValues::new(db, ValueLimits::default()),
             ),
-            loans: std::mem::take(&mut self.loans),
+            loans: self.loan_seeds.clone(),
             input_loans: std::mem::take(&mut self.external_loans),
             targets: std::mem::take(&mut self.inputs)
                 .into_iter()
@@ -347,6 +358,8 @@ impl<'db> Inventory<'db> {
                 .collect(),
             pending: Vec::new(),
         };
+        let previous_targets = builder.targets.clone();
+        let previous_storage_count = builder.storage.len();
         for (source, scope) in sources {
             builder.register(source, scope, CapabilityClass::Handle, true, &[])?;
         }
@@ -427,6 +440,8 @@ impl<'db> Inventory<'db> {
             }
         }
         builder.finish_storage()?;
+        let changed =
+            builder.targets != previous_targets || builder.storage.len() != previous_storage_count;
         let holders: Vec<_> = self
             .entry
             .holders()
@@ -444,8 +459,14 @@ impl<'db> Inventory<'db> {
             self.entry.set_value(id, value);
         }
         self.values = builder.values;
+        self.loan_seeds = builder.loans.clone();
         self.loans = builder.loans;
         self.inputs = builder.targets.into_values().collect();
+        self.input_loans = builder
+            .input_loans
+            .iter()
+            .filter_map(|((source, _), loan)| source.is_incoming().then_some(*loan))
+            .collect();
         self.external_loans = builder.input_loans;
         self.allocation_cells.clear();
         for (root, value) in self.entry.storage() {
@@ -459,21 +480,18 @@ impl<'db> Inventory<'db> {
                     .push(root.clone());
             }
         }
-        Ok(())
+        Ok(changed)
+    }
+
+    /// Rebuild loan facts after an inventory epoch without changing loan IDs.
+    pub fn reset_epoch_loans(&mut self) {
+        self.loans.clone_from(&self.loan_seeds);
     }
 }
 
 impl<'db> InputBuilder<'db> {
     fn shape(&self, ty: TyId<'db>) -> Result<ShapeId<'db>, ShapeError<'db>> {
-        capability_shape(
-            self.db,
-            self.instance
-                .key(self.db)
-                .impl_env(self.db)
-                .normalization_scope(self.db),
-            self.instance.assumptions(self.db),
-            ty,
-        )
+        self.transport.shape(self.db, ty)
     }
 
     fn register(
@@ -489,6 +507,7 @@ impl<'db> InputBuilder<'db> {
             target.writable |= writable;
             if !target.classes.contains(&class) {
                 target.classes.push(class);
+                target.classes.sort();
             }
         } else {
             let shape = self.shape(source.contract.ty)?;
@@ -581,10 +600,18 @@ impl<'db> InputBuilder<'db> {
         let mut failure = None;
         let db = self.db;
         let instance = self.instance;
+        let cursor = match &origin {
+            InputOrigin::Parameter(param) => Some(self.transport.parameter(db, *param)),
+            InputOrigin::Referent(source) => self
+                .transport
+                .route(db, source)?
+                .and_then(|route| route.cursor),
+        };
+        let transport = &self.transport;
         let value = self
             .values
             .from_shape(shape, scope, |semantics, path, scope| {
-                let contract = match referent_contract(db, instance, semantics) {
+                let contract = match transport.referent(db, semantics, cursor) {
                     Ok(contract) => contract,
                     Err(error) => {
                         failure = Some(error);
@@ -685,32 +712,6 @@ impl<'db> InputBuilder<'db> {
         }
         Ok(value)
     }
-}
-
-pub(super) fn referent_contract<'db>(
-    db: &'db dyn HirAnalysisDb,
-    instance: SemanticInstance<'db>,
-    semantics: CapabilitySemantics<'db>,
-) -> Result<ReferentContract<'db>, ShapeError<'db>> {
-    let space = if matches!(
-        semantics.class,
-        CapabilityClass::Handle | CapabilityClass::Pointer
-    ) {
-        OpaqueHandleContract::for_ty(
-            db,
-            instance.key(db).impl_env(db).normalization_scope(db),
-            instance.assumptions(db),
-            semantics.representation_ty,
-        )
-        .map_err(|error| ShapeError::UnresolvedCapability(error.0))?
-        .ok_or(ShapeError::UnresolvedCapability(
-            semantics.representation_ty,
-        ))?
-        .address_space
-    } else {
-        HandleAddressSpace::Unspecified
-    };
-    Ok(ReferentContract::new(db, semantics.target_ty, space))
 }
 
 fn canonical_source<'db>(
@@ -817,8 +818,8 @@ mod tests {
     use crate::{
         analysis::{
             semantic::{
-                capability::guard::ValueOccurrence, get_or_build_semantic_instance,
-                identity_semantic_instance_key,
+                capability::{guard::ValueOccurrence, handle::OpaqueHandleContract},
+                get_or_build_semantic_instance, identity_semantic_instance_key,
             },
             ty::ProviderAddressSpace,
         },
@@ -867,5 +868,66 @@ mod tests {
                 "fresh bytes must not manufacture native input loans: {leaves:#?}"
             );
         }
+    }
+
+    #[test]
+    fn storage_discovery_retracts_epoch_loan_facts_and_stabilizes_registration() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("loan_epoch.fe".into(), "fn anchor(value: mut u256) {}");
+        let (module, _) = db.top_mod(file);
+        let owner = BodyOwner::Func(find_func(&db, module, "anchor"));
+        let instance =
+            get_or_build_semantic_instance(&db, identity_semantic_instance_key(&db, owner));
+        let mut inventory = Inventory::new(&db, &signature_body(&db, instance)).unwrap();
+        assert!(
+            !inventory.loans.is_empty(),
+            "mutable input must have a loan seed"
+        );
+        let scope = BinderScope::default();
+        let reference = LoanRef {
+            id: LoanId(0),
+            args: inventory.loans[0]
+                .parameters()
+                .variables()
+                .map(|_| IndexExpr::Const(0))
+                .collect(),
+        };
+        let seed = inventory.loans[0].region(&db, &reference, &scope);
+        let ty = TyId::u256(&db);
+        let source = ExternalSource::allocation(
+            &db,
+            OpaqueHandleRef {
+                contract: OpaqueHandleContract {
+                    handle_ty: TyId::ptr_to(&db, ty),
+                    target_ty: ty,
+                    address_space: HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+                },
+                occurrence: AddressOccurrence::Summary(0),
+                arguments: Box::new([]),
+            },
+        );
+        let derived = RegionSet::singleton(
+            inventory.loans[0].parameters(),
+            RegionRoot::External(source.clone()),
+            RegionPath::default(),
+        );
+        assert!(inventory.loans[0].extend(&derived, []));
+        assert_ne!(inventory.loans[0].region(&db, &reference, &scope), seed);
+        inventory.reset_epoch_loans();
+        assert_eq!(inventory.loans[0].region(&db, &reference, &scope), seed);
+        let count = inventory.loans.len();
+        assert!(
+            inventory
+                .add_external_sources(&db, instance, [(source.clone(), scope.clone())])
+                .unwrap()
+        );
+        assert_eq!(inventory.loans.len(), count);
+        assert_eq!(inventory.loans[0].region(&db, &reference, &scope), seed);
+        assert!(
+            !inventory
+                .add_external_sources(&db, instance, [(source, scope)])
+                .unwrap()
+        );
+        assert_eq!(inventory.loans.len(), count);
     }
 }

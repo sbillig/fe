@@ -16,7 +16,7 @@ use crate::{
                 region::SymbolicPlace,
                 semantics::{CapabilityClass, CapabilitySemantics, StorageClass, TransportClass},
                 shape::{ArrayLength, CapabilityShape, ShapeChildren, capability_shape},
-                source::InputSource,
+                source::{InputSource, SourceExpr},
                 value::{Guarded, ValueLimits},
             },
             normalized::NRootId,
@@ -30,6 +30,7 @@ use crate::{
     test_db::HirAnalysisTestDb,
 };
 use common::file::File;
+use std::collections::BTreeSet;
 
 fn database() -> (HirAnalysisTestDb, File) {
     let mut db = HirAnalysisTestDb::default();
@@ -117,7 +118,16 @@ fn handle<'db>(
     shape: ShapeId<'db>,
     id: usize,
 ) -> CapabilityValue<'db> {
-    values.from_shape(shape, &BinderScope::default(), |_, _, scope| {
+    handle_in(values, shape, &BinderScope::default(), id)
+}
+
+fn handle_in<'db>(
+    values: &mut CapabilityValues<'db>,
+    shape: ShapeId<'db>,
+    scope: &BinderScope,
+    id: usize,
+) -> CapabilityValue<'db> {
+    values.from_shape(shape, scope, |_, _, scope| {
         vec![Guarded {
             guard: Guard::always(scope),
             payload: CapabilityRef::borrow(
@@ -158,6 +168,435 @@ fn read<'db>(
             ValueOccurrence::Value(NValueId::from_u32(99)),
         )
         .unwrap()
+}
+
+/// A `ty` cell at `stride * index` in the first input's byte referent.
+fn input_cell<'db>(
+    db: &'db HirAnalysisTestDb,
+    ty: TyId<'db>,
+    stride: TyId<'db>,
+    index: IndexExpr<'db>,
+) -> RegionRoot<'db> {
+    let base = ExternalSource::input(
+        InputSource::slot(0, Default::default()),
+        ReferentContract::memory(db, TyId::u8(db)),
+        false,
+    );
+    RegionRoot::External(ExternalSource::memory(
+        db,
+        SourceExpr::whole(base),
+        ty,
+        Some((stride, index)),
+    ))
+}
+
+#[test]
+fn typed_storage_coverage_requires_the_union_to_cover_the_demand() {
+    let db = HirAnalysisTestDb::default();
+    let shapes = Shapes::new(&db);
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let scope = BinderScope::default();
+    let ty = TyId::u256(&db);
+    let cell = |index| input_cell(&db, ty, ty, index);
+    let index = IndexExpr::Runtime(NValueId::from_u32(1));
+    let demand = cell(index);
+    let zero = cell(IndexExpr::Const(0));
+    let one = cell(IndexExpr::Const(1));
+    let empty = values.empty(shapes.handle, &scope);
+    let first = BorrowState::new(&mut values, [], [(one.clone(), empty.clone())]);
+    let one_guard = Guard::always(&scope)
+        .with_equality(index, IndexExpr::Const(1))
+        .unwrap();
+    assert!(
+        !first
+            .storage_coverage(&demand, &scope)
+            .complete(&Guard::always(&scope))
+    );
+    assert!(first.storage_coverage(&demand, &scope).complete(&one_guard));
+    let both = BorrowState::new(&mut values, [], [(zero, empty.clone()), (one, empty)]);
+    let zero_guard = Guard::always(&scope)
+        .with_equality(index, IndexExpr::Const(0))
+        .unwrap();
+    let coverage = both.storage_coverage(&demand, &scope);
+    assert!(coverage.complete(&zero_guard.or(&one_guard)));
+    assert!(!coverage.complete(&Guard::always(&scope)));
+    assert!(
+        coverage
+            .uncovered(&Guard::always(&scope))
+            .unwrap()
+            .with_equality(index, IndexExpr::Const(2))
+            .is_some()
+    );
+}
+
+#[test]
+fn conditional_typed_match_retains_residual_byte_overlap() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let shapes = Shapes::new(&db);
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let scope = BinderScope::default();
+    let (family_scope, member) = scope.bind(IndexNamespace::InputSlot);
+    let ty = TyId::borrow_mut_of(&db, TyId::u256(&db));
+    // A one-byte stride lets neighboring members share bytes.
+    let cell = |index| input_cell(&db, ty, TyId::u8(&db), index);
+    let initial = handle_in(&mut values, shapes.handle, &family_scope, 0);
+    let mut state = BorrowState::new(&mut values, [], [(cell(member), initial)]);
+    let replacement = handle(&mut values, shapes.handle, 1);
+    state
+        .write_region(
+            overwrite,
+            &mut values,
+            &region(cell(IndexExpr::Const(0))),
+            &replacement,
+        )
+        .unwrap();
+    let at_zero = read(
+        &db,
+        &mut values,
+        &state,
+        &region(cell(IndexExpr::Const(0))),
+        shapes.handle,
+    );
+    assert_eq!(at_zero, replacement);
+    let at_one = read(
+        &db,
+        &mut values,
+        &state,
+        &region(cell(IndexExpr::Const(1))),
+        shapes.handle,
+    );
+    assert!(
+        at_one
+            .direct()
+            .iter()
+            .any(|entry| matches!(entry.payload, CapabilityRef::Invalidated { .. })),
+        "overlapping bytes outside exact typed identity must invalidate: {at_one:?}"
+    );
+}
+
+#[test]
+fn existential_uncertain_object_write_retains_residual_overlap() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let shapes = Shapes::new(&db);
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let scope = BinderScope::default();
+    let (family_scope, member) = scope.bind(IndexNamespace::InputSlot);
+    let contract = ReferentContract::memory(&db, TyId::borrow_mut_of(&db, TyId::u256(&db)));
+    let object = |index| {
+        RegionRoot::External(ExternalSource::unknown(
+            contract,
+            AddressOccurrence::Summary(0),
+            Box::new([index]),
+        ))
+    };
+    let initial = handle_in(&mut values, shapes.handle, &family_scope, 0);
+    let mut state = BorrowState::new(&mut values, [], [(object(member), initial)]);
+    // One unknown object is written, but a different one can share its bytes.
+    let (witness_scope, witness) = scope.bind(IndexNamespace::Existential);
+    let destination = RegionSet::new(
+        &scope,
+        [Guarded {
+            guard: Guard::always(&witness_scope),
+            payload: SymbolicPlace {
+                root: object(witness),
+                path: RegionPath::default(),
+                views: Default::default(),
+            },
+        }],
+    );
+    let replacement = handle(&mut values, shapes.handle, 1);
+    state
+        .write_region(overwrite, &mut values, &destination, &replacement)
+        .unwrap();
+    let loaded = read(
+        &db,
+        &mut values,
+        &state,
+        &region(object(IndexExpr::Const(1))),
+        shapes.handle,
+    );
+    assert!(
+        loaded
+            .direct()
+            .iter()
+            .any(|entry| matches!(entry.payload, CapabilityRef::Invalidated { .. })),
+        "another unknown object can overlap the member: {loaded:?}"
+    );
+    assert!(
+        loaded.direct().iter().any(|entry| entry
+            .payload
+            .loan()
+            .is_some_and(|loan| loan.id == LoanId(0))),
+        "an existential destination must not replace the member: {loaded:?}"
+    );
+}
+
+#[test]
+fn typed_family_updates_replace_only_the_selected_member() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let shapes = Shapes::new(&db);
+    let scope = BinderScope::default();
+    let (family_scope, member) = scope.bind(IndexNamespace::InputSlot);
+    let ty = TyId::borrow_mut_of(&db, TyId::u256(&db));
+    let cell = |index| input_cell(&db, ty, ty, index);
+    for stored in [0, 1, 2] {
+        let mut values = CapabilityValues::new(&db, ValueLimits::default());
+        let family_value = handle_in(&mut values, shapes.handle, &family_scope, 0);
+        let mut state = BorrowState::new(&mut values, [], [(cell(member), family_value)]);
+        let replacement = handle(&mut values, shapes.handle, 1);
+        state
+            .write_region(
+                overwrite,
+                &mut values,
+                &region(cell(IndexExpr::Const(stored))),
+                &replacement,
+            )
+            .unwrap();
+        for selected in [0, 1, 2] {
+            let loaded = read(
+                &db,
+                &mut values,
+                &state,
+                &region(cell(IndexExpr::Const(selected))),
+                shapes.handle,
+            );
+            if selected == stored {
+                assert_eq!(loaded, replacement, "stored={stored} selected={selected}");
+            } else {
+                assert!(
+                    loaded.direct().iter().any(|entry| entry
+                        .payload
+                        .loan()
+                        .is_some_and(|loan| loan.id == LoanId(0))),
+                    "store at {stored} removed possible old member {selected}: {loaded:?}"
+                );
+            }
+        }
+    }
+}
+
+fn allocation_cell<'db>(
+    db: &'db HirAnalysisTestDb,
+    instance: u32,
+    index: IndexExpr<'db>,
+) -> RegionRoot<'db> {
+    let ty = TyId::borrow_mut_of(db, TyId::u256(db));
+    let array = TyId::array_with_len(db, ty, 3);
+    let base = ExternalSource::allocation(
+        db,
+        OpaqueHandleRef {
+            contract: OpaqueHandleContract {
+                handle_ty: TyId::ptr_to(db, array),
+                target_ty: array,
+                address_space: HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+            },
+            occurrence: AddressOccurrence::Summary(instance),
+            arguments: Box::new([]),
+        },
+    );
+    RegionRoot::External(ExternalSource::memory(
+        db,
+        SourceExpr::whole(base),
+        ty,
+        Some((ty, index)),
+    ))
+}
+
+#[test]
+fn typed_storage_matches_a_bounded_concrete_cell_model() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let shapes = Shapes::new(&db);
+    let scope = BinderScope::default();
+    let (family_scope, member) = scope.bind(IndexNamespace::InputSlot);
+    let cell = |instance, index| allocation_cell(&db, instance, index);
+    let selector = IndexExpr::Runtime(NValueId::from_u32(20));
+    let branch = IndexExpr::Runtime(NValueId::from_u32(21));
+    let demand = cell(0, selector);
+    let mut values = CapabilityValues::new(
+        &db,
+        ValueLimits {
+            guarded_alternatives: 1,
+            ..ValueLimits::default()
+        },
+    );
+    let storage = (0..2)
+        .map(|instance| {
+            let seed = handle_in(&mut values, shapes.handle, &family_scope, instance as usize);
+            (cell(instance, member), seed)
+        })
+        .collect::<Vec<_>>();
+    let mut state = BorrowState::new(&mut values, [], storage);
+    assert!(
+        state
+            .storage_coverage(&demand, &scope)
+            .complete(&Guard::always(&scope))
+    );
+    let (renamed_scope, renamed_member) = scope.bind(IndexNamespace::Value);
+    let rename =
+        IndexSubst::new(&family_scope, &renamed_scope, [(member, renamed_member)]).unwrap();
+    let renamed = cell(0, member).substitute(&db, &rename);
+    assert_eq!(renamed, cell(0, renamed_member));
+
+    let renamed_seed = handle_in(&mut values, shapes.handle, &renamed_scope, 0);
+    let other_seed = handle_in(&mut values, shapes.handle, &family_scope, 1);
+    let mut renamed_state = BorrowState::new(
+        &mut values,
+        [],
+        [
+            (cell(0, renamed_member), renamed_seed),
+            (cell(1, member), other_seed),
+        ],
+    );
+
+    let exact = handle(&mut values, shapes.handle, 2);
+    let exact_region = region(cell(0, IndexExpr::Const(1)));
+    state
+        .write_region(overwrite, &mut values, &exact_region, &exact)
+        .unwrap();
+    renamed_state
+        .write_region(overwrite, &mut values, &exact_region, &exact)
+        .unwrap();
+    let conditional = RegionSet::new(
+        &scope,
+        [Guarded {
+            guard: Guard::always(&scope)
+                .with_equality(branch, IndexExpr::Const(1))
+                .unwrap(),
+            payload: SymbolicPlace {
+                root: cell(1, selector),
+                path: RegionPath::default(),
+                views: Default::default(),
+            },
+        }],
+    );
+    let dynamic = handle(&mut values, shapes.handle, 3);
+    state
+        .write_region(overwrite, &mut values, &conditional, &dynamic)
+        .unwrap();
+    renamed_state
+        .write_region(overwrite, &mut values, &conditional, &dynamic)
+        .unwrap();
+    for instance in 0..2 {
+        for index in 0..3 {
+            let loaded = read(
+                &db,
+                &mut values,
+                &state,
+                &region(cell(instance, IndexExpr::Const(index))),
+                shapes.handle,
+            );
+            let renamed_loaded = read(
+                &db,
+                &mut values,
+                &renamed_state,
+                &region(cell(instance, IndexExpr::Const(index))),
+                shapes.handle,
+            );
+            let widened = values.widen(&loaded);
+            for selected in 0..3 {
+                for enabled in 0..2 {
+                    let valuation = Guard::always(&scope)
+                        .with_equality(selector, IndexExpr::Const(selected))
+                        .unwrap()
+                        .with_equality(branch, IndexExpr::Const(enabled))
+                        .unwrap();
+                    let expected = if instance == 0 && index == 1 {
+                        2
+                    } else if instance == 1 && enabled == 1 && index == selected {
+                        3
+                    } else {
+                        instance as usize
+                    };
+                    let loans = |actual: &CapabilityValue<'_>| {
+                        actual
+                            .direct()
+                            .iter()
+                            .filter(|entry| {
+                                entry
+                                    .guard
+                                    .and(&valuation.in_scope(entry.guard.scope()))
+                                    .is_some()
+                            })
+                            .filter_map(|entry| entry.payload.loan().map(|loan| loan.id.0))
+                            .collect::<BTreeSet<_>>()
+                    };
+                    let observed = loans(&loaded);
+                    assert_eq!(observed, loans(&renamed_loaded));
+                    for actual in [observed, loans(&widened)] {
+                        assert!(
+                            actual.contains(&expected),
+                            "instance={instance} index={index} selector={selected} branch={enabled}: {actual:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(values.metrics().widened_nodes > 0);
+}
+
+#[test]
+fn widening_branch_local_native_initialization_keeps_invalid_possibilities() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let shapes = Shapes::new(&db);
+    let scope = BinderScope::default();
+    let cell = allocation_cell(&db, 0, IndexExpr::Const(0));
+    let branch = IndexExpr::Runtime(NValueId::from_u32(22));
+    let mut values = CapabilityValues::new(
+        &db,
+        ValueLimits {
+            guarded_alternatives: 1,
+            ..ValueLimits::default()
+        },
+    );
+    let invalid = values.from_shape(shapes.handle, &scope, |semantics, _, scope| {
+        vec![Guarded {
+            guard: Guard::always(scope),
+            payload: CapabilityRef::Invalidated {
+                class: semantics.class,
+                region: region(cell.clone()),
+            },
+        }]
+    });
+    let mut state = BorrowState::new(&mut values, [], [(cell.clone(), invalid)]);
+    let condition = Guard::always(&scope)
+        .with_equality(branch, IndexExpr::Const(1))
+        .unwrap();
+    let destination = RegionSet::new(
+        &scope,
+        [Guarded {
+            guard: condition,
+            payload: SymbolicPlace {
+                root: cell.clone(),
+                path: RegionPath::default(),
+                views: Default::default(),
+            },
+        }],
+    );
+    let valid = handle(&mut values, shapes.handle, 1);
+    state
+        .write_region(overwrite, &mut values, &destination, &valid)
+        .unwrap();
+    let loaded = read(&db, &mut values, &state, &region(cell), shapes.handle);
+    let widened = values.widen(&loaded);
+    for value in [&loaded, &widened] {
+        let no_write = Guard::always(&scope)
+            .with_equality(branch, IndexExpr::Const(0))
+            .unwrap();
+        assert!(value.direct().iter().any(|entry| {
+            matches!(entry.payload, CapabilityRef::Invalidated { .. })
+                && entry
+                    .guard
+                    .and(&no_write.in_scope(entry.guard.scope()))
+                    .is_some()
+        }));
+    }
+    assert!(values.metrics().widened_nodes > 0);
 }
 
 #[test]
@@ -914,6 +1353,41 @@ fn uncertain_member_write_preserves_old_handles_and_scopes_unknown_sources() {
             .collect();
         assert_eq!(ids, [LoanId(0), LoanId(1)]);
     }
+}
+
+#[test]
+fn exact_destination_overwrites_old_handle_with_existential_payload() {
+    let (db, file) = database();
+    let shapes = Shapes::new(&db);
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let old = handle(&mut values, shapes.handle, 0);
+    let cell = root(&db, 0);
+    let mut state = BorrowState::new(&mut values, [], [(cell.clone(), old)]);
+    let scope = BinderScope::default();
+    let (payload_scope, witness) = scope.bind(IndexNamespace::Existential);
+    let replacement = values.from_shape(shapes.handle, &scope, |_, _, _| {
+        vec![Guarded {
+            guard: Guard::always(&payload_scope),
+            payload: CapabilityRef::borrow(
+                BorrowKind::Mut,
+                LoanRef {
+                    id: LoanId(1),
+                    args: [witness].into(),
+                },
+            ),
+        }]
+    });
+    state
+        .write_region(
+            overwrite(&db, file),
+            &mut values,
+            &region(cell.clone()),
+            &replacement,
+        )
+        .unwrap();
+    let loaded = read(&db, &mut values, &state, &region(cell), shapes.handle);
+    assert_eq!(loaded.direct().len(), 1);
+    assert_eq!(loaded.direct()[0].payload.loan().unwrap().id, LoanId(1));
 }
 
 #[test]

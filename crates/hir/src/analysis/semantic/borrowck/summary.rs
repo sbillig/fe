@@ -1,9 +1,18 @@
 //! Structural return values and mutable-input poststates use the same algebra.
 use super::validity::NativeValidity;
 use crate::analysis::semantic::diagnostics::SemanticDiagnostic;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    static GUARD_INSTANTIATIONS: Cell<usize> = const { Cell::new(0) };
+}
 
 use cranelift_entity::EntityRef;
+use rustc_hash::FxHashMap;
 
 use crate::{
     analysis::{
@@ -14,7 +23,7 @@ use crate::{
                 birth::AllocationBirth,
                 external::{ClobberCondition, ExternalOrigin, ExternalSource, ReferentContract},
                 footprint::{AccessExtent, AccessFootprint},
-                guard::{Guard, ValueOccurrence},
+                guard::{ChoiceKey, Guard, ValueOccurrence},
                 handle::{
                     AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
                     OpaqueWriteSite,
@@ -22,7 +31,7 @@ use crate::{
                 index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
                 loan::{CapabilityRef, LoanDef, LoanId, LoanRef},
                 opaque::OpaqueWrite,
-                path::{Projection, RegionPath, StructuralPath, project_referent_ty},
+                path::{Projection, RegionPath, StructuralPath},
                 region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace, substitute_clause},
                 semantics::{CapabilityClass, CapabilitySemantics},
                 shape::{ShapeChildren, ShapeId},
@@ -30,14 +39,14 @@ use crate::{
                 state::{BorrowState, CapabilityValue, CapabilityValues},
                 value::{Guarded, IndexPayload, ValueId, ValueInterner, ValueLimits},
             },
+            definite_assignment::literal_bool_cond,
             get_or_build_semantic_instance, instantiated_effect_env,
             normalized::{
-                NEffectArg, NEffectArgValue, NExpr, NOperand, NRootKind, NStatement,
-                NStatementKind, NTerminatorKind, NValueDefinition, NValueId,
+                NEffectArg, NEffectArgValue, NExpr, NOperand, NStatement, NStatementKind,
+                NTerminatorKind, NValueDefinition, NValueId,
             },
         },
         ty::{
-            ProviderAddressSpace,
             corelib::{MemoryAccessKind, intrinsic_contract},
             provider::ProviderKind,
             ty_check::BodyOwner,
@@ -54,17 +63,99 @@ use super::{
         BorrowSummaryComputation, BorrowSummaryVoucher, provisional_borrow_summary_voucher,
         semantic_borrow_summary_voucher,
     },
-    inventory::referent_contract,
     ir::{
         AvailabilityRequirement, AvailabilitySummary, BorrowSummary, BoundaryRequirement,
-        InputPoststate, MemoryAccess, PendingSemanticValidation,
+        CertifiedRangePoststate, InputPoststate, MemoryAccess, PendingSemanticValidation,
+        ScalarInputPoststate,
     },
     solver::{BorrowSummaryMode, Borrowck, Resolution},
+    transport::{TransportRoute, referent_contract},
     validation::can_specialize,
 };
 
 pub type SourceValue<'db> = ValueId<'db, SourceExpr<'db>>;
 type SourceValues<'db> = ValueInterner<'db, SourceExpr<'db>>;
+
+impl<'db> BorrowSummary<'db> {
+    /// Number choices only after assembling all summary components. Assigning
+    /// numbers on first encounter separates related observations when poststates
+    /// and access requirements encounter them in different orders. Preserve the
+    /// local order through this injective renaming and subsequent call expansion.
+    fn abstract_choices(
+        mut self,
+        values: &mut SourceValues<'db>,
+        choices: BTreeSet<ValueOccurrence>,
+    ) -> Self {
+        let choices: BTreeMap<_, _> = choices
+            .into_iter()
+            .enumerate()
+            .map(|(index, occurrence)| {
+                (occurrence, index.try_into().expect("summary choice count"))
+            })
+            .collect();
+        let map = |guard: &Guard<'db>| {
+            guard.map_occurrences(|occurrence| match occurrence {
+                ValueOccurrence::Argument(_) | ValueOccurrence::Summary => occurrence,
+                _ => ValueOccurrence::SummaryChoice(choices[&occurrence]),
+            })
+        };
+        for value in std::iter::once(&mut self.result)
+            .chain(self.mutable_inputs.iter_mut().map(|input| &mut input.value))
+            .chain(
+                self.certified_ranges
+                    .iter_mut()
+                    .map(|range| &mut range.contents),
+            )
+        {
+            *value = values.map_guards(value, map);
+        }
+        for range in &mut self.certified_ranges {
+            range.coverage = map(&range.coverage).expect("injective summary choice renaming");
+        }
+        for region in self
+            .requirements
+            .iter_mut()
+            .flat_map(|requirement| {
+                std::iter::once(&mut requirement.region).chain(requirement.populated.iter_mut())
+            })
+            .chain(
+                self.accesses
+                    .iter_mut()
+                    .flat_map(|access| [&mut access.region, &mut access.authorizers]),
+            )
+            .chain(
+                self.availability
+                    .incoming
+                    .iter_mut()
+                    .map(|requirement| &mut requirement.region),
+            )
+            .chain([
+                &mut self.availability.reinitialized,
+                &mut self.availability.unavailable,
+                &mut self.native_requirements,
+            ])
+        {
+            *region = RegionSet::new(
+                region.scope(),
+                region.clauses().iter().map(|clause| Guarded {
+                    guard: map(&clause.guard).expect("injective summary choice renaming"),
+                    payload: clause.payload.clone(),
+                }),
+            );
+        }
+        self.accesses.sort();
+        self.availability.incoming.sort();
+        self
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SummaryValueRole {
+    Return,
+    Retained,
+    FreshInvalidPoststate,
+    MirroredResult,
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct CallInputs<'a, 'db> {
@@ -87,6 +178,105 @@ impl CallInputs<'_, '_> {
     }
 }
 
+/// How a summary component may refer to the single object a call returns.
+#[derive(Clone, Copy)]
+enum PortUse {
+    Result,
+    Copy,
+    Other,
+}
+
+fn contains_allocation_origin(source: &ExternalSource<'_>) -> bool {
+    source.clobber.as_ref().is_some_and(|clobber| {
+        contains_allocation_origin(&clobber.target.source)
+            || contains_allocation_origin(&clobber.written.source)
+    }) || match &source.origin {
+        ExternalOrigin::Allocation(_) => true,
+        ExternalOrigin::Memory { base, .. } => contains_allocation_origin(&base.source),
+        _ => false,
+    }
+}
+
+/// Resolutions share one immutable pre-call state and one argument mapping.
+/// Inventory discovery and loan growth invalidate source resolutions; a
+/// resolution computed while those facts change is never cached.
+/// Guard substitutions depend only on the fixed body and call mapping, so they
+/// remain reusable across inventory changes. Errors are never cached.
+pub(super) struct SourceInstantiations<'a, 'db> {
+    state: &'a BorrowState<'db>,
+    result: NValueId,
+    inputs: CallInputs<'a, 'db>,
+    generation: Option<usize>,
+    resolved: BTreeMap<BinderScope, FxHashMap<SourceExpr<'db>, Resolution<'db>>>,
+    guards: FxHashMap<Guard<'db>, Option<Guard<'db>>>,
+    #[cfg(test)]
+    evaluations: usize,
+}
+
+impl<'a, 'db> SourceInstantiations<'a, 'db> {
+    pub(super) fn new(
+        state: &'a BorrowState<'db>,
+        result: NValueId,
+        inputs: CallInputs<'a, 'db>,
+    ) -> Self {
+        Self {
+            state,
+            result,
+            inputs,
+            generation: None,
+            resolved: BTreeMap::new(),
+            guards: FxHashMap::default(),
+            #[cfg(test)]
+            evaluations: 0,
+        }
+    }
+
+    pub(super) fn guard(
+        &mut self,
+        checker: &Borrowck<'db>,
+        guard: &Guard<'db>,
+    ) -> Result<Option<Guard<'db>>, SemanticDiagnostic<'db>> {
+        if let Some(instantiated) = self.guards.get(guard) {
+            return Ok(instantiated.clone());
+        }
+        let instantiated = checker.instantiate_guard(guard, self.result, self.inputs)?;
+        self.guards.insert(guard.clone(), instantiated.clone());
+        Ok(instantiated)
+    }
+
+    pub(super) fn resolve(
+        &mut self,
+        checker: &mut Borrowck<'db>,
+        source: &SourceExpr<'db>,
+        scope: &BinderScope,
+    ) -> Result<Resolution<'db>, SemanticDiagnostic<'db>> {
+        let generation = checker.source_generation;
+        if self.generation != Some(generation) {
+            self.resolved.clear();
+            self.generation = Some(generation);
+        }
+        if let Some(resolved) = self
+            .resolved
+            .get(scope)
+            .and_then(|sources| sources.get(source))
+        {
+            return Ok(resolved.clone());
+        }
+        #[cfg(test)]
+        {
+            self.evaluations += 1;
+        }
+        let resolved = checker.instantiate_source_uncached(source, scope, self)?;
+        if checker.source_generation == generation {
+            self.resolved
+                .entry(scope.clone())
+                .or_default()
+                .insert(source.clone(), resolved.clone());
+        }
+        Ok(resolved)
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct CallSummary<'db> {
     pub instance: SemanticInstance<'db>,
@@ -94,6 +284,7 @@ pub(super) struct CallSummary<'db> {
     pub pending: bool,
     updates: Vec<CapabilityValue<'db>>,
     births: Vec<AllocationBirth<'db>>,
+    single_result_port: bool,
 }
 
 impl<'db> Borrowck<'db> {
@@ -102,14 +293,16 @@ impl<'db> Borrowck<'db> {
         mut source: ExternalSource<'db>,
         result: NValueId,
         origin: SemOrigin<'db>,
+        single_result_port: bool,
     ) -> Result<ExternalSource<'db>, SemanticDiagnostic<'db>> {
         let mut invalid = false;
+        let fresh = single_result_port && source.is_fresh_allocation();
         source.map_occurrences(&mut |occurrence, arguments| {
             let AddressOccurrence::Summary(choice) = *occurrence else {
                 invalid = true;
                 return;
             };
-            *arguments = arguments
+            *arguments = (if fresh { &[][..] } else { arguments.as_ref() })
                 .iter()
                 .copied()
                 .chain(
@@ -122,7 +315,7 @@ impl<'db> Borrowck<'db> {
             *occurrence = AddressOccurrence::Value {
                 instance: self.instance,
                 value: result,
-                choice,
+                choice: if fresh { 0 } else { choice },
             };
         });
         if invalid {
@@ -134,6 +327,7 @@ impl<'db> Borrowck<'db> {
     }
 
     pub fn prepare_calls(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
+        self.source_generation += 1;
         let calls: Vec<_> = self
             .body
             .blocks
@@ -194,7 +388,6 @@ impl<'db> Borrowck<'db> {
                         |semantics, _, scope| {
                             let payload = match semantics.class {
                                 CapabilityClass::Borrow(kind) => {
-                                    let id = LoanId(self.inventory.loans.len());
                                     let (loan, args, _) = LoanDef::with_occurrence_arguments(
                                         kind,
                                         BorrowActivation::Immediate,
@@ -202,6 +395,9 @@ impl<'db> Borrowck<'db> {
                                         scope,
                                         self.inventory.loops.arguments(&self.body, result),
                                     );
+                                    let id = LoanId(self.inventory.loans.len());
+                                    assert_eq!(self.inventory.loan_seeds.len(), id.0);
+                                    self.inventory.loan_seeds.push(loan.clone());
                                     self.inventory.loans.push(loan);
                                     CapabilityRef::borrow(kind, LoanRef { id, args })
                                 }
@@ -222,43 +418,70 @@ impl<'db> Borrowck<'db> {
                 .collect();
             let sources = SourceValues::new(self.db, ValueLimits::default());
             let mut external = Vec::new();
-            for value in std::iter::once(&summary.result)
-                .chain(summary.mutable_inputs.iter().map(|update| &update.value))
-            {
-                for leaf in sources.leaves(value, ValueOccurrence::Summary) {
-                    external.push((
-                        leaf.payload.source,
-                        leaf.guard.scope().clone(),
-                        Some(leaf.guard),
-                    ));
-                }
+            for leaf in sources.leaves(&summary.result, ValueOccurrence::Summary) {
+                let scope = leaf.guard.scope().clone();
+                external.push((
+                    leaf.payload.source,
+                    scope,
+                    Some(leaf.guard),
+                    PortUse::Result,
+                ));
             }
-            external.extend(summary.mutable_inputs.iter().map(|update| {
-                (
-                    update.destination.source.clone(),
-                    update.value.scope().clone(),
-                    None,
+            for update in &summary.mutable_inputs {
+                let leaves = sources.leaves(&update.value, ValueOccurrence::Summary);
+                let port = if update.value == summary.result
+                    || (update.destination.source.fresh_allocation().is_some()
+                        && leaves.iter().all(|leaf| leaf.payload.invalidated))
+                {
+                    PortUse::Copy
+                } else {
+                    PortUse::Other
+                };
+                for leaf in leaves {
+                    let scope = leaf.guard.scope().clone();
+                    external.push((leaf.payload.source, scope, Some(leaf.guard), port));
+                }
+                let destination = update.destination.source.clone();
+                external.push((destination, update.value.scope().clone(), None, port));
+            }
+            for range in &summary.certified_ranges {
+                for leaf in sources.leaves(&range.contents, ValueOccurrence::Summary) {
+                    let scope = leaf.guard.scope().clone();
+                    external.push((leaf.payload.source, scope, Some(leaf.guard), PortUse::Other));
+                }
+                external.push((
+                    range.destination.source.clone(),
+                    range.scope.clone(),
+                    Some(range.coverage.clone()),
+                    PortUse::Other,
+                ));
+            }
+            let regions = summary
+                .requirements
+                .iter()
+                .flat_map(|requirement| {
+                    std::iter::once(&requirement.region).chain(requirement.populated.iter())
+                })
+                .chain(
+                    summary
+                        .accesses
+                        .iter()
+                        .flat_map(|access| [&access.region, &access.authorizers]),
                 )
-            }));
-            external.extend(summary.requirements.iter().flat_map(|requirement| {
-                std::iter::once(&requirement.region)
-                    .chain(requirement.populated.iter())
-                    .flat_map(|region| region.clauses())
-                    .filter_map(|clause| {
-                        SourceExpr::from_place(&clause.payload).map(|source| {
-                            (
-                                source.source,
-                                clause.guard.scope().clone(),
-                                Some(clause.guard.clone()),
-                            )
-                        })
-                    })
-            }));
+                .chain(
+                    summary
+                        .availability
+                        .incoming
+                        .iter()
+                        .map(|requirement| &requirement.region),
+                )
+                .chain([
+                    &summary.availability.reinitialized,
+                    &summary.availability.unavailable,
+                    &summary.native_requirements,
+                ]);
             external.extend(
-                summary
-                    .accesses
-                    .iter()
-                    .flat_map(|access| [&access.region, &access.authorizers])
+                regions
                     .flat_map(|region| region.clauses())
                     .filter_map(|clause| {
                         SourceExpr::from_place(&clause.payload).map(|source| {
@@ -266,34 +489,34 @@ impl<'db> Borrowck<'db> {
                                 source.source,
                                 clause.guard.scope().clone(),
                                 Some(clause.guard.clone()),
+                                PortUse::Other,
                             )
                         })
                     }),
             );
-            external.extend(
-                summary
-                    .availability
-                    .incoming
-                    .iter()
-                    .map(|requirement| &requirement.region)
-                    .chain([
-                        &summary.availability.reinitialized,
-                        &summary.availability.unavailable,
-                        &summary.native_requirements,
-                    ])
-                    .flat_map(|region| region.clauses())
-                    .filter_map(|clause| {
-                        SourceExpr::from_place(&clause.payload).map(|source| {
-                            (
-                                source.source,
-                                clause.guard.scope().clone(),
-                                Some(clause.guard.clone()),
-                            )
+            // A direct capability result carries only one object in a call
+            // evaluation. Its fresh alternatives therefore share one finite
+            // call-result port when every other exported fresh object is that
+            // same object: a stored copy of the result or invalid contents of
+            // its fresh storage. Allocation arguments bound by a family or an
+            // existential can name several objects in one evaluation, so an
+            // equal abstract value does not identify a copy with the result.
+            // The Value occurrence and enclosing loop arguments still
+            // distinguish different calls.
+            let single_result_port = summary.result.shape().direct(self.db).is_some()
+                && summary.certified_ranges.is_empty()
+                && summary.native_requirements.is_empty()
+                && external.iter().all(|(source, _, _, port)| match port {
+                    PortUse::Result => true,
+                    PortUse::Copy => source.fresh_allocation().is_none_or(|handle| {
+                        handle.arguments.iter().all(|argument| {
+                            !matches!(argument, IndexExpr::Bound(_) | IndexExpr::Iteration(_))
                         })
                     }),
-            );
+                    PortUse::Other => !contains_allocation_origin(source),
+                });
             let mut births = Vec::new();
-            for (source, scope, guard) in external {
+            for (source, scope, guard, _) in external {
                 if let Some(guard) = guard
                     && let Some(birth) = AllocationBirth::from_source(&source, guard)
                     && !births.contains(&birth)
@@ -301,7 +524,7 @@ impl<'db> Borrowck<'db> {
                     births.push(birth);
                 }
                 let base = if let Some(base) = source.address_base(self.db) {
-                    self.instantiate_address_base(base, result, origin)?
+                    self.instantiate_address_base(base, result, origin, single_result_port)?
                 } else {
                     match source.origin {
                         ExternalOrigin::Provider {
@@ -335,6 +558,7 @@ impl<'db> Borrowck<'db> {
                     pending,
                     updates,
                     births,
+                    single_result_port,
                 },
             );
         }
@@ -376,7 +600,11 @@ impl<'db> Borrowck<'db> {
             });
         }
         self.solve()?;
-        let summary = if !self.pending.callees.is_empty() && can_specialize(self.db, self.instance)
+        let recursive_unresolved = !self.recursive_calls.is_empty()
+            && (self.blocked.is_some() || !self.pending.callees.is_empty());
+        let summary = if (!self.pending.callees.is_empty()
+            && can_specialize(self.db, self.instance))
+            || recursive_unresolved
         {
             if self.summary_mode == BorrowSummaryMode::Final && self.blocked.is_none() {
                 if let Some(diagnostic) = self.analyze_availability().diagnostic {
@@ -388,6 +616,11 @@ impl<'db> Borrowck<'db> {
                     .clone()?;
                 self.validate_pending_exports()?;
             }
+            // A recursive component with unresolved callees has no validated
+            // body contract to iterate. Keep its visible result opaque and
+            // its Pending or Blocked status until those callees are resolved.
+            // Independent final returning paths were checked above when the
+            // component was pending rather than blocked.
             signature_summary(self.db, self.instance, true)?
         } else {
             self.build_summary()?
@@ -403,7 +636,7 @@ impl<'db> Borrowck<'db> {
     /// complete boundary proof obligation, even in a pending template.
     fn validate_pending_exports(&self) -> Result<(), SemanticDiagnostic<'db>> {
         let mut values = SourceValues::new(self.db, ValueLimits::default());
-        let mut choices = BTreeMap::new();
+        let mut choices = BTreeSet::new();
         let mut handles = BTreeMap::new();
         for (index, block) in self.body.blocks.iter().enumerate() {
             let NTerminatorKind::Return(returned) = block.terminator.kind else {
@@ -427,15 +660,15 @@ impl<'db> Borrowck<'db> {
                         .storage()
                         .find(|(root, _)| **root == RegionRoot::External(input.source.clone()))
                 })
-                .map(|(_, value)| (value, Boundary::Retained));
-            for (value, boundary) in returned
+                .map(|(_, value)| (value, SummaryValueRole::Retained));
+            for (value, role) in returned
                 .into_iter()
-                .map(|returned| (state.value(returned.value), Boundary::Return))
+                .map(|returned| (state.value(returned.value), SummaryValueRole::Return))
                 .chain(retained)
             {
                 self.summarize_value(
                     value,
-                    boundary,
+                    role,
                     block.terminator.origin,
                     &mut values,
                     &mut choices,
@@ -503,7 +736,10 @@ impl<'db> Borrowck<'db> {
             }
         }
         let mut may_return = false;
-        let mut choices = BTreeMap::new();
+        let scalar_ty = self.instance.normalized_result_ty(self.db);
+        let scalar_scope = BinderScope::default().bind(IndexNamespace::Result);
+        let mut scalar_result = None;
+        let mut choices = BTreeSet::new();
         let mut handles = BTreeMap::new();
         for index in 0..self.body.blocks.len() {
             let block = &self.body.blocks[index];
@@ -515,6 +751,70 @@ impl<'db> Borrowck<'db> {
             };
             may_return = true;
             let origin = block.terminator.origin;
+            // Facts over formal arguments hold on every normal return; an
+            // integer result also relates to the value this path returns.
+            let actual = returned
+                .filter(|_| scalar_ty.is_integral(self.db))
+                .map(|returned| self.index(returned.value));
+            let uninformative = actual.is_some_and(|actual| {
+                matches!(actual, IndexExpr::Runtime(value)
+                    if !matches!(self.body.values[value.index()].definition,
+                        NValueDefinition::EntryParam { .. })
+                        && !state.guard().indices().contains(&actual))
+            });
+            let guard = if uninformative {
+                Guard::always(&scalar_scope.0)
+            } else {
+                let guard = state.guard().in_scope(&scalar_scope.0);
+                let guard = match actual {
+                    Some(actual) => guard
+                        .with_equality(scalar_scope.1, actual)
+                        .expect("a fresh result can equal a returned scalar"),
+                    None => guard,
+                };
+                let subst = IndexSubst::new(
+                    &scalar_scope.0,
+                    &scalar_scope.0,
+                    guard.indices().into_iter().filter_map(|index| {
+                        let IndexExpr::Runtime(value) = index else {
+                            return None;
+                        };
+                        let replacement = match self.body.values[value.index()].definition {
+                            NValueDefinition::EntryParam { param } => IndexExpr::FormalValue(param),
+                            _ if Some(index) == actual => scalar_scope.1,
+                            _ => return None,
+                        };
+                        Some((index, replacement))
+                    }),
+                )
+                .expect("scalar result substitution");
+                guard
+                    .substitute(&subst)
+                    .expect("renaming a feasible scalar return preserves feasibility")
+                    .map_occurrences(|occurrence| match occurrence {
+                        ValueOccurrence::Value(value)
+                            if let NValueDefinition::EntryParam { param } =
+                                self.body.values[value.index()].definition
+                                && self
+                                    .summary_param_ty(param)
+                                    .is_some_and(|ty| ty.is_bool(self.db)) =>
+                        {
+                            ValueOccurrence::Argument(param)
+                        }
+                        other => other,
+                    })
+                    .expect("scalar choice renaming preserves feasibility")
+                    .forget_occurrences(|occurrence| {
+                        !matches!(occurrence, ValueOccurrence::Argument(_))
+                    })
+                    .forget_indices(|index| {
+                        matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_))
+                    })
+            };
+            scalar_result = Some(
+                scalar_result
+                    .map_or_else(|| guard.clone(), |previous: Guard<'db>| previous.or(&guard)),
+            );
             if let Some(returned) = returned {
                 let returned = state.value(returned.value);
                 if returned.shape() != result_shape {
@@ -525,7 +825,7 @@ impl<'db> Borrowck<'db> {
                 }
                 let sources = self.summarize_value(
                     returned,
-                    Boundary::Return,
+                    SummaryValueRole::Return,
                     origin,
                     &mut values,
                     &mut choices,
@@ -540,9 +840,17 @@ impl<'db> Borrowck<'db> {
                     .find(|(root, _)| *root == &RegionRoot::External(source.clone()))
                     .expect("inventoried mutable input")
                     .1;
+                let role =
+                    if returned.is_some_and(|returned| contents == state.value(returned.value)) {
+                        SummaryValueRole::MirroredResult
+                    } else if source.fresh_allocation().is_some() {
+                        SummaryValueRole::FreshInvalidPoststate
+                    } else {
+                        SummaryValueRole::Retained
+                    };
                 let sources = self.summarize_value(
                     contents,
-                    Boundary::Retained,
+                    role,
                     origin,
                     &mut values,
                     &mut choices,
@@ -561,6 +869,40 @@ impl<'db> Borrowck<'db> {
                         AddressOccurrence::Summary(*handles.entry(*occurrence).or_insert(next));
                 });
         }
+        let return_states: Vec<_> = self
+            .body
+            .blocks
+            .iter()
+            .zip(&self.terminal)
+            .filter(|(block, _)| matches!(block.terminator.kind, NTerminatorKind::Return(_)))
+            .filter_map(|(_, state)| state.as_ref())
+            .collect();
+        let scalar_inputs = self
+            .inventory
+            .inputs
+            .iter()
+            .filter_map(|input| {
+                if !input.writable
+                    || !input.source.contract.ty.is_integral(self.db)
+                    || !matches!(&input.source.origin, ExternalOrigin::Input(_))
+                {
+                    return None;
+                }
+                let root = RegionRoot::External(input.source.clone());
+                let (first, rest) = return_states.split_first()?;
+                let value = first.scalar_constant(&root)?;
+                if !rest
+                    .iter()
+                    .all(|state| state.scalar_constant(&root) == Some(value))
+                {
+                    return None;
+                }
+                Some(ScalarInputPoststate {
+                    destination: SourceExpr::whole(input.source.clone()),
+                    value,
+                })
+            })
+            .collect();
         let mut requirements: Vec<BoundaryRequirement<'db>> = Vec::new();
         for mut requirement in pending {
             requirement.region = self.summarize_region(
@@ -615,7 +957,8 @@ impl<'db> Borrowck<'db> {
                 )
             };
             let region = self.summarize_region(
-                &external(&access.region),
+                &external(&access.region)
+                    .forget_occurrences(|occurrence| self.recursive_call_choice(occurrence)),
                 SemOrigin::Body(self.body.template_owner),
                 &mut choices,
                 &mut access_handles,
@@ -698,6 +1041,91 @@ impl<'db> Borrowck<'db> {
             &handles,
             false,
         )?;
+        let mut returns = return_states.iter();
+        let mut common_ranges: Vec<_> = returns
+            .next()
+            .into_iter()
+            .flat_map(|state| state.certified())
+            .map(|certified| {
+                (
+                    certified.family.clone(),
+                    certified.scope.clone(),
+                    certified.coverage.clone(),
+                    vec![&certified.contents],
+                )
+            })
+            .collect();
+        for state in returns {
+            common_ranges.retain_mut(|(family, scope, coverage, contents)| {
+                let Some(incoming) = state
+                    .certified()
+                    .iter()
+                    .find(|incoming| incoming.family == *family && incoming.scope == *scope)
+                else {
+                    return false;
+                };
+                let Some(shared) = coverage.and(&incoming.coverage) else {
+                    return false;
+                };
+                *coverage = shared;
+                contents.push(&incoming.contents);
+                true
+            });
+        }
+        let mut certified_ranges = Vec::new();
+        for (family, scope, coverage, contents) in common_ranges {
+            if contents.iter().any(|value| {
+                self.inventory
+                    .values
+                    .leaves(value, ValueOccurrence::Summary)
+                    .iter()
+                    .any(|leaf| {
+                        !matches!(
+                            leaf.semantics.class,
+                            CapabilityClass::Pointer | CapabilityClass::Handle
+                        )
+                    })
+            }) {
+                continue;
+            }
+            let RegionRoot::External(source) = family else {
+                continue;
+            };
+            let destination = SourceExpr {
+                source,
+                path: RegionPath::default(),
+                views: Default::default(),
+                invalidated: false,
+            };
+            let Some(summarized) =
+                self.summarize_source(destination, &coverage, &mut choices, &mut handles)
+            else {
+                continue;
+            };
+            if summarized.guard.scope() != &scope {
+                continue;
+            }
+            let mut combined = values.empty(contents[0].shape(), &scope);
+            for value in contents {
+                let mapped = self.summarize_value(
+                    value,
+                    SummaryValueRole::Retained,
+                    origin,
+                    &mut values,
+                    &mut choices,
+                    &mut handles,
+                )?;
+                combined = values.join(&combined, &mapped);
+            }
+            certified_ranges.push(CertifiedRangePoststate {
+                destination: summarized.payload,
+                scope,
+                coverage: summarized.guard,
+                contents: combined,
+            });
+        }
+        let scalar_result =
+            scalar_result.filter(|guard: &Guard<'db>| !Guard::always(guard.scope()).implies(guard));
         let summary = BorrowSummary {
             native_requirements: self.summarize_availability_region(
                 &ownership.native_validity.requirements,
@@ -710,9 +1138,13 @@ impl<'db> Borrowck<'db> {
             availability,
             may_return,
             result,
+            scalar_result,
             mutable_inputs: updates,
+            certified_ranges,
+            scalar_inputs,
             requirements,
         };
+        let summary = summary.abstract_choices(&mut values, choices);
         self.verify_summary(&summary)?;
         Ok(summary)
     }
@@ -721,11 +1153,16 @@ impl<'db> Borrowck<'db> {
         &self,
         region: &RegionSet<'db>,
         origin: SemOrigin<'db>,
-        choices: &mut BTreeMap<ValueOccurrence, u32>,
+        choices: &mut BTreeSet<ValueOccurrence>,
         exposed_handles: &BTreeMap<AddressOccurrence<'db>, u32>,
         definite: bool,
     ) -> Result<RegionSet<'db>, SemanticDiagnostic<'db>> {
-        let mut summary = RegionSet::empty(&BinderScope::default());
+        let mut summaries = Vec::new();
+        let region = if definite {
+            region.clone()
+        } else {
+            region.forget_occurrences(|occurrence| self.recursive_call_choice(occurrence))
+        };
         for clause in region.clauses() {
             let mut source =
                 SourceExpr::from_place(&clause.payload).expect("filtered availability source");
@@ -756,21 +1193,21 @@ impl<'db> Borrowck<'db> {
                     },
                 }],
             );
-            summary = summary.union(&self.summarize_region(
+            summaries.push(self.summarize_region(
                 &region,
                 origin,
                 choices,
                 &mut exposed_handles.clone(),
             )?);
         }
-        Ok(summary)
+        Ok(RegionSet::union_all(&BinderScope::default(), summaries))
     }
 
     fn summarize_region(
         &self,
         region: &RegionSet<'db>,
         origin: SemOrigin<'db>,
-        choices: &mut BTreeMap<ValueOccurrence, u32>,
+        choices: &mut BTreeSet<ValueOccurrence>,
         handles: &mut BTreeMap<AddressOccurrence<'db>, u32>,
     ) -> Result<RegionSet<'db>, SemanticDiagnostic<'db>> {
         let scope = BinderScope::default();
@@ -808,12 +1245,17 @@ impl<'db> Borrowck<'db> {
     fn summarize_value(
         &self,
         value: &CapabilityValue<'db>,
-        boundary: Boundary,
+        role: SummaryValueRole,
         origin: SemOrigin<'db>,
         values: &mut SourceValues<'db>,
-        choices: &mut BTreeMap<ValueOccurrence, u32>,
+        choices: &mut BTreeSet<ValueOccurrence>,
         handles: &mut BTreeMap<AddressOccurrence<'db>, u32>,
     ) -> Result<SourceValue<'db>, SemanticDiagnostic<'db>> {
+        let boundary = if matches!(role, SummaryValueRole::Return) {
+            Boundary::Return
+        } else {
+            Boundary::Retained
+        };
         let mut failure = None;
         let result =
             self.inventory
@@ -849,8 +1291,35 @@ impl<'db> Borrowck<'db> {
                         };
                         payload.invalidated =
                             matches!(entry.payload, CapabilityRef::Invalidated { .. });
+                        // A direct result contains one address per call evaluation.
+                        // The finite call-result port names that fresh address;
+                        // deeper recursive choices only select which fresh
+                        // alternative reached it. Project those choices from
+                        // the may-source, while the call result and loop
+                        // generation still isolate this birth from older ones.
+                        // Forwarded inputs remain may-aliases. Invalid native
+                        // contents of that new object also stay invalid when
+                        // their deeper selection is projected.
+                        let input = matches!(&payload.source.origin, ExternalOrigin::Input(_));
+                        let result = input || payload.source.is_fresh_allocation();
+                        let projected = match role {
+                            SummaryValueRole::Return => result,
+                            SummaryValueRole::MirroredResult => result || payload.invalidated,
+                            SummaryValueRole::FreshInvalidPoststate => payload.invalidated,
+                            SummaryValueRole::Retained => false,
+                        };
+                        let guard = if projected {
+                            clause.guard.forget_occurrences(|occurrence| {
+                                self.recursive_call_choice(occurrence)
+                                    && (input
+                                        || matches!(occurrence, ValueOccurrence::CallChoice { result, .. }
+                                            if self.calls[&result].single_result_port))
+                            })
+                        } else {
+                            clause.guard.clone()
+                        };
                         if let Some(source) =
-                            self.summarize_source(payload, &clause.guard, choices, handles)
+                            self.summarize_source(payload, &guard, choices, handles)
                         {
                             sources.push(source);
                         }
@@ -867,7 +1336,7 @@ impl<'db> Borrowck<'db> {
         &self,
         mut payload: SourceExpr<'db>,
         guard: &Guard<'db>,
-        choices: &mut BTreeMap<ValueOccurrence, u32>,
+        choices: &mut BTreeSet<ValueOccurrence>,
         handles: &mut BTreeMap<AddressOccurrence<'db>, u32>,
     ) -> Option<Guarded<'db, SourceExpr<'db>>> {
         if payload.invalidated
@@ -930,8 +1399,8 @@ impl<'db> Borrowck<'db> {
                 ) {
                     return occurrence;
                 }
-                let next = choices.len().try_into().expect("summary choice count");
-                ValueOccurrence::SummaryChoice(*choices.entry(occurrence).or_insert(next))
+                choices.insert(occurrence);
+                occurrence
             })
         })?;
         Some(Guarded {
@@ -941,20 +1410,7 @@ impl<'db> Borrowck<'db> {
     }
 
     pub(super) fn summary_param_ty(&self, param: u32) -> Option<TyId<'db>> {
-        self.body
-            .values
-            .iter()
-            .find_map(|value| {
-                matches!(value.definition,
-            NValueDefinition::EntryParam { param: actual } if actual == param)
-                .then_some(value.ty)
-            })
-            .or_else(|| {
-                self.body.roots.iter().find_map(|root| {
-                    matches!(root.kind, NRootKind::ParamPlace { param: actual } if actual == param)
-                        .then_some(root.ty)
-                })
-            })
+        self.inventory.transport.param_ty(param)
     }
 
     fn reachable_source_class(
@@ -1070,8 +1526,7 @@ impl<'db> Borrowck<'db> {
             }
             ExternalOrigin::Local(_) => return Err(invalid("source contains local storage")),
             ExternalOrigin::Input(input) => {
-                let param_ty = self
-                    .summary_param_ty(input.param())
+                self.summary_param_ty(input.param())
                     .ok_or_else(|| invalid("source parameter does not exist"))?;
                 if external.is_reachable() {
                     let class = self
@@ -1079,21 +1534,26 @@ impl<'db> Borrowck<'db> {
                         .ok_or_else(|| {
                             invalid("reachable source has no compatible input authority")
                         })?;
+                    // A widened source keeps only an address space that an
+                    // entry route from the same parameter established.
+                    if external.contract.address_space != HandleAddressSpace::Unspecified
+                        && !self.inventory.inputs.iter().any(|target| {
+                            matches!(&target.source.origin, ExternalOrigin::Input(entry)
+                                if entry.param() == input.param())
+                                && target.source.contract == external.contract
+                        })
+                    {
+                        return Err(invalid("widened source address space has no entry route"));
+                    }
                     (external.contract.ty, class, external.contract.address_space)
                 } else {
-                    let semantics = match input.origin() {
-                        InputOrigin::Place(_) => self.shape(param_ty)?.direct(db),
-                        InputOrigin::Slot { slot, .. } => {
-                            let param_ty = param_ty.as_view(db).unwrap_or(param_ty);
-                            let ty =
-                                project_referent_ty(db, self.instance, param_ty, slot.as_slice())
-                                    .ok_or_else(|| invalid("input slot path is invalid"))?;
-                            self.shape(ty)?.direct(db)
-                        }
-                    }
-                    .ok_or_else(|| invalid("input source does not select a capability"))?;
-                    let contract = referent_contract(db, self.instance, semantics)
-                        .map_err(|_| invalid("input referent contract is unresolved"))?;
+                    let (semantics, contract) = self
+                        .inventory
+                        .transport
+                        .route(db, external)
+                        .map_err(|_| invalid("input referent contract is unresolved"))?
+                        .and_then(|route| route.selected)
+                        .ok_or_else(|| invalid("input source does not select a capability"))?;
                     (contract.ty, semantics.class, contract.address_space)
                 }
             }
@@ -1170,18 +1630,19 @@ impl<'db> Borrowck<'db> {
             }
         };
         if !external.is_reachable() {
-            let steps = match &external.origin {
-                ExternalOrigin::Input(input) => input.dereferences(),
-                _ => &[],
-            };
-            for path in steps.iter().chain(external.dereferences()) {
-                let slot = project_referent_ty(db, self.instance, ty, path.as_slice())
-                    .ok_or_else(|| invalid("followed source path is invalid"))?;
-                let semantics = self.shape(slot)?.direct(db).ok_or_else(|| {
-                    invalid("followed source does not select a stored capability")
-                })?;
-                let contract = referent_contract(db, self.instance, semantics)
-                    .map_err(|_| invalid("followed referent contract is unresolved"))?;
+            if !matches!(&external.origin, ExternalOrigin::Input(_))
+                && let Some((semantics, contract)) = self
+                    .inventory
+                    .transport
+                    .follow(
+                        db,
+                        TransportRoute::untransported(ty),
+                        external.dereferences().iter().map(RegionPath::as_slice),
+                    )
+                    .map_err(|_| invalid("followed referent contract is unresolved"))?
+                    .ok_or_else(|| invalid("followed source does not select a stored capability"))?
+                    .selected
+            {
                 ty = contract.ty;
                 class = semantics.class;
                 space = contract.address_space;
@@ -1261,12 +1722,59 @@ impl<'db> Borrowck<'db> {
                 "summary result shape or scope differs from its signature".into(),
             ));
         }
+        if let Some(guard) = &summary.scalar_result {
+            let (scope, _) = BinderScope::default().bind(IndexNamespace::Result);
+            // Only an integer result can be named by the postcondition.
+            let integral = self
+                .instance
+                .normalized_result_ty(self.db)
+                .is_integral(self.db);
+            if guard.scope() != &scope
+                || guard.occurrences().into_iter().any(|occurrence| {
+                    !matches!(occurrence, ValueOccurrence::Argument(param) if self.summary_param_ty(param).is_some_and(|ty| ty.is_bool(self.db)))
+                })
+                || guard.indices().into_iter().any(|index| match index {
+                    IndexExpr::Bound(_) => !integral || scope.validate(index).is_err(),
+                    IndexExpr::FormalValue(param) => !self
+                        .summary_param_ty(param)
+                        .is_some_and(|ty| ty.as_view(self.db).unwrap_or(ty).is_integral(self.db)),
+                    IndexExpr::Const(_) | IndexExpr::TypeConst(_) => false,
+                    IndexExpr::Runtime(_) | IndexExpr::Iteration(_) => true,
+                })
+            {
+                return Err(self.internal_diag(
+                    SemOrigin::Body(self.body.template_owner),
+                    "scalar postcondition retains a callee-local fact".into(),
+                ));
+            }
+        }
         for update in &summary.mutable_inputs {
             let ty = self.verify_source(&update.destination, update.value.scope(), None, true)?;
             if self.shape(ty)? != update.value.shape() {
                 return Err(self.internal_diag(
                     SemOrigin::Body(self.body.template_owner),
                     "summary poststate differs from its destination shape".into(),
+                ));
+            }
+        }
+        for update in &summary.scalar_inputs {
+            let ExternalOrigin::Input(_) = &update.destination.source.origin else {
+                return Err(self.internal_diag(
+                    SemOrigin::Body(self.body.template_owner),
+                    "scalar poststate retains a non-input destination".into(),
+                ));
+            };
+            if !self.inventory.inputs.iter().any(|target| {
+                target.writable
+                    && target.source == update.destination.source
+                    && target.source.contract.ty.is_integral(self.db)
+            }) || !update.destination.path.is_empty()
+                || update.destination.views.iter().next().is_some()
+                || update.destination.invalidated
+            {
+                return Err(self.internal_diag(
+                    SemOrigin::Body(self.body.template_owner),
+                    "scalar poststate has an invalid destination".into(),
                 ));
             }
         }
@@ -1365,6 +1873,25 @@ impl<'db> Borrowck<'db> {
                 self.verify_summary_guard(&leaf.guard, &leaf.payload)?;
             }
         }
+        for range in &summary.certified_ranges {
+            if range.coverage.scope() != &range.scope || range.contents.scope() != &range.scope {
+                return Err(self.internal_diag(
+                    SemOrigin::Body(self.body.template_owner),
+                    "certified range has inconsistent binders".into(),
+                ));
+            }
+            self.verify_source(&range.destination, &range.scope, None, true)?;
+            self.verify_summary_guard(&range.coverage, &range.destination)?;
+            for leaf in values.leaves(&range.contents, ValueOccurrence::Summary) {
+                self.verify_source(
+                    &leaf.payload,
+                    leaf.guard.scope(),
+                    Some(leaf.semantics),
+                    false,
+                )?;
+                self.verify_summary_guard(&leaf.guard, &leaf.payload)?;
+            }
+        }
         Ok(())
     }
 
@@ -1446,7 +1973,12 @@ impl<'db> Borrowck<'db> {
             .expect("birth scalar substitution");
             let source = ExternalSource::allocation(self.db, template.allocation.clone())
                 .substitute(self.db, &subst);
-            let source = self.instantiate_address_base(source, result, inputs.origin)?;
+            let source = self.instantiate_address_base(
+                source,
+                result,
+                inputs.origin,
+                call.single_result_port,
+            )?;
             let birth =
                 AllocationBirth::from_source(&source, guard).expect("allocation birth origin");
             if !births.contains(&birth) {
@@ -1489,7 +2021,7 @@ impl<'db> Borrowck<'db> {
         };
         let returned =
             self.instantiate_value(state, &call.summary.result, &template, result, inputs)?;
-        let mut updates = Vec::new();
+        let mut updates: Vec<(RegionSet<'db>, CapabilityValue<'db>)> = Vec::new();
         for (update, template) in call.summary.mutable_inputs.iter().zip(&call.updates) {
             let value = self.instantiate_value(state, &update.value, template, result, inputs)?;
             let target = self.instantiate_source(
@@ -1499,7 +2031,57 @@ impl<'db> Borrowck<'db> {
                 update.value.scope(),
                 inputs,
             )?;
-            updates.push((target.region, value));
+            if let Some((_, existing)) = updates
+                .iter_mut()
+                .find(|(region, _)| *region == target.region)
+            {
+                *existing = self.inventory.values.join(existing, &value);
+            } else {
+                updates.push((target.region, value));
+            }
+        }
+        let mut certified_ranges = Vec::new();
+        for range in &call.summary.certified_ranges {
+            let Some(coverage) = self.instantiate_guard(&range.coverage, result, inputs)? else {
+                continue;
+            };
+            let target =
+                self.instantiate_source(state, &range.destination, result, &range.scope, inputs)?;
+            let template = self
+                .inventory
+                .values
+                .empty(range.contents.shape(), &range.scope);
+            let contents =
+                self.instantiate_value(state, &range.contents, &template, result, inputs)?;
+            certified_ranges.push((target.region, coverage, contents));
+        }
+        let mut scalar_updates = BTreeMap::new();
+        for update in &call.summary.scalar_inputs {
+            let resolved = self.instantiate_source(
+                state,
+                &update.destination,
+                result,
+                &BinderScope::default(),
+                inputs,
+            )?;
+            let [clause] = resolved.region.clauses() else {
+                continue;
+            };
+            if !clause.payload.path.is_empty()
+                || clause.payload.views.iter().next().is_some()
+                || clause.guard.scope() != state.guard().scope()
+                || !state.guard().implies(&clause.guard)
+            {
+                continue;
+            }
+            scalar_updates
+                .entry(clause.payload.root.clone())
+                .and_modify(|value: &mut Option<usize>| {
+                    if *value != Some(update.value) {
+                        *value = None;
+                    }
+                })
+                .or_insert(Some(update.value));
         }
         let storage = updates
             .iter()
@@ -1554,6 +2136,43 @@ impl<'db> Borrowck<'db> {
                     format!("unresolved call poststate: {error:?}"),
                 )
             })?;
+        for (region, coverage, contents) in certified_ranges {
+            let [clause] = region.clauses() else {
+                continue;
+            };
+            let Some(coverage) = coverage
+                .and(&clause.guard)
+                .and_then(|guard| guard.and(&state.guard().in_scope(region.scope())))
+            else {
+                continue;
+            };
+            state.certify_family_contents(
+                &clause.payload.root,
+                region.scope(),
+                &coverage,
+                &contents,
+            );
+        }
+        for (root, value) in scalar_updates {
+            if let Some(value) = value {
+                state.store_scalar(root, IndexExpr::Const(value));
+            }
+        }
+        if let Some(postcondition) = &call.summary.scalar_result {
+            let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
+            let subst = IndexSubst::new(
+                postcondition.scope(),
+                &BinderScope::default(),
+                [(returned, IndexExpr::Runtime(result))],
+            )
+            .expect("scalar call result substitution");
+            if let Some(postcondition) = postcondition.substitute(&subst)
+                && let Some(postcondition) =
+                    self.instantiate_guard(&postcondition, result, inputs)?
+            {
+                state.constrain(&postcondition, &mut self.inventory.values);
+            }
+        }
         Ok(returned)
     }
 
@@ -1567,10 +2186,11 @@ impl<'db> Borrowck<'db> {
     ) -> Result<CapabilityValue<'db>, SemanticDiagnostic<'db>> {
         let mut values = CapabilityValues::new(self.db, ValueLimits::default());
         let sources = SourceValues::new(self.db, ValueLimits::default());
+        let mut instantiations = SourceInstantiations::new(state, result, inputs);
         let mut error = None;
         let instantiated =
             sources.map_payloads(value, &mut values, |semantics, path, entry, domain| {
-                let guard = match self.instantiate_guard(domain, result, inputs) {
+                let guard = match instantiations.guard(self, domain) {
                     Ok(Some(guard)) => guard,
                     Ok(None) => return Vec::new(),
                     Err(failure) => {
@@ -1578,13 +2198,7 @@ impl<'db> Borrowck<'db> {
                         return Vec::new();
                     }
                 };
-                let resolved = match self.instantiate_source(
-                    state,
-                    &entry.payload,
-                    result,
-                    guard.scope(),
-                    inputs,
-                ) {
+                let resolved = match instantiations.resolve(self, &entry.payload, guard.scope()) {
                     Ok(resolved) => resolved,
                     Err(failure) => {
                         error.get_or_insert(failure);
@@ -1592,7 +2206,10 @@ impl<'db> Borrowck<'db> {
                     }
                 };
                 let region = if resolved.invalidated.invalid {
-                    resolved.invalidated.requirements.with_guard(&guard)
+                    let requirements = &resolved.invalidated.requirements;
+                    let lift = IndexSubst::new(requirements.scope(), guard.scope(), [])
+                        .expect("native requirement scope");
+                    requirements.substitute(self.db, &lift).with_guard(&guard)
                 } else {
                     resolved.region.with_guard(&guard)
                 };
@@ -1700,6 +2317,8 @@ impl<'db> Borrowck<'db> {
         result: NValueId,
         inputs: CallInputs<'_, 'db>,
     ) -> Result<Option<Guard<'db>>, SemanticDiagnostic<'db>> {
+        #[cfg(test)]
+        GUARD_INSTANTIATIONS.set(GUARD_INSTANTIATIONS.get() + 1);
         let subst = IndexSubst::new(
             guard.scope(),
             guard.scope(),
@@ -1712,32 +2331,51 @@ impl<'db> Borrowck<'db> {
         )
         .expect("call guard substitution");
         let mut invalid = false;
-        let guard = guard.substitute(&subst).and_then(|guard| {
-            guard.map_occurrences(|occurrence| match occurrence {
-                ValueOccurrence::Argument(param) => {
-                    inputs
+        let guard = guard
+            .substitute(&subst)
+            .and_then(|guard| {
+                guard.map_occurrences(|occurrence| match occurrence {
+                    ValueOccurrence::Argument(param) => inputs
                         .occurrence(param)
+                        .map(|occurrence| match occurrence {
+                            ValueOccurrence::Value(value) => {
+                                ValueOccurrence::Value(self.forwarded_value(value))
+                            }
+                            other => other,
+                        })
                         .unwrap_or(ValueOccurrence::CallChoice {
                             result,
                             choice: param,
-                        })
-                }
-                ValueOccurrence::SummaryChoice(choice) => {
-                    ValueOccurrence::CallChoice { result, choice }
-                }
-                ValueOccurrence::Summary => ValueOccurrence::Value(result),
-                ValueOccurrence::Value(_)
-                | ValueOccurrence::Root(_)
-                | ValueOccurrence::CallChoice { .. } => {
-                    invalid = true;
-                    occurrence
-                }
+                        }),
+                    ValueOccurrence::SummaryChoice(choice) => {
+                        ValueOccurrence::CallChoice { result, choice }
+                    }
+                    ValueOccurrence::Summary => ValueOccurrence::Value(result),
+                    ValueOccurrence::Value(_)
+                    | ValueOccurrence::Root(_)
+                    | ValueOccurrence::CallChoice { .. } => {
+                        invalid = true;
+                        occurrence
+                    }
+                })
             })
-        });
+            .and_then(|mut guard| {
+                for arg in inputs.args {
+                    if let Some(value) = literal_bool_cond(self.db, &self.body, arg.value) {
+                        let occurrence = ValueOccurrence::Value(self.forwarded_value(arg.value));
+                        guard = guard.with_boolean(
+                            ChoiceKey::new(occurrence, StructuralPath::default()),
+                            value,
+                        )?;
+                        guard = guard.forget_occurrences(|candidate| candidate == occurrence);
+                    }
+                }
+                Some(guard)
+            });
         if invalid {
             return Err(self.internal_diag(
                 inputs.origin,
-                "summary retains a local enum occurrence".into(),
+                "summary retains a local choice occurrence".into(),
             ));
         }
         Ok(guard)
@@ -1780,6 +2418,18 @@ impl<'db> Borrowck<'db> {
         scope: &BinderScope,
         inputs: CallInputs<'_, 'db>,
     ) -> Result<Resolution<'db>, SemanticDiagnostic<'db>> {
+        SourceInstantiations::new(state, result, inputs).resolve(self, source, scope)
+    }
+
+    fn instantiate_source_uncached(
+        &mut self,
+        source: &SourceExpr<'db>,
+        scope: &BinderScope,
+        instantiations: &mut SourceInstantiations<'_, 'db>,
+    ) -> Result<Resolution<'db>, SemanticDiagnostic<'db>> {
+        let state = instantiations.state;
+        let result = instantiations.result;
+        let inputs = instantiations.inputs;
         let CallInputs {
             args,
             effects,
@@ -1801,9 +2451,8 @@ impl<'db> Borrowck<'db> {
         let path = &source.path;
         let external = &source.source;
         let clobber = if let Some(clobber) = &external.clobber {
-            let target = self.instantiate_source(state, &clobber.target, result, scope, inputs)?;
-            let written =
-                self.instantiate_source(state, &clobber.written, result, scope, inputs)?;
+            let target = instantiations.resolve(self, &clobber.target, scope)?;
+            let written = instantiations.resolve(self, &clobber.written, scope)?;
             if matches!(
                 AccessFootprint::typed(&target.region).overlap(
                     self.db,
@@ -1840,7 +2489,7 @@ impl<'db> Borrowck<'db> {
                 element,
                 target_ty,
             } => {
-                let base = self.instantiate_source(state, base, result, scope, inputs)?;
+                let base = instantiations.resolve(self, base, scope)?;
                 let region = self.memory_region(&base.region, *target_ty, *element, origin)?;
                 (
                     Resolution {
@@ -1859,6 +2508,7 @@ impl<'db> Borrowck<'db> {
                     external.address_base(self.db).expect("address origin"),
                     result,
                     origin,
+                    self.calls[&result].single_result_port,
                 )?;
                 let ty = source.contract.ty;
                 let region = if let Some((target, written, extent)) = clobber {
@@ -2223,12 +2873,12 @@ impl<'db> SignatureValues<'_, 'db> {
                         // Reinterpreting a raw address preserves that address;
                         // it does not inherit loans reachable through its bytes.
                         // Arbitrary other referents have their own alternative.
-                        source = SourceExpr {
-                            source: ExternalSource::memory(db, source, semantics.target_ty, None),
-                            path: RegionPath::default(),
-                            views: Default::default(),
-                            invalidated: false,
-                        };
+                        source = SourceExpr::whole(ExternalSource::memory(
+                            db,
+                            source,
+                            semantics.target_ty,
+                            None,
+                        ));
                     } else if candidate.ty != semantics.target_ty {
                         source.source = source.source.widen();
                         source.source.contract = ReferentContract::new(
@@ -2254,11 +2904,7 @@ impl<'db> SignatureValues<'_, 'db> {
                 // Native results obey the language's memory-transport contract.
                 // Instantiation creates a result loan; this is no inherited parent.
                 Some(ExternalSource::unknown(
-                    ReferentContract::new(
-                        db,
-                        semantics.target_ty,
-                        HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-                    ),
+                    ReferentContract::memory(db, semantics.target_ty),
                     occurrence,
                     scope.variables().collect(),
                 ))
@@ -2493,7 +3139,10 @@ pub(super) fn signature_summary<'db>(
         native_requirements: RegionSet::empty(&BinderScope::default()),
         may_return: opaque && !instance.is_intrinsically_never_returning(db),
         result,
+        scalar_result: None,
         mutable_inputs,
+        certified_ranges: Vec::new(),
+        scalar_inputs: Vec::new(),
         requirements: Vec::new(),
         accesses,
         availability,
@@ -2508,13 +3157,18 @@ mod tests {
     use crate::{
         analysis::{
             semantic::{
-                capability::{handle::HandleAddressSpace, source::InputSource},
+                VariantIndex,
+                capability::{
+                    guard::ChoiceKey, handle::HandleAddressSpace,
+                    region::CANONICALIZED_REGION_CLAUSES, source::InputSource, test_roots,
+                },
                 identity_semantic_instance_key,
+                normalized::{NRootId, ReadMode},
             },
             ty::{
                 ProviderAddressSpace,
                 corelib::{resolve_core_trait, resolve_lib_func_path},
-                ty_check::BodyOwner,
+                ty_check::{BodyOwner, EffectArgLayoutView, EffectPassMode},
             },
         },
         hir_def::ItemKind,
@@ -2533,6 +3187,718 @@ mod tests {
                 },
             }],
         )
+    }
+
+    #[test]
+    fn followed_input_transport_matches_entry_and_summary_verification() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "followed_input_transport.fe".into(),
+            r#"
+struct Inner { cursor: mut u256 }
+struct Outer { inner: mut Inner }
+fn nested(_ outer: mut Outer) {}
+fn raw(_ ptr: *Outer) {}
+"#,
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        for (name, expected) in [
+            (
+                "nested",
+                HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+            ),
+            ("raw", HandleAddressSpace::Unspecified),
+        ] {
+            let instance = get_or_build_semantic_instance(
+                &db,
+                identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, name))),
+            );
+            let checker = Borrowck::new(&db, instance).unwrap();
+            let target = checker
+                .inventory
+                .inputs
+                .iter()
+                .find(|target| {
+                    target.ty == TyId::u256(&db)
+                        && target
+                            .classes
+                            .contains(&CapabilityClass::Borrow(BorrowKind::Mut))
+                        && matches!(&target.source.origin, ExternalOrigin::Input(input)
+                            if !input.dereferences().is_empty()
+                                || !target.source.dereferences().is_empty())
+                })
+                .expect("nested mutable input target");
+            assert_eq!(target.source.contract.address_space, expected, "{name}");
+            let mut source = SourceExpr::whole(target.source.clone());
+            assert_eq!(
+                checker
+                    .verify_source(&source, &target.scope, None, false)
+                    .unwrap(),
+                TyId::u256(&db),
+                "{name}"
+            );
+            let forged = if expected == HandleAddressSpace::Unspecified {
+                HandleAddressSpace::Known(ProviderAddressSpace::Memory)
+            } else {
+                HandleAddressSpace::Unspecified
+            };
+            source.source.contract.address_space = forged;
+            assert!(
+                checker
+                    .verify_source(&source, &target.scope, None, false)
+                    .is_err(),
+                "{name}: forged transport contract was accepted"
+            );
+            // Widening loses the route, so only an entry-established space survives.
+            source.source = target.source.clone().widen();
+            assert!(
+                checker
+                    .verify_source(&source, &BinderScope::default(), None, false)
+                    .is_ok(),
+                "{name}: widened entry contract was rejected"
+            );
+            source.source.contract.address_space = forged;
+            assert_eq!(
+                checker
+                    .verify_source(&source, &BinderScope::default(), None, false)
+                    .is_err(),
+                forged != HandleAddressSpace::Unspecified,
+                "{name}: widened forged transport contract"
+            );
+        }
+    }
+
+    #[test]
+    fn availability_summary_canonicalizes_regions_in_linear_work() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "availability_union.fe".into(),
+            "fn inspect(_ pointer: *u256) {}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "inspect"))),
+        );
+        let checker = Borrowck::new(&db, instance).unwrap();
+        let scope = BinderScope::default();
+        let ty = TyId::u256(&db);
+        let base = SourceExpr {
+            invalidated: false,
+            source: ExternalSource::input(
+                InputSource::slot(0, StructuralPath::default()),
+                ReferentContract::new(
+                    &db,
+                    ty,
+                    HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+                ),
+                false,
+            ),
+            path: RegionPath::default(),
+            views: Default::default(),
+        };
+        let count = 256;
+        let region = RegionSet::new(
+            &scope,
+            (0..count).map(|index| Guarded {
+                guard: Guard::always(&scope),
+                payload: SymbolicPlace {
+                    root: RegionRoot::External(ExternalSource::memory(
+                        &db,
+                        base.clone(),
+                        ty,
+                        Some((ty, IndexExpr::Const(index))),
+                    )),
+                    path: RegionPath::default(),
+                    views: Default::default(),
+                },
+            }),
+        );
+        assert_eq!(region.clauses().len(), count);
+        for definite in [false, true] {
+            let before = CANONICALIZED_REGION_CLAUSES.get();
+            let summarized = checker
+                .summarize_availability_region(
+                    &region,
+                    SemOrigin::Body(checker.body.template_owner),
+                    &mut BTreeSet::new(),
+                    &BTreeMap::new(),
+                    definite,
+                )
+                .unwrap();
+            let visits = CANONICALIZED_REGION_CLAUSES.get() - before;
+            assert_eq!(summarized, region);
+            assert!(
+                visits <= count * 4,
+                "processed {visits} clauses for {count} alternatives"
+            );
+        }
+    }
+
+    #[test]
+    fn call_memory_regions_preserve_guards_authority_and_linear_work() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "call_memory_unions.fe".into(),
+            "fn native(_ value: mut u256, _ index: u256) {}\nfn raw(_ value: *u256, _ index: u256) {}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let scope = BinderScope::default();
+        let ty = TyId::u256(&db);
+        let count = 256;
+        for (name, invalidated) in [("native", false), ("native", true), ("raw", false)] {
+            let instance = get_or_build_semantic_instance(
+                &db,
+                identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, name))),
+            );
+            let mut summary = Borrowck::new(&db, instance)
+                .unwrap()
+                .borrow_summary()
+                .unwrap()
+                .summary
+                .unwrap();
+            let mut checker = Borrowck::new(&db, instance).unwrap();
+            let params: BTreeMap<_, _> = checker
+                .body
+                .values
+                .iter()
+                .enumerate()
+                .filter_map(|(index, value)| {
+                    if let NValueDefinition::EntryParam { param } = value.definition {
+                        Some((param, NValueId::new(index)))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let args = [params[&0], params[&1]].map(|value| NOperand {
+                value,
+                origin: None,
+                mode: ReadMode::Read,
+            });
+            let result = args[0].value;
+            let mut state = checker.inventory.entry.clone();
+            if invalidated {
+                // A weak byte overwrite retains the valid alternative and
+                // adds invalidated native provenance without loan authority.
+                let original = state.value(result).clone();
+                let region = checker.resolve_capability(&original).region;
+                let damaged = checker.inventory.values.from_shape(
+                    original.shape(),
+                    original.scope(),
+                    |semantics, _, scope| {
+                        vec![Guarded {
+                            guard: Guard::always(scope),
+                            payload: CapabilityRef::Invalidated {
+                                class: semantics.class,
+                                region: region.clone(),
+                            },
+                        }]
+                    },
+                );
+                let mixed = checker.inventory.values.join(&original, &damaged);
+                state.set_value(result, mixed);
+            }
+            let origin = SemOrigin::Body(checker.body.template_owner);
+            let inputs = CallInputs {
+                args: &args,
+                effects: &[],
+                origin,
+            };
+            let base = SourceExpr {
+                invalidated: false,
+                source: ExternalSource::input(
+                    InputSource::slot(0, StructuralPath::default()),
+                    ReferentContract::new(
+                        &db,
+                        ty,
+                        HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+                    ),
+                    false,
+                ),
+                path: RegionPath::default(),
+                views: Default::default(),
+            };
+            let region = RegionSet::new(
+                &scope,
+                (0..count).map(|index| Guarded {
+                    guard: Guard::always(&scope)
+                        .with_equality(IndexExpr::FormalValue(1), IndexExpr::Const(index % 2))
+                        .unwrap(),
+                    payload: SymbolicPlace {
+                        root: RegionRoot::External(ExternalSource::memory(
+                            &db,
+                            base.clone(),
+                            ty,
+                            Some((ty, IndexExpr::Const(index))),
+                        )),
+                        path: RegionPath::default(),
+                        views: Default::default(),
+                    },
+                }),
+            );
+            assert_eq!(region.clauses().len(), count);
+            let base = checker
+                .instantiate_source(&state, &base, result, &scope, inputs)
+                .unwrap();
+            assert_eq!(base.invalidated.invalid, invalidated);
+            let expected_regions = (0..count).map(|index| {
+                let guard = Guard::always(&scope)
+                    .with_equality(checker.index(args[1].value), IndexExpr::Const(index % 2))
+                    .unwrap();
+                checker
+                    .memory_region(
+                        &base.region,
+                        ty,
+                        Some((ty, IndexExpr::Const(index))),
+                        origin,
+                    )
+                    .unwrap()
+                    .with_guard(&guard)
+            });
+            let mut expected_authority = Vec::new();
+            for clause in region.clauses() {
+                let guard = checker
+                    .instantiate_guard(&clause.guard, result, inputs)
+                    .unwrap()
+                    .unwrap();
+                expected_authority.extend(base.traversed.iter().chain(&base.parents).map(
+                    |parent| Guarded {
+                        guard: parent.guard.and(&guard).unwrap(),
+                        payload: parent.payload.clone(),
+                    },
+                ));
+            }
+            let expected_region = RegionSet::union_all(&scope, expected_regions);
+            assert_eq!(expected_region.clauses().len(), count);
+            assert_eq!(expected_authority.is_empty(), name == "raw");
+            expected_authority.extend(expected_authority.clone());
+            summary.accesses = vec![MemoryAccess {
+                kind: MemoryAccessKind::Write,
+                extent: AccessExtent::Bytes(IndexExpr::FormalValue(1)),
+                region: region.clone(),
+                authorizers: region,
+            }];
+            checker.calls.insert(
+                result,
+                CallSummary {
+                    instance,
+                    summary,
+                    pending: false,
+                    updates: Vec::new(),
+                    births: Vec::new(),
+                    single_result_port: false,
+                },
+            );
+            let before = CANONICALIZED_REGION_CLAUSES.get();
+            let guards_before = GUARD_INSTANTIATIONS.get();
+            let resolved = checker
+                .call_memory_accesses(&state, result, inputs)
+                .unwrap();
+            let visits = CANONICALIZED_REGION_CLAUSES.get() - before;
+            assert_eq!(resolved.len(), 1);
+            let resolved = &resolved[0];
+            assert_eq!(resolved.access.region, expected_region);
+            assert_eq!(resolved.access.authorizers, expected_region);
+            assert_eq!(resolved.access.kind, MemoryAccessKind::Write);
+            assert_eq!(
+                resolved.access.extent,
+                AccessExtent::Bytes(checker.index(args[1].value))
+            );
+            assert_eq!(resolved.authority, expected_authority);
+            assert_eq!(resolved.invalidated.invalid, invalidated);
+            assert_eq!(
+                resolved.invalidated.requirements,
+                base.invalidated.requirements
+            );
+            assert!(
+                visits <= count * 64,
+                "{name}, invalidated={invalidated}: processed {visits} clauses for {count} alternatives"
+            );
+            assert_eq!(
+                GUARD_INSTANTIATIONS.get() - guards_before,
+                2,
+                "each distinct call guard should be instantiated once"
+            );
+        }
+    }
+
+    #[test]
+    fn call_guard_reuse_preserves_scopes_mappings_and_errors() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "call_guard_cache.fe".into(),
+            "fn inspect(_ first: u256, _ second: u256) -> u256 { 1 }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "inspect"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        let params: BTreeMap<_, _> = checker
+            .body
+            .values
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| {
+                if let NValueDefinition::EntryParam { param } = value.definition {
+                    Some((param, NValueId::new(index)))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let constant = checker
+            .body
+            .values
+            .iter()
+            .enumerate()
+            .find_map(|(index, _)| {
+                let value = NValueId::new(index);
+                (checker.index(value) == IndexExpr::Const(1)).then_some(value)
+            })
+            .unwrap();
+        let scope = BinderScope::default();
+        let (nested, _) = scope.bind(IndexNamespace::Existential);
+        let state = checker.inventory.entry.clone();
+        for argument in [params[&0], constant] {
+            let args = [NOperand {
+                value: argument,
+                origin: None,
+                mode: ReadMode::Read,
+            }];
+            for effect in [params[&0], params[&1]] {
+                let effects = [NEffectArg {
+                    binding_idx: 0,
+                    arg: NEffectArgValue::Value(NOperand {
+                        value: effect,
+                        origin: None,
+                        mode: ReadMode::Read,
+                    }),
+                    pass_mode: EffectPassMode::ByValue,
+                    layout_view: EffectArgLayoutView::Direct,
+                    required_mut: false,
+                    provider_target_ty: None,
+                    provider: None,
+                }];
+                for result in [params[&0], params[&1]] {
+                    let inputs = CallInputs {
+                        args: &args,
+                        effects: &effects,
+                        origin: SemOrigin::Body(checker.body.template_owner),
+                    };
+                    let mut instantiations = SourceInstantiations::new(&state, result, inputs);
+                    for scope in [&scope, &nested] {
+                        let scalar = Guard::always(scope)
+                            .with_equality(IndexExpr::FormalValue(0), IndexExpr::Const(0))
+                            .unwrap();
+                        let expected = Guard::always(scope)
+                            .with_equality(checker.index(argument), IndexExpr::Const(0));
+                        let before = GUARD_INSTANTIATIONS.get();
+                        for _ in 0..4 {
+                            assert_eq!(instantiations.guard(&checker, &scalar).unwrap(), expected);
+                        }
+                        assert_eq!(
+                            GUARD_INSTANTIATIONS.get() - before,
+                            1,
+                            "cache feasible and infeasible guards separately in each scope"
+                        );
+                        for (formal, actual) in [
+                            (
+                                ValueOccurrence::Argument(0),
+                                ValueOccurrence::Value(argument),
+                            ),
+                            (ValueOccurrence::Argument(1), ValueOccurrence::Value(effect)),
+                            (
+                                ValueOccurrence::Argument(9),
+                                ValueOccurrence::CallChoice { result, choice: 9 },
+                            ),
+                            (ValueOccurrence::Summary, ValueOccurrence::Value(result)),
+                            (
+                                ValueOccurrence::SummaryChoice(7),
+                                ValueOccurrence::CallChoice { result, choice: 7 },
+                            ),
+                        ] {
+                            let guard = Guard::always(scope)
+                                .with_variant(
+                                    ChoiceKey::new(
+                                        formal,
+                                        StructuralPath::new([Projection::Index(
+                                            IndexExpr::FormalValue(0),
+                                        )]),
+                                    ),
+                                    VariantIndex(1),
+                                )
+                                .unwrap();
+                            let expected = Guard::always(scope).with_variant(
+                                ChoiceKey::new(
+                                    actual,
+                                    StructuralPath::new([Projection::Index(
+                                        checker.index(argument),
+                                    )]),
+                                ),
+                                VariantIndex(1),
+                            );
+                            let before = GUARD_INSTANTIATIONS.get();
+                            assert_eq!(instantiations.guard(&checker, &guard).unwrap(), expected);
+                            checker.source_generation += 1;
+                            assert_eq!(instantiations.guard(&checker, &guard).unwrap(), expected);
+                            assert_eq!(
+                                GUARD_INSTANTIATIONS.get() - before,
+                                1,
+                                "inventory changes do not change pure guard substitution"
+                            );
+                        }
+                        for occurrence in [
+                            ValueOccurrence::Value(argument),
+                            ValueOccurrence::Root(NRootId::from_u32(0)),
+                            ValueOccurrence::CallChoice { result, choice: 0 },
+                        ] {
+                            let guard = Guard::always(scope)
+                                .with_variant(
+                                    ChoiceKey::new(occurrence, StructuralPath::default()),
+                                    VariantIndex(0),
+                                )
+                                .unwrap();
+                            let before = GUARD_INSTANTIATIONS.get();
+                            assert!(instantiations.guard(&checker, &guard).is_err());
+                            assert!(instantiations.guard(&checker, &guard).is_err());
+                            assert_eq!(
+                                GUARD_INSTANTIATIONS.get() - before,
+                                2,
+                                "invalid local occurrences must still be rejected, without caching errors"
+                            );
+                            assert!(!instantiations.guards.contains_key(&guard));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn call_source_reuse_tracks_state_scopes_and_inventory_growth() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "call_source_cache.fe".into(),
+            "fn native(_ value: mut u256) {}\nfn raw(_ value: *u256) {}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        for name in ["native", "raw"] {
+            let instance = get_or_build_semantic_instance(
+                &db,
+                identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, name))),
+            );
+            let mut checker = Borrowck::new(&db, instance).unwrap();
+            let value = checker
+                .body
+                .values
+                .iter()
+                .enumerate()
+                .find_map(|(index, value)| {
+                    matches!(value.definition, NValueDefinition::EntryParam { param: 0 })
+                        .then(|| NValueId::new(index))
+                })
+                .unwrap();
+            let state = checker.inventory.entry.clone();
+            let scope = BinderScope::default();
+            let origin = SemOrigin::Body(checker.body.template_owner);
+            let args = [NOperand {
+                value,
+                origin: None,
+                mode: ReadMode::Read,
+            }];
+            let inputs = CallInputs {
+                args: &args,
+                effects: &[],
+                origin,
+            };
+            let contract = ReferentContract::new(
+                &db,
+                TyId::u256(&db),
+                HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+            );
+            let source = SourceExpr {
+                invalidated: false,
+                source: ExternalSource::input(
+                    InputSource::slot(0, StructuralPath::default()),
+                    contract,
+                    false,
+                ),
+                path: RegionPath::default(),
+                views: Default::default(),
+            };
+            let mut sources = SourceInstantiations::new(&state, value, inputs);
+            let initial = sources.resolve(&mut checker, &source, &scope).unwrap();
+            assert!(!initial.region.is_empty());
+            let evaluations = sources.evaluations;
+            let reused = sources.resolve(&mut checker, &source, &scope).unwrap();
+            assert_eq!(
+                sources.evaluations, evaluations,
+                "identical source was evaluated twice"
+            );
+            assert_eq!(reused.region, initial.region);
+            assert_eq!(reused.parents, initial.parents);
+            assert_eq!(reused.traversed, initial.traversed);
+
+            let (nested, _) = scope.bind(IndexNamespace::Existential);
+            let lifted = sources.resolve(&mut checker, &source, &nested).unwrap();
+            assert_eq!(lifted.region.scope(), &nested);
+            assert!(
+                sources.evaluations > evaluations,
+                "different scopes shared a resolution"
+            );
+            let evaluations = sources.evaluations;
+            sources.resolve(&mut checker, &source, &scope).unwrap();
+            assert_eq!(sources.evaluations, evaluations);
+
+            if name == "native" {
+                let reference = state.value(value).direct()[0]
+                    .payload
+                    .loan()
+                    .unwrap()
+                    .clone();
+                let extra = RegionSet::singleton(
+                    &scope,
+                    test_roots::local(&db, NRootId::from_u32(0)),
+                    RegionPath::default(),
+                );
+                checker.extend_loan(value, &reference, &extra, Vec::new());
+                let changed = sources.resolve(&mut checker, &source, &scope).unwrap();
+                assert!(
+                    sources.evaluations > evaluations,
+                    "loan growth retained a stale resolution"
+                );
+                assert_eq!(changed.region, initial.region.union(&extra));
+                let evaluations = sources.evaluations;
+                checker.extend_loan(value, &reference, &extra, Vec::new());
+                sources.resolve(&mut checker, &source, &scope).unwrap();
+                assert_eq!(
+                    sources.evaluations, evaluations,
+                    "unchanged loan facts invalidated reuse"
+                );
+            } else {
+                // Following a newly discovered pointer cell changes the storage
+                // inventory during resolution. Cache only a subsequent stable read.
+                let memory = SourceExpr {
+                    source: ExternalSource::memory(
+                        &db,
+                        source.clone(),
+                        TyId::ptr_to(&db, contract.ty),
+                        None,
+                    )
+                    .follow(RegionPath::default(), contract, false),
+                    ..source.clone()
+                };
+                let generation = checker.source_generation;
+                sources.resolve(&mut checker, &memory, &scope).unwrap();
+                assert!(checker.source_generation > generation);
+                assert!(
+                    sources
+                        .resolved
+                        .get(&scope)
+                        .is_none_or(|entries| !entries.contains_key(&memory))
+                );
+                let evaluations = sources.evaluations;
+                let discovered = sources.resolve(&mut checker, &memory, &scope).unwrap();
+                assert!(sources.evaluations > evaluations);
+                let evaluations = sources.evaluations;
+                assert_eq!(
+                    sources
+                        .resolve(&mut checker, &memory, &scope)
+                        .unwrap()
+                        .region,
+                    discovered.region
+                );
+                assert_eq!(sources.evaluations, evaluations);
+            }
+
+            // A new pre-call state always starts a new cache, even with the same
+            // source expression, arguments, and unchanged inventory generation.
+            let mut moved = state.clone();
+            let empty = checker
+                .inventory
+                .values
+                .empty(state.value(value).shape(), &scope);
+            moved.set_value(value, empty);
+            let resolved = SourceInstantiations::new(&moved, value, inputs)
+                .resolve(&mut checker, &source, &scope)
+                .unwrap();
+            assert!(resolved.region.is_empty());
+        }
+    }
+
+    #[test]
+    fn summary_choice_order_stays_compact_across_poststates_and_accesses() {
+        for arms in [4, 8, 16] {
+            let branches = (0..arms)
+                .map(|index| format!("if op == {index} {{ frame.memory.set(value: {index}) }}"))
+                .collect::<Vec<_>>()
+                .join(" else ");
+            let source = format!(
+                r#"
+use core::Option
+struct Buffer {{ allocation: Option<*u256> }}
+impl Buffer {{
+    fn data(self) -> *u256 {{
+        match self.allocation {{
+            Option::Some(address) => address
+            Option::None => core::panic()
+        }}
+    }}
+    fn set(mut self, value: u256) {{ *self.data() = value }}
+}}
+struct Frame {{ memory: Buffer, output: Buffer }}
+fn dispatch(frame: mut Frame, op: u256) {{ {branches} }}
+fn caller(frame: mut Frame, op: u256) {{ dispatch(frame, op) }}
+"#
+            );
+            let mut db = HirAnalysisTestDb::default();
+            let file = db.new_stand_alone("summary_choice_order.fe".into(), &source);
+            let (module, _) = db.top_mod(file);
+            db.assert_no_diags(module);
+            for name in ["dispatch", "caller"] {
+                let instance = get_or_build_semantic_instance(
+                    &db,
+                    identity_semantic_instance_key(
+                        &db,
+                        BodyOwner::Func(find_func(&db, module, name)),
+                    ),
+                );
+                let checker = Borrowck::new(&db, instance).unwrap();
+                let summary = checker.borrow_summary().unwrap().summary.unwrap();
+                assert!(!summary.accesses.is_empty());
+                let maximum = summary
+                    .accesses
+                    .iter()
+                    .flat_map(|access| [&access.region, &access.authorizers])
+                    .chain(
+                        summary
+                            .availability
+                            .incoming
+                            .iter()
+                            .map(|requirement| &requirement.region),
+                    )
+                    .chain([
+                        &summary.availability.reinitialized,
+                        &summary.availability.unavailable,
+                    ])
+                    .flat_map(|region| region.clauses())
+                    .map(|clause| clause.guard.node_count())
+                    .max()
+                    .unwrap();
+                assert!(
+                    maximum <= arms * 128,
+                    "{name} with {arms} arms: {maximum} nodes"
+                );
+            }
+        }
     }
 
     #[test]
@@ -2896,7 +4262,7 @@ fn clobber(slot: *ref u256) {
             .leaves(&summary.result, ValueOccurrence::Summary)
             .pop()
             .unwrap();
-        let check = |source: &SourceExpr<'_>| {
+        let check = |source| {
             checker
                 .verify_source(source, leaf.guard.scope(), Some(leaf.semantics), false)
                 .is_ok()

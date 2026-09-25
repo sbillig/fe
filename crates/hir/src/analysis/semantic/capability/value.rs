@@ -1,6 +1,6 @@
 //! Shape-checked, hash-consed structural values shared by local state and summaries.
 use super::{
-    guard::{ChoiceKey, Guard, ValueOccurrence},
+    guard::{ChoiceKey, Guard, GuardCache, ValueOccurrence},
     index::{BinderScope, IndexError, IndexExpr, IndexNamespace, IndexSubst},
     path::{Projection, StructuralPath},
     semantics::{CapabilityClass, CapabilitySemantics},
@@ -10,10 +10,10 @@ use crate::analysis::{
     HirAnalysisDb,
     semantic::{FieldIndex, VariantIndex},
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxBuildHasher, FxHashMap};
 use std::{
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
-    hash::Hash,
+    hash::{BuildHasher, Hash, Hasher},
     sync::Arc,
 };
 
@@ -29,8 +29,23 @@ pub struct Guarded<'db, P> {
     pub payload: P,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ValueId<'db, P>(Arc<StructuredValue<'db, P>>);
+// Values nest deeply and key many maps, so each ID carries its node's hash.
+#[derive(Clone, Debug)]
+pub struct ValueId<'db, P>(Arc<StructuredValue<'db, P>>, u64);
+
+impl<P: PartialEq> PartialEq for ValueId<'_, P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.1 == other.1 && self.0 == other.0
+    }
+}
+
+impl<P: Eq> Eq for ValueId<'_, P> {}
+
+impl<P> Hash for ValueId<'_, P> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.1);
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct StructuredValue<'db, P> {
@@ -91,6 +106,8 @@ pub struct ValueMetrics {
 pub struct ValueInterner<'db, P> {
     pub(super) db: &'db dyn HirAnalysisDb,
     nodes: FxHashMap<StructuredValue<'db, P>, ValueId<'db, P>>,
+    normalized: FxHashMap<(BinderScope, Guarded<'db, P>), Guarded<'db, P>>,
+    guards: GuardCache<'db>,
     limits: ValueLimits,
     metrics: ValueMetrics,
 }
@@ -166,6 +183,8 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         Self {
             db,
             nodes: FxHashMap::default(),
+            normalized: FxHashMap::default(),
+            guards: GuardCache::default(),
             limits,
             metrics: ValueMetrics::default(),
         }
@@ -561,13 +580,18 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             guard.scope(),
             "guard scope must match its value"
         );
+        if value.is_empty() {
+            return value.clone();
+        }
         let direct = value
             .0
             .direct
             .iter()
             .filter_map(|entry| {
                 Some(Guarded {
-                    guard: entry.guard.and(&guard.in_scope(entry.guard.scope()))?,
+                    guard: self
+                        .guards
+                        .and(&entry.guard, &guard.in_scope(entry.guard.scope()))?,
                     payload: entry.payload.clone(),
                 })
             })
@@ -609,6 +633,10 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         })
     }
 
+    pub fn guards(&mut self) -> &mut GuardCache<'db> {
+        &mut self.guards
+    }
+
     pub fn substitute(
         &mut self,
         value: &ValueId<'db, P>,
@@ -619,6 +647,9 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             subst.source(),
             "substitution source scope must match"
         );
+        if subst.is_identity() {
+            return value.clone();
+        }
         let shape = value.shape().substitute(self.db, subst);
         let direct = value
             .0
@@ -754,9 +785,50 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         path: &StructuralPath<IndexExpr<'db>>,
         occurrence: ValueOccurrence,
     ) -> Option<ValueId<'db, P>> {
+        self.project_from(
+            value,
+            path.as_slice(),
+            occurrence,
+            StructuralPath::default(),
+        )
+    }
+
+    /// Select index-independent fields before substituting. Rebuilding siblings
+    /// that the projection discards can dominate reads from large aggregates.
+    /// Array selectors are already in the destination scope, so substitute before
+    /// the first index. Retain the full prefix for subsequent enum observations.
+    pub fn project_substituted(
+        &mut self,
+        value: &ValueId<'db, P>,
+        subst: &IndexSubst<'db>,
+        path: &StructuralPath<IndexExpr<'db>>,
+        occurrence: ValueOccurrence,
+    ) -> Option<ValueId<'db, P>> {
+        assert_eq!(
+            value.scope(),
+            subst.source(),
+            "substitution source scope must match"
+        );
+        let split = path
+            .as_slice()
+            .iter()
+            .position(|step| matches!(step, Projection::Index(_)))
+            .unwrap_or(path.as_slice().len());
+        let (prefix, suffix) = path.as_slice().split_at(split);
+        let selected = self.project_from(value, prefix, occurrence, StructuralPath::default())?;
+        let selected = self.substitute(&selected, subst);
+        self.project_from(&selected, suffix, occurrence, StructuralPath::new(prefix))
+    }
+
+    fn project_from(
+        &mut self,
+        value: &ValueId<'db, P>,
+        path: &[Projection<IndexExpr<'db>>],
+        occurrence: ValueOccurrence,
+        mut prefix: StructuralPath<IndexExpr<'db>>,
+    ) -> Option<ValueId<'db, P>> {
         let mut current = value.clone();
-        let mut prefix = StructuralPath::default();
-        for step in path.as_slice() {
+        for step in path {
             current = match (step, &current.0.children) {
                 (Projection::Field(field), ValueChildren::Product(fields)) => fields
                     .iter()
@@ -1261,9 +1333,9 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     .direct
                     .iter()
                     .flat_map(|entry| {
-                        entry
-                            .guard
-                            .and(&domain.in_scope(entry.guard.scope()))
+                        destination
+                            .guards
+                            .and(&entry.guard, &domain.in_scope(entry.guard.scope()))
                             .map(|domain| map(semantics, path, entry, &domain))
                             .unwrap_or_default()
                     })
@@ -1468,21 +1540,57 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         );
     }
 
-    fn intern(&mut self, mut node: StructuredValue<'db, P>) -> ValueId<'db, P> {
-        for entry in &mut node.direct {
-            let subst = entry.guard.scope().canonical_existentials(
-                &node.scope,
-                entry
-                    .guard
-                    .indices()
-                    .into_iter()
-                    .chain(entry.payload.indices()),
-            );
-            entry.guard = entry
+    // Values are rebuilt from the same clauses, and alpha normalization is pure.
+    fn alpha_normalize(&mut self, scope: &BinderScope, entry: Guarded<'db, P>) -> Guarded<'db, P> {
+        let key = (scope.clone(), entry);
+        if let Some(normal) = self.normalized.get(&key) {
+            return normal.clone();
+        }
+        let (_, entry) = &key;
+        let subst = entry.guard.scope().canonical_existentials(scope, || {
+            entry
+                .guard
+                .indices()
+                .into_iter()
+                .chain(entry.payload.indices())
+        });
+        let normal = Guarded {
+            guard: entry
                 .guard
                 .substitute(&subst)
-                .expect("clause alpha normalization");
-            entry.payload = entry.payload.substitute(self.db, &subst);
+                .expect("clause alpha normalization"),
+            payload: entry.payload.substitute(self.db, &subst),
+        };
+        if self.normalized.len() >= self.limits.interned_nodes {
+            self.normalized.clear();
+        }
+        self.normalized.insert(key, normal.clone());
+        normal
+    }
+
+    fn intern(&mut self, mut node: StructuredValue<'db, P>) -> ValueId<'db, P> {
+        let mut canonical = BTreeMap::<(BinderScope, P), Guard<'db>>::new();
+        for entry in std::mem::take(&mut node.direct) {
+            let entry = self.alpha_normalize(&node.scope, entry);
+            match canonical.entry((entry.guard.scope().clone(), entry.payload)) {
+                Entry::Vacant(vacant) => {
+                    vacant.insert(entry.guard);
+                }
+                Entry::Occupied(mut occupied) => {
+                    let guard = self.guards.or(occupied.get(), &entry.guard);
+                    occupied.insert(guard);
+                }
+            }
+        }
+        node.direct = canonical
+            .into_iter()
+            .map(|((_, payload), guard)| Guarded { guard, payload })
+            .collect();
+        if let Some(value) = self.nodes.get(&node) {
+            return value.clone();
+        }
+        // An interned node was validated when it was first created.
+        for entry in &node.direct {
             assert!(
                 node.shape
                     .direct(self.db)
@@ -1497,27 +1605,14 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     .expect("free payload binder");
             }
         }
-        let mut canonical = BTreeMap::<(BinderScope, P), Guard<'db>>::new();
-        for entry in node.direct {
-            canonical
-                .entry((entry.guard.scope().clone(), entry.payload))
-                .and_modify(|guard| *guard = guard.or(&entry.guard))
-                .or_insert(entry.guard);
-        }
-        node.direct = canonical
-            .into_iter()
-            .map(|((_, payload), guard)| Guarded { guard, payload })
-            .collect();
-        if let Some(value) = self.nodes.get(&node) {
-            return value.clone();
-        }
         // IDs have structural equality, so cache eviction never changes domain equality.
         // Live values keep their nodes alive independently of the interning cache.
         if self.nodes.len() >= self.limits.interned_nodes {
             self.nodes.clear();
             self.metrics.interner_evictions += 1;
         }
-        let value = ValueId(Arc::new(node.clone()));
+        let hash = FxBuildHasher.hash_one(&node);
+        let value = ValueId(Arc::new(node.clone()), hash);
         self.nodes.insert(node, value.clone());
         self.metrics.nodes_created += 1;
         value

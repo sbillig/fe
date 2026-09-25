@@ -90,13 +90,10 @@ pub contract ConstantStrings {
 "#;
     let bytecode = compile_fe_sonatina_bytecode(source, "ConstantStrings", "ConstantStrings")
         .expect("compile constant string contract");
-    eprintln!(
-        "constant string getters: {} runtime bytes",
-        bytecode.runtime.len()
-    );
     assert!(
         bytecode.runtime.len() <= 280,
-        "constant string code size regressed"
+        "constant string code size regressed to {} bytes",
+        bytecode.runtime.len()
     );
     let mut runtime = RuntimeInstance::deploy(&hex::encode(bytecode.deploy)).expect("deploy");
     for (signature, value) in [
@@ -107,10 +104,10 @@ pub contract ConstantStrings {
         let function = AbiParser::default().parse_function(signature).unwrap();
         let input = function.encode_input(&[]).unwrap();
         let profile = runtime.call_raw_gas_profile(&input, ExecutionOptions::default());
-        eprintln!("{signature}: {} execution gas", profile.total_step_gas);
         assert!(
             profile.total_step_gas <= 510,
-            "{signature} encoding gas regressed"
+            "{signature} encoding gas regressed to {}",
+            profile.total_step_gas
         );
         let result = runtime
             .call_raw(&input, ExecutionOptions::default())

@@ -22,24 +22,23 @@ fn erc20_deployment_size_and_behavior() {
     let source = include_str!("evm_compiler_bench/erc20_minimal.fe");
     let bytecode = compile_fe_sonatina_bytecode(source, "Erc20Minimal", "Erc20Minimal")
         .expect("compile ERC20 benchmark");
-    eprintln!(
-        "ERC20 init/runtime bytes: {}/{}",
-        bytecode.deploy.len(),
-        bytecode.runtime.len()
-    );
     // The 9c9840ce4 baseline was 1,675/1,551 bytes. Keep meaningful headroom
     // below that baseline without pinning incidental instruction ordering.
-    assert!(bytecode.deploy.len() <= 1_390, "ERC20 initcode regressed");
+    assert!(
+        bytecode.deploy.len() <= 1_390,
+        "ERC20 initcode regressed to {} bytes",
+        bytecode.deploy.len()
+    );
     assert!(
         bytecode.runtime.len() <= 1_250,
-        "ERC20 runtime size regressed"
+        "ERC20 runtime size regressed to {} bytes",
+        bytecode.runtime.len()
     );
-    let (mut runtime, deploy_gas) = RuntimeInstance::deploy_with_constructor_args_tracked(
+    let mut runtime = RuntimeInstance::deploy_with_constructor_args(
         &hex::encode(bytecode.deploy),
         &encode(&[Token::Uint(1_000_000.into())]),
     )
     .unwrap();
-    eprintln!("ERC20 deployment transaction gas: {deploy_gas}");
     let owner = Token::Address(Address::zero());
     let recipient = Token::Address(Address::from_low_u64_be(123));
     let calls = [

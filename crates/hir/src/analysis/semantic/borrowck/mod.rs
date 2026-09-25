@@ -8,9 +8,12 @@ mod events;
 mod facts;
 mod inventory;
 mod ir;
+mod loop_certificate;
 mod memory;
+mod scalar;
 mod solver;
 mod summary;
+mod transport;
 mod validation;
 mod validity;
 

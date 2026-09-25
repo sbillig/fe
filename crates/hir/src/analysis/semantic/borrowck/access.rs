@@ -116,14 +116,22 @@ impl<'db> Borrowck<'db> {
                                     RegionPath::new(leaf.path.as_slice())
                                 )
                                 .with_guard(&leaf.guard)
-                                .close_existentials(region.scope())
+                                .quantify_into(self.db, region.scope())
                             ),
                             OverlapResult::Disjoint
                         )
                 })
                 .fold(NativeValidity::default(), |mut validity, leaf| {
-                    if let CapabilityRef::Invalidated { region, .. } = &leaf.payload {
-                        validity |= NativeValidity::from_region(&region.with_guard(&leaf.guard));
+                    if let CapabilityRef::Invalidated {
+                        region: invalidated,
+                        ..
+                    } = &leaf.payload
+                    {
+                        validity |= NativeValidity::from_region(
+                            &invalidated
+                                .with_guard(&leaf.guard)
+                                .quantify_into(self.db, region.scope()),
+                        );
                     }
                     validity
                 })

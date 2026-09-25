@@ -41,3 +41,24 @@ fn read_initialized_reference() -> u256 {
     let result: u256 = *slot
     result
 }
+
+// Accepted: native slots allocated in a loop can be returned uninitialized.
+fn make_slot(_ n: u256) -> *ref u256 {
+    let mut slot = ptr::alloc<ref u256>()
+    let mut i: u256 = 0
+    while i < n {
+        slot = ptr::alloc<ref u256>()
+        i += 1
+    }
+    slot
+}
+fn discard_returned_slot() {
+    let _ = make_slot(3)
+}
+
+// Rejected: the returned loop-allocated slot still holds no native reference.
+fn read_returned_slot() -> u256 {
+    let slot = make_slot(3)
+    let value: u256 = *slot
+    value
+}

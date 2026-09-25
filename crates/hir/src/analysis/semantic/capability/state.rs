@@ -2,10 +2,12 @@
 //!
 //! A carrier describes its referent region. Loading that region reads a separate
 //! structural value; updating it never changes the carrier or its loan identity.
+use rustc_hash::FxHashMap;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     birth::AllocationBirth,
+    external::StorageMatch,
     footprint::AccessFootprint,
     guard::{Guard, ValueOccurrence},
     handle::AddressOccurrence,
@@ -13,7 +15,7 @@ use super::{
     loan::{CapabilityRef, LoanDef},
     opaque::OpaqueWrite,
     path::{RegionPath, StructuralPath},
-    region::{OverlapResult, RegionRoot, RegionSet},
+    region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace},
     repack::RepackError,
     semantics::UnresolvedCapability,
     shape::ShapeId,
@@ -23,6 +25,37 @@ use crate::analysis::{HirAnalysisDb, semantic::normalized::NValueId};
 
 pub type CapabilityValue<'db> = ValueId<'db, CapabilityRef<'db>>;
 pub type CapabilityValues<'db> = ValueInterner<'db, CapabilityRef<'db>>;
+
+/// Typed-cell matches for one request, whose guards are in the request's
+/// binder scope. Their union is the represented part of a demand.
+pub struct StorageCoverage<'a, 'db> {
+    pub matches: Vec<(
+        &'a RegionRoot<'db>,
+        &'a CapabilityValue<'db>,
+        StorageMatch<'db>,
+    )>,
+}
+
+impl<'db> StorageCoverage<'_, 'db> {
+    fn covered(&self) -> Option<Guard<'db>> {
+        self.matches
+            .iter()
+            .map(|(_, _, matched)| matched.guard.clone())
+            .reduce(|left, right| left.or(&right))
+    }
+
+    pub fn complete(&self, demand: &Guard<'db>) -> bool {
+        self.covered()
+            .is_some_and(|covered| demand.implies(&covered))
+    }
+
+    pub fn uncovered(&self, demand: &Guard<'db>) -> Option<Guard<'db>> {
+        self.covered().map_or_else(
+            || Some(demand.clone()),
+            |covered| demand.difference(&covered),
+        )
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StateError<'db> {
@@ -40,6 +73,17 @@ pub struct BorrowState<'db> {
     guard: Guard<'db>,
     values: BTreeMap<NValueId, CapabilityValue<'db>>,
     contents: BTreeMap<RegionRoot<'db>, CapabilityValue<'db>>,
+    certified_contents: Vec<CertifiedContents<'db>>,
+    scalar_cells: BTreeMap<RegionRoot<'db>, Vec<Guarded<'db, Option<IndexExpr<'db>>>>>,
+}
+
+/// A verified must range over a typed family and its possible contents.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CertifiedContents<'db> {
+    pub family: RegionRoot<'db>,
+    pub scope: BinderScope,
+    pub coverage: Guard<'db>,
+    pub contents: CapabilityValue<'db>,
 }
 
 impl<'db> BorrowState<'db> {
@@ -53,6 +97,8 @@ impl<'db> BorrowState<'db> {
             guard: Guard::always(&scope),
             values: BTreeMap::new(),
             contents: BTreeMap::new(),
+            certified_contents: Vec::new(),
+            scalar_cells: BTreeMap::new(),
         };
         for (id, shape) in holders {
             assert!(
@@ -101,6 +147,11 @@ impl<'db> BorrowState<'db> {
         births: &[AllocationBirth<'db>],
     ) {
         for birth in births {
+            self.certified_contents.retain(|certificate| {
+                birth
+                    .selector(&certificate.family, &certificate.scope)
+                    .is_none()
+            });
             let Some(roots) = families.get(&birth.allocation.occurrence) else {
                 continue;
             };
@@ -118,15 +169,27 @@ impl<'db> BorrowState<'db> {
         }
     }
 
-    pub fn has_storage(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        root: &RegionRoot<'db>,
+    /// SSA representation roots are covered by their structural value.
+    pub fn storage_coverage<'a>(
+        &'a self,
+        root: &'a RegionRoot<'db>,
         scope: &BinderScope,
-    ) -> bool {
-        self.contents.iter().any(|(candidate, contents)| {
-            storage_instance(db, candidate, contents.scope(), root, scope).is_some()
-        })
+    ) -> StorageCoverage<'a, 'db> {
+        let representation = match root {
+            RegionRoot::Value(value) => Some((root, self.value(*value))),
+            _ => None,
+        };
+        StorageCoverage {
+            matches: self
+                .contents
+                .iter()
+                .chain(representation)
+                .filter_map(|(candidate, contents)| {
+                    let matched = storage_instance(candidate, contents.scope(), root, scope)?;
+                    Some((candidate, contents, matched))
+                })
+                .collect(),
+        }
     }
 
     pub fn guard(&self) -> &Guard<'db> {
@@ -141,8 +204,115 @@ impl<'db> BorrowState<'db> {
         for value in self.values.values_mut().chain(self.contents.values_mut()) {
             *value = values.with_guard(value, &guard.in_scope(value.scope()));
         }
+        for alternatives in self.scalar_cells.values_mut() {
+            *alternatives = alternatives
+                .iter()
+                .filter_map(|entry| {
+                    Some(Guarded {
+                        guard: values.guards().and(&entry.guard, &guard)?,
+                        payload: entry.payload,
+                    })
+                })
+                .collect();
+        }
+        self.scalar_cells
+            .retain(|_, alternatives| !alternatives.is_empty());
         self.guard = guard;
         true
+    }
+
+    pub fn load_scalar(
+        &mut self,
+        root: RegionRoot<'db>,
+        result: NValueId,
+        values: &mut CapabilityValues<'db>,
+    ) {
+        if let Some(alternatives) = self.scalar_cells.get(&root) {
+            let relation = alternatives
+                .iter()
+                .filter_map(|entry| {
+                    let guard = self.guard.and(&entry.guard)?;
+                    entry.payload.map_or(Some(guard.clone()), |stored| {
+                        guard.with_equality(IndexExpr::Runtime(result), stored)
+                    })
+                })
+                .reduce(|left, right| left.or(&right));
+            if let Some(relation) = relation
+                && relation != self.guard
+            {
+                self.constrain(&relation, values);
+            }
+        }
+        self.scalar_cells.insert(
+            root,
+            vec![Guarded {
+                guard: self.guard.clone(),
+                payload: Some(IndexExpr::Runtime(result)),
+            }],
+        );
+    }
+
+    pub fn store_scalar(&mut self, root: RegionRoot<'db>, value: IndexExpr<'db>) {
+        self.scalar_cells.insert(
+            root,
+            vec![Guarded {
+                guard: self.guard.clone(),
+                payload: Some(value),
+            }],
+        );
+    }
+
+    pub fn scalar_constant(&self, root: &RegionRoot<'db>) -> Option<usize> {
+        let alternatives = self.scalar_cells.get(root)?;
+        let Some(IndexExpr::Const(value)) = alternatives.first()?.payload else {
+            return None;
+        };
+        let mut covered: Option<Guard<'db>> = None;
+        for entry in alternatives {
+            if entry.payload != Some(IndexExpr::Const(value)) {
+                return None;
+            }
+            covered = Some(covered.map_or_else(|| entry.guard.clone(), |old| old.or(&entry.guard)));
+        }
+        self.guard.implies(&covered?).then_some(value)
+    }
+
+    fn invalidate_scalar_memory(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        footprint: AccessFootprint<'_, 'db>,
+    ) {
+        self.scalar_cells.retain(|root, _| {
+            let region = RegionSet::singleton(
+                footprint.region.scope(),
+                root.clone(),
+                RegionPath::default(),
+            );
+            matches!(
+                AccessFootprint::typed(&region).overlap(db, footprint),
+                OverlapResult::Disjoint
+            )
+        });
+    }
+
+    fn invalidate_certified_contents(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        footprint: AccessFootprint<'_, 'db>,
+    ) {
+        self.certified_contents.retain(|certificate| {
+            let family = RegionSet::singleton(
+                &certificate.scope,
+                certificate.family.clone(),
+                RegionPath::default(),
+            )
+            .substitute(db, &certificate.scope.freshening(footprint.region.scope()))
+            .close_existentials(footprint.region.scope());
+            matches!(
+                AccessFootprint::typed(&family).overlap(db, footprint),
+                OverlapResult::Disjoint
+            )
+        });
     }
 
     pub fn forget_iteration(
@@ -151,43 +321,85 @@ impl<'db> BorrowState<'db> {
         repeated: impl Fn(IndexExpr<'db>) -> bool + Copy,
         occurrence: impl Fn(ValueOccurrence) -> bool + Copy,
     ) {
+        self.certified_contents.retain(|certificate| {
+            let family = RegionSet::singleton(
+                &certificate.scope,
+                certificate.family.clone(),
+                RegionPath::default(),
+            );
+            !certificate.family.indices().any(repeated)
+                && family.forget_occurrences(occurrence) == family
+                && !certificate.coverage.indices().into_iter().any(repeated)
+                && !certificate
+                    .coverage
+                    .occurrences()
+                    .into_iter()
+                    .any(occurrence)
+                && !values
+                    .leaves(&certificate.contents, ValueOccurrence::Summary)
+                    .iter()
+                    .any(|leaf| {
+                        leaf.guard.indices().into_iter().any(repeated)
+                            || leaf.guard.occurrences().into_iter().any(occurrence)
+                            || leaf.payload.indices().any(repeated)
+                            || leaf.payload.forget_occurrences(occurrence) != leaf.payload
+                    })
+        });
         self.guard = self
             .guard
             .forget_occurrences(occurrence)
             .forget_indices(repeated);
+        for alternatives in self.scalar_cells.values_mut() {
+            for entry in alternatives.iter_mut() {
+                entry.guard = entry
+                    .guard
+                    .forget_occurrences(occurrence)
+                    .forget_indices(repeated);
+                if entry.payload.is_some_and(repeated) {
+                    entry.payload = None;
+                }
+            }
+        }
+        // Each iteration forgets the same guards again, and values share clauses.
+        let mut guards = std::mem::take(values.guards());
+        let mut forgotten = FxHashMap::default();
         let mut destination = CapabilityValues::new(values.db, ValueLimits::default());
         for value in self.values.values_mut().chain(self.contents.values_mut()) {
             let mapped = values.map_payloads(value, &mut destination, |_, _, entry, domain| {
-                let guard = domain.forget_occurrences(occurrence);
-                let payload = entry.payload.forget_occurrences(occurrence);
-                let mut scope = guard.scope().clone();
-                let indices: BTreeSet<_> = guard
-                    .indices()
-                    .into_iter()
-                    .chain(payload.indices())
-                    .filter(|index| repeated(*index))
-                    .collect();
-                let bindings: Vec<_> = indices
-                    .into_iter()
-                    .map(|index| {
-                        let (nested, witness) = scope.bind(IndexNamespace::Existential);
-                        scope = nested;
-                        (index, witness)
+                forgotten
+                    .entry((entry.payload.clone(), domain.clone()))
+                    .or_insert_with(|| {
+                        let guard = domain.forget_occurrences(occurrence);
+                        let payload = entry.payload.forget_occurrences(occurrence);
+                        let mut scope = guard.scope().clone();
+                        let indices: BTreeSet<_> = guard
+                            .indices()
+                            .into_iter()
+                            .chain(payload.indices())
+                            .filter(|index| repeated(*index))
+                            .collect();
+                        let bindings: Vec<_> = indices
+                            .into_iter()
+                            .map(|index| {
+                                let (nested, witness) = scope.bind(IndexNamespace::Existential);
+                                scope = nested;
+                                (index, witness)
+                            })
+                            .collect();
+                        let subst = IndexSubst::new(guard.scope(), &scope, bindings)
+                            .expect("previous value occurrence witnesses");
+                        guards.substitute(&guard, &subst).map(|guard| Guarded {
+                            guard,
+                            payload: payload.substitute(values.db, &subst),
+                        })
                     })
-                    .collect();
-                let subst = IndexSubst::new(guard.scope(), &scope, bindings)
-                    .expect("previous value occurrence witnesses");
-                guard
-                    .substitute(&subst)
-                    .map(|guard| Guarded {
-                        guard,
-                        payload: payload.substitute(values.db, &subst),
-                    })
+                    .clone()
                     .into_iter()
                     .collect()
             });
             *value = destination.widen(&mapped);
         }
+        *values.guards() = guards;
     }
 
     pub fn value(&self, id: NValueId) -> &CapabilityValue<'db> {
@@ -209,6 +421,92 @@ impl<'db> BorrowState<'db> {
         self.contents.iter()
     }
 
+    pub fn certified(&self) -> &[CertifiedContents<'db>] {
+        &self.certified_contents
+    }
+
+    fn matching_certified_contents<'a>(
+        &'a self,
+        clause: &Guarded<'db, SymbolicPlace<'db>>,
+    ) -> Vec<(&'a CertifiedContents<'db>, IndexSubst<'db>, Guard<'db>)> {
+        self.certified_contents
+            .iter()
+            .filter_map(|certificate| {
+                let (RegionRoot::External(family), RegionRoot::External(instance)) =
+                    (&certificate.family, &clause.payload.root)
+                else {
+                    return None;
+                };
+                if instance.uncertain() || instance.is_reachable() {
+                    return None;
+                }
+                let matched =
+                    family.match_instance(&certificate.scope, instance, clause.guard.scope())?;
+                let write = matched.write?;
+                let guard = certificate
+                    .coverage
+                    .substitute(&matched.substitution)?
+                    .and(&matched.guard)?
+                    .and(&write.guard.substitute(&matched.substitution)?)?
+                    .and(&clause.guard)?
+                    .and(&self.guard.in_scope(clause.guard.scope()))?;
+                Some((certificate, matched.substitution, guard))
+            })
+            .collect()
+    }
+
+    /// Definite typed initialization supplied by a verified whole-cell range.
+    /// The selected request path is retained, so this is also valid for a leaf.
+    pub fn certified_initialized_region(&self, region: &RegionSet<'db>) -> RegionSet<'db> {
+        RegionSet::new(
+            region.scope(),
+            region.clauses().iter().flat_map(|clause| {
+                self.matching_certified_contents(clause)
+                    .into_iter()
+                    .map(|(_, _, guard)| Guarded {
+                        guard,
+                        payload: clause.payload.clone(),
+                    })
+            }),
+        )
+    }
+
+    /// Keep a proved range separate from possible contents, whose join may
+    /// widen guards. Reads use this must fact to exclude old possibilities only
+    /// on covered members of the same typed storage family.
+    pub fn certify_family_contents(
+        &mut self,
+        family: &RegionRoot<'db>,
+        family_scope: &BinderScope,
+        coverage: &Guard<'db>,
+        replacement: &CapabilityValue<'db>,
+    ) -> bool {
+        assert_eq!(coverage.scope(), family_scope, "certificate guard scope");
+        assert_eq!(
+            replacement.scope(),
+            family_scope,
+            "certificate content scope"
+        );
+        assert!(
+            coverage.implies(&self.guard.in_scope(family_scope)),
+            "certificate must be restricted to its state"
+        );
+        if !matches!(family, RegionRoot::External(source) if !source.uncertain() && !source.is_reachable())
+            || !self.contents.get(family).is_some_and(|old| {
+                old.scope() == family_scope && old.shape() == replacement.shape()
+            })
+        {
+            return false;
+        }
+        self.certified_contents.push(CertifiedContents {
+            family: family.clone(),
+            scope: family_scope.clone(),
+            coverage: coverage.clone(),
+            contents: replacement.clone(),
+        });
+        true
+    }
+
     pub fn join(&mut self, other: &Self, values: &mut CapabilityValues<'db>) -> bool {
         assert!(
             self.values.keys().eq(other.values.keys()),
@@ -218,9 +516,93 @@ impl<'db> BorrowState<'db> {
             self.contents.keys().eq(other.contents.keys()),
             "storage inventory mismatch"
         );
+        let previous_guard = self.guard.clone();
         let joined_guard = self.guard.or(&other.guard);
         let mut changed = joined_guard != self.guard;
         self.guard = joined_guard;
+        let mut certified = Vec::new();
+        for prior in &self.certified_contents {
+            let matching = other.certified_contents.iter().find(|incoming| {
+                incoming.family == prior.family
+                    && incoming.scope == prior.scope
+                    && incoming.contents == prior.contents
+            });
+            let old_only = prior
+                .coverage
+                .difference(&other.guard.in_scope(&prior.scope));
+            let covered = matching.and_then(|incoming| prior.coverage.and(&incoming.coverage));
+            let new_only = matching.and_then(|incoming| {
+                incoming
+                    .coverage
+                    .difference(&previous_guard.in_scope(&incoming.scope))
+            });
+            if let Some(coverage) = old_only
+                .into_iter()
+                .chain(covered)
+                .chain(new_only)
+                .reduce(|left, right| left.or(&right))
+            {
+                let mut retained = prior.clone();
+                retained.coverage = coverage;
+                certified.push(retained);
+            }
+        }
+        for incoming in &other.certified_contents {
+            if self.certified_contents.iter().any(|prior| {
+                prior.family == incoming.family
+                    && prior.scope == incoming.scope
+                    && prior.contents == incoming.contents
+            }) {
+                continue;
+            }
+            if let Some(coverage) = incoming
+                .coverage
+                .difference(&previous_guard.in_scope(&incoming.scope))
+            {
+                let mut retained = incoming.clone();
+                retained.coverage = coverage;
+                certified.push(retained);
+            }
+        }
+        changed |= certified != self.certified_contents;
+        self.certified_contents = certified;
+        let mut scalar_cells = BTreeMap::new();
+        for root in self
+            .scalar_cells
+            .keys()
+            .chain(other.scalar_cells.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+        {
+            let mut alternatives = self.scalar_cells.get(&root).cloned().unwrap_or_else(|| {
+                vec![Guarded {
+                    guard: previous_guard.clone(),
+                    payload: None,
+                }]
+            });
+            alternatives.extend(other.scalar_cells.get(&root).cloned().unwrap_or_else(|| {
+                vec![Guarded {
+                    guard: other.guard.clone(),
+                    payload: None,
+                }]
+            }));
+            let mut by_value = BTreeMap::new();
+            for entry in alternatives {
+                by_value
+                    .entry(entry.payload)
+                    .and_modify(|guard: &mut Guard<'db>| *guard = guard.or(&entry.guard))
+                    .or_insert(entry.guard);
+            }
+            scalar_cells.insert(
+                root,
+                by_value
+                    .into_iter()
+                    .map(|(payload, guard)| Guarded { guard, payload })
+                    .collect(),
+            );
+        }
+        changed |= scalar_cells != self.scalar_cells;
+        self.scalar_cells = scalar_cells;
         for (old, incoming) in self
             .values
             .values_mut()
@@ -245,20 +627,21 @@ impl<'db> BorrowState<'db> {
         loans: &[LoanDef<'db>],
     ) -> RegionSet<'db> {
         let value = self.value(carrier);
-        value
-            .direct()
-            .iter()
-            .filter(|entry| !matches!(entry.payload, CapabilityRef::Invalidated { .. }))
-            .fold(RegionSet::empty(value.scope()), |region, entry| {
-                region.union(
-                    &entry
+        RegionSet::union_all(
+            value.scope(),
+            value
+                .direct()
+                .iter()
+                .filter(|entry| !matches!(entry.payload, CapabilityRef::Invalidated { .. }))
+                .map(|entry| {
+                    entry
                         .payload
                         .region(db, loans, entry.guard.scope())
                         .with_guard(&entry.guard)
-                        .close_existentials(value.scope()),
-                )
-            })
-            .project(path)
+                        .close_existentials(value.scope())
+                }),
+        )
+        .project(path)
     }
 
     /// Load structural contents from the selected storage, preserving guards and
@@ -276,29 +659,39 @@ impl<'db> BorrowState<'db> {
             return Ok(result);
         }
         for clause in region.clauses() {
-            let mut covered: Option<Guard<'db>> = None;
-            let representation = if let RegionRoot::Value(value) = clause.payload.root {
-                Some((&clause.payload.root, self.value(value)))
-            } else {
-                None
-            };
-            for (root, contents) in self.contents.iter().chain(representation) {
-                let Some((substitution, guard)) = storage_instance(
-                    db,
-                    root,
-                    contents.scope(),
-                    &clause.payload.root,
-                    clause.guard.scope(),
-                ) else {
-                    continue;
-                };
-                covered = Some(covered.map_or_else(|| guard.clone(), |old| old.or(&guard)));
-                let Some(guard) = guard.and(&clause.guard) else {
-                    continue;
-                };
-                let contents = values.substitute(contents, &substitution);
+            let coverage = self.storage_coverage(&clause.payload.root, clause.guard.scope());
+            if !coverage.complete(&clause.guard) {
+                return Err(StateError::MissingStorage(Box::new(
+                    clause.payload.root.clone(),
+                )));
+            }
+            // A certified range replaces every older possibility on its members.
+            let certified = self.matching_certified_contents(clause);
+            let certified_coverage = certified
+                .iter()
+                .map(|(_, _, guard)| guard.clone())
+                .reduce(|left, right| left.or(&right));
+            let possible = coverage
+                .matches
+                .into_iter()
+                .filter_map(|(_, contents, matched)| {
+                    let guard = matched.guard.and(&clause.guard)?;
+                    let guard = match &certified_coverage {
+                        Some(covered) => guard.difference(covered)?,
+                        None => guard,
+                    };
+                    Some((contents, matched.substitution, guard))
+                });
+            let certified = certified
+                .into_iter()
+                .map(|(certificate, substitution, guard)| {
+                    (&certificate.contents, substitution, guard)
+                });
+            for (contents, substitution, guard) in possible.chain(certified) {
                 let path = StructuralPath::new(clause.payload.path.as_slice());
-                let Some(selected) = values.project(&contents, &path, occurrence) else {
+                let Some(selected) =
+                    values.project_substituted(contents, &substitution, &path, occurrence)
+                else {
                     continue;
                 };
                 let selected = clause
@@ -310,11 +703,6 @@ impl<'db> BorrowState<'db> {
                 let selected = values.with_guard(&selected, &guard);
                 let selected = values.close_existentials(&selected, region.scope());
                 result = values.join(&result, &selected);
-            }
-            if covered.is_none_or(|guard| !clause.guard.implies(&guard)) {
-                return Err(StateError::MissingStorage(Box::new(
-                    clause.payload.root.clone(),
-                )));
             }
         }
         Ok(result)
@@ -367,6 +755,8 @@ impl<'db> BorrowState<'db> {
             }
         }
         self.contents.extend(updates);
+        self.invalidate_certified_contents(values.db, footprint);
+        self.invalidate_scalar_memory(values.db, footprint);
         Ok(())
     }
 
@@ -390,6 +780,10 @@ impl<'db> BorrowState<'db> {
             })
             .collect();
         let mut updates = BTreeMap::new();
+        // Family members each destination clause reaches as the same typed cell,
+        // and those among them the typed update wrote.
+        let mut typed = Vec::new();
+        let mut written = Vec::new();
         for (index, (region, replacement)) in replacements.iter().enumerate() {
             let interferes = independent.iter().enumerate().any(|(other, region)| {
                 index != other
@@ -399,41 +793,28 @@ impl<'db> BorrowState<'db> {
                     )
             });
             for clause in region.clauses() {
-                let mut covered: Option<Guard<'db>> = None;
-                for (root, contents) in &self.contents {
-                    let Some((_, match_guard)) = storage_instance(
-                        values.db,
-                        root,
-                        contents.scope(),
-                        &clause.payload.root,
-                        clause.guard.scope(),
-                    ) else {
-                        continue;
-                    };
-                    covered = Some(
-                        covered.map_or_else(|| match_guard.clone(), |old| old.or(&match_guard)),
-                    );
-                    let Some(write_guard) = clause.guard.and(&match_guard) else {
-                        continue;
-                    };
-                    // Bind a selected symbolic occurrence back to its storage family.
-                    // Constants and runtime selectors stay free, so a write to one
-                    // member is guarded by equality with the family's parameter.
-                    let mut bindings = BTreeMap::new();
-                    for (formal, actual) in root.indices().zip(clause.payload.root.indices()) {
-                        if matches!(actual, IndexExpr::Bound(_)) {
-                            bindings.entry(actual).or_insert(formal);
-                        }
+                let coverage = self.storage_coverage(&clause.payload.root, clause.guard.scope());
+                if matches!(clause.payload.root, RegionRoot::Value(_))
+                    || !coverage.complete(&clause.guard)
+                {
+                    return Err(StateError::MissingStorage(Box::new(
+                        clause.payload.root.clone(),
+                    )));
+                }
+                let mut domains = BTreeMap::new();
+                let mut applied = BTreeMap::new();
+                for (root, contents, matched) in coverage.matches {
+                    if let Some(domain) = &matched.typed {
+                        domains.insert(root, domain.clone());
                     }
-                    let mut family_guard = Some(Guard::always(contents.scope()));
-                    for (formal, actual) in root.indices().zip(clause.payload.root.indices()) {
-                        let actual = bindings.get(&actual).copied().unwrap_or(actual);
-                        family_guard =
-                            family_guard.and_then(|guard| guard.with_equality(formal, actual));
-                    }
-                    let Some(family_guard) = family_guard else {
+                    let (Some(write_guard), Some(embedding)) =
+                        (clause.guard.and(&matched.guard), matched.write)
+                    else {
                         continue;
                     };
+                    if let Some(domain) = matched.typed {
+                        applied.insert(root, domain);
+                    }
                     let path = StructuralPath::new(clause.payload.path.as_slice());
                     let old = updates.get(root).unwrap_or(contents);
                     let lift = IndexSubst::new(replacement.scope(), clause.guard.scope(), [])
@@ -451,16 +832,7 @@ impl<'db> BorrowState<'db> {
                         )
                         .map_err(StateError::Repack)?;
                     let changed = values
-                        .replace_family(
-                            old,
-                            &path,
-                            &replacement,
-                            &write_guard,
-                            &Guarded {
-                                guard: family_guard,
-                                payload: bindings,
-                            },
-                        )
+                        .replace_family(old, &path, &replacement, &write_guard, &embedding)
                         .map_err(|_| {
                             StateError::UnrepresentableWrite(Box::new(clause.payload.root.clone()))
                         })?;
@@ -471,61 +843,64 @@ impl<'db> BorrowState<'db> {
                     };
                     updates.insert(root.clone(), updated);
                 }
-                if covered.is_none_or(|guard| !clause.guard.implies(&guard)) {
-                    return Err(StateError::MissingStorage(Box::new(
-                        clause.payload.root.clone(),
-                    )));
-                }
+                typed.push(domains);
+                written.push(applied);
             }
         }
-        for (region, _) in replacements {
-            for clause in region.clauses() {
-                for (root, contents) in &self.contents {
-                    if !contents.shape().contains_capability(values.db)
-                        || storage_instance(
-                            values.db,
-                            root,
-                            contents.scope(),
-                            &clause.payload.root,
-                            clause.guard.scope(),
-                        )
-                        .is_some()
-                        || !root.may_alias_unknown(&clause.payload.root)
-                    {
-                        continue;
-                    }
-                    let candidate =
-                        RegionSet::singleton(contents.scope(), root.clone(), RegionPath::default());
-                    let candidate = candidate
+        let clauses = replacements
+            .iter()
+            .flat_map(|(region, _)| region.clauses().iter().map(move |clause| (*region, clause)));
+        for ((region, clause), domains) in clauses.zip(&typed) {
+            for (root, contents) in &self.contents {
+                if !contents.shape().contains_capability(values.db)
+                    || !root.may_alias_unknown(&clause.payload.root)
+                {
+                    continue;
+                }
+                // The typed update accounts for members reached as the same
+                // typed cell. Other members may still share written bytes.
+                let residual = match domains.get(root) {
+                    Some(domain) => Guard::always(contents.scope()).difference(domain),
+                    None => Some(Guard::always(contents.scope())),
+                };
+                let Some(residual) = residual else {
+                    continue;
+                };
+                let candidate =
+                    RegionSet::singleton(contents.scope(), root.clone(), RegionPath::default())
+                        .with_guard(&residual)
                         .substitute(values.db, &contents.scope().freshening(region.scope()))
                         .close_existentials(region.scope());
-                    if matches!(
-                        candidate.overlap(values.db, region),
-                        OverlapResult::Disjoint
-                    ) {
-                        continue;
-                    }
-                    // Unknown bases may overlap at a byte offset, even when
-                    // their typed contents have the same shape. A partial store
-                    // can corrupt a native capability rather than copy it intact.
-                    let old = updates.get(root).unwrap_or(contents);
-                    let unknown = overwrite
-                        .contents(
-                            values,
-                            contents.shape(),
-                            contents.scope(),
-                            Some((root, AccessFootprint::typed(region))),
-                        )
-                        .map_err(StateError::OpaqueContents)?;
-                    updates.insert(root.clone(), values.join(old, &unknown));
+                if matches!(
+                    candidate.overlap(values.db, region),
+                    OverlapResult::Disjoint
+                ) {
+                    continue;
                 }
+                // Unknown bases may overlap at a byte offset, even when
+                // their typed contents have the same shape. A partial store
+                // can corrupt a native capability rather than copy it intact.
+                let old = updates.get(root).unwrap_or(contents);
+                let unknown = overwrite
+                    .contents(
+                        values,
+                        contents.shape(),
+                        contents.scope(),
+                        Some((root, AccessFootprint::typed(region))),
+                    )
+                    .map_err(StateError::OpaqueContents)?;
+                let unknown = values.with_guard(&unknown, &residual);
+                updates.insert(root.clone(), values.join(old, &unknown));
             }
         }
         // Unknown bases may overlap at different physical offsets. Retain every
         // compatible stored capability, with independent witnesses for the source
         // and destination families; an unknown write never removes prior contents.
+        // Members the typed update wrote already hold the replacement.
+        let mut written = written.into_iter();
         for (region, replacement) in replacements {
             for clause in region.clauses() {
+                let applied = written.next().expect("typed domains for every clause");
                 let lift = IndexSubst::new(replacement.scope(), clause.guard.scope(), [])
                     .expect("unknown store witness scope");
                 let replacement = values.substitute(replacement, &lift);
@@ -554,8 +929,16 @@ impl<'db> BorrowState<'db> {
                     {
                         continue;
                     }
+                    let residual = match applied.get(root) {
+                        Some(domain) => Guard::always(contents.scope()).difference(domain),
+                        None => Some(Guard::always(contents.scope())),
+                    };
+                    let Some(residual) = residual else {
+                        continue;
+                    };
                     let candidate =
                         RegionSet::singleton(contents.scope(), root.clone(), RegionPath::default())
+                            .with_guard(&residual)
                             .substitute(values.db, &contents.scope().freshening(region.scope()))
                             .close_existentials(region.scope());
                     if matches!(
@@ -581,31 +964,40 @@ impl<'db> BorrowState<'db> {
                                 .collect()
                         },
                     );
+                    let added = values.with_guard(&added, &residual);
                     let old = updates.get(root).unwrap_or(contents);
                     updates.insert(root.clone(), values.join(old, &added));
                 }
             }
         }
         self.contents.extend(updates);
+        for (region, _) in replacements {
+            self.invalidate_certified_contents(values.db, AccessFootprint::typed(region));
+            self.invalidate_scalar_memory(values.db, AccessFootprint::typed(region));
+        }
         Ok(())
     }
 }
 
 fn storage_instance<'db>(
-    db: &'db dyn HirAnalysisDb,
     root: &RegionRoot<'db>,
     scope: &BinderScope,
     instance: &RegionRoot<'db>,
     instance_scope: &BinderScope,
-) -> Option<(IndexSubst<'db>, Guard<'db>)> {
+) -> Option<StorageMatch<'db>> {
     match (root, instance) {
         (RegionRoot::External(root), RegionRoot::External(instance)) => {
-            root.match_instance(db, scope, instance, instance_scope)
+            root.match_instance(scope, instance, instance_scope)
         }
-        _ if root == instance => Some((
-            IndexSubst::new(scope, instance_scope, []).ok()?,
-            Guard::always(instance_scope),
-        )),
+        _ if root == instance => Some(StorageMatch {
+            substitution: IndexSubst::new(scope, instance_scope, []).ok()?,
+            guard: Guard::always(instance_scope),
+            typed: Some(Guard::always(scope)),
+            write: Some(Guarded {
+                guard: Guard::always(scope),
+                payload: BTreeMap::new(),
+            }),
+        }),
         _ => None,
     }
 }

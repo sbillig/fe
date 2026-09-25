@@ -31,19 +31,11 @@ pub(crate) mod test_roots {
         region::RegionRoot,
         source::InputSource,
     };
-    use crate::analysis::{
-        HirAnalysisDb,
-        semantic::normalized::NRootId,
-        ty::{ProviderAddressSpace, ty_def::TyId},
-    };
+    use crate::analysis::{HirAnalysisDb, semantic::normalized::NRootId, ty::ty_def::TyId};
     pub fn local(db: &dyn HirAnalysisDb, root: NRootId) -> RegionRoot<'_> {
         RegionRoot::Root {
             root,
-            contract: ReferentContract::new(
-                db,
-                TyId::u256(db),
-                HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-            ),
+            contract: ReferentContract::memory(db, TyId::u256(db)),
         }
     }
     pub fn input<'db>(db: &'db dyn HirAnalysisDb, source: InputSource<'db>) -> ExternalSource<'db> {

@@ -249,10 +249,10 @@ impl<'db> Borrowck<'db> {
                             .map(OccurrenceStep::Data),
                     )
                     .collect();
-                let region = leaf
-                    .payload
-                    .region(self.db, &self.inventory.loans, leaf.guard.scope())
-                    .with_guard(&leaf.guard);
+                let region = self.capability_region(&Guarded {
+                    guard: leaf.guard.clone(),
+                    payload: leaf.payload.clone(),
+                });
                 let invalidated = matches!(leaf.payload, CapabilityRef::Invalidated { .. });
                 let access = if invalidated || leaf.semantics.target_ty.is_zero_sized(self.db) {
                     None
@@ -850,14 +850,16 @@ impl<'db> Borrowck<'db> {
             for parent in self.ancestors(authority.iter().cloned()) {
                 // Access offsets can introduce witnesses unused by the authority.
                 // Drop only those unused binders before comparing exact loan occurrences.
-                let canonical = parent.guard.scope().canonical_existentials(
-                    region.scope(),
-                    parent
-                        .guard
-                        .indices()
-                        .into_iter()
-                        .chain(parent.payload.args.iter().copied()),
-                );
+                let canonical = parent
+                    .guard
+                    .scope()
+                    .canonical_existentials(region.scope(), || {
+                        parent
+                            .guard
+                            .indices()
+                            .into_iter()
+                            .chain(parent.payload.args.iter().copied())
+                    });
                 let parent = Guarded {
                     guard: parent
                         .guard

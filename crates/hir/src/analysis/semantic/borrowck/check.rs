@@ -499,7 +499,9 @@ fn semantic_borrow_summary_cycle_recover<'db>(
     if count >= 16
         && !matches!(
             value,
-            SemanticBorrowSummaryResult::Err(_) | SemanticBorrowSummaryResult::Pending { .. }
+            SemanticBorrowSummaryResult::Err(_)
+                | SemanticBorrowSummaryResult::Pending { .. }
+                | SemanticBorrowSummaryResult::Blocked { .. }
         )
     {
         // A signature-only fallback cannot describe body-dependent boundary
