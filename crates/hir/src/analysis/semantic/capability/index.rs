@@ -195,7 +195,7 @@ impl BinderScope {
 }
 
 /// A simultaneous, scope-checked substitution. Applying it never follows chains.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct IndexSubst<'db> {
     source: BinderScope,
     destination: BinderScope,

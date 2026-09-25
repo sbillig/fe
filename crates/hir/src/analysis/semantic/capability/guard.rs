@@ -3,9 +3,11 @@
 //! Index conditions use reduced bit decisions over Fe's 256-bit `usize`, so equality,
 //! disequality, and bounds share one Boolean algebra. Enum decisions have index conditions
 //! as leaves. Neither graph enumerates array elements or depends on construction order.
+use rustc_hash::FxHashMap;
 use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet},
+    hash::Hash,
     sync::Arc,
 };
 
@@ -334,6 +336,53 @@ impl PartialOrd for ChoiceBit<'_> {
 }
 
 type Condition<'db> = Decision<ChoiceBit<'db>, IndexCondition<'db>>;
+
+/// Fixpoint iteration rebuilds values from the same guards, so their unions and
+/// intersections repeat. Guards are immutable; a cached result is the result.
+#[derive(Default)]
+pub struct GuardCache<'db> {
+    conjunctions: FxHashMap<(Guard<'db>, Guard<'db>), Option<Guard<'db>>>,
+    disjunctions: FxHashMap<(Guard<'db>, Guard<'db>), Guard<'db>>,
+    substitutions: FxHashMap<(Guard<'db>, IndexSubst<'db>), Option<Guard<'db>>>,
+}
+
+impl<'db> GuardCache<'db> {
+    const LIMIT: usize = 4096;
+
+    pub fn and(&mut self, lhs: &Guard<'db>, rhs: &Guard<'db>) -> Option<Guard<'db>> {
+        Self::cached(&mut self.conjunctions, lhs, rhs, Guard::and)
+    }
+
+    pub fn or(&mut self, lhs: &Guard<'db>, rhs: &Guard<'db>) -> Guard<'db> {
+        Self::cached(&mut self.disjunctions, lhs, rhs, Guard::or)
+    }
+
+    pub fn substitute(
+        &mut self,
+        guard: &Guard<'db>,
+        subst: &IndexSubst<'db>,
+    ) -> Option<Guard<'db>> {
+        Self::cached(&mut self.substitutions, guard, subst, Guard::substitute)
+    }
+
+    fn cached<K: Clone + Eq + Hash, R: Clone>(
+        results: &mut FxHashMap<(Guard<'db>, K), R>,
+        lhs: &Guard<'db>,
+        rhs: &K,
+        operation: impl FnOnce(&Guard<'db>, &K) -> R,
+    ) -> R {
+        let key = (lhs.clone(), rhs.clone());
+        if let Some(result) = results.get(&key) {
+            return result.clone();
+        }
+        let result = operation(lhs, rhs);
+        if results.len() >= Self::LIMIT {
+            results.clear();
+        }
+        results.insert(key, result.clone());
+        result
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Guard<'db> {

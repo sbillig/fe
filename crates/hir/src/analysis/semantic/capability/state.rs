@@ -2,6 +2,7 @@
 //!
 //! A carrier describes its referent region. Loading that region reads a separate
 //! structural value; updating it never changes the carrier or its loan identity.
+use rustc_hash::FxHashMap;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
@@ -208,7 +209,7 @@ impl<'db> BorrowState<'db> {
                 .iter()
                 .filter_map(|entry| {
                     Some(Guarded {
-                        guard: entry.guard.and(&guard)?,
+                        guard: values.guards().and(&entry.guard, &guard)?,
                         payload: entry.payload,
                     })
                 })
@@ -359,39 +360,46 @@ impl<'db> BorrowState<'db> {
                 }
             }
         }
+        // Each iteration forgets the same guards again, and values share clauses.
+        let mut guards = std::mem::take(values.guards());
+        let mut forgotten = FxHashMap::default();
         let mut destination = CapabilityValues::new(values.db, ValueLimits::default());
         for value in self.values.values_mut().chain(self.contents.values_mut()) {
             let mapped = values.map_payloads(value, &mut destination, |_, _, entry, domain| {
-                let guard = domain.forget_occurrences(occurrence);
-                let payload = entry.payload.forget_occurrences(occurrence);
-                let mut scope = guard.scope().clone();
-                let indices: BTreeSet<_> = guard
-                    .indices()
-                    .into_iter()
-                    .chain(payload.indices())
-                    .filter(|index| repeated(*index))
-                    .collect();
-                let bindings: Vec<_> = indices
-                    .into_iter()
-                    .map(|index| {
-                        let (nested, witness) = scope.bind(IndexNamespace::Existential);
-                        scope = nested;
-                        (index, witness)
+                forgotten
+                    .entry((entry.payload.clone(), domain.clone()))
+                    .or_insert_with(|| {
+                        let guard = domain.forget_occurrences(occurrence);
+                        let payload = entry.payload.forget_occurrences(occurrence);
+                        let mut scope = guard.scope().clone();
+                        let indices: BTreeSet<_> = guard
+                            .indices()
+                            .into_iter()
+                            .chain(payload.indices())
+                            .filter(|index| repeated(*index))
+                            .collect();
+                        let bindings: Vec<_> = indices
+                            .into_iter()
+                            .map(|index| {
+                                let (nested, witness) = scope.bind(IndexNamespace::Existential);
+                                scope = nested;
+                                (index, witness)
+                            })
+                            .collect();
+                        let subst = IndexSubst::new(guard.scope(), &scope, bindings)
+                            .expect("previous value occurrence witnesses");
+                        guards.substitute(&guard, &subst).map(|guard| Guarded {
+                            guard,
+                            payload: payload.substitute(values.db, &subst),
+                        })
                     })
-                    .collect();
-                let subst = IndexSubst::new(guard.scope(), &scope, bindings)
-                    .expect("previous value occurrence witnesses");
-                guard
-                    .substitute(&subst)
-                    .map(|guard| Guarded {
-                        guard,
-                        payload: payload.substitute(values.db, &subst),
-                    })
+                    .clone()
                     .into_iter()
                     .collect()
             });
             *value = destination.widen(&mapped);
         }
+        *values.guards() = guards;
     }
 
     pub fn value(&self, id: NValueId) -> &CapabilityValue<'db> {

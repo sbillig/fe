@@ -1,6 +1,6 @@
 //! Shape-checked, hash-consed structural values shared by local state and summaries.
 use super::{
-    guard::{ChoiceKey, Guard, ValueOccurrence},
+    guard::{ChoiceKey, Guard, GuardCache, ValueOccurrence},
     index::{BinderScope, IndexError, IndexExpr, IndexNamespace, IndexSubst},
     path::{Projection, StructuralPath},
     semantics::{CapabilityClass, CapabilitySemantics},
@@ -91,6 +91,7 @@ pub struct ValueMetrics {
 pub struct ValueInterner<'db, P> {
     pub(super) db: &'db dyn HirAnalysisDb,
     nodes: FxHashMap<StructuredValue<'db, P>, ValueId<'db, P>>,
+    guards: GuardCache<'db>,
     limits: ValueLimits,
     metrics: ValueMetrics,
 }
@@ -166,6 +167,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         Self {
             db,
             nodes: FxHashMap::default(),
+            guards: GuardCache::default(),
             limits,
             metrics: ValueMetrics::default(),
         }
@@ -570,7 +572,9 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             .iter()
             .filter_map(|entry| {
                 Some(Guarded {
-                    guard: entry.guard.and(&guard.in_scope(entry.guard.scope()))?,
+                    guard: self
+                        .guards
+                        .and(&entry.guard, &guard.in_scope(entry.guard.scope()))?,
                     payload: entry.payload.clone(),
                 })
             })
@@ -610,6 +614,10 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             direct,
             children,
         })
+    }
+
+    pub fn guards(&mut self) -> &mut GuardCache<'db> {
+        &mut self.guards
     }
 
     pub fn substitute(
@@ -1308,9 +1316,9 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     .direct
                     .iter()
                     .flat_map(|entry| {
-                        entry
-                            .guard
-                            .and(&domain.in_scope(entry.guard.scope()))
+                        destination
+                            .guards
+                            .and(&entry.guard, &domain.in_scope(entry.guard.scope()))
                             .map(|domain| map(semantics, path, entry, &domain))
                             .unwrap_or_default()
                     })
@@ -1546,10 +1554,15 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         }
         let mut canonical = BTreeMap::<(BinderScope, P), Guard<'db>>::new();
         for entry in node.direct {
-            canonical
-                .entry((entry.guard.scope().clone(), entry.payload))
-                .and_modify(|guard| *guard = guard.or(&entry.guard))
-                .or_insert(entry.guard);
+            match canonical.entry((entry.guard.scope().clone(), entry.payload)) {
+                Entry::Vacant(vacant) => {
+                    vacant.insert(entry.guard);
+                }
+                Entry::Occupied(mut occupied) => {
+                    let guard = self.guards.or(occupied.get(), &entry.guard);
+                    occupied.insert(guard);
+                }
+            }
         }
         node.direct = canonical
             .into_iter()
