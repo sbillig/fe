@@ -9,15 +9,27 @@ use salsa::Update;
 use super::{
     binder::Binder,
     const_ty::{
-        ConstTyData, HoleAnchor, HoleMinter, LayoutBoundaryIdentity, LayoutInstantiationContext,
-        LayoutInstantiationId, LayoutOccurrencePath,
+        HoleAnchor, LayoutBoundaryIdentity, LayoutInstantiationContext, LayoutInstantiationId,
+        LayoutOccurrencePath, LoweringContext,
     },
-    layout_holes::{LayoutInstantiation, LayoutRootUse, instantiate_layout_template},
+    layout_holes::{
+        LayoutInstantiation, LayoutRootUse, LayoutTemplateSubst, instantiate_layout_template,
+    },
+    subst::substitute_complete,
     trait_resolution::{PredicateListId, constraint::collect_constraints},
-    ty_def::{InvalidCause, TyData, TyId},
-    ty_lower::{GenericParamTypeSet, lower_hir_ty, lower_layout_root_uses_in_hir_ty},
+    ty_def::{InvalidCause, TyId},
+    ty_lower::{
+        GenericParamTypeSet, LoweredSlot, ParamBasis, ParamDomainId, ParamSchemaId, PartialSubst,
+        lower_hir_ty, lower_hir_ty_deferred, lower_layout_root_uses_in_hir_ty,
+    },
 };
 use crate::analysis::HirAnalysisDb;
+
+#[derive(Clone, Copy)]
+enum AdtFieldTyMode {
+    Canonical,
+    ConcreteDemand,
+}
 
 /// Represents a ADT type definition.
 #[salsa::tracked]
@@ -91,7 +103,7 @@ impl<'db> AdtDef<'db> {
     pub(crate) fn as_generic_param_owner(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> Option<GenericParamOwner<'db>> {
+    ) -> GenericParamOwner<'db> {
         self.adt_ref(db).generic_owner()
     }
 }
@@ -120,16 +132,33 @@ impl<'db> AdtField<'db> {
         }
     }
 
-    pub fn ty(&self, db: &'db dyn HirAnalysisDb, i: usize) -> Binder<TyId<'db>> {
+    pub fn ty(&self, db: &'db dyn HirAnalysisDb, i: usize) -> Binder<'db, TyId<'db>> {
+        self.ty_in_mode(db, i, AdtFieldTyMode::Canonical)
+    }
+
+    fn ty_in_mode(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        i: usize,
+        mode: AdtFieldTyMode,
+    ) -> Binder<'db, TyId<'db>> {
         let assumptions = self.assumptions(db);
 
         let ty = if let Some(hir_ty) = self.tys[i].to_opt() {
-            lower_hir_ty(db, hir_ty, self.scope, assumptions)
+            match mode {
+                AdtFieldTyMode::Canonical => lower_hir_ty(db, hir_ty, self.scope, assumptions),
+                AdtFieldTyMode::ConcreteDemand => {
+                    lower_hir_ty_deferred(db, hir_ty, self.scope, assumptions)
+                }
+            }
         } else {
             TyId::invalid(db, InvalidCause::ParseError)
         };
 
-        Binder::bind(ty)
+        match GenericParamOwner::from_item_opt(self.scope.item()) {
+            Some(owner) => Binder::bind(owner, ty),
+            None => Binder::closed(ty),
+        }
     }
 
     fn layout_root_uses(&self, db: &'db dyn HirAnalysisDb, i: usize) -> Vec<LayoutRootUse<'db>> {
@@ -137,7 +166,7 @@ impl<'db> AdtField<'db> {
             return Vec::new();
         };
         let assumptions = self.assumptions(db);
-        let minter = HoleMinter::new(HoleAnchor::TemplateTy {
+        let minter = LoweringContext::new(HoleAnchor::TemplateTy {
             ty: hir_ty,
             scope: self.scope,
             assumptions,
@@ -149,7 +178,7 @@ impl<'db> AdtField<'db> {
     pub fn iter_types<'a>(
         &'a self,
         db: &'db dyn HirAnalysisDb,
-    ) -> impl Iterator<Item = Binder<TyId<'db>>> + 'a {
+    ) -> impl Iterator<Item = Binder<'db, TyId<'db>>> + 'a {
         (0..self.num_types()).map(move |i| self.ty(db, i))
     }
 
@@ -222,10 +251,10 @@ impl<'db> AdtRef<'db> {
         crate::core::adt_lower::lower_adt(db, self)
     }
 
-    pub(crate) fn generic_owner(self) -> Option<GenericParamOwner<'db>> {
+    pub(crate) fn generic_owner(self) -> GenericParamOwner<'db> {
         match self {
-            AdtRef::Enum(e) => Some(e.into()),
-            AdtRef::Struct(s) => Some(s.into()),
+            AdtRef::Enum(e) => e.into(),
+            AdtRef::Struct(s) => s.into(),
         }
     }
 }
@@ -248,30 +277,112 @@ pub fn instantiate_adt_field_shape<'db>(
     field_idx: usize,
     explicit_args: &[TyId<'db>],
 ) -> TyId<'db> {
-    let scope = adt.scope(db);
+    instantiate_adt_field_shape_in_mode(
+        db,
+        adt,
+        variant_idx,
+        field_idx,
+        explicit_args,
+        AdtFieldTyMode::Canonical,
+    )
+}
+
+pub(crate) fn instantiate_adt_field_for_concrete_demand<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+    variant_idx: usize,
+    field_idx: usize,
+    canonical_args: &[TyId<'db>],
+    source_args: &[TyId<'db>],
+) -> ConcreteTypeView<'db> {
+    ConcreteTypeView {
+        canonical: instantiate_adt_field_shape_in_mode(
+            db,
+            adt,
+            variant_idx,
+            field_idx,
+            canonical_args,
+            AdtFieldTyMode::Canonical,
+        ),
+        source: instantiate_adt_field_source_for_concrete_demand(
+            db,
+            adt,
+            variant_idx,
+            field_idx,
+            source_args,
+        ),
+    }
+}
+
+/// The canonical field type supplies layout identity; the source view keeps
+/// anonymous const bodies and their captures available for concrete errors.
+#[derive(Clone, Copy)]
+pub(crate) struct ConcreteTypeView<'db> {
+    pub canonical: TyId<'db>,
+    pub source: TyId<'db>,
+}
+
+impl<'db> ConcreteTypeView<'db> {
+    pub(crate) fn new(canonical: TyId<'db>, source: TyId<'db>) -> Self {
+        Self { canonical, source }
+    }
+
+    pub(crate) fn identity(ty: TyId<'db>) -> Self {
+        Self::new(ty, ty)
+    }
+}
+
+pub(crate) fn instantiate_adt_field_source_for_concrete_demand<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+    variant_idx: usize,
+    field_idx: usize,
+    source_args: &[TyId<'db>],
+) -> TyId<'db> {
+    instantiate_adt_field_shape_in_mode(
+        db,
+        adt,
+        variant_idx,
+        field_idx,
+        source_args,
+        AdtFieldTyMode::ConcreteDemand,
+    )
+}
+
+fn instantiate_adt_field_shape_in_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+    variant_idx: usize,
+    field_idx: usize,
+    explicit_args: &[TyId<'db>],
+    mode: AdtFieldTyMode,
+) -> TyId<'db> {
+    let owner = adt.as_generic_param_owner(db);
+    let schema = ParamSchemaId::full(db, owner);
     let param_count = adt.params(db).len();
     adt.fields(db)
         .get(variant_idx)
-        .and_then(|variant| (field_idx < variant.num_types()).then(|| variant.ty(db, field_idx)))
+        .and_then(|variant| {
+            (field_idx < variant.num_types()).then(|| variant.ty_in_mode(db, field_idx, mode))
+        })
         .map(|field_ty| {
-            if explicit_args.len() >= param_count {
-                return field_ty.instantiate_scoped(db, scope, explicit_args);
+            if explicit_args.len() == param_count {
+                return field_ty.instantiate(db, explicit_args);
             }
-
-            field_ty.instantiate_with(db, |ty| match ty.data(db) {
-                TyData::TyParam(param) if param.owner == scope => {
-                    explicit_args.get(param.idx).copied().unwrap_or(ty)
-                }
-                TyData::ConstTy(const_ty) => {
-                    if let ConstTyData::TyParam(param, _) = const_ty.data(db)
-                        && param.owner == scope
-                    {
-                        return explicit_args.get(param.idx).copied().unwrap_or(ty);
-                    }
-                    ty
-                }
-                _ => ty,
-            })
+            if explicit_args.len() > param_count {
+                return TyId::invalid(db, InvalidCause::Other);
+            }
+            let domain = ParamDomainId::full(db, schema);
+            let mut partial = PartialSubst::new(db, domain);
+            for (slot, arg) in explicit_args.iter().enumerate() {
+                let key = schema
+                    .key_at(db, LoweredSlot(slot))
+                    .expect("ADT argument slot");
+                partial.bind(db, key, *arg).expect("unique ADT binding");
+            }
+            let (subst, _) = partial.residualize(db);
+            substitute_complete(db, field_ty.instantiate_identity(), &subst)
+                .expect("ADT field uses its declaration domain")
         })
         .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
 }
@@ -285,6 +396,8 @@ pub(crate) fn instantiate_adt_field_layout<'db>(
     parent: LayoutInstantiationId<'db>,
     occurrence: LayoutOccurrencePath,
 ) -> LayoutInstantiation<'db> {
+    let owner = adt.as_generic_param_owner(db);
+    let schema = ParamSchemaId::full(db, owner);
     let field = adt
         .fields(db)
         .get(variant_idx)
@@ -294,23 +407,48 @@ pub(crate) fn instantiate_adt_field_layout<'db>(
         .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
     let template_root_uses =
         field.map_or_else(Vec::new, |field| field.layout_root_uses(db, field_idx));
+    let domain = ParamDomainId::full(db, schema);
+    if args.len() > domain.len(db) {
+        return instantiate_layout_template(
+            db,
+            TyId::invalid(
+                db,
+                InvalidCause::TooManyGenericArgs {
+                    expected: domain.len(db),
+                    given: args.len(),
+                },
+            ),
+            None,
+            LayoutInstantiationContext::Nested(parent),
+            LayoutBoundaryIdentity::AdtApplication(adt),
+            occurrence,
+        );
+    }
+    // Layout discovery also visits incomplete applications while diagnosing
+    // invalid source. Preserve absent formals as explicit residual parameters.
+    let mut partial = PartialSubst::new(db, domain);
+    for (key, arg) in schema.keys(db).iter().copied().zip(args.iter().copied()) {
+        partial
+            .bind(db, key, arg)
+            .expect("unique ADT layout binding");
+    }
+    let subst = partial.residualize(db).0;
     let mut instantiated = instantiate_layout_template(
         db,
         template,
-        adt.params(db),
-        args,
+        Some(LayoutTemplateSubst::new(ParamBasis::Full, subst.clone())),
         LayoutInstantiationContext::Nested(parent),
         LayoutBoundaryIdentity::AdtApplication(adt),
         occurrence.clone(),
     );
     for root_use in template_root_uses {
-        let value = Binder::bind(root_use.value).instantiate(db, args);
+        let value = Binder::bind(owner, root_use.value).instantiate(db, subst.values());
         if super::layout_holes::layout_root_id(db, value).is_some() {
             continue;
         }
         let owner = root_use
             .owner
-            .map(|owner| Binder::bind(owner).instantiate(db, args))
+            .map(|root_owner| Binder::bind(owner, root_owner).instantiate(db, subst.values()))
             .or(Some(instantiated.ty));
         let mut selector = occurrence.clone();
         selector.extend(root_use.selector);

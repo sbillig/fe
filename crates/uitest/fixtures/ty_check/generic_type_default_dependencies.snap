@@ -68,3 +68,9 @@ error[3-0022]: cannot reference generic parameter before it is declared
    │
 16 │ fn nested_type<T = ForwardAlias<u256, U>, U = bool>() {}
    │                ^^^^^^^^^^^^^^^^^^^^^^^^^ cannot reference `U` before it's declared
+
+error[3-0022]: cannot reference generic parameter before it is declared
+   ┌─ generic_type_default_dependencies.fe:22:36
+   │
+22 │ fn hidden_trait_arg<T: Indexed<V>, U = T::Item, V = u8>() {}
+   │                                    ^^^^^^^^^^^ cannot reference `V` before it's declared

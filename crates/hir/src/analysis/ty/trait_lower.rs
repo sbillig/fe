@@ -14,7 +14,10 @@ use salsa::Update;
 
 use super::{
     binder::Binder,
-    const_ty::{ConstBodyLowering, ConstTyId, HoleAnchor, HoleMinter},
+    const_ty::{
+        ConstBodyLowering, ConstCaptureEnv, ConstTyId, HoleAnchor, LoweringContext,
+        UnevaluatedConstPolicy,
+    },
     fold::{TyFoldable, TyFolder},
     generic_defaults::DefaultApplication,
     trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
@@ -134,7 +137,7 @@ pub(crate) fn collect_trait_impls<'db>(
 pub(crate) fn lower_impl_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
-) -> Option<Binder<ImplementorId<'db>>> {
+) -> Option<ImplementorId<'db>> {
     let trait_inst = impl_trait.trait_inst_result(db).ok()?;
     let params = impl_trait.impl_params(db);
 
@@ -142,13 +145,13 @@ pub(crate) fn lower_impl_trait<'db>(
     // diagnostics. Raw candidate enumeration uses the deferred path below.
     let types = impl_trait.assoc_type_bindings_for_trait_inst(db, trait_inst);
 
-    Some(Binder::bind(ImplementorId::new(
+    Some(ImplementorId::new(
         db,
         trait_inst,
         params,
         types,
         ImplementorOrigin::Hir(impl_trait),
-    )))
+    ))
 }
 
 pub(crate) fn complete_selected_impl<'db>(
@@ -156,9 +159,7 @@ pub(crate) fn complete_selected_impl<'db>(
     selected: ImplementorId<'db>,
 ) -> Option<ImplementorId<'db>> {
     match selected.origin(db) {
-        ImplementorOrigin::Hir(impl_trait) => {
-            Some(lower_impl_trait(db, impl_trait)?.instantiate_identity())
-        }
+        ImplementorOrigin::Hir(impl_trait) => lower_impl_trait(db, impl_trait),
         ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => Some(selected),
     }
 }
@@ -201,7 +202,7 @@ pub(crate) fn lower_checked_impl_assoc_ty<'db>(
         .assoc_types(db)
         .find(|assoc| assoc.name(db) == Some(name))?
         .default_ty(db)?;
-    Some(Binder::bind(default).instantiate(db, trait_inst.args(db)))
+    Some(Binder::bind(trait_inst.def(db).into(), default).instantiate(db, trait_inst.args(db)))
 }
 
 pub(crate) fn complete_candidate_impl_assoc_ty<'db>(
@@ -277,16 +278,16 @@ pub(crate) fn lower_candidate_impl_assoc_ty<'db>(
         .assoc_types(db)
         .find(|assoc| assoc.name(db) == Some(name))?
         .candidate_default_ty(db)?;
-    Some(Binder::bind(default).instantiate(db, trait_inst.args(db)))
+    Some(Binder::bind(trait_inst.def(db).into(), default).instantiate(db, trait_inst.args(db)))
 }
 
 /// Complete a semantically lowered candidate header with its associated type
 /// definitions after the syntax-only impl index has been assembled.
 pub(crate) fn complete_impl_trait<'db>(
     db: &'db dyn HirAnalysisDb,
-    implementor: Binder<ImplementorId<'db>>,
-) -> Binder<ImplementorId<'db>> {
-    match implementor.skip_binder().origin(db) {
+    implementor: ImplementorId<'db>,
+) -> ImplementorId<'db> {
+    match implementor.origin(db) {
         ImplementorOrigin::Hir(impl_trait) => lower_impl_trait_candidate(db, impl_trait)
             .expect("a collected impl header must remain lowerable"),
         ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => implementor,
@@ -296,16 +297,16 @@ pub(crate) fn complete_impl_trait<'db>(
 fn lower_impl_trait_candidate<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
-) -> Option<Binder<ImplementorId<'db>>> {
-    let implementor = lower_impl_trait_header(db, impl_trait)?.instantiate_identity();
+) -> Option<ImplementorId<'db>> {
+    let implementor = lower_impl_trait_header(db, impl_trait)?;
     let types = impl_trait.candidate_assoc_type_bindings_for_trait_inst(db, implementor.trait_(db));
-    Some(Binder::bind(ImplementorId::new(
+    Some(ImplementorId::new(
         db,
         implementor.trait_(db),
         implementor.params(db).to_vec(),
         types,
         implementor.origin(db),
-    )))
+    ))
 }
 
 /// Lower only the part of an impl needed to index and select it.
@@ -317,7 +318,7 @@ fn lower_impl_trait_candidate<'db>(
 pub(crate) fn lower_impl_trait_header<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
-) -> Option<Binder<ImplementorId<'db>>> {
+) -> Option<ImplementorId<'db>> {
     // Delegate trait-ref lowering and ingot checks to the semantic helper on
     // `ImplTrait`. If lowering fails or the ingot rule is violated, this
     // returns `None`.
@@ -334,7 +335,7 @@ pub(crate) fn lower_impl_trait_header<'db>(
         ImplementorOrigin::Hir(impl_trait),
     );
 
-    Some(Binder::bind(implementor))
+    Some(implementor)
 }
 
 /// Lower a trait reference to a trait instance.
@@ -398,18 +399,14 @@ fn lower_trait_ref_inner<'db>(
         return Err(TraitRefLowerError::Ignored);
     };
 
-    let minter = match const_bodies {
-        ConstBodyLowering::Eager => HoleMinter::new(HoleAnchor::TemplatePath {
+    let minter = LoweringContext::for_const_bodies(
+        HoleAnchor::TemplatePath {
             path,
             scope,
             assumptions,
-        }),
-        ConstBodyLowering::Deferred => HoleMinter::deferred(HoleAnchor::TemplatePath {
-            path,
-            scope,
-            assumptions,
-        }),
-    };
+        },
+        const_bodies,
+    );
 
     lower_trait_ref_with_minter(
         db,
@@ -429,7 +426,7 @@ pub(crate) fn lower_trait_ref_with_minter<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     owner_self: Option<TyId<'db>>,
-    minter: &HoleMinter<'db>,
+    minter: &LoweringContext<'db>,
 ) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
     let Partial::Present(path) = trait_ref.path(db) else {
         return Err(TraitRefLowerError::Ignored);
@@ -495,7 +492,7 @@ fn resolve_shadowed_trait_ref<'db>(
     path: PathId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &HoleMinter<'db>,
+    minter: &LoweringContext<'db>,
 ) -> Option<PathRes<'db>> {
     if path.parent(db).is_some() {
         return None;
@@ -588,7 +585,7 @@ pub(crate) fn lower_trait_ref_impl<'db>(
     assumptions: PredicateListId<'db>,
     t: Trait<'db>,
 ) -> Result<TraitInstId<'db>, TraitArgError<'db>> {
-    let minter = HoleMinter::new(HoleAnchor::TemplatePath {
+    let minter = LoweringContext::new(HoleAnchor::TemplatePath {
         path,
         scope,
         assumptions,
@@ -602,7 +599,7 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     t: Trait<'db>,
-    minter: &HoleMinter<'db>,
+    minter: &LoweringContext<'db>,
 ) -> Result<TraitInstId<'db>, TraitArgError<'db>> {
     let trait_params: &[TyId<'db>] = t.params(db);
     let args = path.generic_args(db).data(db);
@@ -619,9 +616,16 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
                 ConstGenericArgValue::Expr(body) => {
                     let const_ty = match minter.const_bodies() {
                         ConstBodyLowering::Eager => ConstTyId::from_opt_body(db, body),
-                        ConstBodyLowering::Deferred => {
-                            ConstTyId::from_opt_body_deferred(db, body, None, Vec::new())
-                        }
+                        ConstBodyLowering::Deferred => ConstTyId::unevaluated(
+                            db,
+                            body,
+                            None,
+                            None,
+                            body.to_opt().map_or(ConstCaptureEnv::Empty, |body| {
+                                ConstCaptureEnv::identity_for_body(db, body, Some(minter))
+                            }),
+                            UnevaluatedConstPolicy::DeferValidation,
+                        ),
                     };
                     provided_explicit.push(TyId::const_ty(db, const_ty));
                 }
@@ -647,7 +651,7 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
             &provided_explicit,
             match minter.const_bodies() {
                 ConstBodyLowering::Eager => DefaultApplication::Evaluate(minter),
-                ConstBodyLowering::Deferred => DefaultApplication::Metadata(minter),
+                ConstBodyLowering::Deferred => DefaultApplication::StructuralMetadata(minter),
             },
         )
         .map_err(|error| match error.cause {

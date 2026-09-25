@@ -7,7 +7,6 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{available_traits_in_scope, is_scope_visible_from},
     ty::{
-        binder::Binder,
         canonical::{Canonical, Canonicalized, Solution},
         fold::TyFoldable as _,
         method_table::{MethodProbe, ProbedMethod, probe_method},
@@ -59,7 +58,7 @@ impl<'db> TraitMethodCand<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum AssembledTraitMethodCand<'db> {
     Impl {
-        implementor: Binder<ImplementorId<'db>>,
+        implementor: ImplementorId<'db>,
         method: Func<'db>,
     },
     Assumption {
@@ -71,18 +70,14 @@ enum AssembledTraitMethodCand<'db> {
 impl<'db> AssembledTraitMethodCand<'db> {
     fn trait_def(self, db: &'db dyn HirAnalysisDb) -> Trait<'db> {
         match self {
-            AssembledTraitMethodCand::Impl { implementor, .. } => {
-                implementor.skip_binder().trait_def(db)
-            }
+            AssembledTraitMethodCand::Impl { implementor, .. } => implementor.trait_def(db),
             AssembledTraitMethodCand::Assumption { inst, .. } => inst.def(db),
         }
     }
 
     fn diagnostic_inst(self, db: &'db dyn HirAnalysisDb) -> TraitInstId<'db> {
         match self {
-            AssembledTraitMethodCand::Impl { implementor, .. } => {
-                implementor.skip_binder().trait_(db)
-            }
+            AssembledTraitMethodCand::Impl { implementor, .. } => implementor.trait_(db),
             AssembledTraitMethodCand::Assumption { inst, .. } => inst,
         }
     }
@@ -294,8 +289,8 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
         self.trait_.map(|t| t == trait_def).unwrap_or(true)
     }
 
-    fn insert_impl_trait_method_cand(&mut self, implementor: Binder<ImplementorId<'db>>) {
-        let trait_def = implementor.skip_binder().trait_def(self.db);
+    fn insert_impl_trait_method_cand(&mut self, implementor: ImplementorId<'db>) {
+        let trait_def = implementor.trait_def(self.db);
         if !self.allow_trait(trait_def) {
             return;
         }
@@ -710,7 +705,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
 
     fn check_impl_cand(
         &self,
-        implementor: Binder<ImplementorId<'db>>,
+        implementor: ImplementorId<'db>,
         method: Func<'db>,
     ) -> TraitCandidateCheck<'db> {
         let mut table = UnificationTable::new(self.db);
@@ -792,7 +787,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         let inst = if receiver_is_ty_param {
             inst
         } else {
-            table.instantiate_with_fresh_vars(Binder::bind(inst))
+            table.instantiate_with_fresh_vars(inst)
         };
 
         match is_goal_query_satisfiable(
@@ -809,7 +804,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 let solution = if receiver_is_ty_param {
                     solution
                 } else {
-                    table.instantiate_with_fresh_vars(Binder::bind(solution))
+                    table.instantiate_with_fresh_vars(solution)
                 };
 
                 MethodCandidate::TraitMethod(TraitMethodCand::new(
@@ -945,18 +940,11 @@ fn test_it() {
         let impls = impls_for_ty(&db, std_ingot, Canonical::new(&db, address));
         let impl_trait_names: Vec<_> = impls
             .iter()
-            .map(|imp| {
-                imp.skip_binder()
-                    .trait_(&db)
-                    .pretty_print(&db, false)
-                    .to_string()
-            })
+            .map(|imp| imp.trait_(&db).pretty_print(&db, false).to_string())
             .collect();
 
         assert!(
-            impls
-                .iter()
-                .any(|imp| imp.skip_binder().trait_def(&db) == wordrepr),
+            impls.iter().any(|imp| imp.trait_def(&db) == wordrepr),
             "expected WordRepr impl for Address, found {impl_trait_names:?}"
         );
     }

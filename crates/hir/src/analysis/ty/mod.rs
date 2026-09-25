@@ -53,6 +53,7 @@ pub mod pattern_ir;
 pub mod pattern_types;
 pub mod provider;
 pub(crate) mod scratch;
+pub(crate) mod subst;
 pub mod trait_def;
 pub mod trait_lower;
 pub mod trait_resolution; // This line was previously 'pub mod name_resolution;'
@@ -167,7 +168,7 @@ fn copy_goal_has_possible_impl<'db>(
             impls_for_trait_def(db, ingot, trait_def)
                 .iter()
                 .any(|implementor| {
-                    let impl_self = implementor.skip_binder().self_ty(db);
+                    let impl_self = implementor.self_ty(db);
                     copy_impl_self_may_match(db, impl_self, self_base)
                 })
         })
@@ -410,7 +411,7 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                 .all_items(db)
                 .iter()
                 .filter_map(|item| GenericParamOwner::from_item_opt(*item))
-                .flat_map(|owner| ty_check::check_generic_const_default_bodies(db, owner))
+                .flat_map(|owner| ty_check::check_generic_default_bodies(db, owner))
                 .map(|diag| diag.to_voucher()),
         );
 
@@ -611,7 +612,7 @@ pub fn resolve_default_root_effect_ty<'db>(
     let root_ident = IdentId::new(db, "RootEffect".to_owned());
     Some(normalize::normalize_ty(
         db,
-        TyId::assoc_ty(db, inst_target, root_ident),
+        TyId::assoc_ty(db, inst_target.trait_ref(db), root_ident),
         scope,
         assumptions,
     ))

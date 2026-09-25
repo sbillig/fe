@@ -201,7 +201,10 @@ impl<'db> MethodTable<'db> {
             .name(db)
             .expect("callables inserted in table have a name");
         let bucket = self.buckets.entry(*base).or_insert_with(MethodBucket::new);
-        let methods = bucket.methods.entry(Binder::bind(ty)).or_default();
+        let methods = bucket
+            .methods
+            .entry(Binder::bind(func.generic_owner(), ty))
+            .or_default();
         methods.insert(name, func);
     }
 
@@ -216,7 +219,7 @@ impl<'db> MethodTable<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
 struct MethodBucket<'db> {
-    methods: FxHashMap<Binder<TyId<'db>>, FxHashMap<IdentId<'db>, CallableDef<'db>>>,
+    methods: FxHashMap<Binder<'db, TyId<'db>>, FxHashMap<IdentId<'db>, CallableDef<'db>>>,
 }
 
 impl<'db> MethodBucket<'db> {

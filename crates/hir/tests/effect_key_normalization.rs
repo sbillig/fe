@@ -10,7 +10,7 @@ use fe_hir::analysis::semantic::{
 };
 use fe_hir::analysis::ty::effects::{EffectKeyKind, place_effect_provider_param_index_map};
 use fe_hir::analysis::ty::trait_def::resolve_trait_method_instance;
-use fe_hir::analysis::ty::trait_resolution::TraitSolveCx;
+use fe_hir::analysis::ty::trait_resolution::{Selection, TraitSolveCx};
 use fe_hir::analysis::ty::ty_check::{
     BodyOwner, EffectArg, EffectArgLayoutView, EffectPassMode, TypedBody,
     check_contract_recv_arm_body, check_func_body,
@@ -479,7 +479,11 @@ fn needs<T: HasRoot, U = T>()
             let needs = find_func(&db, top_mod, "needs");
             if validate_first {
                 let diags = diagnostics_for(&db, top_mod);
-                assert_eq!(diags.is_empty(), valid, "{diags:#?}");
+                assert_eq!(
+                    diags.is_empty(),
+                    valid,
+                    "key {key}, validate_first {validate_first}: {diags:#?}"
+                );
             }
 
             assert_eq!(
@@ -500,7 +504,11 @@ fn needs<T: HasRoot, U = T>()
                 assert_eq!(param.idx, idx);
             }
             let diags = diagnostics_for(&db, top_mod);
-            assert_eq!(diags.is_empty(), valid, "{diags:#?}");
+            assert_eq!(
+                diags.is_empty(),
+                valid,
+                "key {key}, validate_first {validate_first}: {diags:#?}"
+            );
         }
     }
 }
@@ -4848,19 +4856,20 @@ fn impl_trait_method_typed_body_instantiation_substitutes_self() {
     let inst = impl_trait
         .trait_inst(&db)
         .expect("missing impl trait instance");
-    let (resolved_method, impl_args) = resolve_trait_method_instance(
+    let Selection::Unique(resolved) = resolve_trait_method_instance(
         &db,
         TraitSolveCx::new(&db, impl_trait.scope()),
         inst,
         method.name(&db).to_opt().expect("missing method name"),
-    )
-    .expect("missing resolved impl method");
-    assert_eq!(resolved_method, method);
+    ) else {
+        panic!("missing resolved impl method");
+    };
+    assert_eq!(resolved.body(), Some(method));
 
     let instantiated = instantiate_typed_body(
         &db,
         typed_body_template(&db, BodyOwner::Func(method)),
-        GenericSubst::new(&db, impl_args),
+        GenericSubst::for_owner(&db, method.into(), resolved.body_args().to_vec()),
     );
     let self_binding = instantiated.param_binding(0).expect("missing self binding");
     let self_ty = instantiated.binding_ty(&db, self_binding);
@@ -4889,18 +4898,19 @@ fn impl_trait_method_self_paths_preserve_binding_ty_after_instantiation() {
     let inst = impl_trait
         .trait_inst(&db)
         .expect("missing impl trait instance");
-    let (_, impl_args) = resolve_trait_method_instance(
+    let Selection::Unique(resolved) = resolve_trait_method_instance(
         &db,
         TraitSolveCx::new(&db, impl_trait.scope()),
         inst,
         method.name(&db).to_opt().expect("missing method name"),
-    )
-    .expect("missing resolved impl method");
+    ) else {
+        panic!("missing resolved impl method");
+    };
 
     let instantiated = instantiate_typed_body(
         &db,
         typed_body_template(&db, BodyOwner::Func(method)),
-        GenericSubst::new(&db, impl_args),
+        GenericSubst::for_owner(&db, method.into(), resolved.body_args().to_vec()),
     );
     let body = instantiated.body().expect("missing typed body");
     let self_binding = instantiated.param_binding(0).expect("missing self binding");
@@ -5093,19 +5103,20 @@ fn impl_sum_semantic_body_uses_self_binding_directly() {
     let inst = impl_trait
         .trait_inst(&db)
         .expect("missing impl trait instance");
-    let (_, impl_args) = resolve_trait_method_instance(
+    let Selection::Unique(resolved) = resolve_trait_method_instance(
         &db,
         TraitSolveCx::new(&db, impl_trait.scope()),
         inst,
         method.name(&db).to_opt().expect("missing method name"),
-    )
-    .expect("missing resolved impl method");
+    ) else {
+        panic!("missing resolved impl method");
+    };
     let instance = get_or_build_semantic_instance(
         &db,
         fe_hir::analysis::semantic::SemanticInstanceKey::new(
             &db,
             BodyOwner::Func(method),
-            GenericSubst::new(&db, impl_args),
+            GenericSubst::for_owner(&db, method.into(), resolved.body_args().to_vec()),
             fe_hir::analysis::semantic::EffectProviderSubst::empty(&db),
             fe_hir::analysis::semantic::ImplEnv::empty(&db, impl_trait.scope()),
         ),

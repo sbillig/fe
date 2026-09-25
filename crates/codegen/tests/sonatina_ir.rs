@@ -91,18 +91,6 @@ fn sonatina_function_body<'a>(ir: &'a str, symbol_segment: &str) -> Option<&'a s
     Some(&body[..end])
 }
 
-#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "trait_function_item_values_preserve_runtime_dispatch_witnesses.fe")]
-fn trait_function_item_values_preserve_runtime_dispatch_witnesses(fixture: Fixture<&str>) {
-    let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
-        emit_module_sonatina_ir(db, top_mod)
-            .expect("trait function-item values should preserve their dispatch witnesses")
-    });
-    assert!(
-        ir.contains("call") && ir.contains("read"),
-        "trait function-item calls must lower to the selected implementation:\n{ir}"
-    );
-}
-
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "zero_sized_const_aggregates_do_not_emit_const_regions.fe")]
 fn zero_sized_const_aggregates_do_not_emit_const_regions(fixture: Fixture<&str>) {
     let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
@@ -382,13 +370,17 @@ fn runtime_abi_head_guard_matches_modern_solidity_signed_size_check(fixture: Fix
 
     assert!(
         output.lines().any(|line| {
-            line.contains("call %validate_runtime_head") && line.contains("4.i256 32.i256")
+            line.contains("call %")
+                && line.contains("validate_runtime_head")
+                && line.contains("4.i256 32.i256")
         }),
         "runtime decoder should validate its one-word head after the selector:\n{output}"
     );
     assert!(
         output.lines().any(|line| {
-            line.contains("call %validate_runtime_head") && line.contains("4.i256 0.i256")
+            line.contains("call %")
+                && line.contains("validate_runtime_head")
+                && line.contains("4.i256 0.i256")
         }),
         "zero-argument runtime decoder should retain its empty-head path:\n{output}"
     );

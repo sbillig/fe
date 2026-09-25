@@ -208,12 +208,12 @@ fn f() uses (slot: Slot<7>) {}
     let TyData::ConstTy(default_const) = default_arg.data(&db) else {
         panic!("expected const generic arg, got {default_arg:?}");
     };
-    let ConstTyData::UnEvaluated { generic_args, .. } = default_const.data(&db) else {
+    let ConstTyData::UnEvaluated { capture, .. } = default_const.data(&db) else {
         panic!("expected unevaluated default const arg, got {default_const:?}");
     };
 
-    assert_eq!(generic_args.len(), 1);
-    assert_eq!(generic_args[0], base_arg);
+    let generic_args = capture.complete(&db).expect("captured default");
+    assert_eq!(generic_args.values(), &[base_arg]);
 }
 
 #[test]
@@ -248,11 +248,11 @@ fn recurse<const A: usize, const B: usize, const C: usize = B>(
     let TyData::ConstTy(default) = args[2].data(&db) else {
         panic!("expected const default");
     };
-    let ConstTyData::UnEvaluated { generic_args, .. } = default.data(&db) else {
+    let ConstTyData::UnEvaluated { capture, .. } = default.data(&db) else {
         panic!("expected captured const default");
     };
     assert_ne!(args[0], args[1]);
-    assert_eq!(generic_args.as_slice(), &args[..2]);
+    assert_eq!(capture.complete(&db).unwrap().values(), &args[..2]);
 }
 
 #[test]
@@ -489,13 +489,15 @@ fn f(a: Outer<u8>, b: Outer<u16>) {}
     let TyData::ConstTy(default_const) = default_arg.data(&db) else {
         panic!("expected const generic arg, got {default_arg:?}");
     };
-    let ConstTyData::UnEvaluated { generic_args, .. } = default_const.data(&db) else {
+    let ConstTyData::UnEvaluated { capture, .. } = default_const.data(&db) else {
         panic!("expected unevaluated default const arg, got {default_const:?}");
     };
 
     assert!(
-        generic_args.is_empty(),
-        "field projection leaked outer args into unrelated inner default: {generic_args:?}"
+        capture
+            .complete(&db)
+            .is_none_or(|subst| subst.values().is_empty()),
+        "field projection leaked outer args into unrelated inner default: {capture:?}"
     );
 }
 
@@ -537,12 +539,14 @@ fn f(a: Alias<u8>, b: Alias<u16>) {}
     let TyData::ConstTy(default_const) = default_arg.data(&db) else {
         panic!("expected const generic arg, got {default_arg:?}");
     };
-    let ConstTyData::UnEvaluated { generic_args, .. } = default_const.data(&db) else {
+    let ConstTyData::UnEvaluated { capture, .. } = default_const.data(&db) else {
         panic!("expected unevaluated default const arg, got {default_const:?}");
     };
 
     assert!(
-        generic_args.is_empty(),
-        "type-alias instantiation leaked outer args into unrelated inner default: {generic_args:?}"
+        capture
+            .complete(&db)
+            .is_none_or(|subst| subst.values().is_empty()),
+        "type-alias instantiation leaked outer args into unrelated inner default: {capture:?}"
     );
 }

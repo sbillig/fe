@@ -110,20 +110,17 @@ fn run_fe_check(path: &Path) -> FeCheckRun {
 }
 
 #[test]
-fn generic_type_defaults_have_expected_check_outcomes() {
+fn valid_generic_type_default_fixtures_pass_check() {
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../uitest/fixtures/ty_check");
-    for (fixture, expected) in [
-        ("generic_type_default_environments.fe", 0),
-        ("inherent_method_projection_target.fe", 0),
-        ("generic_type_default_caller_mismatch.fe", 1),
-        ("generic_type_default_validation.fe", 1),
-        ("generic_type_default_dependencies.fe", 1),
-        ("generic_type_default_cycles.fe", 1),
-        ("inherent_method_projection_target_mismatch.fe", 1),
+    // The uitest snapshots cover HIR diagnostics; these valid fixtures must
+    // also pass the full `fe check` pipeline.
+    for fixture in [
+        "generic_type_default_environments.fe",
+        "inherent_method_projection_target.fe",
     ] {
         let run = run_fe_check(&fixtures.join(fixture));
         assert!(!run.timed_out, "{fixture} timed out: {}", run.combined);
-        assert_eq!(run.code, expected, "{fixture}: {}", run.combined);
+        assert_eq!(run.code, 0, "{fixture}: {}", run.combined);
     }
 }
 

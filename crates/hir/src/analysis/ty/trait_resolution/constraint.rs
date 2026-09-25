@@ -12,9 +12,8 @@ use either::Either;
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        adt_def::AdtDef,
         binder::Binder,
-        const_ty::{ConstBodyLowering, HoleAnchor, HoleMinter},
+        const_ty::{ConstBodyLowering, HoleAnchor, LoweringContext},
         corelib::resolve_core_trait,
         effects::{
             EffectKeyCanonMode, EffectKeyKind, canonical_effect_identity_for_binding,
@@ -154,7 +153,10 @@ pub(crate) fn ty_constraints<'db>(
 ) -> PredicateListId<'db> {
     let (base, args) = ty.decompose_ty_app(db);
     let (params, base_constraints) = match base.data(db) {
-        TyData::TyBase(TyBase::Adt(adt)) => (adt.params(db), collect_adt_constraints(db, *adt)),
+        TyData::TyBase(TyBase::Adt(adt)) => (
+            adt.params(db),
+            collect_constraints(db, adt.as_generic_param_owner(db)),
+        ),
         TyData::TyBase(TyBase::Func(func_def)) => (
             func_def.params(db),
             collect_func_def_constraints(db, *func_def, true),
@@ -210,17 +212,6 @@ pub fn super_trait_cycle_impl<'db>(
     None
 }
 
-/// Collect constraints that are specified by the given ADT definition.
-pub(crate) fn collect_adt_constraints<'db>(
-    db: &'db dyn HirAnalysisDb,
-    adt: AdtDef<'db>,
-) -> Binder<PredicateListId<'db>> {
-    let Some(owner) = adt.as_generic_param_owner(db) else {
-        return Binder::bind(PredicateListId::empty_list(db));
-    };
-    collect_constraints(db, owner)
-}
-
 #[salsa::tracked(
     cycle_fn=collect_func_def_constraints_cycle_recover,
     cycle_initial=collect_func_def_constraints_cycle_initial
@@ -229,15 +220,14 @@ pub(crate) fn collect_func_decl_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     func: CallableDef<'db>,
     include_parent: bool,
-) -> Binder<PredicateListId<'db>> {
+) -> Binder<'db, PredicateListId<'db>> {
     let hir_func = match func {
         CallableDef::Func(func) => func,
+        CallableDef::VariantCtor(var) if include_parent => {
+            return collect_constraints(db, var.enum_.into());
+        }
         CallableDef::VariantCtor(var) => {
-            let adt = var.enum_.as_adt(db);
-            if include_parent {
-                return collect_adt_constraints(db, adt);
-            }
-            return Binder::bind(PredicateListId::empty_list(db));
+            return Binder::bind(var.enum_.into(), PredicateListId::empty_list(db));
         }
     };
 
@@ -246,13 +236,16 @@ pub(crate) fn collect_func_decl_constraints<'db>(
         return func_constraints;
     }
 
-    Binder::bind(PredicateListId::new(
-        db,
-        collect_func_decl_constraint_pairs(db, func)
-            .into_iter()
-            .map(|(inst, _)| inst)
-            .collect::<Vec<_>>(),
-    ))
+    Binder::bind(
+        hir_func.into(),
+        PredicateListId::new(
+            db,
+            collect_func_decl_constraint_pairs(db, func)
+                .into_iter()
+                .map(|(inst, _)| inst)
+                .collect::<Vec<_>>(),
+        ),
+    )
 }
 
 /// The constraints enforced on a call to `func` (parent constraints first,
@@ -266,11 +259,7 @@ pub(crate) fn collect_func_decl_constraint_pairs<'db>(
     let hir_func = match func {
         CallableDef::Func(func) => func,
         CallableDef::VariantCtor(var) => {
-            let adt = var.enum_.as_adt(db);
-            return match adt.as_generic_param_owner(db) {
-                Some(owner) => decl_constraint_pairs(db, owner).clone(),
-                None => Vec::new(),
-            };
+            return decl_constraint_pairs(db, var.enum_.into()).clone();
         }
     };
 
@@ -306,7 +295,7 @@ pub(crate) fn collect_func_def_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     func: CallableDef<'db>,
     include_parent: bool,
-) -> Binder<PredicateListId<'db>> {
+) -> Binder<'db, PredicateListId<'db>> {
     let CallableDef::Func(hir_func) = func else {
         return collect_func_decl_constraints(db, func, include_parent);
     };
@@ -321,27 +310,27 @@ pub(crate) fn collect_func_def_constraints<'db>(
         predicates.insert(inst);
     }
 
-    Binder::bind(PredicateListId::new(
-        db,
-        predicates.into_iter().collect::<Vec<_>>(),
-    ))
+    Binder::bind(
+        hir_func.into(),
+        PredicateListId::new(db, predicates.into_iter().collect::<Vec<_>>()),
+    )
 }
 
 fn collect_func_def_constraints_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
-    _func: CallableDef<'db>,
+    func: CallableDef<'db>,
     _include_parent: bool,
-) -> Binder<PredicateListId<'db>> {
-    Binder::bind(PredicateListId::empty_list(db))
+) -> Binder<'db, PredicateListId<'db>> {
+    Binder::bind(func.generic_owner(), PredicateListId::empty_list(db))
 }
 
 fn collect_func_def_constraints_cycle_recover<'db>(
     _db: &'db dyn HirAnalysisDb,
-    _value: &Binder<PredicateListId<'db>>,
+    _value: &Binder<'db, PredicateListId<'db>>,
     _count: u32,
     _func: CallableDef<'db>,
     _include_parent: bool,
-) -> salsa::CycleRecoveryAction<Binder<PredicateListId<'db>>> {
+) -> salsa::CycleRecoveryAction<Binder<'db, PredicateListId<'db>>> {
     salsa::CycleRecoveryAction::Iterate
 }
 
@@ -371,14 +360,17 @@ pub(crate) enum PredicateSource<'db> {
 pub(crate) fn collect_decl_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
-) -> Binder<PredicateListId<'db>> {
-    Binder::bind(PredicateListId::new(
-        db,
-        decl_constraint_pairs(db, owner)
-            .iter()
-            .map(|(inst, _)| *inst)
-            .collect::<Vec<_>>(),
-    ))
+) -> Binder<'db, PredicateListId<'db>> {
+    Binder::bind(
+        owner,
+        PredicateListId::new(
+            db,
+            decl_constraint_pairs(db, owner)
+                .iter()
+                .map(|(inst, _)| *inst)
+                .collect::<Vec<_>>(),
+        ),
+    )
 }
 
 /// Declared constraints of `owner` paired with the bound each was collected
@@ -562,17 +554,17 @@ fn collect_decl_constraint_pairs_impl<'db>(
 
 fn collect_constraints_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
-    _owner: GenericParamOwner<'db>,
-) -> Binder<PredicateListId<'db>> {
-    Binder::bind(PredicateListId::empty_list(db))
+    owner: GenericParamOwner<'db>,
+) -> Binder<'db, PredicateListId<'db>> {
+    Binder::bind(owner, PredicateListId::empty_list(db))
 }
 
 fn collect_constraints_cycle_recover<'db>(
     _db: &'db dyn HirAnalysisDb,
-    _value: &Binder<PredicateListId<'db>>,
+    _value: &Binder<'db, PredicateListId<'db>>,
     _count: u32,
     _owner: GenericParamOwner<'db>,
-) -> salsa::CycleRecoveryAction<Binder<PredicateListId<'db>>> {
+) -> salsa::CycleRecoveryAction<Binder<'db, PredicateListId<'db>>> {
     salsa::CycleRecoveryAction::Iterate
 }
 
@@ -580,7 +572,7 @@ fn collect_constraints_cycle_recover<'db>(
 pub fn collect_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
-) -> Binder<PredicateListId<'db>> {
+) -> Binder<'db, PredicateListId<'db>> {
     match owner {
         GenericParamOwner::Func(func) => collect_func_def_constraints(db, func.into(), true),
         _ => collect_decl_constraints(db, owner),
@@ -591,14 +583,17 @@ pub fn collect_constraints<'db>(
 pub(crate) fn collect_candidate_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
-) -> Binder<PredicateListId<'db>> {
-    Binder::bind(PredicateListId::new(
-        db,
-        candidate_decl_constraint_pairs(db, owner)
-            .iter()
-            .map(|(inst, _)| *inst)
-            .collect::<Vec<_>>(),
-    ))
+) -> Binder<'db, PredicateListId<'db>> {
+    Binder::bind(
+        owner,
+        PredicateListId::new(
+            db,
+            candidate_decl_constraint_pairs(db, owner)
+                .iter()
+                .map(|(inst, _)| *inst)
+                .collect::<Vec<_>>(),
+        ),
+    )
 }
 
 struct Deferred<'db> {
@@ -647,7 +642,7 @@ fn try_resolve_type_bound<'db>(
             let ty = match const_bodies {
                 ConstBodyLowering::Eager => lower_hir_ty(db, hir_ty, deferred.scope, assumptions),
                 ConstBodyLowering::Deferred => {
-                    let minter = HoleMinter::deferred(HoleAnchor::TemplateTy {
+                    let minter = LoweringContext::deferred(HoleAnchor::TemplateTy {
                         ty: hir_ty,
                         scope: deferred.scope,
                         assumptions,
@@ -674,7 +669,7 @@ fn try_resolve_type_bound<'db>(
             enclosing_trait_self_ty(db, deferred.scope),
         ),
         ConstBodyLowering::Deferred => {
-            let minter = HoleMinter::deferred(HoleAnchor::TemplatePath {
+            let minter = LoweringContext::deferred(HoleAnchor::TemplatePath {
                 path: deferred.trait_ref.path(db).to_opt()?,
                 scope: deferred.scope,
                 assumptions,

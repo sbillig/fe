@@ -1740,6 +1740,35 @@ contract C { mut values: Slots }
 }
 
 #[test]
+fn specialized_adt_field_array_extent_preserves_indexed_root_layout() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+struct Slot<const ROOT: u256 = _> {}
+struct Slots<const N: usize> { values: [Slot; { 10 / N }] }
+
+contract C {
+    mut first: Slots<2>,
+    mut second: Slots<5>,
+}
+"#,
+    );
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.storage_layout(&db);
+    let first = field(&db, contract, "first");
+    let second = field(&db, contract, "second");
+    assert_eq!(first.families.len(), 1);
+    assert_eq!(second.families.len(), 1);
+    assert_eq!(first.families[0].extent, 5);
+    assert_eq!(second.families[0].extent, 2);
+    assert_eq!(first.families[0].dimensions[0].len, 5);
+    assert_eq!(second.families[0].dimensions[0].len, 2);
+    assert_ne!(first.families[0].lane, second.families[0].lane);
+    validate_allocated_contract_layout(&db, layout.allocated.as_ref().unwrap()).unwrap();
+}
+
+#[test]
 fn one_source_can_bind_scalar_and_multiple_indexed_landings() {
     parse_ok!(
         db,
@@ -2704,7 +2733,7 @@ fn concrete_array(maps: [StorageMap<u256, u256, 7>; 2]) {}
     let key = SemanticInstanceKey::new(
         &db,
         BodyOwner::Func(func),
-        GenericSubst::new(&db, vec![root]),
+        GenericSubst::for_owner(&db, func.into(), vec![root]),
         EffectProviderSubst::empty(&db),
         ImplEnv::empty(&db, func.scope()),
     );
@@ -3028,7 +3057,7 @@ fn consume_outer<const WRAPPER: u256, const TARGET: u256>(
     let value_schema = SemanticInstanceKey::new(
         &db,
         BodyOwner::Func(consume_independent),
-        GenericSubst::new(&db, vec![params[1], params[1]]),
+        GenericSubst::for_owner(&db, consume_independent.into(), vec![params[1], params[1]]),
         EffectProviderSubst::empty(&db),
         ImplEnv::empty(&db, consume_independent.scope()),
     )
@@ -3067,7 +3096,7 @@ fn consume_outer<const WRAPPER: u256, const TARGET: u256>(
     let outer_schema = SemanticInstanceKey::new(
         &db,
         BodyOwner::Func(consume_outer),
-        GenericSubst::new(&db, vec![params[1], params[1]]),
+        GenericSubst::for_owner(&db, consume_outer.into(), vec![params[1], params[1]]),
         EffectProviderSubst::empty(&db),
         ImplEnv::empty(&db, consume_outer.scope()),
     )

@@ -17,8 +17,8 @@ use crate::analysis::ty::method_table::{MethodProbe, probe_method};
 use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::trait_lower::lower_impl_trait;
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
-use crate::analysis::ty::ty_error::collect_ty_lower_errors;
-use crate::hir_def::scope_graph::ScopeId;
+use crate::analysis::ty::ty_error::{collect_ty_lower_errors, emit_invalid_ty_error};
+use crate::analysis::ty::ty_lower::generic_param_owner_assumptions;
 use crate::hir_def::{
     Contract, Enum, EnumVariant, FieldParent, Func, GenericParam, GenericParamOwner,
     GenericParamView, IdentId, Impl, ImplTrait, ItemKind, Partial, PathId, Struct, Trait,
@@ -686,10 +686,7 @@ impl<'db> ImplTrait<'db> {
     pub(crate) fn diags_implementor_validity(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> (
-        Option<Binder<ImplementorId<'db>>>,
-        Vec<TyDiagCollection<'db>>,
-    ) {
+    ) -> (Option<ImplementorId<'db>>, Vec<TyDiagCollection<'db>>) {
         self.implementor_with_errors(db)
     }
 
@@ -702,7 +699,6 @@ impl<'db> ImplTrait<'db> {
         let Some(implementor) = lower_impl_trait(db, self) else {
             return diags;
         };
-        let implementor = implementor.instantiate_identity();
         let trait_hir = implementor.trait_def(db);
         let impl_types = implementor.types(db);
 
@@ -752,7 +748,6 @@ impl<'db> ImplTrait<'db> {
         let Some(implementor) = lower_impl_trait(db, self) else {
             return diags;
         };
-        let implementor = implementor.instantiate_identity();
         let trait_hir = implementor.trait_def(db);
 
         // Check that all required trait consts are implemented
@@ -783,7 +778,6 @@ impl<'db> ImplTrait<'db> {
         let Some(implementor) = lower_impl_trait(db, self) else {
             return Vec::new();
         };
-        let implementor = implementor.instantiate_identity();
         let trait_hir = implementor.trait_def(db);
         let trait_args = implementor.trait_(db).args(db);
 
@@ -908,7 +902,6 @@ impl<'db> ImplTrait<'db> {
         let Some(implementor) = lower_impl_trait(db, self) else {
             return Vec::new();
         };
-        let implementor = implementor.instantiate_identity();
         let trait_hir = implementor.trait_def(db);
         let inst = implementor.trait_inst(db);
         let scope = self.scope();
@@ -951,14 +944,14 @@ impl<'db> ImplTrait<'db> {
                 let ConstTyData::UnEvaluated {
                     body: start_body,
                     ty: Some(start_ty),
-                    generic_args: start_args,
+                    capture,
                     ..
                 } = const_ty.data(db)
                 else {
                     continue;
                 };
                 if start_ty.has_invalid(db)
-                    || !const_body_resolution_reenters(db, *start_body, *start_ty, start_args)
+                    || !const_body_resolution_reenters(db, *start_body, *start_ty, capture)
                 {
                     continue;
                 }
@@ -983,56 +976,19 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<TyDiagCollection<'db>> {
-        use ty::fold::TyFoldable as _;
-        use ty::trait_lower::lower_impl_trait;
-
-        struct TraitScopeSubstFolder<'db, 'a> {
-            trait_scope: ScopeId<'db>,
-            trait_args: &'a [TyId<'db>],
-        }
-
-        impl<'db> ty::fold::TyFolder<'db> for TraitScopeSubstFolder<'db, '_> {
-            fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-                match ty.data(db) {
-                    ty::ty_def::TyData::TyParam(param)
-                        if !param.is_effect() && param.owner == self.trait_scope =>
-                    {
-                        self.trait_args.get(param.idx).copied().unwrap_or(ty)
-                    }
-
-                    ty::ty_def::TyData::ConstTy(const_ty) => match const_ty.data(db) {
-                        ty::const_ty::ConstTyData::TyParam(param, _)
-                            if !param.is_effect() && param.owner == self.trait_scope =>
-                        {
-                            self.trait_args.get(param.idx).copied().unwrap_or(ty)
-                        }
-
-                        _ => ty.super_fold_with(db, self),
-                    },
-
-                    _ => ty.super_fold_with(db, self),
-                }
-            }
-        }
-
         let mut diags = Vec::new();
         let Some(implementor) = lower_impl_trait(db, self) else {
             return diags;
         };
-        let implementor = implementor.instantiate_identity();
         let trait_args = implementor.trait_(db).args(db);
-        let trait_scope = implementor.trait_def(db).scope();
         let assumptions = param_env(db, self.into());
 
         for assoc in implementor.assoc_type_views(db) {
             let Some(name) = assoc.name(db) else { continue };
 
             for bound_inst in assoc.bounds(db) {
-                let mut folder = TraitScopeSubstFolder {
-                    trait_scope,
-                    trait_args,
-                };
-                let bound_inst = bound_inst.fold_with(db, &mut folder);
+                let bound_inst = Binder::bind(implementor.trait_def(db).into(), bound_inst)
+                    .instantiate(db, trait_args);
                 use ty::trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable};
                 if let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
                     db,
@@ -1068,7 +1024,6 @@ impl<'db> ImplTrait<'db> {
         let Some(implementor) = lower_impl_trait(db, self) else {
             return diags;
         };
-        let implementor = implementor.instantiate_identity();
         let trait_inst = implementor.trait_(db);
         let trait_def = implementor.trait_def(db);
 
@@ -1383,7 +1338,19 @@ impl<'db> GenericParamOwner<'db> {
             let GenericParam::Const(c) = view.param else {
                 continue;
             };
-            if c.ty.to_opt().is_none() {
+            let Some(hir_ty) = c.ty.to_opt() else {
+                continue;
+            };
+            let span = view.span().into_const_param().ty();
+            let mut source_diags = collect_ty_lower_errors(
+                db,
+                self.scope(),
+                hir_ty,
+                span.clone(),
+                generic_param_owner_assumptions(db, self.scope()),
+            );
+            if !source_diags.is_empty() {
+                out.append(&mut source_diags);
                 continue;
             }
             if let Some(ty) = param_set.param_by_original_idx(db, view.idx) {
@@ -1396,7 +1363,6 @@ impl<'db> GenericParamOwner<'db> {
                     _ => None,
                 };
                 if let Some(cause) = cause_opt {
-                    let span = view.span().into_const_param().ty();
                     match cause {
                         InvalidCause::InvalidConstParamTy => {
                             out.push(TyLowerDiag::InvalidConstParamTy(span.into()).into());
@@ -1416,7 +1382,13 @@ impl<'db> GenericParamOwner<'db> {
                         InvalidCause::ConstTyMismatch { expected, given } => {
                             out.push(const_ty_mismatch_diag(span.into(), expected, given));
                         }
-                        _ => {}
+                        cause => {
+                            if let Some(diag) =
+                                emit_invalid_ty_error(db, TyId::invalid(db, cause), span.into())
+                            {
+                                out.push(diag);
+                            }
+                        }
                     }
                 }
             }
@@ -1723,8 +1695,8 @@ impl<'db> Diagnosable<'db> for ImplTrait<'db> {
         };
 
         let mut out = validity_diags;
-        out.extend(implementor.skip_binder().diags_method_conformance(db));
-        out.extend(self.diags_effect_handle_raw(db, *implementor.skip_binder()));
+        out.extend(implementor.diags_method_conformance(db));
+        out.extend(self.diags_effect_handle_raw(db, implementor));
         out.extend(self.diags_trait_ref_and_wf(db));
         out.extend(self.diags_assoc_types_wf(db));
         out.extend(self.diags_assoc_types(db));

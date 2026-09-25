@@ -16,15 +16,16 @@ use super::{BodyOwner, ExprProp, LocalBinding, TraitObligationOutcome, TyChecker
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        const_ty::{CallableInputLayoutHoleOrigin, HoleAnchor, HoleMinter, LayoutHoleArgSite},
+        const_ty::{CallableInputLayoutHoleOrigin, HoleAnchor, LayoutHoleArgSite, LoweringContext},
         corelib::resolve_lib_func_path,
         diagnostics::{BodyDiag, FuncBodyDiag},
-        fold::{AssocTySubst, TyFoldable, TyFolder},
-        generic_defaults::{DefaultApplication, GenericArgError, generic_default},
-        normalize::normalize_ty,
+        fold::{TyFoldable, TyFolder},
+        generic_defaults::{DefaultApplication, GenericArgError},
+        normalize::{normalize_from_assumptions, normalize_ty},
         trait_def::TraitInstId,
         trait_resolution::{
-            TraitSolveCx, check_trait_inst_wf, constraint::collect_func_decl_constraints,
+            PredicateListId, TraitSolveCx, check_trait_inst_wf,
+            constraint::collect_func_decl_constraints,
         },
         ty_def::{BorrowKind, CapabilityKind},
         ty_def::{InvalidCause, TyBase, TyData, TyFlags, TyId},
@@ -45,6 +46,12 @@ pub(super) enum CallGenericArgUnifyError<'db> {
     ArityMismatch { given: usize, expected: usize },
     UnificationFailed,
     InvalidArgument(GenericArgError<'db>),
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum CallGenericArgPhase {
+    Probe,
+    Check,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -161,10 +168,11 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
     tc: &mut TyChecker<'db>,
     args: GenericArgListId<'db>,
     anchor: HoleAnchor<'db>,
+    phase: CallGenericArgPhase,
     mut unify_arg: impl FnMut(&mut TyChecker<'db>, usize, TyId<'db>, &mut TyId<'db>) -> bool,
 ) -> Result<(), CallGenericArgUnifyError<'db>> {
     let db = tc.db;
-    let minter = HoleMinter::new(anchor);
+    let minter = LoweringContext::new(anchor);
     let given_args = args.is_given(db).then(|| {
         lower_generic_arg_list(
             db,
@@ -209,7 +217,12 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
                     db,
                     &callable.generic_args[..offset],
                     provided,
-                    DefaultApplication::Metadata(&minter),
+                    match phase {
+                        CallGenericArgPhase::Probe => {
+                            DefaultApplication::StructuralMetadata(&minter)
+                        }
+                        CallGenericArgPhase::Check => DefaultApplication::CheckedMetadata(&minter),
+                    },
                 )
                 .map_err(CallGenericArgUnifyError::InvalidArgument)?
         }
@@ -248,6 +261,7 @@ pub struct Callable<'db> {
     base_ty: TyId<'db>,
     generic_args: Vec<TyId<'db>>,
     effect_providers: Vec<EffectProviderSpecialization<'db>>,
+    checked_input_tys: Option<Vec<TyId<'db>>>,
     /// The originating trait instance if this callable comes from a trait method
     /// (e.g., operator overloading, method call, indexing). None for inherent functions.
     pub trait_inst: Option<TraitInstId<'db>>,
@@ -260,6 +274,9 @@ impl<'db> TyVisitable<'db> for Callable<'db> {
     {
         self.generic_args.visit_with(visitor);
         self.effect_providers.visit_with(visitor);
+        if let Some(inputs) = &self.checked_input_tys {
+            inputs.visit_with(visitor);
+        }
         if let Some(inst) = self.trait_inst {
             inst.visit_with(visitor);
         }
@@ -276,6 +293,9 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
             base_ty: self.base_ty,
             generic_args: self.generic_args.fold_with(db, folder),
             effect_providers: self.effect_providers.fold_with(db, folder),
+            checked_input_tys: self
+                .checked_input_tys
+                .map(|inputs| inputs.fold_with(db, folder)),
             trait_inst: self.trait_inst.map(|i| i.fold_with(db, folder)),
         }
     }
@@ -331,12 +351,38 @@ impl<'db> Callable<'db> {
             base_ty: base,
             generic_args: args.to_vec(),
             effect_providers: Vec::new(),
+            checked_input_tys: None,
             trait_inst,
         })
     }
 
+    /// A completed function item: `generic_args` covers the item's full schema.
+    pub(crate) fn from_item(
+        db: &'db dyn HirAnalysisDb,
+        callable_def: CallableDef<'db>,
+        generic_args: Vec<TyId<'db>>,
+        trait_inst: Option<TraitInstId<'db>>,
+    ) -> Self {
+        Self {
+            callable_def,
+            base_ty: TyId::func(db, callable_def),
+            generic_args,
+            effect_providers: Vec::new(),
+            checked_input_tys: None,
+            trait_inst,
+        }
+    }
+
     pub fn generic_args(&self) -> &[TyId<'db>] {
         &self.generic_args
+    }
+
+    pub fn checked_input_tys(&self) -> Option<&[TyId<'db>]> {
+        self.checked_input_tys.as_deref()
+    }
+
+    pub(super) fn set_checked_input_tys(&mut self, inputs: Vec<TyId<'db>>) {
+        self.checked_input_tys = Some(inputs);
     }
 
     pub fn generic_args_mut(&mut self) -> &mut Vec<TyId<'db>> {
@@ -381,40 +427,42 @@ impl<'db> Callable<'db> {
         self.trait_inst
     }
 
+    fn normalize_with_trait_evidence<T>(&self, db: &'db dyn HirAnalysisDb, value: T) -> T
+    where
+        T: TyFoldable<'db>,
+    {
+        if let Some(inst) = self.trait_inst {
+            normalize_from_assumptions(
+                db,
+                value,
+                self.callable_def.scope(),
+                PredicateListId::new(db, vec![inst]),
+            )
+        } else {
+            value
+        }
+    }
+
     pub fn ret_ty(&self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let ret = self
             .callable_def
             .ret_ty(db)
             .instantiate(db, &self.generic_args);
-        if let Some(inst) = self.trait_inst {
-            let mut subst = AssocTySubst::new(inst);
-            ret.fold_with(db, &mut subst)
-        } else {
-            ret
-        }
+        self.normalize_with_trait_evidence(db, ret)
     }
 
     pub fn arg_ty(&self, db: &'db dyn HirAnalysisDb, idx: usize) -> Option<TyId<'db>> {
-        let mut arg = self
+        let arg = self
             .callable_def
             .arg_tys(db)
             .get(idx)?
             .instantiate(db, &self.generic_args);
-        if let Some(inst) = self.trait_inst {
-            let mut subst = AssocTySubst::new(inst);
-            arg = arg.fold_with(db, &mut subst);
-        }
-        Some(arg)
+        Some(self.normalize_with_trait_evidence(db, arg))
     }
 
     pub fn ty(&self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let ty = TyId::foldl(db, self.base_ty, &self.generic_args);
-        if let Some(inst) = self.trait_inst {
-            let mut subst = AssocTySubst::new(inst);
-            ty.fold_with(db, &mut subst)
-        } else {
-            ty
-        }
+        self.normalize_with_trait_evidence(db, ty)
     }
 
     pub(super) fn unify_generic_args(
@@ -424,10 +472,17 @@ impl<'db> Callable<'db> {
         anchor: HoleAnchor<'db>,
         span: LazyGenericArgListSpan<'db>,
     ) -> bool {
-        match unify_explicit_call_generic_args(self, tc, args, anchor, |tc, idx, given, current| {
-            *current = tc.equate_ty(given, *current, span.clone().arg(idx).into());
-            true
-        }) {
+        match unify_explicit_call_generic_args(
+            self,
+            tc,
+            args,
+            anchor,
+            CallGenericArgPhase::Check,
+            |tc, idx, given, current| {
+                *current = tc.equate_ty(given, *current, span.clone().arg(idx).into());
+                true
+            },
+        ) {
             Ok(()) => true,
             Err(CallGenericArgUnifyError::ArityMismatch { given, expected }) => {
                 tc.push_diag(BodyDiag::CallGenericArgNumMismatch {
@@ -441,14 +496,7 @@ impl<'db> Callable<'db> {
             Err(CallGenericArgUnifyError::UnificationFailed) => false,
             Err(CallGenericArgUnifyError::InvalidArgument(error)) => {
                 // Invalid declarations are diagnosed once, at their default.
-                let declaration_error = match self.callable_def {
-                    CallableDef::Func(func) => {
-                        error.from_default
-                            && generic_default(tc.db, func.into(), error.index).is_err()
-                    }
-                    CallableDef::VariantCtor(_) => false,
-                };
-                if !declaration_error {
+                if error.diagnostic_owner.is_none() {
                     let error_span = if error.from_default {
                         span.into()
                     } else {
@@ -466,7 +514,7 @@ impl<'db> Callable<'db> {
     }
 
     pub(super) fn check_args(
-        &self,
+        &mut self,
         tc: &mut TyChecker<'db>,
         call_args: &[HirCallArg<'db>],
         span: LazyCallArgListSpan<'db>,
@@ -575,6 +623,7 @@ impl<'db> Callable<'db> {
             )
         };
 
+        let mut checked_inputs = Vec::with_capacity(expected_arity);
         for (i, (given, expected)) in args.into_iter().zip(expected_arg_tys.iter()).enumerate() {
             // Call labels are either explicit (`f(x: value)`) or inferred from a bare
             // identifier argument (`f(x)`), but not from arbitrary expressions (`f(10)`).
@@ -595,10 +644,7 @@ impl<'db> Callable<'db> {
             }
 
             let mut expected = expected.instantiate(db, &self.generic_args);
-            if let Some(inst) = self.trait_inst {
-                let mut subst = AssocTySubst::new(inst);
-                expected = expected.fold_with(db, &mut subst);
-            }
+            expected = self.normalize_with_trait_evidence(db, expected);
             let mut expected = tc.normalize_ty(expected);
             let mode = func_params
                 .as_ref()
@@ -774,7 +820,9 @@ impl<'db> Callable<'db> {
                 // Variant constructors materialize their fields immediately (owned context).
                 tc.record_implicit_move_for_owned_expr(given.expr, expected);
             }
+            checked_inputs.push(tc.normalize_ty(actual));
         }
+        self.checked_input_tys = Some(checked_inputs);
     }
 
     fn compile_time_string_literal_arg_expected(
@@ -793,10 +841,7 @@ impl<'db> Callable<'db> {
             .arg_tys(tc.db)
             .get(arg_idx)?
             .instantiate(tc.db, &self.generic_args);
-        if let Some(inst) = self.trait_inst {
-            let mut subst = AssocTySubst::new(inst);
-            expected = expected.fold_with(tc.db, &mut subst);
-        }
+        expected = self.normalize_with_trait_evidence(tc.db, expected);
         let expected = normalize_ty(tc.db, expected, tc.env.scope(), tc.env.assumptions());
         if tc.string_literal_should_use_byte_array(expected)
             || self
@@ -998,12 +1043,7 @@ impl<'db> Callable<'db> {
             if !check_trait_inst_wf(db, definition_solve_cx, declared_constraint).is_wf() {
                 continue;
             }
-            let constraint = if let Some(inst) = self.trait_inst {
-                let mut subst = AssocTySubst::new(inst);
-                constraint.fold_with(db, &mut subst)
-            } else {
-                constraint
-            };
+            let constraint = self.normalize_with_trait_evidence(db, constraint);
             let constraint = tc.normalize_trait_goal(constraint);
             if collect_flags(db, constraint).contains(TyFlags::HAS_INVALID) {
                 continue;

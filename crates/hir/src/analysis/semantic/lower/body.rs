@@ -1206,14 +1206,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             ),
         };
         let result_ty = self.expr_ty(expr);
+        // Admission reports failed concrete demands; raw lowering preserves
+        // the symbolic form for provisional and not-yet-admitted bodies.
         let size = match runtime_size_bytes(self.db, ty) {
             Ok(size @ Some(_)) => size,
-            Ok(None) if ty.has_param(self.db) || ty.has_var(self.db) => None,
-            Err(_) => None,
-            Ok(None) => panic!(
-                "core::size_of should resolve for {}",
-                ty.pretty_print(self.db)
-            ),
+            Ok(None) | Err(_) => None,
         };
         let Some(size) = size else {
             let caller = self.instance.key(self.db);
@@ -1222,13 +1219,21 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     self.db,
                     caller,
                     callable,
+                    &[],
                     callable.effect_providers(),
                 ),
-                BindingRoleMode::Provisional => {
-                    provisional_semantic_callee_key(self.db, caller, callable, self.assumptions)
-                }
+                BindingRoleMode::Provisional => provisional_semantic_callee_key(
+                    self.db,
+                    caller,
+                    callable,
+                    &[],
+                    self.assumptions,
+                ),
             }
-            .expect("const intrinsic should resolve to a function");
+            .ok()
+            .flatten()
+            .expect("const intrinsic should resolve to a function")
+            .key;
             let const_expr = match kind {
                 ConstIntrinsicKind::SizeOf => ConstExpr::Invocation(ConstInvocation {
                     key,
