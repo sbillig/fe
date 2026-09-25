@@ -4262,7 +4262,7 @@ fn clobber(slot: *ref u256) {
             .leaves(&summary.result, ValueOccurrence::Summary)
             .pop()
             .unwrap();
-        let check = |source: &SourceExpr<'_>| {
+        let check = |source| {
             checker
                 .verify_source(source, leaf.guard.scope(), Some(leaf.semantics), false)
                 .is_ok()

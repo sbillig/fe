@@ -4,7 +4,7 @@ use crate::analysis::semantic::diagnostics::{
     BlockedSemanticBody, SemanticDiagnostic, SemanticDiagnosticKind, SemanticDiagnosticSpan,
     SemanticNormalizationFailure, normalized_body_internal_diag,
 };
-use std::{collections::BTreeMap, slice};
+use std::{cell::RefCell, collections::BTreeMap, slice};
 
 use cranelift_entity::EntityRef;
 use num_traits::ToPrimitive;
@@ -104,6 +104,12 @@ pub(super) struct Borrowck<'db> {
     pub storage_facts_changed: bool,
     /// Invalidates call-local source resolutions when their inventory changes.
     pub(super) source_generation: usize,
+    /// Guarded capability regions at one `source_generation`; loans change only
+    /// with the generation.
+    capability_regions: RefCell<(
+        usize,
+        FxHashMap<Guarded<'db, CapabilityRef<'db>>, RegionSet<'db>>,
+    )>,
 }
 
 impl<'db> Borrowck<'db> {
@@ -162,6 +168,7 @@ impl<'db> Borrowck<'db> {
             loan_facts_changed: false,
             storage_facts_changed: false,
             source_generation: 0,
+            capability_regions: RefCell::default(),
         };
         checker.prepare_scalar_demand()?;
         Ok(checker)
@@ -263,15 +270,34 @@ impl<'db> Borrowck<'db> {
         }
     }
 
+    /// The region a capability entry designates under its guard.
+    pub(super) fn capability_region(
+        &self,
+        entry: &Guarded<'db, CapabilityRef<'db>>,
+    ) -> RegionSet<'db> {
+        let mut cache = self.capability_regions.borrow_mut();
+        let (generation, regions) = &mut *cache;
+        if *generation != self.source_generation {
+            *generation = self.source_generation;
+            regions.clear();
+        }
+        regions
+            .entry(entry.clone())
+            .or_insert_with(|| {
+                entry
+                    .payload
+                    .region(self.db, &self.inventory.loans, entry.guard.scope())
+                    .with_guard(&entry.guard)
+            })
+            .clone()
+    }
+
     pub fn resolve_capability(&self, value: &CapabilityValue<'db>) -> Resolution<'db> {
         let mut result = Resolution::empty(value.scope());
         result.region = RegionSet::union_all(
             value.scope(),
             value.direct().iter().filter_map(|entry| {
-                let region = entry
-                    .payload
-                    .region(self.db, &self.inventory.loans, entry.guard.scope())
-                    .with_guard(&entry.guard);
+                let region = self.capability_region(entry);
                 if matches!(entry.payload, CapabilityRef::Invalidated { .. }) {
                     result.invalidated |= NativeValidity::from_region(&region);
                     return None;

@@ -249,10 +249,10 @@ impl<'db> Borrowck<'db> {
                             .map(OccurrenceStep::Data),
                     )
                     .collect();
-                let region = leaf
-                    .payload
-                    .region(self.db, &self.inventory.loans, leaf.guard.scope())
-                    .with_guard(&leaf.guard);
+                let region = self.capability_region(&Guarded {
+                    guard: leaf.guard.clone(),
+                    payload: leaf.payload.clone(),
+                });
                 let invalidated = matches!(leaf.payload, CapabilityRef::Invalidated { .. });
                 let access = if invalidated || leaf.semantics.target_ty.is_zero_sized(self.db) {
                     None
