@@ -1716,14 +1716,35 @@ fn find_associated_type_in_mode<'db>(
     let scope_ingot = scope.ingot(db);
 
     if let TyData::TyParam(param) = original_ty.data(db) {
-        // Trait self, in trait or impl trait. Associated type must be in this trait.
+        // Trait self, in trait or impl trait. Associated type must be in this trait
+        // or, inside a trait, in one of its supertraits.
         if param.is_trait_self() {
             if let Some(trait_) = param.owner.resolve_to::<Trait>(db) {
+                let trait_inst =
+                    TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
                 if trait_.assoc_ty(db, name).is_some() {
-                    let trait_inst =
-                        TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
                     let assoc_ty = TyId::assoc_ty(db, trait_inst.trait_ref(db), name);
                     return Ok(smallvec![(trait_inst, assoc_ty)]);
+                }
+
+                // The trait's `Self` also satisfies the trait's declared supertraits,
+                // so their associated types are reachable as `Self::Name` too. Bounds
+                // on the trait's own associated types have another self type and are
+                // skipped.
+                let mut candidates = SmallVec::new();
+                for &bound in PredicateListId::new(db, vec![trait_inst])
+                    .extend_all_bounds(db)
+                    .list(db)
+                {
+                    if bound.def(db) != trait_
+                        && bound.self_ty(db) == original_ty
+                        && let Some(assoc_ty) = bound.project_assoc_ty(db, name)
+                    {
+                        candidates.push((bound, assoc_ty));
+                    }
+                }
+                if !candidates.is_empty() {
+                    return Ok(candidates);
                 }
             } else if let Some(impl_trait) = param.owner.resolve_to::<ImplTrait>(db)
                 && let Some(trait_inst) = impl_trait.trait_inst(db)
