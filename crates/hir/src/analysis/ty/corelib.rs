@@ -532,6 +532,7 @@ define_runtime_intrinsics! {
     Stop => (Std, ["evm", "ops", "stop"], NO_MEMORY_ACCESSES, None),
     Panic => (Core, ["panic"], NO_MEMORY_ACCESSES, None),
     PanicWithValue => (Core, ["panic_with_value"], NO_MEMORY_ACCESSES, None),
+    PanicCode => (Core, ["panic_code"], NO_MEMORY_ACCESSES, None),
     Todo => (Core, ["todo"], NO_MEMORY_ACCESSES, None),
     IntrinsicKeccak256 => (Core, ["intrinsic", "__keccak256"], READ_VALUE_0, None),
 }

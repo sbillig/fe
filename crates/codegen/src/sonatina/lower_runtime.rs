@@ -3057,6 +3057,13 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     len,
                 ));
             }
+            // Native targets have no revert data; a revert aborts like a trap.
+            RTerminator::Revert { .. } | RTerminator::RevertEmpty
+                if self.module.is_native_target() =>
+            {
+                self.fb
+                    .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+            }
             RTerminator::Revert { offset, len } => {
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
