@@ -1983,7 +1983,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                     }
                     PathRes::TyAlias(
                         alias.clone(),
-                        alias.instantiate_from_path(db, path, &args, assumptions, minter),
+                        alias.instantiate(db, &args, assumptions, minter),
                     )
                 }
 
@@ -2182,8 +2182,7 @@ fn ty_from_adtref<'db>(
         None,
         args,
         assumptions,
-        ConstDefaultCompletion::metadata(Some(path)),
-        Some(minter),
+        ConstDefaultCompletion::metadata_at_application(minter),
     );
     let applied = TyId::foldl(db, ty, &completed_args);
     if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) = applied.data(db)

@@ -158,7 +158,7 @@ where
                 use_.visit_with(visitor);
             }
         },
-        ConstTyData::UnEvaluated { .. } => {}
+        ConstTyData::UnEvaluated { generic_args, .. } => generic_args.visit_with(visitor),
     }
 }
 
