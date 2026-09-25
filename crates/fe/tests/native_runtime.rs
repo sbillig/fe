@@ -173,6 +173,34 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_assert_message_traps() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("traps.fe");
+    fs::write(
+        &source,
+        r#"
+fn checked(_ value: u256) -> u256 {
+    assert!(value < 10, "value too large")
+    value
+}
+#[test]
+fn pass_small() { core::assert(checked(3) == 3) }
+#[test]
+fn fail_message() { core::assert(checked(11) == 11) }
+"#,
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+        .args(["test", "--backend", "native", "--jobs", "1"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(!result.status.success(), "{result:?}");
+    assert!(stdout.contains("1 passed; 1 failed"), "{result:?}");
+}
+
+#[test]
 fn native_runner_executes_tests_filters_and_retains_only_requested_artifacts() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("cases.fe");
