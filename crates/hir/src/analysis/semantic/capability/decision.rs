@@ -69,6 +69,41 @@ impl<V: Ord, T: Ord> Ord for Decision<V, T> {
     }
 }
 
+impl<V, T: Ord> Decision<V, T> {
+    /// The derived node order, with variables compared by `variable`.
+    pub(super) fn cmp_by<W>(
+        &self,
+        other: &Decision<W, T>,
+        mut variable: impl FnMut(&V, &W) -> Ordering,
+    ) -> Ordering {
+        for (left, right) in self.nodes.iter().zip(other.nodes.iter()) {
+            let ordering = match (left, right) {
+                (Node::Leaf(left), Node::Leaf(right)) => left.cmp(right),
+                (Node::Leaf(_), Node::Branch { .. }) => Ordering::Less,
+                (Node::Branch { .. }, Node::Leaf(_)) => Ordering::Greater,
+                (
+                    Node::Branch {
+                        variable: left,
+                        low: left_low,
+                        high: left_high,
+                    },
+                    Node::Branch {
+                        variable: right,
+                        low: right_low,
+                        high: right_high,
+                    },
+                ) => variable(left, right)
+                    .then(left_low.cmp(right_low))
+                    .then(left_high.cmp(right_high)),
+            };
+            if ordering.is_ne() {
+                return ordering;
+            }
+        }
+        self.nodes.len().cmp(&other.nodes.len())
+    }
+}
+
 impl<V: Ord, T: Ord> PartialOrd for Decision<V, T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))

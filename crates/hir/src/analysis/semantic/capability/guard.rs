@@ -5,6 +5,7 @@
 //! as leaves. Neither graph enumerates array elements or depends on construction order.
 use rustc_hash::FxHashMap;
 use std::{
+    cell::RefCell,
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet},
     hash::Hash,
@@ -93,24 +94,19 @@ impl<'db> ChoiceKey<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct IndexBit<'db> {
+/// A bit of the index in one slot of a condition's sorted index table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct SlotBit {
     // Interleaving words avoids an exponential equality graph.
     bit: Reverse<u16>,
-    index: IndexExpr<'db>,
+    slot: u16,
 }
 
-impl<'db> IndexBit<'db> {
-    fn new(index: IndexExpr<'db>, bit: u16) -> Self {
+impl SlotBit {
+    fn new(slot: usize, bit: u16) -> Self {
         Self {
-            index,
             bit: Reverse(bit),
-        }
-    }
-    fn substitute(&self, subst: &IndexSubst<'db>) -> Variable<Self> {
-        match subst.apply(self.index) {
-            IndexExpr::Const(value) => Variable::Constant(constant_bit(value, self.bit.0)),
-            index => Variable::Symbol(Self::new(index, self.bit.0)),
+            slot: u16::try_from(slot).expect("index condition table fits a slot"),
         }
     }
 }
@@ -121,35 +117,182 @@ fn constant_bit(value: usize, bit: u16) -> bool {
         .is_some_and(|value| value & 1 != 0)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+type BitDecision = Decision<SlotBit, bool>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum SlotTarget {
+    Slot(u16),
+    Const(usize),
+}
+
+/// Bit-decision operations name table slots rather than indices, so equal
+/// operations over different indices share one result. Guard algebra repeats
+/// the same few operations across fixpoint iterations and summaries.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum BitOperation {
+    And(BitDecision, BitDecision),
+    Or(BitDecision, BitDecision),
+    Not(BitDecision),
+    Restrict(BitDecision, BitDecision),
+    Substitute(BitDecision, Box<[SlotTarget]>),
+    Exists(BitDecision, Box<[u16]>),
+}
+
+thread_local! {
+    static BIT_OPERATIONS: RefCell<FxHashMap<BitOperation, Option<BitDecision>>> =
+        RefCell::default();
+}
+
+impl BitOperation {
+    const LIMIT: usize = 4096;
+
+    fn run(self) -> Option<BitDecision> {
+        if let Some(result) = BIT_OPERATIONS.with_borrow(|results| results.get(&self).cloned()) {
+            return result;
+        }
+        let result = match &self {
+            Self::And(lhs, rhs) => Some(lhs.apply(rhs, |left, right| *left && *right)),
+            Self::Or(lhs, rhs) => Some(lhs.apply(rhs, |left, right| *left || *right)),
+            Self::Not(decision) => Some(decision.map(|bit| Variable::Symbol(*bit), |value| !value)),
+            Self::Restrict(decision, care) => {
+                decision.restrict(care, &false, |value, care| care.then_some(*value))
+            }
+            Self::Substitute(decision, targets) => Some(decision.map(
+                |bit| match targets[usize::from(bit.slot)] {
+                    SlotTarget::Const(value) => Variable::Constant(constant_bit(value, bit.bit.0)),
+                    SlotTarget::Slot(slot) => Variable::Symbol(SlotBit { slot, ..*bit }),
+                },
+                |value| *value,
+            )),
+            Self::Exists(decision, slots) => Some(decision.exists(
+                |bit| slots.contains(&bit.slot),
+                |left, right| *left || *right,
+            )),
+        };
+        BIT_OPERATIONS.with_borrow_mut(|results| {
+            if results.len() >= Self::LIMIT {
+                results.clear();
+            }
+            results.insert(self, result.clone());
+        });
+        result
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct IndexCondition<'db> {
-    decision: Decision<IndexBit<'db>, bool>,
-    // Each index owns many bit decisions; collect the distinct indices once.
+    // Sorted and distinct: exactly the indices the decision reads.
     indices: Arc<[IndexExpr<'db>]>,
+    decision: BitDecision,
+}
+
+impl Ord for IndexCondition<'_> {
+    // Order as the decision over the indices themselves.
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self == other {
+            return Ordering::Equal;
+        }
+        self.decision.cmp_by(&other.decision, |left, right| {
+            left.bit.cmp(&right.bit).then_with(|| {
+                self.indices[usize::from(left.slot)].cmp(&other.indices[usize::from(right.slot)])
+            })
+        })
+    }
+}
+
+impl PartialOrd for IndexCondition<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl<'db> IndexCondition<'db> {
-    fn new(decision: Decision<IndexBit<'db>, bool>) -> Self {
-        let mut indices = Vec::new();
-        for bit in decision.variables() {
-            if !indices.contains(&bit.index) {
-                indices.push(bit.index);
-            }
-        }
-        indices.sort_unstable();
+    fn constant(value: bool) -> Self {
         Self {
-            decision,
-            indices: indices.into(),
+            indices: Arc::new([]),
+            decision: Decision::leaf(value),
         }
     }
     fn always() -> Self {
-        Self::new(Decision::leaf(true))
+        Self::constant(true)
     }
     fn never() -> Self {
-        Self::new(Decision::leaf(false))
+        Self::constant(false)
+    }
+    fn is_always(&self) -> bool {
+        self.decision.is_leaf(&true)
     }
     fn is_never(&self) -> bool {
         self.decision.is_leaf(&false)
+    }
+
+    /// Drop table slots the decision no longer reads.
+    fn compact(indices: Arc<[IndexExpr<'db>]>, decision: BitDecision) -> Self {
+        let mut used = vec![false; indices.len()];
+        for bit in decision.variables() {
+            used[usize::from(bit.slot)] = true;
+        }
+        if used.iter().all(|used| *used) {
+            return Self { indices, decision };
+        }
+        let mut next = 0;
+        // An unread slot's target is never consulted.
+        let targets = used
+            .iter()
+            .map(|used| {
+                if *used {
+                    next += 1;
+                    SlotTarget::Slot(next - 1)
+                } else {
+                    SlotTarget::Const(0)
+                }
+            })
+            .collect();
+        Self {
+            indices: indices
+                .iter()
+                .zip(&used)
+                .filter_map(|(index, used)| used.then_some(*index))
+                .collect(),
+            decision: BitOperation::Substitute(decision, targets).run().unwrap(),
+        }
+    }
+
+    /// Express both decisions over one merged table.
+    fn aligned(&self, other: &Self) -> (Arc<[IndexExpr<'db>]>, BitDecision, BitDecision) {
+        if self.indices == other.indices {
+            return (
+                self.indices.clone(),
+                self.decision.clone(),
+                other.decision.clone(),
+            );
+        }
+        let indices: Arc<[_]> = self
+            .indices
+            .iter()
+            .chain(other.indices.iter())
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let relabel = |condition: &Self| {
+            if condition.indices.len() == indices.len() {
+                return condition.decision.clone();
+            }
+            let targets = condition
+                .indices
+                .iter()
+                .map(|index| {
+                    let slot = indices.binary_search(index).unwrap();
+                    SlotTarget::Slot(u16::try_from(slot).unwrap())
+                })
+                .collect();
+            BitOperation::Substitute(condition.decision.clone(), targets)
+                .run()
+                .unwrap()
+        };
+        let (lhs, rhs) = (relabel(self), relabel(other));
+        (indices, lhs, rhs)
     }
 
     fn equal(lhs: IndexExpr<'db>, rhs: IndexExpr<'db>) -> Self {
@@ -157,16 +300,22 @@ impl<'db> IndexCondition<'db> {
         match (lhs, rhs) {
             (lhs, rhs) if lhs == rhs => Self::always(),
             (IndexExpr::Const(_), IndexExpr::Const(_)) => Self::never(),
-            (IndexExpr::Const(value), index) => Self::new(Decision::chain(
-                (0..INDEX_BITS).map(|bit| (IndexBit::new(index, bit), constant_bit(value, bit))),
-                true,
-                false,
-            )),
-            (lhs, rhs) => Self::new(Decision::equal_bits(
-                (0..INDEX_BITS).map(|bit| (IndexBit::new(lhs, bit), IndexBit::new(rhs, bit))),
-                true,
-                false,
-            )),
+            (IndexExpr::Const(value), index) => Self {
+                indices: Arc::new([index]),
+                decision: Decision::chain(
+                    (0..INDEX_BITS).map(|bit| (SlotBit::new(0, bit), constant_bit(value, bit))),
+                    true,
+                    false,
+                ),
+            },
+            (lhs, rhs) => Self {
+                indices: Arc::new([lhs, rhs]),
+                decision: Decision::equal_bits(
+                    (0..INDEX_BITS).map(|bit| (SlotBit::new(0, bit), SlotBit::new(1, bit))),
+                    true,
+                    false,
+                ),
+            },
         }
     }
 
@@ -175,40 +324,46 @@ impl<'db> IndexCondition<'db> {
             return Self::never();
         }
         if let (IndexExpr::Const(value), IndexExpr::Const(len)) = (index, len) {
-            return if value < len {
-                Self::always()
-            } else {
-                Self::never()
-            };
+            return Self::constant(value < len);
         }
         if let IndexExpr::Const(len) = len {
-            return Self::new(Decision::upper_bound_bits(
-                (0..INDEX_BITS).map(|bit| (IndexBit::new(index, bit), constant_bit(len, bit))),
-            ));
+            return Self::compact(
+                Arc::new([index]),
+                Decision::upper_bound_bits(
+                    (0..INDEX_BITS).map(|bit| (SlotBit::new(0, bit), constant_bit(len, bit))),
+                ),
+            );
         }
-        Self::new(Decision::less_bits((0..INDEX_BITS).map(|bit| {
+        let indices: Vec<_> = [index, len]
+            .into_iter()
+            .filter(|index| !matches!(index, IndexExpr::Const(_)))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let decision = Decision::less_bits((0..INDEX_BITS).map(|bit| {
             let word_bit = |index| match index {
                 IndexExpr::Const(value) => Variable::Constant(constant_bit(value, bit)),
-                index => Variable::Symbol(IndexBit::new(index, bit)),
+                index => {
+                    Variable::Symbol(SlotBit::new(indices.binary_search(&index).unwrap(), bit))
+                }
             };
             (word_bit(index), word_bit(len))
-        })))
+        }));
+        Self::compact(indices.into(), decision)
     }
 
     fn and(&self, other: &Self) -> Self {
-        if self == other || other.decision.is_leaf(&true) {
+        if self == other || other.is_always() {
             return self.clone();
         }
-        if self.decision.is_leaf(&true) {
+        if self.is_always() {
             return other.clone();
         }
         if self.is_never() || other.is_never() {
             return Self::never();
         }
-        Self::new(
-            self.decision
-                .apply(&other.decision, |left, right| *left && *right),
-        )
+        let (indices, lhs, rhs) = self.aligned(other);
+        Self::compact(indices, BitOperation::And(lhs, rhs).run().unwrap())
     }
 
     fn or(&self, other: &Self) -> Self {
@@ -218,38 +373,94 @@ impl<'db> IndexCondition<'db> {
         if self.is_never() {
             return other.clone();
         }
-        if self.decision.is_leaf(&true) || other.decision.is_leaf(&true) {
+        if self.is_always() || other.is_always() {
             return Self::always();
         }
-        Self::new(
-            self.decision
-                .apply(&other.decision, |left, right| *left || *right),
-        )
+        let (indices, lhs, rhs) = self.aligned(other);
+        Self::compact(indices, BitOperation::Or(lhs, rhs).run().unwrap())
     }
 
     fn not(&self) -> Self {
-        Self::new(
-            self.decision
-                .map(|bit| Variable::Symbol(bit.clone()), |value| !value),
-        )
+        Self {
+            indices: self.indices.clone(),
+            decision: BitOperation::Not(self.decision.clone()).run().unwrap(),
+        }
     }
     fn implies(&self, other: &Self) -> bool {
         self.and(&other.not()).is_never()
     }
     fn substitute(&self, subst: &IndexSubst<'db>) -> Self {
-        Self::new(
-            self.decision
-                .map(|bit| bit.substitute(subst), |value| *value),
+        let targets: Vec<_> = self
+            .indices
+            .iter()
+            .map(|index| subst.apply(*index))
+            .collect();
+        if targets.iter().eq(self.indices.iter()) {
+            return self.clone();
+        }
+        let indices: Vec<_> = targets
+            .iter()
+            .filter(|index| !matches!(index, IndexExpr::Const(_)))
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        // An order-preserving rename leaves every slot in place.
+        if indices.len() == targets.len() && targets.is_sorted() {
+            return Self {
+                indices: indices.into(),
+                decision: self.decision.clone(),
+            };
+        }
+        let targets = targets
+            .into_iter()
+            .map(|index| match index {
+                IndexExpr::Const(value) => SlotTarget::Const(value),
+                index => {
+                    SlotTarget::Slot(u16::try_from(indices.binary_search(&index).unwrap()).unwrap())
+                }
+            })
+            .collect();
+        Self::compact(
+            indices.into(),
+            BitOperation::Substitute(self.decision.clone(), targets)
+                .run()
+                .unwrap(),
         )
     }
     fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> + '_ {
         self.indices.iter().copied()
     }
 
+    /// Existentially quantify the selected indices.
+    fn project(&self, mut hidden: impl FnMut(IndexExpr<'db>) -> bool) -> Self {
+        let slots: Box<[u16]> = self
+            .indices
+            .iter()
+            .enumerate()
+            .filter(|(_, index)| hidden(**index))
+            .map(|(slot, _)| u16::try_from(slot).unwrap())
+            .collect();
+        if slots.is_empty() {
+            return self.clone();
+        }
+        Self::compact(
+            self.indices.clone(),
+            BitOperation::Exists(self.decision.clone(), slots)
+                .run()
+                .unwrap(),
+        )
+    }
+
     fn restrict(&self, care: &Self) -> Option<Self> {
-        self.decision
-            .restrict(&care.decision, &false, |value, care| care.then_some(*value))
-            .map(Self::new)
+        let (indices, decision, care) = self.aligned(care);
+        BitOperation::Restrict(decision, care)
+            .run()
+            .map(|decision| Self::compact(indices, decision))
+    }
+
+    fn node_count(&self) -> usize {
+        self.decision.node_count()
     }
 
     // Find a representative only when the complete condition proves equality. Partial
@@ -266,7 +477,7 @@ impl<'db> IndexCondition<'db> {
             }
             let mut candidate = Some(0usize);
             for (bit, value) in &witness {
-                if bit.index == *index && *value {
+                if self.indices[usize::from(bit.slot)] == *index && *value {
                     candidate = candidate.and_then(|candidate| {
                         1usize
                             .checked_shl(u32::from(bit.bit.0))
@@ -613,12 +824,7 @@ impl<'db> Guard<'db> {
             )
             .map(
                 |bit| Variable::Symbol(bit.clone()),
-                |condition| {
-                    IndexCondition::new(condition.decision.exists(
-                        |bit| indices.contains(&bit.index),
-                        |left, right| *left || *right,
-                    ))
-                },
+                |condition| condition.project(|index| indices.contains(&index)),
             );
         Self::canonical(&self.scope, condition)
             .expect("existential quantification preserves feasibility")
@@ -654,12 +860,7 @@ impl<'db> Guard<'db> {
             &self.scope,
             self.condition.map(
                 |bit| Variable::Symbol(bit.clone()),
-                |condition| {
-                    IndexCondition::new(condition.decision.exists(
-                        |bit| projected.contains(&bit.index),
-                        |left, right| *left || *right,
-                    ))
-                },
+                |condition| condition.project(|index| projected.contains(&index)),
             ),
         )
         .expect("existential projection preserves feasibility")
@@ -698,7 +899,7 @@ impl<'db> Guard<'db> {
             + self
                 .condition
                 .leaves()
-                .map(|leaf| leaf.decision.node_count())
+                .map(IndexCondition::node_count)
                 .sum::<usize>()
     }
 
