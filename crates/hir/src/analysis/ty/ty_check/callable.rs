@@ -1,7 +1,7 @@
 use crate::{
     hir_def::{
-        BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArgListId, IdentId, LitKind,
-        Partial, UnOp,
+        BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArgListId, IdentId,
+        ItemKind, LitKind, Partial, UnOp,
     },
     span::{
         DynLazySpan,
@@ -9,6 +9,7 @@ use crate::{
         params::LazyGenericArgListSpan,
     },
 };
+use common::indexmap::IndexMap;
 use salsa::Update;
 
 use super::{BodyOwner, ExprProp, LocalBinding, TraitObligationOutcome, TyChecker};
@@ -19,6 +20,7 @@ use crate::analysis::{
         corelib::resolve_lib_func_path,
         diagnostics::{BodyDiag, FuncBodyDiag},
         fold::{AssocTySubst, TyFoldable, TyFolder},
+        generic_defaults::{DefaultApplication, GenericArgError, generic_default},
         normalize::normalize_ty,
         trait_def::TraitInstId,
         trait_resolution::{
@@ -26,8 +28,9 @@ use crate::analysis::{
         },
         ty_def::{BorrowKind, CapabilityKind},
         ty_def::{InvalidCause, TyBase, TyData, TyFlags, TyId},
+        ty_error::emit_invalid_ty_error,
         ty_lower::{
-            ConstDefaultCompletion, collect_generic_params, lower_generic_arg_list,
+            collect_generic_params, lower_generic_arg_list,
             specialized_callable_layout_bundle_signature,
         },
         visitor::{TyVisitable, TyVisitor, collect_flags},
@@ -38,9 +41,10 @@ use crate::hir_def::Body;
 use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
 
-pub(super) enum CallGenericArgUnifyError {
+pub(super) enum CallGenericArgUnifyError<'db> {
     ArityMismatch { given: usize, expected: usize },
     UnificationFailed,
+    InvalidArgument(GenericArgError<'db>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -158,7 +162,7 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
     args: GenericArgListId<'db>,
     anchor: HoleAnchor<'db>,
     mut unify_arg: impl FnMut(&mut TyChecker<'db>, usize, TyId<'db>, &mut TyId<'db>) -> bool,
-) -> Result<(), CallGenericArgUnifyError> {
+) -> Result<(), CallGenericArgUnifyError<'db>> {
     let db = tc.db;
     let minter = HoleMinter::new(anchor);
     let given_args = args.is_given(db).then(|| {
@@ -200,14 +204,14 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
                 inferred_required = callable.generic_args[offset..offset + required].to_vec();
                 &inferred_required
             };
-            param_set.complete_callable_explicit_args(
-                db,
-                func,
-                &callable.generic_args[..offset],
-                provided,
-                tc.env.assumptions(),
-                ConstDefaultCompletion::metadata_at_application(&minter),
-            )
+            param_set
+                .complete_args(
+                    db,
+                    &callable.generic_args[..offset],
+                    provided,
+                    DefaultApplication::Metadata(&minter),
+                )
+                .map_err(CallGenericArgUnifyError::InvalidArgument)?
         }
         CallableDef::VariantCtor(_) => given_args
             .clone()
@@ -302,6 +306,25 @@ impl<'db> Callable<'db> {
         assert_eq!(params.len(), args.len());
 
         let callable_def = *callable_def;
+        // Function items retain their trait arguments in the type even when
+        // stored in a local; reconstruct the witness needed for later dispatch.
+        let trait_inst = trait_inst.or_else(|| {
+            let CallableDef::Func(func) = callable_def else {
+                return None;
+            };
+            let ItemKind::Trait(trait_) = func.scope().parent_item(db)? else {
+                return None;
+            };
+            let trait_arg_count = trait_.params(db).len();
+            (args.len() >= trait_arg_count).then(|| {
+                TraitInstId::new(
+                    db,
+                    trait_,
+                    args[..trait_arg_count].to_vec(),
+                    IndexMap::new(),
+                )
+            })
+        });
 
         Ok(Self {
             callable_def,
@@ -416,6 +439,29 @@ impl<'db> Callable<'db> {
                 false
             }
             Err(CallGenericArgUnifyError::UnificationFailed) => false,
+            Err(CallGenericArgUnifyError::InvalidArgument(error)) => {
+                // Invalid declarations are diagnosed once, at their default.
+                let declaration_error = match self.callable_def {
+                    CallableDef::Func(func) => {
+                        error.from_default
+                            && generic_default(tc.db, func.into(), error.index).is_err()
+                    }
+                    CallableDef::VariantCtor(_) => false,
+                };
+                if !declaration_error {
+                    let error_span = if error.from_default {
+                        span.into()
+                    } else {
+                        span.arg(error.index).into()
+                    };
+                    if let Some(diag) =
+                        emit_invalid_ty_error(tc.db, TyId::invalid(tc.db, error.cause), error_span)
+                    {
+                        tc.push_diag(diag);
+                    }
+                }
+                false
+            }
         }
     }
 

@@ -1118,9 +1118,10 @@ mod tests {
             LayoutInstantiationId, LayoutIntroSite, LayoutOccurrenceStep, LayoutRootId,
             StructuralHoleOrigin,
         },
+        generic_defaults::DefaultApplication,
         trait_resolution::PredicateListId,
         ty_def::{Kind, PrimTy, TyBase, TyData, TyId, TyParam},
-        ty_lower::{ConstDefaultCompletion, collect_generic_params, lower_hir_ty},
+        ty_lower::{collect_generic_params, lower_hir_ty},
     };
     use crate::core::semantic::trait_self_predicate;
     use crate::hir_def::{
@@ -1297,14 +1298,14 @@ fn exercise(slot: Slot) {
                 body,
                 site: BodyHoleSite::Expr(expr),
             });
-            let completed = param_set.complete_callable_explicit_args(
-                &db,
-                allocate,
-                &param_set.params(&db)[..offset],
-                &[],
-                PredicateListId::empty_list(&db),
-                ConstDefaultCompletion::metadata_at_application(&minter),
-            );
+            let completed = param_set
+                .complete_args(
+                    &db,
+                    &param_set.params(&db)[..offset],
+                    &[],
+                    DefaultApplication::Metadata(&minter),
+                )
+                .expect("valid default");
             assert_eq!(completed.len(), 1);
             expect_structural_hole(&db, completed[0]).root(&db)
         };

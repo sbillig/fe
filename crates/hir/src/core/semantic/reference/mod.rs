@@ -40,7 +40,6 @@ use crate::{
     },
 };
 
-pub(crate) use collector::body_references;
 pub use has_references::{HasReferences, MatchedReference};
 pub use resolver::{ResolvedScopeTarget, resolved_item_scope_targets};
 

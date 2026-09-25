@@ -9,18 +9,20 @@ use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::name_resolution::{self, PathRes};
+use crate::analysis::name_resolution;
 use crate::analysis::ty;
 use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
+use crate::analysis::ty::generic_defaults::{default_dependencies, type_default_diags};
+use crate::analysis::ty::method_table::{MethodProbe, probe_method};
 use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::trait_lower::lower_impl_trait;
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::analysis::ty::ty_error::collect_ty_lower_errors;
 use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{
-    ConstGenericArgValue, Contract, Enum, EnumVariant, FieldParent, Func, GenericParam,
-    GenericParamOwner, GenericParamView, IdentId, Impl, ImplTrait, ItemKind, Partial, PathId,
-    Struct, Trait, TypeAlias, TypeBound, VariantKind, WhereClauseOwner,
+    Contract, Enum, EnumVariant, FieldParent, Func, GenericParam, GenericParamOwner,
+    GenericParamView, IdentId, Impl, ImplTrait, ItemKind, Partial, PathId, Struct, Trait,
+    TypeAlias, TypeBound, VariantKind, WhereClauseOwner,
 };
 use crate::span::DynLazySpan;
 
@@ -31,7 +33,6 @@ use crate::semantic::{
     FieldView, FuncParamView, ImplAssocTypeView, InherentImplAdmissibility, SuperTraitRefView,
     VariantView, WherePredicateBoundView, WherePredicateView, constraints_for,
     header_constraints_for, lower_hir_kind_local, param_env,
-    reference::{ReferenceView, body_references},
 };
 
 /// Unified "pull" diagnostics surface for HIR items and views.
@@ -513,8 +514,9 @@ impl<'db> Impl<'db> {
                 return out;
             }
             InherentImplAdmissibility::InvalidTy { ty } => {
-                if let Some(diag) =
-                    ty::ty_error::emit_invalid_ty_error(db, ty, self.span().target_ty().into())
+                if out.is_empty()
+                    && let Some(diag) =
+                        ty::ty_error::emit_invalid_ty_error(db, ty, self.span().target_ty().into())
                 {
                     out.push(diag);
                 }
@@ -1426,99 +1428,12 @@ impl<'db> GenericParamOwner<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<TyDiagCollection<'db>> {
-        use ty::{
-            const_ty::ConstTyData,
-            ty_def::{TyId, TyParam},
-            ty_lower::lower_hir_ty,
-            visitor::{TyVisitable, TyVisitor},
-        };
-
         let mut out = Vec::new();
-        // Forward-ref checking only needs parameter occurrences in default types.
-        // Full assumptions can create non-converging cycles on malformed defaults
-        // (e.g. `T = Self`) and should not panic diagnostics collection.
-        let assumptions = ty::trait_resolution::PredicateListId::empty_list(db);
-        let scope = self.scope();
-
         for view in self.params(db) {
-            let referenced = match view.param {
-                GenericParam::Type(tp) => {
-                    let Some(default_ty) = tp.default_ty else {
-                        continue;
-                    };
-                    if default_ty.is_self_ty(db) {
-                        continue;
-                    }
-
-                    struct Collector<'db> {
-                        db: &'db dyn HirAnalysisDb,
-                        scope: ScopeId<'db>,
-                        out: Vec<usize>,
-                    }
-                    impl<'db> TyVisitor<'db> for Collector<'db> {
-                        fn db(&self) -> &'db dyn HirAnalysisDb {
-                            self.db
-                        }
-                        fn visit_param(&mut self, tp: &TyParam<'db>) {
-                            if !tp.is_trait_self() && tp.owner == self.scope {
-                                self.out.push(tp.original_idx(self.db));
-                            }
-                        }
-                        fn visit_const_param(&mut self, tp: &TyParam<'db>, _ty: TyId<'db>) {
-                            if tp.owner == self.scope {
-                                self.out.push(tp.original_idx(self.db));
-                            }
-                        }
-                    }
-
-                    let lowered = lower_hir_ty(db, default_ty, scope, assumptions);
-                    let mut collector = Collector {
-                        db,
-                        scope,
-                        out: Vec::new(),
-                    };
-                    lowered.visit_with(&mut collector);
-                    collector.out
-                }
-                GenericParam::Const(param) => {
-                    let Some(ConstGenericArgValue::Expr(Partial::Present(body))) = param.default
-                    else {
-                        continue;
-                    };
-                    body_references(db, body)
-                        .iter()
-                        .filter_map(|reference| match reference {
-                            ReferenceView::Path(path) => Some(path),
-                            _ => None,
-                        })
-                        .filter_map(|path| {
-                            match name_resolution::resolve_path(
-                                db,
-                                path.path,
-                                path.scope,
-                                assumptions,
-                                true,
-                            )
-                            .ok()?
-                            {
-                                PathRes::Ty(ty) => Some(ty),
-                                _ => None,
-                            }
-                        })
-                        .filter_map(|ty| {
-                            let ty::ty_def::TyData::ConstTy(const_ty) = ty.data(db) else {
-                                return None;
-                            };
-                            let ConstTyData::TyParam(param, _) = const_ty.data(db) else {
-                                return None;
-                            };
-                            (param.owner == scope).then(|| param.original_idx(db))
-                        })
-                        .collect()
-                }
-            };
-
-            for j in referenced.into_iter().filter(|j| *j >= view.idx) {
+            for &j in default_dependencies(db, self, view.idx)
+                .iter()
+                .filter(|&&j| j >= view.idx)
+            {
                 if let Some(name) = self.param_view(db, j).param.name().to_opt() {
                     let span = view.span();
                     out.push(TyLowerDiag::GenericDefaultForwardRef { span, name }.into());
@@ -1715,6 +1630,7 @@ impl<'db> Diagnosable<'db> for GenericParamOwner<'db> {
         out.extend(self.diags_trait_bounds(db));
         out.extend(self.diags_non_trailing_defaults(db));
         out.extend(self.diags_default_forward_refs(db));
+        out.extend(type_default_diags(db, self));
         out
     }
 }
@@ -1723,9 +1639,6 @@ impl<'db> Diagnosable<'db> for Func<'db> {
     type Diagnostic = TyDiagCollection<'db>;
 
     fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
-        use ty::canonical::Canonical;
-        use ty::method_table::probe_method;
-
         let mut out = Vec::new();
         out.extend(self.diags_const_fn(db));
         out.extend(self.diags_parameters(db));
@@ -1743,10 +1656,14 @@ impl<'db> Diagnosable<'db> for Func<'db> {
             && let Some(self_ty) = impl_.admissible_inherent_impl_ty(db)
         {
             let ingot = self.top_mod(db).ingot(db);
-            for &cand in probe_method(
+            for cand in probe_method(
                 db,
                 ingot,
-                Canonical::new(db, self_ty),
+                MethodProbe {
+                    receiver: self_ty,
+                    assumptions: param_env(db, impl_.into()),
+                },
+                self.scope(),
                 func_def.name(db).expect("impl methods have names"),
             ) {
                 if cand.def != func_def {
