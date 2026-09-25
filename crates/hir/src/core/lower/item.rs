@@ -195,6 +195,7 @@ fn validate_struct_attrs<'db>(
             AttrRule::unsupported("arithmetic", ARITHMETIC_TARGETS),
             AttrRule::supported("event", BARE_FORM, "`#[event]`"),
             AttrRule::supported("error", BARE_FORM, "`#[error]`"),
+            AttrRule::supported("abi", BARE_FORM, "`#[abi]`"),
             AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
         ],
@@ -510,9 +511,13 @@ impl<'db> Struct<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Struct) -> Self {
         let is_event_struct = super::event::is_event_struct(&ast);
         let is_error_struct = super::error::is_error_struct(&ast);
+        let is_abi_struct = super::abi_struct::is_abi_struct(&ast);
 
         if is_event_struct && is_error_struct {
             super::error::report_event_error_attr_conflict(ctxt, &ast);
+        }
+        if is_abi_struct && (is_event_struct || is_error_struct) {
+            super::abi_struct::report_abi_attr_conflict(ctxt, &ast);
         }
         if is_event_struct {
             return super::event::lower_event_struct(ctxt, ast);
@@ -523,6 +528,9 @@ impl<'db> Struct<'db> {
         }
 
         report_indexed_attrs_outside_event_struct(ctxt, &ast);
+        if is_abi_struct {
+            return super::abi_struct::lower_abi_struct(ctxt, ast);
+        }
 
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let id = ctxt.joined_id(TrackedItemVariant::Struct(name));
@@ -1021,7 +1029,7 @@ impl<'db> FieldDefListId<'db> {
         Self::new(ctxt.db(), fields)
     }
 
-    fn lower_ast_opt_with_context(
+    pub(super) fn lower_ast_opt_with_context(
         ctxt: &mut FileLowerCtxt<'db>,
         ast: Option<ast::RecordFieldDefList>,
         field_kind: &'static str,
