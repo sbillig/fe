@@ -6,6 +6,7 @@
 use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet},
+    sync::Arc,
 };
 
 use super::{
@@ -119,17 +120,34 @@ fn constant_bit(value: usize, bit: u16) -> bool {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct IndexCondition<'db>(Decision<IndexBit<'db>, bool>);
+struct IndexCondition<'db> {
+    decision: Decision<IndexBit<'db>, bool>,
+    // Each index owns many bit decisions; collect the distinct indices once.
+    indices: Arc<[IndexExpr<'db>]>,
+}
 
 impl<'db> IndexCondition<'db> {
+    fn new(decision: Decision<IndexBit<'db>, bool>) -> Self {
+        let mut indices = Vec::new();
+        for bit in decision.variables() {
+            if !indices.contains(&bit.index) {
+                indices.push(bit.index);
+            }
+        }
+        indices.sort_unstable();
+        Self {
+            decision,
+            indices: indices.into(),
+        }
+    }
     fn always() -> Self {
-        Self(Decision::leaf(true))
+        Self::new(Decision::leaf(true))
     }
     fn never() -> Self {
-        Self(Decision::leaf(false))
+        Self::new(Decision::leaf(false))
     }
     fn is_never(&self) -> bool {
-        self.0.is_leaf(&false)
+        self.decision.is_leaf(&false)
     }
 
     fn equal(lhs: IndexExpr<'db>, rhs: IndexExpr<'db>) -> Self {
@@ -137,12 +155,12 @@ impl<'db> IndexCondition<'db> {
         match (lhs, rhs) {
             (lhs, rhs) if lhs == rhs => Self::always(),
             (IndexExpr::Const(_), IndexExpr::Const(_)) => Self::never(),
-            (IndexExpr::Const(value), index) => Self(Decision::chain(
+            (IndexExpr::Const(value), index) => Self::new(Decision::chain(
                 (0..INDEX_BITS).map(|bit| (IndexBit::new(index, bit), constant_bit(value, bit))),
                 true,
                 false,
             )),
-            (lhs, rhs) => Self(Decision::equal_bits(
+            (lhs, rhs) => Self::new(Decision::equal_bits(
                 (0..INDEX_BITS).map(|bit| (IndexBit::new(lhs, bit), IndexBit::new(rhs, bit))),
                 true,
                 false,
@@ -162,11 +180,11 @@ impl<'db> IndexCondition<'db> {
             };
         }
         if let IndexExpr::Const(len) = len {
-            return Self(Decision::upper_bound_bits(
+            return Self::new(Decision::upper_bound_bits(
                 (0..INDEX_BITS).map(|bit| (IndexBit::new(index, bit), constant_bit(len, bit))),
             ));
         }
-        Self(Decision::less_bits((0..INDEX_BITS).map(|bit| {
+        Self::new(Decision::less_bits((0..INDEX_BITS).map(|bit| {
             let word_bit = |index| match index {
                 IndexExpr::Const(value) => Variable::Constant(constant_bit(value, bit)),
                 index => Variable::Symbol(IndexBit::new(index, bit)),
@@ -176,16 +194,19 @@ impl<'db> IndexCondition<'db> {
     }
 
     fn and(&self, other: &Self) -> Self {
-        if self == other || other.0.is_leaf(&true) {
+        if self == other || other.decision.is_leaf(&true) {
             return self.clone();
         }
-        if self.0.is_leaf(&true) {
+        if self.decision.is_leaf(&true) {
             return other.clone();
         }
         if self.is_never() || other.is_never() {
             return Self::never();
         }
-        Self(self.0.apply(&other.0, |left, right| *left && *right))
+        Self::new(
+            self.decision
+                .apply(&other.decision, |left, right| *left && *right),
+        )
     }
 
     fn or(&self, other: &Self) -> Self {
@@ -195,15 +216,18 @@ impl<'db> IndexCondition<'db> {
         if self.is_never() {
             return other.clone();
         }
-        if self.0.is_leaf(&true) || other.0.is_leaf(&true) {
+        if self.decision.is_leaf(&true) || other.decision.is_leaf(&true) {
             return Self::always();
         }
-        Self(self.0.apply(&other.0, |left, right| *left || *right))
+        Self::new(
+            self.decision
+                .apply(&other.decision, |left, right| *left || *right),
+        )
     }
 
     fn not(&self) -> Self {
-        Self(
-            self.0
+        Self::new(
+            self.decision
                 .map(|bit| Variable::Symbol(bit.clone()), |value| !value),
         )
     }
@@ -211,16 +235,19 @@ impl<'db> IndexCondition<'db> {
         self.and(&other.not()).is_never()
     }
     fn substitute(&self, subst: &IndexSubst<'db>) -> Self {
-        Self(self.0.map(|bit| bit.substitute(subst), |value| *value))
+        Self::new(
+            self.decision
+                .map(|bit| bit.substitute(subst), |value| *value),
+        )
     }
-    fn indices(&self) -> BTreeSet<IndexExpr<'db>> {
-        self.0.variables().map(|bit| bit.index).collect()
+    fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> + '_ {
+        self.indices.iter().copied()
     }
 
     fn restrict(&self, care: &Self) -> Option<Self> {
-        self.0
-            .restrict(&care.0, &false, |value, care| care.then_some(*value))
-            .map(Self)
+        self.decision
+            .restrict(&care.decision, &false, |value, care| care.then_some(*value))
+            .map(Self::new)
     }
 
     // Find a representative only when the complete condition proves equality. Partial
@@ -230,7 +257,7 @@ impl<'db> IndexCondition<'db> {
         indices: &BTreeSet<IndexExpr<'db>>,
     ) -> BTreeMap<IndexExpr<'db>, IndexExpr<'db>> {
         let mut representatives = BTreeMap::new();
-        let witness = self.0.witness(|value| *value).unwrap_or_default();
+        let witness = self.decision.witness(|value| *value).unwrap_or_default();
         for index in indices {
             if matches!(index, IndexExpr::Const(_)) {
                 continue;
@@ -538,7 +565,7 @@ impl<'db> Guard<'db> {
             .map(
                 |bit| Variable::Symbol(bit.clone()),
                 |condition| {
-                    IndexCondition(condition.0.exists(
+                    IndexCondition::new(condition.decision.exists(
                         |bit| indices.contains(&bit.index),
                         |left, right| *left || *right,
                     ))
@@ -579,7 +606,7 @@ impl<'db> Guard<'db> {
             self.condition.map(
                 |bit| Variable::Symbol(bit.clone()),
                 |condition| {
-                    IndexCondition(condition.0.exists(
+                    IndexCondition::new(condition.decision.exists(
                         |bit| projected.contains(&bit.index),
                         |left, right| *left || *right,
                     ))
@@ -622,7 +649,7 @@ impl<'db> Guard<'db> {
             + self
                 .condition
                 .leaves()
-                .map(|leaf| leaf.0.node_count())
+                .map(|leaf| leaf.decision.node_count())
                 .sum::<usize>()
     }
 

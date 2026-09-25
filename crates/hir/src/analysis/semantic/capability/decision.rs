@@ -2,10 +2,10 @@
 #[cfg(test)]
 use std::cell::Cell;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::{
-    collections::{BTreeMap, BTreeSet},
-    hash::Hash,
+    cmp::Ordering,
+    hash::{Hash, Hasher},
     sync::Arc,
 };
 
@@ -24,10 +24,55 @@ enum Node<V, T> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug)]
 pub(super) struct Decision<V, T> {
     // Postorder, low edge first. The last node is the root; no unreachable nodes remain.
     nodes: Arc<[Node<V, T>]>,
+    // Guards nest decisions and sit inside interned values, so hash each graph
+    // once rather than on every enclosing hash.
+    hash: u64,
+}
+
+impl<V: Hash, T: Hash> Decision<V, T> {
+    fn new(nodes: Arc<[Node<V, T>]>) -> Self {
+        let mut hasher = FxHasher::default();
+        nodes.hash(&mut hasher);
+        Self {
+            hash: hasher.finish(),
+            nodes,
+        }
+    }
+}
+
+impl<V: PartialEq, T: PartialEq> PartialEq for Decision<V, T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash
+            && (Arc::ptr_eq(&self.nodes, &other.nodes) || self.nodes == other.nodes)
+    }
+}
+
+impl<V: Eq, T: Eq> Eq for Decision<V, T> {}
+
+impl<V: Hash, T: Hash> Hash for Decision<V, T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
+}
+
+impl<V: Ord, T: Ord> Ord for Decision<V, T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if Arc::ptr_eq(&self.nodes, &other.nodes) {
+            Ordering::Equal
+        } else {
+            self.nodes.cmp(&other.nodes)
+        }
+    }
+}
+
+impl<V: Ord, T: Ord> PartialOrd for Decision<V, T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -44,9 +89,13 @@ struct Builder<V, T> {
 
 impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
     fn new() -> Self {
+        Self::with_capacity(0)
+    }
+
+    fn with_capacity(nodes: usize) -> Self {
         Self {
-            nodes: Vec::new(),
-            interned: FxHashMap::default(),
+            nodes: Vec::with_capacity(nodes),
+            interned: FxHashMap::with_capacity_and_hasher(nodes, Default::default()),
             selections: FxHashMap::default(),
         }
     }
@@ -186,12 +235,11 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
     }
 
     fn finish(self, root: usize) -> Decision<V, T> {
-        let mut nodes = Vec::new();
-        let mut numbering = FxHashMap::default();
+        let mut nodes = Vec::with_capacity(self.nodes.len());
+        let mut numbering =
+            FxHashMap::with_capacity_and_hasher(self.nodes.len(), Default::default());
         self.visit(root, &mut nodes, &mut numbering);
-        Decision {
-            nodes: nodes.into(),
-        }
+        Decision::new(nodes.into())
     }
 
     fn visit(
@@ -270,9 +318,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         Some(builder.finish(root))
     }
     pub(super) fn leaf(value: T) -> Self {
-        Self {
-            nodes: vec![Node::Leaf(value)].into(),
-        }
+        Self::new(vec![Node::Leaf(value)].into())
     }
 
     pub(super) fn chain(
@@ -321,25 +367,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         mut variable: impl FnMut(&V) -> Variable<W>,
         mut leaf: impl FnMut(&T) -> U,
     ) -> Decision<W, U> {
-        // An injective, order-preserving rename keeps every branch ordered.
-        // Other substitutions can identify or reorder decisions and need select.
-        let mapped_variables: BTreeMap<_, _> = self
-            .variables()
-            .map(|key| {
-                let mapped = variable(key);
-                (key, mapped)
-            })
-            .collect();
-        let mut previous = None;
-        let ordered = mapped_variables.values().all(|mapped| match mapped {
-            Variable::Constant(_) => true,
-            Variable::Symbol(key) => {
-                let increasing = previous.is_none_or(|old| old < key);
-                previous = Some(key);
-                increasing
-            }
-        });
-        let mut builder = Builder::new();
+        let mut builder = Builder::with_capacity(self.nodes.len());
         let mut mapped = Vec::with_capacity(self.nodes.len());
         for node in self.nodes.iter() {
             let id = match node {
@@ -348,13 +376,29 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
                     variable: key,
                     low,
                     high,
-                } => match mapped_variables[key].clone() {
-                    Variable::Constant(value) => mapped[if value { *high } else { *low }],
-                    Variable::Symbol(key) if ordered => {
-                        builder.branch(key, mapped[*low], mapped[*high])
+                } => {
+                    let (low, high) = (mapped[*low], mapped[*high]);
+                    match variable(key) {
+                        Variable::Constant(value) => {
+                            if value {
+                                high
+                            } else {
+                                low
+                            }
+                        }
+                        // A rename ordered before both mapped children keeps this
+                        // branch ordered. Other substitutions can identify or reorder
+                        // decisions and need select.
+                        Variable::Symbol(key)
+                            if [low, high].into_iter().all(|child| {
+                                builder.variable(child).is_none_or(|child| key < *child)
+                            }) =>
+                        {
+                            builder.branch(key, low, high)
+                        }
+                        Variable::Symbol(key) => builder.select(key, low, high),
                     }
-                    Variable::Symbol(key) => builder.select(key, mapped[*low], mapped[*high]),
-                },
+                }
             };
             mapped.push(id);
         }
@@ -369,16 +413,20 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         join: impl Fn(&T, &T) -> T,
     ) -> Self {
         // Ask about each distinct variable once, in decision order.
-        let selected: BTreeSet<_> = self
+        let mut variables: Vec<_> = self
             .variables()
-            .collect::<BTreeSet<_>>()
+            .collect::<FxHashSet<_>>()
             .into_iter()
-            .filter(|variable| selected(variable))
             .collect();
-        if selected.is_empty() {
+        variables.sort_unstable();
+        let quantified: FxHashMap<_, _> = variables
+            .into_iter()
+            .map(|variable| (variable, selected(variable)))
+            .collect();
+        if !quantified.values().any(|selected| *selected) {
             return self.clone();
         }
-        let mut builder = Builder::new();
+        let mut builder = Builder::with_capacity(self.nodes.len());
         let mut mapped = Vec::with_capacity(self.nodes.len());
         let mut memo = FxHashMap::default();
         for node in self.nodes.iter() {
@@ -388,7 +436,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
                     variable,
                     low,
                     high,
-                } if selected.contains(variable) => {
+                } if quantified[variable] => {
                     builder.apply(mapped[*low], mapped[*high], &join, true, &mut memo)
                 }
                 Node::Branch {
@@ -403,7 +451,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
     }
 
     pub(super) fn apply(&self, other: &Self, leaf: impl Fn(&T, &T) -> T) -> Self {
-        let mut builder = Builder::new();
+        let mut builder = Builder::with_capacity(self.nodes.len() + other.nodes.len());
         let lhs = builder.import(self);
         let rhs = builder.import(other);
         let root = builder.apply(lhs, rhs, &leaf, false, &mut FxHashMap::default());
