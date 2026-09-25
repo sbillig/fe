@@ -2,7 +2,8 @@ use super::intrinsic::size_of
 use super::marker::Copy
 use super::option::Option
 use super::ops::{Eq, Index, IndexMut}
-use super::panic
+use super::panic_code
+use super::panics::PANIC_INDEX_OUT_OF_BOUNDS
 
 /// Dynamic allocation in linear memory.
 ///
@@ -185,13 +186,13 @@ impl<T> MemSlice<T> {
     pub fn slice(self, offset: u256, len: u256) -> Self {
         match self.try_slice(start: offset, len) {
             Option::Some(slice) => slice
-            Option::None => panic()
+            Option::None => index_out_of_bounds()
         }
     }
 
     pub fn split_at(self, offset: u256) -> (Self, Self) {
         if offset > self.len {
-            panic()
+            index_out_of_bounds()
         }
         (
             self.truncate(len: offset),
@@ -205,7 +206,7 @@ impl<T> MemSlice<T> {
 
     pub fn ptr_at(self, _ index: u256) -> *T {
         if index >= self.len {
-            panic()
+            index_out_of_bounds()
         }
         offset(self.ptr, index)
     }
@@ -224,7 +225,7 @@ impl MemSlice<u8> {
     pub fn byte_at(self, _ index: u256) -> u8 {
         match self.get(index) {
             Option::Some(value) => value
-            Option::None => panic()
+            Option::None => index_out_of_bounds()
         }
     }
 }
@@ -322,7 +323,7 @@ impl MemBuffer {
     /// Copy bytes into an allocation subrange and extend the logical extent.
     pub fn copy_from(mut self, dest_offset: u256, _ source: own MemSpan) {
         if dest_offset > self.capacity || source.len() > self.capacity - dest_offset {
-            panic()
+            index_out_of_bounds()
         }
         if source.is_empty() {
             return
@@ -343,14 +344,14 @@ impl MemBuffer {
     /// Set the logical extent after initializing the added bytes.
     pub fn set_len(mut self, _ len: u256) {
         if len > self.capacity {
-            panic()
+            index_out_of_bounds()
         }
         self.len = len
     }
 
     pub fn truncate(mut self, _ len: u256) {
         if len > self.len {
-            panic()
+            index_out_of_bounds()
         }
         self.len = len
     }
@@ -450,7 +451,7 @@ pub fn copy_raw(_ dest: *u8, _ source: *u8, _ len: u256) {
 #[inline(always)]
 fn array_elem<T, const N: usize>(_ ptr: *[T; N], _ index: usize) -> *T {
     if index >= N {
-        panic()
+        index_out_of_bounds()
     }
     elem(cast<[T; N], T>(ptr), index)
 }
@@ -458,7 +459,7 @@ fn array_elem<T, const N: usize>(_ ptr: *[T; N], _ index: usize) -> *T {
 #[inline(always)]
 fn mem_array_elem<T>(_ array: MemArray<T>, _ index: usize) -> *T {
     if index as u256 >= array.len {
-        panic()
+        index_out_of_bounds()
     }
     elem(array.ptr, index)
 }
@@ -513,4 +514,9 @@ impl<T> Index<usize> for MemSlice<T>
     fn index(self, _ index: usize) -> T {
         *self.ptr_at(index as u256)
     }
+}
+
+// Out-of-range indices and ranges fail like Solidity index errors.
+fn index_out_of_bounds() -> ! {
+    panic_code(PANIC_INDEX_OUT_OF_BOUNDS)
 }

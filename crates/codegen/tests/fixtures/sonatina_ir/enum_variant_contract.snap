@@ -180,6 +180,16 @@ func private %core__lib__ptr__impl_MemSlice_aa77__from_raw_parts__g79ff_faaf_0(v
         return v8;
 }
 
+func private %index_out_of_bounds() {
+    block0:
+        jump block1;
+
+    block1:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 50.i256 i256;
+        evm_revert 0.i256 36.i256;
+}
+
 func private %init() {
     block0:
         v0.objref<@layout_0> = obj.alloc @layout_0;
@@ -486,7 +496,8 @@ func private %set_len(v0.objref<@layout_0>, v1.i256) {
         br v7 block2 block3;
 
     block2:
-        evm_invalid;
+        call %index_out_of_bounds;
+        unreachable;
 
     block3:
         jump block4;

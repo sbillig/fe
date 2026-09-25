@@ -1,0 +1,44 @@
+// `core::panic_code` reverts with Solidity `Panic(uint256)` data, and core
+// bounds checks report index errors with code 0x32.
+use core::panics::{PANIC_INDEX_OUT_OF_BOUNDS, PANIC_OVERFLOW}
+use core::ptr::{MemArray, MemSpan}
+
+fn fail(_ code: u256) -> u256 {
+    if code != 0 {
+        core::panic_code(code)
+    }
+    1
+}
+
+fn write_at(_ index: u256) -> u8 {
+    let mut buffer: MemArray<u8> = MemArray::new_zeroed(3)
+    buffer[index as usize] = 65
+    buffer[0]
+}
+
+#[test]
+fn panic_code_not_reached() {
+    assert!(fail(0) == 1)
+    assert!(write_at(0) == 65)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn panic_code_index() {
+    let _ = fail(PANIC_INDEX_OUT_OF_BOUNDS)
+}
+
+#[test(should_revert, panic = 0x11)]
+fn panic_code_overflow() {
+    let _ = fail(PANIC_OVERFLOW)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn mem_array_index_out_of_bounds() {
+    let _ = write_at(3)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn mem_span_slice_out_of_bounds() {
+    let buffer: MemArray<u8> = MemArray::new_zeroed(4)
+    let _ = buffer.span().slice(offset: 2, len: 3)
+}

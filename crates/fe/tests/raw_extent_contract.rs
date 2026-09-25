@@ -2,7 +2,7 @@ use contract_harness::{ExecutionOptions, HarnessError, RuntimeInstance};
 use fe::bench_support::compile_fe_sonatina_bytecode;
 
 #[test]
-fn checked_slice_halts_before_accessing_an_invalid_complete_range() {
+fn checked_slice_reverts_before_accessing_an_invalid_complete_range() {
     let source = r#"
 use core::ptr::FixedMemBuffer
 msg RangeMsg {
@@ -33,10 +33,13 @@ pub contract RangeContract {
     calldata[35] = 17;
     let error = runtime
         .call_raw(&calldata, ExecutionOptions::default())
-        .expect_err("range crossing the allocation end must halt");
-    // Bare core::panic is an EVM halt, distinct from the test macro's revert.
+        .expect_err("range crossing the allocation end must fail");
+    // Core range checks fail like Solidity index errors: Panic(0x32).
+    let mut panic = vec![0x4e, 0x48, 0x7b, 0x71];
+    panic.extend([0u8; 31]);
+    panic.push(0x32);
     assert!(
-        matches!(&error, HarnessError::Halted { reason, .. } if format!("{reason:?}") == "InvalidFEOpcode"),
+        matches!(&error, HarnessError::Revert(data) if data.0 == panic),
         "{error:?}"
     );
 }

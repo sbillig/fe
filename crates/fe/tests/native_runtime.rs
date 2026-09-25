@@ -173,7 +173,7 @@ pub fn main() -> i32 {
 }
 
 #[test]
-fn native_assert_message_traps() {
+fn native_assert_message_and_panic_code_trap() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("traps.fe");
     fs::write(
@@ -187,6 +187,8 @@ fn checked(_ value: u256) -> u256 {
 fn pass_small() { core::assert(checked(3) == 3) }
 #[test]
 fn fail_message() { core::assert(checked(11) == 11) }
+#[test]
+fn fail_code() { core::panic_code(0x32) }
 "#,
     )
     .unwrap();
@@ -197,7 +199,7 @@ fn fail_message() { core::assert(checked(11) == 11) }
         .unwrap();
     let stdout = String::from_utf8_lossy(&result.stdout);
     assert!(!result.status.success(), "{result:?}");
-    assert!(stdout.contains("1 passed; 1 failed"), "{result:?}");
+    assert!(stdout.contains("1 passed; 2 failed"), "{result:?}");
 }
 
 #[test]

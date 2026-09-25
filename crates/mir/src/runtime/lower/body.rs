@@ -3899,6 +3899,12 @@ impl<'db> RmirEmitter<'db> {
             };
             return Some(self.lower_panic_with_value(bb, *value));
         }
+        if kind == RuntimeBuiltinFuncKind::PanicCode {
+            let [code] = args.as_slice() else {
+                return None;
+            };
+            return Some(self.lower_panic_code(bb, *code));
+        }
         let lowered = self.lower_extern_builtin(semantic, &args)?;
         let ret_ty = semantic_return_ty(self.db, semantic);
         let _ = effect_args;
@@ -3939,6 +3945,45 @@ impl<'db> RmirEmitter<'db> {
                 self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased)
             }
         })
+    }
+
+    /// Reverts with Solidity `Panic(uint256)` data for a runtime `code`.
+    fn lower_panic_code(&mut self, bb: RBlockId, code: RLocalId) -> RLocalId {
+        // The call reverts, so the payload can use scratch memory at 0 like
+        // the checked-arithmetic panics do.
+        let word = RuntimeClass::Scalar(word_scalar_class());
+        let code = self.coerce_value(bb, code, &word);
+        let ptr = self.alloc_u256_const(bb, 0);
+        let selector = self.alloc_runtime_temp(TyId::u256(self.db), RuntimeCarrier::Value(word));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: selector,
+                expr: RExpr::ConstScalar(ConstScalar::Int {
+                    bits: 256,
+                    signed: false,
+                    words: padded_word_bytes(&solidity_panic_payload(0)[..4]),
+                }),
+            },
+        );
+        self.push_ignored_builtin(
+            bb,
+            crate::runtime::RuntimeBuiltin::Mstore {
+                addr: ptr,
+                value: selector,
+            },
+        );
+        let code_addr = self.alloc_u256_const(bb, 4);
+        self.push_ignored_builtin(
+            bb,
+            crate::runtime::RuntimeBuiltin::Mstore {
+                addr: code_addr,
+                value: code,
+            },
+        );
+        let len = self.alloc_u256_const(bb, 36);
+        self.set_terminator(bb, RTerminator::Revert { offset: ptr, len });
+        self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased)
     }
 
     fn lower_panic_with_value(&mut self, bb: RBlockId, value: RLocalId) -> RLocalId {
@@ -4844,6 +4889,8 @@ impl<'db> RmirEmitter<'db> {
                 let [_value] = args else { return None };
                 LoweredBuiltinCall::Terminator(RTerminator::Trap)
             }
+            // Lowered with its payload in `lower_panic_code`.
+            RuntimeBuiltinFuncKind::PanicCode => return None,
             RuntimeBuiltinFuncKind::IntrinsicKeccak256 => return None,
         })
     }
