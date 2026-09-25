@@ -45,9 +45,14 @@ impl<'db> Borrowck<'db> {
         occurrence: ValueOccurrence,
     ) -> NativeValidity<'db> {
         let mut validity = NativeValidity::default();
+        // Leaves below arrays add element binders; requirements share the value's.
         for leaf in self.inventory.values.leaves(value, occurrence) {
             if let CapabilityRef::Invalidated { region, .. } = leaf.payload {
-                validity |= NativeValidity::from_region(&region.with_guard(&leaf.guard));
+                validity |= NativeValidity::from_region(
+                    &region
+                        .with_guard(&leaf.guard)
+                        .quantify_into(self.db, value.scope()),
+                );
             }
         }
         validity

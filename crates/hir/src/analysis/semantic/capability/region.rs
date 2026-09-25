@@ -461,6 +461,16 @@ impl<'db> RegionSet<'db> {
         Self::new(scope, self.clauses.iter().cloned())
     }
 
+    /// Express this region in `owner`, a lexical ancestor of its scope. Binders
+    /// `owner` lacks become clause-local witnesses; `owner`'s own are kept.
+    pub fn quantify_into(&self, db: &'db dyn HirAnalysisDb, owner: &BinderScope) -> Self {
+        if &self.scope == owner {
+            return self.clone();
+        }
+        self.substitute(db, &self.scope.quantifying(owner))
+            .close_existentials(owner)
+    }
+
     /// Conservatively intersect regions. Unknown enum overlays retain both paths:
     /// choosing one could later turn uncertainty into a false coverage proof.
     pub fn intersection(&self, other: &Self) -> Self {

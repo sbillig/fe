@@ -107,6 +107,32 @@ impl BinderScope {
         IndexSubst::new(self, &destination, entries).expect("fresh binders are scoped")
     }
 
+    /// Keep `owner`'s binders and give the binders local to this scope, such as
+    /// an array leaf's element binders, fresh existential witnesses. `owner`
+    /// must be a lexical ancestor; unrelated scopes are never matched by count.
+    pub fn quantifying<'db>(&self, owner: &Self) -> IndexSubst<'db> {
+        assert!(
+            self.counts
+                .iter()
+                .zip(owner.counts)
+                .all(|(count, owner)| owner <= *count),
+            "quantified scope must extend its owner"
+        );
+        let mut destination = owner.clone();
+        let entries: Vec<_> = self
+            .variables()
+            .map(|source| {
+                if owner.validate(source).is_ok() {
+                    return (source, source);
+                }
+                let (nested, target) = destination.bind(IndexNamespace::Existential);
+                destination = nested;
+                (source, target)
+            })
+            .collect();
+        IndexSubst::new(self, &destination, entries).expect("quantified binders are scoped")
+    }
+
     /// Extra existential variables are owned by a clause, not by its surrounding
     /// value or loan family. Other namespaces must match the lexical parent.
     pub fn existential_extension_of(&self, parent: &Self) -> Option<u32> {
