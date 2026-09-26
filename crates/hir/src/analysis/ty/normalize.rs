@@ -64,6 +64,20 @@ where
     value.fold_with(db, &mut normalizer)
 }
 
+/// Apply the associated equalities carried by a single trait predicate, as
+/// [`normalize_from_assumptions`] does.
+pub fn normalize_with_trait_evidence<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    scope: ScopeId<'db>,
+    evidence: TraitInstId<'db>,
+) -> T
+where
+    T: TyFoldable<'db>,
+{
+    normalize_from_assumptions(db, value, scope, PredicateListId::new(db, vec![evidence]))
+}
+
 pub(crate) fn normalize_layout_root_uses<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,

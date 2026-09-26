@@ -556,17 +556,17 @@ struct LayoutTemplateInstantiator<'db> {
 }
 
 impl<'db> LayoutTemplateInstantiator<'db> {
-    fn param_index(&self, ty: TyId<'db>) -> Option<usize> {
+    /// The mapping position and argument for a declared parameter occurrence.
+    fn param_argument(&self, ty: TyId<'db>) -> Option<(usize, TyId<'db>)> {
         let subst = self.subst.as_ref()?;
-        let schema = subst.mapping.domain().schema(self.db);
-        let key = schema.original_key_in_basis(self.db, ty, subst.basis)?;
-        Some(
-            subst
-                .mapping
-                .domain()
-                .position_for(self.db, key)
-                .expect("layout template mapping covers every declared parameter"),
-        )
+        let domain = subst.mapping.domain();
+        let key = domain
+            .schema(self.db)
+            .original_key_in_basis(self.db, ty, subst.basis)?;
+        let idx = domain
+            .position_for(self.db, key)
+            .expect("layout template mapping covers every declared parameter");
+        Some((idx, subst.mapping.values()[idx]))
     }
 
     fn with_path<T>(&mut self, step: LayoutOccurrenceStep, f: impl FnOnce(&mut Self) -> T) -> T {
@@ -646,21 +646,11 @@ impl<'db> LayoutTemplateInstantiator<'db> {
 
 impl<'db> TyFolder<'db> for LayoutTemplateInstantiator<'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        if let Some(idx) = self.param_index(ty) {
-            let arg = self
-                .subst
-                .as_ref()
-                .expect("parameter mapping exists")
-                .mapping
-                .values()[idx];
-            return match ty.data(db) {
-                TyData::TyParam(_) => self.type_argument(idx, arg),
-                TyData::ConstTy(const_ty)
-                    if matches!(const_ty.data(db), ConstTyData::TyParam(..)) =>
-                {
-                    self.const_argument(idx, arg)
-                }
-                _ => ty,
+        if let Some((idx, arg)) = self.param_argument(ty) {
+            return if matches!(ty.data(db), TyData::TyParam(_)) {
+                self.type_argument(idx, arg)
+            } else {
+                self.const_argument(idx, arg)
             };
         }
 
@@ -1130,20 +1120,17 @@ mod tests {
     };
     use crate::analysis::ty::{
         const_ty::{
-            BodyHoleSite, ConstTyData, ConstTyId, HoleAnchor, HoleId, LayoutBoundaryIdentity,
-            LayoutHoleArgSite, LayoutInstantiationContext, LayoutInstantiationId, LayoutIntroSite,
-            LayoutOccurrenceStep, LayoutRootId, LoweringContext, StructuralHoleOrigin,
-            UnevaluatedConstPolicy,
+            ConstTyData, ConstTyId, HoleAnchor, HoleId, LayoutBoundaryIdentity, LayoutHoleArgSite,
+            LayoutInstantiationContext, LayoutInstantiationId, LayoutIntroSite,
+            LayoutOccurrenceStep, LayoutRootId, StructuralHoleOrigin, UnevaluatedConstPolicy,
         },
-        generic_defaults::{DefaultApplication, GenericDefault, generic_default},
+        generic_defaults::{GenericDefault, generic_default},
         trait_resolution::PredicateListId,
         ty_def::{Kind, PrimTy, TyBase, TyData, TyId, TyParam},
-        ty_lower::{collect_generic_params, lower_hir_ty},
+        ty_lower::lower_hir_ty,
     };
     use crate::core::semantic::trait_self_predicate;
-    use crate::hir_def::{
-        Expr, GenericArgListId, IdentId, ItemKind, Partial, PathId, scope_graph::ScopeId,
-    };
+    use crate::hir_def::{GenericArgListId, IdentId, ItemKind, PathId, scope_graph::ScopeId};
     use crate::test_db::{HirAnalysisTestDb, find_func};
 
     fn usize_ty<'db>(db: &'db HirAnalysisTestDb) -> TyId<'db> {
@@ -1335,59 +1322,6 @@ mod tests {
         let second = fields[1].decompose_ty_app(&db).1[1];
         assert_eq!(first, expected_first);
         assert_eq!(second, actual_second);
-    }
-
-    #[test]
-    fn callable_default_holes_are_fresh_per_call() {
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            Utf8PathBuf::from("callable_default_holes_are_fresh_per_call.fe"),
-            r#"
-struct Slot<const ROOT: usize = _> {}
-
-fn allocate<const ROOT: usize = _>(_ slot: Slot) {}
-
-fn exercise(slot: Slot) {
-    allocate(slot)
-    allocate(slot)
-}
-"#,
-        );
-        let (top_mod, _) = db.top_mod(file);
-        let allocate = find_func(&db, top_mod, "allocate");
-        let body = find_func(&db, top_mod, "exercise")
-            .body(&db)
-            .expect("missing `exercise` body");
-        let calls = body
-            .exprs(&db)
-            .iter()
-            .filter_map(|(expr, data)| {
-                matches!(data, Partial::Present(Expr::Call(..))).then_some(expr)
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(calls.len(), 2);
-
-        let param_set = collect_generic_params(&db, allocate.into());
-        let offset = param_set.offset_to_explicit_params_position(&db);
-        assert_eq!(offset, 1);
-        let complete = |expr| {
-            let minter = LoweringContext::new(HoleAnchor::BodySyntax {
-                body,
-                site: BodyHoleSite::Expr(expr),
-            });
-            let completed = param_set
-                .complete_args(
-                    &db,
-                    &param_set.params(&db)[..offset],
-                    &[],
-                    DefaultApplication::StructuralMetadata(&minter),
-                )
-                .expect("valid default");
-            assert_eq!(completed.len(), 1);
-            expect_structural_hole(&db, completed[0]).root(&db)
-        };
-
-        assert_ne!(complete(calls[0]), complete(calls[1]));
     }
 
     #[test]

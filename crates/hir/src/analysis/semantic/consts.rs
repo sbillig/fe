@@ -8,7 +8,7 @@ use crate::analysis::{
     HirAnalysisDb,
     semantic::SemanticInstance,
     ty::{
-        adt_def::{ConcreteTypeView, instantiate_adt_field_for_concrete_demand},
+        adt_def::{AdtDef, ConcreteTypeView, instantiate_adt_field_for_concrete_demand},
         const_ty::{
             ConcreteArrayLengthError, ConstTyData, ConstTyId, const_ty_from_sem_const,
             demand_concrete_array_length, evaluate_type_level_const_ty,
@@ -951,6 +951,34 @@ pub fn runtime_size_bytes<'db>(
     runtime_size_bytes_with_source(db, ConcreteTypeView::identity(ty))
 }
 
+/// The fields of one variant of `ty`, an application of `adt`, each paired
+/// with its view through `source`, which must name the same application.
+fn adt_variant_field_views<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+    variant_idx: usize,
+    ty: TyId<'db>,
+    source: TyId<'db>,
+) -> Result<Vec<ConcreteTypeView<'db>>, RuntimeSizeError<'db>> {
+    let args = ty.generic_args(db);
+    let source_args = source.generic_args(db);
+    if source.adt_def(db) != Some(adt) || source_args.len() != args.len() {
+        return Err(RuntimeSizeError::UnavailableConcrete);
+    }
+    Ok((0..adt.fields(db)[variant_idx].num_types())
+        .map(|field_idx| {
+            instantiate_adt_field_for_concrete_demand(
+                db,
+                adt,
+                variant_idx,
+                field_idx,
+                args,
+                source_args,
+            )
+        })
+        .collect())
+}
+
 pub(crate) fn runtime_size_bytes_with_source<'db>(
     db: &'db dyn HirAnalysisDb,
     view: ConcreteTypeView<'db>,
@@ -1064,62 +1092,26 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
             }
         } else if ty.is_struct(db) {
             let adt = ty.adt_def(db).expect("struct has an ADT definition");
-            let args = ty.generic_args(db);
-            if source.adt_def(db) != Some(adt) {
-                return Err(RuntimeSizeError::UnavailableConcrete);
-            }
-            let source_args = source.generic_args(db);
-            if source_args.len() != args.len() {
-                return Err(RuntimeSizeError::UnavailableConcrete);
-            }
             sum_fields(
                 db,
-                (0..adt.fields(db)[0].num_types()).map(|field_idx| {
-                    instantiate_adt_field_for_concrete_demand(
-                        db,
-                        adt,
-                        0,
-                        field_idx,
-                        args,
-                        source_args,
-                    )
-                }),
+                adt_variant_field_views(db, adt, 0, ty, source)?,
                 visiting,
             )?
         } else if let Some(enum_) = ty.as_enum(db) {
-            let args = ty.generic_args(db);
             let adt = enum_.as_adt(db);
-            if source.adt_def(db) != Some(adt) {
-                return Err(RuntimeSizeError::UnavailableConcrete);
-            }
-            let source_args = source.generic_args(db);
-            if source_args.len() != args.len() {
-                return Err(RuntimeSizeError::UnavailableConcrete);
-            }
             let tag_size = u64::from(enum_tag_bits(enum_.len_variants(db)).div_ceil(8));
-            let max_payload = adt.fields(db).iter().enumerate().try_fold(
-                Some(0u64),
-                |max_payload, (variant_idx, variant)| {
+            let max_payload =
+                (0..adt.fields(db).len()).try_fold(Some(0u64), |max_payload, variant_idx| {
                     let payload = sum_fields(
                         db,
-                        (0..variant.num_types()).map(|field_idx| {
-                            instantiate_adt_field_for_concrete_demand(
-                                db,
-                                adt,
-                                variant_idx,
-                                field_idx,
-                                args,
-                                source_args,
-                            )
-                        }),
+                        adt_variant_field_views(db, adt, variant_idx, ty, source)?,
                         visiting,
                     )?;
                     Ok(match (max_payload, payload) {
                         (Some(max_payload), Some(payload)) => Some(max_payload.max(payload)),
                         _ => None,
                     })
-                },
-            )?;
+                })?;
             match max_payload {
                 Some(max_payload) => Some(
                     tag_size

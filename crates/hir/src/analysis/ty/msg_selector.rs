@@ -10,7 +10,7 @@ use crate::analysis::ty::abi_ty::{
     semantic_ty_to_abi_desc_with_source, suggested_fe_type_for_sol_type,
 };
 use crate::analysis::ty::adt_def::{
-    AdtRef, ConcreteTypeView, instantiate_adt_field_for_concrete_demand,
+    AdtRef, ConcreteTypeView, instantiate_adt_field_source_for_concrete_demand,
 };
 use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_type_path};
 use crate::analysis::ty::diagnostics::FuncBodyDiag;
@@ -145,7 +145,7 @@ fn check_variant_field_abi_requirements<'db>(
             continue;
         }
 
-        let source = instantiate_adt_field_for_concrete_demand(db, adt, 0, idx, &[], &[]).source;
+        let source = instantiate_adt_field_source_for_concrete_demand(db, adt, 0, idx, &[]);
         let kind = match semantic_ty_to_abi_desc_with_source(
             db,
             ConcreteTypeView::new(field_ty, source),

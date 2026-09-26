@@ -9,27 +9,20 @@ use salsa::Update;
 use super::{
     binder::Binder,
     const_ty::{
-        HoleAnchor, LayoutBoundaryIdentity, LayoutInstantiationContext, LayoutInstantiationId,
-        LayoutOccurrencePath, LoweringContext,
+        ConstBodyLowering, HoleAnchor, LayoutBoundaryIdentity, LayoutInstantiationContext,
+        LayoutInstantiationId, LayoutOccurrencePath, LoweringContext,
     },
     layout_holes::{
         LayoutInstantiation, LayoutRootUse, LayoutTemplateSubst, instantiate_layout_template,
     },
-    subst::substitute_complete,
     trait_resolution::{PredicateListId, constraint::collect_constraints},
     ty_def::{InvalidCause, TyId},
     ty_lower::{
-        GenericParamTypeSet, LoweredSlot, ParamBasis, ParamDomainId, ParamSchemaId, PartialSubst,
-        lower_hir_ty, lower_hir_ty_deferred, lower_layout_root_uses_in_hir_ty,
+        CompleteSubst, GenericParamTypeSet, ParamBasis, ParamDomainId, ParamSchemaId,
+        lower_hir_ty_in_mode, lower_layout_root_uses_in_hir_ty,
     },
 };
 use crate::analysis::HirAnalysisDb;
-
-#[derive(Clone, Copy)]
-enum AdtFieldTyMode {
-    Canonical,
-    ConcreteDemand,
-}
 
 /// Represents a ADT type definition.
 #[salsa::tracked]
@@ -133,24 +126,19 @@ impl<'db> AdtField<'db> {
     }
 
     pub fn ty(&self, db: &'db dyn HirAnalysisDb, i: usize) -> Binder<'db, TyId<'db>> {
-        self.ty_in_mode(db, i, AdtFieldTyMode::Canonical)
+        self.ty_in_mode(db, i, ConstBodyLowering::Eager)
     }
 
+    /// Deferred const bodies keep anonymous bodies and their captures for
+    /// concrete-demand diagnostics.
     fn ty_in_mode(
         &self,
         db: &'db dyn HirAnalysisDb,
         i: usize,
-        mode: AdtFieldTyMode,
+        const_bodies: ConstBodyLowering,
     ) -> Binder<'db, TyId<'db>> {
-        let assumptions = self.assumptions(db);
-
         let ty = if let Some(hir_ty) = self.tys[i].to_opt() {
-            match mode {
-                AdtFieldTyMode::Canonical => lower_hir_ty(db, hir_ty, self.scope, assumptions),
-                AdtFieldTyMode::ConcreteDemand => {
-                    lower_hir_ty_deferred(db, hir_ty, self.scope, assumptions)
-                }
-            }
+            lower_hir_ty_in_mode(db, hir_ty, self.scope, self.assumptions(db), const_bodies)
         } else {
             TyId::invalid(db, InvalidCause::ParseError)
         };
@@ -283,7 +271,7 @@ pub fn instantiate_adt_field_shape<'db>(
         variant_idx,
         field_idx,
         explicit_args,
-        AdtFieldTyMode::Canonical,
+        ConstBodyLowering::Eager,
     )
 }
 
@@ -302,7 +290,7 @@ pub(crate) fn instantiate_adt_field_for_concrete_demand<'db>(
             variant_idx,
             field_idx,
             canonical_args,
-            AdtFieldTyMode::Canonical,
+            ConstBodyLowering::Eager,
         ),
         source: instantiate_adt_field_source_for_concrete_demand(
             db,
@@ -345,7 +333,7 @@ pub(crate) fn instantiate_adt_field_source_for_concrete_demand<'db>(
         variant_idx,
         field_idx,
         source_args,
-        AdtFieldTyMode::ConcreteDemand,
+        ConstBodyLowering::Deferred,
     )
 }
 
@@ -355,33 +343,18 @@ fn instantiate_adt_field_shape_in_mode<'db>(
     variant_idx: usize,
     field_idx: usize,
     explicit_args: &[TyId<'db>],
-    mode: AdtFieldTyMode,
+    const_bodies: ConstBodyLowering,
 ) -> TyId<'db> {
-    let owner = adt.as_generic_param_owner(db);
-    let schema = ParamSchemaId::full(db, owner);
-    let param_count = adt.params(db).len();
+    let domain = ParamDomainId::full(db, ParamSchemaId::full(db, adt.as_generic_param_owner(db)));
     adt.fields(db)
         .get(variant_idx)
-        .and_then(|variant| {
-            (field_idx < variant.num_types()).then(|| variant.ty_in_mode(db, field_idx, mode))
-        })
-        .map(|field_ty| {
-            if explicit_args.len() == param_count {
-                return field_ty.instantiate(db, explicit_args);
-            }
-            if explicit_args.len() > param_count {
-                return TyId::invalid(db, InvalidCause::Other);
-            }
-            let domain = ParamDomainId::full(db, schema);
-            let mut partial = PartialSubst::new(db, domain);
-            for (slot, arg) in explicit_args.iter().enumerate() {
-                let key = schema
-                    .key_at(db, LoweredSlot(slot))
-                    .expect("ADT argument slot");
-                partial.bind(db, key, *arg).expect("unique ADT binding");
-            }
-            let (subst, _) = partial.residualize(db);
-            substitute_complete(db, field_ty.instantiate_identity(), &subst)
+        .filter(|variant| field_idx < variant.num_types() && explicit_args.len() <= domain.len(db))
+        .map(|variant| {
+            // Omitted trailing arguments keep their declaration formals.
+            let subst = CompleteSubst::with_prefix(db, domain, explicit_args);
+            variant
+                .ty_in_mode(db, field_idx, const_bodies)
+                .instantiate_subst(db, &subst)
                 .expect("ADT field uses its declaration domain")
         })
         .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
@@ -426,13 +399,7 @@ pub(crate) fn instantiate_adt_field_layout<'db>(
     }
     // Layout discovery also visits incomplete applications while diagnosing
     // invalid source. Preserve absent formals as explicit residual parameters.
-    let mut partial = PartialSubst::new(db, domain);
-    for (key, arg) in schema.keys(db).iter().copied().zip(args.iter().copied()) {
-        partial
-            .bind(db, key, arg)
-            .expect("unique ADT layout binding");
-    }
-    let subst = partial.residualize(db).0;
+    let subst = CompleteSubst::with_prefix(db, domain, args);
     let mut instantiated = instantiate_layout_template(
         db,
         template,

@@ -127,10 +127,7 @@ pub(crate) fn generic_default<'db>(
     owner: GenericParamOwner<'db>,
     param_idx: usize,
 ) -> Result<Option<GenericDefault<'db>>, DefaultLowerError<'db>> {
-    if default_dependencies(db, owner, param_idx)
-        .iter()
-        .any(|&idx| idx >= param_idx)
-    {
+    if has_forward_source_dependency(db, owner, param_idx) {
         // Diagnosed from HIR without entering type/constraint lowering.
         return Err(DefaultLowerError::new(db, InvalidCause::Other, None));
     }
@@ -153,14 +150,7 @@ pub(crate) fn generic_default<'db>(
             let formal = set
                 .param_by_original_idx(db, param_idx)
                 .ok_or_else(|| DefaultLowerError::new(db, InvalidCause::TypeLoweringCycle, None))?;
-            if let Some(name) = forbidden_default_dependency(
-                db,
-                ty,
-                owner.scope(),
-                set.offset_to_explicit_params_position(db) + param_idx,
-            ) {
-                return Err(DefaultLowerError::new(db, InvalidCause::Other, Some(name)));
-            }
+            reject_forward_dependency(db, set, param_idx, ty)?;
             let ty = check_argument(db, ty, formal.kind(db), None, false)
                 .map_err(|cause| DefaultLowerError::new(db, cause, None))?;
             Ok(Some(GenericDefault::Type(Binder::bind(owner, ty))))
@@ -177,14 +167,7 @@ pub(crate) fn generic_default<'db>(
                     _ => None,
                 })
                 .ok_or_else(|| DefaultLowerError::new(db, InvalidCause::TypeLoweringCycle, None))?;
-            if let Some(name) = forbidden_default_dependency(
-                db,
-                expected,
-                owner.scope(),
-                set.offset_to_explicit_params_position(db) + param_idx,
-            ) {
-                return Err(DefaultLowerError::new(db, InvalidCause::Other, Some(name)));
-            }
+            reject_forward_dependency(db, set, param_idx, expected)?;
             Ok(Some(GenericDefault::Const {
                 value,
                 expected: Binder::bind(owner, expected),
@@ -193,14 +176,25 @@ pub(crate) fn generic_default<'db>(
     }
 }
 
+/// Whether a default names its own or a later parameter in source.
+fn has_forward_source_dependency<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+    param_idx: usize,
+) -> bool {
+    default_dependencies(db, owner, param_idx)
+        .iter()
+        .any(|&idx| idx >= param_idx)
+}
+
 /// Inspect the construction recipe after member identity and aliases have
 /// been resolved. Equality predicates on the declaration are not recipe data.
-fn forbidden_default_dependency<'db>(
+fn reject_forward_dependency<'db>(
     db: &'db dyn HirAnalysisDb,
+    set: GenericParamTypeSet<'db>,
+    param_idx: usize,
     ty: TyId<'db>,
-    owner: ScopeId<'db>,
-    first_forbidden_slot: usize,
-) -> Option<IdentId<'db>> {
+) -> Result<(), DefaultLowerError<'db>> {
     struct Finder<'db> {
         db: &'db dyn HirAnalysisDb,
         owner: ScopeId<'db>,
@@ -227,12 +221,15 @@ fn forbidden_default_dependency<'db>(
 
     let mut finder = Finder {
         db,
-        owner,
-        first_forbidden_slot,
+        owner: set.scope(db),
+        first_forbidden_slot: set.offset_to_explicit_params_position(db) + param_idx,
         found: None,
     };
     ty.visit_with(&mut finder);
-    finder.found
+    match finder.found {
+        Some(name) => Err(DefaultLowerError::new(db, InvalidCause::Other, Some(name))),
+        None => Ok(()),
+    }
 }
 
 fn default_cycle_initial<'db>(
@@ -269,10 +266,7 @@ pub(crate) fn type_default_diags<'db>(
         let Some(hir_ty) = param.default_ty else {
             continue;
         };
-        if default_dependencies(db, owner, view.idx)
-            .iter()
-            .any(|&idx| idx >= view.idx)
-        {
+        if has_forward_source_dependency(db, owner, view.idx) {
             continue;
         }
         let span = view.span().into_type_param().default_ty();
@@ -332,6 +326,19 @@ impl<'a, 'db> DefaultApplication<'a, 'db> {
 
     fn checks_default(self) -> bool {
         matches!(self, Self::CheckedMetadata(_))
+    }
+
+    fn const_policy(self) -> UnevaluatedConstPolicy {
+        if self
+            .minter()
+            .is_some_and(|minter| minter.const_bodies() == ConstBodyLowering::Deferred)
+        {
+            UnevaluatedConstPolicy::DeferValidation
+        } else if self.evaluates() {
+            UnevaluatedConstPolicy::Evaluate
+        } else {
+            UnevaluatedConstPolicy::Preserve
+        }
     }
 }
 
@@ -407,9 +414,9 @@ impl<'db> GenericParamTypeSet<'db> {
         }
         let mut args = implicit.to_vec();
         for (source_param_idx, &formal) in params.iter().skip(offset).enumerate() {
-            let schema = param_schema(db, owner, self.basis(db));
-            let domain = schema
-                .allowed_default_dependencies(db, SourceParamIndex(source_param_idx))
+            let index = SourceParamIndex(source_param_idx);
+            let domain = param_schema(db, owner, self.basis(db))
+                .allowed_default_dependencies(db, index)
                 .expect("default prefix must name a source parameter");
             let subst = CompleteSubst::new(domain, db, args.clone())
                 .unwrap_or_else(|error| panic!("invalid default prefix for {owner:?}: {error:?}"));
@@ -423,135 +430,15 @@ impl<'db> GenericParamTypeSet<'db> {
             };
             let from_default = source_param_idx >= provided.len();
             let checked = (from_default && application.checks_default())
-                .then(|| {
-                    checked_generic_default(db, owner, SourceParamIndex(source_param_idx)).clone()
-                })
+                .then(|| checked_generic_default(db, owner, index).clone())
                 .flatten();
-            let result = (|| {
-                let arg = if let Some(&arg) = provided.get(source_param_idx) {
-                    arg
-                } else {
-                    let default = match &checked {
-                        Some(DefaultValidation::Checked(template)) => Some(template),
-                        Some(DefaultValidation::Invalid(error)) => {
-                            return Err(error.cause(db).clone());
-                        }
-                        None => generic_default(db, owner, source_param_idx)
-                            .as_ref()
-                            .map_err(|error| error.cause(db).clone())?
-                            .as_ref(),
-                    };
-                    let Some(default) = default else {
-                        return Ok(None);
-                    };
-                    match default {
-                        GenericDefault::Type(template) => {
-                            // Freshen only template-owned roots before introducing caller values.
-                            let mut roots = FxHashMap::default();
-                            let fresh = rewrite_structural_holes(
-                                db,
-                                template.instantiate_identity(),
-                                |hole, ty| {
-                                    Some(TyId::const_ty(
-                                        db,
-                                        if let Some(minter) = application.minter() {
-                                            let root = *roots
-                                                .entry(hole.root(db))
-                                                .or_insert_with(|| minter.holes().mint(db));
-                                            ConstTyId::hole_with_id(
-                                                db,
-                                                ty,
-                                                HoleId::Structural(StructuralHoleId::with_intro(
-                                                    db,
-                                                    ty,
-                                                    root,
-                                                    hole.origin(db),
-                                                    hole.introduced_at(db).clone(),
-                                                )),
-                                            )
-                                        } else {
-                                            ConstTyId::hole_with_ty(db, ty)
-                                        },
-                                    ))
-                                },
-                            );
-                            let applied = Binder::bind(owner, fresh)
-                                .instantiate_subst(db, &subst)
-                                .unwrap_or_else(|error| {
-                                    panic!("invalid default template for {owner:?}: {error:?}")
-                                });
-                            if matches!(application, DefaultApplication::Evaluate(_)) {
-                                canonicalize_ty_for_mode(
-                                    db,
-                                    applied,
-                                    ConstCanonEnv::new(
-                                        owner.scope(),
-                                        PredicateListId::empty_list(db),
-                                        None,
-                                    ),
-                                    ConstCanonMode::Identity,
-                                )
-                            } else {
-                                applied
-                            }
-                        }
-                        GenericDefault::Const { value, expected } => {
-                            let template_ty = expected.instantiate_identity();
-                            let expected =
-                                expected
-                                    .instantiate_subst(db, &subst)
-                                    .unwrap_or_else(|error| {
-                                        panic!(
-                                            "invalid const default type for {owner:?}: {error:?}"
-                                        )
-                                    });
-                            match value {
-                                ConstGenericArgValue::Expr(body) => {
-                                    let capture = ConstCaptureEnv::bound(
-                                        db,
-                                        owner,
-                                        Some(SourceParamIndex(source_param_idx)),
-                                        args.clone(),
-                                    );
-                                    let policy = if application.minter().is_some_and(|minter| {
-                                        minter.const_bodies() == ConstBodyLowering::Deferred
-                                    }) {
-                                        UnevaluatedConstPolicy::DeferValidation
-                                    } else if application.evaluates() {
-                                        UnevaluatedConstPolicy::Evaluate
-                                    } else {
-                                        UnevaluatedConstPolicy::Preserve
-                                    };
-                                    let ct = ConstTyId::unevaluated(
-                                        db,
-                                        *body,
-                                        Some(template_ty),
-                                        Some(expected),
-                                        capture,
-                                        policy,
-                                    );
-                                    TyId::const_ty(db, ct)
-                                }
-                                ConstGenericArgValue::Hole => TyId::const_ty(
-                                    db,
-                                    if let Some(minter) = application.minter() {
-                                        ConstTyId::structural_hole(
-                                            db,
-                                            expected,
-                                            StructuralHoleOrigin::DefaultHoleParam {
-                                                owner,
-                                                param_idx: source_param_idx,
-                                            },
-                                            LayoutIntroSite::definition(owner, source_param_idx),
-                                            minter.holes().mint(db),
-                                        )
-                                    } else {
-                                        ConstTyId::hole_with_ty(db, expected)
-                                    },
-                                ),
-                            }
-                        }
-                    }
+            let arg = match provided.get(source_param_idx) {
+                Some(&arg) => Ok(Some(arg)),
+                None => default_arg(db, owner, index, checked.as_ref(), &subst, application),
+            }
+            .and_then(|arg| {
+                let Some(arg) = arg else {
+                    return Ok(None);
                 };
                 // Explicit eager const arguments must have the same identity
                 // here as after TyId::app; later defaults capture this prefix.
@@ -559,7 +446,7 @@ impl<'db> GenericParamTypeSet<'db> {
                 let evaluate = application.evaluates()
                     || (!from_default && !arg.preserves_const_arg_metadata(db));
                 check_argument(db, arg, formal.kind(db), expected, evaluate).map(Some)
-            })()
+            })
             .map_err(|cause| GenericArgError {
                 index: source_param_idx,
                 from_default,
@@ -567,15 +454,129 @@ impl<'db> GenericParamTypeSet<'db> {
                 diagnostic_owner: matches!(checked, Some(DefaultValidation::Invalid(_))).then_some(
                     DefaultDiagnosticOwner {
                         owner,
-                        param: SourceParamIndex(source_param_idx),
+                        param: index,
                     },
                 ),
             })?;
-            let Some(arg) = result else { break };
+            let Some(arg) = arg else { break };
             args.push(arg);
         }
         Ok(args.split_off(offset))
     }
+}
+
+/// Instantiates `owner`'s default for `index` under `subst`, the substitution
+/// of the arguments preceding it. `checked` is the declaration's validation
+/// when the application requires one.
+fn default_arg<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+    index: SourceParamIndex,
+    checked: Option<&DefaultValidation<'db>>,
+    subst: &CompleteSubst<'db>,
+    application: DefaultApplication<'_, 'db>,
+) -> Result<Option<TyId<'db>>, InvalidCause<'db>> {
+    let default = match checked {
+        Some(DefaultValidation::Checked(template)) => Some(template),
+        Some(DefaultValidation::Invalid(error)) => return Err(error.cause(db).clone()),
+        None => generic_default(db, owner, index.0)
+            .as_ref()
+            .map_err(|error| error.cause(db).clone())?
+            .as_ref(),
+    };
+    Ok(default.map(|default| match default {
+        GenericDefault::Type(template) => {
+            instantiate_type_default(db, owner, *template, subst, application)
+        }
+        GenericDefault::Const { value, expected } => {
+            instantiate_const_default(db, owner, index, value, *expected, subst, application)
+        }
+    }))
+}
+
+fn instantiate_type_default<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+    template: Binder<'db, TyId<'db>>,
+    subst: &CompleteSubst<'db>,
+    application: DefaultApplication<'_, 'db>,
+) -> TyId<'db> {
+    // Freshen only template-owned roots before introducing caller values.
+    let mut roots = FxHashMap::default();
+    let fresh = rewrite_structural_holes(db, template.instantiate_identity(), |hole, ty| {
+        let hole = match application.minter() {
+            Some(minter) => {
+                let root = *roots
+                    .entry(hole.root(db))
+                    .or_insert_with(|| minter.holes().mint(db));
+                ConstTyId::hole_with_id(
+                    db,
+                    ty,
+                    HoleId::Structural(StructuralHoleId::with_intro(
+                        db,
+                        ty,
+                        root,
+                        hole.origin(db),
+                        hole.introduced_at(db).clone(),
+                    )),
+                )
+            }
+            None => ConstTyId::hole_with_ty(db, ty),
+        };
+        Some(TyId::const_ty(db, hole))
+    });
+    let applied = Binder::bind(owner, fresh)
+        .instantiate_subst(db, subst)
+        .unwrap_or_else(|error| panic!("invalid default template for {owner:?}: {error:?}"));
+    if matches!(application, DefaultApplication::Evaluate(_)) {
+        canonicalize_ty_for_mode(
+            db,
+            applied,
+            ConstCanonEnv::new(owner.scope(), PredicateListId::empty_list(db), None),
+            ConstCanonMode::Identity,
+        )
+    } else {
+        applied
+    }
+}
+
+fn instantiate_const_default<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+    index: SourceParamIndex,
+    value: &ConstGenericArgValue<'db>,
+    expected: Binder<'db, TyId<'db>>,
+    subst: &CompleteSubst<'db>,
+    application: DefaultApplication<'_, 'db>,
+) -> TyId<'db> {
+    let template_ty = expected.instantiate_identity();
+    let expected = expected
+        .instantiate_subst(db, subst)
+        .unwrap_or_else(|error| panic!("invalid const default type for {owner:?}: {error:?}"));
+    let value = match value {
+        ConstGenericArgValue::Expr(body) => ConstTyId::unevaluated(
+            db,
+            *body,
+            Some(template_ty),
+            Some(expected),
+            ConstCaptureEnv::bound(db, owner, Some(index), subst.values().to_vec()),
+            application.const_policy(),
+        ),
+        ConstGenericArgValue::Hole => match application.minter() {
+            Some(minter) => ConstTyId::structural_hole(
+                db,
+                expected,
+                StructuralHoleOrigin::DefaultHoleParam {
+                    owner,
+                    param_idx: index.0,
+                },
+                LayoutIntroSite::definition(owner, index.0),
+                minter.holes().mint(db),
+            ),
+            None => ConstTyId::hole_with_ty(db, expected),
+        },
+    };
+    TyId::const_ty(db, value)
 }
 
 /// Parameter dependencies are a property of the source, not of successful type
@@ -646,6 +647,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        analysis::semantic::runtime_size_bytes,
         analysis::ty::{
             const_ty::{
                 BoundHoleId, CallableLayoutOwner, ConstTyData, LayoutIntroRoot, LayoutIntroStep,
@@ -874,13 +876,20 @@ fn array<const N: usize, T = [u8; { N + 1 }]>() {}
         let TyData::ConstTy(length) = ty.generic_args(&db)[1].data(&db) else {
             panic!("array length")
         };
-        assert!(matches!(
-            length.data(&db),
-            ConstTyData::UnEvaluated {
-                policy: UnevaluatedConstPolicy::DeferValidation,
-                ..
-            }
-        ));
+        assert!(
+            matches!(
+                length.data(&db),
+                ConstTyData::UnEvaluated {
+                    policy: UnevaluatedConstPolicy::DeferValidation,
+                    capture: ConstCaptureEnv::Identity(_),
+                    ..
+                }
+            ),
+            "actual length: {:?}",
+            length.data(&db)
+        );
+        // The symbolic length has no concrete size until an application binds N.
+        assert_eq!(runtime_size_bytes(&db, ty), Ok(None));
         let set = collect_generic_params(&db, func.into());
         let minter = LoweringContext::deferred(HoleAnchor::CallableOutput {
             owner: CallableLayoutOwner::Func(func),

@@ -18,7 +18,7 @@ use super::{
     diagnostics::{TyDiagCollection, TyLowerDiag},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyData, TyId},
-    ty_lower::{lower_hir_ty, lower_hir_ty_deferred},
+    ty_lower::lower_hir_ty_in_mode,
 };
 use crate::visitor::prelude::LazyTraitRefSpan;
 
@@ -79,10 +79,7 @@ fn collect_hir_ty_diags_in_mode<'db>(
     }
 
     // Fall back to semantic errors
-    let ty = match const_bodies {
-        ConstBodyLowering::Eager => lower_hir_ty(db, hir_ty, scope, assumptions),
-        ConstBodyLowering::Deferred => lower_hir_ty_deferred(db, hir_ty, scope, assumptions),
-    };
+    let ty = lower_hir_ty_in_mode(db, hir_ty, scope, assumptions, const_bodies);
     emit_invalid_ty_error(db, ty, span.into())
         .into_iter()
         .collect()
@@ -257,14 +254,13 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
     }
 
     fn visit_ty(&mut self, ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>, hir_ty: TypeId<'db>) {
-        let ty = match self.const_bodies {
-            ConstBodyLowering::Eager => {
-                lower_hir_ty(self.db, hir_ty, ctxt.scope(), self.assumptions)
-            }
-            ConstBodyLowering::Deferred => {
-                lower_hir_ty_deferred(self.db, hir_ty, ctxt.scope(), self.assumptions)
-            }
-        };
+        let ty = lower_hir_ty_in_mode(
+            self.db,
+            hir_ty,
+            ctxt.scope(),
+            self.assumptions,
+            self.const_bodies,
+        );
 
         // This will report errors with nested types that are fundamental to the nested type,
         // but will not catch cases where the nested type is fine on its own, but incompatible

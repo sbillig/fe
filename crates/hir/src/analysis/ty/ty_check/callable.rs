@@ -21,11 +21,10 @@ use crate::analysis::{
         diagnostics::{BodyDiag, FuncBodyDiag},
         fold::{TyFoldable, TyFolder},
         generic_defaults::{DefaultApplication, GenericArgError},
-        normalize::{normalize_from_assumptions, normalize_ty},
+        normalize::{normalize_ty, normalize_with_trait_evidence},
         trait_def::TraitInstId,
         trait_resolution::{
-            PredicateListId, TraitSolveCx, check_trait_inst_wf,
-            constraint::collect_func_decl_constraints,
+            TraitSolveCx, check_trait_inst_wf, constraint::collect_func_decl_constraints,
         },
         ty_def::{BorrowKind, CapabilityKind},
         ty_def::{InvalidCause, TyBase, TyData, TyFlags, TyId},
@@ -183,6 +182,7 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
             &minter,
         )
     });
+    let given_count = given_args.as_ref().map_or(0, Vec::len);
     let offset = callable.callable_def.offset_to_explicit_params_position(db);
     let explicit_arg_count = callable.generic_args.len() - offset;
 
@@ -190,14 +190,10 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
         CallableDef::Func(func) => {
             let param_set = collect_generic_params(db, func.into());
             let required = param_set.required_explicit_param_count(db);
-            if given_args
-                .as_ref()
-                .is_some_and(|args| args.len() < required || args.len() > explicit_arg_count)
-            {
-                let given = given_args.as_ref().map_or(0, Vec::len);
+            if given_args.is_some() && !(required..=explicit_arg_count).contains(&given_count) {
                 return Err(CallGenericArgUnifyError::ArityMismatch {
-                    given,
-                    expected: if given < required {
+                    given: given_count,
+                    expected: if given_count < required {
                         required
                     } else {
                         explicit_arg_count
@@ -205,13 +201,10 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
                 });
             }
 
-            let inferred_required;
-            let provided = if let Some(given_args) = &given_args {
-                given_args.as_slice()
-            } else {
-                inferred_required = callable.generic_args[offset..offset + required].to_vec();
-                &inferred_required
-            };
+            // Without explicit arguments, required parameters stay inferred.
+            let provided = given_args
+                .as_deref()
+                .unwrap_or_else(|| &callable.generic_args[offset..offset + required]);
             param_set
                 .complete_args(
                     db,
@@ -233,22 +226,20 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
 
     if completed_args.len() != explicit_arg_count {
         return Err(CallGenericArgUnifyError::ArityMismatch {
-            given: given_args.as_ref().map_or(0, Vec::len),
+            given: given_count,
             expected: explicit_arg_count,
         });
     }
 
-    let given_count = given_args.as_ref().map_or(0, Vec::len);
     for (idx, (completed, current)) in completed_args
         .into_iter()
         .zip(&mut callable.generic_args[offset..])
         .enumerate()
     {
-        if idx < given_count && !unify_arg(tc, idx, completed, current) {
-            return Err(CallGenericArgUnifyError::UnificationFailed);
-        }
         if idx >= given_count {
             *current = completed;
+        } else if !unify_arg(tc, idx, completed, current) {
+            return Err(CallGenericArgUnifyError::UnificationFailed);
         }
     }
 
@@ -432,12 +423,7 @@ impl<'db> Callable<'db> {
         T: TyFoldable<'db>,
     {
         if let Some(inst) = self.trait_inst {
-            normalize_from_assumptions(
-                db,
-                value,
-                self.callable_def.scope(),
-                PredicateListId::new(db, vec![inst]),
-            )
+            normalize_with_trait_evidence(db, value, self.callable_def.scope(), inst)
         } else {
             value
         }

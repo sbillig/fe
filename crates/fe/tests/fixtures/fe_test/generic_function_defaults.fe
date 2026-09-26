@@ -2,6 +2,15 @@ fn selected<const A: usize, const B: usize, const C: usize = B>() -> usize { C }
 
 fn forwarded<const X: usize, const Y: usize>() -> usize { selected<Y, X>() }
 
+// A recursive call captures the caller's own parameters in swapped order.
+fn recursive<const A: usize, const B: usize, const C: usize = B>(_ depth: u256) -> usize {
+    if depth == 0 {
+        C
+    } else {
+        recursive<B, A>(depth - 1)
+    }
+}
+
 trait Length {
     const LEN: usize
     fn value<const N: usize = Self::LEN>() -> usize { N }
@@ -109,6 +118,8 @@ fn swapped_call<const X: usize, const Y: usize>() -> usize { call_default<Y, X>(
 #[test]
 fn const_defaults() {
     assert!(forwarded<2, 3>() == 2)
+    assert!(recursive<2, 3>(0) == 3)
+    assert!(recursive<2, 3>(1) == 2)
     assert!(trait_value<bool>() == 2)
     assert!(inherent_value<3>() == 3)
     let trait_item = <bool as Length>::value

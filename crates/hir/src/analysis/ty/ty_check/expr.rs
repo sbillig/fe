@@ -55,7 +55,7 @@ use crate::analysis::ty::{
         stored_value_contains_out_of_scope_params,
     },
     fold::{TyFoldable as _, TyFolder},
-    normalize::normalize_from_assumptions,
+    normalize::normalize_with_trait_evidence,
     provider::{
         ProviderLayoutEvidence, ProviderTransport, provider_semantics,
         provider_semantics_for_specialized_call,
@@ -5409,11 +5409,11 @@ impl<'db> TyChecker<'db> {
             .arg_tys(self.db)
             .get(1)?
             .instantiate(self.db, gen_args);
-        let expected_rhs = self.normalize_ty(normalize_from_assumptions(
+        let expected_rhs = self.normalize_ty(normalize_with_trait_evidence(
             self.db,
             expected_rhs,
             self.env.scope(),
-            PredicateListId::new(self.db, vec![inst]),
+            inst,
         ));
         Some(expected_rhs)
     }

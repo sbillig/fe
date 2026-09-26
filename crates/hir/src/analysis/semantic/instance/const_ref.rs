@@ -416,6 +416,9 @@ fn semantic_callee_key_with_assumptions<'db>(
     assumptions: PredicateListId<'db>,
     provider_resolution_mode: ProviderResolutionMode,
 ) -> Result<Option<SemanticCallCallee<'db>>, MethodArgMapError<'db>> {
+    let CallableDef::Func(nominal_func) = callable.callable_def() else {
+        return Ok(None);
+    };
     let mut selected_trait_method: Option<(ResolvedImplInstance<'db>, TraitInstId<'db>)> = None;
     let mut effect_pairs = Vec::new();
     let mut provider_pairs = Vec::new();
@@ -427,66 +430,66 @@ fn semantic_callee_key_with_assumptions<'db>(
                 .map(|ty| (arg.binding_idx as usize, ty))
         })
         .collect::<Vec<_>>();
-    let (owner, mut subst_args) = match callable.callable_def() {
-        CallableDef::Func(func) => {
-            let mut subst_args = callable.generic_args().to_vec();
-            let owner = if let Some(inst) = callable.trait_inst()
-                && let Some(name) = func.name(db).to_opt()
-                && let Selection::Unique(method) = resolve_trait_method_instance(
-                    db,
-                    TraitSolveCx::new(db, impl_env.normalization_scope(db))
-                        .with_assumptions(assumptions),
-                    inst,
-                    name,
-                )
-                && let Some(impl_func) = method.body()
-            {
-                subst_args = method
-                    .complete_body_args(
-                        db,
-                        &subst_args,
-                        callable.checked_input_tys(),
-                        Some(&checked_effect_inputs),
-                    )?
-                    .into_values();
-                effect_pairs = method.effect_pairs().to_vec();
-                let nominal_env = EffectEnvView::new(EffectParamSite::Func(func));
-                let body_env = EffectEnvView::new(EffectParamSite::Func(impl_func));
-                if effect_pairs.len() != func.effect_requirements(db).len() {
-                    return Err(MethodArgMapError::MissingEffectRole(effect_pairs.len()));
-                }
-                for &(nominal_idx, body_idx) in &effect_pairs {
-                    let Some(nominal) = nominal_env.resolved_binding(db, nominal_idx) else {
-                        continue;
-                    };
-                    let Some(body) = body_env.resolved_binding(db, body_idx) else {
-                        continue;
-                    };
-                    let nominal = nominal.provider.provider_idx;
-                    let body = body.provider.provider_idx;
-                    if let Some((_, existing)) =
-                        provider_pairs.iter().find(|(index, _)| *index == nominal)
-                    {
-                        if *existing != body {
-                            return Err(MethodArgMapError::InconsistentProviderRole {
-                                nominal,
-                                first: *existing,
-                                second: body,
-                            });
-                        }
-                    } else {
-                        provider_pairs.push((nominal, body));
-                    }
-                }
-                selected_trait_method = Some((method.resolved(), inst));
-                BodyOwner::Func(impl_func)
-            } else {
-                BodyOwner::Func(func)
-            };
-            (owner, subst_args)
+    let mut subst_args = callable.generic_args().to_vec();
+    let body_func = if let Some(inst) = callable.trait_inst()
+        && let Some(name) = nominal_func.name(db).to_opt()
+        && let Selection::Unique(method) = resolve_trait_method_instance(
+            db,
+            TraitSolveCx::new(db, impl_env.normalization_scope(db)).with_assumptions(assumptions),
+            inst,
+            name,
+        )
+        && let Some(impl_func) = method.body()
+    {
+        subst_args = method
+            .complete_body_args(
+                db,
+                &subst_args,
+                callable.checked_input_tys(),
+                Some(&checked_effect_inputs),
+            )?
+            .into_values();
+        effect_pairs = method.effect_pairs().to_vec();
+        let nominal_env = EffectEnvView::new(EffectParamSite::Func(nominal_func));
+        let body_env = EffectEnvView::new(EffectParamSite::Func(impl_func));
+        if effect_pairs.len() != nominal_func.effect_requirements(db).len() {
+            return Err(MethodArgMapError::MissingEffectRole(effect_pairs.len()));
         }
-        CallableDef::VariantCtor(_) => return Ok(None),
+        for &(nominal_idx, body_idx) in &effect_pairs {
+            let Some(nominal) = nominal_env.resolved_binding(db, nominal_idx) else {
+                continue;
+            };
+            let Some(body) = body_env.resolved_binding(db, body_idx) else {
+                continue;
+            };
+            let nominal = nominal.provider.provider_idx;
+            let body = body.provider.provider_idx;
+            if let Some((_, existing)) = provider_pairs.iter().find(|(index, _)| *index == nominal)
+            {
+                if *existing != body {
+                    return Err(MethodArgMapError::InconsistentProviderRole {
+                        nominal,
+                        first: *existing,
+                        second: body,
+                    });
+                }
+            } else {
+                provider_pairs.push((nominal, body));
+            }
+        }
+        selected_trait_method = Some((method.resolved(), inst));
+        impl_func
+    } else {
+        nominal_func
     };
+    let owner = BodyOwner::Func(body_func);
+    // An implementation selected without relying on a caller assumption.
+    let selected_impl = selected_trait_method.is_some_and(|(resolved, _)| {
+        !matches!(
+            resolved.selected().origin(db),
+            ImplementorOrigin::Assumption
+        )
+    });
     let effect_providers = effect_providers
         .iter()
         .cloned()
@@ -505,7 +508,7 @@ fn semantic_callee_key_with_assumptions<'db>(
     let effect_providers = resolve_callable_effect_providers(
         db,
         caller,
-        owner,
+        body_func,
         &mut subst_args,
         &effect_providers,
         provider_resolution_mode,
@@ -520,140 +523,113 @@ fn semantic_callee_key_with_assumptions<'db>(
     // A fully concrete implementation can shed caller context only when the
     // same implementation is selected without it. Symbolic calls and
     // assumption-selected defaults keep the caller's proof environment.
-    let (context_independent, nominal_witness_required) =
-        if let (Some((resolved, inst)), CallableDef::Func(func), BodyOwner::Func(body_func)) =
-            (selected_trait_method, callable.callable_def(), owner)
-            && !matches!(
-                resolved.selected().origin(db),
-                ImplementorOrigin::Assumption
-            )
-            && let Some(name) = func.name(db).to_opt()
-        {
-            let body_flags = collect_flags(db, subst_args.as_slice())
+    let (context_independent, nominal_witness_required) = if let Some((resolved, inst)) =
+        selected_trait_method
+        && selected_impl
+        && let Some(name) = nominal_func.name(db).to_opt()
+    {
+        let body_ground = is_ground(
+            collect_flags(db, subst_args.as_slice())
                 | collect_flags(db, effect_providers.as_slice())
                 | collect_flags(db, effect_args)
-                | collect_flags(db, resolved.trait_inst());
-            let body_ground = !body_flags.intersects(
-                TyFlags::HAS_INVALID
-                    | TyFlags::HAS_VAR
-                    | TyFlags::HAS_PARAM
-                    | TyFlags::HAS_PROJECTION,
-            );
-            let original_ground = !collect_flags(db, inst).intersects(
-                TyFlags::HAS_INVALID
-                    | TyFlags::HAS_VAR
-                    | TyFlags::HAS_PARAM
-                    | TyFlags::HAS_PROJECTION,
-            );
-            let independent = body_ground
-                && matches!(
-                    resolve_trait_method_instance(
-                        db,
-                        TraitSolveCx::new(db, owner.scope()),
-                        resolved.trait_inst(),
-                        name,
-                    ),
-                    Selection::Unique(method) if method.resolved() == resolved
-                );
-            // A symbolic nominal receiver can be discarded after selection only if
-            // it normalizes to the independent implementation and neither signature
-            // has additional effects, method bounds, or layout slots to carry.
-            let nominal_redundant = independent
-                && inst.assoc_type_bindings(db).is_empty()
-                && func.effect_requirements(db).is_empty()
-                && body_func.effect_requirements(db).is_empty()
-                && effect_args.is_empty()
-                && effect_providers.is_empty()
-                && collect_func_decl_constraints(db, CallableDef::Func(func), false)
-                    .instantiate_identity()
-                    .is_empty(db)
-                && collect_func_decl_constraints(db, CallableDef::Func(body_func), false)
-                    .instantiate_identity()
-                    .is_empty(db)
-                && [func, body_func].into_iter().all(|func| {
-                    param_schema(db, func.into(), ParamBasis::Full)
-                        .keys(db)
-                        .iter()
-                        .all(|key| !matches!(key, ParamKey::CallableLayout { .. }))
-                })
-                && inst.args(db).len() == resolved.trait_inst().args(db).len()
-                && inst
-                    .args(db)
-                    .iter()
-                    .zip(resolved.trait_inst().args(db))
-                    .all(|(&nominal, &selected)| {
-                        normalize_ty(db, nominal, impl_env.normalization_scope(db), assumptions)
-                            == selected
-                    })
-                && func.arg_tys(db).len() == body_func.arg_tys(db).len()
-                && func.arg_tys(db).iter().enumerate().all(|(idx, _)| {
-                    let nominal = callable
-                        .arg_ty(db, idx)
-                        .expect("nominal input arity changed");
-                    let body =
-                        CallableDef::Func(body_func).arg_tys(db)[idx].instantiate(db, &subst_args);
-                    normalize_ty(db, nominal, impl_env.normalization_scope(db), assumptions)
-                        == normalize_ty(db, body, owner.scope(), PredicateListId::empty_list(db))
-                })
-                && normalize_ty(
+                | collect_flags(db, resolved.trait_inst()),
+        );
+        let original_ground = is_ground(collect_flags(db, inst));
+        let independent = body_ground
+            && matches!(
+                resolve_trait_method_instance(
                     db,
-                    callable.ret_ty(db),
-                    impl_env.normalization_scope(db),
-                    assumptions,
-                ) == normalize_ty(
-                    db,
-                    CallableDef::Func(body_func)
-                        .ret_ty(db)
-                        .instantiate(db, &subst_args),
-                    owner.scope(),
-                    PredicateListId::empty_list(db),
-                );
-            (
-                independent && (original_ground || nominal_redundant),
-                !nominal_redundant,
-            )
-        } else if let (None, CallableDef::Func(func)) =
-            (selected_trait_method, callable.callable_def())
-            && !func.is_associated_func(db)
-            && callable.trait_inst().is_none()
+                    TraitSolveCx::new(db, owner.scope()),
+                    resolved.trait_inst(),
+                    name,
+                ),
+                Selection::Unique(method) if method.resolved() == resolved
+            );
+        // A symbolic nominal receiver can be discarded after selection only if
+        // it normalizes to the independent implementation and neither signature
+        // has additional effects, method bounds, or layout slots to carry.
+        let nominal_redundant = independent
+            && inst.assoc_type_bindings(db).is_empty()
+            && nominal_func.effect_requirements(db).is_empty()
+            && body_func.effect_requirements(db).is_empty()
             && effect_args.is_empty()
             && effect_providers.is_empty()
-            && func.effect_requirements(db).is_empty()
-            && param_schema(db, func.into(), ParamBasis::Full)
-                .keys(db)
+            && [nominal_func, body_func].into_iter().all(|func| {
+                collect_func_decl_constraints(db, CallableDef::Func(func), false)
+                    .instantiate_identity()
+                    .is_empty(db)
+                    && !has_callable_layout_slots(db, func)
+            })
+            && inst.args(db).len() == resolved.trait_inst().args(db).len()
+            && inst
+                .args(db)
                 .iter()
-                .all(|key| !matches!(key, ParamKey::CallableLayout { .. }))
-            && !collect_flags(db, subst_args.as_slice()).intersects(
-                TyFlags::HAS_INVALID
-                    | TyFlags::HAS_VAR
-                    | TyFlags::HAS_PARAM
-                    | TyFlags::HAS_PROJECTION,
-            )
-        {
-            let empty = PredicateListId::empty_list(db);
-            let bounds = collect_func_decl_constraints(db, CallableDef::Func(func), true)
-                .instantiate(db, &subst_args);
-            let independent = bounds.list(db).iter().copied().all(|bound| {
-                matches!(
-                    is_goal_satisfiable(db, TraitSolveCx::new(db, func.scope()), bound),
-                    GoalSatisfiability::Satisfied(_)
-                )
-            }) && func.arg_tys(db).iter().enumerate().all(|(idx, _)| {
-                let arg = callable
+                .zip(resolved.trait_inst().args(db))
+                .all(|(&nominal, &selected)| {
+                    normalize_ty(db, nominal, impl_env.normalization_scope(db), assumptions)
+                        == selected
+                })
+            && nominal_func.arg_tys(db).len() == body_func.arg_tys(db).len()
+            && (0..nominal_func.arg_tys(db).len()).all(|idx| {
+                let nominal = callable
                     .arg_ty(db, idx)
                     .expect("nominal input arity changed");
-                normalize_ty(db, arg, impl_env.normalization_scope(db), assumptions)
-                    == normalize_ty(db, arg, func.scope(), empty)
-            }) && normalize_ty(
+                let body =
+                    CallableDef::Func(body_func).arg_tys(db)[idx].instantiate(db, &subst_args);
+                normalize_ty(db, nominal, impl_env.normalization_scope(db), assumptions)
+                    == normalize_ty(db, body, owner.scope(), PredicateListId::empty_list(db))
+            })
+            && normalize_ty(
                 db,
                 callable.ret_ty(db),
                 impl_env.normalization_scope(db),
                 assumptions,
-            ) == normalize_ty(db, callable.ret_ty(db), func.scope(), empty);
-            (independent, true)
-        } else {
-            (false, true)
-        };
+            ) == normalize_ty(
+                db,
+                CallableDef::Func(body_func)
+                    .ret_ty(db)
+                    .instantiate(db, &subst_args),
+                owner.scope(),
+                PredicateListId::empty_list(db),
+            );
+        (
+            independent && (original_ground || nominal_redundant),
+            !nominal_redundant,
+        )
+    } else if selected_trait_method.is_none()
+        && !nominal_func.is_associated_func(db)
+        && callable.trait_inst().is_none()
+        && effect_args.is_empty()
+        && effect_providers.is_empty()
+        && nominal_func.effect_requirements(db).is_empty()
+        && !has_callable_layout_slots(db, nominal_func)
+        && is_ground(collect_flags(db, subst_args.as_slice()))
+    {
+        let empty = PredicateListId::empty_list(db);
+        let scope = nominal_func.scope();
+        let bounds = collect_func_decl_constraints(db, CallableDef::Func(nominal_func), true)
+            .instantiate(db, &subst_args);
+        let independent = bounds.list(db).iter().copied().all(|bound| {
+            matches!(
+                is_goal_satisfiable(db, TraitSolveCx::new(db, scope), bound),
+                GoalSatisfiability::Satisfied(_)
+            )
+        }) && (0..nominal_func.arg_tys(db).len()).all(|idx| {
+            let arg = callable
+                .arg_ty(db, idx)
+                .expect("nominal input arity changed");
+            normalize_ty(db, arg, impl_env.normalization_scope(db), assumptions)
+                == normalize_ty(db, arg, scope, empty)
+        }) && normalize_ty(
+            db,
+            callable.ret_ty(db),
+            impl_env.normalization_scope(db),
+            assumptions,
+        ) == normalize_ty(db, callable.ret_ty(db), scope, empty);
+        (independent, true)
+    } else {
+        (false, true)
+    };
     let mut witnesses: IndexSet<_> = if context_independent {
         IndexSet::new()
     } else {
@@ -665,19 +641,10 @@ fn semantic_callee_key_with_assumptions<'db>(
     if let Some((resolved, _)) = selected_trait_method {
         witnesses.insert(resolved.trait_inst());
     }
-    let normalization_scope = if context_independent {
+    let normalization_scope = if context_independent || selected_impl {
         owner.scope()
     } else {
-        selected_trait_method.map_or(impl_env.normalization_scope(db), |(resolved, _)| {
-            if matches!(
-                resolved.selected().origin(db),
-                ImplementorOrigin::Assumption
-            ) {
-                impl_env.normalization_scope(db)
-            } else {
-                owner.scope()
-            }
-        })
+        impl_env.normalization_scope(db)
     };
     let impl_env = ImplEnv::new(
         db,
@@ -690,12 +657,8 @@ fn semantic_callee_key_with_assumptions<'db>(
         witnesses.into_iter().collect::<Vec<_>>(),
     );
 
-    let BodyOwner::Func(body_func) = owner else {
-        unreachable!("semantic call callee must be a function")
-    };
     if matches!(provider_resolution_mode, ProviderResolutionMode::Final)
         && let Some((resolved, nominal_inst)) = selected_trait_method
-        && let CallableDef::Func(nominal_func) = callable.callable_def()
     {
         let body_constraints =
             collect_func_decl_constraints(db, CallableDef::Func(body_func), true)
@@ -747,15 +710,8 @@ fn semantic_callee_key_with_assumptions<'db>(
             });
         }
     }
-    let concrete_dispatch = callable.trait_inst().is_none()
-        || selected_trait_method.is_some_and(|(resolved, _)| {
-            !matches!(
-                resolved.selected().origin(db),
-                ImplementorOrigin::Assumption
-            )
-        });
     Ok(Some(SemanticCallCallee {
-        concrete_dispatch,
+        concrete_dispatch: callable.trait_inst().is_none() || selected_impl,
         key: SemanticInstanceKey::new(
             db,
             owner,
@@ -768,10 +724,25 @@ fn semantic_callee_key_with_assumptions<'db>(
     }))
 }
 
+/// Whether a value has no inference state, symbolic parameters, or
+/// unresolved projections.
+fn is_ground(flags: TyFlags) -> bool {
+    !flags.intersects(
+        TyFlags::HAS_INVALID | TyFlags::HAS_VAR | TyFlags::HAS_PARAM | TyFlags::HAS_PROJECTION,
+    )
+}
+
+fn has_callable_layout_slots<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> bool {
+    param_schema(db, func.into(), ParamBasis::Full)
+        .keys(db)
+        .iter()
+        .any(|key| matches!(key, ParamKey::CallableLayout { .. }))
+}
+
 fn resolve_callable_effect_providers<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: Option<SemanticInstance<'db>>,
-    owner: BodyOwner<'db>,
+    func: Func<'db>,
     subst_args: &mut [TyId<'db>],
     effect_providers: &[EffectProviderSpecialization<'db>],
     provider_resolution_mode: ProviderResolutionMode,
@@ -807,56 +778,46 @@ fn resolve_callable_effect_providers<'db>(
         })
         .collect::<Vec<_>>();
     providers.sort_by_key(|provider| provider.provider.provider_idx);
-    if let BodyOwner::Func(func) = owner {
-        let effect_env = EffectEnvView::new(EffectParamSite::Func(func));
-        let resolution_by_req = match provider_resolution_mode {
-            ProviderResolutionMode::Final => effect_env
-                .resolutions(db)
-                .into_iter()
-                .map(|resolution| (resolution.requirement_idx as usize, resolution.provider_idx))
-                .collect::<FxHashMap<_, _>>(),
-            ProviderResolutionMode::Provisional => effect_env
-                .requirements(db)
-                .into_iter()
-                .filter_map(|requirement| {
-                    provisional_provider_idx_for_requirement(
-                        db,
-                        EffectParamSite::Func(func),
-                        requirement.binding_idx,
-                    )
-                    .map(|provider_idx| (requirement.binding_idx as usize, provider_idx))
-                })
-                .collect::<FxHashMap<_, _>>(),
-        };
-        let provider_by_idx = providers
-            .iter()
-            .map(|provider| (provider.provider.provider_idx, provider))
-            .collect::<FxHashMap<_, _>>();
-        for (effect_idx, param_idx) in place_effect_provider_param_index_map(db, func)
-            .iter()
-            .enumerate()
-            .filter_map(|(effect_idx, param_idx)| {
-                param_idx.map(|param_idx| (effect_idx, param_idx))
+    let effect_env = EffectEnvView::new(EffectParamSite::Func(func));
+    let resolution_by_req = match provider_resolution_mode {
+        ProviderResolutionMode::Final => effect_env
+            .resolutions(db)
+            .into_iter()
+            .map(|resolution| (resolution.requirement_idx as usize, resolution.provider_idx))
+            .collect::<FxHashMap<_, _>>(),
+        ProviderResolutionMode::Provisional => effect_env
+            .requirements(db)
+            .into_iter()
+            .filter_map(|requirement| {
+                provisional_provider_idx_for_requirement(
+                    db,
+                    EffectParamSite::Func(func),
+                    requirement.binding_idx,
+                )
+                .map(|provider_idx| (requirement.binding_idx as usize, provider_idx))
             })
-        {
-            let Some(provider_idx) = resolution_by_req.get(&effect_idx).copied() else {
-                continue;
-            };
-            let Some(provider) = provider_by_idx.get(&provider_idx) else {
-                continue;
-            };
-            if let Some(slot) = subst_args.get_mut(param_idx) {
-                *slot = provider.provider.provider_ty;
-            }
-            let actual_key_ty = effect_provider_target_ty(db, caller(), provider);
-            instantiate_callable_effect_layout_args(
-                db,
-                func,
-                effect_idx,
-                actual_key_ty,
-                subst_args,
-            );
+            .collect::<FxHashMap<_, _>>(),
+    };
+    let provider_by_idx = providers
+        .iter()
+        .map(|provider| (provider.provider.provider_idx, provider))
+        .collect::<FxHashMap<_, _>>();
+    for (effect_idx, param_idx) in place_effect_provider_param_index_map(db, func)
+        .iter()
+        .enumerate()
+        .filter_map(|(effect_idx, param_idx)| param_idx.map(|param_idx| (effect_idx, param_idx)))
+    {
+        let Some(provider_idx) = resolution_by_req.get(&effect_idx).copied() else {
+            continue;
+        };
+        let Some(provider) = provider_by_idx.get(&provider_idx) else {
+            continue;
+        };
+        if let Some(slot) = subst_args.get_mut(param_idx) {
+            *slot = provider.provider.provider_ty;
         }
+        let actual_key_ty = effect_provider_target_ty(db, caller(), provider);
+        instantiate_callable_effect_layout_args(db, func, effect_idx, actual_key_ty, subst_args);
     }
     providers
 }

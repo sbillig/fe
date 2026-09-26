@@ -13,11 +13,10 @@ use fe_hir::{
         },
         ty::{
             diagnostics::{BodyDiag, FuncBodyDiag, TyDiagCollection, TyLowerDiag},
-            ty_check::{BodyOwner, check_anon_const_body, check_func_body},
-            ty_def::{PrimTy, TyBase, TyData, TyId},
+            ty_check::{BodyOwner, check_func_body},
         },
     },
-    hir_def::{ConstGenericArgValue, GenericParam, GenericParamOwner, ItemKind, Partial},
+    hir_def::{ItemKind, Partial},
     span::LazySpan,
 };
 use num_traits::ToPrimitive;
@@ -281,12 +280,19 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
             .unwrap_or_else(|| panic!("missing const fn `{name}`"))
     }
 
-    fn eval_bytes<'db>(db: &'db HirAnalysisTestDb, func: fe_hir::hir_def::Func<'db>) -> Vec<u8> {
-        let value = match eval_body_owner_const(
+    fn eval_func<'db>(
+        db: &'db HirAnalysisTestDb,
+        func: fe_hir::hir_def::Func<'db>,
+    ) -> EvalOutcome<'db, SemConstId<'db>> {
+        eval_body_owner_const(
             db,
             BodyOwner::Func(func),
             GenericSubst::for_owner(db, func.into(), Vec::new()),
-        ) {
+        )
+    }
+
+    fn eval_bytes<'db>(db: &'db HirAnalysisTestDb, func: fe_hir::hir_def::Func<'db>) -> Vec<u8> {
+        let value = match eval_func(db, func) {
             EvalOutcome::Ready(value) => value,
             err => {
                 let name = func
@@ -325,11 +331,7 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
     }
 
     fn eval_usize<'db>(db: &'db HirAnalysisTestDb, func: fe_hir::hir_def::Func<'db>) -> usize {
-        let value = match eval_body_owner_const(
-            db,
-            BodyOwner::Func(func),
-            GenericSubst::for_owner(db, func.into(), Vec::new()),
-        ) {
+        let value = match eval_func(db, func) {
             EvalOutcome::Ready(value) => value,
             err => {
                 let name = func
@@ -352,11 +354,7 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
     }
 
     fn eval_bool<'db>(db: &'db HirAnalysisTestDb, func: fe_hir::hir_def::Func<'db>) -> bool {
-        let value = match eval_body_owner_const(
-            db,
-            BodyOwner::Func(func),
-            GenericSubst::for_owner(db, func.into(), Vec::new()),
-        ) {
+        let value = match eval_func(db, func) {
             EvalOutcome::Ready(value) => value,
             err => {
                 let name = func
@@ -398,39 +396,15 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
         find_func(&db, top_mod, "eq_from_bytes_matches_literal"),
     );
 
-    let from_bytes_const = eval_body_owner_const(
-        &db,
-        BodyOwner::Func(find_func(&db, top_mod, "from_bytes_value")),
-        GenericSubst::for_owner(
-            &db,
-            (find_func(&db, top_mod, "from_bytes_value")).into(),
-            Vec::new(),
-        ),
-    )
-    .into_ready()
-    .expect("expected const evaluation success");
-    let literal_4_const = eval_body_owner_const(
-        &db,
-        BodyOwner::Func(find_func(&db, top_mod, "literal_value_4")),
-        GenericSubst::for_owner(
-            &db,
-            (find_func(&db, top_mod, "literal_value_4")).into(),
-            Vec::new(),
-        ),
-    )
-    .into_ready()
-    .expect("expected const evaluation success");
-    let literal_8_const = eval_body_owner_const(
-        &db,
-        BodyOwner::Func(find_func(&db, top_mod, "literal_value_8")),
-        GenericSubst::for_owner(
-            &db,
-            (find_func(&db, top_mod, "literal_value_8")).into(),
-            Vec::new(),
-        ),
-    )
-    .into_ready()
-    .expect("expected const evaluation success");
+    let from_bytes_const = eval_func(&db, find_func(&db, top_mod, "from_bytes_value"))
+        .into_ready()
+        .expect("expected const evaluation success");
+    let literal_4_const = eval_func(&db, find_func(&db, top_mod, "literal_value_4"))
+        .into_ready()
+        .expect("expected const evaluation success");
+    let literal_8_const = eval_func(&db, find_func(&db, top_mod, "literal_value_8"))
+        .into_ready()
+        .expect("expected const evaluation success");
     let sem_eq = fe_hir::analysis::semantic::sem_const_eq(&db, from_bytes_const, literal_4_const);
     let sem_eq_lit8 =
         fe_hir::analysis::semantic::sem_const_eq(&db, from_bytes_const, literal_8_const);
@@ -449,79 +423,39 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
             } => format!("{} {:?}", ty.pretty_print(&db), bytes),
             other => format!("{other:?}"),
         };
-        let rhs_word = eval_body_owner_const(
-            &db,
-            BodyOwner::Func(find_func(&db, top_mod, "rhs_word_in_eq_from_bytes")),
-            GenericSubst::for_owner(
-                &db,
-                (find_func(&db, top_mod, "rhs_word_in_eq_from_bytes")).into(),
-                Vec::new(),
-            ),
-        )
-        .into_ready()
-        .and_then(|value| match value.value(&db) {
-            SemConstValue::Scalar {
-                value: SemConstScalar::Int { value },
-                ..
-            } => Some(value.clone()),
-            _ => None,
-        });
-        let s_word = eval_body_owner_const(
-            &db,
-            BodyOwner::Func(find_func(&db, top_mod, "s_word_in_eq_from_bytes")),
-            GenericSubst::for_owner(
-                &db,
-                (find_func(&db, top_mod, "s_word_in_eq_from_bytes")).into(),
-                Vec::new(),
-            ),
-        )
-        .into_ready()
-        .and_then(|value| match value.value(&db) {
-            SemConstValue::Scalar {
-                value: SemConstScalar::Int { value },
-                ..
-            } => Some(value.clone()),
-            _ => None,
-        });
-        let rhs_value_eq = eval_body_owner_const(
-            &db,
-            BodyOwner::Func(find_func(&db, top_mod, "rhs_value_in_eq_from_bytes")),
-            GenericSubst::for_owner(
-                &db,
-                (find_func(&db, top_mod, "rhs_value_in_eq_from_bytes")).into(),
-                Vec::new(),
-            ),
-        )
-        .into_ready()
-        .map(|value| value.value(&db).clone());
-        let s_value_eq = eval_body_owner_const(
-            &db,
-            BodyOwner::Func(find_func(&db, top_mod, "s_value_in_eq_from_bytes")),
-            GenericSubst::for_owner(
-                &db,
-                (find_func(&db, top_mod, "s_value_in_eq_from_bytes")).into(),
-                Vec::new(),
-            ),
-        )
-        .into_ready()
-        .map(|value| value.value(&db).clone());
+        let rhs_word = eval_func(&db, find_func(&db, top_mod, "rhs_word_in_eq_from_bytes"))
+            .into_ready()
+            .and_then(|value| match value.value(&db) {
+                SemConstValue::Scalar {
+                    value: SemConstScalar::Int { value },
+                    ..
+                } => Some(value.clone()),
+                _ => None,
+            });
+        let s_word = eval_func(&db, find_func(&db, top_mod, "s_word_in_eq_from_bytes"))
+            .into_ready()
+            .and_then(|value| match value.value(&db) {
+                SemConstValue::Scalar {
+                    value: SemConstScalar::Int { value },
+                    ..
+                } => Some(value.clone()),
+                _ => None,
+            });
+        let rhs_value_eq = eval_func(&db, find_func(&db, top_mod, "rhs_value_in_eq_from_bytes"))
+            .into_ready()
+            .map(|value| value.value(&db).clone());
+        let s_value_eq = eval_func(&db, find_func(&db, top_mod, "s_value_in_eq_from_bytes"))
+            .into_ready()
+            .map(|value| value.value(&db).clone());
         panic!(
             "unexpected equality results: eq_from_bytes_matches_literal={eq_from_bytes} sem_const_eq(lit4)={sem_eq} sem_const_eq(lit8)={sem_eq_lit8}\nfrom_bytes_value={from_dbg}\nliteral_value_4={lit_dbg}\nliteral_value_8={:?}\ns_word_in_eq_from_bytes={s_word:?}\nrhs_word_in_eq_from_bytes={rhs_word:?}\ns_value_in_eq_from_bytes={s_value_eq:?}\nrhs_value_in_eq_from_bytes={rhs_value_eq:?}",
             literal_8_const.value(&db),
         );
     }
 
-    let high_roundtrip = eval_body_owner_const(
-        &db,
-        BodyOwner::Func(find_func(&db, top_mod, "high_word_string_roundtrip")),
-        GenericSubst::for_owner(
-            &db,
-            (find_func(&db, top_mod, "high_word_string_roundtrip")).into(),
-            Vec::new(),
-        ),
-    )
-    .into_ready()
-    .expect("expected const evaluation success");
+    let high_roundtrip = eval_func(&db, find_func(&db, top_mod, "high_word_string_roundtrip"))
+        .into_ready()
+        .expect("expected const evaluation success");
     match high_roundtrip.value(&db) {
         SemConstValue::Scalar {
             value: SemConstScalar::Int { value },
@@ -533,17 +467,9 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
     let high_bytes = eval_bytes(&db, find_func(&db, top_mod, "high_word_string_as_bytes"));
     assert_eq!(high_bytes, vec![67, 79, 79, 76]);
 
-    let high_word_const = eval_body_owner_const(
-        &db,
-        BodyOwner::Func(find_func(&db, top_mod, "high_word_string_value")),
-        GenericSubst::for_owner(
-            &db,
-            (find_func(&db, top_mod, "high_word_string_value")).into(),
-            Vec::new(),
-        ),
-    )
-    .into_ready()
-    .expect("expected const evaluation success");
+    let high_word_const = eval_func(&db, find_func(&db, top_mod, "high_word_string_value"))
+        .into_ready()
+        .expect("expected const evaluation success");
     assert!(
         fe_hir::analysis::semantic::sem_const_eq(&db, high_word_const, literal_4_const),
         "CTFE string equality should ignore hidden high bytes outside String<N> capacity"
@@ -663,7 +589,7 @@ const fn invalid_const() -> usize {
     let result = eval_body_owner_const_with_args(
         &db,
         BodyOwner::Func(func),
-        GenericSubst::for_owner(&db, (func).into(), Vec::new()),
+        GenericSubst::for_owner(&db, func.into(), Vec::new()),
         Vec::new(),
     );
 
@@ -710,58 +636,10 @@ const fn invalid_call_like_expr() -> u256 {
     let result = eval_body_owner_const_with_args(
         &db,
         BodyOwner::Func(func),
-        GenericSubst::for_owner(&db, (func).into(), Vec::new()),
+        GenericSubst::for_owner(&db, func.into(), Vec::new()),
         Vec::new(),
     );
 
-    assert!(
-        matches!(
-            result,
-            EvalOutcome::Failed(EvalFailure::Ctfe(CtfeError::InvalidBody { .. }))
-        ),
-        "expected invalid body CTFE error, got {result:?}"
-    );
-}
-
-#[test]
-fn parser_recovered_default_without_type_diags_is_rejected_before_ctfe_lowering() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "semantic_ctfe.fe".into(),
-        include_str!(
-            "../../fe/tests/fixtures/crash_regressions/generic_const_default_malformed_arithmetic.fe"
-        ),
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let func = top_mod
-        .all_funcs(&db)
-        .iter()
-        .find(|func| matches!(func.name(&db), Partial::Present(name) if name.data(&db) == "malformed"))
-        .copied()
-        .expect("missing function with malformed default");
-    let body = GenericParamOwner::Func(func)
-        .params(&db)
-        .find_map(|view| match view.param {
-            GenericParam::Const(param) => match param.default {
-                Some(ConstGenericArgValue::Expr(Partial::Present(body))) => Some(body),
-                _ => None,
-            },
-            _ => None,
-        })
-        .expect("missing recovered default body");
-    let expected = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
-    let (diags, _) = check_anon_const_body(&db, body, expected);
-    assert!(
-        diags.is_empty(),
-        "expected no type-check diagnostics: {diags:?}"
-    );
-
-    let result = eval_body_owner_const_with_args(
-        &db,
-        BodyOwner::AnonConstBody { body, expected },
-        GenericSubst::none(&db),
-        Vec::new(),
-    );
     assert!(
         matches!(
             result,
@@ -1496,10 +1374,11 @@ fn check_length() {
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
     for (name, expected) in [("single", 7), ("first", 7), ("second", 3)] {
+        let func = find_func(&db, top_mod, name);
         let value = eval_body_owner_const(
             &db,
-            BodyOwner::Func(find_func(&db, top_mod, name)),
-            GenericSubst::for_owner(&db, (find_func(&db, top_mod, name)).into(), Vec::new()),
+            BodyOwner::Func(func),
+            GenericSubst::for_owner(&db, func.into(), Vec::new()),
         )
         .into_ready()
         .expect("selected associated constant should evaluate");
@@ -1543,10 +1422,11 @@ const fn inherent() -> u8 { Marker<3>::OTHER.value }
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
     for (name, expected) in [("first", 7), ("second", 7), ("inherent", 9)] {
+        let func = find_func(&db, top_mod, name);
         let value = eval_body_owner_const(
             &db,
-            BodyOwner::Func(find_func(&db, top_mod, name)),
-            GenericSubst::for_owner(&db, (find_func(&db, top_mod, name)).into(), Vec::new()),
+            BodyOwner::Func(func),
+            GenericSubst::for_owner(&db, func.into(), Vec::new()),
         )
         .into_ready()
         .expect("generic const record should evaluate");
