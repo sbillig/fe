@@ -232,6 +232,10 @@ impl<'db> RuntimeTupleFieldEmitter<'db> for SyntheticBodyBuilder<'db> {
 }
 
 impl<'db> RuntimeValueArgSelectionCx<'db> for SyntheticBodyBuilder<'db> {
+    fn db(&self) -> &'db dyn MirDb {
+        self.db
+    }
+
     fn runtime_value_class(&self, value: RLocalId) -> Option<RuntimeClass<'db>> {
         self.locals
             .get(value.index())?
@@ -414,7 +418,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             let tail_ptr = self.push_builtin_value(
                 decode_bb,
                 ptr_ty,
-                RuntimeClass::raw_addr(AddressSpaceKind::Memory, byte_class()),
+                RuntimeClass::raw_addr(self.db, AddressSpaceKind::Memory, byte_class()),
                 RuntimeBuiltin::Malloc { size: tail_len },
             );
             self.push_side_effect_builtin(
@@ -675,7 +679,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             if !binding.init_immutable {
                 continue;
             }
-            let Some(pointee_class) = binding.class.deref_target() else {
+            let Some(pointee_class) = binding.class.deref_target(self.db) else {
                 continue;
             };
 
@@ -705,7 +709,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             let slot_bytes = self.push_binary_word(bb, ArithBinOp::Mul, slot_words, thirty_two);
             let dst_addr = self.push_binary_word(bb, ArithBinOp::Add, buffer_ptr, slot_bytes);
             let dst_raw_class =
-                RuntimeClass::raw_addr(AddressSpaceKind::Memory, pointee_class.clone());
+                RuntimeClass::raw_addr(self.db, AddressSpaceKind::Memory, pointee_class.clone());
             let dst_raw_addr = self.push_local(
                 TyId::u256(self.db),
                 RuntimeCarrier::Value(dst_raw_class),
@@ -1017,7 +1021,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             tuple_ty,
             field_indices,
             |emitter, field_ty| {
-                top_level_class_for_ty_in_env(emitter.db(), env, field_ty, AddressSpaceKind::Memory)
+                top_level_class_for_ty_in_env(emitter.db, env, field_ty, AddressSpaceKind::Memory)
                     .unwrap_or_else(memory_fallback_class)
             },
         )
@@ -1339,14 +1343,17 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 AddressSpaceKind::Memory,
                 false,
             ),
-            PlaceRoot::Ptr { space, class, .. } => {
-                (RuntimeClass::raw_addr(*space, class.clone()), *space, true)
-            }
+            PlaceRoot::Ptr { space, class, .. } => (
+                RuntimeClass::raw_addr(self.db, *space, class.clone()),
+                *space,
+                true,
+            ),
             PlaceRoot::Provider(_) => {
                 unreachable!("synthetic runtime locals do not use provider roots")
             }
         };
         Some(crate::runtime::place::ref_class_for_place_result(
+            self.db,
             &root_class,
             &value_class,
             root_class.address_space().unwrap_or(root_space),
@@ -1398,7 +1405,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let raw_ptr = self.push_builtin_value(
             bb,
             ptr_ty,
-            RuntimeClass::raw_addr(AddressSpaceKind::Memory, byte_class()),
+            RuntimeClass::raw_addr(self.db, AddressSpaceKind::Memory, byte_class()),
             RuntimeBuiltin::Malloc { size },
         );
         let word_ptr = self.push_local(
@@ -1544,6 +1551,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             },
         );
         let raw_class = RuntimeClass::raw_addr(
+            self.db,
             AddressSpaceKind::Memory,
             RuntimeClass::AggregateValue { layout },
         );

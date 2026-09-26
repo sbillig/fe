@@ -6,6 +6,7 @@ pub mod lower;
 pub(crate) mod package;
 pub mod place;
 pub mod pretty;
+pub mod relation;
 pub(crate) mod root_effects;
 pub mod stable_key;
 pub(crate) mod synthetic;

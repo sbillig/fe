@@ -447,16 +447,12 @@ fn serialize_const_node_with_size<'db>(
         RuntimeClass::AggregateValue { layout } => {
             serialize_const_node_to_layout_bytes(db, *layout, node, target)
         }
-        RuntimeClass::RawAddr {
-            pointee: Some(pointee),
-            ..
-        } if matches!(pointee.as_ref(), RuntimeClass::AggregateValue { .. }) => {
-            let RuntimeClass::AggregateValue { layout } = pointee.as_ref() else {
-                unreachable!()
-            };
-            serialize_const_node_to_layout_bytes(db, *layout, node, target)
-        }
-        RuntimeClass::RawAddr { .. } => {
+        RuntimeClass::RawAddr { pointee, .. } => {
+            if let Some(RuntimeClass::AggregateValue { layout }) =
+                pointee.map(|pointee| pointee.target(db))
+            {
+                return serialize_const_node_to_layout_bytes(db, layout, node, target);
+            }
             let ConstNode::Scalar(scalar) = node else {
                 return Err(LowerError::Unsupported(
                     "raw address const node expected scalar payload".to_string(),

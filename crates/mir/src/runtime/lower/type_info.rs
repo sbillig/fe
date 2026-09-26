@@ -22,8 +22,8 @@ use salsa::Update;
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, LowerError, RefKind, RefView, RuntimeClass, ScalarClass, ScalarRepr,
-        ScalarRole,
+        AddressSpaceKind, LowerError, RawPointeeId, RawPointeeKey, RefKind, RefView, RuntimeClass,
+        ScalarClass, ScalarRepr, ScalarRole,
     },
 };
 
@@ -593,16 +593,60 @@ pub(crate) fn effect_handle_transport_class_for_ty_in_env<'db>(
     ))
 }
 
+/// The raw pointee for a source target type, created without classifying it.
+///
+/// The key is the target normalized in the requesting environment and nothing
+/// else, so the same closed type yields the same handle in every caller.
+/// Scalar targets are classified directly; everything else stays deferred
+/// until dereferenced, which is what lets `Node { next: *Node }` name its own
+/// target while `layout(Node)` is still being built.
 fn raw_addr_pointee_for_ty_in_env<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
     ty: TyId<'db>,
-) -> Option<Box<RuntimeClass<'db>>> {
+) -> Option<RawPointeeId<'db>> {
     let ty = runtime_repr_ty_in_env(db, env, ty);
     if ty.has_param(db) || ty.contains_assoc_ty_of_param(db) {
         return None;
     }
-    Some(Box::new(stored_class_for_ty_in_env(db, env, ty)))
+    if let Some(scalar) = scalar_class_from_repr_ty(db, ty) {
+        return Some(RawPointeeId::exact(db, RuntimeClass::Scalar(scalar)));
+    }
+    Some(RawPointeeId::new(db, RawPointeeKey::Stored(ty)))
+}
+
+/// Classifies a stored raw pointee in a context derived from its type alone:
+/// the first ADT declaration scope in the type's syntax (head before
+/// arguments), or no scope for ADT-free types, with empty assumptions.
+///
+/// The key is already normalized in the requesting environment, so resolution
+/// only normalizes instantiated field declarations. Coherence admits an impl
+/// for a closed self type only in the self type's or the trait's ingot, and
+/// impl lookup searches both whatever the origin, so the requester's scope and
+/// bounds do not select a different impl.
+#[salsa::tracked]
+pub(crate) fn resolve_stored_raw_pointee<'db>(
+    db: &'db dyn MirDb,
+    pointee: RawPointeeId<'db>,
+) -> RuntimeClass<'db> {
+    let RawPointeeKey::Stored(ty) = pointee.key(db) else {
+        panic!("exact raw pointees resolve without classification: {pointee:?}");
+    };
+    let env = RuntimeTypeEnv::new(
+        canonical_pointee_scope(db, *ty),
+        PredicateListId::empty_list(db),
+    );
+    stored_class_for_ty_in_env(db, env, *ty)
+}
+
+fn canonical_pointee_scope<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<ScopeId<'db>> {
+    let (base, args) = ty.decompose_ty_app(db);
+    if let TyData::TyBase(TyBase::Adt(_)) = base.data(db) {
+        return base.as_scope(db);
+    }
+    args.iter()
+        .filter(|arg| !matches!(arg.data(db), TyData::ConstTy(_)))
+        .find_map(|arg| canonical_pointee_scope(db, *arg))
 }
 
 fn raw_addr_class_for_ty_in_env<'db>(
@@ -735,11 +779,23 @@ fn runtime_transport_sensitive_aggregate_cycle_recover<'db>(
 
 #[cfg(test)]
 mod tests {
+    use common::InputDb;
     use driver::DriverDataBase;
+    use hir::{
+        analysis::semantic::{get_or_build_semantic_instance, root_semantic_instance_key},
+        analysis::ty::ty_check::BodyOwner,
+        hir_def::TopLevelMod,
+    };
+    use url::Url;
 
-    use crate::runtime::{BorrowAccess, LayoutId, LayoutKey, RuntimeBoundarySpec, StructLayout};
+    use crate::runtime::{
+        BorrowAccess, Layout, LayoutId, LayoutKey, RuntimeBoundarySpec, StructLayout,
+        relation::{raw_pointee_matches_class, raw_pointees_equivalent},
+    };
 
-    use super::super::boundary::boundary_spec_for_ty_in_env;
+    use super::super::boundary::{
+        BoundaryMatcher, boundary_spec_for_ty_in_env, default_borrow_transport_set,
+    };
     use super::*;
 
     #[test]
@@ -853,7 +909,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_pointer_classes_retain_complete_nested_pointees() {
+    fn raw_pointer_targets_resolve_one_level() {
         let db = DriverDataBase::default();
         let assumptions = PredicateListId::new(&db, Vec::new());
         let env = RuntimeTypeEnv::new(None, assumptions);
@@ -863,7 +919,7 @@ mod tests {
             top_level_class_for_ty_in_env(&db, env, word_ptr_ty, AddressSpaceKind::Memory)
                 .expect("word pointer class");
 
-        assert_eq!(word_ptr.deref_target(), Some(word));
+        assert_eq!(word_ptr.deref_target(&db), Some(word));
 
         let word_ptr_ptr = top_level_class_for_ty_in_env(
             &db,
@@ -873,7 +929,7 @@ mod tests {
         )
         .expect("nested word pointer class");
 
-        assert_eq!(word_ptr_ptr.deref_target(), Some(word_ptr));
+        assert_eq!(word_ptr_ptr.deref_target(&db), Some(word_ptr));
     }
 
     #[test]
@@ -886,15 +942,306 @@ mod tests {
             }),
         );
         let aggregate = RuntimeClass::AggregateValue { layout };
-        let pointer = RuntimeClass::raw_addr(AddressSpaceKind::Memory, aggregate);
+        let pointer = RuntimeClass::raw_addr(&db, AddressSpaceKind::Memory, aggregate);
 
         assert_eq!(pointer.aggregate_layout(), None);
         assert_eq!(
             pointer
-                .deref_target()
+                .deref_target(&db)
                 .and_then(|pointee| pointee.aggregate_layout()),
             Some(layout),
         );
+    }
+
+    const RECURSIVE_SOURCE: &str = r#"
+struct Node {
+    value: u256,
+    next: *Node,
+}
+
+struct A {
+    value: u256,
+    next: *A,
+}
+
+struct B {
+    value: u256,
+    next: *B,
+}
+
+struct Odd {
+    value: u256,
+    next: *Even,
+}
+
+struct Even {
+    value: u8,
+    next: *Odd,
+}
+
+struct RefHolder {
+    target: *ref Node,
+}
+
+trait Word {
+    type Repr
+}
+
+struct Narrow {}
+
+impl Word for Narrow {
+    type Repr = u8
+}
+
+struct Projected<T: Word> {
+    value: T::Repr,
+    next: *Projected<T>,
+}
+
+struct Buffer<const N: usize> {
+    data: [u8; N],
+    next: *Buffer<N>,
+}
+
+fn first(_ p: *Node, _ bytes: *u8, _ pair: (u8, Node)) {}
+fn normalized(_ projected: *Projected<Narrow>, _ buffer: *Buffer<3>) {}
+fn second(_ p: *Node, _ bytes: *u8, _ words: [u8; 2]) {}
+fn shapes(_ a: *A, _ b: *B, _ odd: *Odd, _ holder: RefHolder) {}
+"#;
+
+    fn with_source<T>(f: impl for<'db> FnOnce(&'db DriverDataBase, TopLevelMod<'db>) -> T) -> T {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///recursive_raw_pointees.fe").unwrap();
+        db.workspace()
+            .touch(&mut db, url.clone(), Some(RECURSIVE_SOURCE.to_string()));
+        let file = db
+            .workspace()
+            .get(&db, &url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        f(&db, top_mod)
+    }
+
+    /// A parameter's type together with its function's own runtime type env.
+    fn param<'db>(
+        db: &'db DriverDataBase,
+        top_mod: TopLevelMod<'db>,
+        func: &str,
+        idx: usize,
+    ) -> (TyId<'db>, RuntimeTypeEnv<'db>) {
+        let func = top_mod
+            .all_funcs(db)
+            .iter()
+            .copied()
+            .find(|candidate| {
+                candidate
+                    .name(db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(db) == func)
+            })
+            .unwrap_or_else(|| panic!("missing function `{func}`"));
+        let key = root_semantic_instance_key(db, BodyOwner::Func(func)).expect("root key");
+        let semantic = get_or_build_semantic_instance(db, key);
+        let typed_body = semantic.key(db).typed_body(db);
+        let binding = typed_body.param_binding(idx).expect("parameter binding");
+        let env = RuntimeTypeEnv::for_semantic(db, semantic);
+        (
+            runtime_repr_ty_in_env(db, env, typed_body.binding_ty(db, binding)),
+            env,
+        )
+    }
+
+    fn raw_pointee<'db>(
+        db: &'db DriverDataBase,
+        top_mod: TopLevelMod<'db>,
+        func: &str,
+        idx: usize,
+    ) -> RawPointeeId<'db> {
+        let (ty, env) = param(db, top_mod, func, idx);
+        let class = top_level_class_for_ty_in_env(db, env, ty, AddressSpaceKind::Memory)
+            .expect("pointer parameter class");
+        class.raw_pointee().expect("known raw pointee")
+    }
+
+    fn struct_fields<'db>(
+        db: &'db DriverDataBase,
+        class: &RuntimeClass<'db>,
+    ) -> Vec<RuntimeClass<'db>> {
+        let Some(Layout::Struct(layout)) = class.aggregate_layout().map(|layout| layout.data(db))
+        else {
+            panic!("expected struct class, got {class:?}");
+        };
+        layout.fields.to_vec()
+    }
+
+    #[test]
+    fn source_pointees_do_not_depend_on_the_requesting_function() {
+        with_source(|db, top_mod| {
+            let first = raw_pointee(db, top_mod, "first", 0);
+            let second = raw_pointee(db, top_mod, "second", 0);
+            assert_eq!(first, second, "same closed type from different functions");
+            assert!(matches!(first.key(db), RawPointeeKey::Stored(_)));
+
+            let first_bytes = raw_pointee(db, top_mod, "first", 1);
+            assert_eq!(first_bytes, raw_pointee(db, top_mod, "second", 1));
+            let byte = RuntimeClass::Scalar(ScalarClass {
+                repr: ScalarRepr::Int {
+                    bits: 8,
+                    signed: false,
+                },
+                role: ScalarRole::Plain,
+            });
+            assert_eq!(
+                first_bytes,
+                RawPointeeId::exact(db, byte),
+                "scalar source targets share the exact address-of target"
+            );
+        });
+    }
+
+    #[test]
+    fn recursive_pointees_are_named_before_their_layout_exists() {
+        with_source(|db, top_mod| {
+            let (ptr_ty, env) = param(db, top_mod, "first", 0);
+            let node_ty = ptr_ty.as_ptr(db).expect("pointer parameter");
+            let node = stored_class_for_ty_in_env(db, env, node_ty);
+            let fields = struct_fields(db, &node);
+            let RuntimeClass::RawAddr {
+                space: AddressSpaceKind::Memory,
+                pointee: Some(next),
+            } = &fields[1]
+            else {
+                panic!("expected a raw next field, got {:?}", fields[1]);
+            };
+            assert_eq!(*next, raw_pointee(db, top_mod, "first", 0));
+            assert_eq!(
+                next.target(db),
+                node,
+                "canonical resolution agrees with the caller"
+            );
+        });
+    }
+
+    #[test]
+    fn canonical_resolution_matches_caller_classification() {
+        with_source(|db, top_mod| {
+            for idx in 0..2 {
+                let (ptr_ty, env) = param(db, top_mod, "normalized", idx);
+                let target_ty = ptr_ty.as_ptr(db).expect("pointer parameter");
+                let caller = stored_class_for_ty_in_env(db, env, target_ty);
+                let pointee = raw_pointee(db, top_mod, "normalized", idx);
+                assert_eq!(pointee.target(db), caller, "parameter {idx}");
+                let fields = struct_fields(db, &caller);
+                assert_eq!(fields[1].raw_pointee(), Some(pointee), "parameter {idx}");
+            }
+            let (projected_ty, env) = param(db, top_mod, "normalized", 0);
+            let projected = stored_class_for_ty_in_env(db, env, projected_ty.as_ptr(db).unwrap());
+            assert!(matches!(
+                struct_fields(db, &projected)[0],
+                RuntimeClass::Scalar(ScalarClass {
+                    repr: ScalarRepr::Int { bits: 8, .. },
+                    ..
+                })
+            ));
+            let (buffer_ty, env) = param(db, top_mod, "normalized", 1);
+            let buffer = stored_class_for_ty_in_env(db, env, buffer_ty.as_ptr(db).unwrap());
+            assert_eq!(struct_fields(db, &buffer)[0].array_len(db), Some(3));
+        });
+    }
+
+    #[test]
+    fn referent_pointees_stay_deferred() {
+        with_source(|db, top_mod| {
+            let (holder_ty, env) = param(db, top_mod, "shapes", 3);
+            let holder = stored_class_for_ty_in_env(db, env, holder_ty);
+            let field = struct_fields(db, &holder).remove(0);
+            let pointee = field.raw_pointee().expect("known raw pointee");
+            assert!(matches!(pointee.key(db), RawPointeeKey::Stored(_)));
+            assert!(matches!(
+                pointee.target(db),
+                RuntimeClass::Ref {
+                    kind: RefKind::Native,
+                    ..
+                }
+            ));
+        });
+    }
+
+    #[test]
+    fn canonical_scope_is_the_first_adt_in_type_syntax() {
+        with_source(|db, top_mod| {
+            let (pair_ty, _) = param(db, top_mod, "first", 2);
+            let (ptr_ty, _) = param(db, top_mod, "first", 0);
+            let node_ty = ptr_ty.as_ptr(db).unwrap();
+            assert_eq!(canonical_pointee_scope(db, pair_ty), node_ty.as_scope(db));
+            let (words_ty, _) = param(db, top_mod, "second", 2);
+            assert_eq!(canonical_pointee_scope(db, words_ty), None);
+        });
+    }
+
+    #[test]
+    fn source_and_exact_spellings_of_one_target_are_equivalent() {
+        with_source(|db, top_mod| {
+            let stored = raw_pointee(db, top_mod, "first", 0);
+            let exact = RawPointeeId::exact(db, stored.target(db));
+            assert_ne!(stored, exact);
+            assert!(raw_pointees_equivalent(db, stored, exact));
+            assert!(raw_pointee_matches_class(db, stored, &exact.target(db)));
+        });
+    }
+
+    #[test]
+    fn isomorphic_recursive_pointees_are_equivalent_by_structure() {
+        with_source(|db, top_mod| {
+            let a = raw_pointee(db, top_mod, "shapes", 0);
+            let b = raw_pointee(db, top_mod, "shapes", 1);
+            let odd = raw_pointee(db, top_mod, "shapes", 2);
+            assert_ne!(a.target(db), b.target(db));
+            assert!(raw_pointees_equivalent(db, a, b));
+            assert!(raw_pointees_equivalent(db, b, a));
+            // The first edge cycles back consistently, but the second node's
+            // scalar differs.
+            assert!(!raw_pointees_equivalent(db, a, odd));
+            assert!(!raw_pointees_equivalent(db, odd, a));
+            // No provisional result leaked from the failed query.
+            assert!(raw_pointees_equivalent(db, a, b));
+        });
+    }
+
+    #[test]
+    fn borrow_boundaries_select_the_exact_boundary_target() {
+        with_source(|db, top_mod| {
+            let stored = raw_pointee(db, top_mod, "first", 0);
+            let node = stored.target(db);
+            let boundary = RuntimeBoundarySpec::BorrowLike {
+                pointee: node.clone(),
+                access: BorrowAccess::ReadWrite,
+                allow: default_borrow_transport_set(
+                    BorrowAccess::ReadWrite,
+                    AddressSpaceKind::Memory,
+                ),
+            };
+            let source_spelled = RuntimeClass::RawAddr {
+                space: AddressSpaceKind::Memory,
+                pointee: Some(stored),
+            };
+            let exact_spelled = RuntimeClass::raw_addr(db, AddressSpaceKind::Memory, node.clone());
+            let selected = BoundaryMatcher::selected_class(db, &source_spelled, &boundary);
+            assert_eq!(selected.as_ref(), Some(&exact_spelled));
+            assert_eq!(
+                BoundaryMatcher::selected_class(db, &exact_spelled, &boundary),
+                Some(exact_spelled.clone())
+            );
+            let storage = RuntimeClass::RawAddr {
+                space: AddressSpaceKind::Storage,
+                pointee: Some(stored),
+            };
+            assert_eq!(
+                BoundaryMatcher::selected_class(db, &storage, &boundary),
+                Some(RuntimeClass::raw_addr(db, AddressSpaceKind::Storage, node)),
+                "the accepted address space is kept"
+            );
+        });
     }
 
     fn assert_memory_provider_ref(class: &RuntimeClass<'_>) {

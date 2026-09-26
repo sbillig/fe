@@ -213,7 +213,7 @@ fn entry_effect_arg_plan_for_binding<'db>(
                 return Ok(None);
             };
             let materialization =
-                target_root_provider_materialization(&plan.class).ok_or_else(|| {
+                target_root_provider_materialization(db, &plan.class).ok_or_else(|| {
                     LowerError::Unsupported(format!(
                         "{} cannot synthesize effect binding `{}` because root provider class `{:?}` has no supported entry materialization",
                         context.label(db),
@@ -343,15 +343,16 @@ fn contract_field_binding<'db>(
 }
 
 pub(crate) fn target_root_provider_materialization<'db>(
+    db: &'db dyn MirDb,
     class: &RuntimeClass<'db>,
 ) -> Option<TargetRootProviderMaterialization<'db>> {
     match class {
         RuntimeClass::RawAddr {
             space: AddressSpaceKind::Memory,
             pointee: Some(pointee),
-        } => match pointee.as_ref() {
+        } => match pointee.target(db) {
             RuntimeClass::AggregateValue { layout } => {
-                Some(TargetRootProviderMaterialization::MemoryRawAddr { layout: *layout })
+                Some(TargetRootProviderMaterialization::MemoryRawAddr { layout })
             }
             RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
                 None

@@ -9,10 +9,11 @@ use crate::{
     instance::RuntimeInstance,
     runtime::{
         AddressSpaceKind, ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RBlockId, RExpr,
-        RLocalId, RStmt, RTerminator, RValueId, RefKind, RefView, RuntimeBody, RuntimeBuiltin,
-        RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeFunction, RuntimeLinkage,
-        RuntimeLocalRoot, RuntimeObject, RuntimePackage, RuntimePlace, RuntimeSection,
-        RuntimeSectionName, RuntimeSectionRef, ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        RLocalId, RStmt, RTerminator, RValueId, RawPointeeId, RawPointeeKey, RefKind, RefView,
+        RuntimeBody, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeCodeRegion,
+        RuntimeFunction, RuntimeLinkage, RuntimeLocalRoot, RuntimeObject, RuntimePackage,
+        RuntimePlace, RuntimeSection, RuntimeSectionName, RuntimeSectionRef, ScalarClass,
+        ScalarRepr, ScalarRole, VariantId,
     },
     verify::{RuntimeVerifyFailure, RuntimeVerifySite},
 };
@@ -997,10 +998,16 @@ fn format_class<'db>(db: &'db dyn MirDb, class: &RuntimeClass<'db>) -> String {
             "raw {}{}",
             format_space(*space),
             pointee
-                .as_deref()
-                .map(|pointee| format!(" {}", format_class(db, pointee)))
+                .map(|pointee| format!(" {}", format_raw_pointee(db, pointee)))
                 .unwrap_or_default()
         ),
+    }
+}
+
+fn format_raw_pointee<'db>(db: &'db dyn MirDb, pointee: RawPointeeId<'db>) -> String {
+    match pointee.key(db) {
+        RawPointeeKey::Stored(ty) => ty.pretty_print(db).to_string(),
+        RawPointeeKey::Exact(class) => format_class(db, class),
     }
 }
 

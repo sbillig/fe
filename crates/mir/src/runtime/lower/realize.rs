@@ -3,6 +3,7 @@ use hir::analysis::{
     ty::ty_def::TyId,
 };
 
+use crate::db::MirDb;
 use crate::runtime::{
     PlaceRoot, RBlockId, RLocalId, RuntimeBoundarySpec, RuntimeClass, RuntimeParamPlan,
     RuntimePlace,
@@ -62,6 +63,8 @@ impl<'db> SelectedRuntimeValueArg<'db> {
 }
 
 pub(crate) trait RuntimeValueArgSelectionCx<'db> {
+    fn db(&self) -> &'db dyn MirDb;
+
     fn runtime_value_class(&self, value: RLocalId) -> Option<RuntimeClass<'db>>;
 
     fn runtime_value_source(&self, value: RLocalId) -> Option<RuntimeValueSource<'db>>;
@@ -134,7 +137,7 @@ where
         if let Some(address) = self.cx.promote_runtime_value_address(source, boundary) {
             value_source.address = Some(address);
         }
-        RuntimeValueUsePlanner::select(value_source, boundary).unwrap_or_else(|| {
+        RuntimeValueUsePlanner::select(self.cx.db(), value_source, boundary).unwrap_or_else(|| {
             let source = self.source_class(source);
             panic!(
                 "runtime boundary has no realizable materialization: source={source:?} boundary={boundary:?}"
@@ -155,16 +158,21 @@ where
         if let Some(address) = self.cx.promote_runtime_value_address(source, borrow) {
             value_source.address = Some(address);
         }
-        if BoundaryMatcher::class_satisfies_boundary(&source_class, borrow) {
-            return RuntimeValueUsePlan::UseValue;
+        if let Some(selected) = BoundaryMatcher::selected_class(self.cx.db(), &source_class, borrow)
+        {
+            return if selected == source_class {
+                RuntimeValueUsePlan::UseValue
+            } else {
+                RuntimeValueUsePlan::CoerceValue(selected)
+            };
         }
-        if let Some(address) = value_source
-            .address
-            .filter(|address| BoundaryMatcher::class_satisfies_boundary(&address.class, borrow))
+        if let Some(address) = value_source.address
+            && let Some(selected) =
+                BoundaryMatcher::selected_class(self.cx.db(), &address.class, borrow)
         {
             return RuntimeValueUsePlan::AddrOfRuntimePlace {
                 place: address.place,
-                class: address.class,
+                class: selected,
             };
         }
         if &source_class == value {
@@ -266,11 +274,12 @@ fn emit_runtime_value_materialization<'db>(
     materialization: RuntimeValueMaterialization<'db>,
     semantic_ty: TyId<'db>,
 ) -> RLocalId {
+    let class = materialization.class();
     match materialization {
-        RuntimeValueMaterialization::ObjectRef(layout) => {
-            emitter.coerce_value_for_use(bb, src, &RuntimeClass::object_ref(layout), semantic_ty)
+        RuntimeValueMaterialization::ObjectRef(_) => {
+            emitter.coerce_value_for_use(bb, src, &class, semantic_ty)
         }
-        RuntimeValueMaterialization::RawAddrSlot(pointee) => {
+        RuntimeValueMaterialization::RawAddrSlot { pointee, .. } => {
             let source = emitter
                 .value_class_for_use(src)
                 .unwrap_or_else(|| panic!("cannot materialize erased runtime value {src:?}"));
@@ -287,7 +296,7 @@ fn emit_runtime_value_materialization<'db>(
                     root: PlaceRoot::Slot(slot),
                     path: Box::default(),
                 },
-                RuntimeValueMaterialization::RawAddrSlot(pointee).class(),
+                class,
                 semantic_ty,
             )
         }
@@ -453,9 +462,10 @@ mod tests {
     use driver::DriverDataBase;
     use hir::analysis::ty::ty_def::TyId;
 
+    use crate::db::MirDb;
     use crate::runtime::{
-        AddressSpaceKind, RBlockId, RLocalId, RuntimeClass, RuntimePlace, ScalarClass, ScalarRepr,
-        ScalarRole,
+        AddressSpaceKind, RBlockId, RLocalId, RawPointeeId, RuntimeClass, RuntimePlace,
+        ScalarClass, ScalarRepr, ScalarRole,
     };
 
     use super::super::boundary::{RuntimeValueMaterialization, RuntimeValueUsePlan};
@@ -481,8 +491,8 @@ mod tests {
         })
     }
 
-    fn raw_addr_class<'db>(space: AddressSpaceKind) -> RuntimeClass<'db> {
-        RuntimeClass::raw_addr(space, word_class())
+    fn raw_addr_class<'db>(db: &'db dyn MirDb, space: AddressSpaceKind) -> RuntimeClass<'db> {
+        RuntimeClass::raw_addr(db, space, word_class())
     }
 
     #[derive(Debug, PartialEq, Eq)]
@@ -588,16 +598,17 @@ mod tests {
             &mut emitter,
             RBlockId::new(0),
             RLocalId::new(0),
-            RuntimeValueUsePlan::MaterializeValue(RuntimeValueMaterialization::RawAddrSlot(
-                word_class(),
-            )),
+            RuntimeValueUsePlan::MaterializeValue(RuntimeValueMaterialization::RawAddrSlot {
+                pointee: word_class(),
+                target: RawPointeeId::exact(&db, word_class()),
+            }),
             semantic_ty,
         );
 
         assert_eq!(result, RLocalId::new(3));
         assert_eq!(
             emitter.classes[result.index()],
-            Some(raw_addr_class(AddressSpaceKind::Memory))
+            Some(raw_addr_class(&db, AddressSpaceKind::Memory))
         );
         assert_eq!(emitter.roots[RLocalId::new(2).index()], Some(word_class()));
         assert_eq!(
@@ -614,7 +625,7 @@ mod tests {
                 },
                 FakeEmitOp::AddrOf {
                     dst: RLocalId::new(3),
-                    class: raw_addr_class(AddressSpaceKind::Memory),
+                    class: raw_addr_class(&db, AddressSpaceKind::Memory),
                 },
             ]
         );

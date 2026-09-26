@@ -42,8 +42,43 @@ pub enum RuntimeClass<'db> {
     },
     RawAddr {
         space: AddressSpaceKind,
-        pointee: Option<Box<RuntimeClass<'db>>>,
+        pointee: Option<RawPointeeId<'db>>,
     },
+}
+
+/// The deferred or exact target of a raw address.
+///
+/// Identity is the immutable key: comparing or hashing a pointee never
+/// resolves its target. `Stored` names a closed, normalized source type whose
+/// stored class is classified on demand, which lets a recursive type point at
+/// itself before its own layout is complete. `Exact` carries an already-derived
+/// class, including specializations that no source type reconstructs.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RawPointeeKey<'db> {
+    Stored(TyId<'db>),
+    Exact(RuntimeClass<'db>),
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct RawPointeeId<'db> {
+    #[return_ref]
+    pub key: RawPointeeKey<'db>,
+}
+
+impl<'db> RawPointeeId<'db> {
+    pub fn exact(db: &'db dyn MirDb, class: RuntimeClass<'db>) -> Self {
+        Self::new(db, RawPointeeKey::Exact(class))
+    }
+
+    /// The class this pointee denotes. Stored targets are classified one
+    /// level deep; their own raw fields remain deferred.
+    pub fn target(self, db: &'db dyn MirDb) -> RuntimeClass<'db> {
+        match self.key(db) {
+            RawPointeeKey::Exact(class) => class.clone(),
+            RawPointeeKey::Stored(_) => crate::runtime::lower::resolve_stored_raw_pointee(db, self),
+        }
+    }
 }
 
 impl<'db> RuntimeClass<'db> {
@@ -112,10 +147,10 @@ impl<'db> RuntimeClass<'db> {
         }
     }
 
-    pub fn raw_addr(space: AddressSpaceKind, pointee: Self) -> Self {
+    pub fn raw_addr(db: &'db dyn MirDb, space: AddressSpaceKind, pointee: Self) -> Self {
         Self::RawAddr {
             space,
-            pointee: Some(Box::new(pointee)),
+            pointee: Some(RawPointeeId::exact(db, pointee)),
         }
     }
 
@@ -140,21 +175,33 @@ impl<'db> RuntimeClass<'db> {
             .map(|layout| Self::AggregateValue { layout })
     }
 
-    pub fn pointee(&self) -> Option<&RuntimeClass<'db>> {
+    pub fn ref_pointee(&self) -> Option<&RuntimeClass<'db>> {
         match self {
             RuntimeClass::Ref { pointee, .. } => Some(pointee),
-            RuntimeClass::RawAddr { pointee, .. } => pointee.as_deref(),
-            RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => None,
+            RuntimeClass::Scalar(_)
+            | RuntimeClass::AggregateValue { .. }
+            | RuntimeClass::RawAddr { .. } => None,
         }
     }
 
-    pub fn deref_target(&self) -> Option<RuntimeClass<'db>> {
+    pub fn raw_pointee(&self) -> Option<RawPointeeId<'db>> {
+        match self {
+            RuntimeClass::RawAddr { pointee, .. } => *pointee,
+            RuntimeClass::Scalar(_)
+            | RuntimeClass::AggregateValue { .. }
+            | RuntimeClass::Ref { .. } => None,
+        }
+    }
+
+    /// The class reached by dereferencing this transport, resolving a raw
+    /// target on demand. `None` for non-transports and opaque raw addresses.
+    pub fn deref_target(&self, db: &'db dyn MirDb) -> Option<RuntimeClass<'db>> {
         match self {
             RuntimeClass::Ref { pointee, .. } => Some((**pointee).clone()),
             RuntimeClass::RawAddr {
                 pointee: Some(pointee),
                 ..
-            } => Some((**pointee).clone()),
+            } => Some(pointee.target(db)),
             RuntimeClass::Scalar(_)
             | RuntimeClass::AggregateValue { .. }
             | RuntimeClass::RawAddr { pointee: None, .. } => None,

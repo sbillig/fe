@@ -167,7 +167,7 @@ pub fn resolve_runtime_place<'db>(
             PlaceElem::Deref => {
                 let carrier_class = current;
                 current = carrier_class
-                    .deref_target()
+                    .deref_target(db)
                     .ok_or_else(|| VerifyError::InvalidPlace(carrier_class.clone()))?;
                 path.push(ResolvedPlaceElem::Deref {
                     carrier_class,
@@ -192,7 +192,7 @@ pub fn resolve_runtime_place_address_class<'db>(
 ) -> Result<RuntimeClass<'db>, VerifyError<'db>> {
     let resolved = resolve_runtime_place(db, program, body, place)?;
     let (mut root_class, mut root_space, mut force_raw) =
-        runtime_place_transport_root(body, place)?;
+        runtime_place_transport_root(db, body, place)?;
     for elem in resolved.path.iter() {
         if let ResolvedPlaceElem::Deref { carrier_class, .. } = elem {
             root_class = carrier_class.clone();
@@ -201,6 +201,7 @@ pub fn resolve_runtime_place_address_class<'db>(
         }
     }
     Ok(ref_class_for_place_result(
+        db,
         &root_class,
         &resolved.result_class,
         root_space,
@@ -221,6 +222,7 @@ pub(crate) fn project_place<'db>(
 /// place whose transport root has class `root_class` and whose projected
 /// value has class `value_class`.
 pub(crate) fn ref_class_for_place_result<'db>(
+    db: &'db dyn MirDb,
     root_class: &RuntimeClass<'db>,
     value_class: &RuntimeClass<'db>,
     root_space: AddressSpaceKind,
@@ -246,12 +248,14 @@ pub(crate) fn ref_class_for_place_result<'db>(
         }
     }
     RuntimeClass::raw_addr(
+        db,
         root_class.address_space().unwrap_or(root_space),
         value_class.clone(),
     )
 }
 
 fn runtime_place_transport_root<'db>(
+    db: &'db dyn MirDb,
     body: &impl PlaceClassEnv<'db>,
     place: &crate::runtime::RuntimePlace<'db>,
 ) -> Result<(RuntimeClass<'db>, crate::runtime::AddressSpaceKind, bool), VerifyError<'db>> {
@@ -295,9 +299,11 @@ fn runtime_place_transport_root<'db>(
                 false,
             )
         }
-        PlaceRoot::Ptr { space, class, .. } => {
-            (RuntimeClass::raw_addr(*space, class.clone()), *space, true)
-        }
+        PlaceRoot::Ptr { space, class, .. } => (
+            RuntimeClass::raw_addr(db, *space, class.clone()),
+            *space,
+            true,
+        ),
     })
 }
 
@@ -651,6 +657,7 @@ mod tests {
 
     #[test]
     fn native_scalar_addresses_preserve_object_layout() {
+        let db = DriverDataBase::default();
         let scalar = RuntimeClass::Scalar(ScalarClass {
             repr: ScalarRepr::Int {
                 bits: 8,
@@ -664,12 +671,12 @@ mod tests {
             view: RefView::Whole,
         };
         assert_eq!(
-            ref_class_for_place_result(&scalar, &scalar, AddressSpaceKind::Memory, false),
+            ref_class_for_place_result(&db, &scalar, &scalar, AddressSpaceKind::Memory, false),
             object
         );
-        let pointer = RuntimeClass::raw_addr(AddressSpaceKind::Memory, scalar.clone());
+        let pointer = RuntimeClass::raw_addr(&db, AddressSpaceKind::Memory, scalar.clone());
         assert_eq!(
-            ref_class_for_place_result(&pointer, &scalar, AddressSpaceKind::Memory, true),
+            ref_class_for_place_result(&db, &pointer, &scalar, AddressSpaceKind::Memory, true),
             pointer
         );
     }

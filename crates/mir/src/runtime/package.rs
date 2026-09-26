@@ -48,12 +48,12 @@ use crate::{
     runtime::{
         AddressSpaceKind, ConstRegionId, ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm,
         DispatchDefault, EntryEffectArgPlan, EntrySemanticArgsPlan, InitArgsPlan, LayoutId,
-        LayoutKey, RefKind, RefView, ResolvedCodeRegion, RuntimeClass, RuntimeCodeRegion,
-        RuntimeCodeRegionKey, RuntimeFunction, RuntimeFunctionOwner, RuntimeInlineHint,
-        RuntimeInputPlan, RuntimeLinkage, RuntimeObject, RuntimePackage, RuntimePackagePlan,
-        RuntimeReturnPlan, RuntimeSection, RuntimeSectionName, RuntimeSectionRef,
-        RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole, TargetRootProviderBinding,
-        TargetRootProviderMaterialization,
+        LayoutKey, RawPointeeId, RawPointeeKey, RefKind, RefView, ResolvedCodeRegion, RuntimeClass,
+        RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeFunction, RuntimeFunctionOwner,
+        RuntimeInlineHint, RuntimeInputPlan, RuntimeLinkage, RuntimeObject, RuntimePackage,
+        RuntimePackagePlan, RuntimeReturnPlan, RuntimeSection, RuntimeSectionName,
+        RuntimeSectionRef, RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
+        TargetRootProviderBinding, TargetRootProviderMaterialization,
     },
     verify::verify_runtime_package,
 };
@@ -1003,7 +1003,7 @@ fn contract_recv_host_binding<'db>(
         Some(registration.provider_ty),
         AddressSpaceKind::Memory,
     );
-    let materialization = target_root_provider_materialization(&class).ok_or_else(|| {
+    let materialization = target_root_provider_materialization(db, &class).ok_or_else(|| {
         LowerError::Unsupported(format!(
             "contract `{}` recv root provider class `{:?}` has no supported entry materialization",
             contract_name(db, contract),
@@ -2269,10 +2269,20 @@ fn runtime_class_sort_key<'db>(db: &'db dyn MirDb, class: &RuntimeClass<'db>) ->
             "raw:{}:{}",
             address_space_sort_key(*space),
             pointee
-                .as_deref()
-                .map(|pointee| runtime_class_sort_key(db, pointee))
+                .map(|pointee| raw_pointee_sort_key(db, pointee))
                 .unwrap_or_default()
         ),
+    }
+}
+
+/// Names a raw target without resolving it. Exact targets keep the class
+/// rendering; stored targets name their source type. The result is a naming
+/// and ordering string, not an identity: `type_identity` renders every const
+/// hole as `_`, so distinct pointees can share a name.
+pub(crate) fn raw_pointee_sort_key<'db>(db: &'db dyn MirDb, pointee: RawPointeeId<'db>) -> String {
+    match pointee.key(db) {
+        RawPointeeKey::Stored(ty) => format!("stored({})", type_identity(db, *ty)),
+        RawPointeeKey::Exact(class) => runtime_class_sort_key(db, class),
     }
 }
 

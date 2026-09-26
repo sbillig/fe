@@ -3446,7 +3446,7 @@ impl<'db> RmirEmitter<'db> {
                 root: PlaceRoot::Ptr {
                     addr: value,
                     space: *space,
-                    class: pointee.as_ref().clone(),
+                    class: pointee.target(self.db),
                 },
                 path: Box::default(),
             }),
@@ -4384,7 +4384,7 @@ impl<'db> RmirEmitter<'db> {
                     },
                     Some(RuntimeClass::RawAddr {
                         space: *space,
-                        pointee: pointee.clone(),
+                        pointee: *pointee,
                     }),
                 )
             }
@@ -4989,6 +4989,7 @@ impl<'db> RmirEmitter<'db> {
             bb,
             provider,
             &RuntimeClass::raw_addr(
+                self.db,
                 AddressSpaceKind::Memory,
                 RuntimeClass::AggregateValue { layout },
             ),
@@ -5805,7 +5806,7 @@ impl<'db> RmirEmitter<'db> {
                 }
             }
             if idx + 1 < place.path.len()
-                && let Some(target) = current.deref_target()
+                && let Some(target) = current.deref_target(self.db)
             {
                 projected.push(PlaceElem::Deref);
                 current = target;
@@ -5988,7 +5989,7 @@ impl<'db> RmirEmitter<'db> {
                 root: PlaceRoot::Ptr {
                     addr: value,
                     space: *space,
-                    class: pointee.as_ref().clone(),
+                    class: pointee.target(self.db),
                 },
                 path: Box::default(),
             }),

@@ -22,3 +22,4 @@ pub(crate) mod type_info;
 pub use body::lower_to_rmir;
 pub use call::collect_runtime_calls;
 pub(crate) use consts::const_scalar_from_value;
+pub(crate) use type_info::resolve_stored_raw_pointee;
