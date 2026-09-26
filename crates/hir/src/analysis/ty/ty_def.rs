@@ -546,6 +546,18 @@ impl<'db> TyId<'db> {
         matches!(self.base_ty(db).data(db), TyData::TyParam(_))
     }
 
+    /// The declared parameter this type or const parameter occurrence names.
+    pub(crate) fn as_generic_param(self, db: &'db dyn HirAnalysisDb) -> Option<&'db TyParam<'db>> {
+        match self.data(db) {
+            TyData::TyParam(param) => Some(param),
+            TyData::ConstTy(const_ty) => match const_ty.data(db) {
+                ConstTyData::TyParam(param, _) => Some(param),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Returns `true` if the base type is a user defined `struct` type.
     pub fn is_struct(self, db: &dyn HirAnalysisDb) -> bool {
         let base_ty = self.base_ty(db);

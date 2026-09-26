@@ -27,15 +27,13 @@ use super::{
     },
     ty_check::{ConstRef, check_anon_const_body},
     ty_def::{InvalidCause, TyData, TyId},
-    ty_lower::{ParamDomainId, ParamSchemaId, PartialSubst},
+    ty_lower::{CompleteSubst, ParamDomainId, ParamSchemaId, PartialSubst},
     unify::UnificationTable,
 };
 use crate::analysis::HirAnalysisDb;
 use crate::hir_def::{CallableDef, Expr, Partial, PathKind, scope_graph::ScopeId};
 use common::indexmap::IndexMap;
 use rustc_hash::FxHashMap;
-
-type ParamSubstMap<'db> = PartialSubst<'db>;
 
 /// Compares the implementation method with the trait method to ensure they
 /// match.
@@ -91,6 +89,7 @@ pub(super) fn compare_impl_method<'db>(
         sink.push(ImplDiag::MethodEffectMismatch { trait_m, impl_m }.into());
         err = true;
     }
+    let param_subst = param_subst.residualize(db);
     err |= !compare_ty(db, impl_m, trait_m, &param_subst, trait_inst, sink);
     if err {
         return;
@@ -215,7 +214,7 @@ fn compare_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_m: CallableDef<'db>,
     trait_m: CallableDef<'db>,
-    param_subst: &ParamSubstMap<'db>,
+    param_subst: &CompleteSubst<'db>,
     trait_inst: TraitInstId<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
@@ -225,7 +224,7 @@ fn compare_ty<'db>(
 
     let evidence = PredicateListId::new(db, vec![trait_inst]);
     let impl_assumptions = collect_func_def_constraints(db, impl_m, true).instantiate_identity();
-    let trait_assumptions = instantiate_with_partial_map(
+    let trait_assumptions = instantiate_trait_method_template(
         db,
         collect_func_def_constraints(db, trait_m, true),
         param_subst,
@@ -241,7 +240,7 @@ fn compare_ty<'db>(
         .enumerate()
     {
         // 1) Instantiate trait method's type params into the impl's generics
-        let trait_m_ty = instantiate_with_partial_map(db, *trait_m_ty, param_subst);
+        let trait_m_ty = instantiate_trait_method_template(db, *trait_m_ty, param_subst);
         if trait_m_ty.has_invalid(db) {
             continue;
         }
@@ -291,7 +290,7 @@ fn compare_ty<'db>(
     }
 
     let impl_m_ret_ty = impl_m.ret_ty(db).instantiate_identity();
-    let trait_m_ret_ty = instantiate_with_partial_map(db, trait_m.ret_ty(db), param_subst);
+    let trait_m_ret_ty = instantiate_trait_method_template(db, trait_m.ret_ty(db), param_subst);
 
     // Substitute and normalize the return type as well.
     let trait_m_ret_ty_substituted =
@@ -343,7 +342,7 @@ fn compare_ty<'db>(
 
 fn insert_param_mapping<'db>(
     db: &'db dyn HirAnalysisDb,
-    out: &mut ParamSubstMap<'db>,
+    out: &mut PartialSubst<'db>,
     from: TyId<'db>,
     to: TyId<'db>,
 ) {
@@ -359,7 +358,7 @@ fn trait_to_impl_param_subst<'db>(
     impl_m: CallableDef<'db>,
     trait_m: CallableDef<'db>,
     trait_inst: TraitInstId<'db>,
-) -> (ParamSubstMap<'db>, Vec<(usize, usize)>) {
+) -> (PartialSubst<'db>, Vec<(usize, usize)>) {
     let schema = ParamSchemaId::callable(db, trait_m);
     let mut out = PartialSubst::new(db, ParamDomainId::full(db, schema));
 
@@ -445,7 +444,7 @@ pub(crate) struct MethodParamCorrespondence {
 
 /// The same declaration correspondence used by method conformance, expressed
 /// as body slots so call elaboration cannot reinterpret it by position.
-pub(crate) fn method_body_to_trait_slots<'db>(
+pub(crate) fn method_param_correspondence<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_m: CallableDef<'db>,
     trait_m: CallableDef<'db>,
@@ -481,7 +480,7 @@ struct EffectProviderEntry<'db> {
 
 fn map_effect_provider_params_by_identity<'db>(
     db: &'db dyn HirAnalysisDb,
-    out: &mut ParamSubstMap<'db>,
+    out: &mut PartialSubst<'db>,
     impl_m: CallableDef<'db>,
     trait_m: CallableDef<'db>,
     trait_inst: TraitInstId<'db>,
@@ -539,7 +538,7 @@ fn map_effect_provider_params_by_identity<'db>(
 fn collect_effect_provider_entries<'db>(
     db: &'db dyn HirAnalysisDb,
     method: CallableDef<'db>,
-    param_subst: Option<&ParamSubstMap<'db>>,
+    param_subst: Option<&PartialSubst<'db>>,
     trait_inst: TraitInstId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
@@ -547,6 +546,7 @@ fn collect_effect_provider_entries<'db>(
     let CallableDef::Func(func) = method else {
         return Vec::new();
     };
+    let param_subst = param_subst.map(|subst| subst.residualize(db));
 
     let provider_param_map = place_effect_provider_param_index_map(db, func);
     let params = method.params(db);
@@ -561,11 +561,11 @@ fn collect_effect_provider_entries<'db>(
                 .flatten()
                 .and_then(|provider_param_idx| params.get(provider_param_idx).copied());
             let mut binding = binding.clone();
-            if let Some(subst) = param_subst {
+            if let Some(subst) = &param_subst {
                 binding.key = match binding.key {
                     crate::core::semantic::EffectRequirementKey::Type(key_ty) => {
                         crate::core::semantic::EffectRequirementKey::Type(
-                            instantiate_with_partial_map(
+                            instantiate_trait_method_template(
                                 db,
                                 Binder::bind(method.generic_owner(), key_ty),
                                 subst,
@@ -574,7 +574,7 @@ fn collect_effect_provider_entries<'db>(
                     }
                     crate::core::semantic::EffectRequirementKey::Trait(key_trait) => {
                         crate::core::semantic::EffectRequirementKey::Trait(
-                            instantiate_with_partial_map(
+                            instantiate_trait_method_template(
                                 db,
                                 Binder::bind(method.generic_owner(), key_trait),
                                 subst,
@@ -701,24 +701,21 @@ fn effect_identity_tys_match<'db>(
     expected: TyId<'db>,
     actual: TyId<'db>,
 ) -> bool {
-    let expected_shape = layout_shape_ty(db, expected);
-    let actual_shape = layout_shape_ty(db, actual);
     UnificationTable::new(db)
-        .unify(expected_shape, actual_shape)
+        .unify(layout_shape_ty(db, expected), layout_shape_ty(db, actual))
         .is_ok()
 }
 
-fn instantiate_with_partial_map<'db, T>(
+fn instantiate_trait_method_template<'db, T>(
     db: &'db dyn HirAnalysisDb,
     binder: Binder<'db, T>,
-    param_subst: &ParamSubstMap<'db>,
+    param_subst: &CompleteSubst<'db>,
 ) -> T
 where
     T: TyFoldable<'db>,
 {
-    let (subst, _) = param_subst.residualize(db);
     binder
-        .instantiate_subst(db, &subst)
+        .instantiate_subst(db, param_subst)
         .expect("trait method comparison uses the declared parameter domain")
 }
 
@@ -1018,11 +1015,11 @@ fn compare_constraints<'db>(
     impl_m: CallableDef<'db>,
     trait_m: CallableDef<'db>,
     trait_inst: TraitInstId<'db>,
-    param_subst: &ParamSubstMap<'db>,
+    param_subst: &CompleteSubst<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
     let impl_m_constraints = collect_func_def_constraints(db, impl_m, false).instantiate_identity();
-    let trait_m_constraints = instantiate_with_partial_map(
+    let trait_m_constraints = instantiate_trait_method_template(
         db,
         collect_func_def_constraints(db, trait_m, false),
         param_subst,

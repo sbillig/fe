@@ -1,8 +1,8 @@
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::{PathRes, resolve_path_with_minter};
 use crate::analysis::ty::const_ty::{
-    ConstCanonEnv, ConstCanonMode, ConstTyData, HoleAnchor, HoleId, LayoutHoleArgSite,
-    LayoutIntroSite, LoweringContext, StructuralHoleOrigin, canonicalize_trait_inst_for_mode,
+    ConstCanonEnv, ConstCanonMode, HoleAnchor, HoleId, LayoutHoleArgSite, LayoutIntroSite,
+    LoweringContext, StructuralHoleOrigin, canonicalize_trait_inst_for_mode,
     canonicalize_ty_for_mode,
 };
 use crate::analysis::ty::fold::TyFoldable;
@@ -376,36 +376,15 @@ where
     T: TyFoldable<'db>,
 {
     let schema = ParamSchemaId::callable(db, callable.callable_def());
-    let parent_schema = match schema.owner(db) {
-        GenericParamOwner::Func(func) if func.is_associated_func(db) => schema
-            .owner(db)
-            .parent(db)
-            .map(|owner| ParamSchemaId::full(db, owner)),
-        _ => None,
-    };
     let mut args = callable.generic_args().to_vec();
     for (index, arg) in args.iter_mut().enumerate() {
-        let slot = LoweredSlot(index);
-        let key = schema
-            .key_at(db, slot)
-            .expect("effect key slot belongs to callable");
-        let formal = parent_schema
-            .and_then(|parent| {
-                parent
-                    .slot_for(db, key)
-                    .and_then(|slot| parent.formal_at(db, slot))
-            })
-            .or_else(|| schema.formal_at(db, slot))
+        let formal = schema
+            .declared_formal_at(db, LoweredSlot(index))
             .expect("effect key slot has a formal");
-        let param = match formal.data(db) {
-            TyData::TyParam(param) => Some(param),
-            TyData::ConstTy(const_ty) => match const_ty.data(db) {
-                ConstTyData::TyParam(param, _) => Some(param),
-                _ => None,
-            },
-            _ => None,
-        };
-        if param.is_some_and(|param| param.is_effect() || param.is_implicit()) {
+        if formal
+            .as_generic_param(db)
+            .is_some_and(|param| param.is_effect() || param.is_implicit())
+        {
             *arg = formal;
         }
     }

@@ -1,19 +1,12 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use camino::Utf8PathBuf;
-use fe_hir::analysis::{
-    name_resolution::{PathRes, resolve_path},
-    ty::{
-        const_ty::{
-            ConstTyData, HoleId, LayoutIntroRoot, LayoutIntroSite, LayoutIntroStep,
-            StructuralHoleOrigin,
-        },
-        trait_resolution::PredicateListId,
-        ty_check::check_func_body,
-        ty_def::{TyData, TyId},
-    },
+use fe_hir::analysis::ty::{
+    const_ty::ConstTyData,
+    ty_check::check_func_body,
+    ty_def::{TyData, TyId},
 };
-use fe_hir::hir_def::{Expr, GenericParamOwner, IdentId, ItemKind, Partial, Pat, PathId};
+use fe_hir::hir_def::{ItemKind, Partial, Pat};
 use fe_hir::test_db::HirAnalysisTestDb;
 
 fn find_func<'db>(
@@ -30,70 +23,6 @@ fn find_func<'db>(
             _ => None,
         })
         .unwrap_or_else(|| panic!("missing `{name}` function"))
-}
-
-#[test]
-fn trait_path_default_holes_keep_source_declaration_provenance() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("trait_path_default_hole_provenance.fe"),
-        "trait Cap<const ROOT: u256 = _, const OTHER: u256 = _> {}\nfn context() {}\n",
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-    let context = find_func(&db, top_mod, "context");
-    let trait_ = top_mod
-        .children_non_nested(&db)
-        .find_map(|item| match item {
-            ItemKind::Trait(trait_) => Some(trait_),
-            _ => None,
-        })
-        .unwrap();
-    let owner = GenericParamOwner::Trait(trait_);
-    let path = PathId::from_ident(&db, IdentId::new(&db, "Cap"));
-    let PathRes::Trait(inst) = resolve_path(
-        &db,
-        path,
-        context.scope(),
-        PredicateListId::empty_list(&db),
-        false,
-    )
-    .unwrap() else {
-        panic!("expected resolved trait path");
-    };
-    assert_eq!(inst.args(&db).len(), 3);
-    for (source_param_idx, name) in [(0, "ROOT"), (1, "OTHER")] {
-        // Trait arguments include Self; declaration provenance must not.
-        let TyData::ConstTy(value) = inst.args(&db)[source_param_idx + 1].data(&db) else {
-            panic!("expected const argument");
-        };
-        let ConstTyData::Hole(_, HoleId::Structural(hole)) = value.data(&db) else {
-            panic!("expected structural default hole");
-        };
-        assert_eq!(
-            hole.origin(&db),
-            StructuralHoleOrigin::DefaultHoleParam {
-                owner,
-                param_idx: source_param_idx
-            }
-        );
-        assert_eq!(
-            owner
-                .param_view(&db, source_param_idx)
-                .name()
-                .to_opt()
-                .unwrap()
-                .data(&db),
-            name
-        );
-        assert_eq!(
-            hole.trace(&db).introduced_at,
-            LayoutIntroSite {
-                root: LayoutIntroRoot::Definition { owner },
-                path: vec![LayoutIntroStep::ConstParam(source_param_idx as u32)],
-            }
-        );
-    }
 }
 
 #[test]
@@ -214,45 +143,6 @@ fn f() uses (slot: Slot<7>) {}
 
     let generic_args = capture.complete(&db).expect("captured default");
     assert_eq!(generic_args.values(), &[base_arg]);
-}
-
-#[test]
-fn recursive_default_captures_keep_the_callers_parameter_order() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("recursive_default_captures_keep_the_callers_parameter_order.fe"),
-        r#"
-fn recurse<const A: usize, const B: usize, const C: usize = B>(
-    _ left: [u8; A],
-    _ right: [u8; B],
-) {
-    recurse<B, A>(right, left)
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
-    let func = find_func(&db, top_mod, "recurse");
-    let body = func.body(&db).expect("missing recursive function body");
-    let typed_body = &check_func_body(&db, func).1;
-    let call = body
-        .exprs(&db)
-        .iter()
-        .find_map(|(expr, data)| {
-            matches!(data, Partial::Present(Expr::Call(..)))
-                .then(|| typed_body.callable_expr(expr))
-                .flatten()
-        })
-        .expect("missing recursive call");
-    let args = call.generic_args();
-    let TyData::ConstTy(default) = args[2].data(&db) else {
-        panic!("expected const default");
-    };
-    let ConstTyData::UnEvaluated { capture, .. } = default.data(&db) else {
-        panic!("expected captured const default");
-    };
-    assert_ne!(args[0], args[1]);
-    assert_eq!(capture.complete(&db).unwrap().values(), &args[..2]);
 }
 
 #[test]

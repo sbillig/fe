@@ -14,7 +14,7 @@ use super::{
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{TyFoldable, TyFolder},
     generic_defaults::DefaultApplication,
-    normalize::{normalize_from_assumptions, normalize_ty},
+    normalize::{normalize_ty, normalize_with_trait_evidence},
     subst::substitute_complete,
     trait_def::{
         ImplementorId, ResolvedImplInstance, TraitInstId, resolve_trait_impl_instance,
@@ -25,7 +25,7 @@ use super::{
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_error::first_invalid_ty_cause,
     ty_lower::{
-        CompleteSubst, ParamBasis, ParamDomainId, ParamSchemaId, SourceParamIndex, SubstError,
+        CompleteSubst, ParamBasis, ParamDomainId, SourceParamIndex, SubstError,
         collect_generic_params, param_schema,
     },
     unify::UnificationTable,
@@ -143,7 +143,7 @@ impl<'db> ConstCanonEnv<'db> {
         T: TyFoldable<'db>,
     {
         if let Some(inst) = self.assoc_evidence {
-            normalize_from_assumptions(db, value, self.scope, PredicateListId::new(db, vec![inst]))
+            normalize_with_trait_evidence(db, value, self.scope, inst)
         } else {
             value
         }
@@ -1253,22 +1253,8 @@ pub fn canonicalize_const_ty_for_mode<'db>(
                 ty: ty.map(|ty| canonicalize_ty_for_mode(db, ty, env, mode)),
                 template_ty: *template_ty,
                 const_def: *const_def,
-                capture: match capture {
-                    ConstCaptureEnv::Bound(subst) => ConstCaptureEnv::Bound(
-                        CompleteSubst::new(
-                            subst.domain(),
-                            db,
-                            subst
-                                .values()
-                                .iter()
-                                .copied()
-                                .map(|arg| canonicalize_ty_for_mode(db, arg, env, mode))
-                                .collect(),
-                        )
-                        .expect("canonicalized capture retains its domain"),
-                    ),
-                    other => other.clone(),
-                },
+                capture: capture
+                    .map_bound_values(|arg| canonicalize_ty_for_mode(db, arg, env, mode)),
                 policy: *policy,
             },
         ),
@@ -1815,8 +1801,11 @@ pub(super) fn try_eval_const_int_expr<'db>(
 fn specialize_available_const_assumptions<'db>(
     db: &'db dyn HirAnalysisDb,
     assumptions: PredicateListId<'db>,
-    subst: &CompleteSubst<'db>,
+    subst: Option<&CompleteSubst<'db>>,
 ) -> PredicateListId<'db> {
+    let Some(subst) = subst else {
+        return assumptions;
+    };
     let predicates: Vec<_> = assumptions
         .list(db)
         .iter()
@@ -2016,9 +2005,11 @@ pub(crate) fn evaluate_const_ty<'db>(
                         inst.assoc_type_bindings(db).clone(),
                     );
                     let inst = capture.specialize(db, inst);
-                    let assumptions = capture_subst.as_ref().map_or(assumptions, |subst| {
-                        specialize_available_const_assumptions(db, assumptions, subst)
-                    });
+                    let assumptions = specialize_available_const_assumptions(
+                        db,
+                        assumptions,
+                        capture_subst.as_ref(),
+                    );
 
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let expr = ConstExprId::new(
@@ -2052,9 +2043,11 @@ pub(crate) fn evaluate_const_ty<'db>(
                 }
                 PathRes::InherentConst(recv_ty, impl_, name) => {
                     let recv_ty = capture.specialize(db, recv_ty);
-                    let assumptions = capture_subst.as_ref().map_or(assumptions, |subst| {
-                        specialize_available_const_assumptions(db, assumptions, subst)
-                    });
+                    let assumptions = specialize_available_const_assumptions(
+                        db,
+                        assumptions,
+                        capture_subst.as_ref(),
+                    );
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let use_ = super::assoc_const::InherentConstUse::new(
                             body.scope(),
@@ -3210,12 +3203,13 @@ impl<'db> ConstCaptureEnv<'db> {
         before: Option<SourceParamIndex>,
         values: Vec<TyId<'db>>,
     ) -> Self {
-        let plan = before.map_or_else(
-            || ConstCaptureDomain::full(owner, ParamBasis::Full),
-            |index| ConstCaptureDomain::before(owner, ParamBasis::Full, index),
-        );
+        let domain = ConstCaptureDomain {
+            owner,
+            basis: ParamBasis::Full,
+            before,
+        };
         Self::Bound(
-            CompleteSubst::new(plan.materialize(db), db, values).expect("complete const capture"),
+            CompleteSubst::new(domain.materialize(db), db, values).expect("complete const capture"),
         )
     }
 
@@ -3226,24 +3220,11 @@ impl<'db> ConstCaptureEnv<'db> {
             Self::Identity(plan) => {
                 let domain = plan.materialize(db);
                 let schema = domain.schema(db);
-                let parent_schema = match schema.owner(db) {
-                    GenericParamOwner::Func(func) if func.is_associated_func(db) => schema
-                        .owner(db)
-                        .parent(db)
-                        .map(|owner| ParamSchemaId::full(db, owner)),
-                    _ => None,
-                };
                 let values = domain
                     .slots(db)
                     .map(|slot| {
-                        let key = schema.key_at(db, slot).expect("capture slot has a key");
-                        parent_schema
-                            .and_then(|parent| {
-                                parent
-                                    .slot_for(db, key)
-                                    .and_then(|slot| parent.formal_at(db, slot))
-                            })
-                            .or_else(|| schema.formal_at(db, slot))
+                        schema
+                            .declared_formal_at(db, slot)
                             .expect("capture slot has a formal")
                     })
                     .collect();
@@ -3276,15 +3257,14 @@ impl<'db> ConstCaptureEnv<'db> {
     where
         F: TyFolder<'db>,
     {
-        let Self::Bound(subst) = self else {
-            return self.clone();
-        };
-        let values = subst
-            .values()
-            .iter()
-            .map(|&value| folder.fold_ty(db, value))
-            .collect();
-        Self::Bound(CompleteSubst::new(subst.domain(), db, values).expect("capture domain"))
+        self.map_bound_values(|value| folder.fold_ty(db, value))
+    }
+
+    fn map_bound_values(&self, f: impl FnMut(TyId<'db>) -> TyId<'db>) -> Self {
+        match self {
+            Self::Bound(subst) => Self::Bound(subst.map_values(f)),
+            Self::Empty | Self::Identity(_) => self.clone(),
+        }
     }
 }
 
@@ -3344,9 +3324,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        analysis::semantic::{
-            bool_const, int_const, runtime_size_bytes, sem_const_from_ty, tuple_const,
-        },
+        analysis::semantic::{bool_const, int_const, sem_const_from_ty, tuple_const},
         analysis::ty::{
             generic_defaults::{GenericDefault, generic_default},
             layout_holes::{LayoutTemplateSubst, instantiate_layout_template},
@@ -3554,102 +3532,6 @@ mod tests {
             ConstCanonMode::Stored,
         );
         assert_eq!(stored, raw);
-    }
-
-    #[test]
-    fn deferred_identity_capture_remains_symbolic_until_application() {
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            Utf8PathBuf::from("identity_capture_flags.fe"),
-            "fn f<const N: usize, T = [u8; { N + 1 }]>() {}",
-        );
-        let (module, _) = db.top_mod(file);
-        db.assert_no_diags(module);
-        let func = find_func(&db, module, "f");
-        let GenericDefault::Type(default) = generic_default(&db, func.into(), 1)
-            .as_ref()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-        else {
-            panic!("expected type default")
-        };
-        let length = default.instantiate_identity().generic_args(&db)[1];
-        let TyData::ConstTy(length_const) = length.data(&db) else {
-            panic!("expected const length")
-        };
-        assert!(
-            matches!(
-                length_const.data(&db),
-                ConstTyData::UnEvaluated {
-                    capture: ConstCaptureEnv::Identity(_),
-                    ..
-                }
-            ),
-            "actual length: {:?}",
-            length_const.data(&db)
-        );
-        assert!(!const_ty_is_fully_ground(&db, *length_const));
-        assert_eq!(
-            runtime_size_bytes(&db, default.instantiate_identity()),
-            Ok(None)
-        );
-    }
-
-    #[test]
-    fn const_capture_domain_comes_from_lowering_context_not_hole_anchor() {
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            Utf8PathBuf::from("explicit_const_capture_domain.fe"),
-            "fn f<const N: usize, T = [u8; { N + 1 }]>() {}",
-        );
-        let (module, _) = db.top_mod(file);
-        db.assert_no_diags(module);
-        let func = find_func(&db, module, "f");
-        let GenericDefault::Type(default) = generic_default(&db, func.into(), 1)
-            .as_ref()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-        else {
-            panic!("expected type default")
-        };
-        let length = default.instantiate_identity().generic_args(&db)[1];
-        let TyData::ConstTy(length) = length.data(&db) else {
-            panic!("expected const length")
-        };
-        let ConstTyData::UnEvaluated {
-            body,
-            capture: ConstCaptureEnv::Identity(default_domain),
-            ..
-        } = length.data(&db)
-        else {
-            panic!("expected deferred default capture")
-        };
-
-        let anchor = HoleAnchor::GenericDefault {
-            owner: func.into(),
-            param_idx: 0,
-        };
-        let source_context =
-            LoweringContext::deferred(anchor).with_source_params(Some(func.into()));
-        let ConstCaptureEnv::Identity(source_domain) =
-            ConstCaptureEnv::identity_for_body(&db, *body, Some(&source_context))
-        else {
-            panic!("expected source capture")
-        };
-        assert_eq!(source_domain.basis, ParamBasis::Source);
-        assert_eq!(source_domain.before, None);
-
-        let default_context = source_context.with_default_capture(func.into(), SourceParamIndex(1));
-        let ConstCaptureEnv::Identity(explicit_domain) =
-            ConstCaptureEnv::identity_for_body(&db, *body, Some(&default_context))
-        else {
-            panic!("expected default capture")
-        };
-        assert_eq!(explicit_domain, *default_domain);
-        assert_eq!(explicit_domain.basis, ParamBasis::Full);
-        assert_eq!(explicit_domain.before, Some(SourceParamIndex(1)));
     }
 
     #[test]

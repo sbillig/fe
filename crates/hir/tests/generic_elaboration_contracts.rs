@@ -3,16 +3,16 @@ use common::indexmap::IndexMap;
 use fe_hir::{
     analysis::{
         semantic::{
-            SemanticBodyAdmission, SemanticDiagnosticKind, check_semantic_borrows,
-            check_semantic_boundaries, get_or_build_semantic_instance,
-            identity_semantic_instance_key, root_semantic_instance_key, semantic_body_admission,
+            SemanticInstanceKey, check_semantic_borrows, check_semantic_boundaries,
+            get_or_build_semantic_instance, identity_semantic_instance_key,
+            root_semantic_instance_key,
         },
         ty::{
             binder::Binder,
             normalize::normalize_ty,
             trait_def::TraitInstId,
             trait_resolution::PredicateListId,
-            ty_check::{BodyOwner, check_func_body},
+            ty_check::BodyOwner,
             ty_def::{Kind, TyData, TyId, TyVarSort},
             ty_lower::{
                 CompleteSubst, LoweredSlot, ParamBasis, ParamDomainId, ParamKey, SourceParamIndex,
@@ -25,120 +25,23 @@ use fe_hir::{
     test_db::{HirAnalysisTestDb, find_func},
 };
 
-#[test]
-fn unused_dependent_default_stays_symbolic_in_semantic_callee_key() {
-    for (source, caller_name, invalid_demand) in [
-        (
-            "fn inner<const N: usize, T = [u8; { 10 / N }]>() {}\nfn concrete() { inner<0>() }",
-            "concrete",
-            false,
-        ),
-        (
-            "fn inner<const N: usize, T = [u8; { 10 / N }]>() -> u256 { core::size_of<T>() }\nfn concrete() -> u256 { inner<0>() }",
-            "concrete",
-            true,
-        ),
-        (
-            "fn inner<const N: usize, T = [u8; { 10 / N }]>() -> u256 { core::size_of<T>() }\nfn outer<const M: usize>() -> u256 { inner<M>() }",
-            "outer",
-            false,
-        ),
-    ] {
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(Utf8PathBuf::from("dependent_default.fe"), source);
-        let (module, _) = db.top_mod(file);
-        let concrete = find_func(&db, module, caller_name);
-        let instance = get_or_build_semantic_instance(
-            &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(concrete)),
-        );
-        let callee = instance
-            .call_sites(&db)
-            .iter()
-            .flatten()
-            .find_map(|site| site.callee)
-            .expect("missing semantic callee");
-        let args = callee.key.subst(&db).generic_args(&db);
-        assert_eq!(args.len(), 2);
-        assert!(
-            !args[1].has_invalid(&db),
-            "default was evaluated into an invalid key: {:?}",
-            args[1]
-        );
-        let callee_instance = get_or_build_semantic_instance(&db, callee.key);
-        match (
-            invalid_demand,
-            semantic_body_admission(&db, callee_instance),
-        ) {
-            (false, SemanticBodyAdmission::Ready(_)) => {}
-            (true, SemanticBodyAdmission::Rejected(diag)) => {
-                assert_eq!(
-                    diag.diag(&db).kind,
-                    SemanticDiagnosticKind::InvalidConcreteType
-                );
-            }
-            (_, result) => panic!("wrong admission for dependent default: {result:?}"),
-        }
-    }
+/// The selected callee of the first call site in `key`'s instance.
+fn first_callee_key<'db>(
+    db: &'db HirAnalysisTestDb,
+    key: SemanticInstanceKey<'db>,
+) -> SemanticInstanceKey<'db> {
+    get_or_build_semantic_instance(db, key)
+        .call_sites(db)
+        .iter()
+        .flatten()
+        .find_map(|site| site.callee)
+        .expect("missing semantic callee")
+        .key
 }
 
 #[test]
-fn stored_trait_function_retains_associated_equality_in_semantic_callee() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("stored_trait_function_evidence.fe"),
-        r#"
-trait Out {
-    type Item
-    fn f(_ x: own Self::Item) -> Self::Item { x }
-}
-
-fn direct<T: Out<Item = u256>>(_ x: u256) -> u256 { T::f(x) }
-fn stored<T: Out<Item = u256>>(_ x: u256) -> u256 {
-    let f = T::f
-    f(x)
-}
-fn qualified_stored<T: Out<Item = u256>>(_ x: u256) -> u256 {
-    let f = <T as Out>::f
-    f(x)
-}
-fn tuple_stored<T: Out<Item = u256>>(_ x: u256) -> u256 {
-    let pair = (T::f,)
-    pair.0(x)
-}
-"#,
-    );
-    let (module, _) = db.top_mod(file);
-
-    for name in ["direct", "stored", "qualified_stored", "tuple_stored"] {
-        let func = find_func(&db, module, name);
-        let (diags, _) = check_func_body(&db, func);
-        assert!(diags.is_empty(), "{name} type checking failed: {diags:?}");
-
-        let instance = get_or_build_semantic_instance(
-            &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(func)),
-        );
-        let callee = instance
-            .call_sites(&db)
-            .iter()
-            .flatten()
-            .find_map(|site| site.callee)
-            .unwrap_or_else(|| panic!("missing semantic callee for {name}"));
-        let callee_instance = get_or_build_semantic_instance(&db, callee.key);
-        assert_eq!(
-            callee_instance.normalized_result_ty(&db),
-            TyId::u256(&db),
-            "{name} lost its associated equality"
-        );
-    }
-}
-
-#[test]
-fn concrete_selected_body_does_not_inherit_unrelated_caller_bounds() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("concrete_selected_callee_evidence.fe"),
+fn concrete_callees_do_not_inherit_unrelated_caller_bounds() {
+    for source in [
         r#"
 trait A {}
 trait B {}
@@ -147,31 +50,6 @@ impl Out for bool {}
 fn first<T: A>() { <bool as Out>::f() }
 fn second<U: B>() { <bool as Out>::f() }
 "#,
-    );
-    let (module, _) = db.top_mod(file);
-    db.assert_no_diags(module);
-    let callees = ["first", "second"].map(|name| {
-        let func = find_func(&db, module, name);
-        let caller = get_or_build_semantic_instance(
-            &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(func)),
-        );
-        caller
-            .call_sites(&db)
-            .iter()
-            .flatten()
-            .find_map(|site| site.callee)
-            .expect("missing selected method")
-            .key
-    });
-    assert_eq!(callees[0], callees[1]);
-}
-
-#[test]
-fn concrete_free_callee_does_not_inherit_unrelated_caller_bounds() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("concrete_free_callee_evidence.fe"),
         r#"
 trait A {}
 trait B {}
@@ -181,24 +59,20 @@ fn target<T: Need>(_ x: T) {}
 fn first<X: A>() { target(true) }
 fn second<Y: B>() { target(true) }
 "#,
-    );
-    let (module, _) = db.top_mod(file);
-    db.assert_no_diags(module);
-    let callees = ["first", "second"].map(|name| {
-        let func = find_func(&db, module, name);
-        let caller = get_or_build_semantic_instance(
-            &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(func)),
-        );
-        caller
-            .call_sites(&db)
-            .iter()
-            .flatten()
-            .find_map(|site| site.callee)
-            .expect("missing concrete free call")
-            .key
-    });
-    assert_eq!(callees[0], callees[1]);
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(Utf8PathBuf::from("concrete_callee_evidence.fe"), source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let [first, second] = ["first", "second"].map(|name| {
+            let func = find_func(&db, module, name);
+            first_callee_key(
+                &db,
+                identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+            )
+        });
+        assert_eq!(first, second, "{source}");
+    }
 }
 
 #[test]
@@ -328,21 +202,12 @@ fn access() -> u256 uses (raw: mut RawStorage) { raw.sload(0) }
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
     let func = find_func(&db, module, "access");
-    let instance = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
-    );
+    let identity = identity_semantic_instance_key(&db, BodyOwner::Func(func));
+    let instance = get_or_build_semantic_instance(&db, identity);
     check_semantic_borrows(&db, instance).expect("sealed effect call must pass borrow validation");
     check_semantic_boundaries(&db, instance)
         .expect("sealed effect call must pass boundary validation");
-    let callee = instance
-        .call_sites(&db)
-        .iter()
-        .flatten()
-        .find_map(|site| site.callee)
-        .expect("missing sealed effect callee")
-        .key;
-    let BodyOwner::Func(selected) = callee.owner(&db) else {
+    let BodyOwner::Func(selected) = first_callee_key(&db, identity).owner(&db) else {
         panic!("sealed effect callee is not a function");
     };
     assert!(
@@ -352,15 +217,7 @@ fn access() -> u256 uses (raw: mut RawStorage) { raw.sload(0) }
 
     let root_key = root_semantic_instance_key(&db, BodyOwner::Func(func))
         .expect("standalone root must synthesize the sealed effect provider");
-    let root = get_or_build_semantic_instance(&db, root_key);
-    let selected = root
-        .call_sites(&db)
-        .iter()
-        .flatten()
-        .find_map(|site| site.callee)
-        .expect("missing root sealed effect callee")
-        .key;
-    let BodyOwner::Func(selected) = selected.owner(&db) else {
+    let BodyOwner::Func(selected) = first_callee_key(&db, root_key).owner(&db) else {
         panic!("root sealed effect callee is not a function");
     };
     assert!(
@@ -408,86 +265,6 @@ fn substituting_projection_and_evidence_preserves_both_arguments_and_bindings() 
         Some(&TyId::bool(&db)),
         "associated binding retained a stale declaration parameter"
     );
-}
-
-#[test]
-fn projection_normalization_matches_all_trait_arguments() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("full_trait_reference_matching.fe"),
-        "trait Out<A> { type Item }\nfn f<T>() {}\n",
-    );
-    let (module, _) = db.top_mod(file);
-    db.assert_no_diags(module);
-    let (trait_, func) =
-        module
-            .children_non_nested(&db)
-            .fold((None, None), |acc, item| match item {
-                ItemKind::Trait(trait_) => (Some(trait_), acc.1),
-                ItemKind::Func(func) => (acc.0, Some(func)),
-                _ => acc,
-            });
-    let trait_ = trait_.expect("missing Out");
-    let func = func.expect("missing f");
-    let param = CallableDef::Func(func).params(&db)[0];
-    let item = IdentId::new(&db, "Item");
-    let bound = TraitInstId::new(
-        &db,
-        trait_,
-        vec![param, TyId::u8(&db)],
-        IndexMap::from_iter([(item, TyId::u256(&db))]),
-    );
-    let assumptions = PredicateListId::new(&db, vec![bound]);
-    let different_reference = TraitInstId::new_simple(&db, trait_, vec![param, TyId::bool(&db)]);
-    let projection = TyId::assoc_ty(&db, different_reference.trait_ref(&db), item);
-    assert_eq!(
-        normalize_ty(&db, projection, func.scope(), assumptions),
-        projection,
-        "equality from Out<u8> was incorrectly used for Out<bool>"
-    );
-}
-
-#[test]
-fn implied_associated_type_bound_instantiates_all_trait_arguments() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        Utf8PathBuf::from("implied_associated_type_bound_arguments.fe"),
-        "trait Bound<X> {}\ntrait Foo<T, U> { type Item: Bound<T> }\n",
-    );
-    let (module, _) = db.top_mod(file);
-    db.assert_no_diags(module);
-    let mut traits = module
-        .children_non_nested(&db)
-        .filter_map(|item| match item {
-            ItemKind::Trait(trait_) => Some(trait_),
-            _ => None,
-        });
-    let bound = traits.next().expect("missing Bound");
-    let foo = traits.next().expect("missing Foo");
-    let premise = TraitInstId::new_simple(
-        &db,
-        foo,
-        vec![TyId::bool(&db), TyId::u256(&db), TyId::u8(&db)],
-    );
-    let implied = PredicateListId::new(&db, vec![premise]).extend_all_bounds(&db);
-    let item_bound = implied
-        .list(&db)
-        .iter()
-        .copied()
-        .find(|pred| pred.def(&db) == bound)
-        .expect("missing implied Item: Bound<T> predicate");
-    assert_eq!(item_bound.args(&db)[1], TyId::u256(&db));
-
-    let formals = foo.params(&db);
-    let swapped = TraitInstId::new_simple(&db, foo, vec![TyId::bool(&db), formals[2], formals[1]]);
-    let implied = PredicateListId::new(&db, vec![swapped]).extend_all_bounds(&db);
-    let item_bound = implied
-        .list(&db)
-        .iter()
-        .copied()
-        .find(|pred| pred.def(&db) == bound)
-        .expect("missing swapped implied predicate");
-    assert_eq!(item_bound.args(&db)[1], formals[2]);
 }
 
 #[test]

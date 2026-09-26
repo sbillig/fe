@@ -2,7 +2,7 @@
 
 use crate::{
     analysis::ty::{
-        method_cmp::{compare_impl_method, method_body_to_trait_slots},
+        method_cmp::{compare_impl_method, method_param_correspondence},
         trait_lower::{
             ImplSelfKey, collect_trait_impls, complete_impl_trait, complete_selected_impl,
             lower_impl_trait_header,
@@ -38,8 +38,8 @@ use super::{
     ty_def::{TyBase, TyData, TyId},
     ty_lower::{
         CompleteSubst, ParamBasis, ParamDomainId, ParamKey, ParamSchemaId, PartialSubst,
-        callable_input_layout_origin_ty, collect_generic_params, collect_layout_arg_bindings,
-        layout_param_root_uses, param_schema, same_layout_argument,
+        callable_input_layout_origin_ty, collect_layout_arg_bindings, layout_param_root_uses,
+        param_schema, same_layout_argument,
     },
     unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor},
@@ -595,12 +595,6 @@ impl<'db> ResolvedMethodInstance<'db> {
                 given: self.body_args.len(),
             });
         }
-        if inherited_len > body_schema.keys(db).len() {
-            return Err(MethodArgMapError::SelectedPrefixArity {
-                expected: body_schema.keys(db).len(),
-                given: inherited_len,
-            });
-        }
 
         let domain = ParamDomainId::full(db, body_schema);
         let mut args = PartialSubst::new(db, domain);
@@ -624,7 +618,6 @@ impl<'db> ResolvedMethodInstance<'db> {
                 given: checked_inputs.len(),
             });
         }
-        let body_params = collect_generic_params(db, body.into()).params(db);
         if checked_inputs.is_some() || checked_effect_inputs.is_some() {
             let mut predicates: IndexSet<_> = self.assumptions.list(db).iter().copied().collect();
             predicates.insert(self.resolved.trait_inst());
@@ -640,30 +633,26 @@ impl<'db> ResolvedMethodInstance<'db> {
                         } else {
                             CallableInputLayoutHoleOrigin::ValueParam(idx)
                         };
-                        Ok((origin, ty))
+                        (origin, ty)
                     });
-            let effect_inputs =
-                checked_effect_inputs
-                    .into_iter()
-                    .flatten()
-                    .map(|&(nominal, ty)| {
-                        let body_idx = self
-                            .effect_pairs
-                            .iter()
-                            .find(|(index, _)| *index == nominal)
-                            .map(|(_, index)| *index)
-                            .ok_or(MethodArgMapError::MissingEffectRole(nominal))?;
-                        Ok((CallableInputLayoutHoleOrigin::Effect(body_idx), ty))
-                    });
-            for input in value_inputs.chain(effect_inputs) {
-                let (origin, actual_ty) = input?;
+            let effect_inputs = checked_effect_inputs
+                .into_iter()
+                .flatten()
+                .map(|&(nominal, ty)| {
+                    self.effect_pairs
+                        .iter()
+                        .find(|(index, _)| *index == nominal)
+                        .map(|&(_, body_idx)| (CallableInputLayoutHoleOrigin::Effect(body_idx), ty))
+                        .ok_or(MethodArgMapError::MissingEffectRole(nominal))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            for (origin, actual_ty) in value_inputs.chain(effect_inputs) {
                 let Some(formal_ty) = callable_input_layout_origin_ty(db, body, origin) else {
                     continue;
                 };
-                let (partial, _) = args.residualize(db);
                 let formal_ty = normalize_ty(
                     db,
-                    substitute_complete(db, formal_ty, &partial)
+                    substitute_complete(db, formal_ty, &args.residualize(db))
                         .expect("selected input template must match body schema"),
                     self.normalization_scope,
                     assumptions,
@@ -690,22 +679,11 @@ impl<'db> ResolvedMethodInstance<'db> {
                 }
             }
         }
-        for (slot, &key) in body_schema.keys(db).iter().enumerate() {
-            if args.get(db, key).is_none() {
-                if matches!(key, ParamKey::CallableLayout { .. }) {
-                    // A receiver can carry layout components through its runtime
-                    // bundle even when its nominal type exposes no const argument.
-                    // Keep the body formal symbolic; call layout evidence binds it.
-                    args.bind(db, key, body_params[slot])
-                        .expect("selected symbolic layout parameter key");
-                } else {
-                    return Err(MethodArgMapError::MissingNominalRole(key));
-                }
-            }
-        }
-        Ok(args
-            .finish(db)
-            .expect("selected body substitution is complete"))
+        // Every non-layout slot is bound by now. A receiver can carry layout
+        // components through its runtime bundle even when its nominal type
+        // exposes no const argument, so unbound layout slots keep their body
+        // formals; call layout evidence binds them.
+        Ok(args.residualize(db))
     }
 }
 
@@ -750,7 +728,7 @@ pub fn resolve_trait_method_instance<'db>(
                         .collect(),
                 )
             } else {
-                let correspondence = method_body_to_trait_slots(
+                let correspondence = method_param_correspondence(
                     db,
                     body.as_callable(db).expect("selected method is callable"),
                     declaration

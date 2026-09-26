@@ -20,7 +20,6 @@ use crate::analysis::{
     },
     ty::const_expr::{ConstExpr, ConstExprId, ConstInvocation},
     ty::const_ty::{ConstCaptureEnv, ConstTyData, ConstTyId, const_ty_from_sem_const},
-    ty::ty_lower::CompleteSubst,
 };
 
 pub trait TyFoldable<'db>
@@ -252,14 +251,10 @@ impl<'db> TyFoldable<'db> for SemanticInstanceKey<'db> {
             owner,
             GenericSubst::new(
                 db,
-                self.subst(db).mapping(db).as_ref().map(|mapping| {
-                    CompleteSubst::new(
-                        mapping.domain(),
-                        db,
-                        mapping.values().to_vec().fold_with(db, folder),
-                    )
-                    .expect("folding preserves substitution arity")
-                }),
+                self.subst(db)
+                    .mapping(db)
+                    .as_ref()
+                    .map(|mapping| mapping.map_values(|value| value.fold_with(db, folder))),
             ),
             EffectProviderSubst::new(
                 db,

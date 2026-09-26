@@ -165,6 +165,19 @@ pub(crate) fn lower_hir_ty_deferred<'db>(
     lower_hir_ty_impl(db, ty, scope, assumptions, &minter)
 }
 
+pub(crate) fn lower_hir_ty_in_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: HirTyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    const_bodies: ConstBodyLowering,
+) -> TyId<'db> {
+    match const_bodies {
+        ConstBodyLowering::Eager => lower_hir_ty(db, ty, scope, assumptions),
+        ConstBodyLowering::Deferred => lower_hir_ty_deferred(db, ty, scope, assumptions),
+    }
+}
+
 pub(crate) fn lower_opt_hir_ty_with_minter<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: Partial<HirTyId<'db>>,
@@ -1640,17 +1653,27 @@ struct CallableInputLayoutPlan<'db> {
         FxHashMap<CallableInputLayoutHoleOrigin, FxHashMap<LayoutBundlePath, Vec<usize>>>,
 }
 
+/// Deferred lowering discovers slots, so its predicates must not depend on the
+/// completed callable parameter list.
+fn callable_input_assumptions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: crate::hir_def::Func<'db>,
+    const_bodies: ConstBodyLowering,
+) -> PredicateListId<'db> {
+    match const_bodies {
+        ConstBodyLowering::Eager => {
+            collect_func_decl_constraints(db, func.into(), true).instantiate_identity()
+        }
+        ConstBodyLowering::Deferred => collect_callable_shape_constraints(db, func),
+    }
+}
+
 fn callable_input_layout_types<'db>(
     db: &'db dyn HirAnalysisDb,
     func: crate::hir_def::Func<'db>,
     const_bodies: ConstBodyLowering,
 ) -> Vec<(CallableInputLayoutHoleOrigin, TyId<'db>)> {
-    let assumptions = match const_bodies {
-        ConstBodyLowering::Eager => {
-            collect_func_decl_constraints(db, func.into(), true).instantiate_identity()
-        }
-        ConstBodyLowering::Deferred => collect_callable_shape_constraints(db, func),
-    };
+    let assumptions = callable_input_assumptions(db, func, const_bodies);
     let lower_ty = |hir_ty| match const_bodies {
         ConstBodyLowering::Eager => normalize_from_assumptions(
             db,
@@ -1710,12 +1733,7 @@ fn callable_input_layout_projections<'db>(
     CallableInputLayoutHoleOrigin,
     CallableLayoutProjections<'db>,
 )> {
-    let assumptions = match const_bodies {
-        ConstBodyLowering::Eager => {
-            collect_func_decl_constraints(db, func.into(), true).instantiate_identity()
-        }
-        ConstBodyLowering::Deferred => collect_callable_shape_constraints(db, func),
-    };
+    let assumptions = callable_input_assumptions(db, func, const_bodies);
     callable_input_layout_types(db, func, const_bodies)
         .into_iter()
         .map(|(origin, ty)| {
@@ -1743,6 +1761,7 @@ fn callable_input_carrier_projections<'db>(
     CallableInputLayoutHoleOrigin,
     CallableLayoutProjections<'db>,
 )> {
+    let assumptions = callable_input_assumptions(db, func, ConstBodyLowering::Eager);
     callable_input_layout_types(db, func, ConstBodyLowering::Eager)
         .into_iter()
         .map(|(origin, ty)| {
@@ -1756,7 +1775,7 @@ fn callable_input_carrier_projections<'db>(
                     },
                     ty,
                     false,
-                    collect_func_decl_constraints(db, func.into(), true).instantiate_identity(),
+                    assumptions,
                 ),
             )
         })
@@ -2077,14 +2096,14 @@ fn preserve_declared_component_ports<'db>(
 fn specialize_component_representative<'db>(
     db: &'db dyn HirAnalysisDb,
     component: &mut LayoutBundleComponent<'db>,
-    schema: ParamSchemaId<'db>,
+    owner: GenericParamOwner<'db>,
     args: &[TyId<'db>],
 ) {
     if let Some(LayoutBundleComponentKey::Param(value)) = component.representative {
-        let value = Binder::bind(schema.owner(db), value).instantiate(db, args);
+        let value = Binder::bind(owner, value).instantiate(db, args);
         component.representative = Some(specialized_layout_component_key(db, value));
     }
-    component.ty = Binder::bind(schema.owner(db), component.ty).instantiate(db, args);
+    component.ty = Binder::bind(owner, component.ty).instantiate(db, args);
 }
 
 fn specialize_callable_input_layout_interface<'db>(
@@ -2138,12 +2157,7 @@ fn specialize_callable_input_layout_interface<'db>(
             else {
                 unreachable!("input layout interface has a function owner")
             };
-            specialize_component_representative(
-                db,
-                component,
-                ParamSchemaId::full(db, func.into()),
-                args,
-            );
+            specialize_component_representative(db, component, func.into(), args);
         }
     }
     let component_refined_ports = projection.component_refined_ports;
@@ -2249,12 +2263,7 @@ pub(crate) fn specialized_callable_layout_bundle_signature_with_normalizer<'db>(
     let restored_ports = preserve_declared_component_ports(&mut output, &declared_output_interface);
     for component in &mut output.schema.components {
         if restored_ports.contains(&component.port) {
-            specialize_component_representative(
-                db,
-                component,
-                ParamSchemaId::full(db, func.into()),
-                args,
-            );
+            specialize_component_representative(db, component, func.into(), args);
         }
     }
     let component_refined_ports = output.component_refined_ports;
@@ -2455,14 +2464,7 @@ pub(crate) fn instantiate_callable_effect_layout_args<'db>(
         else {
             continue;
         };
-        let implicit_idx = match implicit_arg.data(db) {
-            TyData::TyParam(param) => Some(param.idx),
-            TyData::ConstTy(const_ty) => match const_ty.data(db) {
-                ConstTyData::TyParam(param, _) => Some(param.idx),
-                _ => None,
-            },
-            _ => None,
-        };
+        let implicit_idx = implicit_arg.as_generic_param(db).map(|param| param.idx);
         if let Some(implicit_idx) = implicit_idx
             && let Some(slot) = subst_args.get_mut(implicit_idx)
         {
@@ -3845,37 +3847,40 @@ impl<'db> ParamSchemaId<'db> {
     /// basis. Associated methods can also refer to their parent's original
     /// parameters, even though inherited formals are reminted in method scope.
     pub fn original_key(self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<ParamKey<'db>> {
-        let param = match ty.data(db) {
-            TyData::TyParam(param) => param,
-            TyData::ConstTy(const_ty) => match const_ty.data(db) {
-                ConstTyData::TyParam(param, _) => param,
-                _ => return None,
-            },
-            _ => return None,
-        };
-        let formal_param = |formal: TyId<'db>| match formal.data(db) {
-            TyData::TyParam(formal) => Some(formal),
-            TyData::ConstTy(const_ty) => match const_ty.data(db) {
-                ConstTyData::TyParam(formal, _) => Some(formal),
-                _ => None,
-            },
-            _ => None,
-        };
+        let param = ty.as_generic_param(db)?;
+        let slot = LoweredSlot(param.idx);
         if self
-            .formal_at(db, LoweredSlot(param.idx))
-            .and_then(formal_param)
+            .formal_at(db, slot)
+            .and_then(|formal| formal.as_generic_param(db))
             == Some(param)
         {
-            return self.key_at(db, LoweredSlot(param.idx));
+            return self.key_at(db, slot);
         }
-        if let GenericParamOwner::Func(func) = self.owner(db)
-            && func.is_associated_func(db)
-            && let Some(parent) = self.owner(db).parent(db)
-        {
-            let key = param_schema(db, parent, ParamBasis::Full).original_key(db, ty)?;
-            return self.slot_for(db, key).map(|_| key);
+        let key = self.parent_schema(db)?.original_key(db, ty)?;
+        self.slot_for(db, key).map(|_| key)
+    }
+
+    /// The formal for `slot` in declaration coordinates. An associated
+    /// method's inherited slots use its parent's formals, since that is how
+    /// the parent's declarations refer to them.
+    pub fn declared_formal_at(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        slot: LoweredSlot,
+    ) -> Option<TyId<'db>> {
+        self.parent_schema(db)
+            .zip(self.key_at(db, slot))
+            .and_then(|(parent, key)| parent.formal_at(db, parent.slot_for(db, key)?))
+            .or_else(|| self.formal_at(db, slot))
+    }
+
+    fn parent_schema(self, db: &'db dyn HirAnalysisDb) -> Option<Self> {
+        match self.owner(db) {
+            GenericParamOwner::Func(func) if func.is_associated_func(db) => {
+                Some(Self::full(db, self.owner(db).parent(db)?))
+            }
+            _ => None,
         }
-        None
     }
 
     /// Resolves a declared occurrence in an explicitly chosen source basis.
@@ -4025,54 +4030,10 @@ impl<'db> PartialSubst<'db> {
             .and_then(|position| self.values[position])
     }
 
-    pub fn residualize(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> (CompleteSubst<'db>, Vec<ParamKey<'db>>) {
-        let schema = self.domain.schema(db);
-        let mut residual = Vec::new();
-        let values = self
-            .domain
-            .slots(db)
-            .zip(&self.values)
-            .map(|(slot, value)| {
-                value.unwrap_or_else(|| {
-                    residual.push(schema.key_at(db, slot).expect("valid domain slot"));
-                    schema
-                        .formal_at(db, slot)
-                        .expect("domain slot has a formal")
-                })
-            })
-            .collect();
-        (
-            CompleteSubst {
-                domain: self.domain,
-                values,
-            },
-            residual,
-        )
-    }
-
-    pub fn finish(self, db: &'db dyn HirAnalysisDb) -> Result<CompleteSubst<'db>, SubstError<'db>> {
-        let values = self
-            .domain
-            .slots(db)
-            .zip(self.values)
-            .map(|(slot, value)| {
-                value.ok_or(SubstError::MissingArgument {
-                    domain: self.domain,
-                    key: self
-                        .domain
-                        .schema(db)
-                        .key_at(db, slot)
-                        .expect("valid domain slot"),
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(CompleteSubst {
-            domain: self.domain,
-            values,
-        })
+    /// Completes the substitution, leaving unbound slots at their declaration
+    /// formals.
+    pub fn residualize(&self, db: &'db dyn HirAnalysisDb) -> CompleteSubst<'db> {
+        CompleteSubst::from_optional_values(db, self.domain, |slot| self.values[slot.0])
     }
 }
 
@@ -4109,6 +4070,47 @@ impl<'db> CompleteSubst<'db> {
             db,
             values,
         )
+    }
+
+    /// Binds the leading slots of `domain` to `prefix` and leaves the remaining
+    /// slots at their declaration formals.
+    pub fn with_prefix(
+        db: &'db dyn HirAnalysisDb,
+        domain: ParamDomainId<'db>,
+        prefix: &[TyId<'db>],
+    ) -> Self {
+        assert!(
+            prefix.len() <= domain.len(db),
+            "substitution prefix exceeds its domain"
+        );
+        Self::from_optional_values(db, domain, |slot| prefix.get(slot.0).copied())
+    }
+
+    fn from_optional_values(
+        db: &'db dyn HirAnalysisDb,
+        domain: ParamDomainId<'db>,
+        mut value: impl FnMut(LoweredSlot) -> Option<TyId<'db>>,
+    ) -> Self {
+        let schema = domain.schema(db);
+        let values = domain
+            .slots(db)
+            .map(|slot| {
+                value(slot).unwrap_or_else(|| {
+                    schema
+                        .formal_at(db, slot)
+                        .expect("domain slot has a formal")
+                })
+            })
+            .collect();
+        Self { domain, values }
+    }
+
+    /// Maps each value while keeping the domain.
+    pub fn map_values(&self, f: impl FnMut(TyId<'db>) -> TyId<'db>) -> Self {
+        Self {
+            domain: self.domain,
+            values: self.values.iter().copied().map(f).collect(),
+        }
     }
 
     pub fn domain(&self) -> ParamDomainId<'db> {

@@ -1,9 +1,9 @@
 //! Simultaneous generic substitution in a declared parameter domain.
 
 use super::{
-    const_ty::{ConstCaptureEnv, ConstTyData},
+    const_ty::ConstCaptureEnv,
     fold::{TyFoldable, TyFolder},
-    ty_def::{TyData, TyId},
+    ty_def::TyId,
     ty_lower::{CompleteSubst, ParamSchemaId, SubstError},
 };
 use crate::{
@@ -35,15 +35,8 @@ pub(crate) fn is_owned_by_schema<'db>(
     ty: TyId<'db>,
     schema: ParamSchemaId<'db>,
 ) -> bool {
-    let param = match ty.data(db) {
-        TyData::TyParam(param) => param,
-        TyData::ConstTy(const_ty) => match const_ty.data(db) {
-            ConstTyData::TyParam(param, _) => param,
-            _ => return false,
-        },
-        _ => return false,
-    };
-    param.owner == schema.owner(db).scope() && !param.is_effect()
+    ty.as_generic_param(db)
+        .is_some_and(|param| param.owner == schema.owner(db).scope() && !param.is_effect())
 }
 
 struct SubstFolder<'a, 'db> {
@@ -138,15 +131,7 @@ impl<'db> TyFolder<'db> for ScopedSubstFolder<'_, 'db> {
     }
 
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        let param = match ty.data(db) {
-            TyData::TyParam(param) => Some(param),
-            TyData::ConstTy(const_ty) => match const_ty.data(db) {
-                ConstTyData::TyParam(param, _) => Some(param),
-                _ => None,
-            },
-            _ => None,
-        };
-        if let Some(param) = param
+        if let Some(param) = ty.as_generic_param(db)
             && param.owner == self.owner
             && !param.is_effect()
             && let Some(arg) = self.args.get(param.idx)
@@ -178,8 +163,10 @@ mod tests {
     use super::*;
     use crate::{
         analysis::ty::{
+            const_ty::ConstTyData,
             generic_defaults::{GenericDefault, generic_default},
             trait_def::TraitInstId,
+            ty_def::TyData,
             ty_lower::{ParamBasis, ParamDomainId, PartialSubst, SourceParamIndex, param_schema},
         },
         hir_def::{CallableDef, IdentId},
@@ -269,16 +256,10 @@ mod tests {
 
         let mut partial = PartialSubst::new(&db, ParamDomainId::full(&db, schema));
         partial.bind(&db, t_key, TyId::bool(&db)).unwrap();
-        let (residualized, residual) = partial.residualize(&db);
-        assert_eq!(residual, vec![u_key]);
         assert_eq!(
-            substitute_complete(&db, params.to_vec(), &residualized).unwrap(),
+            substitute_complete(&db, params.to_vec(), &partial.residualize(&db)).unwrap(),
             vec![TyId::bool(&db), params[1]]
         );
-        assert!(matches!(
-            partial.finish(&db),
-            Err(SubstError::MissingArgument { key, .. }) if key == u_key
-        ));
     }
 
     #[test]

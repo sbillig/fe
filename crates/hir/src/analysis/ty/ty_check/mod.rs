@@ -104,7 +104,7 @@ use crate::analysis::ty::{
         BodyHoleSite, CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleAnchor,
         LoweringContext, invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag,
     },
-    normalize::{normalize_from_assumptions, normalize_ty},
+    normalize::{normalize_ty, normalize_with_trait_evidence},
     pattern_ir::{
         ConstructorKind, PatternAnalysisStatus, PatternStore, ValidatedPatId, ValidatedPatKind,
     },
@@ -1862,12 +1862,7 @@ impl<'db> TyChecker<'db> {
                     {
                         let mut expected = expected.instantiate(db, callable.generic_args());
                         if let Some(inst) = callable.trait_inst() {
-                            expected = normalize_from_assumptions(
-                                db,
-                                expected,
-                                scope,
-                                PredicateListId::new(db, vec![inst]),
-                            );
+                            expected = normalize_with_trait_evidence(db, expected, scope, inst);
                         }
                         let expected = normalize_ty(
                             db,
@@ -5364,12 +5359,7 @@ fn try_instantiate_trait_method<'db>(
     let inst_self = table.instantiate_to_term(inst.self_ty(db));
     table.unify(inst_self, receiver_ty)?;
 
-    Ok(normalize_from_assumptions(
-        db,
-        ty,
-        method.scope(),
-        PredicateListId::new(db, vec![inst]),
-    ))
+    Ok(normalize_with_trait_evidence(db, ty, method.scope(), inst))
 }
 
 fn instantiate_trait_method<'db>(
@@ -5393,7 +5383,7 @@ fn instantiate_trait_assoc_fn<'db>(
     // `try_instantiate_trait_method`.
     let ty = TyId::foldl(db, TyId::func(db, method), inst.args(db));
 
-    normalize_from_assumptions(db, ty, method.scope(), PredicateListId::new(db, vec![inst]))
+    normalize_with_trait_evidence(db, ty, method.scope(), inst)
 }
 
 struct TyCheckerFinalizer<'db> {
