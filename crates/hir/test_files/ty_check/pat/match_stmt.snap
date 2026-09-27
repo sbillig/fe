@@ -222,13 +222,13 @@ note:
    ┌─ match_stmt.fe:30:24
    │
 30 │             return r + g + b
-   │                        ^ u8
+   │                        ^ ref u8
 
 note:
    ┌─ match_stmt.fe:30:28
    │
 30 │             return r + g + b
-   │                            ^ u8
+   │                            ^ ref u8
 
 note:
    ┌─ match_stmt.fe:32:9

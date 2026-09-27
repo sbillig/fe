@@ -334,27 +334,25 @@ func private %input() -> @layout_2 {
 
 func inline(always) private %impl_trait_CallData__len(v0.@layout_2) -> i256 {
     block0:
-        v1.objref<i256> = obj.alloc i256;
         jump block1;
 
     block1:
-        v2.i256 = evm_calldata_size;
-        v5.i256 = extract_value v0 0.i256;
-        obj.store v1 v2;
-        v6.i1 = gt v5 v2;
-        br v6 block2 block3;
+        v1.i256 = evm_calldata_size;
+        v4.i256 = extract_value v0 0.i256;
+        v5.i1 = gt v4 v1;
+        br v5 block2 block3;
 
     block2:
         jump block4;
 
     block3:
-        v8.i256 = extract_value v0 0.i256;
-        (v10.i256, v11.i1) = usubo v2 v8;
-        br v11 block5 block6;
+        v7.i256 = extract_value v0 0.i256;
+        (v9.i256, v10.i1) = usubo v1 v7;
+        br v10 block5 block6;
 
     block4:
-        v16.i256 = phi (0.i256 block2) (v10 block6);
-        return v16;
+        v15.i256 = phi (0.i256 block2) (v9 block6);
+        return v15;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -610,8 +608,8 @@ func private %search(v0.i256, v1.i256, v2.i256, v3.i256) -> @layout_6 {
         jump block2;
 
     block2:
-        v7.i256 = obj.load v4;
-        v9.i1 = lt v7 v2;
+        v8.i256 = obj.load v4;
+        v9.i1 = lt v8 v2;
         br v9 block3 block4;
 
     block3:
@@ -645,8 +643,8 @@ func private %search(v0.i256, v1.i256, v2.i256, v3.i256) -> @layout_6 {
         jump block2;
 
     block8:
-        v30.i256 = obj.load v4;
-        v32.i1 = lt v30 v2;
+        v31.i256 = obj.load v4;
+        v32.i1 = lt v31 v2;
         br v32 block6 block7;
 
     block9:
@@ -739,21 +737,19 @@ func private %store_word(v0.i256, v1.i256) {
 
 func inline(always) private %validate_runtime_head(v0.i256, v1.i256, v2.i256) {
     block0:
-        v3.objref<i256> = obj.alloc i256;
         jump block1;
 
     block1:
-        v6.i1 = eq v2 0.i256;
-        v7.i1 = is_zero v6;
-        br v7 block2 block3;
+        v5.i1 = eq v2 0.i256;
+        v6.i1 = is_zero v5;
+        br v6 block2 block3;
 
     block2:
-        v10.i256 = sub v0 v1;
-        v11.i256 = call %from_word v10;
-        v13.i256 = call %from_word v2;
-        obj.store v3 v13;
-        v14.i1 = slt v11 v13;
-        br v14 block5 block6;
+        v9.i256 = sub v0 v1;
+        v10.i256 = call %from_word v9;
+        v12.i256 = call %from_word v2;
+        v13.i1 = slt v10 v12;
+        br v13 block5 block6;
 
     block3:
         jump block4;

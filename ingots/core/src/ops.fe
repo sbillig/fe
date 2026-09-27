@@ -124,7 +124,6 @@ pub trait Eq<T = Self> {
 }
 
 // Aggregate comparisons use element Eq implementations and short-circuit.
-// As with Eq itself, a non-Copy right-hand operand is consumed.
 impl<T: Eq, const N: usize> Eq for [T; N] {
     fn eq(self, _ other: [T; N]) -> bool {
         let mut i: usize = 0
