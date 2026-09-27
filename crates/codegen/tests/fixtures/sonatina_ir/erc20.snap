@@ -18,8 +18,14 @@ type @layout_9 = {@layout_0, @layout_0, i256};
 type @layout_10 = {i256, @layout_0};
 type @layout_11 = {};
 type @layout_12 = {@layout_11};
+type @layout_13 = {[i256; 2], i256};
+type @layout_14 = {[i256; 3], i256};
 
-global private const @layout_0 $const_region_0 = {0};
+global private const @layout_13 $const_region_0 = {[0, 32], 64};
+global private const [i256; 2] $const_region_1 = [0, 32];
+global private const @layout_14 $const_region_2 = {[0, 32, 64], 96};
+global private const [i256; 3] $const_region_3 = [0, 32, 64];
+global private const @layout_0 $const_region_4 = {0};
 
 func private %__CoolCoin_init(v0.i256, v1.@layout_0, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256) {
     block0:
@@ -1729,8 +1735,10 @@ func inline(always) private %impl_trait_IncreaseAllowance__decode_from__g8f43(v0
     block1:
         v3.i256 = call %impl_trait_CallData__len v0;
         v5.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v1 v3;
-        (v7.i256, v8.i1) = uaddo v1 32.i256;
-        br v8 block2 block3;
+        v6.constref<@layout_13> = const.ref $const_region_0;
+        v7.constref<[i256; 2]> = const.ref $const_region_1;
+        (v10.i256, v11.i1) = uaddo v1 32.i256;
+        br v11 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -1738,10 +1746,10 @@ func inline(always) private %impl_trait_IncreaseAllowance__decode_from__g8f43(v0
         evm_revert 0.i256 36.i256;
 
     block3:
-        v17.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
-        v20.@layout_6 = insert_value undef.@layout_6 0.i256 v5;
-        v22.@layout_6 = insert_value v20 1.i256 v17;
-        return v22;
+        v20.i256 = call %decode_msg_field_from__g7f14 v0 v1 v10 v3;
+        v23.@layout_6 = insert_value undef.@layout_6 0.i256 v5;
+        v24.@layout_6 = insert_value v23 1.i256 v20;
+        return v24;
 }
 
 func inline(always) private %impl_trait_Approve__decode_from__g8f43(v0.@layout_0, v1.i256) -> @layout_6 {
@@ -1751,8 +1759,10 @@ func inline(always) private %impl_trait_Approve__decode_from__g8f43(v0.@layout_0
     block1:
         v3.i256 = call %impl_trait_CallData__len v0;
         v5.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v1 v3;
-        (v7.i256, v8.i1) = uaddo v1 32.i256;
-        br v8 block2 block3;
+        v6.constref<@layout_13> = const.ref $const_region_0;
+        v7.constref<[i256; 2]> = const.ref $const_region_1;
+        (v10.i256, v11.i1) = uaddo v1 32.i256;
+        br v11 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -1760,10 +1770,10 @@ func inline(always) private %impl_trait_Approve__decode_from__g8f43(v0.@layout_0
         evm_revert 0.i256 36.i256;
 
     block3:
-        v17.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
-        v20.@layout_6 = insert_value undef.@layout_6 0.i256 v5;
-        v22.@layout_6 = insert_value v20 1.i256 v17;
-        return v22;
+        v20.i256 = call %decode_msg_field_from__g7f14 v0 v1 v10 v3;
+        v23.@layout_6 = insert_value undef.@layout_6 0.i256 v5;
+        v24.@layout_6 = insert_value v23 1.i256 v20;
+        return v24;
 }
 
 func inline(always) private %impl_trait_TotalSupply__decode_from__g8f43(v0.@layout_0, v1.i256) {
@@ -1790,8 +1800,10 @@ func inline(always) private %impl_trait_BurnFrom__decode_from__g8f43(v0.@layout_
     block1:
         v3.i256 = call %impl_trait_CallData__len v0;
         v5.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v1 v3;
-        (v7.i256, v8.i1) = uaddo v1 32.i256;
-        br v8 block2 block3;
+        v6.constref<@layout_13> = const.ref $const_region_0;
+        v7.constref<[i256; 2]> = const.ref $const_region_1;
+        (v10.i256, v11.i1) = uaddo v1 32.i256;
+        br v11 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -1799,10 +1811,10 @@ func inline(always) private %impl_trait_BurnFrom__decode_from__g8f43(v0.@layout_
         evm_revert 0.i256 36.i256;
 
     block3:
-        v17.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
-        v20.@layout_6 = insert_value undef.@layout_6 0.i256 v5;
-        v22.@layout_6 = insert_value v20 1.i256 v17;
-        return v22;
+        v20.i256 = call %decode_msg_field_from__g7f14 v0 v1 v10 v3;
+        v23.@layout_6 = insert_value undef.@layout_6 0.i256 v5;
+        v24.@layout_6 = insert_value v23 1.i256 v20;
+        return v24;
 }
 
 func inline(always) private %impl_trait_Symbol__decode_from__g8f43(v0.@layout_0, v1.i256) {
@@ -1820,8 +1832,10 @@ func inline(always) private %impl_trait_DecreaseAllowance__decode_from__g8f43(v0
     block1:
         v3.i256 = call %impl_trait_CallData__len v0;
         v5.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v1 v3;
-        (v7.i256, v8.i1) = uaddo v1 32.i256;
-        br v8 block2 block3;
+        v6.constref<@layout_13> = const.ref $const_region_0;
+        v7.constref<[i256; 2]> = const.ref $const_region_1;
+        (v10.i256, v11.i1) = uaddo v1 32.i256;
+        br v11 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -1829,10 +1843,10 @@ func inline(always) private %impl_trait_DecreaseAllowance__decode_from__g8f43(v0
         evm_revert 0.i256 36.i256;
 
     block3:
-        v17.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
-        v20.@layout_6 = insert_value undef.@layout_6 0.i256 v5;
-        v22.@layout_6 = insert_value v20 1.i256 v17;
-        return v22;
+        v20.i256 = call %decode_msg_field_from__g7f14 v0 v1 v10 v3;
+        v23.@layout_6 = insert_value undef.@layout_6 0.i256 v5;
+        v24.@layout_6 = insert_value v23 1.i256 v20;
+        return v24;
 }
 
 func inline(always) private %impl_trait_BalanceOf__decode_from__g8f43(v0.@layout_0, v1.i256) -> @layout_7 {
@@ -1900,8 +1914,10 @@ func inline(always) private %impl_trait_Transfer__decode_from__g8f43(v0.@layout_
     block1:
         v3.i256 = call %impl_trait_CallData__len v0;
         v5.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v1 v3;
-        (v7.i256, v8.i1) = uaddo v1 32.i256;
-        br v8 block2 block3;
+        v6.constref<@layout_13> = const.ref $const_region_0;
+        v7.constref<[i256; 2]> = const.ref $const_region_1;
+        (v10.i256, v11.i1) = uaddo v1 32.i256;
+        br v11 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -1909,10 +1925,10 @@ func inline(always) private %impl_trait_Transfer__decode_from__g8f43(v0.@layout_
         evm_revert 0.i256 36.i256;
 
     block3:
-        v17.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
-        v20.@layout_6 = insert_value undef.@layout_6 0.i256 v5;
-        v22.@layout_6 = insert_value v20 1.i256 v17;
-        return v22;
+        v20.i256 = call %decode_msg_field_from__g7f14 v0 v1 v10 v3;
+        v23.@layout_6 = insert_value undef.@layout_6 0.i256 v5;
+        v24.@layout_6 = insert_value v23 1.i256 v20;
+        return v24;
 }
 
 func inline(always) private %impl_trait_Address__decode_from__gc8cd(v0.@layout_0, v1.i256) -> @layout_0 {
@@ -1944,8 +1960,10 @@ func inline(always) private %impl_trait_Mint__decode_from__g8f43(v0.@layout_0, v
     block1:
         v3.i256 = call %impl_trait_CallData__len v0;
         v5.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v1 v3;
-        (v7.i256, v8.i1) = uaddo v1 32.i256;
-        br v8 block2 block3;
+        v6.constref<@layout_13> = const.ref $const_region_0;
+        v7.constref<[i256; 2]> = const.ref $const_region_1;
+        (v10.i256, v11.i1) = uaddo v1 32.i256;
+        br v11 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -1953,10 +1971,10 @@ func inline(always) private %impl_trait_Mint__decode_from__g8f43(v0.@layout_0, v
         evm_revert 0.i256 36.i256;
 
     block3:
-        v17.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
-        v20.@layout_6 = insert_value undef.@layout_6 0.i256 v5;
-        v22.@layout_6 = insert_value v20 1.i256 v17;
-        return v22;
+        v20.i256 = call %decode_msg_field_from__g7f14 v0 v1 v10 v3;
+        v23.@layout_6 = insert_value undef.@layout_6 0.i256 v5;
+        v24.@layout_6 = insert_value v23 1.i256 v20;
+        return v24;
 }
 
 func inline(always) private %impl_trait_Allowance__decode_from__g8f43(v0.@layout_0, v1.i256) -> @layout_8 {
@@ -1966,8 +1984,10 @@ func inline(always) private %impl_trait_Allowance__decode_from__g8f43(v0.@layout
     block1:
         v3.i256 = call %impl_trait_CallData__len v0;
         v5.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v1 v3;
-        (v7.i256, v8.i1) = uaddo v1 32.i256;
-        br v8 block2 block3;
+        v6.constref<@layout_13> = const.ref $const_region_0;
+        v7.constref<[i256; 2]> = const.ref $const_region_1;
+        (v10.i256, v11.i1) = uaddo v1 32.i256;
+        br v11 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -1975,10 +1995,10 @@ func inline(always) private %impl_trait_Allowance__decode_from__g8f43(v0.@layout
         evm_revert 0.i256 36.i256;
 
     block3:
-        v17.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v7 v3;
-        v20.@layout_8 = insert_value undef.@layout_8 0.i256 v5;
-        v22.@layout_8 = insert_value v20 1.i256 v17;
-        return v22;
+        v20.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v10 v3;
+        v23.@layout_8 = insert_value undef.@layout_8 0.i256 v5;
+        v24.@layout_8 = insert_value v23 1.i256 v20;
+        return v24;
 }
 
 func inline(always) private %impl_trait_TransferFrom__decode_from__g8f43(v0.@layout_0, v1.i256) -> @layout_9 {
@@ -1988,8 +2008,10 @@ func inline(always) private %impl_trait_TransferFrom__decode_from__g8f43(v0.@lay
     block1:
         v3.i256 = call %impl_trait_CallData__len v0;
         v5.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v1 v3;
-        (v7.i256, v8.i1) = uaddo v1 32.i256;
-        br v8 block2 block3;
+        v6.constref<@layout_14> = const.ref $const_region_2;
+        v7.constref<[i256; 3]> = const.ref $const_region_3;
+        (v10.i256, v11.i1) = uaddo v1 32.i256;
+        br v11 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -1997,20 +2019,18 @@ func inline(always) private %impl_trait_TransferFrom__decode_from__g8f43(v0.@lay
         evm_revert 0.i256 36.i256;
 
     block3:
-        v17.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v7 v3;
-        (v20.i256, v21.i1) = uaddo v1 32.i256;
-        br v21 block2 block4;
+        v20.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v10 v3;
+        v23.constref<@layout_14> = const.ref $const_region_2;
+        v24.constref<[i256; 3]> = const.ref $const_region_3;
+        (v27.i256, v28.i1) = uaddo v1 64.i256;
+        br v28 block2 block4;
 
     block4:
-        (v22.i256, v23.i1) = uaddo v20 32.i256;
-        br v23 block2 block5;
-
-    block5:
-        v27.i256 = call %decode_msg_field_from__g7f14 v0 v1 v22 v3;
-        v30.@layout_9 = insert_value undef.@layout_9 0.i256 v5;
-        v33.@layout_9 = insert_value v30 1.i256 v17;
-        v35.@layout_9 = insert_value v33 2.i256 v27;
-        return v35;
+        v32.i256 = call %decode_msg_field_from__g7f14 v0 v1 v27 v3;
+        v35.@layout_9 = insert_value undef.@layout_9 0.i256 v5;
+        v37.@layout_9 = insert_value v35 1.i256 v20;
+        v38.@layout_9 = insert_value v37 2.i256 v32;
+        return v38;
 }
 
 func inline(always) private %decode_from_prechecked_head__g1b32(v0.@layout_0, v1.i256, v2.i256) {
@@ -3500,7 +3520,7 @@ func inline(always) private %impl_CallData__new() -> @layout_0 {
         jump block1;
 
     block1:
-        v1.constref<@layout_0> = const.ref $const_region_0;
+        v1.constref<@layout_0> = const.ref $const_region_4;
         v2.objref<@layout_0> = obj.alloc @layout_0;
         obj.init.const v2 v1;
         v3.@layout_0 = obj.load v2;
@@ -5402,7 +5422,7 @@ func private %zero() -> @layout_0 {
         jump block1;
 
     block1:
-        v1.constref<@layout_0> = const.ref $const_region_0;
+        v1.constref<@layout_0> = const.ref $const_region_4;
         v2.objref<@layout_0> = obj.alloc @layout_0;
         obj.init.const v2 v1;
         v3.@layout_0 = obj.load v2;
@@ -5418,5 +5438,9 @@ object @CoolCoin {
     section runtime {
         entry %contract_runtime_root_CoolCoin;
         data $const_region_0;
+        data $const_region_1;
+        data $const_region_2;
+        data $const_region_3;
+        data $const_region_4;
     }
 }
