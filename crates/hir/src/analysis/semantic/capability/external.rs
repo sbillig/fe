@@ -111,6 +111,10 @@ pub enum ExternalOrigin<'db> {
         target_ty: TyId<'db>,
     },
     OpaqueHandle(OpaqueHandleRef<'db>),
+    /// All addresses of this contract, without a distinguished object or loan.
+    /// Arbitrary contents close over this finite family instead of naming a
+    /// new cell for every pointer loaded from unknown bytes.
+    OpaqueMemory,
     /// An allocator-created object. Its identity is distinct from every older input.
     Allocation(OpaqueHandleRef<'db>),
     /// An address admitted by an explicit unknown-call or intrinsic contract.
@@ -231,6 +235,30 @@ impl<'db> ClobberCondition<'db> {
 }
 
 impl<'db> ExternalSource<'db> {
+    pub fn opaque_memory(contract: ReferentContract<'db>) -> Self {
+        Self {
+            origin: ExternalOrigin::OpaqueMemory,
+            contract,
+            clobber: None,
+            dereferences: Box::new([]),
+            reachable: true,
+            uncertain: true,
+        }
+    }
+
+    /// Reading or corrupting arbitrary bytes cannot refine their identity.
+    pub fn is_arbitrary(&self) -> bool {
+        self.clobber.is_some()
+            || match &self.origin {
+                ExternalOrigin::OpaqueMemory => true,
+                ExternalOrigin::OpaqueHandle(handle) => {
+                    matches!(handle.occurrence, AddressOccurrence::Overwrite(_))
+                }
+                ExternalOrigin::Memory { base, .. } => base.source.is_arbitrary(),
+                _ => false,
+            }
+    }
+
     pub fn unknown(
         contract: ReferentContract<'db>,
         occurrence: AddressOccurrence<'db>,
@@ -362,6 +390,13 @@ impl<'db> ExternalSource<'db> {
         target_ty: TyId<'db>,
         mut element: Option<(TyId<'db>, IndexExpr<'db>)>,
     ) -> Self {
+        if matches!(base.source.origin, ExternalOrigin::OpaqueMemory) {
+            return Self::opaque_memory(ReferentContract::new(
+                db,
+                target_ty,
+                base.source.contract.address_space,
+            ));
+        }
         if element.is_some_and(|(_, index)| index == IndexExpr::Const(0)) {
             element = None;
         }
@@ -509,7 +544,9 @@ impl<'db> ExternalSource<'db> {
                 .indices()
                 .chain(element.iter().map(|(_, index)| *index))
                 .collect(),
-            ExternalOrigin::Provider { .. } | ExternalOrigin::Local(_) => Vec::new(),
+            ExternalOrigin::Provider { .. }
+            | ExternalOrigin::Local(_)
+            | ExternalOrigin::OpaqueMemory => Vec::new(),
         };
         indices.extend(self.clobber.iter().flat_map(|clobber| {
             clobber
@@ -573,7 +610,7 @@ impl<'db> ExternalSource<'db> {
                     }),
                 };
             }
-            ExternalOrigin::Input(_) | ExternalOrigin::Local(_) => {}
+            ExternalOrigin::Input(_) | ExternalOrigin::Local(_) | ExternalOrigin::OpaqueMemory => {}
         }
         result
     }
@@ -590,6 +627,7 @@ impl<'db> ExternalSource<'db> {
                 arguments: arguments.iter().map(|index| subst.apply(*index)).collect(),
             },
             ExternalOrigin::Local(root) => ExternalOrigin::Local(*root),
+            ExternalOrigin::OpaqueMemory => ExternalOrigin::OpaqueMemory,
             ExternalOrigin::Input(input) => ExternalOrigin::Input(input.substitute(subst)),
             ExternalOrigin::Provider {
                 provider,
@@ -688,10 +726,11 @@ impl<'db> ExternalSource<'db> {
         let typed = embedding
             .as_ref()
             .filter(|_| {
-                !instance
-                    .overlapping_object_indices()
-                    .iter()
-                    .any(|index| matches!(index, IndexExpr::Bound(_)))
+                !matches!(self.origin, ExternalOrigin::OpaqueMemory)
+                    && !instance
+                        .overlapping_object_indices()
+                        .iter()
+                        .any(|index| matches!(index, IndexExpr::Bound(_)))
             })
             .map(|embedding| embedding.guard.clone());
         let write = embedding.filter(|_| !self.reachable && !instance.reachable);
@@ -823,6 +862,7 @@ impl<'db> ExternalSource<'db> {
                 );
             }
             (ExternalOrigin::Local(left), ExternalOrigin::Local(right)) if left == right => {}
+            (ExternalOrigin::OpaqueMemory, ExternalOrigin::OpaqueMemory) => {}
             (
                 ExternalOrigin::Provider {
                     provider: left,

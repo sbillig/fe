@@ -3718,7 +3718,7 @@ fn test_recursive_raw_pointers_execute_at_o0_and_o2() {
         let (output, exit_code) = run_fe_main(&["test", "--jobs", "1", level, fixture]);
         assert_eq!(exit_code, 0, "fe test {level} failed:\n{output}");
         assert!(
-            output.contains("8 passed; 0 failed"),
+            output.contains("9 passed; 0 failed"),
             "expected every recursive raw-pointer test to run at {level}:\n{output}"
         );
     }

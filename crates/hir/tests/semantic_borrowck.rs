@@ -10110,7 +10110,7 @@ fn staged(cursor: mut u256, index: usize) -> u256 {{
                 .flat_map(|access| access.region.clauses())
             {
                 if let RegionRoot::External(source) = &clause.payload.root
-                    && matches!(source.origin, ExternalOrigin::Memory { .. })
+                    && matches!(source.origin, ExternalOrigin::OpaqueMemory)
                 {
                     assert!(
                         source.uncertain(),
@@ -10491,4 +10491,97 @@ fn user_allocator_externs_still_require_effect_contracts() {
             "{declaration}: {diagnostics}"
         );
     }
+}
+
+#[test]
+fn raw_call_consumption_retires_native_contents_without_writing_bytes() {
+    let prefix = r#"
+use core::ptr
+fn consume(_ value: own [ref u256; 2]) {}
+fn take(_ values: *[ref u256; 2]) { consume(*values) }
+"#;
+    with_borrow_summary(prefix, "take", |_, summary| {
+        assert!(summary.mutable_inputs.is_empty());
+        assert!(!summary.availability.unavailable.is_empty());
+    });
+    for (after, moved) in [
+        ("", false),
+        ("take(values)", true),
+        ("*values = [ref owner, ref owner]\ntake(values)", false),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+{prefix}
+fn caller() {{
+    let owner: u256 = 7
+    let values = ptr::alloc<[ref u256; 2]>()
+    *values = [ref owner, ref owner]
+    take(values)
+    {after}
+}}
+"#
+        ));
+        if moved {
+            assert!(diagnostics.contains("move conflict"), "{diagnostics}");
+        } else {
+            assert!(diagnostics.is_empty(), "{diagnostics}");
+        }
+    }
+}
+
+#[test]
+fn recursive_raw_pointers_preserve_native_loan_conflicts() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+struct Node { value: u256, next: *Node }
+fn pick(_ first: *Node, _ second: *Node, use_first: bool) -> *Node {
+    if use_first { first } else { second }
+}
+fn bad_mut() {
+    let node = core::ptr::alloc<Node>()
+    node.value = 1
+    node.next = node
+    let first = pick(node, node, use_first: true)
+    let second = pick(node, node, use_first: false)
+    let borrowed = mut first.value
+    second.next.value = 2
+    borrowed = 3
+}
+fn bad_ref() {
+    let node = core::ptr::alloc<Node>()
+    node.value = 1
+    node.next = node
+    let borrowed = ref node.value
+    node.next.value = 2
+    let observed = borrowed
+}
+fn disjoint() {
+    let head = core::ptr::alloc<Node>()
+    let tail = core::ptr::alloc<Node>()
+    head.value = 1
+    head.next = tail
+    tail.value = 2
+    tail.next = head
+    let borrowed = mut head.value
+    tail.value = 3
+    borrowed = 4
+}
+"#,
+    );
+    for name in ["bad_mut", "bad_ref"] {
+        assert!(
+            diagnostics.contains(&format!("borrow conflict in `fn {name}`")),
+            "{diagnostics}"
+        );
+    }
+    for name in ["pick", "disjoint"] {
+        assert!(
+            !diagnostics.contains(&format!("borrow conflict in `fn {name}`")),
+            "{diagnostics}"
+        );
+    }
+    assert!(
+        !diagnostics.contains("internal borrow checking error"),
+        "{diagnostics}"
+    );
 }

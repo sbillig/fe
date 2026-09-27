@@ -43,6 +43,11 @@ struct Pair {
     link: (u256, *Pair),
 }
 
+struct MovePair {
+    a: u256,
+    b: u256,
+}
+
 struct PNode {
     value: u256,
     next: **PNode,
@@ -121,8 +126,6 @@ fn test_recursive_params_returns_and_values() {
     assert(node_sum(built) == 6)
 }
 
-// Each test calls a joining or looping helper at most once: repeated calls
-// currently stall the frontend borrow checker on recursive raw pointees.
 #[test]
 fn test_recursive_joins() {
     let b = core::ptr::alloc<Node>()
@@ -131,6 +134,8 @@ fn test_recursive_joins() {
     let a = core::ptr::alloc<Node>()
     a.value = 1
     a.next = b
+    let first = pick(a, b, use_first: true)
+    assert(first.value == 1)
     let second = pick(a, b, use_first: false)
     assert(second.value == 2)
     let chosen = if a.value == 1 { a.next } else { a }
@@ -149,6 +154,7 @@ fn test_recursive_loops() {
     a.next = b
     c.next = a
     assert(walk(a, steps: 4) == 2)
+    assert(walk(a, steps: 8) == 3)
 }
 
 #[test]
@@ -179,9 +185,29 @@ fn test_generic_recursion() {
     assert(generic_next(w) == 300)
 }
 
-// Matching a pointer out of these recursive payloads, or passing such a
-// payload to a function, currently stalls the frontend borrow checker;
-// construction, storage, and whole-value copies are covered here.
+fn relink(_ node: *ENode, _ next: Link) {
+    node.next = next
+}
+
+fn is_cons(_ link: Link) -> bool {
+    match link {
+        Link::Nil => false
+        Link::Cons(_) => true
+    }
+}
+
+fn read_next_ptr(_ start: *ONode) -> Option<*ONode> {
+    start.next
+}
+
+fn optional_next_value(_ start: *ONode) -> u256 {
+    if let Option::Some(node) = start.next {
+        node.value
+    } else {
+        0
+    }
+}
+
 #[test]
 fn test_enum_payload_recursion() {
     let last = core::ptr::alloc<ENode>()
@@ -189,7 +215,9 @@ fn test_enum_payload_recursion() {
     last.next = Link::Nil
     let first = core::ptr::alloc<ENode>()
     first.value = 6
-    first.next = Link::Cons(last)
+    relink(first, Link::Cons(last))
+    assert(is_cons(Link::Cons(first)))
+    assert(is_cons(first.next))
     let copy = *first
     let slot = core::ptr::alloc<ENode>()
     *slot = copy
@@ -203,9 +231,33 @@ fn test_enum_payload_recursion() {
     let o1 = core::ptr::alloc<ONode>()
     o1.value = 1
     o1.next = Option::Some(o2)
+    assert(optional_next_value(o1) == 2)
+    assert(optional_next_value(o2) == 0)
     let node = *o1
     assert(node.value == 1)
     assert(node.next.is_some())
+    assert(o2.next.is_none())
+}
+
+#[test]
+fn test_recursive_read_only_call_frame_after_move() {
+    let first = core::ptr::alloc<MovePair>()
+    first.a = 6
+    first.b = 0
+    let copy = *first
+    assert(copy.a == 6)
+
+    let o2 = core::ptr::alloc<ONode>()
+    o2.value = 2
+    o2.next = Option::None
+    let o1 = core::ptr::alloc<ONode>()
+    o1.value = 1
+    o1.next = Option::Some(o2)
+    assert(optional_next_value(o1) == 2)
+    assert(optional_next_value(o1) == 2)
+    let next = read_next_ptr(o1)
+    assert(next.is_some())
+    assert(optional_next_value(o2) == 0)
     assert(o2.next.is_none())
 }
 

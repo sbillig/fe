@@ -378,7 +378,11 @@ fn raw_return_space<'db>(
             provider.binding(db).provider_ty.as_ptr(db).is_some(),
         ),
         // An unknown semantic referent supplies no raw-carrier layout evidence.
-        ExternalOrigin::Local(_) | ExternalOrigin::Unknown { .. } => return None,
+        ExternalOrigin::Local(_)
+        | ExternalOrigin::Unknown { .. }
+        | ExternalOrigin::OpaqueMemory => {
+            return None;
+        }
     };
     steps.extend(source.dereferences().iter());
     for path in steps {

@@ -721,6 +721,22 @@ impl<'db> BorrowState<'db> {
         self.write_regions(overwrite, values, &[(region, replacement)])
     }
 
+    /// Consuming a value retires its modeled capabilities without writing bytes
+    /// or manufacturing clobbers in possibly overlapping cells. Availability
+    /// separately prevents subsequent uses through every alias.
+    pub fn move_out(
+        &mut self,
+        values: &mut CapabilityValues<'db>,
+        region: &RegionSet<'db>,
+        shape: ShapeId<'db>,
+    ) -> Result<(), StateError<'db>> {
+        let empty = values.empty(shape, region.scope());
+        self.update_regions(None, values, &[(region, &empty)])?;
+        self.invalidate_certified_contents(values.db, AccessFootprint::typed(region));
+        self.invalidate_scalar_memory(values.db, AccessFootprint::typed(region));
+        Ok(())
+    }
+
     /// Byte writes may destroy every overlapping typed interpretation, including
     /// an exact cell when an intrinsic supplies no structural poststate.
     pub fn invalidate_memory(
@@ -766,6 +782,15 @@ impl<'db> BorrowState<'db> {
     pub fn write_regions(
         &mut self,
         overwrite: OpaqueWrite<'db>,
+        values: &mut CapabilityValues<'db>,
+        replacements: &[(&RegionSet<'db>, &CapabilityValue<'db>)],
+    ) -> Result<(), StateError<'db>> {
+        self.update_regions(Some(overwrite), values, replacements)
+    }
+
+    fn update_regions(
+        &mut self,
+        overwrite: Option<OpaqueWrite<'db>>,
         values: &mut CapabilityValues<'db>,
         replacements: &[(&RegionSet<'db>, &CapabilityValue<'db>)],
     ) -> Result<(), StateError<'db>> {
@@ -847,6 +872,10 @@ impl<'db> BorrowState<'db> {
                 written.push(applied);
             }
         }
+        let Some(overwrite) = overwrite else {
+            self.contents.extend(updates);
+            return Ok(());
+        };
         let clauses = replacements
             .iter()
             .flat_map(|(region, _)| region.clauses().iter().map(move |clause| (*region, clause)));

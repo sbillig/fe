@@ -527,6 +527,7 @@ impl<'db> Borrowck<'db> {
                     self.instantiate_address_base(base, result, origin, single_result_port)?
                 } else {
                     match source.origin {
+                        ExternalOrigin::OpaqueMemory => source,
                         ExternalOrigin::Provider {
                             provider,
                             target_ty,
@@ -703,10 +704,36 @@ impl<'db> Borrowck<'db> {
         let mut result = values.empty(result_shape, &scope);
         let mut updates = Vec::new();
         let inputs = self.inventory.inputs.clone();
+        let pending_accesses = self.body_memory_accesses();
+        // Control-flow restrictions and logical moves also change modeled
+        // contents, but neither writes bytes. Publish typed poststates for write
+        // destinations and newly created objects. Byte writes also expose their
+        // corrupted interpretations. Typed alias invalidation is replayed from
+        // the actual accesses, not as another store to each possible alias.
+        let writes: Vec<_> = pending_accesses
+            .iter()
+            .filter(|access| access.kind == MemoryAccessKind::Write)
+            .collect();
         for input in &inputs {
             if input.writable
                 && input.shape.contains_capability(self.db)
                 && !matches!(input.source.origin, ExternalOrigin::Local(_))
+                && (input.source.is_fresh_allocation()
+                    || writes.iter().any(|access| {
+                        access.region.clauses().iter().any(|clause| {
+                            matches!(&clause.payload.root, RegionRoot::External(source)
+                                if input.source.match_instance(&input.scope, source, clause.guard.scope()).is_some())
+                        }) || (access.extent != AccessExtent::Typed
+                            && !matches!(
+                                AccessFootprint::typed(&RegionSet::singleton(
+                                    &input.scope,
+                                    RegionRoot::External(input.source.clone()),
+                                    RegionPath::default(),
+                                ).quantify_into(self.db, access.region.scope()))
+                                    .overlap(self.db, access.footprint()),
+                                OverlapResult::Disjoint
+                            ))
+                    }))
             {
                 let root = RegionRoot::External(input.source.clone());
                 let initial = self
@@ -932,7 +959,6 @@ impl<'db> Borrowck<'db> {
                 requirements.push(requirement);
             }
         }
-        let pending_accesses = self.body_memory_accesses();
         let mut accesses = Vec::new();
         for access in pending_accesses {
             // Eliding fresh-object effects relies on the raw API's valid-range
@@ -1508,6 +1534,11 @@ impl<'db> Borrowck<'db> {
             return Err(invalid("referent addressability does not match its type"));
         }
         let (mut ty, mut class, mut space) = match &external.origin {
+            ExternalOrigin::OpaqueMemory => (
+                external.contract.ty,
+                CapabilityClass::Pointer,
+                external.contract.address_space,
+            ),
             ExternalOrigin::Unknown {
                 contract,
                 occurrence,
@@ -2083,9 +2114,19 @@ impl<'db> Borrowck<'db> {
                 })
                 .or_insert(Some(update.value));
         }
+        let accesses = self.call_memory_accesses(state, result, inputs)?;
+        let consumed = if call.summary.availability.unavailable.is_empty() {
+            Vec::new()
+        } else {
+            self.call_availability(state, result, inputs)?
+                .expect("prepared call")
+                .consumed
+        };
         let storage = updates
             .iter()
-            .flat_map(|(region, _)| region.clauses())
+            .map(|(region, _)| region)
+            .chain(consumed.iter().map(|(region, _)| region))
+            .flat_map(RegionSet::clauses)
             .filter_map(|clause| match &clause.payload.root {
                 RegionRoot::External(source) => {
                     Some((source.clone(), clause.guard.scope().clone()))
@@ -2093,7 +2134,6 @@ impl<'db> Borrowck<'db> {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let accesses = self.call_memory_accesses(state, result, inputs)?;
         self.ensure_storage(state, storage, statement.origin)?;
         // Every source above was substituted against the same pre-call state.
         // Birth seeds precede final poststates, never caller-source reads.
@@ -2120,6 +2160,17 @@ impl<'db> Borrowck<'db> {
                         )
                     })?;
             }
+        }
+        // Final typed poststates can restore portions of a consumed aggregate.
+        for (region, shape) in consumed {
+            state
+                .move_out(&mut self.inventory.values, &region, shape)
+                .map_err(|error| {
+                    self.internal_diag(
+                        statement.origin,
+                        format!("unresolved call consumption: {error:?}"),
+                    )
+                })?;
         }
         state
             .write_regions(
@@ -2481,6 +2532,24 @@ impl<'db> Borrowck<'db> {
             return Ok(resolved);
         }
         let (mut resolved, mut target_ty) = match &external.origin {
+            ExternalOrigin::OpaqueMemory => {
+                let region = RegionSet::singleton(
+                    scope,
+                    RegionRoot::External(external.clone()),
+                    path.clone(),
+                )
+                .with_relative_views(self.db, &source.views, path.as_slice().len());
+                return Ok(Resolution {
+                    invalidated: if invalidated {
+                        NativeValidity::from_region(&region)
+                    } else {
+                        NativeValidity::default()
+                    },
+                    region,
+                    parents: Vec::new(),
+                    traversed: Vec::new(),
+                });
+            }
             ExternalOrigin::Local(_) => {
                 return Err(self.internal_diag(origin, "summary retains local storage".into()));
             }
@@ -3187,6 +3256,65 @@ mod tests {
                 },
             }],
         )
+    }
+
+    #[test]
+    fn recursive_read_only_summaries_preserve_input_cells() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "recursive_frame.fe".into(),
+            r#"
+struct Node { value: u256, next: Option<*Node> }
+enum Link { Nil, Cons(*Node) }
+fn read_next_ptr(_ start: *Node) -> Option<*Node> { start.next }
+fn optional_next_value(_ start: *Node) -> u256 {
+    if let Option::Some(node) = start.next { node.value } else { 0 }
+}
+fn is_cons(_ link: Link) -> bool {
+    match link { Link::Nil => false, Link::Cons(_) => true }
+}
+fn relink(_ node: *Node, _ next: Option<*Node>) { node.next = next }
+"#,
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        for name in ["read_next_ptr", "optional_next_value", "is_cons"] {
+            let instance = get_or_build_semantic_instance(
+                &db,
+                identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, name))),
+            );
+            let summary = Borrowck::new(&db, instance)
+                .unwrap()
+                .borrow_summary()
+                .unwrap()
+                .summary
+                .unwrap();
+            assert!(
+                summary.mutable_inputs.is_empty(),
+                "{name} publishes writes to unchanged input cells: {summary:#?}"
+            );
+        }
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "relink"))),
+        );
+        let summary = Borrowck::new(&db, instance)
+            .unwrap()
+            .borrow_summary()
+            .unwrap()
+            .summary
+            .unwrap();
+        let [update] = summary.mutable_inputs.as_slice() else {
+            panic!("relink must publish only its written cell: {summary:#?}");
+        };
+        assert_eq!(update.destination.source.param(), Some(0));
+        assert!(!update.destination.source.is_reachable());
+        assert!(
+            summary
+                .accesses
+                .iter()
+                .any(|access| access.kind == MemoryAccessKind::Write)
+        );
     }
 
     #[test]
