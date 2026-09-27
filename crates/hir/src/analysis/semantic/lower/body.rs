@@ -26,9 +26,9 @@ use crate::{
             },
             normalize::normalize_ty,
             ty_check::{
-                BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, LocalBinding,
-                PathReadSemantics, RecordInitLowering, RecordLike, SemanticExprLowering, TypedBody,
-                ValuePathRef,
+                BodyOwner, Callable, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef,
+                LocalBinding, PathReadSemantics, RecordInitLowering, RecordLike,
+                SemanticExprLowering, TypedBody, ValuePathRef,
             },
             ty_def::{BorrowKind, TyData, TyId},
             ty_is_copy,
@@ -1074,21 +1074,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         ty: TyId<'db>,
         receiver: Option<ExprId>,
         args: &[ExprId],
-        callable: &crate::analysis::ty::ty_check::Callable<'db>,
+        callable: &Callable<'db>,
     ) -> SValueId {
         let mut values = Vec::with_capacity(args.len() + usize::from(receiver.is_some()));
         if let Some(receiver) = receiver {
             values.push(SOperand::expr(
-                self.lower_callable_receiver(expr, receiver, callable.arg_ty(self.db, 0)),
+                self.lower_callable_receiver(expr, receiver, callable),
                 receiver,
             ));
         }
-        for (index, &arg) in args.iter().enumerate() {
-            let expected = callable.arg_ty(self.db, index + usize::from(receiver.is_some()));
-            values.push(SOperand::expr(
-                self.lower_callable_argument(arg, expected),
-                arg,
-            ));
+        for &arg in args {
+            let value = self.lower_callable_argument(arg, callable, values.len());
+            values.push(SOperand::expr(value, arg));
         }
 
         match callable.callable_def() {
@@ -1127,23 +1124,29 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
     }
 
-    fn lower_callable_argument(&mut self, expr: ExprId, expected: Option<TyId<'db>>) -> SValueId {
-        let actual = self.expr_ty(expr);
-        if !ty_is_copy(self.db, self.body.scope(), actual, self.assumptions)
-            && expected.is_some_and(|ty| {
-                normalize_ty(self.db, ty, self.body.scope(), self.assumptions)
+    /// Lowers the call input for parameter `param`. A non-Copy projection
+    /// passed to a view parameter is viewed in place: loading it first would
+    /// move the field, and the call's view coercion cannot undo that move.
+    /// Call normalization views root values directly.
+    fn lower_callable_argument(
+        &mut self,
+        expr: ExprId,
+        callable: &Callable<'db>,
+        param: usize,
+    ) -> SValueId {
+        let ty = self.expr_ty(expr);
+        if !ty_is_copy(self.db, self.body.scope(), ty, self.assumptions)
+            && callable.arg_ty(self.db, param).is_some_and(|param_ty| {
+                normalize_ty(self.db, param_ty, self.body.scope(), self.assumptions)
                     .as_view(self.db)
                     .is_some()
             })
             && let Some(place) = self.try_lower_place(expr)
             && !place.path.is_empty()
         {
-            // Root values can be viewed directly at the call. A non-Copy
-            // projection must form its view before loading the owned field:
-            // coercing the loaded value cannot undo its ownership move.
             return self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),
-                TyId::view_of(self.db, actual),
+                TyId::view_of(self.db, ty),
                 SExpr::ReadPlace { place },
             );
         }
@@ -1154,7 +1157,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         &mut self,
         call_expr: ExprId,
         receiver: ExprId,
-        expected: Option<TyId<'db>>,
+        callable: &Callable<'db>,
     ) -> SValueId {
         if let Some(site) = self
             .call_sites
@@ -1207,13 +1210,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             );
         }
 
-        self.lower_callable_argument(receiver, expected)
+        self.lower_callable_argument(receiver, callable, 0)
     }
 
     fn lower_const_intrinsic(
         &mut self,
         expr: ExprId,
-        callable: &crate::analysis::ty::ty_check::Callable<'db>,
+        callable: &Callable<'db>,
         kind: ConstIntrinsicKind,
     ) -> SValueId {
         let ty = match kind {
