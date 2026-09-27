@@ -340,13 +340,13 @@ note:
    ┌─ custom_imported_variants.fe:61:24
    │
 61 │             return r + g + b
-   │                        ^ u8
+   │                        ^ ref u8
 
 note:
    ┌─ custom_imported_variants.fe:61:28
    │
 61 │             return r + g + b
-   │                            ^ u8
+   │                            ^ ref u8
 
 note:
    ┌─ custom_imported_variants.fe:67:50
@@ -497,10 +497,10 @@ note:
    ┌─ custom_imported_variants.fe:79:24
    │
 79 │             return r + g + b
-   │                        ^ u8
+   │                        ^ ref u8
 
 note:
    ┌─ custom_imported_variants.fe:79:28
    │
 79 │             return r + g + b
-   │                            ^ u8
+   │                            ^ ref u8

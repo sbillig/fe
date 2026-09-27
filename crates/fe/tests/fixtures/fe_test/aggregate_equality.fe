@@ -82,12 +82,20 @@ impl Eq for Item {
 }
 
 #[test]
+fn custom_noncopy_operands_remain_usable() {
+    let a = Item { value: 1 }
+    let b = Item { value: 11 }
+    assert!(a == b)
+    assert!(a == b && !(a != b))
+    assert!(b.value == 11)
+}
+
+#[test]
 fn custom_noncopy_tuple_elements() {
     let a = (Item { value: 1 }, Item { value: 2 })
     let b = (Item { value: 11 }, Item { value: 12 })
     assert!(a == b)
-    // The left operand remains usable; the right operand has been consumed.
-    assert!(a.0.value == 1)
+    assert!(a == b && a.0.value == 1 && b.0.value == 11)
     assert!(a != (Item { value: 1 }, Item { value: 3 }))
 }
 
@@ -96,7 +104,7 @@ fn custom_noncopy_array_elements() {
     let a = [Item { value: 1 }, Item { value: 2 }]
     let b = [Item { value: 11 }, Item { value: 12 }]
     assert!(a == b)
-    assert!(a[0].value == 1)
+    assert!(!(a != b) && a[0].value == 1 && b[0].value == 11)
     assert!(a != [Item { value: 1 }, Item { value: 3 }])
 }
 

@@ -340,13 +340,13 @@ note:
    ┌─ patterns_comparison.fe:65:24
    │
 65 │             return r + g + b
-   │                        ^ u8
+   │                        ^ ref u8
 
 note:
    ┌─ patterns_comparison.fe:65:28
    │
 65 │             return r + g + b
-   │                            ^ u8
+   │                            ^ ref u8
 
 note:
    ┌─ patterns_comparison.fe:71:45
@@ -497,13 +497,13 @@ note:
    ┌─ patterns_comparison.fe:85:24
    │
 85 │             return r + g + b
-   │                        ^ u8
+   │                        ^ ref u8
 
 note:
    ┌─ patterns_comparison.fe:85:28
    │
 85 │             return r + g + b
-   │                            ^ u8
+   │                            ^ ref u8
 
 note:
     ┌─ patterns_comparison.fe:91:53
@@ -749,13 +749,13 @@ note:
     ┌─ patterns_comparison.fe:117:17
     │
 117 │             r + g + b
-    │                 ^ u8
+    │                 ^ ref u8
 
 note:
     ┌─ patterns_comparison.fe:117:21
     │
 117 │             r + g + b
-    │                     ^ u8
+    │                     ^ ref u8
 
 note:
     ┌─ patterns_comparison.fe:121:12
@@ -1029,13 +1029,13 @@ note:
     ┌─ patterns_comparison.fe:149:24
     │
 149 │             return r + g + b
-    │                        ^ u8
+    │                        ^ ref u8
 
 note:
     ┌─ patterns_comparison.fe:149:28
     │
 149 │             return r + g + b
-    │                            ^ u8
+    │                            ^ ref u8
 
 note:
     ┌─ patterns_comparison.fe:151:9

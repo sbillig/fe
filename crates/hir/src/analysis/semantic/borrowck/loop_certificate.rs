@@ -189,14 +189,19 @@ fn frontier_candidate<'db>(
     {
         return Err(FrontierRejection::UnsupportedFrontier);
     }
+    // A scalar operand may reach the comparison through copies of the parameter.
+    let mut bound = rhs;
+    while let Some((_, NExpr::Forward { src })) = body.defining_expr(bound) {
+        bound = src.value;
+    }
     if !matches!(
-        body.values[rhs.index()].definition,
+        body.values[bound.index()].definition,
         NValueDefinition::EntryParam { .. }
     ) {
         return Err(FrontierRejection::UnsupportedBound);
     }
     if integer_model(db, body.values[lhs.index()].ty)
-        != integer_model(db, body.values[rhs.index()].ty)
+        != integer_model(db, body.values[bound.index()].ty)
         || !integer_model(db, body.values[lhs.index()].ty).is_some_and(|(_, signed)| !signed)
     {
         return Err(FrontierRejection::UnsupportedScalarType);
@@ -205,7 +210,7 @@ fn frontier_candidate<'db>(
         loop_region,
         frontier_root: place.base,
         header_value: lhs,
-        bound: rhs,
+        bound,
         condition: cond.value,
         body: then_target.block,
         full_exit: else_target.block,
@@ -218,7 +223,17 @@ impl<'db> Borrowck<'db> {
         candidate: FrontierCandidate,
     ) -> Result<FrontierStep, FrontierRejection> {
         let loop_region = &candidate.loop_region;
-        let header = &self.body.blocks[loop_region.header.index()];
+        // Besides copies of the bound, the header only reads the frontier and compares.
+        let bound = self.index(candidate.bound);
+        let header: Vec<_> = self.body.blocks[loop_region.header.index()]
+            .statements
+            .iter()
+            .filter(|statement| {
+                !matches!(&statement.kind,
+                    NStatementKind::Define { result, expr: NExpr::Forward { .. } }
+                        if self.index(*result) == bound)
+            })
+            .collect();
         if !loop_region.blocks.contains(&candidate.body)
             || loop_region.backedges.len() != 1
             || loop_region.backedges[0].from != candidate.body
@@ -227,11 +242,11 @@ impl<'db> Borrowck<'db> {
             || loop_region.exits[0].from != loop_region.header
             || loop_region.exits[0].to != candidate.full_exit
             || loop_region.entries.is_empty()
-            || header.statements.len() != 2
-            || !matches!(&header.statements[0].kind,
-                NStatementKind::Define { result, .. } if *result == candidate.header_value)
-            || !matches!(&header.statements[1].kind,
-                NStatementKind::Define { result, .. } if *result == candidate.condition)
+            || !matches!(header.as_slice(), [value, condition]
+                if matches!(&value.kind,
+                    NStatementKind::Define { result, .. } if *result == candidate.header_value)
+                && matches!(&condition.kind,
+                    NStatementKind::Define { result, .. } if *result == candidate.condition))
         {
             return Err(FrontierRejection::UnsupportedLoopShape);
         }

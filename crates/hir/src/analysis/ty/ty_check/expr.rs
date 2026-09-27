@@ -5138,6 +5138,7 @@ impl<'db> TyChecker<'db> {
 
         let lhs_candidates = self.capability_fallback_candidates(lhs_ty);
         let method_assumptions = self.env.assumptions();
+        let mut checked_rhs_ty = None;
 
         let (method, inst) = if let Some(rhs_expr) = rhs_expr {
             let mut selected_lhs_ty = lhs_candidates[0];
@@ -5276,7 +5277,14 @@ impl<'db> TyChecker<'db> {
                                 expected_rhs,
                             )
                             .unwrap_or(rhs.ty);
-                        self.unify_ty(Typeable::Expr(rhs_expr, rhs.clone()), rhs_ty, expected_rhs);
+                        // Like a call argument, the operand keeps its own type:
+                        // the call boundary applies the coercion, so a viewed
+                        // operand is borrowed in place rather than moved.
+                        checked_rhs_ty = Some(self.equate_ty(
+                            rhs_ty,
+                            expected_rhs,
+                            rhs_expr.span(self.body()).into(),
+                        ));
                     }
                     (func_ty, inst)
                 }
@@ -5382,11 +5390,12 @@ impl<'db> TyChecker<'db> {
 
         let mut checked_inputs = vec![self.normalize_ty(lhs_ty)];
         if let Some(rhs_expr) = rhs_expr {
-            let rhs_ty = self
-                .env
-                .typed_expr(rhs_expr)
-                .expect("checked operator RHS has a type")
-                .ty;
+            let rhs_ty = checked_rhs_ty.unwrap_or_else(|| {
+                self.env
+                    .typed_expr(rhs_expr)
+                    .expect("checked operator RHS has a type")
+                    .ty
+            });
             checked_inputs.push(self.normalize_ty(rhs_ty));
         }
         callable.set_checked_input_tys(checked_inputs);

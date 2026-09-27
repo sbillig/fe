@@ -507,9 +507,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Expr::Lit(lit) => self.lower_leaf_literal(expr, lit),
             Expr::Path(_) => self.lower_path_expr(expr),
             Expr::Tuple(elems) | Expr::Array(elems) => {
-                // An implicit view at a call boundary borrows the constructed
-                // value; it is not the type of the aggregate being constructed.
-                let ty = ty.as_view(self.db).unwrap_or(ty);
                 let fields = elems
                     .iter()
                     .map(|expr| self.lower_expr_operand(*expr))
@@ -517,7 +514,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.emit_expr_with_origin(origin, ty, SExpr::AggregateMake { ty, fields })
             }
             Expr::ArrayRep(elem, _) => {
-                let ty = ty.as_view(self.db).unwrap_or(ty);
                 let value = self.lower_expr_operand(*elem);
                 self.emit_expr_with_origin(origin, ty, SExpr::ArrayRepeat { ty, value })
             }
@@ -623,14 +619,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Expr::Cast(value, _) => {
                 let value = self.lower_expr_operand(*value);
-                self.emit_expr_with_origin(
-                    origin,
-                    ty,
-                    SExpr::Cast {
-                        value,
-                        to: ty.as_view(self.db).unwrap_or(ty),
-                    },
-                )
+                self.emit_expr_with_origin(origin, ty, SExpr::Cast { value, to: ty })
             }
             Expr::Call(_, args) => self.lower_call(expr, None, args),
             Expr::Assert(args) => self.lower_assert(expr, args),
@@ -957,10 +946,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         _: Partial<PathId<'db>>,
         fields: &[HirField<'db>],
     ) -> SValueId {
-        // An implicit borrow applies to the constructed value, not to the
-        // aggregate representation used for field lookup and initialization.
         let ty = self.expr_ty(expr);
-        let ty = ty.as_view(self.db).unwrap_or(ty);
         match self
             .typed_body
             .record_init_lowering(expr)

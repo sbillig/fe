@@ -1324,9 +1324,9 @@ fn entry() -> u8 {
 }
 
 #[test]
-fn derived_place_bound_field_aliases_do_not_write_back_to_receiver() {
+fn view_receiver_field_operands_are_read_in_place() {
     with_runtime_package!(
-        "derived_place_bound_field_aliases_do_not_write_back_to_receiver.fe",
+        "view_receiver_field_operands_are_read_in_place.fe",
         r#"pub struct Pair {
     pub a: u256,
     pub b: u256,
@@ -1364,18 +1364,14 @@ pub fn entry() -> bool {
                         RStmt::Store { dst, .. } | RStmt::CopyInto { dst, .. }
                             if dst.root == PlaceRoot::Slot(receiver)
                     )),
-                "field reads through a derived place-bound alias should not write back to the receiver:\n{body:#?}"
+                "field operands should not write back to the receiver:\n{body:#?}"
             );
             assert!(
                 body.locals
                     .iter()
                     .skip(body.signature.params.len())
-                    .any(|local| {
-                        local.semantic_ty.pretty_print(&db) == "u256"
-                            && matches!(local.carrier, RuntimeCarrier::Erased)
-                            && matches!(local.root, RuntimeLocalRoot::None)
-                    }),
-                "derived place-bound scalar alias should stay carrierless/rootless:\n{body:#?}"
+                    .all(|local| matches!(local.root, RuntimeLocalRoot::None)),
+                "field operands should be read without rooting a copy:\n{body:#?}"
             );
         }
     );

@@ -105,7 +105,7 @@ note:
    ┌─ const_eval_const_fn_let_destructure.fe:13:9
    │
 13 │     a + b
-   │         ^ usize
+   │         ^ ref usize
 
 note:
    ┌─ const_eval_const_fn_let_destructure.fe:18:8
