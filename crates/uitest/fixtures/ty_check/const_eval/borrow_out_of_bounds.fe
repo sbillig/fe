@@ -1,0 +1,37 @@
+struct S { x: u8 }
+
+impl S {
+    const fn get(ref self) -> u8 { 42 }
+}
+
+const fn borrowed(_ idx: usize) -> u8 {
+    let values: [u8; 2] = [1, 2]
+    let a = ref values[idx]
+    42
+}
+
+const fn borrowed_mut(_ idx: usize) -> u8 {
+    let mut values: [u8; 2] = [1, 2]
+    let a = mut values[idx]
+    42
+}
+
+const fn receiver(_ idx: usize) -> u8 {
+    let values: [S; 2] = [S { x: 1 }, S { x: 2 }]
+    values[idx].get()
+}
+
+const fn inner(_ values: ref [u8; 2], _ idx: usize) -> u8 {
+    let a = ref values[idx]
+    42
+}
+
+const fn through_ref(_ idx: usize) -> u8 {
+    let values: [u8; 2] = [1, 2]
+    inner(ref values, idx)
+}
+
+const BORROWED: u8 = borrowed(3)
+const BORROWED_MUT: u8 = borrowed_mut(3)
+const RECEIVER: u8 = receiver(3)
+const THROUGH_REF: u8 = through_ref(3)

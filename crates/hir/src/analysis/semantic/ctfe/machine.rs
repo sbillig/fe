@@ -1640,11 +1640,15 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     }
                 }
                 let place = self.resolve_place(frame_idx, &place, origin)?;
-                Ok(CtfeValue::Ref(CtfeRef {
+                let r#ref = CtfeRef {
                     frame: place.frame,
                     root: place.root,
                     path: place.path.into_boxed_slice(),
-                }))
+                };
+                // Forming a borrow checks its projections, as at runtime, even
+                // when the borrow is never read or written.
+                self.load_ref_value(&r#ref, origin)?;
+                Ok(CtfeValue::Ref(r#ref))
             }
             SExpr::GetEnumTag { value } => {
                 let value = self.load_value(frame_idx, value, origin)?;
