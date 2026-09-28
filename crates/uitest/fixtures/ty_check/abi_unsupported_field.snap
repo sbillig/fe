@@ -4,6 +4,15 @@ expression: diags
 input_file: fixtures/ty_check/abi_unsupported_field.fe
 ---
 error[6-0003]: trait bound is not satisfied
+  ┌─ abi_unsupported_field.fe:5:1
+  │
+5 │ ╭ #[abi]
+6 │ │ struct Wrapper {
+7 │ │     inner: Plain,
+8 │ │ }
+  │ ╰─^ `Plain` doesn't implement `SolCompat`
+
+error[6-0003]: trait bound is not satisfied
     ┌─ abi_unsupported_field.fe:5:1
     │
   5 │ ╭ #[abi]

@@ -13,12 +13,13 @@ use super::{
 use crate::{
     ErrorDiagnostic, ErrorDiagnosticKind,
     hir_def::{
-        Expr, ExprId, FieldDefListId, FuncModifiers, FuncParam, FuncParamMode, FuncParamName,
-        GenericArg, GenericArgListId, GenericParamListId, IdentId, ImplTrait, Partial, Pat, PathId,
-        Stmt, Struct, TrackedItemVariant, TraitRefId, TypeBound, TypeGenericArg, TypeId, TypeKind,
+        AssocConstDef, AttrListId, Body, BodyKind, Expr, ExprId, FieldDefListId, FuncModifiers,
+        FuncParam, FuncParamMode, FuncParamName, GenericArg, GenericArgListId, GenericParamListId,
+        IdentId, ImplTrait, LitKind, Partial, Pat, PathId, PathKind, Stmt, StringId, Struct,
+        TrackedItemVariant, TraitRefId, TupleTypeId, TypeBound, TypeGenericArg, TypeId, TypeKind,
         Visibility, WhereClauseId, WherePredicate, expr::CallArg,
     },
-    span::AbiStructDesugared,
+    span::{AbiStructDesugared, HirOrigin},
 };
 
 /// Returns true for a struct annotated with `#[abi]`.
@@ -112,6 +113,7 @@ pub(super) fn lower_abi_struct<'db>(
     lower_encode_impl(&mut builder, self_ty, &field_specs);
     lower_decode_impl(&mut builder, self_ty, &field_specs);
     lower_static_abi_impl(&mut builder, self_ty, &field_specs);
+    lower_sol_compat_impl(&mut builder, self_ty, &field_specs);
 
     struct_
 }
@@ -394,5 +396,164 @@ fn lower_decode_impl<'db>(
                 body.return_record_self(&field_names);
             },
         );
+    });
+}
+
+/// `impl SolCompat for S where F0: SolCompat, ...`: the Solidity type name of
+/// the struct is the tuple of its field types, e.g. `(uint8,address)`, so
+/// `#[abi]` structs can be event and error fields.
+///
+/// `S` and `SOL_TYPE` are built from the same element list: punctuation
+/// literals typed `std::abi::SolPunctuation` and each field's
+/// `<F as SolCompat>::S` and `<F as SolCompat>::SOL_TYPE`, nested in chunks
+/// like the event signatures to stay within the `AsBytes` tuple arity.
+fn lower_sol_compat_impl<'db>(
+    builder: &mut HirBuilder<'_, 'db, AbiStructDesugared>,
+    self_ty: TypeId<'db>,
+    field_specs: &FieldSpecs<'db>,
+) {
+    let db = builder.db();
+    let std_root = builder.roots().std;
+    let abi_item = |name: &str| {
+        PathId::from_ident(db, std_root)
+            .push_str(db, "abi")
+            .push_str(db, name)
+    };
+    let sol_compat = || TraitRefId::new(db, Partial::Present(abi_item("SolCompat")));
+    let predicates: Vec<_> = field_specs
+        .iter()
+        .map(|(_, ty)| WherePredicate {
+            ty: Partial::Present(*ty),
+            bounds: vec![TypeBound::Trait(sol_compat())],
+        })
+        .collect();
+    let where_clause = WhereClauseId::new(db, predicates);
+    let origin: HirOrigin<ast::Expr> = builder.origin();
+    let idx = builder.ctxt().next_impl_trait_idx();
+    builder.with_item_scope(TrackedItemVariant::ImplTrait(idx), |builder, id| {
+        let ctxt = builder.ctxt();
+        let body_id = ctxt.joined_id(TrackedItemVariant::NamelessBody);
+        let mut body_ctxt = super::body::BodyCtxt::new(ctxt, body_id);
+
+        // (type, value) of every fragment of the tuple type name.
+        let mut elems: Vec<(TypeId<'db>, ExprId)> = Vec::new();
+        let punctuation_ty = TypeId::new(
+            db,
+            TypeKind::Path(Partial::Present(abi_item("SolPunctuation"))),
+        );
+        let punctuation = |body_ctxt: &mut super::body::BodyCtxt<'_, 'db>, text: &str| {
+            let lit = Expr::Lit(LitKind::String(StringId::new(db, text.to_string())));
+            (punctuation_ty, body_ctxt.push_expr(lit, origin.clone()))
+        };
+        elems.push(punctuation(&mut body_ctxt, "("));
+        for (idx, (_, field_ty)) in field_specs.iter().copied().enumerate() {
+            if idx > 0 {
+                elems.push(punctuation(&mut body_ctxt, ","));
+            }
+            let qualified = PathId::new(
+                db,
+                PathKind::QualifiedType {
+                    type_: field_ty,
+                    trait_: sol_compat(),
+                },
+                None,
+            );
+            let ty = TypeId::new(
+                db,
+                TypeKind::Path(Partial::Present(qualified.push_str(db, "S"))),
+            );
+            let expr = body_ctxt.push_expr(
+                Expr::Path(Partial::Present(qualified.push_str(db, "SOL_TYPE"))),
+                origin.clone(),
+            );
+            elems.push((ty, expr));
+        }
+        elems.push(punctuation(&mut body_ctxt, ")"));
+
+        // The `AsBytes` tuple impls stop at arity 16; nesting doesn't change
+        // the bytes.
+        const MAX_TUPLE_ARITY: usize = 16;
+        while elems.len() > MAX_TUPLE_ARITY {
+            elems = elems
+                .chunks(MAX_TUPLE_ARITY)
+                .map(|chunk| {
+                    if let [single] = chunk {
+                        *single
+                    } else {
+                        let ty = TypeId::new(
+                            db,
+                            TypeKind::Tuple(TupleTypeId::new(
+                                db,
+                                chunk
+                                    .iter()
+                                    .map(|(ty, _)| Partial::Present(*ty))
+                                    .collect::<Vec<_>>(),
+                            )),
+                        );
+                        let expr = body_ctxt.push_expr(
+                            Expr::Tuple(chunk.iter().map(|(_, expr)| *expr).collect()),
+                            origin.clone(),
+                        );
+                        (ty, expr)
+                    }
+                })
+                .collect();
+        }
+        let tuple_ty = TypeId::new(
+            db,
+            TypeKind::Tuple(TupleTypeId::new(
+                db,
+                elems
+                    .iter()
+                    .map(|(ty, _)| Partial::Present(*ty))
+                    .collect::<Vec<_>>(),
+            )),
+        );
+        let root = body_ctxt.push_expr(
+            Expr::Tuple(elems.iter().map(|(_, expr)| *expr).collect()),
+            origin.clone(),
+        );
+        let body = Body::new(
+            db,
+            body_id,
+            root,
+            BodyKind::Anonymous,
+            body_ctxt.stmts,
+            body_ctxt.exprs,
+            body_ctxt.conds,
+            body_ctxt.pats,
+            body_ctxt.f_ctxt.top_mod(),
+            body_ctxt.source_map,
+            origin.clone(),
+        );
+        body_ctxt.f_ctxt.leave_item_scope(body);
+
+        let self_s = TypeId::new(
+            db,
+            TypeKind::Path(Partial::Present(
+                PathId::from_ident(db, IdentId::make_self_ty(db)).push_str(db, "S"),
+            )),
+        );
+        let sol_type = AssocConstDef {
+            attributes: AttrListId::new(db, vec![]),
+            name: Partial::Present(IdentId::new(db, "SOL_TYPE".to_string())),
+            ty: Partial::Present(self_s),
+            value: Partial::Present(body),
+            vis: Visibility::Public,
+        };
+        let types = vec![builder.assoc_ty("S", Partial::Present(tuple_ty))];
+        ImplTrait::new(
+            db,
+            id,
+            Partial::Present(sol_compat()),
+            Partial::Present(self_ty),
+            builder.empty_attrs(),
+            builder.empty_generic_params(),
+            where_clause,
+            types,
+            vec![sol_type],
+            builder.top_mod(),
+            builder.origin(),
+        )
     });
 }

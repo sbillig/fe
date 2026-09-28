@@ -90,6 +90,12 @@ impl<const LEN: usize> AsBytes for SolArraySuffix<LEN> {
     }
 }
 
+/// One byte of punctuation in a Solidity type name. The `SolCompat`
+/// implementation of an `#[abi]` struct spells its fields' tuple type as
+/// `("(", F0::SOL_TYPE, ",", F1::SOL_TYPE, ")")` with this type for the
+/// punctuation, e.g. `(uint256,address)`.
+pub type SolPunctuation = String<1>
+
 impl<T, const LEN: usize> SolCompat for [T; LEN] where T: SolCompat {
     type S = (T::S, SolArraySuffix<LEN>)
     const SOL_TYPE: Self::S = (T::SOL_TYPE, SolArraySuffix<LEN> {})
