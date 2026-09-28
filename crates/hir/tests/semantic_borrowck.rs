@@ -6604,20 +6604,19 @@ fn find_empty(board: Board, row: usize, col: usize) -> bool {
     );
 
     let normalized = normalized_func_body(&db, top_mod, "read_board");
-    let row_read_mode = normalized
-        .body
-        .blocks
-        .iter()
-        .flat_map(|block| block.statements.iter())
-        .find_map(|stmt| match &stmt.kind {
-            NStatementKind::Define {
-                result,
-                expr: NExpr::Load { mode, .. },
-            } if normalized.body.values[result.index()].ty.pretty_print(&db) == "Row" => Some(mode),
-            _ => None,
-        })
-        .expect("row projection read");
-    assert_eq!(*row_read_mode, ReadMode::Read);
+    assert!(
+        normalized
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.statements.iter())
+            .any(|stmt| matches!(
+                &stmt.kind,
+                NStatementKind::Define { expr: NExpr::MakeView { place, .. }, .. }
+                    if place.ty.pretty_print(&db) == "Row"
+            )),
+        "the row projection should be viewed in place"
+    );
 }
 
 #[test]

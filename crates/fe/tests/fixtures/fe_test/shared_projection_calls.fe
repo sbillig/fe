@@ -1,0 +1,58 @@
+use core::ptr
+
+struct Buffer { value: u256 }
+
+impl Buffer {
+    fn new(_ value: u256) -> Self { Self { value } }
+    fn read(self) -> u256 { self.value }
+    fn write(mut self, _ value: u256) { self.value = value }
+    fn into_value(own self) -> u256 { self.value }
+}
+
+struct Frame { memory: Buffer }
+
+impl Frame {
+    fn clear(mut self) { self.memory.write(0) }
+}
+
+fn read(_ buffer: Buffer) -> u256 { buffer.read() }
+
+#[test]
+fn shared_field_calls_keep_the_owner() {
+    let mut frame = Frame { memory: Buffer::new(42) }
+    assert!(frame.memory.read() == 42)
+    assert!(read(frame.memory) == 42)
+    assert!(Buffer::read(frame.memory) == 42)
+    frame.memory.write(frame.memory.read() + 1)
+    assert!(frame.memory.read() == 43)
+    frame.clear()
+    assert!(frame.memory.into_value() == 0)
+}
+
+#[test]
+fn shared_element_calls_keep_the_array() {
+    let mut frames = [Frame { memory: Buffer::new(3) }, Frame { memory: Buffer::new(8) }]
+    let mut index: usize = 0
+    while index < 2 {
+        frames[index].memory.write(read(frames[index].memory) + 10)
+        index += 1
+    }
+    assert!(frames[0].memory.read() == 13)
+    assert!(frames[1].memory.read() == 18)
+}
+
+#[test]
+fn shared_field_calls_keep_an_immutable_owner() {
+    let frame = Frame { memory: Buffer::new(42) }
+    assert!(frame.memory.read() + read(frame.memory) == 84)
+    assert!(frame.memory.into_value() == 42)
+}
+
+#[test]
+fn shared_pointee_calls_view_raw_memory() {
+    let slot = ptr::alloc<Buffer>()
+    *slot = Buffer::new(5)
+    assert!((*slot).read() + read(*slot) == 10)
+    (*slot).write(6)
+    assert!((*slot).read() == 6)
+}
