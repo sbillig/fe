@@ -1621,23 +1621,18 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             SExpr::Borrow {
                 place, provider, ..
             } => {
-                if let Some(provider) = provider {
-                    let locals = &self.frames[frame_idx].body.locals;
-                    // Ordinary explicit local borrows also carry Memory
-                    // metadata. Only frame-backed places are meaningful here:
-                    // CTFE has no external address-space/provider state.
-                    if provider != ProviderAddressSpace::Memory
+                // Ordinary explicit local borrows also carry Memory metadata.
+                // Only frame-backed places are meaningful here: CTFE has no
+                // memory outside its frames. Admitted providers are frame
+                // locals too, since each effect slot owns a copy of its value.
+                if let Some(provider) = provider
+                    && (provider != ProviderAddressSpace::Memory
                         || place
                             .path
                             .iter()
-                            .any(|elem| matches!(elem, Projection::Deref))
-                        || locals[place.local.index()]
-                            .role
-                            .root_provider(locals)
-                            .is_some()
-                    {
-                        return Err(CtfeError::InvalidProviderUse { origin }.into());
-                    }
+                            .any(|elem| matches!(elem, Projection::Deref)))
+                {
+                    return Err(CtfeError::InvalidProviderUse { origin }.into());
                 }
                 let place = self.resolve_place(frame_idx, &place, origin)?;
                 let r#ref = CtfeRef {

@@ -60,6 +60,29 @@ const fn multiple() -> u256 {
 }
 const MULTIPLE: u256 = multiple()
 
+// A provider need not be `Copy`. Its effect slot owns the provided value, so
+// `ref self` methods and explicit borrows read it like any other local.
+trait Describe {
+    const fn describe(ref self) -> u256
+}
+struct Pair { left: u256, right: u256 }
+impl Describe for Pair {
+    const fn describe(ref self) -> u256 { self.left * 10 + self.right }
+}
+const fn describe_twice() -> u256 uses (pair: Describe) {
+    let borrowed = ref pair
+    pair.describe() + borrowed.describe()
+}
+const fn forward_describe() -> u256 uses (pair: Describe) {
+    describe_twice()
+}
+const fn described() -> u256 {
+    with (Describe = Pair { left: 4, right: 2 }) {
+        forward_describe()
+    }
+}
+const DESCRIBED: u256 = described()
+
 #[test]
 fn const_and_runtime_providers_agree() {
     assert!(ANSWER == 36)
@@ -70,4 +93,10 @@ fn const_and_runtime_providers_agree() {
 fn const_and_runtime_effect_positions_agree() {
     assert!(MULTIPLE == 117)
     assert!(multiple() == MULTIPLE)
+}
+
+#[test]
+fn const_and_runtime_borrowed_providers_agree() {
+    assert!(DESCRIBED == 84)
+    assert!(described() == DESCRIBED)
 }

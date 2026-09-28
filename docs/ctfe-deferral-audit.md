@@ -123,8 +123,10 @@ Remaining adapters have explicit policies:
 
 Borrows of a local in an evaluating frame (`ref x`, `mut x`, a projection of
 one, or such a borrow passed to or returned from a callee) are admitted since
-#1582. A borrow through a pointer or of a provider-backed local still fails with
-`InvalidProviderUse`, since CTFE has no memory outside its frames. Internal
+#1582. A borrow through a pointer or in another address space still fails with
+`InvalidProviderUse`, since CTFE has no memory outside its frames. An admitted
+immutable trait provider is a frame local as well, since its effect slot owns a
+copy of the provided value, so `ref self` provider methods evaluate. Internal
 machine tests cover admitted reference lifetime, typed reads, mutation,
 discard/replay behavior and the pointer rejection. The generic stdlib
 `SolArraySuffix` declaration is covered; before #1582 its additional concrete
