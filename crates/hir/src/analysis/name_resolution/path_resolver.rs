@@ -1808,11 +1808,13 @@ fn find_associated_type_in_mode<'db>(
 
         // Only consult explicit bounds for type-parameter receivers; concrete
         // receivers get their candidates from impl lookup to avoid spurious
-        // ambiguity between bounds and implementations.
+        // ambiguity between bounds and implementations. The parameters in
+        // these bounds are the ones in scope, so they are matched as they
+        // are: freshening them would let a bound on `T` match `U` or `Self`.
         if let TyData::TyParam(_) = original_ty.data(db) {
             for &trait_inst in assumptions.list(db) {
                 let snapshot = cx.snapshot();
-                let pred_self_ty = cx.instantiate_with_fresh_vars(trait_inst.self_ty(db));
+                let pred_self_ty = cx.materialize(trait_inst.self_ty(db));
 
                 if cx.unify::<TyId<'db>>(lhs_ty, pred_self_ty).is_ok() {
                     let trait_inst = cx.materialize(trait_inst);
