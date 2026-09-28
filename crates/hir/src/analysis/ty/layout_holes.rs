@@ -14,7 +14,7 @@ use super::{
     visitor::{TyVisitable, TyVisitor, walk_ty},
 };
 use crate::analysis::HirAnalysisDb;
-use crate::hir_def::CallableDef;
+use crate::hir_def::{CallableDef, Func};
 use salsa::Update;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1103,6 +1103,16 @@ pub(crate) fn callable_input_layout_bindings_by_origin<'db>(
     let CallableDef::Func(func) = method else {
         return FxHashMap::default();
     };
+    func_layout_hole_bindings(db, func).clone()
+}
+
+// `Func::arg_tys` needs these bindings on every call; computing the implicit
+// parameter plan walks every parameter type's layout projections.
+#[salsa::tracked(return_ref)]
+fn func_layout_hole_bindings<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> FxHashMap<CallableInputLayoutHoleOrigin, Vec<(TyId<'db>, TyId<'db>)>> {
     func_implicit_param_plan(db, func).bindings_by_origin
 }
 
