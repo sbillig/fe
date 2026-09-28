@@ -33,7 +33,6 @@ use crate::{
             },
             normalize::normalize_ty,
             provider::ProviderAddressSpace,
-            subst::substitute_complete,
             ty_check::{
                 BodyOwner, EffectArgLayoutView, EffectParamSite, EffectPassMode, LocalBinding,
                 ParamSite,
@@ -1212,38 +1211,18 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             current: 0,
         });
         let result = self.run_frame(frame_idx).and_then(|value| {
-            if let CtfeValue::Ref(r#ref) = &value {
-                let key = instance.key(self.db);
-                let result_ty = match key.owner(self.db) {
-                    BodyOwner::Func(func) => func.return_ty(self.db),
-                    BodyOwner::Const(const_) => const_.ty(self.db),
-                    BodyOwner::AnonConstBody { expected, .. } => expected,
-                    BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
-                        return Err(CtfeError::NotConstEvaluable { origin }.into());
-                    }
-                };
-                // The instance substitution ranges over the owner's full schema.
-                let ty = match key.subst(self.db).mapping(self.db) {
-                    Some(mapping) => substitute_complete(self.db, result_ty, mapping)
-                        .map_err(|_| CtfeError::NotConstEvaluable { origin })?,
-                    None => result_ty,
-                };
-                let returns_borrow = normalize_ty(
-                    self.db,
-                    ty,
-                    key.impl_env(self.db).normalization_scope(self.db),
-                    key.impl_env(self.db).assumptions(self.db),
-                )
-                .as_capability(self.db)
-                .is_some();
-                // Returning an ordinary value reads the referent before its
-                // frame disappears. Returning a capability preserves the ref.
-                if !returns_borrow {
-                    return self
-                        .load_ref_value(r#ref, origin)
-                        .map(CtfeValue::Value)
-                        .map_err(Into::into);
-                }
+            // Returning an ordinary value reads the referent before its frame
+            // disappears. Returning a capability preserves the ref.
+            if let CtfeValue::Ref(r#ref) = &value
+                && instance
+                    .normalized_result_ty(self.db)
+                    .as_capability(self.db)
+                    .is_none()
+            {
+                return self
+                    .load_ref_value(r#ref, origin)
+                    .map(CtfeValue::Value)
+                    .map_err(Into::into);
             }
             // A callee may return a reference into a caller's frame, but never
             // into the frame that is about to be removed.
