@@ -152,6 +152,24 @@ pub enum SemanticBorrowCheckResult<'db> {
     Err(SemanticDiagnosticId<'db>),
 }
 
+/// The final summary of a body together with the local validation of the same
+/// solved body, so the summary and the borrow check share one fixed point.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct SemanticBorrowAnalysis<'db> {
+    pub summary: SemanticBorrowSummaryResult<'db>,
+    /// `None` when the summary did not come from solving the body, e.g. for
+    /// intrinsic contracts; the borrow check then solves the body itself.
+    pub check: Option<LocalBorrowCheck<'db>>,
+}
+
+/// Loan-conflict and availability validation of one solved body. Resolved
+/// callees are validated by their own checks.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct LocalBorrowCheck<'db> {
+    pub result: SemanticBorrowCheckResult<'db>,
+    pub callees: Vec<SemanticInstance<'db>>,
+}
+
 /// Obligations that must be discharged by rebuilding the concrete semantic
 /// instance. A conservative template summary is not a successful validation.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Update)]

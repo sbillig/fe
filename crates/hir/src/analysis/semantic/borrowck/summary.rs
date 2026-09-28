@@ -575,7 +575,7 @@ impl<'db> Borrowck<'db> {
     }
 
     pub fn borrow_summary(
-        mut self,
+        &mut self,
     ) -> Result<BorrowSummaryComputation<'db>, SemanticDiagnostic<'db>> {
         if let Some(summary) = self.intrinsic_summary()? {
             self.verify_summary(&summary)?;
@@ -628,8 +628,8 @@ impl<'db> Borrowck<'db> {
         };
         Ok(BorrowSummaryComputation {
             summary: Some(summary),
-            blocked: self.blocked,
-            pending: self.pending,
+            blocked: self.blocked.clone(),
+            pending: self.pending.clone(),
         })
     }
 
@@ -3999,7 +3999,7 @@ fn caller(frame: mut Frame, op: u256) {{ dispatch(frame, op) }}
                         BodyOwner::Func(find_func(&db, module, name)),
                     ),
                 );
-                let checker = Borrowck::new(&db, instance).unwrap();
+                let mut checker = Borrowck::new(&db, instance).unwrap();
                 let summary = checker.borrow_summary().unwrap().summary.unwrap();
                 assert!(!summary.accesses.is_empty());
                 let maximum = summary
@@ -4077,7 +4077,7 @@ fn caller(frame: mut Frame, op: u256) {{ dispatch(frame, op) }}
                 &db,
                 identity_semantic_instance_key(&db, BodyOwner::Func(func)),
             );
-            let checker = Borrowck::new(&db, instance).unwrap();
+            let mut checker = Borrowck::new(&db, instance).unwrap();
             match checker.borrow_summary() {
                 Ok(result) => {
                     let summary = result.summary.unwrap();
