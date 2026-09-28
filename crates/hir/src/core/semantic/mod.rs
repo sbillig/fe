@@ -92,7 +92,7 @@ use crate::analysis::ty::trait_def::{
     ImplementorId, ImplementorOrigin, TraitInstId, does_impl_trait_conflict, impls_for_trait_def,
 };
 use crate::analysis::ty::trait_lower::{
-    TraitRefLowerError, lower_trait_ref, lower_trait_ref_deferred,
+    TraitRefLowerError, collect_trait_impls, lower_trait_ref, lower_trait_ref_deferred,
 };
 use crate::analysis::ty::trait_resolution::constraint::{
     collect_candidate_constraints, collect_constraints, collect_func_decl_constraints,
@@ -4074,13 +4074,23 @@ impl<'db> ImplTrait<'db> {
             return false;
         }
 
-        marker
-            .ingot(db)
-            .all_impl_traits(db)
-            .iter()
-            .copied()
-            .filter(|&impl_| Self::impl_trait_implements_marker(db, impl_, marker))
+        Self::marker_impls(db, marker)
             .all(|impl_| Self::impl_trait_targets_local_nominal_root(db, impl_, impl_trait_ingot))
+    }
+
+    /// Impls of `marker` in its own ingot. The raw trait index narrows the
+    /// candidates to impls whose trait path resolves to `marker`.
+    fn marker_impls(
+        db: &'db dyn HirAnalysisDb,
+        marker: Trait<'db>,
+    ) -> impl Iterator<Item = ImplTrait<'db>> {
+        collect_trait_impls(db, marker.ingot(db))
+            .by_trait
+            .get(&marker)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(move |&impl_| Self::impl_trait_implements_marker(db, impl_, marker))
     }
 
     fn impl_trait_implements_marker(
@@ -4156,12 +4166,7 @@ impl<'db> ImplTrait<'db> {
         db: &'db dyn HirAnalysisDb,
         marker: Trait<'db>,
     ) -> FxHashSet<TyBase<'db>> {
-        marker
-            .ingot(db)
-            .all_impl_traits(db)
-            .iter()
-            .copied()
-            .filter(|&impl_| Self::impl_trait_implements_marker(db, impl_, marker))
+        Self::marker_impls(db, marker)
             .filter_map(|impl_| Self::impl_trait_local_nominal_root(db, impl_))
             .collect()
     }
