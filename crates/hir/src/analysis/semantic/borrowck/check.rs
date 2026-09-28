@@ -6,8 +6,8 @@ use std::fmt;
 
 use super::{
     ir::{
-        BorrowSummary, BorrowSummaryId, PendingSemanticValidation, SemanticBorrowCheckResult,
-        SemanticBorrowSummaryResult,
+        BorrowSummary, BorrowSummaryId, LocalBorrowCheck, PendingSemanticValidation,
+        SemanticBorrowAnalysis, SemanticBorrowCheckResult, SemanticBorrowSummaryResult,
     },
     solver::{BorrowSummaryMode, Borrowck},
     summary::signature_summary,
@@ -30,26 +30,37 @@ use common::diagnostics::CompleteDiagnostic;
 use rustc_hash::FxHashSet;
 
 #[salsa::tracked(
-    cycle_fn=semantic_borrow_summary_cycle_recover,
-    cycle_initial=semantic_borrow_summary_cycle_initial
+    return_ref,
+    cycle_fn=semantic_borrow_analysis_cycle_recover,
+    cycle_initial=semantic_borrow_analysis_cycle_initial
 )]
-fn semantic_borrow_summary_query<'db>(
+fn semantic_borrow_analysis_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> SemanticBorrowSummaryResult<'db> {
-    let borrowck = match Borrowck::new(db, instance) {
+) -> SemanticBorrowAnalysis<'db> {
+    let mut borrowck = match Borrowck::new(db, instance) {
         Ok(borrowck) => borrowck,
         Err(SemanticNormalizationFailure::Blocked(blocked)) => {
-            return blocked_signature_borrow_summary_result(db, instance, blocked);
+            return SemanticBorrowAnalysis {
+                summary: blocked_signature_borrow_summary_result(db, instance, blocked),
+                check: None,
+            };
         }
         Err(
             SemanticNormalizationFailure::Rejected(diag)
             | SemanticNormalizationFailure::InternalFailure(diag),
         ) => {
-            return SemanticBorrowSummaryResult::Err(SemanticDiagnosticId::new(db, diag));
+            return SemanticBorrowAnalysis {
+                summary: SemanticBorrowSummaryResult::Err(SemanticDiagnosticId::new(db, diag)),
+                check: None,
+            };
         }
     };
-    cached_borrow_summary_result(db, borrowck.borrow_summary())
+    let summary = cached_borrow_summary_result(db, borrowck.borrow_summary());
+    SemanticBorrowAnalysis {
+        summary,
+        check: borrowck.is_solved().then(|| borrowck.local_check()),
+    }
 }
 
 #[salsa::tracked(
@@ -72,11 +83,13 @@ fn provisional_borrow_summary_query<'db>(
             return SemanticBorrowSummaryResult::Err(SemanticDiagnosticId::new(db, diag));
         }
     };
-    let borrowck = match Borrowck::new_with_body(db, instance, body, BorrowSummaryMode::Provisional)
-    {
-        Ok(borrowck) => borrowck,
-        Err(diag) => return SemanticBorrowSummaryResult::Err(SemanticDiagnosticId::new(db, diag)),
-    };
+    let mut borrowck =
+        match Borrowck::new_with_body(db, instance, body, BorrowSummaryMode::Provisional) {
+            Ok(borrowck) => borrowck,
+            Err(diag) => {
+                return SemanticBorrowSummaryResult::Err(SemanticDiagnosticId::new(db, diag));
+            }
+        };
     cached_borrow_summary_result(db, borrowck.borrow_summary())
 }
 
@@ -164,15 +177,15 @@ pub fn semantic_borrow_summary<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Result<Option<BorrowSummary<'db>>, SemanticAnalysisError<'db>> {
-    match semantic_borrow_summary_query(db, instance) {
+    match &semantic_borrow_analysis_query(db, instance).summary {
         SemanticBorrowSummaryResult::Ok(summary) => {
             Ok(summary.map(|summary| summary.items(db).clone()))
         }
         SemanticBorrowSummaryResult::Blocked { body, .. } => {
-            Err(SemanticAnalysisError::Blocked(body))
+            Err(SemanticAnalysisError::Blocked(body.clone()))
         }
         SemanticBorrowSummaryResult::Pending { validation, .. } => {
-            Err(SemanticAnalysisError::Pending(validation))
+            Err(SemanticAnalysisError::Pending(validation.clone()))
         }
         SemanticBorrowSummaryResult::Err(diag) => {
             Err(SemanticAnalysisError::Diagnostic(diag.to_complete(db)))
@@ -190,34 +203,24 @@ pub(super) fn semantic_borrow_summary_voucher<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Result<BorrowSummaryVoucher<'db>, SemanticDiagnostic<'db>> {
-    match semantic_borrow_summary_query(db, instance) {
-        SemanticBorrowSummaryResult::Ok(summary) => Ok(BorrowSummaryVoucher {
-            summary: summary.map(|summary| summary.items(db).clone()),
-            blocked: None,
-            pending: Default::default(),
-        }),
-        SemanticBorrowSummaryResult::Blocked { body, summary } => Ok(BorrowSummaryVoucher {
-            summary: summary.map(|summary| summary.items(db).clone()),
-            blocked: Some(body),
-            pending: Default::default(),
-        }),
-        SemanticBorrowSummaryResult::Pending {
-            validation,
-            summary,
-        } => Ok(BorrowSummaryVoucher {
-            summary: summary.map(|summary| summary.items(db).clone()),
-            blocked: None,
-            pending: validation,
-        }),
-        SemanticBorrowSummaryResult::Err(diag) => Err(diag.diag(db).clone()),
-    }
+    summary_voucher(
+        db,
+        semantic_borrow_analysis_query(db, instance).summary.clone(),
+    )
 }
 
 pub(super) fn provisional_borrow_summary_voucher<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Result<BorrowSummaryVoucher<'db>, SemanticDiagnostic<'db>> {
-    match provisional_borrow_summary_query(db, instance) {
+    summary_voucher(db, provisional_borrow_summary_query(db, instance))
+}
+
+fn summary_voucher<'db>(
+    db: &'db dyn HirAnalysisDb,
+    result: SemanticBorrowSummaryResult<'db>,
+) -> Result<BorrowSummaryVoucher<'db>, SemanticDiagnostic<'db>> {
+    match result {
         SemanticBorrowSummaryResult::Ok(summary) => Ok(BorrowSummaryVoucher {
             summary: summary.map(|summary| summary.items(db).clone()),
             blocked: None,
@@ -264,31 +267,37 @@ fn semantic_borrow_check_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> SemanticBorrowCheckResult<'db> {
-    let mut borrowck = match Borrowck::new(db, instance) {
-        Ok(borrowck) => borrowck,
-        Err(SemanticNormalizationFailure::Blocked(blocked)) => {
-            return SemanticBorrowCheckResult::Blocked(blocked);
-        }
-        Err(
-            SemanticNormalizationFailure::Rejected(diag)
-            | SemanticNormalizationFailure::InternalFailure(diag),
-        ) => {
-            return SemanticBorrowCheckResult::Err(SemanticDiagnosticId::new(db, diag));
+    let LocalBorrowCheck { result, callees } =
+        match &semantic_borrow_analysis_query(db, instance).check {
+            Some(check) => check.clone(),
+            None => match Borrowck::new(db, instance) {
+                Ok(mut borrowck) => borrowck.local_check(),
+                Err(SemanticNormalizationFailure::Blocked(blocked)) => {
+                    return SemanticBorrowCheckResult::Blocked(blocked);
+                }
+                Err(
+                    SemanticNormalizationFailure::Rejected(diag)
+                    | SemanticNormalizationFailure::InternalFailure(diag),
+                ) => {
+                    return SemanticBorrowCheckResult::Err(SemanticDiagnosticId::new(db, diag));
+                }
+            },
+        };
+    let mut pending = match result {
+        SemanticBorrowCheckResult::Ok => PendingSemanticValidation::default(),
+        SemanticBorrowCheckResult::Pending(pending) => pending,
+        result @ (SemanticBorrowCheckResult::Blocked(_) | SemanticBorrowCheckResult::Err(_)) => {
+            return result;
         }
     };
-    match borrowck.check() {
-        Ok(Some(blocked)) => return SemanticBorrowCheckResult::Blocked(blocked),
-        Err(diag) => return SemanticBorrowCheckResult::Err(SemanticDiagnosticId::new(db, diag)),
-        Ok(None) => {}
-    }
     // Summaries describe effects and boundary requirements. Local loan conflicts
     // are a separate validation: check every resolved implementation transitively
     // without making a boundary-only query depend on borrow diagnostics.
-    for call in borrowck.calls.values().filter(|call| !call.pending) {
-        match semantic_borrow_check_query(db, call.instance) {
+    for callee in callees {
+        match semantic_borrow_check_query(db, callee) {
             SemanticBorrowCheckResult::Ok => {}
             SemanticBorrowCheckResult::Pending(validation) => {
-                borrowck.pending.callees.extend(validation.callees);
+                pending.callees.extend(validation.callees);
             }
             result
             @ (SemanticBorrowCheckResult::Blocked(_) | SemanticBorrowCheckResult::Err(_)) => {
@@ -296,10 +305,10 @@ fn semantic_borrow_check_query<'db>(
             }
         }
     }
-    if borrowck.pending.callees.is_empty() {
+    if pending.callees.is_empty() {
         SemanticBorrowCheckResult::Ok
     } else {
-        SemanticBorrowCheckResult::Pending(borrowck.pending)
+        SemanticBorrowCheckResult::Pending(pending)
     }
 }
 
@@ -532,6 +541,34 @@ fn semantic_borrow_summary_cycle_recover<'db>(
     provisional_borrow_summary_cycle_recover(db, value, count, instance)
 }
 
+fn semantic_borrow_analysis_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> SemanticBorrowAnalysis<'db> {
+    SemanticBorrowAnalysis {
+        summary: semantic_borrow_summary_cycle_initial(db, instance),
+        check: None,
+    }
+}
+
+fn semantic_borrow_analysis_cycle_recover<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: &SemanticBorrowAnalysis<'db>,
+    count: u32,
+    instance: SemanticInstance<'db>,
+) -> salsa::CycleRecoveryAction<SemanticBorrowAnalysis<'db>> {
+    match semantic_borrow_summary_cycle_recover(db, &value.summary, count, instance) {
+        salsa::CycleRecoveryAction::Iterate => salsa::CycleRecoveryAction::Iterate,
+        // A fallback summary is not a solved body; the check solves it itself.
+        salsa::CycleRecoveryAction::Fallback(summary) => {
+            salsa::CycleRecoveryAction::Fallback(SemanticBorrowAnalysis {
+                summary,
+                check: None,
+            })
+        }
+    }
+}
+
 fn provisional_borrow_summary_cycle_recover<'db>(
     db: &'db dyn HirAnalysisDb,
     value: &SemanticBorrowSummaryResult<'db>,
@@ -633,7 +670,9 @@ mod tests {
                     check_semantic_boundaries(&db, instance),
                     Err(SemanticAnalysisError::Pending(_))
                 ));
-                let pending = semantic_borrow_summary_query(&db, instance);
+                let pending = semantic_borrow_analysis_query(&db, instance)
+                    .summary
+                    .clone();
                 let SemanticBorrowSummaryResult::Pending {
                     validation,
                     summary: Some(summary),
@@ -645,7 +684,10 @@ mod tests {
                 let summary = summary.items(&db);
                 assert!(summary.may_return);
                 assert!(!summary.result.has_missing_native_result(&db));
-                assert_eq!(pending, semantic_borrow_summary_query(&db, instance));
+                assert_eq!(
+                    pending,
+                    semantic_borrow_analysis_query(&db, instance).summary
+                );
                 let salsa::CycleRecoveryAction::Fallback(replayed) =
                     provisional_borrow_summary_cycle_recover(&db, &initial, 16, instance)
                 else {

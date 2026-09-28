@@ -315,6 +315,15 @@ fn lower_impl_trait_candidate<'db>(
 /// type definitions are not lowered here: a definition such as
 /// `type Target = Slot<{ ROOT + 1 }>` type-checks `+` through `core::ops::Add`,
 /// which needs the completed trait environment.
+///
+/// Every trait-environment lookup visits the headers of all candidate impls,
+/// so the lowered header is cached per impl. The sealed-marker admissibility
+/// check lowers marker impls eagerly; if that re-enters this header, the impl
+/// is not a candidate until the cycle converges.
+#[salsa::tracked(
+    cycle_fn=lower_impl_trait_header_cycle_recover,
+    cycle_initial=lower_impl_trait_header_cycle_initial
+)]
 pub(crate) fn lower_impl_trait_header<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
@@ -336,6 +345,22 @@ pub(crate) fn lower_impl_trait_header<'db>(
     );
 
     Some(implementor)
+}
+
+fn lower_impl_trait_header_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _impl_trait: ImplTrait<'db>,
+) -> Option<ImplementorId<'db>> {
+    None
+}
+
+fn lower_impl_trait_header_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Option<ImplementorId<'db>>,
+    _count: u32,
+    _impl_trait: ImplTrait<'db>,
+) -> salsa::CycleRecoveryAction<Option<ImplementorId<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 /// Lower a trait reference to a trait instance.

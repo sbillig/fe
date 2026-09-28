@@ -111,7 +111,7 @@ pub struct ShapeId<'db> {
     pub(super) data: CapabilityShape<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub enum ShapeError<'db> {
     RecursiveValue(TyId<'db>),
     UnresolvedCapability(TyId<'db>),
@@ -210,6 +210,9 @@ impl<'db> ShapeId<'db> {
     }
 }
 
+// Borrow checking and transport contracts ask for the shapes of the same
+// types at every access; building one normalizes and walks every field.
+#[salsa::tracked]
 pub fn capability_shape<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,

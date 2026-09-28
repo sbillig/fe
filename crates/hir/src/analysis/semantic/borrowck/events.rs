@@ -1,7 +1,8 @@
 //! Access checking over the converged structural state and shared regions.
 use super::validity::NativeValidity;
 use crate::analysis::semantic::diagnostics::{
-    BlockedSemanticBody, SemanticDiagnostic, SemanticDiagnosticKind, SemanticDiagnosticSpan,
+    BlockedSemanticBody, SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
+    SemanticDiagnosticSpan,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -37,6 +38,7 @@ use crate::analysis::{
 
 use super::{
     access::effect_occurrence,
+    ir::{LocalBorrowCheck, SemanticBorrowCheckResult},
     solver::{Borrowck, Resolution},
     summary::CallInputs,
 };
@@ -140,7 +142,10 @@ impl Live {
 
 impl<'db> Borrowck<'db> {
     pub fn check(&mut self) -> Result<Option<BlockedSemanticBody<'db>>, SemanticDiagnostic<'db>> {
-        self.solve()?;
+        // The final summary may already have solved this body.
+        if !self.is_solved() {
+            self.solve()?;
+        }
         if self.blocked.is_some() {
             return Ok(self.blocked.clone());
         }
@@ -159,6 +164,24 @@ impl<'db> Borrowck<'db> {
             return Err(diagnostic);
         }
         Ok(None)
+    }
+
+    pub(super) fn local_check(&mut self) -> LocalBorrowCheck<'db> {
+        let result = match self.check() {
+            Ok(Some(blocked)) => SemanticBorrowCheckResult::Blocked(blocked),
+            Err(diag) => SemanticBorrowCheckResult::Err(SemanticDiagnosticId::new(self.db, diag)),
+            Ok(None) if self.pending.callees.is_empty() => SemanticBorrowCheckResult::Ok,
+            Ok(None) => SemanticBorrowCheckResult::Pending(self.pending.clone()),
+        };
+        LocalBorrowCheck {
+            result,
+            callees: self
+                .calls
+                .values()
+                .filter(|call| !call.pending)
+                .map(|call| call.instance)
+                .collect(),
+        }
     }
 
     fn live_before(&self) -> Vec<Vec<Live>> {

@@ -613,6 +613,11 @@ impl<'db> Borrowck<'db> {
         }
     }
 
+    /// Whether [`Self::solve`] has published a converged fixed point.
+    pub fn is_solved(&self) -> bool {
+        self.boundary_requirements.is_some()
+    }
+
     pub fn solve(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
         self.prepare_calls()?;
         if self
