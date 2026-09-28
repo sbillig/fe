@@ -3,7 +3,7 @@ source: crates/parser/tests/syntax_node.rs
 expression: node
 input_file: test_files/syntax_node/exprs/path_lshift.fe
 ---
-Root@0..53
+Root@0..175
   BinExpr@0..10
     PathExpr@0..5
       Path@0..5
@@ -62,3 +62,153 @@ Root@0..53
         PathSegment@48..52
           Ident@48..52 "BITS"
   Newline@52..53 "\n"
+  BinExpr@53..79
+    BinExpr@53..74
+      PathExpr@53..58
+        Path@53..58
+          PathSegment@53..58
+            Ident@53..58 "value"
+      WhiteSpace@58..59 " "
+      LShift@59..61
+        Lt@59..60 "<"
+        Lt@60..61 "<"
+      WhiteSpace@61..62 " "
+      CastExpr@62..74
+        PathExpr@62..66
+          Path@62..66
+            PathSegment@62..66
+              Ident@62..66 "bits"
+        WhiteSpace@66..67 " "
+        AsKw@67..69 "as"
+        WhiteSpace@69..70 " "
+        PathType@70..74
+          Path@70..74
+            PathSegment@70..74
+              Ident@70..74 "u256"
+    WhiteSpace@74..75 " "
+    RShift@75..77
+      Gt@75..76 ">"
+      Gt@76..77 ">"
+    WhiteSpace@77..78 " "
+    LitExpr@78..79
+      Lit@78..79
+        Int@78..79 "1"
+  Newline@79..80 "\n"
+  BinExpr@80..108
+    BinExpr@80..101
+      PathExpr@80..85
+        Path@80..85
+          PathSegment@80..85
+            Ident@80..85 "value"
+      WhiteSpace@85..86 " "
+      LShift@86..88
+        Lt@86..87 "<"
+        Lt@87..88 "<"
+      WhiteSpace@88..89 " "
+      CastExpr@89..101
+        PathExpr@89..93
+          Path@89..93
+            PathSegment@89..93
+              Ident@89..93 "bits"
+        WhiteSpace@93..94 " "
+        AsKw@94..96 "as"
+        WhiteSpace@96..97 " "
+        PathType@97..101
+          Path@97..101
+            PathSegment@97..101
+              Ident@97..101 "u256"
+    WhiteSpace@101..102 " "
+    RShift@102..104
+      Gt@102..103 ">"
+      Gt@103..104 ">"
+    WhiteSpace@104..105 " "
+    ParenExpr@105..108
+      LParen@105..106 "("
+      LitExpr@106..107
+        Lit@106..107
+          Int@106..107 "1"
+      RParen@107..108 ")"
+  Newline@108..109 "\n"
+  BinExpr@109..135
+    BinExpr@109..130
+      PathExpr@109..116
+        Path@109..116
+          PathSegment@109..110
+            Ident@109..110 "M"
+          Colon2@110..112 "::"
+          PathSegment@112..116
+            Ident@112..116 "BITS"
+      WhiteSpace@116..117 " "
+      LShift@117..119
+        Lt@117..118 "<"
+        Lt@118..119 "<"
+      WhiteSpace@119..120 " "
+      CastExpr@120..130
+        PathExpr@120..124
+          Path@120..124
+            PathSegment@120..124
+              Ident@120..124 "bits"
+        WhiteSpace@124..125 " "
+        AsKw@125..127 "as"
+        WhiteSpace@127..128 " "
+        PathType@128..130
+          Path@128..130
+            PathSegment@128..130
+              Ident@128..130 "u8"
+    WhiteSpace@130..131 " "
+    RShift@131..133
+      Gt@131..132 ">"
+      Gt@132..133 ">"
+    WhiteSpace@133..134 " "
+    LitExpr@134..135
+      Lit@134..135
+        Int@134..135 "1"
+  Newline@135..136 "\n"
+  BinExpr@136..174
+    BinExpr@136..169
+      PathExpr@136..141
+        Path@136..141
+          PathSegment@136..141
+            Ident@136..141 "value"
+      WhiteSpace@141..142 " "
+      LShift@142..144
+        Lt@142..143 "<"
+        Lt@143..144 "<"
+      WhiteSpace@144..145 " "
+      CastExpr@145..169
+        PathExpr@145..163
+          Path@145..163
+            PathSegment@145..157
+              QualifiedType@145..157
+                Lt@145..146 "<"
+                PathType@146..147
+                  Path@146..147
+                    PathSegment@146..147
+                      Ident@146..147 "T"
+                WhiteSpace@147..148 " "
+                AsKw@148..150 "as"
+                WhiteSpace@150..151 " "
+                TraitRef@151..156
+                  Path@151..156
+                    PathSegment@151..156
+                      Ident@151..156 "Model"
+                Gt@156..157 ">"
+            Colon2@157..159 "::"
+            PathSegment@159..163
+              Ident@159..163 "BITS"
+        WhiteSpace@163..164 " "
+        AsKw@164..166 "as"
+        WhiteSpace@166..167 " "
+        PathType@167..169
+          Path@167..169
+            PathSegment@167..169
+              Ident@167..169 "u8"
+    WhiteSpace@169..170 " "
+    RShift@170..172
+      Gt@170..171 ">"
+      Gt@171..172 ">"
+    WhiteSpace@172..173 " "
+    LitExpr@173..174
+      Lit@173..174
+        Int@173..174 "1"
+  Newline@174..175 "\n"

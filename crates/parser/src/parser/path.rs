@@ -2,7 +2,7 @@ use crate::{ParseError, SyntaxKind, TextRange, TextSize};
 
 use super::{
     Parser, define_scope,
-    expr::is_lt_eq,
+    expr::{is_lshift, is_lt_eq},
     param::{GenericArgListScope, TraitRefScope},
     token_stream::TokenStream,
     type_::parse_type,
@@ -39,11 +39,26 @@ impl super::Parse for PathSegmentScope {
             Some(kind) if is_path_segment(kind) => {
                 parser.bump();
 
+                if parser.current_kind_same_line() == Some(SyntaxKind::Lt) && is_lshift(parser) {
+                    // `<<` is a left shift unless it opens generic arguments
+                    // whose first argument is a qualified path, as in
+                    // `Wrapped<<T as Trait>::Item>`. No shift operand continues
+                    // with `>::`, so that prefix settles it, and a cast such as
+                    // `value << bits as u256 >> 1` stays a shift.
+                    if parser.dry_run(|parser| {
+                        parser.bump();
+                        parser.parses_without_error(QualifiedTypeScope::default())
+                            && parser.current_kind() == Some(SyntaxKind::Colon2)
+                    }) {
+                        // Errors inside the arguments are reported as they are parsed.
+                        let _ = parser.parse(GenericArgListScope::new(self.is_expr));
+                    }
+                    return Ok(());
+                }
+
                 let is_turbofish = parser.current_kind_same_line() == Some(SyntaxKind::Colon2)
                     && parser.peek_two() == (Some(SyntaxKind::Colon2), Some(SyntaxKind::Lt));
 
-                // `Container<<T as Trait>::Item>` also starts with `<<`.
-                // Let the generic argument dry run distinguish it from a shift.
                 if (is_turbofish
                     || (parser.current_kind_same_line() == Some(SyntaxKind::Lt)
                         && !is_lt_eq(parser)))
@@ -92,7 +107,13 @@ impl super::Parse for QualifiedTypeScope {
                 ));
             }
         }
-        parser.bump_expected(SyntaxKind::AsKw);
+        if !parser.bump_if(SyntaxKind::AsKw) {
+            return Err(ParseError::expected(
+                &[SyntaxKind::AsKw],
+                None,
+                parser.end_of_prev_token,
+            ));
+        }
         parser.parse(TraitRefScope::default())?;
         if parser.bump_if(SyntaxKind::Gt) {
             Ok(())

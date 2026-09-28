@@ -1,0 +1,48 @@
+---
+source: crates/parser/tests/error_recovery.rs
+expression: node
+input_file: test_files/error_recovery/exprs/qualified_generic_arg.fe
+---
+Root@0..45
+  RecordInitExpr@0..44
+    Path@0..27
+      PathSegment@0..27
+        Ident@0..7 "Wrapped"
+        GenericArgList@7..27
+          Lt@7..8 "<"
+          TypeGenericArg@8..27
+            PathType@8..27
+              Path@8..27
+                PathSegment@8..20
+                  QualifiedType@8..20
+                    Lt@8..9 "<"
+                    PathType@9..10
+                      Path@9..10
+                        PathSegment@9..10
+                          Ident@9..10 "T"
+                    WhiteSpace@10..11 " "
+                    AsKw@11..13 "as"
+                    WhiteSpace@13..14 " "
+                    TraitRef@14..19
+                      Path@14..19
+                        PathSegment@14..19
+                          Ident@14..19 "Model"
+                    Gt@19..20 ">"
+                Colon2@20..22 "::"
+                PathSegment@22..27
+                  Ident@22..27 "Point"
+    WhiteSpace@27..28 " "
+    RecordFieldList@28..44
+      LBrace@28..29 "{"
+      WhiteSpace@29..30 " "
+      RecordField@30..42
+        Ident@30..35 "value"
+        Colon@35..36 ":"
+        WhiteSpace@36..37 " "
+        PathExpr@37..42
+          Path@37..42
+            PathSegment@37..42
+              Ident@37..42 "point"
+      WhiteSpace@42..43 " "
+      RBrace@43..44 "}"
+  Newline@44..45 "\n"

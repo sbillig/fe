@@ -1,3 +1,7 @@
 value << 2
 value<<amount
 value << <T as Model>::BITS
+value << bits as u256 >> 1
+value << bits as u256 >> (1)
+M::BITS << bits as u8 >> 1
+value << <T as Model>::BITS as u8 >> 1

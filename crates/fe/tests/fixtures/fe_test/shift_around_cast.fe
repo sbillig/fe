@@ -1,0 +1,36 @@
+// A cast inside a shift must not be read as a qualified generic argument:
+// `value << bits as u256 >> 1` is `(value << (bits as u256)) >> 1`, not
+// `value<<bits as u256>>` followed by a stray `1`.
+pub trait Model {
+    const BITS: u8
+}
+
+pub struct M {}
+
+impl Model for M {
+    const BITS: u8 = 3
+}
+
+fn cast_then_shift(_ value: u256, _ bits: u8) -> u256 {
+    value << bits as u256 >> 1
+}
+
+fn cast_then_shift_by_parenthesized(_ value: u256, _ bits: u8) -> u256 {
+    value << bits as u256 >> (1)
+}
+
+fn cast_after_later_path_segment(_ bits: u8) -> u8 {
+    M::BITS << bits as u8 >> 1
+}
+
+fn cast_of_qualified_constant<T: Model>(_ value: u8) -> u8 {
+    value << <T as Model>::BITS as u8 >> 1
+}
+
+#[test]
+fn casts_inside_shifts_stay_shifts() {
+    assert!(cast_then_shift(1, 3) == 4)
+    assert!(cast_then_shift_by_parenthesized(1, 3) == 4)
+    assert!(cast_after_later_path_segment(2) == 6)
+    assert!(cast_of_qualified_constant<M>(1) == 4)
+}

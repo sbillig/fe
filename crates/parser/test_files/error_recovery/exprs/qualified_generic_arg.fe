@@ -1,0 +1,1 @@
+Wrapped<<T as Model>::Point { value: point }
