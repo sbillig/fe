@@ -1014,6 +1014,39 @@ impl ToDoc for ast::QualifiedType {
 impl ToDoc for ast::GenericArgList {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let indent = ctx.config.indent_width as isize;
+        // The parser reads `<<` as generic arguments only before a qualified
+        // path such as `Wrapped<<T as Trait>::Item>`. Space out a bare
+        // qualified first argument, `Wrapped< <T as Trait> >`, so it does not
+        // become a left shift.
+        let first_path = self
+            .iter()
+            .next()
+            .and_then(|arg| match arg.kind() {
+                GenericArgKind::Type(arg) => arg.ty(),
+                _ => None,
+            })
+            .and_then(|ty| match ty.kind() {
+                TypeKind::Path(ty) => ty.path(),
+                _ => None,
+            });
+        let starts_with_bare_qualified_type = first_path.is_some_and(|path| {
+            let mut segments = path.segments();
+            segments
+                .next()
+                .is_some_and(|segment| segment.qualified_type().is_some())
+                && segments.next().is_none()
+        });
+        if starts_with_bare_qualified_type {
+            return block_list_spaced_auto(
+                ctx,
+                self.syntax(),
+                "<",
+                ">",
+                ast::GenericArg::cast,
+                indent,
+                true,
+            );
+        }
         block_list_auto(
             ctx,
             self.syntax(),

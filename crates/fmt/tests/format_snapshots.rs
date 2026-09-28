@@ -84,3 +84,46 @@ fn load(pointer: **u256) -> u256 {
         "{syntax:#?}",
     );
 }
+
+#[test]
+fn bare_qualified_first_generic_arguments_do_not_become_shifts() {
+    let source = r#"
+fn wrap(_ x: Wrapped< <T as Model>>, _ y: Wrapped< <T as Model>::Point>) {
+    let w = make< <T as Model>>(x)
+}
+"#;
+    let formatted = format_str(source, &Config::default()).expect("format should succeed");
+
+    assert!(formatted.contains("Wrapped< <T as Model> >"), "{formatted}");
+    assert!(formatted.contains("make< <T as Model> >(x)"), "{formatted}");
+    assert!(
+        formatted.contains("Wrapped<<T as Model>::Point>"),
+        "{formatted}"
+    );
+    assert_eq!(
+        format_str(&formatted, &Config::default()).expect("reformat should succeed"),
+        formatted,
+    );
+
+    let (green, errors) = parse_source_file(&formatted, RecoveryMode::NoRecover);
+    assert!(errors.is_empty(), "{errors:#?}\n{formatted}");
+
+    let syntax = SyntaxNode::new_root(green);
+    assert_eq!(
+        syntax
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::GenericArgList)
+            .filter(|node| node
+                .parent()
+                .is_some_and(|parent| parent.kind() == SyntaxKind::PathSegment))
+            .count(),
+        3,
+        "{syntax:#?}",
+    );
+    assert!(
+        syntax
+            .descendants()
+            .all(|node| node.kind() != SyntaxKind::BinExpr),
+        "{syntax:#?}",
+    );
+}
