@@ -1,1 +1,1 @@
-Resolve `Self::Name` inside a trait when `Name` is an associated type of one of its supertraits, such as `Self::Dom` in `trait Eval: Arrow`. If two supertraits define the same name, the reference is reported as ambiguous.
+Resolve `Self::Name` inside a trait when `Name` is an associated type of one of its supertraits, such as `Self::Dom` in `trait Eval: Arrow`. Bounds in scope at the reference, such as a method's own `where Self: Extra`, are considered alongside the inherited ones, and the reference is reported as ambiguous when they name different associated types.

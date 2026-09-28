@@ -1687,6 +1687,21 @@ pub(crate) fn find_associated_type<'db>(
     find_associated_type_in_mode(db, scope, ty, name, assumptions, ConstBodyLowering::Eager)
 }
 
+/// The bounds implied by a trait's own `Self: Trait` predicate.
+///
+/// Header positions such as a trait method signature deliberately withhold the
+/// self-predicate from `assumptions`, because assuming it while the trait's
+/// interface is still being lowered can recurse through the in-progress
+/// definition (see `header_constraints_for`). Its implied bounds are still
+/// sound for naming associated types, which never discharges a goal, so they
+/// are reconstructed locally where they are needed.
+fn trait_self_implied_bounds<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+) -> PredicateListId<'db> {
+    PredicateListId::new(db, vec![trait_self_predicate(db, trait_)]).extend_all_bounds(db)
+}
+
 fn find_associated_type_in_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -1714,14 +1729,14 @@ fn find_associated_type_in_mode<'db>(
     }
 
     let scope_ingot = scope.ingot(db);
+    let mut candidates = SmallVec::new();
 
     if let TyData::TyParam(param) = original_ty.data(db) {
         // Trait self, in trait or impl trait. Associated type must be in this trait
         // or, inside a trait, in one of its supertraits.
         if param.is_trait_self() {
             if let Some(trait_) = param.owner.resolve_to::<Trait>(db) {
-                let trait_inst =
-                    TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
+                let trait_inst = trait_self_predicate(db, trait_);
                 if trait_.assoc_ty(db, name).is_some() {
                     let assoc_ty = TyId::assoc_ty(db, trait_inst.trait_ref(db), name);
                     return Ok(smallvec![(trait_inst, assoc_ty)]);
@@ -1730,21 +1745,19 @@ fn find_associated_type_in_mode<'db>(
                 // The trait's `Self` also satisfies the trait's declared supertraits,
                 // so their associated types are reachable as `Self::Name` too. Bounds
                 // on the trait's own associated types have another self type and are
-                // skipped.
-                let mut candidates = SmallVec::new();
-                for &bound in PredicateListId::new(db, vec![trait_inst])
-                    .extend_all_bounds(db)
-                    .list(db)
-                {
+                // skipped. In a header position such as a trait method signature
+                // `assumptions` does not carry the enclosing trait's own `Self`
+                // bounds, so these are merged with the contextual candidates
+                // collected below rather than returned here: a method-level
+                // `where Self: Extra` is an equally valid source and must
+                // participate in ambiguity resolution.
+                for &bound in trait_self_implied_bounds(db, trait_).list(db) {
                     if bound.def(db) != trait_
                         && bound.self_ty(db) == original_ty
                         && let Some(assoc_ty) = bound.project_assoc_ty(db, name)
                     {
                         candidates.push((bound, assoc_ty));
                     }
-                }
-                if !candidates.is_empty() {
-                    return Ok(candidates);
                 }
             } else if let Some(impl_trait) = param.owner.resolve_to::<ImplTrait>(db)
                 && let Some(trait_inst) = impl_trait.trait_inst(db)
@@ -1755,7 +1768,6 @@ fn find_associated_type_in_mode<'db>(
         }
     }
 
-    let mut candidates = SmallVec::new();
     let search_ingots = [
         Some(scope_ingot),
         original_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
@@ -1885,6 +1897,12 @@ fn find_associated_type_in_mode<'db>(
 
         Ok(())
     })?;
+
+    // Supertrait and contextual bounds can reach the same projection, e.g. a
+    // method that restates a bound the enclosing trait already implies. Two
+    // paths to one declaration are not an ambiguity.
+    let mut seen = IndexSet::new();
+    candidates.retain(|candidate| seen.insert(*candidate));
 
     Ok(candidates)
 }
