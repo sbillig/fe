@@ -445,6 +445,25 @@ impl<'db> ExternalSource<'db> {
         }
     }
 
+    /// Storage reached through a raw address. The referent of a native borrow
+    /// or view parameter is memory too, but its caller passes a native place
+    /// whose overlap with raw writes it can usually refute, so it is not raw.
+    pub(super) fn in_raw_memory(&self) -> bool {
+        self.contract.address_space == HandleAddressSpace::Known(ProviderAddressSpace::Memory)
+            && !(matches!(self.origin, ExternalOrigin::Input(_)) && !self.uncertain())
+    }
+
+    /// A conditional replacement of a pointer stored in raw memory, or an
+    /// offset into one. Its overlap condition lets a caller refute the
+    /// overwrite, but every loop iteration would add replacements of its own.
+    pub(super) fn is_raw_memory_replacement(&self) -> bool {
+        match &self.clobber {
+            Some(clobber) => clobber.target.source.in_raw_memory(),
+            None => matches!(&self.origin, ExternalOrigin::Memory { base, .. }
+                if self.dereferences.is_empty() && base.source.is_raw_memory_replacement()),
+        }
+    }
+
     /// The number of nested offsets or casts into one object. A followed
     /// pointer names another object and starts a new chain.
     fn offset_depth(&self) -> usize {

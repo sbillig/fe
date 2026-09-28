@@ -1,0 +1,115 @@
+use core::ptr
+use core::ptr::MemArray
+
+// Every call below writes through a pointer loaded from raw memory, which may
+// overwrite the pointers stored next to it. Borrow checking must keep the
+// resulting replacement families bounded across calls and loop iterations.
+
+struct Arr<T> {
+    ptr: *T,
+    len: u256,
+}
+
+impl<T> Copy for Arr<T> {}
+
+impl<T> Arr<T> {
+    fn new(_ len: u256) -> Self {
+        Arr { ptr: MemArray<T>::new_uninit(len).ptr_at(0), len }
+    }
+
+    fn at(self, _ i: u256) -> *T {
+        if i >= self.len {
+            core::panic()
+        }
+        ptr::offset(self.ptr, i)
+    }
+}
+
+struct Item {
+    t: u256,
+    id: u256,
+}
+
+impl Copy for Item {}
+
+struct Pair {
+    a: Arr<Item>,
+    b: Arr<Item>,
+    n: u256,
+}
+
+impl Copy for Pair {}
+
+fn update(_ items: Arr<Item>, _ value: u256) {
+    let item = items.at(0)
+    item.t = item.t + value
+}
+
+fn step(_ pairs: Arr<Pair>, _ i: u256) {
+    let pair = pairs.at(i)
+    update(pair.a, 1)
+    update(pair.b, 2)
+}
+
+fn apply(_ pairs: Arr<Pair>, n: u256) {
+    let mut i: u256 = 0
+    while i < n {
+        step(pairs, i)
+        i += 1
+    }
+}
+
+fn apply_inline(_ pairs: Arr<Pair>, n: u256) {
+    let mut i: u256 = 0
+    while i < n {
+        let pair = pairs.at(i)
+        update(pair.a, 20)
+        update(pair.b, 40)
+        i += 1
+    }
+}
+
+fn apply_straight(_ pairs: Arr<Pair>) {
+    let pair = pairs.at(1)
+    update(pair.a, 200)
+    update(pair.b, 200)
+    update(pair.a, 200)
+    update(pair.b, 200)
+}
+
+fn pairs(_ n: u256) -> Arr<Pair> {
+    let pairs = Arr<Pair>::new(n)
+    let mut i: u256 = 0
+    while i < n {
+        let a = Arr<Item>::new(1)
+        let b = Arr<Item>::new(1)
+        *a.at(0) = Item { t: 0, id: i }
+        *b.at(0) = Item { t: 0, id: i }
+        *pairs.at(i) = Pair { a, b, n: i }
+        i += 1
+    }
+    pairs
+}
+
+fn item(_ pairs: Arr<Pair>, _ i: u256, second: bool) -> *Item {
+    let pair = pairs.at(i)
+    let items = if second { pair.b } else { pair.a }
+    items.at(0)
+}
+
+#[test]
+fn writes_through_stored_pointers_in_loops() {
+    let pairs = pairs(2)
+    apply(pairs, n: 2)
+    apply_inline(pairs, n: 2)
+    apply_straight(pairs)
+    let first_a = item(pairs, 0, second: false)
+    let first_b = item(pairs, 0, second: true)
+    let last_a = item(pairs, 1, second: false)
+    let last_b = item(pairs, 1, second: true)
+    assert(first_a.t == 21)
+    assert(first_b.t == 42)
+    assert(last_a.t == 421)
+    assert(last_b.t == 442)
+    assert(last_b.id == 1)
+}

@@ -45,6 +45,13 @@ impl<'db> OpaqueWrite<'db> {
             || clobber.is_some_and(
                 |(root, _)| matches!(root, RegionRoot::External(source) if source.is_arbitrary()),
             );
+        // A raw pointer stored in raw memory and overwritten through an
+        // arbitrary address joins the same family. Its condition would repeat
+        // an earlier replacement's once per write site, multiplying the cell's
+        // alternatives across repeated writes through replaced pointers.
+        let raw_memory_cell = clobber.is_some_and(
+            |(root, _)| matches!(root, RegionRoot::External(source) if source.in_raw_memory()),
+        );
         let mut failure = None;
         let value = values.from_shape(shape, scope, |semantics, path, scope| {
             let native = matches!(
@@ -66,15 +73,13 @@ impl<'db> OpaqueWrite<'db> {
                 failure = Some(UnresolvedCapability(ty));
                 return Vec::new();
             };
+            let family = ExternalSource::opaque_memory(ReferentContract::new(
+                db,
+                contract.target_ty,
+                contract.address_space,
+            ));
             let (witness_scope, source) = if saturated {
-                (
-                    scope.clone(),
-                    ExternalSource::opaque_memory(ReferentContract::new(
-                        db,
-                        contract.target_ty,
-                        contract.address_space,
-                    )),
-                )
+                (scope.clone(), family.clone())
             } else {
                 // Independent cells may receive different addresses even at the
                 // same write site. Lexical witnesses keep replay deterministic.
@@ -126,7 +131,15 @@ impl<'db> OpaqueWrite<'db> {
                         ) {
                             return None;
                         }
-                        let condition = SourceExpr::from_place(&target)
+                        if !native
+                            && raw_memory_cell
+                            && matches!(&clause.payload.root,
+                                RegionRoot::External(written) if written.is_arbitrary())
+                        {
+                            return Some((guard, family.clone()));
+                        }
+                        let mut alternative = source.clone();
+                        alternative.clobber = SourceExpr::from_place(&target)
                             .zip(SourceExpr::from_place(&clause.payload))
                             .map(|(target, written)| {
                                 Box::new(ClobberCondition::new(
@@ -135,17 +148,15 @@ impl<'db> OpaqueWrite<'db> {
                                     extent.substitute(&fresh),
                                 ))
                             });
-                        Some((guard, condition))
+                        Some((guard, alternative))
                     })
                     .collect::<Vec<_>>()
             } else {
-                vec![(Guard::always(&witness_scope), None)]
+                vec![(Guard::always(&witness_scope), source)]
             };
             alternatives
                 .into_iter()
-                .map(|(guard, clobber)| {
-                    let mut source = source.clone();
-                    source.clobber = clobber;
+                .map(|(guard, source)| {
                     let region = RegionSet::singleton(
                         guard.scope(),
                         RegionRoot::External(source),

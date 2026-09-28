@@ -280,6 +280,24 @@ impl<'db> RegionSet<'db> {
         )
     }
 
+    /// Loop feedback widens conditional replacements of pointers stored in
+    /// raw memory to the closed arbitrary-memory family of their contract.
+    pub fn widen_raw_memory_replacements(&self) -> Self {
+        Self::new(
+            &self.scope,
+            self.clauses.iter().map(|clause| {
+                let mut clause = clause.clone();
+                if let RegionRoot::External(source) = &clause.payload.root
+                    && source.is_raw_memory_replacement()
+                {
+                    clause.payload.root =
+                        RegionRoot::External(ExternalSource::opaque_memory(source.contract));
+                }
+                clause
+            }),
+        )
+    }
+
     /// Previous executions own fresh witnesses, independent of the next execution.
     pub fn forget_iteration(
         &self,

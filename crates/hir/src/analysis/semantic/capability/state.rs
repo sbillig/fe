@@ -370,7 +370,12 @@ impl<'db> BorrowState<'db> {
                     .entry((entry.payload.clone(), domain.clone()))
                     .or_insert_with(|| {
                         let guard = domain.forget_occurrences(occurrence);
-                        let payload = entry.payload.forget_occurrences(occurrence);
+                        // Replacement families must not grow with the iteration
+                        // count; the caller loses only their overlap conditions.
+                        let payload = entry
+                            .payload
+                            .forget_occurrences(occurrence)
+                            .widen_raw_memory_replacements();
                         let mut scope = guard.scope().clone();
                         let indices: BTreeSet<_> = guard
                             .indices()

@@ -101,6 +101,15 @@ impl<'db> CapabilityRef<'db> {
         }
     }
 
+    /// See `RegionSet::widen_raw_memory_replacements`. Native capabilities
+    /// keep their conditions, which decide whether invalidation is deferred.
+    pub fn widen_raw_memory_replacements(&self) -> Self {
+        match self {
+            Self::Address(region) => Self::Address(region.widen_raw_memory_replacements()),
+            _ => self.clone(),
+        }
+    }
+
     pub fn forget_occurrences(&self, repeated: impl Fn(ValueOccurrence) -> bool + Copy) -> Self {
         match self {
             Self::Shared { .. } | Self::Mutable { .. } => self.clone(),
