@@ -56,7 +56,14 @@ fn git_repo() -> Option<gix::Repository> {
 
 fn emit_git_rerun_paths(repo: &gix::Repository) {
     emit_rerun_path(repo.git_dir().join("HEAD"));
-    emit_rerun_path(repo.common_dir().join("packed-refs"));
+
+    // Cargo treats a missing rerun-if-changed path as permanently stale, which
+    // would rebuild this crate on every cargo invocation. Shallow CI checkouts
+    // have no packed-refs file.
+    let packed_refs = repo.common_dir().join("packed-refs");
+    if packed_refs.exists() {
+        emit_rerun_path(packed_refs);
+    }
 
     if let Ok(Some(head_ref)) = repo.head_ref() {
         emit_rerun_path(repo.common_dir().join(head_ref.name().to_path()));

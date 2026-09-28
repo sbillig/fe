@@ -71,6 +71,10 @@ jobs:
           - os: ubuntu-latest
           - os: macOS-latest
           - os: windows-latest
+    env:
+      # MSVC's link.exe is much slower than lld at linking the ~100 large test
+      # binaries. Only affects Windows builds.
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
     steps:
       - uses: actions/checkout@v5
         with:
@@ -79,11 +83,30 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+      - name: Cache tree-sitter parser
+        id: tree-sitter-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            crates/tree-sitter-fe/src/parser.c
+            crates/tree-sitter-fe/src/grammar.json
+            crates/tree-sitter-fe/src/node-types.json
+            crates/tree-sitter-fe/src/tree_sitter
+          key: tree-sitter-parser-${{ runner.os }}-${{ hashFiles('crates/tree-sitter-fe/grammar.js', 'crates/tree-sitter-fe/package-lock.json', 'crates/tree-sitter-fe/bindings/rust/build.rs') }}
+      - name: Mark cached tree-sitter parser as fresh
+        if: steps.tree-sitter-cache.outputs.cache-hit == 'true'
+        working-directory: crates/tree-sitter-fe
+        shell: bash
+        # The checkout makes grammar.js newer than the restored files, which
+        # would make the build script try to regenerate them.
+        run: touch src/parser.c src/grammar.json src/node-types.json
       - name: Setup Node
+        if: steps.tree-sitter-cache.outputs.cache-hit != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 20
       - name: Generate tree-sitter parser
+        if: steps.tree-sitter-cache.outputs.cache-hit != 'true'
         working-directory: crates/tree-sitter-fe
         shell: bash
         run: |
@@ -125,8 +148,6 @@ jobs:
         uses: taiki-e/install-action@nextest
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
-        with:
-          cache-workspace-crates: true
       - name: Build
         run: cargo test --release --workspace --all-features --no-run --locked --exclude fe-language-server --exclude fe-bench
       - name: Run tests
