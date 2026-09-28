@@ -1,0 +1,8 @@
+pub trait Gen<A> {
+    type Out
+}
+
+// Both supertraits are `Gen`, so the hint must name the type argument.
+pub trait Both: Gen<u8> + Gen<u16> {
+    fn use_out(_ value: Self::Out)
+}

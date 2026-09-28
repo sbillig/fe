@@ -189,11 +189,20 @@ fn cmp_trait_inst_by_name<'db>(
 ) -> Ordering {
     let a_name = a.def(db).name(db).unwrap().data(db);
     let b_name = b.def(db).name(db).unwrap().data(db);
-    a_name.cmp(b_name).then_with(|| {
-        let a_self = a.self_ty(db).pretty_print(db).to_string();
-        let b_self = b.self_ty(db).pretty_print(db).to_string();
-        a_self.cmp(&b_self)
-    })
+    a_name
+        .cmp(b_name)
+        .then_with(|| {
+            let a_self = a.self_ty(db).pretty_print(db).to_string();
+            let b_self = b.self_ty(db).pretty_print(db).to_string();
+            a_self.cmp(&b_self)
+        })
+        .then_with(|| qualifying_trait_path(db, *a).cmp(&qualifying_trait_path(db, *b)))
+}
+
+/// The trait with its type arguments, as written after `as` in `<T as Trait<A>>`.
+/// Associated type bindings are left out: they are not part of the path.
+fn qualifying_trait_path<'db>(db: &'db dyn SpannedHirAnalysisDb, inst: TraitInstId<'db>) -> String {
+    inst.trait_ref(db).as_predicate(db).pretty_print(db, false)
 }
 
 fn format_method_param_ty<'db>(
@@ -988,19 +997,19 @@ impl DiagnosticVoucher for PathResDiag<'_> {
 
                 for (trait_inst, ty) in candidates {
                     let trait_def = trait_inst.def(db);
-                    let trait_name = trait_def.name(db).unwrap().data(db);
+                    let trait_path = qualifying_trait_path(db, *trait_inst);
                     let span = |t: &Trait| t.span().name().resolve(db);
                     let span = span(&trait_def);
 
                     let msg = match ty.data(db) {
                         TyData::AssocTy(_) | TyData::Invalid(_) | TyData::Never => {
-                            format!("candidate: `{trait_name}`")
+                            format!("candidate: `{trait_path}`")
                         }
                         _ => {
                             // Render as: candidate: <Self as Trait>::Name = Ty
                             let self_ty = trait_inst.self_ty(db).pretty_print(db);
                             let ty_str = ty.pretty_print(db);
-                            format!("candidate: <{self_ty} as {trait_name}>::{name} = {ty_str}")
+                            format!("candidate: <{self_ty} as {trait_path}>::{name} = {ty_str}")
                         }
                     };
 
@@ -1015,10 +1024,10 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                     .iter()
                     .min_by(|(a, _), (b, _)| cmp_trait_inst_by_name(db, a, b))
                     .unwrap();
-                let trait_name = inst.def(db).name(db).unwrap().data(db);
+                let trait_path = qualifying_trait_path(db, *inst);
                 let self_ty = inst.self_ty(db).pretty_print(db);
                 let hint = format!(
-                    "hint: specify the trait explicitly: `<{self_ty} as {trait_name}>::{name}`"
+                    "hint: specify the trait explicitly: `<{self_ty} as {trait_path}>::{name}`"
                 );
 
                 CompleteDiagnostic {
@@ -1347,10 +1356,10 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 // Candidate labels at the trait declarations
                 for inst in trait_insts {
                     let trait_def = inst.def(db);
-                    let trait_name = trait_def.name(db).unwrap().data(db);
+                    let trait_path = qualifying_trait_path(db, *inst);
                     let trait_name_span = trait_def.span().name().resolve(db);
                     let self_ty = inst.self_ty(db).pretty_print(db);
-                    let msg = format!("candidate: `<{self_ty} as {trait_name}>::{const_name}`");
+                    let msg = format!("candidate: `<{self_ty} as {trait_path}>::{const_name}`");
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
                         message: msg,
@@ -1362,10 +1371,10 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                     .iter()
                     .min_by(|a, b| cmp_trait_inst_by_name(db, a, b))
                     .unwrap();
-                let trait_name = inst.def(db).name(db).unwrap().data(db);
+                let trait_path = qualifying_trait_path(db, *inst);
                 let self_ty = inst.self_ty(db).pretty_print(db);
                 let hint = format!(
-                    "hint: specify the trait explicitly: `<{self_ty} as {trait_name}>::{const_name}`"
+                    "hint: specify the trait explicitly: `<{self_ty} as {trait_path}>::{const_name}`"
                 );
 
                 CompleteDiagnostic {

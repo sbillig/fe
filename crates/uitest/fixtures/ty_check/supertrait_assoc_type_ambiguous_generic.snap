@@ -1,0 +1,18 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/supertrait_assoc_type_ambiguous_generic.fe
+---
+error[2-0009]: ambiguous associated type `Out`
+  ┌─ supertrait_assoc_type_ambiguous_generic.fe:7:31
+  │
+1 │ pub trait Gen<A> {
+  │           ---
+  │           │
+  │           candidate: `Gen<u8>`
+  │           candidate: `Gen<u16>`
+  ·
+7 │     fn use_out(_ value: Self::Out)
+  │                               ^^^ associated type `Out` is ambiguous
+  │
+  = hint: specify the trait explicitly: `<Self as Gen<u16>>::Out`
