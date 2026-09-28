@@ -1633,3 +1633,162 @@ fn loop_feedback_separates_old_selectors_from_current_execution() {
     state.forget_iteration(&mut values, |index| index == selector, |_| false);
     assert_eq!(state, stable);
 }
+
+#[test]
+fn moving_contents_does_not_clobber_possible_aliases() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let shapes = Shapes::new(&db);
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let contract = ReferentContract::memory(&db, TyId::borrow_mut_of(&db, TyId::u256(&db)));
+    let input = ExternalSource::input(InputSource::slot(0, Default::default()), contract, true);
+    let direct = region(RegionRoot::External(input.clone()));
+    let reachable = region(RegionRoot::External(input.widen()));
+    let original = handle(&mut values, shapes.handle, 0);
+    let mut state = BorrowState::new(
+        &mut values,
+        [],
+        [
+            (direct.clauses()[0].payload.root.clone(), original.clone()),
+            (
+                reachable.clauses()[0].payload.root.clone(),
+                original.clone(),
+            ),
+        ],
+    );
+    let mut written = state.clone();
+    state.move_out(&mut values, &direct, shapes.handle).unwrap();
+    assert!(read(&db, &mut values, &state, &direct, shapes.handle).is_empty());
+    assert_eq!(
+        read(&db, &mut values, &state, &reachable, shapes.handle),
+        original
+    );
+
+    let empty = values.empty(shapes.handle, &BinderScope::default());
+    written
+        .write_region(overwrite, &mut values, &direct, &empty)
+        .unwrap();
+    assert!(
+        read(&db, &mut values, &written, &reachable, shapes.handle)
+            .direct()
+            .iter()
+            .any(|entry| matches!(entry.payload, CapabilityRef::Invalidated { .. })),
+        "a real byte write must still invalidate a possible alias"
+    );
+}
+
+#[test]
+fn arbitrary_memory_weak_updates_preserve_native_loans_and_invalidity() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let seed = OpaqueWrite {
+        site: OpaqueWriteSite::Seed,
+        ..overwrite
+    };
+    let shapes = Shapes::new(&db);
+    let scope = BinderScope::default();
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let source = ExternalSource::opaque_memory(ReferentContract::memory(
+        &db,
+        TyId::borrow_mut_of(&db, TyId::u256(&db)),
+    ));
+    let matched = source.match_instance(&scope, &source, &scope).unwrap();
+    assert!(matched.typed.is_none());
+    assert!(matched.write.is_none());
+    let cell = RegionRoot::External(source);
+    let destination = region(cell.clone());
+    assert!(destination.definite_write().is_none());
+    let initial = seed
+        .contents(&mut values, shapes.handle, &scope, None)
+        .unwrap();
+    let mut state = BorrowState::new(&mut values, [], [(cell, initial)]);
+    for id in [0, 1] {
+        let replacement = handle(&mut values, shapes.handle, id);
+        state
+            .write_region(overwrite, &mut values, &destination, &replacement)
+            .unwrap();
+    }
+    let before = state.clone();
+    state
+        .invalidate_memory(&mut values, AccessFootprint::typed(&destination), overwrite)
+        .unwrap();
+    assert_eq!(state, before, "arbitrary corruption is already represented");
+    let loaded = read(&db, &mut values, &state, &destination, shapes.handle);
+    let loans: BTreeSet<_> = loaded
+        .direct()
+        .iter()
+        .filter_map(|entry| entry.payload.loan().map(|loan| loan.id))
+        .collect();
+    assert_eq!(loans, BTreeSet::from([LoanId(0), LoanId(1)]));
+    assert!(
+        loaded
+            .direct()
+            .iter()
+            .any(|entry| matches!(entry.payload, CapabilityRef::Invalidated { .. }))
+    );
+}
+
+#[test]
+fn arbitrary_memory_offsets_may_overlap_without_becoming_typed_identity() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let ty = TyId::array_with_len(&db, TyId::u256(&db), 2);
+    let source = ExternalSource::opaque_memory(ReferentContract::memory(&db, ty));
+    let root = RegionRoot::External(source.clone());
+    let first =
+        region(root.clone()).project(&RegionPath::new([Projection::Index(IndexExpr::Const(0))]));
+    let second = region(root).project(&RegionPath::new([Projection::Index(IndexExpr::Const(1))]));
+    assert!(matches!(
+        first.overlap(&db, &second),
+        OverlapResult::Unknown
+    ));
+    assert!(!first.provably_covers(&first));
+    let storage = region(RegionRoot::External(ExternalSource::opaque_memory(
+        ReferentContract::new(
+            &db,
+            ty,
+            HandleAddressSpace::Known(ProviderAddressSpace::Storage),
+        ),
+    )));
+    assert!(matches!(
+        first.overlap(&db, &storage),
+        OverlapResult::Disjoint
+    ));
+    let cast = ExternalSource::memory(
+        &db,
+        SourceExpr {
+            source: source.clone(),
+            path: RegionPath::default(),
+            views: Default::default(),
+            invalidated: false,
+        },
+        ty,
+        Some((TyId::u256(&db), IndexExpr::Const(100))),
+    );
+    assert_eq!(
+        cast, source,
+        "offsets into arbitrary memory add no heap identity"
+    );
+    let shape = capability_shape(
+        &db,
+        overwrite.scope,
+        overwrite.assumptions,
+        TyId::ptr_to(&db, ty),
+    )
+    .unwrap();
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let seed = OpaqueWrite {
+        site: OpaqueWriteSite::Seed,
+        ..overwrite
+    };
+    let scope = BinderScope::default();
+    let plain = seed.contents(&mut values, shape, &scope, None).unwrap();
+    let (family, _) = scope.bind(IndexNamespace::InputSlot);
+    let family_seed = seed.contents(&mut values, shape, &family, None).unwrap();
+    for seeded in [&plain, &family_seed] {
+        let leaf = &seeded.direct()[0];
+        assert!(leaf.payload.loan().is_none());
+        assert_eq!(leaf.payload.indices().count(), 0);
+        assert!(leaf.payload.authority(&leaf.guard).is_empty());
+    }
+}

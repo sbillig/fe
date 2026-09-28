@@ -198,6 +198,7 @@ impl<'db> LinearAddress<'db> {
     fn new(db: &'db dyn HirAnalysisDb, place: &SymbolicPlace<'db>) -> Option<Self> {
         let contract = place.root.contract()?;
         if contract.address_space != HandleAddressSpace::Known(ProviderAddressSpace::Memory)
+            || matches!(&place.root, RegionRoot::External(source) if matches!(source.origin, ExternalOrigin::OpaqueMemory))
             || place.views.iter().next().is_some()
         {
             return None;

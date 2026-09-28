@@ -22,8 +22,10 @@ use crate::{
     instance::RuntimeInstanceKey,
     runtime::{
         AddressSpaceKind, ArrayLayout, EnumLayoutKey, EnumVariantLayout, Layout, LayoutId,
-        LayoutKey, RefKind, RefView, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot,
-        RuntimeProviderBinding, RuntimeProviderBindingId, StructLayout,
+        LayoutKey, RawPointeeId, RawPointeeKey, RefKind, RefView, RuntimeCarrier, RuntimeClass,
+        RuntimeLocalRoot, RuntimeProviderBinding, RuntimeProviderBindingId, StructLayout,
+        package::raw_pointee_sort_key,
+        relation::{raw_pointee_matches_class, raw_pointees_equivalent, transport_target_matches},
     },
 };
 
@@ -1157,7 +1159,7 @@ pub(super) fn local_place_root_class<'db>(
             }
             if let Some(carrier_class) = carrier.value_class().cloned()
                 && let Some(place_class) =
-                    materialized_place_class_from_runtime_source(&carrier_class)
+                    materialized_place_class_from_runtime_source(cx.env.db(), &carrier_class)
             {
                 return Some(place_class);
             }
@@ -1166,7 +1168,7 @@ pub(super) fn local_place_root_class<'db>(
         SemanticLocalKind::PlaceCarrier => {
             if let Some(carrier_class) = carrier.value_class().cloned()
                 && let Some(place_class) =
-                    materialized_place_class_from_runtime_source(&carrier_class)
+                    materialized_place_class_from_runtime_source(cx.env.db(), &carrier_class)
             {
                 return Some(place_class);
             }
@@ -1183,7 +1185,7 @@ pub(super) fn local_place_root_class<'db>(
         SemanticLocalKind::DirectCarrier => {
             if let Some(carrier_class) = carrier.value_class().cloned()
                 && let Some(place_class) =
-                    materialized_place_class_from_runtime_source(&carrier_class)
+                    materialized_place_class_from_runtime_source(cx.env.db(), &carrier_class)
             {
                 return Some(place_class);
             }
@@ -1278,11 +1280,12 @@ pub(super) fn fallback_root_transport_class<'db>(
 }
 
 fn materialized_place_class_from_runtime_source<'db>(
+    db: &'db dyn MirDb,
     class: &RuntimeClass<'db>,
 ) -> Option<RuntimeClass<'db>> {
     match class {
         RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => Some(class.clone()),
-        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => class.deref_target(),
+        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => class.deref_target(db),
     }
 }
 
@@ -1351,7 +1354,7 @@ fn join_runtime_class<'db>(
         return join_reference_transports(db, current, desired);
     }
     if demand.prefer_transport
-        && let Some(raw_addr) = prefer_raw_addr_join(current, desired)
+        && let Some(raw_addr) = prefer_raw_addr_join(db, current, desired)
     {
         return Some(raw_addr);
     }
@@ -1362,8 +1365,8 @@ fn join_runtime_class<'db>(
     let mut candidates = Vec::new();
     push_join_candidate(&mut candidates, current.clone());
     push_join_candidate(&mut candidates, desired.clone());
-    push_materialized_join_candidates(&mut candidates, current);
-    push_materialized_join_candidates(&mut candidates, desired);
+    push_materialized_join_candidates(db, &mut candidates, current);
+    push_materialized_join_candidates(db, &mut candidates, desired);
     if let (Some(current_layout), Some(desired_layout)) =
         (current.aggregate_layout(), desired.aggregate_layout())
         && let Some(layout) = merge_layouts(db, current_layout, desired_layout)
@@ -1389,12 +1392,12 @@ pub(super) fn join_reference_transports<'db>(
     if current.shares_runtime_rep_with(db, desired) {
         return merge_runtime_class(db, current, desired);
     }
-    let pointee = current.pointee()?;
-    if desired.pointee() != Some(pointee) {
+    let pointee = current.deref_target(db)?;
+    if !transport_target_matches(db, desired, &pointee) {
         return None;
     }
     let native = RuntimeClass::Ref {
-        pointee: Box::new(pointee.clone()),
+        pointee: Box::new(pointee),
         kind: RefKind::Native,
         view: RefView::Whole,
     };
@@ -1402,6 +1405,7 @@ pub(super) fn join_reference_transports<'db>(
 }
 
 fn prefer_raw_addr_join<'db>(
+    db: &'db dyn MirDb,
     current: &RuntimeClass<'db>,
     desired: &RuntimeClass<'db>,
 ) -> Option<RuntimeClass<'db>> {
@@ -1431,36 +1435,41 @@ fn prefer_raw_addr_join<'db>(
         else {
             return None;
         };
-        let pointee = raw_addr_join_pointee(raw_pointee, pointee)?;
+        let pointee = raw_addr_join_pointee(db, *raw_pointee, pointee)?;
         return Some(RuntimeClass::RawAddr {
             space: preferred_address_space(ref_kind_address_space(kind)?, *space)?,
             pointee,
         });
     };
-    let pointee = raw_addr_join_pointee(raw_pointee, pointee)?;
+    let pointee = raw_addr_join_pointee(db, *raw_pointee, pointee)?;
     Some(RuntimeClass::RawAddr {
         space: preferred_address_space(*space, ref_kind_address_space(kind)?)?,
         pointee,
     })
 }
 
+/// The raw target when a raw address joins a reference to `ref_pointee`: a
+/// known raw target must match and is reused, while an opaque one is refined
+/// to the reference's exact pointee.
 fn raw_addr_join_pointee<'db>(
-    raw_pointee: &Option<Box<RuntimeClass<'db>>>,
+    db: &'db dyn MirDb,
+    raw_pointee: Option<RawPointeeId<'db>>,
     ref_pointee: &RuntimeClass<'db>,
-) -> Option<Option<Box<RuntimeClass<'db>>>> {
+) -> Option<Option<RawPointeeId<'db>>> {
     match raw_pointee {
-        Some(raw_pointee) if raw_pointee.as_ref() != ref_pointee => None,
-        Some(raw_pointee) => Some(Some(raw_pointee.clone())),
-        None => Some(Some(Box::new(ref_pointee.clone()))),
+        Some(raw_pointee) if !raw_pointee_matches_class(db, raw_pointee, ref_pointee) => None,
+        Some(raw_pointee) => Some(Some(raw_pointee)),
+        None => Some(Some(RawPointeeId::exact(db, ref_pointee.clone()))),
     }
 }
 
 fn push_materialized_join_candidates<'db>(
+    db: &'db dyn MirDb,
     candidates: &mut Vec<RuntimeClass<'db>>,
     class: &RuntimeClass<'db>,
 ) {
-    if let Some(pointee) = class.pointee() {
-        push_join_candidate(candidates, pointee.clone());
+    if let Some(pointee) = class.deref_target(db) {
+        push_join_candidate(candidates, pointee);
     }
     if let Some(layout) = class.aggregate_layout() {
         push_join_candidate(candidates, RuntimeClass::AggregateValue { layout });
@@ -1569,12 +1578,19 @@ pub(super) fn merge_runtime_class<'db>(
                 space: desired_space,
                 pointee: desired_pointee,
             },
-        ) if current_pointee == desired_pointee => {
+        ) => {
+            let pointee = match (current_pointee, desired_pointee) {
+                (None, None) => None,
+                (Some(current), Some(desired)) if current == desired => Some(*current),
+                (Some(current), Some(desired))
+                    if raw_pointees_equivalent(db, *current, *desired) =>
+                {
+                    Some(preferred_equivalent_pointee(db, *current, *desired))
+                }
+                (Some(_), Some(_)) | (None, Some(_)) | (Some(_), None) => return None,
+            };
             let space = preferred_address_space(*current_space, *desired_space)?;
-            Some(RuntimeClass::RawAddr {
-                space,
-                pointee: current_pointee.clone(),
-            })
+            Some(RuntimeClass::RawAddr { space, pointee })
         }
         (
             RuntimeClass::Ref {
@@ -1597,7 +1613,9 @@ pub(super) fn merge_runtime_class<'db>(
                 kind,
                 view: RefView::Whole,
             },
-        ) if raw_pointee.as_deref() == Some(pointee.as_ref()) => {
+        ) if raw_pointee
+            .is_some_and(|raw_pointee| raw_pointee_matches_class(db, raw_pointee, pointee)) =>
+        {
             if *kind == RefKind::Native {
                 return Some(RuntimeClass::Ref {
                     pointee: pointee.clone(),
@@ -1615,12 +1633,32 @@ pub(super) fn merge_runtime_class<'db>(
             } else {
                 Some(RuntimeClass::RawAddr {
                     space: preferred_address_space(ref_space, *space)?,
-                    pointee: raw_pointee.clone(),
+                    pointee: *raw_pointee,
                 })
             }
         }
         _ => None,
     }
+}
+
+/// Chooses between two distinct but equivalent raw targets meeting at a join
+/// with no fixed target. Source recipes win over exact ones, then the naming
+/// string decides; naming strings are not injective, so interned identity
+/// breaks any remaining tie. That last step is stable within one database
+/// only and never reaches an external name.
+fn preferred_equivalent_pointee<'db>(
+    db: &'db dyn MirDb,
+    lhs: RawPointeeId<'db>,
+    rhs: RawPointeeId<'db>,
+) -> RawPointeeId<'db> {
+    let preference = |pointee: RawPointeeId<'db>| {
+        let kind_rank = match pointee.key(db) {
+            RawPointeeKey::Stored(_) => 0,
+            RawPointeeKey::Exact(_) => 1,
+        };
+        (kind_rank, raw_pointee_sort_key(db, pointee), pointee)
+    };
+    std::cmp::min_by_key(lhs, rhs, |pointee| preference(*pointee))
 }
 
 fn merge_layouts<'db>(
@@ -1870,7 +1908,7 @@ mod tests {
             kind: RefKind::Object,
             view: RefView::Whole,
         };
-        let packed = RuntimeClass::raw_addr(AddressSpaceKind::Memory, pointee.clone());
+        let packed = RuntimeClass::raw_addr(&db, AddressSpaceKind::Memory, pointee.clone());
         let storage = RuntimeClass::Ref {
             pointee: Box::new(pointee.clone()),
             kind: RefKind::Provider {

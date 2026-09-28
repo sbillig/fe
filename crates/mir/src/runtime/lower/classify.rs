@@ -785,7 +785,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 }
             };
             if index + 1 < path.len()
-                && let Some(target) = current.deref_target()
+                && let Some(target) = current.deref_target(self.db)
             {
                 current = target;
             }
@@ -866,6 +866,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
             },
         };
         Some(ref_class_for_place_result(
+            self.db,
             &root_class,
             &value_class,
             root_space,
@@ -1504,7 +1505,7 @@ fn provider_root_place_class<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> RuntimeClass<'db> {
-    provider_class.deref_target().unwrap_or_else(|| {
+    provider_class.deref_target(db).unwrap_or_else(|| {
         stored_class_for_ty_in_env(db, RuntimeTypeEnv::new(scope, assumptions), value_ty)
     })
 }
@@ -1624,10 +1625,11 @@ fn effect_binding_borrow_boundary<'db>(
 }
 
 fn specialize_effect_binding_boundary_for_class<'db>(
+    db: &'db dyn MirDb,
     boundary: RuntimeBoundarySpec<'db>,
     class: &RuntimeClass<'db>,
 ) -> RuntimeBoundarySpec<'db> {
-    specialize_boundary_for_aggregate_layout(&boundary, class.aggregate_layout()).into_owned()
+    specialize_boundary_for_aggregate_layout(db, &boundary, class.aggregate_layout()).into_owned()
 }
 
 fn exact_effect_binding_plan_for_class<'db>(
@@ -1746,7 +1748,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             }
             let boundary =
                 effect_binding_borrow_boundary(db, binding, value_ty, env.scope, env.assumptions);
-            let boundary = specialize_effect_binding_boundary_for_class(boundary, &class);
+            let boundary = specialize_effect_binding_boundary_for_class(db, boundary, &class);
             Some(RuntimeEffectBindingPlan { class, boundary })
         }
         SemanticLocalRole::DirectValue { .. } => {
@@ -1822,7 +1824,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             }
             let boundary =
                 effect_binding_borrow_boundary(db, binding, value_ty, env.scope, env.assumptions);
-            let boundary = specialize_effect_binding_boundary_for_class(boundary, &class);
+            let boundary = specialize_effect_binding_boundary_for_class(db, boundary, &class);
             Some(RuntimeEffectBindingPlan { class, boundary })
         }
         SemanticLocalRole::PlaceCarrier {
@@ -1852,7 +1854,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             }
             let boundary =
                 effect_binding_borrow_boundary(db, binding, value_ty, env.scope, env.assumptions);
-            let boundary = specialize_effect_binding_boundary_for_class(boundary, &class);
+            let boundary = specialize_effect_binding_boundary_for_class(db, boundary, &class);
             Some(RuntimeEffectBindingPlan { class, boundary })
         }
         SemanticLocalRole::PlaceBoundValue {
@@ -2575,7 +2577,7 @@ fn runtime_source_place_class<'db>(
         RuntimeClass::Ref { .. }
         | RuntimeClass::RawAddr {
             pointee: Some(_), ..
-        } => class.deref_target(),
+        } => class.deref_target(env.db),
         RuntimeClass::RawAddr {
             space,
             pointee: None,
@@ -3717,7 +3719,7 @@ uses (slot: Slot<u256>)
             );
 
             assert!(
-                BoundaryMatcher::class_satisfies_boundary(&plan.class, &plan.boundary),
+                BoundaryMatcher::class_satisfies_boundary(&db, &plan.class, &plan.boundary),
                 "provider-backed effect binding plan should keep an actualized boundary matching its chosen runtime class:\nplan={plan:#?}"
             );
             let _ = runtime_instance_for_semantic(&db, semantic).body(&db);

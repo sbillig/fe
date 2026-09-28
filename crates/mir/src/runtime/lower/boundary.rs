@@ -15,8 +15,9 @@ use rustc_hash::FxHashMap;
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, BorrowAccess, BorrowTransportSet, LayoutId, RefKind, RefView,
-        RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass, RuntimePlace,
+        AddressSpaceKind, BorrowAccess, BorrowTransportSet, LayoutId, RawPointeeId, RefKind,
+        RefView, RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass, RuntimePlace,
+        relation::{raw_pointee_matches_class, runtime_classes_equivalent},
     },
 };
 
@@ -112,9 +113,10 @@ pub(super) enum RuntimeClassShape<'db> {
         kind: RefShapeKind,
         view: RefView<'db>,
     },
+    /// Raw targets stay unresolved leaves; matchers resolve them on demand.
     RawAddr {
         space: AddressSpaceKind,
-        pointee: Option<Box<RuntimeClassShape<'db>>>,
+        pointee: Option<RawPointeeId<'db>>,
     },
 }
 
@@ -134,7 +136,7 @@ impl<'db> RuntimeClassShape<'db> {
             },
             RuntimeClass::RawAddr { space, pointee } => Self::RawAddr {
                 space: *space,
-                pointee: pointee.as_deref().map(Self::from_class).map(Box::new),
+                pointee: *pointee,
             },
         }
     }
@@ -187,9 +189,13 @@ impl<'db> BoundaryShapeMatcher<'db> {
         }
     }
 
-    pub(super) fn matches_shape(&self, actual: &RuntimeClassShape<'db>) -> bool {
+    pub(super) fn matches_shape(
+        &self,
+        db: &'db dyn MirDb,
+        actual: &RuntimeClassShape<'db>,
+    ) -> bool {
         match self {
-            Self::Exact(matcher) => matcher.matches_shape(actual),
+            Self::Exact(matcher) => matcher.matches_shape(db, actual),
             Self::BorrowLike {
                 pointee,
                 allow_object,
@@ -215,7 +221,7 @@ impl<'db> BoundaryShapeMatcher<'db> {
                 RuntimeClassShape::RawAddr {
                     pointee: Some(actual_pointee),
                     ..
-                } => *allow_raw_addr && **actual_pointee == *pointee,
+                } => *allow_raw_addr && raw_target_shape(db, *actual_pointee) == *pointee,
                 RuntimeClassShape::RawAddr { pointee: None, .. } => false,
                 RuntimeClassShape::Scalar(_)
                 | RuntimeClassShape::AggregateValue { .. }
@@ -237,7 +243,7 @@ pub(super) enum ExactBoundaryShapeMatcher<'db> {
         view: RefView<'db>,
     },
     RawAddr {
-        pointee: Option<RuntimeClassShape<'db>>,
+        pointee: Option<RawPointeeId<'db>>,
     },
 }
 
@@ -250,13 +256,11 @@ impl<'db> ExactBoundaryShapeMatcher<'db> {
                 pointee: RuntimeClassShape::from_class(pointee),
                 view: view.clone(),
             },
-            RuntimeClass::RawAddr { pointee, .. } => Self::RawAddr {
-                pointee: pointee.as_deref().map(RuntimeClassShape::from_class),
-            },
+            RuntimeClass::RawAddr { pointee, .. } => Self::RawAddr { pointee: *pointee },
         }
     }
 
-    fn matches_shape(&self, actual: &RuntimeClassShape<'db>) -> bool {
+    fn matches_shape(&self, db: &'db dyn MirDb, actual: &RuntimeClassShape<'db>) -> bool {
         match (self, actual) {
             (Self::Scalar(expected), RuntimeClassShape::Scalar(actual)) => actual == expected,
             (Self::AggregateValue(expected), RuntimeClassShape::AggregateValue { layout }) => {
@@ -275,13 +279,19 @@ impl<'db> ExactBoundaryShapeMatcher<'db> {
                 RuntimeClassShape::RawAddr {
                     pointee: actual, ..
                 },
-            ) => actual.as_deref() == Some(pointee),
+            ) => actual.is_some_and(|actual| raw_target_shape(db, actual) == *pointee),
+            // Raw-to-raw shape preservation requires the same target recipe;
+            // an equivalent spelling is adapted to the declared target instead.
             (Self::RawAddr { pointee: expected }, RuntimeClassShape::RawAddr { pointee, .. }) => {
-                pointee.as_deref() == expected.as_ref()
+                pointee == expected
             }
             _ => false,
         }
     }
+}
+
+fn raw_target_shape<'db>(db: &'db dyn MirDb, pointee: RawPointeeId<'db>) -> RuntimeClassShape<'db> {
+    RuntimeClassShape::from_class(&pointee.target(db))
 }
 
 pub(super) struct SpecializedBoundary<'a, 'db> {
@@ -342,7 +352,7 @@ pub(super) fn specialize_boundary_for_runtime_source_in_context<'a, 'db>(
             );
         }
         let specialized_boundary =
-            specialize_boundary_for_aggregate_layout(boundary.boundary, aggregate_layout);
+            specialize_boundary_for_aggregate_layout(env.db(), boundary.boundary, aggregate_layout);
         let specialized_matcher = match &specialized_boundary {
             Cow::Borrowed(_) => boundary
                 .matcher
@@ -379,7 +389,11 @@ pub(super) fn specialize_boundary_for_runtime_source_in_context<'a, 'db>(
                 .matcher
                 .cloned()
                 .unwrap_or_else(|| BoundaryShapeMatcher::for_boundary(boundary.boundary)),
-            boundary: specialize_boundary_for_aggregate_layout(boundary.boundary, aggregate_layout),
+            boundary: specialize_boundary_for_aggregate_layout(
+                env.db(),
+                boundary.boundary,
+                aggregate_layout,
+            ),
         },
         carriers,
         class_cache,
@@ -387,18 +401,19 @@ pub(super) fn specialize_boundary_for_runtime_source_in_context<'a, 'db>(
 }
 
 pub(super) fn specialize_boundary_for_aggregate_layout<'a, 'db>(
+    db: &'db dyn MirDb,
     boundary: &'a RuntimeBoundarySpec<'db>,
     aggregate_layout: Option<LayoutId<'db>>,
 ) -> Cow<'a, RuntimeBoundarySpec<'db>> {
     match boundary {
         RuntimeBoundarySpec::ExactTransport(desired) => {
-            match specialize_exact_boundary_for_aggregate_layout(desired, aggregate_layout) {
+            match specialize_exact_boundary_for_aggregate_layout(db, desired, aggregate_layout) {
                 Cow::Borrowed(_) => Cow::Borrowed(boundary),
                 Cow::Owned(class) => Cow::Owned(RuntimeBoundarySpec::ExactTransport(class)),
             }
         }
         RuntimeBoundarySpec::ExactShape(desired) => {
-            match specialize_exact_boundary_for_aggregate_layout(desired, aggregate_layout) {
+            match specialize_exact_boundary_for_aggregate_layout(db, desired, aggregate_layout) {
                 Cow::Borrowed(_) => Cow::Borrowed(boundary),
                 Cow::Owned(class) => Cow::Owned(RuntimeBoundarySpec::ExactShape(class)),
             }
@@ -425,6 +440,7 @@ pub(super) fn specialize_boundary_for_aggregate_layout<'a, 'db>(
 }
 
 fn specialize_exact_boundary_for_aggregate_layout<'a, 'db>(
+    db: &'db dyn MirDb,
     desired: &'a RuntimeClass<'db>,
     aggregate_layout: Option<LayoutId<'db>>,
 ) -> Cow<'a, RuntimeClass<'db>> {
@@ -460,8 +476,13 @@ fn specialize_exact_boundary_for_aggregate_layout<'a, 'db>(
                 pointee: Some(pointee),
             },
             Some(layout),
-        ) if pointee.aggregate_layout().is_some() && pointee.aggregate_layout() != Some(layout) => {
+        ) if pointee
+            .target(db)
+            .aggregate_layout()
+            .is_some_and(|target| target != layout) =>
+        {
             Cow::Owned(RuntimeClass::raw_addr(
+                db,
                 *space,
                 RuntimeClass::AggregateValue { layout },
             ))
@@ -487,31 +508,30 @@ fn preserve_actual_shape_boundary_for_runtime_source<'a, 'db>(
         class_cache
             .local_dynamic_facts(env, local, carriers)
             .and_then(|facts| facts.exact_source_shape)
-            .is_some_and(|shape| boundary.matcher.matches_shape(&shape))
+            .is_some_and(|shape| boundary.matcher.matches_shape(env.db(), &shape))
     } else if let Some(actual) = carrier_value_class_ref(local, carriers) {
         boundary
             .matcher
-            .matches_shape(&RuntimeClassShape::from_class(actual))
+            .matches_shape(env.db(), &RuntimeClassShape::from_class(actual))
     } else {
         env.semantic_value_class(carriers, local)
             .as_ref()
             .map(RuntimeClassShape::from_class)
-            .is_some_and(|shape| boundary.matcher.matches_shape(&shape))
+            .is_some_and(|shape| boundary.matcher.matches_shape(env.db(), &shape))
     };
     if !actual_matches {
         return boundary;
     }
-    if let Some(actual) = carrier_value_class_ref(local, carriers) {
-        return SpecializedBoundary {
-            matcher: BoundaryShapeMatcher::for_boundary(&RuntimeBoundarySpec::ExactShape(
-                actual.clone(),
-            )),
-            boundary: Cow::Owned(RuntimeBoundarySpec::ExactShape(actual.clone())),
-        };
-    }
-    let Some(actual) = env.semantic_value_class(carriers, local) else {
-        return boundary;
+    let actual = match carrier_value_class_ref(local, carriers) {
+        Some(actual) => actual.clone(),
+        None => {
+            let Some(actual) = env.semantic_value_class(carriers, local) else {
+                return boundary;
+            };
+            actual
+        }
     };
+    let actual = BoundaryMatcher::retarget_accepted_class(env.db(), &actual, &boundary.boundary);
     SpecializedBoundary {
         matcher: BoundaryShapeMatcher::for_boundary(&RuntimeBoundarySpec::ExactShape(
             actual.clone(),
@@ -523,7 +543,12 @@ fn preserve_actual_shape_boundary_for_runtime_source<'a, 'db>(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeValueMaterialization<'db> {
     ObjectRef(LayoutId<'db>),
-    RawAddrSlot(RuntimeClass<'db>),
+    /// A fresh memory slot holding `pointee`, passed by its raw address.
+    /// `target` is `pointee` interned as the address's exact target.
+    RawAddrSlot {
+        pointee: RuntimeClass<'db>,
+        target: RawPointeeId<'db>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -564,6 +589,7 @@ pub(crate) struct RuntimeValueUsePlanner;
 
 impl RuntimeValueUsePlanner {
     pub(crate) fn select<'db>(
+        db: &'db dyn MirDb,
         source: RuntimeValueSource<'db>,
         boundary: &RuntimeBoundarySpec<'db>,
     ) -> Option<RuntimeValueUsePlan<'db>> {
@@ -572,10 +598,10 @@ impl RuntimeValueUsePlanner {
                 Some(RuntimeValueUsePlan::CoerceValue(target.clone()))
             }
             RuntimeBoundarySpec::ExactShape(target) => {
-                if source.value_satisfies(boundary) {
-                    return Some(RuntimeValueUsePlan::UseValue);
+                if let Some(plan) = source.value_use_plan(db, boundary) {
+                    return Some(plan);
                 }
-                if let Some(address) = source.compatible_address(boundary) {
+                if let Some(address) = source.compatible_address(db, boundary) {
                     return Some(RuntimeValueUsePlan::AddrOfRuntimePlace {
                         place: address.place,
                         class: address.class,
@@ -583,17 +609,17 @@ impl RuntimeValueUsePlanner {
                 }
                 Some(RuntimeValueUsePlan::CoerceValue(target.clone()))
             }
-            RuntimeBoundarySpec::BorrowLike { .. } if source.value_satisfies(boundary) => {
-                Some(RuntimeValueUsePlan::UseValue)
-            }
             RuntimeBoundarySpec::BorrowLike { .. } => {
-                if let Some(address) = source.compatible_address(boundary) {
+                if let Some(plan) = source.value_use_plan(db, boundary) {
+                    return Some(plan);
+                }
+                if let Some(address) = source.compatible_address(db, boundary) {
                     return Some(RuntimeValueUsePlan::AddrOfRuntimePlace {
                         place: address.place,
                         class: address.class,
                     });
                 }
-                RuntimeValueMaterialization::for_boundary(boundary)
+                RuntimeValueMaterialization::for_boundary(db, boundary)
                     .map(RuntimeValueUsePlan::MaterializeValue)
             }
         }
@@ -604,30 +630,34 @@ pub(crate) struct BoundaryMatcher;
 
 impl BoundaryMatcher {
     pub(crate) fn class_satisfies_boundary<'db>(
+        db: &'db dyn MirDb,
         class: &RuntimeClass<'db>,
         boundary: &RuntimeBoundarySpec<'db>,
     ) -> bool {
         match boundary {
             RuntimeBoundarySpec::ExactTransport(expected) => class == expected,
             RuntimeBoundarySpec::ExactShape(expected) => {
-                Self::class_matches_shape_boundary(class, expected)
+                Self::class_matches_shape_boundary(db, class, expected)
             }
             RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } => match class {
                 RuntimeClass::Ref {
                     pointee: actual_pointee,
                     kind: RefKind::Object | RefKind::Native,
                     view: RefView::Whole,
-                } => allow.allow_object && **actual_pointee == *pointee,
+                } => allow.allow_object && runtime_classes_equivalent(db, actual_pointee, pointee),
                 RuntimeClass::Ref {
                     pointee: actual_pointee,
                     kind: RefKind::Const,
                     view: RefView::Whole,
-                } => allow.allow_const && **actual_pointee == *pointee,
+                } => allow.allow_const && runtime_classes_equivalent(db, actual_pointee, pointee),
                 RuntimeClass::Ref {
                     pointee: actual_pointee,
                     kind: RefKind::Provider { space, .. },
                     view: RefView::Whole,
-                } => allow.provider_spaces.contains(space) && **actual_pointee == *pointee,
+                } => {
+                    allow.provider_spaces.contains(space)
+                        && runtime_classes_equivalent(db, actual_pointee, pointee)
+                }
                 RuntimeClass::Ref {
                     view: RefView::EnumVariant(_),
                     ..
@@ -635,14 +665,53 @@ impl BoundaryMatcher {
                 RuntimeClass::RawAddr {
                     pointee: Some(actual_pointee),
                     ..
-                } => allow.allow_raw_addr && **actual_pointee == *pointee,
+                } => {
+                    allow.allow_raw_addr && raw_pointee_matches_class(db, *actual_pointee, pointee)
+                }
                 RuntimeClass::RawAddr { pointee: None, .. } => false,
                 RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => false,
             },
         }
     }
 
+    /// The exact class `class` is passed as when it satisfies `boundary`.
+    pub(crate) fn selected_class<'db>(
+        db: &'db dyn MirDb,
+        class: &RuntimeClass<'db>,
+        boundary: &RuntimeBoundarySpec<'db>,
+    ) -> Option<RuntimeClass<'db>> {
+        Self::class_satisfies_boundary(db, class, boundary)
+            .then(|| Self::retarget_accepted_class(db, class, boundary))
+    }
+
+    /// A raw address accepted by a boundary that describes its pointee by
+    /// class is re-targeted to exactly that class. Source and exact spellings
+    /// of the same target then select the same parameter class, so they
+    /// share one runtime instance. The accepted address space is kept.
+    pub(crate) fn retarget_accepted_class<'db>(
+        db: &'db dyn MirDb,
+        class: &RuntimeClass<'db>,
+        boundary: &RuntimeBoundarySpec<'db>,
+    ) -> RuntimeClass<'db> {
+        let RuntimeClass::RawAddr {
+            space,
+            pointee: Some(_),
+        } = class
+        else {
+            return class.clone();
+        };
+        let pointee = match boundary {
+            RuntimeBoundarySpec::BorrowLike { pointee, .. } => pointee,
+            RuntimeBoundarySpec::ExactShape(RuntimeClass::Ref { pointee, .. }) => pointee.as_ref(),
+            RuntimeBoundarySpec::ExactTransport(_) | RuntimeBoundarySpec::ExactShape(_) => {
+                return class.clone();
+            }
+        };
+        RuntimeClass::raw_addr(db, *space, pointee.clone())
+    }
+
     pub(crate) fn placeholder_class<'db>(
+        db: &'db dyn MirDb,
         boundary: &RuntimeBoundarySpec<'db>,
     ) -> Option<RuntimeClass<'db>> {
         match boundary {
@@ -668,13 +737,14 @@ impl BoundaryMatcher {
                 })
             }
             RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } if allow.allow_raw_addr => Some(
-                RuntimeClass::raw_addr(AddressSpaceKind::Memory, pointee.clone()),
+                RuntimeClass::raw_addr(db, AddressSpaceKind::Memory, pointee.clone()),
             ),
             RuntimeBoundarySpec::BorrowLike { .. } => None,
         }
     }
 
     fn class_matches_shape_boundary<'db>(
+        db: &'db dyn MirDb,
         actual: &RuntimeClass<'db>,
         expected: &RuntimeClass<'db>,
     ) -> bool {
@@ -690,14 +760,19 @@ impl BoundaryMatcher {
                     view: expected_view,
                     ..
                 },
-            ) => actual_pointee == expected_pointee && actual_view == expected_view,
+            ) => {
+                actual_view == expected_view
+                    && runtime_classes_equivalent(db, actual_pointee, expected_pointee)
+            }
             (
                 RuntimeClass::RawAddr {
                     pointee: actual_pointee,
                     ..
                 },
                 RuntimeClass::Ref { pointee, .. },
-            ) => actual_pointee.as_deref() == Some(pointee),
+            ) => actual_pointee.is_some_and(|actual_pointee| {
+                raw_pointee_matches_class(db, actual_pointee, pointee)
+            }),
             (
                 RuntimeClass::RawAddr {
                     pointee: actual_pointee,
@@ -707,6 +782,8 @@ impl BoundaryMatcher {
                     pointee: expected_pointee,
                     ..
                 },
+                // Same recipe only: an equivalent spelling is coerced to the
+                // declared target rather than accepted as-is.
             ) => actual_pointee == expected_pointee,
             _ => actual == expected,
         }
@@ -714,7 +791,10 @@ impl BoundaryMatcher {
 }
 
 impl<'db> RuntimeValueMaterialization<'db> {
-    pub(crate) fn for_boundary(boundary: &RuntimeBoundarySpec<'db>) -> Option<Self> {
+    pub(crate) fn for_boundary(
+        db: &'db dyn MirDb,
+        boundary: &RuntimeBoundarySpec<'db>,
+    ) -> Option<Self> {
         match boundary {
             RuntimeBoundarySpec::BorrowLike { pointee, allow, .. }
                 if pointee.aggregate_layout().is_some() && allow.allow_object =>
@@ -726,7 +806,10 @@ impl<'db> RuntimeValueMaterialization<'db> {
             RuntimeBoundarySpec::BorrowLike { pointee, allow, .. }
                 if pointee.aggregate_layout().is_none() && allow.allow_raw_addr =>
             {
-                Some(Self::RawAddrSlot(pointee.clone()))
+                Some(Self::RawAddrSlot {
+                    pointee: pointee.clone(),
+                    target: RawPointeeId::exact(db, pointee.clone()),
+                })
             }
             RuntimeBoundarySpec::ExactTransport(_)
             | RuntimeBoundarySpec::ExactShape(_)
@@ -737,26 +820,39 @@ impl<'db> RuntimeValueMaterialization<'db> {
     pub(crate) fn class(&self) -> RuntimeClass<'db> {
         match self {
             Self::ObjectRef(layout) => RuntimeClass::object_ref(*layout),
-            Self::RawAddrSlot(pointee) => {
-                RuntimeClass::raw_addr(AddressSpaceKind::Memory, pointee.clone())
-            }
+            Self::RawAddrSlot { target, .. } => RuntimeClass::RawAddr {
+                space: AddressSpaceKind::Memory,
+                pointee: Some(*target),
+            },
         }
     }
 }
 
 impl<'db> RuntimeValueSource<'db> {
-    fn value_satisfies(&self, boundary: &RuntimeBoundarySpec<'db>) -> bool {
-        BoundaryMatcher::class_satisfies_boundary(&self.value, boundary)
+    /// Uses the value as-is, or re-targets an accepted raw address.
+    fn value_use_plan(
+        &self,
+        db: &'db dyn MirDb,
+        boundary: &RuntimeBoundarySpec<'db>,
+    ) -> Option<RuntimeValueUsePlan<'db>> {
+        let selected = BoundaryMatcher::selected_class(db, &self.value, boundary)?;
+        Some(if selected == self.value {
+            RuntimeValueUsePlan::UseValue
+        } else {
+            RuntimeValueUsePlan::CoerceValue(selected)
+        })
     }
 
     fn compatible_address(
         &self,
+        db: &'db dyn MirDb,
         boundary: &RuntimeBoundarySpec<'db>,
     ) -> Option<RuntimeValueAddress<'db>> {
-        self.address
-            .as_ref()
-            .filter(|address| BoundaryMatcher::class_satisfies_boundary(&address.class, boundary))
-            .cloned()
+        let address = self.address.as_ref()?;
+        Some(RuntimeValueAddress {
+            place: address.place.clone(),
+            class: BoundaryMatcher::selected_class(db, &address.class, boundary)?,
+        })
     }
 }
 
@@ -948,8 +1044,8 @@ mod tests {
         })
     }
 
-    fn raw_addr_class<'db>(space: AddressSpaceKind) -> RuntimeClass<'db> {
-        RuntimeClass::raw_addr(space, word_class())
+    fn raw_addr_class<'db>(db: &'db dyn MirDb, space: AddressSpaceKind) -> RuntimeClass<'db> {
+        RuntimeClass::raw_addr(db, space, word_class())
     }
 
     fn ref_class<'db>(
@@ -1040,25 +1136,32 @@ mod tests {
 
     #[test]
     fn exact_transport_requires_transport_match_but_exact_shape_preserves_source_transport() {
-        let source = raw_addr_class(AddressSpaceKind::Storage);
-        let target = raw_addr_class(AddressSpaceKind::Memory);
+        let db = DriverDataBase::default();
+        let source = raw_addr_class(&db, AddressSpaceKind::Storage);
+        let target = raw_addr_class(&db, AddressSpaceKind::Memory);
         let exact_transport = RuntimeBoundarySpec::ExactTransport(target.clone());
         let exact_shape = RuntimeBoundarySpec::ExactShape(target.clone());
 
         assert!(!BoundaryMatcher::class_satisfies_boundary(
+            &db,
             &source,
             &exact_transport
         ));
         assert!(BoundaryMatcher::class_satisfies_boundary(
+            &db,
             &source,
             &exact_shape
         ));
         assert_eq!(
-            RuntimeValueUsePlanner::select(source_with_value(source.clone()), &exact_transport),
+            RuntimeValueUsePlanner::select(
+                &db,
+                source_with_value(source.clone()),
+                &exact_transport
+            ),
             Some(RuntimeValueUsePlan::CoerceValue(target))
         );
         let shape_plan =
-            RuntimeValueUsePlanner::select(source_with_value(source.clone()), &exact_shape)
+            RuntimeValueUsePlanner::select(&db, source_with_value(source.clone()), &exact_shape)
                 .expect("exact-shape-compatible source should select a plan");
         assert_eq!(shape_plan, RuntimeValueUsePlan::UseValue);
         assert_eq!(shape_plan.class(&source), source);
@@ -1074,14 +1177,17 @@ mod tests {
         ));
 
         assert!(BoundaryMatcher::class_satisfies_boundary(
+            &db,
             &provider_ref(&db, word_class(), AddressSpaceKind::Storage),
             &boundary
         ));
         assert!(!BoundaryMatcher::class_satisfies_boundary(
+            &db,
             &provider_ref(&db, bool_class(), AddressSpaceKind::Storage),
             &boundary
         ));
         assert!(!BoundaryMatcher::class_satisfies_boundary(
+            &db,
             &ref_class(
                 word_class(),
                 RefKind::Provider {
@@ -1093,6 +1199,7 @@ mod tests {
             &boundary
         ));
         assert!(!BoundaryMatcher::class_satisfies_boundary(
+            &db,
             &provider_ref(&db, word_class(), AddressSpaceKind::Storage),
             &RuntimeBoundarySpec::ExactTransport(provider_ref(
                 &db,
@@ -1132,10 +1239,15 @@ mod tests {
                 ref_class(word_class(), RefKind::Const, RefView::Whole),
                 false,
             ),
-            ("raw addr", raw_addr_class(AddressSpaceKind::Memory), true),
+            (
+                "raw addr",
+                raw_addr_class(&db, AddressSpaceKind::Memory),
+                true,
+            ),
             (
                 "wrong raw pointee",
                 RuntimeClass::raw_addr(
+                    &db,
                     AddressSpaceKind::Memory,
                     RuntimeClass::Scalar(ScalarClass {
                         repr: ScalarRepr::Int {
@@ -1161,7 +1273,7 @@ mod tests {
 
         for (name, class, expected) in cases {
             assert_eq!(
-                BoundaryMatcher::class_satisfies_boundary(&class, &boundary),
+                BoundaryMatcher::class_satisfies_boundary(&db, &class, &boundary),
                 expected,
                 "{name}"
             );
@@ -1176,6 +1288,7 @@ mod tests {
 
         assert_eq!(
             RuntimeValueUsePlanner::select(
+                &db,
                 source_with_address(word_class(), address.clone()),
                 &boundary
             ),
@@ -1188,9 +1301,12 @@ mod tests {
             })
         );
         assert_eq!(
-            RuntimeValueUsePlanner::select(source_with_value(word_class()), &boundary),
+            RuntimeValueUsePlanner::select(&db, source_with_value(word_class()), &boundary),
             Some(RuntimeValueUsePlan::MaterializeValue(
-                RuntimeValueMaterialization::RawAddrSlot(word_class()),
+                RuntimeValueMaterialization::RawAddrSlot {
+                    pointee: word_class(),
+                    target: RawPointeeId::exact(&db, word_class()),
+                },
             ))
         );
     }
@@ -1207,6 +1323,7 @@ mod tests {
 
         assert_eq!(
             RuntimeValueUsePlanner::select(
+                &db,
                 source_with_value(RuntimeClass::AggregateValue { layout }),
                 &boundary,
             ),

@@ -1772,7 +1772,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let class = self
                     .body
                     .value_class(*root)
-                    .and_then(RuntimeClass::pointee)
+                    .and_then(RuntimeClass::ref_pointee)
                     .cloned()
                     .ok_or_else(|| {
                         LowerError::Internal("enum get-tag requires reference".into())
@@ -3387,7 +3387,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             } => Ok(PlaceTerminal::Ptr {
                 addr: value,
                 space: *space,
-                class: pointee.as_ref().clone(),
+                class: pointee.target(self.module.db),
             }),
             RuntimeClass::RawAddr { pointee: None, .. } => Err(LowerError::Unsupported(
                 "cannot continue projection through an opaque raw-address carrier".to_string(),

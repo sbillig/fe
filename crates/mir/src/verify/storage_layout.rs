@@ -185,7 +185,7 @@ fn verify_contract_field_binding<'db>(
     let pointee =
         binding
             .class
-            .deref_target()
+            .deref_target(db)
             .ok_or_else(|| VerifyError::InvalidContractFieldClass {
                 field: binding.field,
                 class: binding.class.clone(),
@@ -536,7 +536,7 @@ pub contract Other {
                 assert_eq!(hir.inline_span, span);
                 assert_eq!(
                     RuntimeMemoryLayout::for_space(db, AddressSpaceKind::Storage)
-                        .class_size(&binding.class.deref_target().unwrap())
+                        .class_size(&binding.class.deref_target(db).unwrap())
                         .unwrap(),
                     span as u64
                 );
@@ -704,8 +704,8 @@ pub contract Other {
             let maps = field_named(db, contract, "maps");
             let (_, mut recv) = wrapper_spec(db, package, contract, EntryKind::Recv);
             let args = entry_args_mut(&mut recv, EntryKind::Recv);
-            let words_pointee = field_binding(args, words).class.deref_target().unwrap();
-            let maps_pointee = field_binding(args, maps).class.deref_target().unwrap();
+            let words_pointee = field_binding(args, words).class.deref_target(db).unwrap();
+            let maps_pointee = field_binding(args, maps).class.deref_target(db).unwrap();
 
             assert!(matches!(
                 mutated_wrapper_error(db, package, contract, EntryKind::Recv, |args| {

@@ -2,7 +2,9 @@ use rustc_hash::FxHashSet;
 
 use crate::{
     db::MirDb,
-    runtime::{Layout, LayoutId, RefView, RuntimeClass, RuntimeProgramView, ScalarRole},
+    runtime::{
+        Layout, LayoutId, RawPointeeKey, RefView, RuntimeClass, RuntimeProgramView, ScalarRole,
+    },
     verify::VerifyError,
 };
 
@@ -14,10 +16,17 @@ pub(super) fn verify_class_layouts<'db>(
 ) -> Result<(), VerifyError<'db>> {
     match class {
         RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { pointee: None, .. } => Ok(()),
+        // A stored target is a deferred source descriptor: validating it here
+        // would unfold its whole referent closure. Dereferences validate the
+        // one level they demand. Exact targets carry supplied structure that
+        // used to sit inline, so they are still checked.
         RuntimeClass::RawAddr {
             pointee: Some(pointee),
             ..
-        } => verify_class_layouts(db, program, pointee, visited),
+        } => match pointee.key(db) {
+            RawPointeeKey::Stored(_) => Ok(()),
+            RawPointeeKey::Exact(target) => verify_class_layouts(db, program, target, visited),
+        },
         RuntimeClass::AggregateValue { layout } => verify_layout(db, program, *layout, visited),
         RuntimeClass::Ref { pointee, view, .. } => {
             if !matches!(view, RefView::Whole | RefView::EnumVariant(_)) {

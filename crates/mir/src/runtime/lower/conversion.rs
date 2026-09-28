@@ -5,6 +5,7 @@ use crate::{
     runtime::{
         AddressSpaceKind, LayoutId, PlaceRoot, RBlockId, RExpr, RLocalId, RStmt, RefKind, RefView,
         RuntimeClass, RuntimePlace, ScalarClass, ScalarRepr, ScalarRole,
+        relation::{raw_pointee_matches_class, transport_target_matches},
     },
 };
 
@@ -326,20 +327,18 @@ impl<'db> RuntimeConversionPlanner<'db> {
             }
             (
                 RuntimeClass::Ref {
-                    pointee,
                     view: RefView::Whole,
                     ..
                 }
                 | RuntimeClass::RawAddr {
-                    pointee: Some(pointee),
-                    ..
+                    pointee: Some(_), ..
                 },
                 RuntimeClass::Ref {
                     pointee: desired,
                     kind: RefKind::Native,
                     view: RefView::Whole,
                 },
-            ) if pointee == desired => {
+            ) if transport_target_matches(self.db, &source, desired) => {
                 steps.push(RuntimeConversionStep::NativeRef { class: target });
                 Ok(())
             }
@@ -375,7 +374,7 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 },
                 RuntimeClass::Scalar(scalar),
             ) if *space != AddressSpaceKind::Memory && is_plain_word_scalar(scalar) => {
-                let raw = RuntimeClass::raw_addr(*space, pointee.as_ref().clone());
+                let raw = RuntimeClass::raw_addr(self.db, *space, pointee.as_ref().clone());
                 self.convert(source, raw.clone(), steps)?;
                 self.convert(raw, target, steps)
             }
@@ -402,9 +401,9 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 },
             ) if *space != AddressSpaceKind::Memory
                 && space == provider_space
-                && raw_pointee
-                    .as_deref()
-                    .is_none_or(|raw_pointee| raw_pointee == pointee.as_ref()) =>
+                && raw_pointee.is_none_or(|raw_pointee| {
+                    raw_pointee_matches_class(self.db, raw_pointee, pointee)
+                }) =>
             {
                 steps.push(RuntimeConversionStep::ProviderRefFromRaw {
                     class: target.clone(),
@@ -441,10 +440,13 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 RuntimeClass::AggregateValue {
                     layout: target_layout,
                 },
-            ) if pointee.as_ref()
-                == &(RuntimeClass::AggregateValue {
+            ) if raw_pointee_matches_class(
+                self.db,
+                *pointee,
+                &RuntimeClass::AggregateValue {
                     layout: *target_layout,
-                }) =>
+                },
+            ) =>
             {
                 steps.push(RuntimeConversionStep::LoadRawAddr {
                     class: RuntimeClass::AggregateValue {
@@ -489,7 +491,7 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 && source_space == target_space
                 && pointee.aggregate_layout().is_some() =>
             {
-                let raw = RuntimeClass::raw_addr(*target_space, pointee.as_ref().clone());
+                let raw = RuntimeClass::raw_addr(self.db, *target_space, pointee.as_ref().clone());
                 self.convert(source, raw.clone(), steps)?;
                 self.convert(
                     raw,
@@ -537,7 +539,7 @@ impl<'db> RuntimeConversionPlanner<'db> {
                     view: RefView::Whole,
                 },
             ) if *space != AddressSpaceKind::Memory && is_plain_word_scalar(scalar) => {
-                let raw = RuntimeClass::raw_addr(*space, pointee.as_ref().clone());
+                let raw = RuntimeClass::raw_addr(self.db, *space, pointee.as_ref().clone());
                 steps.push(RuntimeConversionStep::WordToRawAddr {
                     class: raw.clone(),
                     space: *space,
@@ -560,8 +562,7 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 },
             ) if provider_space == raw_space
                 && raw_pointee
-                    .as_deref()
-                    .is_none_or(|target| target == pointee.as_ref()) =>
+                    .is_none_or(|target| raw_pointee_matches_class(self.db, target, pointee)) =>
             {
                 steps.push(RuntimeConversionStep::ProviderRefToRaw { class: target });
                 Ok(())
@@ -638,7 +639,7 @@ mod tests {
     use driver::DriverDataBase;
 
     use super::*;
-    use crate::runtime::{EnumLayoutKey, EnumVariantLayout, LayoutKey, StructLayout};
+    use crate::runtime::{EnumLayoutKey, EnumVariantLayout, LayoutKey, RawPointeeId, StructLayout};
 
     fn word_class<'db>() -> RuntimeClass<'db> {
         RuntimeClass::Scalar(ScalarClass {
@@ -721,7 +722,7 @@ mod tests {
             },
             view: RefView::Whole,
         };
-        let storage_raw = RuntimeClass::raw_addr(AddressSpaceKind::Storage, word_class());
+        let storage_raw = RuntimeClass::raw_addr(&db, AddressSpaceKind::Storage, word_class());
 
         let plan =
             RuntimeConversionPlanner::plan(&db, storage_raw.clone(), storage_provider.clone())
@@ -786,7 +787,10 @@ mod tests {
         let layout = test_struct_layout(&db);
         let typed_raw = RuntimeClass::RawAddr {
             space: AddressSpaceKind::Storage,
-            pointee: Some(Box::new(RuntimeClass::AggregateValue { layout })),
+            pointee: Some(RawPointeeId::exact(
+                &db,
+                RuntimeClass::AggregateValue { layout },
+            )),
         };
         assert!(matches!(
             RuntimeConversionPlanner::plan(&db, storage_provider, typed_raw),
@@ -806,7 +810,7 @@ mod tests {
             },
             view: RefView::Whole,
         };
-        let memory_raw = RuntimeClass::raw_addr(AddressSpaceKind::Memory, word_class());
+        let memory_raw = RuntimeClass::raw_addr(&db, AddressSpaceKind::Memory, word_class());
 
         assert!(matches!(
             RuntimeConversionPlanner::plan(&db, memory_raw, memory_provider.clone()),
@@ -886,6 +890,7 @@ mod tests {
             AddressSpaceKind::Code,
         ] {
             sources.push(RuntimeClass::raw_addr(
+                &db,
                 space,
                 RuntimeClass::AggregateValue { layout },
             ));
@@ -937,6 +942,7 @@ mod tests {
         let plan = RuntimeConversionPlanner::plan(
             &db,
             RuntimeClass::raw_addr(
+                &db,
                 AddressSpaceKind::Storage,
                 RuntimeClass::AggregateValue { layout },
             ),
@@ -962,6 +968,7 @@ mod tests {
         let plan = RuntimeConversionPlanner::plan(
             &db,
             RuntimeClass::raw_addr(
+                &db,
                 AddressSpaceKind::Memory,
                 RuntimeClass::AggregateValue { layout },
             ),

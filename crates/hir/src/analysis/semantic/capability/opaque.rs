@@ -1,7 +1,7 @@
 //! Arbitrary replacement contents after a possible byte-level overwrite.
 //! Entry reads have a different denotation and must never be used as havoc.
 use super::{
-    external::{ClobberCondition, ExternalSource},
+    external::{ClobberCondition, ExternalSource, ReferentContract},
     footprint::AccessFootprint,
     guard::Guard,
     handle::{
@@ -38,6 +38,13 @@ impl<'db> OpaqueWrite<'db> {
         clobber: Option<(&RegionRoot<'db>, AccessFootprint<'_, 'db>)>,
     ) -> Result<CapabilityValue<'db>, UnresolvedCapability<'db>> {
         let db = values.db;
+        // Keep conditional replacements for identifiable cells. Seeds and
+        // replacements inside already arbitrary memory share one closed heap
+        // family; retaining their cell parameters would grow at every load.
+        let saturated = matches!(self.site, OpaqueWriteSite::Seed)
+            || clobber.is_some_and(
+                |(root, _)| matches!(root, RegionRoot::External(source) if source.is_arbitrary()),
+            );
         let mut failure = None;
         let value = values.from_shape(shape, scope, |semantics, path, scope| {
             let native = matches!(
@@ -59,24 +66,37 @@ impl<'db> OpaqueWrite<'db> {
                     return Vec::new();
                 }
             };
-            // Separate cells/family members may receive different addresses,
-            // including when the same operation overwrites several cells. The
-            // witness is lexical, so replay never allocates new identities.
-            let (witness_scope, witness) = scope.bind(IndexNamespace::Existential);
-            let source = ExternalSource::opaque(
-                db,
-                OpaqueHandleRef {
-                    contract,
-                    occurrence: AddressOccurrence::Overwrite(OpaqueContentsId::new(
+            let (witness_scope, source) = if saturated {
+                (
+                    scope.clone(),
+                    ExternalSource::opaque_memory(ReferentContract::new(
                         db,
-                        self.site,
-                        semantics.representation_ty,
-                        path.clone(),
+                        contract.target_ty,
+                        contract.address_space,
                     )),
-                    arguments: scope.variables().chain([witness]).collect(),
-                },
-            );
-            let alternatives = if let Some((target, written)) = clobber {
+                )
+            } else {
+                // Independent cells may receive different addresses even at the
+                // same write site. Lexical witnesses keep replay deterministic.
+                let (witness_scope, witness) = scope.bind(IndexNamespace::Existential);
+                (
+                    witness_scope,
+                    ExternalSource::opaque(
+                        db,
+                        OpaqueHandleRef {
+                            contract,
+                            occurrence: AddressOccurrence::Overwrite(OpaqueContentsId::new(
+                                db,
+                                self.site,
+                                semantics.representation_ty,
+                                path.clone(),
+                            )),
+                            arguments: scope.variables().chain([witness]).collect(),
+                        },
+                    ),
+                )
+            };
+            let alternatives = if !saturated && let Some((target, written)) = clobber {
                 let extent = written.extent;
                 let target = SymbolicPlace {
                     root: target.clone(),

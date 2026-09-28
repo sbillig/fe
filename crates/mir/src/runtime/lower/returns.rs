@@ -28,8 +28,8 @@ use crate::{
     db::MirDb,
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
     runtime::{
-        AddressSpaceKind, EnumLayoutKey, Layout, LayoutId, LayoutKey, RefKind, RuntimeClass,
-        RuntimeExitBehavior,
+        AddressSpaceKind, EnumLayoutKey, Layout, LayoutId, LayoutKey, RawPointeeId, RefKind,
+        RuntimeClass, RuntimeExitBehavior, relation::runtime_classes_equivalent,
     },
 };
 
@@ -316,7 +316,7 @@ pub(crate) fn declaration_runtime_return_class<'db>(
             else {
                 continue;
             };
-            let source = RuntimeClass::raw_addr(space, *pointee);
+            let source = RuntimeClass::raw_addr(db, space, *pointee);
             if let Some(updated) = merge_declaration_return_source(
                 db,
                 class.clone(),
@@ -378,7 +378,11 @@ fn raw_return_space<'db>(
             provider.binding(db).provider_ty.as_ptr(db).is_some(),
         ),
         // An unknown semantic referent supplies no raw-carrier layout evidence.
-        ExternalOrigin::Local(_) | ExternalOrigin::Unknown { .. } => return None,
+        ExternalOrigin::Local(_)
+        | ExternalOrigin::Unknown { .. }
+        | ExternalOrigin::OpaqueMemory => {
+            return None;
+        }
     };
     steps.extend(source.dereferences().iter());
     for path in steps {
@@ -447,8 +451,12 @@ fn merge_declaration_return_source<'db>(
     merge: ReturnSourceMerge,
 ) -> Option<RuntimeClass<'db>> {
     let Some((step, suffix)) = projection.split_first() else {
-        let source =
-            retarget_declaration_return_transport(current.clone(), source_root, projected_source);
+        let source = retarget_declaration_return_transport(
+            db,
+            current.clone(),
+            source_root,
+            projected_source,
+        );
         return match merge {
             ReturnSourceMerge::Join if current.is_transport() && source.is_transport() => {
                 join_reference_transports(db, &current, &source)
@@ -554,6 +562,7 @@ fn declaration_return_value_shapes_match<'db>(
 }
 
 fn retarget_declaration_return_transport<'db>(
+    db: &'db dyn MirDb,
     target: RuntimeClass<'db>,
     source_root: &RuntimeClass<'db>,
     projected_source: &RuntimeClass<'db>,
@@ -576,16 +585,15 @@ fn retarget_declaration_return_transport<'db>(
         pointee: target_pointee,
         ..
     } = &target
-        && let Some(
-            stored @ RuntimeClass::Ref {
-                pointee,
-                kind: RefKind::Native,
-                ..
-            },
-        ) = source.pointee()
-        && pointee == target_pointee
+        && let Some(stored) = source.deref_target(db)
+        && let RuntimeClass::Ref {
+            pointee,
+            kind: RefKind::Native,
+            ..
+        } = &stored
+        && runtime_classes_equivalent(db, pointee, target_pointee)
     {
-        return stored.clone();
+        return stored;
     }
     match (target, source) {
         (
@@ -623,10 +631,9 @@ fn retarget_declaration_return_transport<'db>(
             },
         ) => RuntimeClass::RawAddr {
             space: *space,
-            pointee: if projected_transport {
-                source_target.clone().or(Some(pointee))
-            } else {
-                Some(pointee)
+            pointee: match source_target {
+                Some(source_target) if projected_transport => Some(*source_target),
+                Some(_) | None => Some(RawPointeeId::exact(db, *pointee)),
             },
         },
         (
@@ -641,7 +648,7 @@ fn retarget_declaration_return_transport<'db>(
         ) => RuntimeClass::RawAddr {
             space: *space,
             pointee: if projected_transport {
-                Some(pointee.clone()).or(target)
+                Some(RawPointeeId::exact(db, pointee.as_ref().clone()))
             } else {
                 target
             },
@@ -657,7 +664,7 @@ fn retarget_declaration_return_transport<'db>(
         ) => RuntimeClass::RawAddr {
             space: *space,
             pointee: if projected_transport {
-                source_target.clone().or(target)
+                source_target.or(target)
             } else {
                 target
             },
@@ -1210,8 +1217,8 @@ fn choose(first: ref u8, second: ref u8, use_first: bool) -> ref u8 {
         let semantic = semantic_instance_for_named_func(&db, db.top_mod(file), "choose");
         let default_key = runtime_instance_for_semantic(&db, semantic).key(&db);
         let mut params = default_key.params(&db).clone();
-        let pointee = params[1].pointee().unwrap().clone();
-        params[1] = RuntimeClass::raw_addr(AddressSpaceKind::Memory, pointee);
+        let pointee = params[1].ref_pointee().unwrap().clone();
+        params[1] = RuntimeClass::raw_addr(&db, AddressSpaceKind::Memory, pointee);
         let key = RuntimeInstanceKey::new(&db, RuntimeInstanceSource::Semantic(semantic), params);
         let declaration = declaration_runtime_return_class(&db, key);
         assert!(matches!(

@@ -55,7 +55,7 @@ func private %byte_ptr(v0.i256) -> i256 {
         return v2;
 }
 
-func private %cast__g5f1e(v0.i256) -> i256 {
+func private %cast__gc266(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -63,7 +63,7 @@ func private %cast__g5f1e(v0.i256) -> i256 {
         return v0;
 }
 
-func private %cast__gc266(v0.i256) -> i256 {
+func private %cast__g5f1e(v0.i256) -> i256 {
     block0:
         jump block1;
 

@@ -3707,6 +3707,23 @@ fn test_cli_test_single_file_zero_sized_self_method_passes() {
     );
 }
 
+/// The fixture-directory test runs at the default level only; recursive raw
+/// pointees are also executed unoptimized and fully optimized.
+#[test]
+fn test_recursive_raw_pointers_execute_at_o0_and_o2() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/recursive_raw_pointer.fe");
+    let fixture = fixture.to_str().expect("fixture path utf8");
+    for level in ["-O0", "-O2"] {
+        let (output, exit_code) = run_fe_main(&["test", "--jobs", "1", level, fixture]);
+        assert_eq!(exit_code, 0, "fe test {level} failed:\n{output}");
+        assert!(
+            output.contains("9 passed; 0 failed"),
+            "expected every recursive raw-pointer test to run at {level}:\n{output}"
+        );
+    }
+}
+
 #[test]
 fn test_cli_test_emit_ir_and_rmir_writes_artifacts() {
     let temp = tempdir().expect("tempdir");

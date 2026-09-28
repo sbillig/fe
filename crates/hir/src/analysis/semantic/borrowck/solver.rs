@@ -957,8 +957,14 @@ impl<'db> Borrowck<'db> {
                     state.load_scalar(root, *result, &mut self.inventory.values);
                 }
                 if *mode == ReadMode::Move && place.ty.as_capability(self.db).is_none() {
-                    let empty = self.inventory.values.empty(shape, &scope);
-                    self.write_region(state, &region, &empty, statement)?;
+                    state
+                        .move_out(&mut self.inventory.values, &region, shape)
+                        .map_err(|error| {
+                            self.internal_diag(
+                                statement.origin,
+                                format!("unresolved capability move: {error:?}"),
+                            )
+                        })?;
                 }
                 value
             }

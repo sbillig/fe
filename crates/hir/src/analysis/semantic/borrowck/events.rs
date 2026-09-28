@@ -228,6 +228,7 @@ impl<'db> Borrowck<'db> {
     ) -> Result<Vec<CapabilityOccurrence<'db>>, SemanticDiagnostic<'db>> {
         let mut result = Vec::new();
         let mut pending = vec![(value.clone(), Vec::new(), Vec::new(), traversal)];
+        let mut reached = BTreeSet::new();
         while let Some((value, prefix, ancestry, traversal)) = pending.pop() {
             let leaves = self.inventory.values.leaves(&value, occurrence);
             for leaf in &leaves {
@@ -288,14 +289,26 @@ impl<'db> Borrowck<'db> {
                     continue;
                 }
                 let target = self.shape(leaf.semantics.target_ty)?;
+                // Reads introduce fresh witnesses, so a recursive referent
+                // returns as an alpha-variant of an ancestor region. Compare
+                // regions with their witnesses closed and renumbered.
+                let visited = region.close_existentials(&region.scope().without_existentials());
                 if !target.contains_capability(self.db)
                     || region.is_empty()
-                    || ancestry.contains(&(region.clone(), target))
+                    || ancestry.contains(&(visited.clone(), target))
+                {
+                    continue;
+                }
+                // Reachability unions the capabilities every path reaches, and
+                // contents depend only on the region read. Expand each region
+                // once rather than once per path through a dense referent graph.
+                if matches!(traversal, CapabilityTraversal::Reachable)
+                    && !reached.insert((visited.clone(), target))
                 {
                     continue;
                 }
                 let mut ancestry = ancestry.clone();
-                ancestry.push((region.clone(), target));
+                ancestry.push((visited, target));
                 let contents = self.read_region(state, &region, target, occurrence, origin)?;
                 let mut path = path;
                 path.push(OccurrenceStep::Target);

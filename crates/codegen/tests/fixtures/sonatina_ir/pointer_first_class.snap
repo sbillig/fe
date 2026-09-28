@@ -110,22 +110,6 @@ func private %byte_ptr__g8571(v0.i256) -> i256 {
         return v2;
 }
 
-func private %cast__g4e76(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
-func private %cast__ge428(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
 func private %cast__gcc0a(v0.i256) -> i256 {
     block0:
         jump block1;
@@ -142,14 +126,6 @@ func private %cast__g5f1e(v0.i256) -> i256 {
         return v0;
 }
 
-func private %cast__g8838(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
 func private %cast__gb090(v0.i256) -> i256 {
     block0:
         jump block1;
@@ -158,7 +134,7 @@ func private %cast__gb090(v0.i256) -> i256 {
         return v0;
 }
 
-func private %cast__g0587(v0.i256) -> i256 {
+func private %cast__ge428(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -167,6 +143,30 @@ func private %cast__g0587(v0.i256) -> i256 {
 }
 
 func private %cast__g5398(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %cast__g4e76(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %cast__g8838(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %cast__g0587(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -203,21 +203,21 @@ func inline(always) private %index__ge513(v0.objref<@layout_0>, v1.i256) -> i256
         return v5;
 }
 
-func inline(always) private %index_mut__g95ee(v0.i256, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = call %array_elem v0 v1;
-        return v4;
-}
-
 func inline(always) private %index_mut__ge513(v0.objref<@layout_0>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
         v4.i256 = call %mem_array_elem v0 v1;
+        return v4;
+}
+
+func inline(always) private %index_mut__g95ee(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %array_elem v0 v1;
         return v4;
 }
 

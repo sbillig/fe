@@ -16,10 +16,7 @@ use crate::{
             capability::{
                 external::{ExternalOrigin, ExternalSource, ReferentContract},
                 guard::Guard,
-                handle::{
-                    AddressOccurrence, HandleAddressSpace, OpaqueHandleRef, OpaqueWriteSite,
-                    SeedOrigin,
-                },
+                handle::{AddressOccurrence, HandleAddressSpace, OpaqueHandleRef, OpaqueWriteSite},
                 index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
                 loan::{CapabilityRef, LoanDef, LoanId, LoanRef},
                 opaque::OpaqueWrite,
@@ -540,48 +537,17 @@ impl<'db> InputBuilder<'db> {
                 CellSeed::EntryContents => {
                     self.value(target.shape, &target.scope, origin, &ancestry)?
                 }
-                CellSeed::FreshUninitialized | CellSeed::UnknownBytes => {
-                    let mut base = &target.source;
-                    while let ExternalOrigin::Memory { base: next, .. } = &base.origin {
-                        base = &next.source;
-                    }
-                    let origin = match &base.origin {
-                        ExternalOrigin::Allocation(handle)
-                        | ExternalOrigin::OpaqueHandle(handle) => {
-                            SeedOrigin::Address(handle.occurrence)
-                        }
-                        ExternalOrigin::Unknown { occurrence, .. } => {
-                            SeedOrigin::Address(*occurrence)
-                        }
-                        ExternalOrigin::Local(root) => SeedOrigin::Local(*root),
-                        _ => unreachable!("entry contents have symbolic input seeds"),
-                    };
-                    // Following an arbitrary pointer seed must not grow an
-                    // unbounded chain of seed identities during discovery.
-                    let site = if let SeedOrigin::Address(AddressOccurrence::Overwrite(id)) = origin
-                        && let site @ OpaqueWriteSite::Seed { .. } = id.site(self.db)
-                    {
-                        site
-                    } else {
-                        OpaqueWriteSite::Seed {
-                            instance: self.instance,
-                            origin,
-                        }
-                    };
-                    OpaqueWrite {
-                        site,
-                        scope: self
-                            .instance
-                            .key(self.db)
-                            .impl_env(self.db)
-                            .normalization_scope(self.db),
-                        assumptions: self.instance.assumptions(self.db),
-                    }
-                    // No conditional clobber: fresh/arbitrary bytes have no
-                    // native authority even if all raw writes were disjoint.
-                    .contents(&mut self.values, target.shape, &target.scope, None)
-                    .map_err(|error| ShapeError::UnresolvedCapability(error.0))?
+                CellSeed::FreshUninitialized | CellSeed::UnknownBytes => OpaqueWrite {
+                    site: OpaqueWriteSite::Seed,
+                    scope: self
+                        .instance
+                        .key(self.db)
+                        .impl_env(self.db)
+                        .normalization_scope(self.db),
+                    assumptions: self.instance.assumptions(self.db),
                 }
+                .contents(&mut self.values, target.shape, &target.scope, None)
+                .map_err(|error| ShapeError::UnresolvedCapability(error.0))?,
             };
             self.storage.insert(root, value);
         }

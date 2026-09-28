@@ -9,7 +9,7 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             SemanticInstance,
-            normalized::{NRootId, NStatementId, NValueId},
+            normalized::{NStatementId, NValueId},
         },
         ty::{
             assoc_const::AssocConstUse,
@@ -152,17 +152,8 @@ pub enum OpaqueWriteSite<'db> {
         statement: NStatementId,
     },
     Summary(u32),
-    /// Discovery names bytes; it is not an operation that initialized them.
-    Seed {
-        instance: SemanticInstance<'db>,
-        origin: SeedOrigin<'db>,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum SeedOrigin<'db> {
-    Address(AddressOccurrence<'db>),
-    Local(NRootId),
+    /// Arbitrary initial bytes have no operation or cell identity.
+    Seed,
 }
 
 /// Stable transfer-site and structural-leaf identity. A separate existential

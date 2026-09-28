@@ -25,6 +25,7 @@ use crate::analysis::{
             index::{BinderScope, IndexExpr},
             path::RegionPath,
             region::{OverlapResult, RegionRoot, RegionSet},
+            shape::ShapeId,
             source::{InputOrigin, SourceExpr},
             state::BorrowState,
             value::Guarded,
@@ -49,6 +50,9 @@ pub(super) struct ResolvedAvailability<'db> {
     pub incoming: Vec<(AvailabilityRequirement<'db>, NativeValidity<'db>)>,
     pub reinitialized: RegionSet<'db>,
     pub unavailable: RegionSet<'db>,
+    /// Typed groups of unavailable memory, for retiring capabilities without
+    /// replaying an ownership effect as a physical byte write.
+    pub consumed: Vec<(RegionSet<'db>, ShapeId<'db>)>,
 }
 
 pub(super) struct AvailabilityAnalysis<'db> {
@@ -195,6 +199,7 @@ impl<'db> Borrowck<'db> {
             incoming: Vec::new(),
             reinitialized: RegionSet::empty(&scope),
             unavailable: RegionSet::empty(&scope),
+            consumed: Vec::new(),
         };
         // Every source is substituted against the same pre-call snapshot. A
         // guaranteed callee destination can still be ambiguous in its caller.
@@ -283,6 +288,18 @@ impl<'db> Borrowck<'db> {
                     }
                 }
                 let target = target.region.with_guard(&guard).close_existentials(&scope);
+                if kind.is_none() && !definite {
+                    let ty = source.referent_ty(self.db, call.instance).ok_or_else(|| {
+                        self.internal_diag(
+                            inputs.origin,
+                            "consumed memory has no typed referent".into(),
+                        )
+                    })?;
+                    let shape = self.shape(ty)?;
+                    if shape.contains_capability(self.db) {
+                        resolved.consumed.push((target.clone(), shape));
+                    }
+                }
                 if !definite || target.definite_write().is_some() {
                     target_region = target_region.union(&target);
                 }
@@ -1167,6 +1184,7 @@ mod tests {
             )],
             reinitialized: RegionSet::empty(&scope),
             unavailable: RegionSet::empty(&scope),
+            consumed: Vec::new(),
         });
         assert!(checker.analyze_availability().diagnostic.is_some());
     }
