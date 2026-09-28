@@ -24,8 +24,7 @@ use hir::analysis::{
         const_ty::ConstTyData,
         corelib::{
             PrimitiveWrapperCallKind, RuntimeBuiltinFuncKind, core_primitive_wrapper_call_kind,
-            resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
-            runtime_builtin_func_kind,
+            resolve_core_trait, resolve_lib_func_path, runtime_builtin_func_kind,
         },
         trait_def::TraitInstId,
         trait_resolution::{
@@ -44,7 +43,10 @@ use hir::semantic::ProviderBinding;
 
 use crate::{
     db::MirDb,
-    instance::{RuntimeInstance, RuntimeInstanceKey, get_or_build_runtime_instance},
+    instance::{
+        RuntimeAbi, RuntimeInstance, RuntimeInstanceKey, RuntimeInstanceSource,
+        get_or_build_runtime_instance,
+    },
     resolve_runtime_place_address_class,
     runtime::place::{project_field_class, project_index_class, project_variant_field_class},
     runtime::{
@@ -130,7 +132,7 @@ pub fn lower_to_rmir<'db>(
     {
         validate_runtime_array_extents_in_env(db, type_env, ty)?;
     }
-    check_runtime_body_supported(db, semantic.key(db), &normalized_body)?;
+    check_runtime_body_supported(db, key, &normalized_body)?;
     let facts = BodyStaticFacts::new(db, &normalized_body);
     let abi = runtime_body_abi_plan(db, key, &normalized_body);
     let param_locals = crate::runtime::lower::interface::runtime_param_locals(
@@ -140,7 +142,7 @@ pub fn lower_to_rmir<'db>(
         key.params(db),
     );
     let mut inferer = LocalStateInferer::new(
-        BodyEnv::new(db, &normalized_body, &facts),
+        BodyEnv::new(db, &normalized_body, &facts, key.abi(db)),
         key.params(db),
         &param_locals,
     );
@@ -172,9 +174,13 @@ pub fn lower_to_rmir<'db>(
 
 pub(super) fn check_runtime_body_supported<'db>(
     db: &'db dyn MirDb,
-    key: SemanticInstanceKey<'db>,
+    runtime_key: RuntimeInstanceKey<'db>,
     body: &RuntimeSemanticBody<'db>,
 ) -> Result<(), LowerError> {
+    let key = runtime_key
+        .semantic(db)
+        .expect("semantic runtime body")
+        .key(db);
     let evidence = layout_evidence_body(db, body.owner()).map_err(|error| {
         LowerError::Unsupported(format!(
             "layout evidence lowering failed for {key:?}: {error:?}"
@@ -285,6 +291,7 @@ pub(super) fn check_runtime_body_supported<'db>(
                     db,
                     impl_env.normalization_scope(db),
                     impl_env.assumptions(db),
+                    runtime_key.abi(db),
                     value_ty,
                 )?;
             }
@@ -374,13 +381,18 @@ fn ensure_panic_payload_encodable<'db>(
     db: &'db dyn MirDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    abi: RuntimeAbi<'db>,
     value_ty: TyId<'db>,
 ) -> Result<(), LowerError> {
-    let abi_ty = resolve_lib_type_path(db, scope, "std::abi::Sol")
+    let abi_ty = abi
+        .sol
         .ok_or_else(|| LowerError::Unsupported("missing std::abi::Sol".to_string()))?;
-    let encode_trait = resolve_core_trait(db, scope, &["abi", "Encode"])
+    let library_scope = abi
+        .library_scope(db)
+        .expect("ABI type must belong to an ingot");
+    let encode_trait = resolve_core_trait(db, library_scope, &["abi", "Encode"])
         .ok_or_else(|| LowerError::Unsupported("missing core::abi::Encode".to_string()))?;
-    let abi_size_trait = resolve_core_trait(db, scope, &["abi", "AbiSize"])
+    let abi_size_trait = resolve_core_trait(db, library_scope, &["abi", "AbiSize"])
         .ok_or_else(|| LowerError::Unsupported("missing core::abi::AbiSize".to_string()))?;
     let encode = TraitInstId::new_simple(db, encode_trait, vec![value_ty, abi_ty]);
     let abi_size = TraitInstId::new_simple(db, abi_size_trait, vec![value_ty]);
@@ -399,12 +411,17 @@ fn panic_payload_is_error_variant<'db>(
     db: &'db dyn MirDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    abi: RuntimeAbi<'db>,
     value_ty: TyId<'db>,
 ) -> bool {
-    let Some(abi_ty) = resolve_lib_type_path(db, scope, "std::abi::Sol") else {
+    let Some(abi_ty) = abi.sol else {
         return false;
     };
-    let Some(error_variant_trait) = resolve_core_trait(db, scope, &["error", "ErrorVariant"])
+    let library_scope = abi
+        .library_scope(db)
+        .expect("ABI type must belong to an ingot");
+    let Some(error_variant_trait) =
+        resolve_core_trait(db, library_scope, &["error", "ErrorVariant"])
     else {
         return false;
     };
@@ -1541,8 +1558,13 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn with_current_body_cx<T>(&self, f: impl FnOnce(RuntimeBodyCx<'_, '_, 'db>) -> T) -> T {
-        f(BodyEnv::new(self.db, &self.semantic_body, &self.facts)
-            .with_carriers(&self.semantic_carriers))
+        f(BodyEnv::new(
+            self.db,
+            &self.semantic_body,
+            &self.facts,
+            self.instance.key(self.db).abi(self.db),
+        )
+        .with_carriers(&self.semantic_carriers))
     }
 
     fn current_expr_direct_class(
@@ -1552,7 +1574,13 @@ impl<'db> RmirEmitter<'db> {
         expr: &NExpr<'db>,
     ) -> Option<RuntimeClass<'db>> {
         let mut lookup_return_class = |key| declaration_runtime_return_class(self.db, key);
-        BodyEnv::new(self.db, &self.semantic_body, &self.facts).expr_direct_class(
+        BodyEnv::new(
+            self.db,
+            &self.semantic_body,
+            &self.facts,
+            self.instance.key(self.db).abi(self.db),
+        )
+        .expr_direct_class(
             &self.semantic_carriers,
             block_idx,
             stmt_idx,
@@ -3661,7 +3689,8 @@ impl<'db> RmirEmitter<'db> {
             self.lower_runtime_call_inputs(bb, args, effect_args, &call_input_plan);
         let runtime_key = RuntimeInstanceKey::new(
             self.db,
-            crate::instance::RuntimeInstanceSource::Semantic(semantic),
+            RuntimeInstanceSource::Semantic(semantic),
+            self.instance.key(self.db).abi(self.db),
             runtime_classes,
         );
         let abi = runtime_declaration_abi_plan(self.db, runtime_key);
@@ -4019,13 +4048,17 @@ impl<'db> RmirEmitter<'db> {
         let impl_env = key.impl_env(self.db);
         let scope = impl_env.normalization_scope(self.db);
         let assumptions = impl_env.assumptions(self.db);
-        self.assert_panic_payload_encodable(scope, assumptions, value_ty);
-        let func_path = if panic_payload_is_error_variant(self.db, scope, assumptions, value_ty) {
-            "std::evm::revert_error"
-        } else {
-            "std::evm::revert"
-        };
-        let func = resolve_lib_func_path(self.db, scope, func_path)
+        let abi = self.instance.key(self.db).abi(self.db);
+        ensure_panic_payload_encodable(self.db, scope, assumptions, abi, value_ty)
+            .expect("panic payload support should be checked before rMIR emission");
+        let library_scope = abi.library_scope(self.db).expect("validated panic ABI");
+        let func_path =
+            if panic_payload_is_error_variant(self.db, scope, assumptions, abi, value_ty) {
+                "std::evm::revert_error"
+            } else {
+                "std::evm::revert"
+            };
+        let func = resolve_lib_func_path(self.db, library_scope, func_path)
             .unwrap_or_else(|| panic!("missing {func_path}"));
         let semantic_key =
             generated_callee_key(self.db, scope, assumptions, func, None, &[value_ty])
@@ -4033,17 +4066,8 @@ impl<'db> RmirEmitter<'db> {
         runtime_instance_for_semantic(
             self.db,
             get_or_build_semantic_instance(self.db, semantic_key),
+            abi,
         )
-    }
-
-    fn assert_panic_payload_encodable(
-        &self,
-        scope: ScopeId<'db>,
-        assumptions: PredicateListId<'db>,
-        value_ty: TyId<'db>,
-    ) {
-        ensure_panic_payload_encodable(self.db, scope, assumptions, value_ty)
-            .expect("panic payload support should be checked before rMIR emission");
     }
 
     fn lower_numeric_intrinsic_call(
@@ -5328,7 +5352,8 @@ impl<'db> RmirEmitter<'db> {
         };
         let callee_key = RuntimeInstanceKey::new(
             self.db,
-            crate::instance::RuntimeInstanceSource::Semantic(semantic),
+            RuntimeInstanceSource::Semantic(semantic),
+            self.instance.key(self.db).abi(self.db),
             params,
         );
         let callee = get_or_build_runtime_instance(self.db, callee_key);
@@ -6616,7 +6641,7 @@ mod tests {
     };
     use url::Url;
 
-    use crate::{build_test_runtime_package, runtime::package::runtime_instance_for_semantic};
+    use crate::{build_test_runtime_package, runtime::package::root_runtime_instance};
 
     #[test]
     fn mixed_compile_time_and_runtime_layout_components_lower_through_calls() {
@@ -6668,7 +6693,7 @@ fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
                 &db,
                 identity_semantic_instance_key(&db, BodyOwner::Func(func)),
             );
-            let _ = runtime_instance_for_semantic(&db, semantic).body(&db);
+            let _ = root_runtime_instance(&db, semantic).body(&db);
         }
     }
 

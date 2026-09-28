@@ -26,7 +26,7 @@ use salsa::Update;
 
 use crate::{
     db::MirDb,
-    instance::{RuntimeInstanceKey, RuntimeInstanceSource},
+    instance::{RuntimeAbi, RuntimeInstanceKey, RuntimeInstanceSource},
     runtime::{
         AddressSpaceKind, EnumLayoutKey, Layout, LayoutId, LayoutKey, RawPointeeId, RefKind,
         RuntimeClass, RuntimeExitBehavior, relation::runtime_classes_equivalent,
@@ -56,6 +56,7 @@ pub(crate) enum StaticRuntimeReturnDecision<'db> {
 
 #[derive(Clone)]
 pub(crate) struct RuntimeReturnSummary<'db> {
+    abi: RuntimeAbi<'db>,
     pub(crate) semantic_body: RuntimeSemanticBody<'db>,
     pub(crate) facts: BodyStaticFacts<'db>,
     pub(crate) return_plan: RuntimeVisibleReturnPlan<'db>,
@@ -90,6 +91,7 @@ impl<'db> RuntimeReturnSummary<'db> {
         db: &'db dyn MirDb,
         semantic: SemanticInstance<'db>,
         semantic_body: &RuntimeSemanticBody<'db>,
+        abi: RuntimeAbi<'db>,
     ) -> Self {
         let facts = BodyStaticFacts::new(db, semantic_body);
         let param_locals = runtime_visible_binding_plans(db, semantic)
@@ -111,7 +113,7 @@ impl<'db> RuntimeReturnSummary<'db> {
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let env = BodyEnv::new(db, semantic_body, &facts);
+        let env = BodyEnv::new(db, semantic_body, &facts, abi);
         let mut return_plan = desired_runtime_return_plan(db, semantic);
         let mut default_return_class = default_return_class(db, semantic);
         if matches!(return_plan, RuntimeVisibleReturnPlan::Erased) {
@@ -185,6 +187,7 @@ impl<'db> RuntimeReturnSummary<'db> {
         }
 
         Self {
+            abi,
             semantic_body: semantic_body.clone(),
             facts,
             return_plan,
@@ -199,7 +202,7 @@ impl<'db> RuntimeReturnSummary<'db> {
     }
 
     fn env(&self, db: &'db dyn MirDb) -> BodyEnv<'_, 'db> {
-        BodyEnv::new(db, &self.semantic_body, &self.facts)
+        BodyEnv::new(db, &self.semantic_body, &self.facts, self.abi)
     }
 }
 
@@ -213,7 +216,7 @@ pub(crate) fn runtime_return_class_for_body<'db>(
     {
         return class;
     }
-    let summary = RuntimeReturnSummary::build(db, semantic, body);
+    let summary = RuntimeReturnSummary::build(db, semantic, body, key.abi(db));
     evaluate_runtime_return_class(db, &summary, key.params(db), &mut |callee_key| {
         declaration_runtime_return_class(db, callee_key)
     })
@@ -830,7 +833,7 @@ mod tests {
     use super::*;
     use crate::runtime::{
         lower::{infer::LocalStateInferer, interface::runtime_param_locals},
-        package::runtime_instance_for_semantic,
+        package::root_runtime_instance,
     };
 
     fn semantic_instance_for_named_func<'db>(
@@ -862,7 +865,7 @@ mod tests {
             .expect("legacy return-class inference only applies to semantic runtime instances");
         let semantic_body =
             RuntimeSemanticBody::admitted(db, semantic).expect("semantic body should normalize");
-        let summary = RuntimeReturnSummary::build(db, semantic, &semantic_body);
+        let summary = RuntimeReturnSummary::build(db, semantic, &semantic_body, key.abi(db));
         let env = summary.env(db);
         let inferred = LocalStateInferer::new(
             env,
@@ -908,7 +911,7 @@ mod tests {
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
         let semantic = semantic_instance_for_named_func(&db, top_mod, name);
-        let key = runtime_instance_for_semantic(&db, semantic).key(&db);
+        let key = root_runtime_instance(&db, semantic).key(&db);
 
         assert!(
             matches!(
@@ -952,7 +955,7 @@ mod tests {
             let diagnostics = db.run_on_top_mod(module);
             assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(&db));
             let semantic = semantic_instance_for_named_func(&db, module, "select");
-            let instance = runtime_instance_for_semantic(&db, semantic);
+            let instance = root_runtime_instance(&db, semantic);
             let key = instance.key(&db);
             if signature_first {
                 instance.interface_signature(&db);
@@ -995,7 +998,7 @@ mod tests {
         let top_mod = db.top_mod(file);
         for &(name, exit) in expected {
             let semantic = semantic_instance_for_named_func(&db, top_mod, name);
-            let runtime = runtime_instance_for_semantic(&db, semantic);
+            let runtime = root_runtime_instance(&db, semantic);
             assert_eq!(runtime.exit_behavior(&db), exit, "`{name}` exit behavior");
         }
     }
@@ -1113,7 +1116,7 @@ fn caller_pair_from_declared_pair() -> Pair {
             "caller_pair_from_declared_pair",
         ] {
             let caller = semantic_instance_for_named_func(&db, top_mod, caller_name);
-            let body = runtime_instance_for_semantic(&db, caller).body(&db);
+            let body = root_runtime_instance(&db, caller).body(&db);
 
             assert!(
                 body.blocks
@@ -1188,7 +1191,7 @@ fn helper() {}
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
         let semantic = semantic_instance_for_named_func(&db, top_mod, "helper");
-        let key = runtime_instance_for_semantic(&db, semantic).key(&db);
+        let key = root_runtime_instance(&db, semantic).key(&db);
 
         assert_eq!(
             static_runtime_return_decision(&db, semantic),
@@ -1215,11 +1218,16 @@ fn choose(first: ref u8, second: ref u8, use_first: bool) -> ref u8 {
         );
         let file = db.workspace().get(&db, &file_url).unwrap();
         let semantic = semantic_instance_for_named_func(&db, db.top_mod(file), "choose");
-        let default_key = runtime_instance_for_semantic(&db, semantic).key(&db);
+        let default_key = root_runtime_instance(&db, semantic).key(&db);
         let mut params = default_key.params(&db).clone();
         let pointee = params[1].ref_pointee().unwrap().clone();
         params[1] = RuntimeClass::raw_addr(&db, AddressSpaceKind::Memory, pointee);
-        let key = RuntimeInstanceKey::new(&db, RuntimeInstanceSource::Semantic(semantic), params);
+        let key = RuntimeInstanceKey::new(
+            &db,
+            RuntimeInstanceSource::Semantic(semantic),
+            default_key.abi(&db),
+            params,
+        );
         let declaration = declaration_runtime_return_class(&db, key);
         assert!(matches!(
             declaration,
@@ -1255,7 +1263,7 @@ fn nested(_ buffer: Buffer) -> Loan { Loan { value: mut *buffer.ptr } }
             ("nested", vec![ReturnProjectionStep::Field(0)]),
         ] {
             let semantic = semantic_instance_for_named_func(&db, top_mod, name);
-            let key = runtime_instance_for_semantic(&db, semantic).key(&db);
+            let key = root_runtime_instance(&db, semantic).key(&db);
             let declaration = declaration_runtime_return_class(&db, key).unwrap();
             assert_eq!(
                 Some(declaration.clone()),
@@ -1356,7 +1364,12 @@ fn choose(_ flag: bool) -> u256 {
         let semantic = semantic_instance_for_named_func(&db, top_mod, "choose");
         let semantic_body =
             RuntimeSemanticBody::admitted(&db, semantic).expect("semantic body should normalize");
-        let summary = RuntimeReturnSummary::build(&db, semantic, &semantic_body);
+        let summary = RuntimeReturnSummary::build(
+            &db,
+            semantic,
+            &semantic_body,
+            RuntimeAbi::for_scope(&db, semantic.key(&db).owner(&db).scope()),
+        );
         let return_local = summary
             .return_operands
             .first()
@@ -1600,11 +1613,16 @@ fn first(_ arr: [u8; 4]) -> u8 {
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
         let semantic = semantic_instance_for_named_func(&db, top_mod, "first");
-        let instance = runtime_instance_for_semantic(&db, semantic);
+        let instance = root_runtime_instance(&db, semantic);
         let key = instance.key(&db);
         let semantic_body =
             RuntimeSemanticBody::admitted(&db, semantic).expect("semantic body should normalize");
-        let summary = RuntimeReturnSummary::build(&db, semantic, &semantic_body);
+        let summary = RuntimeReturnSummary::build(
+            &db,
+            semantic,
+            &semantic_body,
+            RuntimeAbi::for_scope(&db, semantic.key(&db).owner(&db).scope()),
+        );
         let env = summary.env(&db);
 
         let legacy = LocalStateInferer::new(

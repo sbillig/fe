@@ -4,5 +4,5 @@ expression: report
 ---
 O2; gas includes transaction/calldata costs
 case deploy_bytes runtime_bytes first_gas second_gas
-static_view 182 163 22120 22090
-native_carriers 399 379 22255 22207
+static_view 194 175 22120 22090
+native_carriers 409 389 22196 22149

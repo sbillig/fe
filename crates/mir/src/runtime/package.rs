@@ -25,8 +25,8 @@ use crate::{
     db::MirDb,
     instance::runtime::runtime_instance_lowered_body,
     instance::{
-        RuntimeInstance, RuntimeInstanceKey, RuntimeInstanceSource, RuntimeSyntheticInstance,
-        get_or_build_runtime_instance,
+        RuntimeAbi, RuntimeInstance, RuntimeInstanceKey, RuntimeInstanceSource,
+        RuntimeSyntheticInstance, get_or_build_runtime_instance,
     },
     runtime::code_region::{code_region_symbol, runtime_code_region_for_manual_root},
     runtime::lower::classify::{
@@ -342,11 +342,7 @@ fn build_standalone_main_package<'db>(
         let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
         let entry_args =
             entry_semantic_args_plan(db, EntryEffectContext::StandaloneFunc { func }, semantic)?;
-        roots.push((
-            func,
-            runtime_instance_for_semantic(db, semantic),
-            entry_args,
-        ));
+        roots.push((func, root_runtime_instance(db, semantic), entry_args));
     }
     let entry = roots
         .iter()
@@ -482,7 +478,7 @@ pub fn build_test_runtime_package<'db>(
         let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
         let entry_args =
             entry_semantic_args_plan(db, EntryEffectContext::TestFunc { func }, semantic)?;
-        let runtime_root = runtime_instance_for_semantic(db, semantic);
+        let runtime_root = root_runtime_instance(db, semantic);
         let root = synthetic_instance(
             db,
             RuntimeSyntheticSpec::TestRoot {
@@ -557,7 +553,7 @@ pub fn build_native_executable_package<'db>(
         )
     })?;
     let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(main))?;
-    let instance = runtime_instance_for_semantic(db, semantic);
+    let instance = root_runtime_instance(db, semantic);
     let package = build_sectioned_package(
         db,
         top_mod,
@@ -732,7 +728,7 @@ pub(crate) fn manual_contract_root_instance<'db>(
     func: Func<'db>,
 ) -> Result<RuntimeInstance<'db>, LowerError> {
     let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
-    let callee = runtime_instance_for_semantic(db, semantic);
+    let callee = root_runtime_instance(db, semantic);
     let entry_args = entry_semantic_args_plan(
         db,
         EntryEffectContext::ManualContractRoot { func },
@@ -844,7 +840,7 @@ fn contract_init_abi_plan<'db>(
     )?;
 
     let semantic = semantic_instance_for_root_owner(db, BodyOwner::ContractInit { contract })?;
-    let user_init = Some(runtime_instance_for_semantic(db, semantic));
+    let user_init = Some(root_runtime_instance(db, semantic));
     let entry_args = entry_semantic_args_plan(
         db,
         EntryEffectContext::HighLevelContract { contract },
@@ -893,7 +889,7 @@ fn contract_recv_wrapper<'db>(
         arm_idx: arm.arm_idx(db),
     };
     let semantic = semantic_instance_for_root_owner(db, owner)?;
-    let user_recv = runtime_instance_for_semantic(db, semantic);
+    let user_recv = root_runtime_instance(db, semantic);
     let entry_args = entry_semantic_args_plan(
         db,
         EntryEffectContext::HighLevelContract { contract },
@@ -1487,16 +1483,29 @@ fn is_implicit_layout_const_param<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> boo
     false
 }
 
-pub(crate) fn runtime_instance_for_semantic<'db>(
+pub(crate) fn root_runtime_instance<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> RuntimeInstance<'db> {
-    runtime_instance_for_semantic_with_visible_param_overrides(db, semantic, |_| None)
+    runtime_instance_for_semantic(
+        db,
+        semantic,
+        RuntimeAbi::for_scope(db, semantic.key(db).owner(db).scope()),
+    )
+}
+
+pub(crate) fn runtime_instance_for_semantic<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    abi: RuntimeAbi<'db>,
+) -> RuntimeInstance<'db> {
+    runtime_instance_for_semantic_with_visible_param_overrides(db, semantic, abi, |_| None)
 }
 
 pub(crate) fn runtime_instance_for_semantic_with_visible_param_overrides<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
+    abi: RuntimeAbi<'db>,
     mut override_class: impl FnMut(&RuntimeVisibleBindingPlan<'db>) -> Option<RuntimeClass<'db>>,
 ) -> RuntimeInstance<'db> {
     let typed_body = semantic.key(db).typed_body(db);
@@ -1518,7 +1527,7 @@ pub(crate) fn runtime_instance_for_semantic_with_visible_param_overrides<'db>(
             })
         })
         .collect();
-    let key = RuntimeInstanceKey::new(db, RuntimeInstanceSource::Semantic(semantic), params);
+    let key = RuntimeInstanceKey::new(db, RuntimeInstanceSource::Semantic(semantic), abi, params);
     get_or_build_runtime_instance(db, key)
 }
 
@@ -1573,8 +1582,23 @@ fn synthetic_instance<'db>(
     spec: RuntimeSyntheticSpec<'db>,
     params: Vec<crate::runtime::RuntimeClass<'db>>,
 ) -> RuntimeInstance<'db> {
+    let abi = match &spec {
+        RuntimeSyntheticSpec::MainRoot { callee, .. }
+        | RuntimeSyntheticSpec::TestRoot { callee, .. }
+        | RuntimeSyntheticSpec::ManualContractRoot { callee, .. } => callee.key(db).abi(db),
+        RuntimeSyntheticSpec::ContractInitAbi { plan } => {
+            RuntimeAbi::for_scope(db, plan.contract.scope())
+        }
+        RuntimeSyntheticSpec::ContractRecvAbi { plan } => {
+            RuntimeAbi::for_scope(db, plan.contract.scope())
+        }
+        RuntimeSyntheticSpec::ContractInitRoot { contract, .. }
+        | RuntimeSyntheticSpec::ContractRuntimeRoot { contract, .. } => {
+            RuntimeAbi::for_scope(db, contract.scope())
+        }
+    };
     let synthetic = RuntimeSyntheticInstance::new(db, spec);
-    let key = RuntimeInstanceKey::new(db, RuntimeInstanceSource::Synthetic(synthetic), params);
+    let key = RuntimeInstanceKey::new(db, RuntimeInstanceSource::Synthetic(synthetic), abi, params);
     get_or_build_runtime_instance(db, key)
 }
 
@@ -1618,6 +1642,7 @@ fn resolve_decode_runtime_args_instance<'db>(
     Ok(runtime_instance_for_semantic_with_visible_param_overrides(
         db,
         semantic,
+        RuntimeAbi::for_scope(db, scope),
         |entry| {
             if matches!(entry.binding, LocalBinding::Param { idx: 0, .. }) {
                 Some(host_class.clone())
@@ -1658,6 +1683,7 @@ pub(crate) fn resolve_trait_runtime_instance<'db>(
     Ok(runtime_instance_for_semantic(
         db,
         get_or_build_semantic_instance(db, key),
+        RuntimeAbi::for_scope(db, scope),
     ))
 }
 
@@ -1950,7 +1976,15 @@ fn runtime_instance_key_for_mode<'db>(
         .map(|param| runtime_class_sort_key(db, param))
         .collect::<Vec<_>>()
         .join(",");
-    format!("{source}:params[{params}]")
+    let abi = key
+        .abi(db)
+        .sol
+        .map(|ty| {
+            let library = ty.ingot(db).expect("ABI type must belong to an ingot");
+            format!("{}@{}", type_identity(db, ty), library.base(db))
+        })
+        .unwrap_or_default();
+    format!("{source}:abi[{abi}]:params[{params}]")
 }
 
 fn runtime_instance_source_key<'db>(
@@ -2739,7 +2773,7 @@ fn ambiguous<const ROOT: u256>(left: Rooted<ROOT>, right: Rooted<ROOT>) -> u256 
             &db,
             hir::analysis::semantic::identity_semantic_instance_key(&db, BodyOwner::Func(func)),
         );
-        let runtime = runtime_instance_for_semantic(&db, semantic);
+        let runtime = root_runtime_instance(&db, semantic);
         let signature = runtime.interface_signature(&db);
         assert_eq!(signature.params.len(), 2);
         let error = runtime_instance_lowered_body(&db, runtime)
@@ -2784,7 +2818,7 @@ fn invalid(result: mut u256) -> mut u256 {
             &db,
             hir::analysis::semantic::identity_semantic_instance_key(&db, BodyOwner::Func(func)),
         );
-        let runtime = runtime_instance_for_semantic(&db, semantic);
+        let runtime = root_runtime_instance(&db, semantic);
 
         let signature = runtime.interface_signature(&db);
         assert_eq!(signature.params.len(), 1);

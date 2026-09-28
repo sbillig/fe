@@ -108,14 +108,14 @@ func private %param_local_collision(v0.i32) -> i32 {
         return v11;
 }
 
-func private %name_collisions__impl_b__impl_Widget__process(v0.constref<@layout_1>) -> i64 {
+func private %name_collisions__impl_a__impl_Widget__process(v0.constref<@layout_0>) -> i32 {
     block0:
         jump block1;
 
     block1:
-        v3.constref<i64> = const.proj v0 0.i256;
-        v4.i64 = const.load v3;
-        (v6.i64, v7.i1) = umulo v4 3.i64;
+        v3.constref<i32> = const.proj v0 0.i256;
+        v4.i32 = const.load v3;
+        (v6.i32, v7.i1) = umulo v4 2.i32;
         br v7 block2 block3;
 
     block2:
@@ -127,14 +127,14 @@ func private %name_collisions__impl_b__impl_Widget__process(v0.constref<@layout_
         return v6;
 }
 
-func private %name_collisions__impl_a__impl_Widget__process(v0.constref<@layout_0>) -> i32 {
+func private %name_collisions__impl_b__impl_Widget__process(v0.constref<@layout_1>) -> i64 {
     block0:
         jump block1;
 
     block1:
-        v3.constref<i32> = const.proj v0 0.i256;
-        v4.i32 = const.load v3;
-        (v6.i32, v7.i1) = umulo v4 2.i32;
+        v3.constref<i64> = const.proj v0 0.i256;
+        v4.i64 = const.load v3;
+        (v6.i64, v7.i1) = umulo v4 3.i64;
         br v7 block2 block3;
 
     block2:
@@ -163,14 +163,14 @@ func private %ret_param_collision(v0.i32) -> i32 {
         return v3;
 }
 
-func private %impl_trait_MultiTraitImpl_5bd8__same_method(v0.constref<@layout_0>) -> i32 {
+func private %impl_trait_MultiTraitImpl_b140__same_method(v0.constref<@layout_0>) -> i32 {
     block0:
         jump block1;
 
     block1:
         v3.constref<i32> = const.proj v0 0.i256;
         v4.i32 = const.load v3;
-        (v6.i32, v7.i1) = uaddo v4 1.i32;
+        (v6.i32, v7.i1) = uaddo v4 2.i32;
         br v7 block2 block3;
 
     block2:
@@ -182,14 +182,14 @@ func private %impl_trait_MultiTraitImpl_5bd8__same_method(v0.constref<@layout_0>
         return v6;
 }
 
-func private %impl_trait_MultiTraitImpl_b140__same_method(v0.constref<@layout_0>) -> i32 {
+func private %impl_trait_MultiTraitImpl_5bd8__same_method(v0.constref<@layout_0>) -> i32 {
     block0:
         jump block1;
 
     block1:
         v3.constref<i32> = const.proj v0 0.i256;
         v4.i32 = const.load v3;
-        (v6.i32, v7.i1) = uaddo v4 2.i32;
+        (v6.i32, v7.i1) = uaddo v4 1.i32;
         br v7 block2 block3;
 
     block2:

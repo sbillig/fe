@@ -131,6 +131,15 @@ func private %emit_transfer(v0.constref<@layout_0>, v1.constref<@layout_0>, v2.i
         return;
 }
 
+func private %encode__gf13e(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        call %store_word v1 v0;
+        return;
+}
+
 func inline(always) private %encode__gac80(v0.@layout_0, v1.i256) {
     block0:
         jump block1;
@@ -171,15 +180,6 @@ func inline(always) private %encode_alloc(v0.@layout_0) -> @layout_1 {
         call %encode__gac80 v0 v14;
         v16.@layout_1 = obj.load v1;
         return v16;
-}
-
-func private %encode__gf13e(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        call %store_word v1 v0;
-        return;
 }
 
 func inline(always) private %encode_field_at(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
@@ -274,6 +274,14 @@ func private %main_root() {
         evm_stop;
 }
 
+func private %trait_AbiSize__payload_size__ge513(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return 32.i256;
+}
+
 func inline(always) private %impl_trait_____payload_size__ge513(v0.@layout_0) -> i256 {
     block0:
         jump block1;
@@ -283,14 +291,6 @@ func inline(always) private %impl_trait_____payload_size__ge513(v0.@layout_0) ->
         v5.i256 = call %dynamic_payload_size v4;
         v6.i256 = add 32.i256 v5;
         return v6;
-}
-
-func private %trait_AbiSize__payload_size__ge513(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return 32.i256;
 }
 
 func private %impl_MemBuffer__ptr(v0.objref<@layout_1>) -> i256 {

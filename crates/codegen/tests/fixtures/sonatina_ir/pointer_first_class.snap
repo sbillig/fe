@@ -37,7 +37,7 @@ func private %alloc_array(v0.i256) -> @layout_0 {
         jump block1;
 
     block1:
-        v2.@layout_0 = call %core__lib__ptr__impl_MemArray_065f__new_uninit__ge513_a9d5 v0;
+        v2.@layout_0 = call %new_uninit v0;
         return v2;
 }
 
@@ -110,15 +110,7 @@ func private %byte_ptr__g8571(v0.i256) -> i256 {
         return v2;
 }
 
-func private %cast__gcc0a(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
-func private %cast__g5f1e(v0.i256) -> i256 {
+func private %cast__g5398(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -134,7 +126,7 @@ func private %cast__gb090(v0.i256) -> i256 {
         return v0;
 }
 
-func private %cast__ge428(v0.i256) -> i256 {
+func private %cast__gcc0a(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -142,7 +134,7 @@ func private %cast__ge428(v0.i256) -> i256 {
         return v0;
 }
 
-func private %cast__g5398(v0.i256) -> i256 {
+func private %cast__g0587(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -150,7 +142,7 @@ func private %cast__g5398(v0.i256) -> i256 {
         return v0;
 }
 
-func private %cast__g4e76(v0.i256) -> i256 {
+func private %cast__g5f1e(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -166,7 +158,15 @@ func private %cast__g8838(v0.i256) -> i256 {
         return v0;
 }
 
-func private %cast__g0587(v0.i256) -> i256 {
+func private %cast__g4e76(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %cast__ge428(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -183,16 +183,6 @@ func inline(always) private %elem(v0.i256, v1.i256) -> i256 {
         return v4;
 }
 
-func inline(always) private %index__g95ee(v0.i256, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = call %array_elem v0 v1;
-        v5.i256 = mload v4 i256;
-        return v5;
-}
-
 func inline(always) private %index__ge513(v0.objref<@layout_0>, v1.i256) -> i256 {
     block0:
         jump block1;
@@ -203,13 +193,14 @@ func inline(always) private %index__ge513(v0.objref<@layout_0>, v1.i256) -> i256
         return v5;
 }
 
-func inline(always) private %index_mut__ge513(v0.objref<@layout_0>, v1.i256) -> i256 {
+func inline(always) private %index__g95ee(v0.i256, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = call %mem_array_elem v0 v1;
-        return v4;
+        v4.i256 = call %array_elem v0 v1;
+        v5.i256 = mload v4 i256;
+        return v5;
 }
 
 func inline(always) private %index_mut__g95ee(v0.i256, v1.i256) -> i256 {
@@ -218,6 +209,15 @@ func inline(always) private %index_mut__g95ee(v0.i256, v1.i256) -> i256 {
 
     block1:
         v4.i256 = call %array_elem v0 v1;
+        return v4;
+}
+
+func inline(always) private %index_mut__ge513(v0.objref<@layout_0>, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %mem_array_elem v0 v1;
         return v4;
 }
 
@@ -296,29 +296,7 @@ func inline(always) private %mem_array_elem(v0.objref<@layout_0>, v1.i256) -> i2
         return v14;
 }
 
-func private %core__lib__ptr__impl_MemArray_065f__new_uninit__ge513_4c2d(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        (v3.i256, v4.i1) = umulo v0 32.i256;
-        br v4 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        v10.*i8 = evm_malloc v3;
-        v11.i256 = ptr_to_int v10 i256;
-        v12.i256 = call %cast__g5f1e v11;
-        v15.@layout_0 = insert_value undef.@layout_0 0.i256 v12;
-        v17.@layout_0 = insert_value v15 1.i256 v0;
-        return v17;
-}
-
-func private %core__lib__ptr__impl_MemArray_065f__new_uninit__ge513_a9d5(v0.i256) -> @layout_0 {
+func private %new_uninit(v0.i256) -> @layout_0 {
     block0:
         jump block1;
 
@@ -346,7 +324,7 @@ func private %new_zeroed(v0.i256) -> @layout_0 {
         jump block1;
 
     block1:
-        v3.@layout_0 = call %core__lib__ptr__impl_MemArray_065f__new_uninit__ge513_4c2d v0;
+        v3.@layout_0 = call %new_uninit v0;
         v5.objref<i256> = obj.proj v1 0.i256;
         v6.i256 = extract_value v3 0.i256;
         obj.store v5 v6;

@@ -597,7 +597,9 @@ fn semantic_callee_key_with_assumptions<'db>(
             !nominal_redundant,
         )
     } else if selected_trait_method.is_none()
-        && !nominal_func.is_associated_func(db)
+        // Inherent methods use the same independence proof as free functions.
+        // Trait methods still require the selection proof above.
+        && (!nominal_func.is_associated_func(db) || nominal_func.containing_impl(db).is_some())
         && callable.trait_inst().is_none()
         && effect_args.is_empty()
         && effect_providers.is_empty()

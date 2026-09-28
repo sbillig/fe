@@ -6,7 +6,9 @@ pub mod trace;
 pub mod verify;
 
 pub use db::MirDb;
-pub use instance::{RuntimeInstance, RuntimeInstanceKey, get_or_build_runtime_instance};
+pub use instance::{
+    RuntimeAbi, RuntimeInstance, RuntimeInstanceKey, get_or_build_runtime_instance,
+};
 pub use origin::{
     RuntimeBlockOrigin, RuntimeFunctionOrigin, RuntimeInstanceOwnerKey, RuntimeLocalOrigin,
     RuntimeLoopOrigin, RuntimeLoopSite, RuntimeStmtIndex, RuntimeStmtOrigin, RuntimeStmtSite,

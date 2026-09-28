@@ -19,7 +19,7 @@ use hir::{
 
 use crate::{
     db::MirDb,
-    instance::RuntimeInstanceKey,
+    instance::{RuntimeAbi, RuntimeInstanceKey},
     runtime::{
         AddressSpaceKind, ArrayLayout, EnumLayoutKey, EnumVariantLayout, Layout, LayoutId,
         LayoutKey, RawPointeeId, RawPointeeKey, RefKind, RefView, RuntimeCarrier, RuntimeClass,
@@ -1060,7 +1060,14 @@ pub(super) fn normalized_local_place_class_in_env<'db>(
     let facts = BodyStaticFacts::new_in_context(db, body, env);
     let place = super::source::declared_root_place_for_local(body, local)
         .or_else(|| super::source::alias_source_place_for_local(db, body, local))?;
-    BodyEnv::from_parts(db, body, env, &facts).normalized_place_class(carriers, &place)
+    BodyEnv::from_parts(
+        db,
+        body,
+        env,
+        &facts,
+        RuntimeAbi::for_scope(db, body.owner().key(db).owner(db).scope()),
+    )
+    .normalized_place_class(carriers, &place)
 }
 
 fn infer_runtime_local_root<'db>(

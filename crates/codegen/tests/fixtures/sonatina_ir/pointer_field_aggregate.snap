@@ -18,7 +18,7 @@ func private %alloc() -> i256 {
         return v3;
 }
 
-func private %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__g06d7_1160(v0.i256) {
+func private %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__g06d7_b5ef(v0.i256) {
     block0:
         jump block1;
 
@@ -37,7 +37,7 @@ func private %standalone_pointer_field_aggregate__pointer_field_aggregate__bump_
         return;
 }
 
-func private %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__g06d7_1160_0(v0.i256) {
+func private %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__g06d7_b5ef_0(v0.i256) {
     block0:
         jump block1;
 
@@ -90,13 +90,13 @@ func private %pointer_field_aggregate() {
         obj.store v9 v10;
         v11.objref<i256> = obj.proj v0 0.i256;
         v12.i256 = obj.load v11;
-        call %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__g06d7_1160 v12;
+        call %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__g06d7_b5ef v12;
         v14.i256 = call %alloc;
         v15.objref<i256> = obj.proj v0 0.i256;
         obj.store v15 v14;
         v16.objref<i256> = obj.proj v0 0.i256;
         v17.i256 = obj.load v16;
-        call %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__g06d7_1160_0 v17;
+        call %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__g06d7_b5ef_0 v17;
         return;
 }
 

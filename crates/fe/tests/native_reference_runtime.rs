@@ -14,9 +14,9 @@ use hir::analysis::{
     ty::ty_check::BodyOwner,
 };
 use mir::{
-    MirDb, RefKind, RuntimeCarrier, RuntimeClass, RuntimeInstanceKey, build_runtime_package,
-    get_or_build_runtime_instance, instance::RuntimeInstanceSource, verify_runtime_body,
-    verify_runtime_package,
+    MirDb, RefKind, RuntimeAbi, RuntimeCarrier, RuntimeClass, RuntimeInstanceKey,
+    build_runtime_package, get_or_build_runtime_instance, instance::RuntimeInstanceSource,
+    verify_runtime_body, verify_runtime_package,
 };
 use test_utils::snap_test;
 use url::Url;
@@ -201,8 +201,12 @@ fn entry() -> u8 {
                 &db,
                 identity_semantic_instance_key(&db, BodyOwner::Func(function)),
             );
-            let key =
-                RuntimeInstanceKey::new(&db, RuntimeInstanceSource::Semantic(semantic), Vec::new());
+            let key = RuntimeInstanceKey::new(
+                &db,
+                RuntimeInstanceSource::Semantic(semantic),
+                RuntimeAbi::for_scope(&db, function.scope()),
+                Vec::new(),
+            );
             let instance = get_or_build_runtime_instance(&db, key);
             if signature_first {
                 instance.interface_signature(&db);
