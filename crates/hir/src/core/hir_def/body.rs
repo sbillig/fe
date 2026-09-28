@@ -63,15 +63,12 @@ impl<'db> Body<'db> {
     /// Returns `Some(func)` if this body belongs to a function, `None` otherwise
     /// (e.g., for anonymous/closure bodies or const bodies).
     pub fn containing_func(self, db: &'db dyn HirDb) -> Option<Func<'db>> {
-        let scope_graph = self.scope().scope_graph(db);
-        for item in scope_graph.items_dfs(db) {
-            if let ItemKind::Func(func) = item
-                && func.body(db) == Some(self)
-            {
-                return Some(func);
-            }
+        // A function body is lowered inside its function's item scope, so the
+        // function is the body's lexical parent.
+        match self.scope().parent(db) {
+            Some(ScopeId::Item(ItemKind::Func(func))) if func.body(db) == Some(self) => Some(func),
+            _ => None,
         }
-        None
     }
 
     #[doc(hidden)]

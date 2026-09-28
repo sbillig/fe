@@ -851,6 +851,10 @@ impl<'db> PredicateListId<'db> {
     /// - Super trait bounds
     /// - Associated type bounds from trait definitions
     pub fn extend_all_bounds(self, db: &'db dyn HirAnalysisDb) -> Self {
+        extend_all_bounds_query(db, self)
+    }
+
+    fn extend_all_bounds_uncached(self, db: &'db dyn HirAnalysisDb) -> Self {
         let mut all_predicates: IndexSet<TraitInstId<'db>> =
             self.list(db).iter().copied().collect();
 
@@ -909,6 +913,35 @@ impl<'db> PredicateListId<'db> {
 
         Self::new(db, all_predicates.into_iter().collect::<Vec<_>>())
     }
+}
+
+// Normalizing implied bounds can resolve traits under assumptions that lead
+// back here. Iterate from the unextended list; extension only adds bounds.
+#[salsa::tracked(
+    cycle_initial = extend_all_bounds_cycle_initial,
+    cycle_fn = extend_all_bounds_cycle_recover
+)]
+fn extend_all_bounds_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    predicates: PredicateListId<'db>,
+) -> PredicateListId<'db> {
+    predicates.extend_all_bounds_uncached(db)
+}
+
+fn extend_all_bounds_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    predicates: PredicateListId<'db>,
+) -> PredicateListId<'db> {
+    predicates
+}
+
+fn extend_all_bounds_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &PredicateListId<'db>,
+    _count: u32,
+    _predicates: PredicateListId<'db>,
+) -> salsa::CycleRecoveryAction<PredicateListId<'db>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 fn predicate_has_recursive_assoc_projection<'db>(

@@ -992,22 +992,29 @@ impl<'db> TyId<'db> {
 
     /// Returns the field types for tuple types and structs
     pub fn field_types(self, db: &'db dyn HirAnalysisDb) -> Vec<TyId<'db>> {
-        if self.is_tuple(db) {
-            let (_, elems) = self.decompose_ty_app(db);
-            elems.to_vec()
-        } else if let Some(adt_def) = self.adt_def(db) {
-            match adt_def.adt_ref(db) {
-                AdtRef::Struct(_) => {
-                    let args = self.generic_args(db);
-                    (0..adt_def.fields(db)[0].num_types())
-                        .map(|idx| instantiate_adt_field_shape(db, adt_def, 0, idx, args))
-                        .collect()
-                }
-                _ => vec![],
+        ty_field_types(db, self).clone()
+    }
+}
+
+// Borrow checking and layout code ask for the same aggregates' field types
+// repeatedly; instantiating ADT field shapes is not free.
+#[salsa::tracked(return_ref)]
+fn ty_field_types<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<TyId<'db>> {
+    if ty.is_tuple(db) {
+        let (_, elems) = ty.decompose_ty_app(db);
+        elems.to_vec()
+    } else if let Some(adt_def) = ty.adt_def(db) {
+        match adt_def.adt_ref(db) {
+            AdtRef::Struct(_) => {
+                let args = ty.generic_args(db);
+                (0..adt_def.fields(db)[0].num_types())
+                    .map(|idx| instantiate_adt_field_shape(db, adt_def, 0, idx, args))
+                    .collect()
             }
-        } else {
-            vec![]
+            _ => vec![],
         }
+    } else {
+        vec![]
     }
 }
 

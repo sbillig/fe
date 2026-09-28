@@ -172,6 +172,7 @@ fn contains_unresolved_type_projection<'db>(db: &'db dyn HirAnalysisDb, ty: TyId
     finder.found
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub(crate) enum EffectHandleResolution<'db> {
     NotHandle,
     Resolved {
@@ -192,6 +193,16 @@ pub(crate) fn resolve_effect_handle<'db>(
     if provider_ty.as_capability(db).is_some() || !can_select_effect_handle_impl(db, provider_ty) {
         return EffectHandleResolution::NotHandle;
     }
+    resolve_effect_handle_query(db, scope, assumptions, provider_ty)
+}
+
+#[salsa::tracked]
+fn resolve_effect_handle_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    provider_ty: TyId<'db>,
+) -> EffectHandleResolution<'db> {
     let Some(effect_handle) = super::corelib::resolve_core_trait(db, scope, &["EffectHandle"])
     else {
         return EffectHandleResolution::NotHandle;
