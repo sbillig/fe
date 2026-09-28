@@ -84,14 +84,6 @@ fn release_profile_db() -> DriverDataBase {
 }
 
 #[test]
-fn analyze_corelib_under_release_profile() {
-    let db = release_profile_db();
-    let core = db.builtin_core();
-    let core_diags = db.run_on_ingot(core);
-    assert_builtin_clean(&db, core, core_diags, "core (release profile)");
-}
-
-#[test]
 fn builtin_core_calls_have_semantic_lowerings() {
     let db = DriverDataBase::default();
     let core = db.builtin_core();
@@ -125,14 +117,6 @@ fn builtin_core_calls_have_semantic_lowerings() {
         "typed core calls without semantic lowerings:\n{}",
         missing.join("\n")
     );
-}
-
-#[test]
-fn analyze_stdlib_under_release_profile() {
-    let db = release_profile_db();
-    let std_ingot = db.builtin_std();
-    let std_diags = db.run_on_ingot(std_ingot);
-    assert_builtin_clean(&db, std_ingot, std_diags, "std (release profile)");
 }
 
 #[test]

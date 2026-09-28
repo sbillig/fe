@@ -46,7 +46,6 @@ codespan-reporting.workspace = true
 testutils = []
 
 [dev-dependencies]
-trybuild = "1.0"
 ascii_tree = "0.1"
 camino.workspace = true
 dir-test.workspace = true
