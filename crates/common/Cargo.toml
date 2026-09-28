@@ -30,4 +30,3 @@ radix_immutable = "0.1"
 
 [dev-dependencies]
 serde_json = "1.0"
-trybuild = "1.0"

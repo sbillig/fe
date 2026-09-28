@@ -2341,7 +2341,6 @@ dependencies = [
  "smol_str 0.1.24",
  "toml 0.8.23",
  "tracing",
- "trybuild",
  "typed-path",
  "url",
 ]
@@ -2445,7 +2444,6 @@ dependencies = [
  "thin-vec",
  "tiny-keccak",
  "tracing",
- "trybuild",
  "url",
 ]
 
@@ -2507,7 +2505,6 @@ dependencies = [
  "num-traits",
  "rustc-hash 2.1.1",
  "salsa",
- "trybuild",
  "url",
 ]
 

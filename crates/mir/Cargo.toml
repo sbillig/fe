@@ -23,5 +23,4 @@ num-traits.workspace = true
 
 [dev-dependencies]
 driver.workspace = true
-trybuild = "1.0"
 url.workspace = true
