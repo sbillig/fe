@@ -1,0 +1,32 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/supertrait_assoc_type_conflicting_equalities.fe
+---
+error[2-0009]: ambiguous associated type `Item`
+   ┌─ supertrait_assoc_type_conflicting_equalities.fe:12:28
+   │
+ 1 │ pub trait Base {
+   │           ----
+   │           │
+   │           candidate: <Self as Base>::Item = bool
+   │           candidate: <Self as Base>::Item = u256
+   ·
+12 │     fn take(_ value: Self::Item) -> Self::Item
+   │                            ^^^^ associated type `Item` is ambiguous
+   │
+   = hint: specify the trait explicitly: `<Self as Base>::Item`
+
+error[2-0009]: ambiguous associated type `Item`
+   ┌─ supertrait_assoc_type_conflicting_equalities.fe:12:43
+   │
+ 1 │ pub trait Base {
+   │           ----
+   │           │
+   │           candidate: <Self as Base>::Item = bool
+   │           candidate: <Self as Base>::Item = u256
+   ·
+12 │     fn take(_ value: Self::Item) -> Self::Item
+   │                                           ^^^^ associated type `Item` is ambiguous
+   │
+   = hint: specify the trait explicitly: `<Self as Base>::Item`

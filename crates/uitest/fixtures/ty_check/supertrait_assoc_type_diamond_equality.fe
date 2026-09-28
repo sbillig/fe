@@ -1,0 +1,13 @@
+pub trait Base {
+    type Item
+}
+
+pub trait Left: Base<Item = u256> {}
+
+pub trait Right: Base {}
+
+// Both supertraits reach the same `Base::Item` declaration, one of them with an
+// equality. Two paths to one declaration are not an ambiguity.
+pub trait Both: Left + Right {
+    fn take(_ value: Self::Item) -> Self::Item
+}

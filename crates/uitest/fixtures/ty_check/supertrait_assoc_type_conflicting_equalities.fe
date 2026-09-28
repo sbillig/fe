@@ -1,0 +1,13 @@
+pub trait Base {
+    type Item
+}
+
+pub trait Left: Base<Item = u256> {}
+
+pub trait Right: Base<Item = bool> {}
+
+// Two paths to one declaration that disagree on the equality must stay
+// ambiguous rather than collapsing to whichever was seen first.
+pub trait Both: Left + Right {
+    fn take(_ value: Self::Item) -> Self::Item
+}

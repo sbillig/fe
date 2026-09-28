@@ -1168,6 +1168,7 @@ where
                 LayoutHoleArgSite::Path(path),
                 minter,
             );
+            let evidence = assoc_ty_candidate_evidence(db, ty, assumptions);
             let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>, TyId<'db>)> =
                 IndexMap::new();
             for (inst, ty_candidate) in assoc_tys.iter().copied() {
@@ -1197,7 +1198,7 @@ where
                     .get(&ident)
                     .copied()
                     .map_or(applied, |bound| TyId::foldl(db, bound, &seg_args));
-                let norm = normalize_ty(db, candidate_ty, scope, assumptions);
+                let norm = normalize_ty(db, candidate_ty, scope, evidence);
                 dedup.entry(norm).or_insert((inst, applied, norm));
             }
 
@@ -1693,13 +1694,42 @@ pub(crate) fn find_associated_type<'db>(
 /// self-predicate from `assumptions`, because assuming it while the trait's
 /// interface is still being lowered can recurse through the in-progress
 /// definition (see `header_constraints_for`). Its implied bounds are still
-/// sound for naming associated types, which never discharges a goal, so they
-/// are reconstructed locally where they are needed.
+/// sound for naming and comparing associated types, which never discharges a
+/// goal, so they are reconstructed locally where they are needed.
 fn trait_self_implied_bounds<'db>(
     db: &'db dyn HirAnalysisDb,
     trait_: Trait<'db>,
 ) -> PredicateListId<'db> {
     PredicateListId::new(db, vec![trait_self_predicate(db, trait_)]).extend_all_bounds(db)
+}
+
+/// Evidence for comparing associated-type candidates with each other: the
+/// caller's assumptions and everything they imply, plus the enclosing trait's
+/// implied bounds when the receiver is that trait's `Self`.
+///
+/// Without the implied bounds a supertrait equality such as
+/// `Left: Base<Item = u256>` is invisible while normalizing, so a binding-free
+/// projection reached through a second supertrait cannot be recognized as the
+/// same type, and two paths to one declaration are reported as an ambiguity.
+fn assoc_ty_candidate_evidence<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> PredicateListId<'db> {
+    let evidence = assumptions.extend_all_bounds(db);
+    if let TyData::TyParam(param) = ty.data(db)
+        && param.is_trait_self()
+        && let Some(trait_) = param.owner.resolve_to::<Trait>(db)
+    {
+        let mut list = evidence.list(db).to_vec();
+        for &bound in trait_self_implied_bounds(db, trait_).list(db) {
+            if !list.contains(&bound) {
+                list.push(bound);
+            }
+        }
+        return PredicateListId::new(db, list);
+    }
+    evidence
 }
 
 fn find_associated_type_in_mode<'db>(
