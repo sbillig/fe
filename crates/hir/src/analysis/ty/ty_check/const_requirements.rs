@@ -238,10 +238,11 @@ pub(super) fn check_body_requirements<'db>(
     // (checked by `check_declared_type_requirements`) or an instantiating
     // expression. A pattern, a binding use, or a block or branch only carries a
     // type that entered elsewhere, so checking it again repeats that report.
-    // A callable's generic arguments are likewise either written in its path,
-    // and checked there as authored types, or inferred from the argument and
-    // result expressions, which are checked themselves; a function-typed
-    // expression is therefore not checked for its type arguments.
+    // A function-typed expression is not checked for its type arguments: they
+    // are written types, checked where they are written, or inferred from the
+    // argument and result expressions, which are checked themselves. The type
+    // before `::` in a path is neither, so an item reached through it checks
+    // that type itself (`check_entered_header`).
     for (expr, data) in body.exprs(db).iter() {
         if typed.expr_binding(expr).is_some()
             || matches!(
@@ -255,6 +256,11 @@ pub(super) fn check_body_requirements<'db>(
         if !matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)))
             && let Some((_, diag)) =
                 check_type_requirements(db, ty, owner.scope(), expr.span(body).into(), &[])
+        {
+            diags.push(diag.into());
+        }
+        if let Some(headers) = const_ref_headers(db, typed, expr)
+            && let Some(diag) = check_entered_header(db, typed, expr, headers, owner.scope())
         {
             diags.push(diag.into());
         }
@@ -292,6 +298,15 @@ pub(super) fn check_body_requirements<'db>(
                 continue;
             }
         };
+        if let Some(diag) = check_entered_header(
+            db,
+            typed,
+            expr,
+            callee_headers(db, func, args),
+            owner.scope(),
+        ) {
+            diags.push(diag.into());
+        }
         // Ground clauses are already mandatory declaration checks. Unsupported
         // associated/generic owner contexts are rejected at their declarations.
         let predicates = WhereClauseOwner::Func(func)
@@ -342,6 +357,114 @@ pub(super) fn check_body_requirements<'db>(
         }
     }
     diags
+}
+
+/// The types an impl's header instantiates: its self type and, for a trait
+/// impl, the trait's arguments, in the impl's declaration coordinates.
+fn header_types<'db>(db: &'db dyn HirAnalysisDb, item: ItemKind<'db>) -> Vec<TyId<'db>> {
+    match item {
+        ItemKind::Impl(impl_) => vec![impl_.ty(db)],
+        ItemKind::ImplTrait(impl_trait) => {
+            let mut tys = vec![impl_trait.ty(db)];
+            if let Some(inst) = impl_trait.trait_inst(db) {
+                tys.extend(inst.args(db).iter().copied());
+            }
+            tys
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The header types a use of `func` with `args` instantiates: its impl's
+/// header, or a trait method's `Self` and trait arguments.
+fn callee_headers<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+    args: &[TyId<'db>],
+) -> Vec<TyId<'db>> {
+    match func.scope().parent_item(db) {
+        Some(ItemKind::Trait(trait_)) => args
+            .get(..trait_.params(db).len())
+            .map(<[_]>::to_vec)
+            .unwrap_or_default(),
+        Some(item @ (ItemKind::Impl(_) | ItemKind::ImplTrait(_))) => {
+            let Ok(subst) = CompleteSubst::for_owner(db, func.into(), args.to_vec()) else {
+                return Vec::new();
+            };
+            header_types(db, item)
+                .into_iter()
+                .filter_map(|ty| substitute_complete(db, ty, &subst).ok())
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The header types an associated constant path instantiates.
+fn const_ref_headers<'db>(
+    db: &'db dyn HirAnalysisDb,
+    typed: &TypedBody<'db>,
+    expr: ExprId,
+) -> Option<Vec<TyId<'db>>> {
+    match typed.expr_const_ref(expr)? {
+        ConstRef::Const(_) => None,
+        ConstRef::TraitConst(reference) => Some(reference.inst().args(db).to_vec()),
+        ConstRef::InherentConst(reference) => Some(vec![reference.receiver_ty()]),
+    }
+}
+
+/// A use of an associated item enters the header types it instantiates, such
+/// as `Bounded<0>` in `Bounded<0>::helper()`, which no written type or checked
+/// expression may carry. A header type that a checked receiver, argument,
+/// result, or called function value already carries was checked where that
+/// value entered; any other is checked here.
+fn check_entered_header<'db>(
+    db: &'db dyn HirAnalysisDb,
+    typed: &TypedBody<'db>,
+    expr: ExprId,
+    headers: Vec<TyId<'db>>,
+    scope: ScopeId<'db>,
+) -> Option<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+    let body = typed.body()?;
+    let is_function =
+        |ty: TyId<'db>| matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)));
+    let mut carried = vec![expr];
+    match expr.data(db, body).borrowed().to_opt() {
+        Some(Expr::Call(callee, call_args)) => {
+            if typed.expr_binding(*callee).is_some() {
+                carried.push(*callee);
+            }
+            carried.extend(call_args.iter().map(|arg| arg.expr));
+        }
+        Some(Expr::MethodCall(receiver, _, _, call_args)) => {
+            carried.push(*receiver);
+            carried.extend(call_args.iter().map(|arg| arg.expr));
+        }
+        _ => {}
+    }
+    // A function value's own type is not checked (see `check_body_requirements`),
+    // so it carries its header types only once bound and used again.
+    let carried: Vec<_> = carried
+        .into_iter()
+        .map(|carrier| (carrier, typed.expr_ty(db, carrier)))
+        .filter(|&(carrier, ty)| carrier != expr || !is_function(ty))
+        .map(|(_, ty)| ty)
+        .collect();
+    headers
+        .into_iter()
+        .filter(|&header| !carried.iter().any(|&ty| ty_mentions(db, ty, header)))
+        .find_map(|header| check_type_requirements(db, header, scope, expr.span(body).into(), &[]))
+        .map(|(_, diag)| diag)
+}
+
+/// Whether `needle` occurs in `ty`.
+fn ty_mentions<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, needle: TyId<'db>) -> bool {
+    ty == needle
+        || ty
+            .decompose_ty_app(db)
+            .1
+            .iter()
+            .any(|&arg| ty_mentions(db, arg, needle))
 }
 
 /// Returns the first unmet requirement in `ty`, with the type application

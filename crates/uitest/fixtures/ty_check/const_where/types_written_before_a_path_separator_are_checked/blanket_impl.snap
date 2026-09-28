@@ -1,0 +1,49 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/types_written_before_a_path_separator_are_checked/blanket_impl.fe
+---
+error[3-0057]: const requirement is not satisfied
+   ┌─ blanket_impl.fe:14:21
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+14 │ fn call() -> u256 { Bounded<0>::helper() }
+   │                     ^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[3-0057]: const requirement is not satisfied
+   ┌─ blanket_impl.fe:15:25
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+15 │ fn constant() -> u256 { Bounded<0>::X }
+   │                         ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[3-0057]: const requirement is not satisfied
+   ┌─ blanket_impl.fe:16:26
+   │
+ 4 │ enum Choice<const N: usize> where N > 0 { Empty }
+   │                                   ----- required by this predicate
+   ·
+16 │ fn enum_call() -> u256 { Choice<0>::helper() }
+   │                          ^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[3-0057]: const requirement is not satisfied
+   ┌─ blanket_impl.fe:18:19
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+18 │     let _helper = Bounded<0>::helper
+   │                   ^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[3-0057]: const requirement is not satisfied
+   ┌─ blanket_impl.fe:21:18
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+21 │     let helper = Bounded<0>::helper
+   │                  ^^^^^^^^^^^^^^^^^^ condition evaluated to `false`

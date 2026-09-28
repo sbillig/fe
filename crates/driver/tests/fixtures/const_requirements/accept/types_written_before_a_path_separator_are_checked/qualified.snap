@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/types_written_before_a_path_separator_are_checked/qualified.fe
+---
+answer() = 42
