@@ -235,6 +235,8 @@ impl<'db> ClobberCondition<'db> {
 }
 
 impl<'db> ExternalSource<'db> {
+    pub const MAX_OFFSET_DEPTH: usize = 4;
+
     pub fn opaque_memory(contract: ReferentContract<'db>) -> Self {
         Self {
             origin: ExternalOrigin::OpaqueMemory,
@@ -421,6 +423,14 @@ impl<'db> ExternalSource<'db> {
         {
             return base.source;
         }
+        // A pointer offset from itself in a loop would nest a new base on
+        // every iteration. Like a long dereference chain, a deep offset chain
+        // is widened so that the loop's provenance reaches a fixed point.
+        if base.source.offset_depth() >= Self::MAX_OFFSET_DEPTH {
+            let mut source = base.source.widen();
+            source.contract = ReferentContract::new(db, target_ty, source.contract.address_space);
+            return source;
+        }
         Self {
             contract: ReferentContract::new(db, target_ty, base.source.contract.address_space),
             uncertain: base.source.uncertain(),
@@ -432,6 +442,17 @@ impl<'db> ExternalSource<'db> {
             clobber: None,
             dereferences: Box::new([]),
             reachable: false,
+        }
+    }
+
+    /// The number of nested offsets or casts into one object. A followed
+    /// pointer names another object and starts a new chain.
+    fn offset_depth(&self) -> usize {
+        match &self.origin {
+            ExternalOrigin::Memory { base, .. } if self.dereferences.is_empty() => {
+                1 + base.source.offset_depth()
+            }
+            _ => 0,
         }
     }
 
