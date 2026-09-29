@@ -176,7 +176,7 @@ fn lower_contract_init<'db>(
         .map(|b| ast::Expr::cast(b.syntax().clone()).unwrap());
     let body = Body::lower_ast_with_variant(
         ctxt,
-        body_ast.clone(),
+        body_ast,
         TrackedItemVariant::ContractInit,
         BodyKind::FuncBody,
     );

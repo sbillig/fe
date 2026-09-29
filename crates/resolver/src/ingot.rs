@@ -341,9 +341,7 @@ impl IngotResolverImpl {
             })
         })?;
         if !path.is_file() {
-            return Err(Box::new(IngotSelectionError::MissingConfig {
-                config_url: config_url.clone(),
-            }));
+            return Err(Box::new(IngotSelectionError::MissingConfig { config_url }));
         }
         let content = fs::read_to_string(&path).map_err(|err| {
             Box::new(IngotSelectionError::ConfigParseError {
@@ -354,7 +352,7 @@ impl IngotResolverImpl {
         Config::parse(&content).map_err(|err| {
             Box::new(IngotSelectionError::ConfigParseError {
                 config_url,
-                error: err.to_string(),
+                error: err,
             })
         })
     }
@@ -382,7 +380,7 @@ impl IngotResolverImpl {
                 let Config::Ingot(config) = Self::resolve_config(&member.url).ok()? else {
                     return None;
                 };
-                config.metadata.name.clone()
+                config.metadata.name
             });
             if member_name.as_ref() == Some(name) {
                 matches.push(member);
@@ -514,7 +512,7 @@ impl IngotResolverImpl {
                                     dependency_url: base.clone(),
                                     expected_name: name.clone(),
                                     found_name: ingot_config.metadata.name.clone(),
-                                    found_version: ingot_config.metadata.version.clone(),
+                                    found_version: ingot_config.metadata.version,
                                 },
                             )));
                         }
@@ -542,7 +540,7 @@ impl IngotResolverImpl {
                                     dependency_url: base_url.clone(),
                                     expected_name: name.clone(),
                                     found_name: ingot_config.metadata.name.clone(),
-                                    found_version: ingot_config.metadata.version.clone(),
+                                    found_version: ingot_config.metadata.version,
                                 },
                             )));
                         }
@@ -550,7 +548,7 @@ impl IngotResolverImpl {
                             base_url.clone(),
                             IngotOrigin::Remote {
                                 description: base.clone(),
-                                checkout_path: checkout_path.clone(),
+                                checkout_path,
                                 reused_checkout,
                             },
                         )
@@ -567,10 +565,10 @@ impl IngotResolverImpl {
                             GitDescription::new(base.source.clone(), base.rev.clone())
                                 .with_path(member_path);
                         (
-                            member.url.clone(),
+                            member.url,
                             IngotOrigin::Remote {
                                 description: member_description,
-                                checkout_path: checkout_path.clone(),
+                                checkout_path,
                                 reused_checkout,
                             },
                         )

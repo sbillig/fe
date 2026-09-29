@@ -69,10 +69,8 @@ impl LspDiagnostics for DriverDataBase {
             let top_mod = map_file_to_mod(self, file);
             let diagnostics = pass_manager.run_on_module(self, top_mod);
             tracing::debug!("[fe:timing]  file {url}: {:?}", t_file.elapsed());
-            let mut finalized_diags: Vec<CompleteDiagnostic> = diagnostics
-                .iter()
-                .map(|d| d.to_complete(self).clone())
-                .collect();
+            let mut finalized_diags: Vec<CompleteDiagnostic> =
+                diagnostics.iter().map(|d| d.to_complete(self)).collect();
             if finalized_diags
                 .iter()
                 .any(|d| d.severity == common::diagnostics::Severity::Error)
