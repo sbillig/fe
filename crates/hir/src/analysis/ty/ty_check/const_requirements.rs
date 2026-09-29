@@ -557,14 +557,20 @@ pub(super) fn check_body_requirements<'db>(
                 Some(Expr::Block(..) | Expr::If(..) | Expr::Match(..) | Expr::With(..))
             )
     };
+    let is_function =
+        |ty: TyId<'db>| matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)));
+    // The expressions whose type failed here. The check of inferred types
+    // below looks at their types again, for failures after the first.
+    let mut failed = FxHashSet::default();
     for (expr, data) in body.exprs(db).iter() {
         if carries(expr) {
             continue;
         }
         let ty = typed.expr_ty(db, expr);
-        if !matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)))
+        if !is_function(ty)
             && let Some(unmet) = check_type_requirements(db, ty, owner.scope(), &written)
         {
+            failed.insert(expr);
             check.unmet_type(expr.span(body).into(), unmet, &mut entered);
         }
         if let Some(headers) = const_ref_headers(db, typed, expr)
@@ -672,6 +678,10 @@ pub(super) fn check_body_requirements<'db>(
     // their types come from an expression here or from the signature, and a
     // signature type reaches the body with its layout holes instantiated, so
     // it would not match the written type that reported it.
+    // An expression type that the loop above found no failure in has none
+    // here either, since `reported` only adds to `written`, so only a
+    // function value's type and the types that failed there are looked at
+    // again.
     let mut reported = written;
     reported.extend(entered);
     let inferred = body
@@ -679,11 +689,13 @@ pub(super) fn check_body_requirements<'db>(
         .keys()
         .filter(|&expr| !carries(expr))
         .flat_map(|expr| {
+            let ty = typed.expr_ty(db, expr);
+            let own = (is_function(ty) || failed.contains(&expr)).then_some(ty);
             let callable_args = typed
                 .callable_expr(expr)
                 .map(|callable| callable.generic_args().to_vec())
                 .unwrap_or_default();
-            std::iter::once(typed.expr_ty(db, expr))
+            own.into_iter()
                 .chain(callable_args)
                 .map(move |ty| (expr, ty))
         });
