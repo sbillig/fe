@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/impl_headers_supply_only_their_own_requirements/unconstrained_header.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ unconstrained_header.fe:8:16
+  │
+3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+  │                                      ----- required by this predicate
+  ·
+8 │     type Out = Bounded<N>
+  │                ^^^^^^^^^^ no matching const requirement in the caller after substitution

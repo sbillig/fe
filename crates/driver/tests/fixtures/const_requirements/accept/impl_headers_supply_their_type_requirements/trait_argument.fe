@@ -1,0 +1,9 @@
+// A trait argument in an impl header supplies its record's condition.
+trait Tag<T> { const fn tag(self) -> u256 }
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+const fn positive<const N: usize>() -> u256 where N > 0 { 1 }
+struct Plain {}
+
+impl<const N: usize> Tag<Bounded<N>> for Plain {
+    const fn tag(self) -> u256 { positive<N>() }
+}

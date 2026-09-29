@@ -9,7 +9,7 @@ error[8-0092]: const where predicates are not supported here yet
 2 │ trait Marker where true {}
   │                    ^^^^ not yet supported in traits, trait impls with generic parameters, generic `impl` blocks, or items nested in generic items
   │
-  = const where predicates are supported on functions, structs, enums, and inherent methods, including methods of generic `impl` blocks
+  = const where predicates are supported on functions, structs, enums, and inherent methods, including methods of generic `impl` blocks; inside an `impl`, the conditions of the types in its header hold without restating them
 
 error[8-0092]: const where predicates are not supported here yet
   ┌─ unsupported_context.fe:5:25
@@ -17,7 +17,7 @@ error[8-0092]: const where predicates are not supported here yet
 5 │     fn read(self) where true
   │                         ^^^^ not yet supported in traits, trait impls with generic parameters, generic `impl` blocks, or items nested in generic items
   │
-  = const where predicates are supported on functions, structs, enums, and inherent methods, including methods of generic `impl` blocks
+  = const where predicates are supported on functions, structs, enums, and inherent methods, including methods of generic `impl` blocks; inside an `impl`, the conditions of the types in its header hold without restating them
 
 error[8-0092]: const where predicates are not supported here yet
    ┌─ unsupported_context.fe:14:33
@@ -25,7 +25,7 @@ error[8-0092]: const where predicates are not supported here yet
 14 │ impl<const N: usize> S<N> where N > 0 {
    │                                 ^^^^^ not yet supported in traits, trait impls with generic parameters, generic `impl` blocks, or items nested in generic items
    │
-   = const where predicates are supported on functions, structs, enums, and inherent methods, including methods of generic `impl` blocks
+   = const where predicates are supported on functions, structs, enums, and inherent methods, including methods of generic `impl` blocks; inside an `impl`, the conditions of the types in its header hold without restating them
 
 error[8-0092]: const where predicates are not supported here yet
    ┌─ unsupported_context.fe:18:46
@@ -33,7 +33,7 @@ error[8-0092]: const where predicates are not supported here yet
 18 │ impl<const N: usize> ReadN<N> for S<N> where N > 0 {
    │                                              ^^^^^ not yet supported in traits, trait impls with generic parameters, generic `impl` blocks, or items nested in generic items
    │
-   = const where predicates are supported on functions, structs, enums, and inherent methods, including methods of generic `impl` blocks
+   = const where predicates are supported on functions, structs, enums, and inherent methods, including methods of generic `impl` blocks; inside an `impl`, the conditions of the types in its header hold without restating them
 
 error[8-0092]: const where predicates are not supported here yet
    ┌─ unsupported_context.fe:25:25
@@ -41,7 +41,7 @@ error[8-0092]: const where predicates are not supported here yet
 25 │     fn read(self) where N > 0 {}
    │                         ^^^^^ not yet supported in traits, trait impls with generic parameters, generic `impl` blocks, or items nested in generic items
    │
-   = const where predicates are supported on functions, structs, enums, and inherent methods, including methods of generic `impl` blocks
+   = const where predicates are supported on functions, structs, enums, and inherent methods, including methods of generic `impl` blocks; inside an `impl`, the conditions of the types in its header hold without restating them
 
 error[8-0092]: const where predicates are not supported here yet
    ┌─ unsupported_context.fe:29:24
@@ -49,4 +49,4 @@ error[8-0092]: const where predicates are not supported here yet
 29 │     struct Inner where true {}
    │                        ^^^^ not yet supported in traits, trait impls with generic parameters, generic `impl` blocks, or items nested in generic items
    │
-   = const where predicates are supported on functions, structs, enums, and inherent methods, including methods of generic `impl` blocks
+   = const where predicates are supported on functions, structs, enums, and inherent methods, including methods of generic `impl` blocks; inside an `impl`, the conditions of the types in its header hold without restating them

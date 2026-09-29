@@ -3324,7 +3324,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 );
                 diag.notes.push(
                     "const where predicates are supported on functions, structs, enums, and \
-                     inherent methods, including methods of generic `impl` blocks"
+                     inherent methods, including methods of generic `impl` blocks; inside an \
+                     `impl`, the conditions of the types in its header hold without restating \
+                     them"
                         .to_string(),
                 );
                 diag

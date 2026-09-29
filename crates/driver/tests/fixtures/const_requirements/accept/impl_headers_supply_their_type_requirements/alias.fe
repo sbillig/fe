@@ -1,0 +1,9 @@
+// A generic alias of a constrained record is checked where it is applied.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+type Positive<const N: usize> = Bounded<N>
+
+const fn read<const M: usize>(_ item: Positive<M>) -> u256 where M > 0 { item.value }
+const fn answer() -> u256 {
+    let item: Positive<3> = Bounded { value: 42 }
+    read(item)
+}

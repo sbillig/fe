@@ -1,0 +1,31 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/impl_headers_supply_only_their_own_requirements/trait_default_body.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ trait_default_body.fe:8:48
+  │
+3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+  │                                      ----- required by this predicate
+  ·
+8 │     fn read_item<const N: usize>(self, _ item: Bounded<N>) -> u256 { positive<N>() }
+  │                                                ^^^^^^^^^^ no matching const requirement in the caller after substitution
+
+error[8-0093]: const requirement is not satisfied
+  ┌─ trait_default_body.fe:7:45
+  │
+4 │ const fn positive<const N: usize>() -> u256 where N > 0 { 1 }
+  │                                                   ----- required by this predicate
+  ·
+7 │     fn read<const N: usize>(self) -> u256 { positive<N>() }
+  │                                             ^^^^^^^^^^^^^ no matching const requirement in the caller after substitution
+
+error[8-0093]: const requirement is not satisfied
+  ┌─ trait_default_body.fe:8:70
+  │
+4 │ const fn positive<const N: usize>() -> u256 where N > 0 { 1 }
+  │                                                   ----- required by this predicate
+  ·
+8 │     fn read_item<const N: usize>(self, _ item: Bounded<N>) -> u256 { positive<N>() }
+  │                                                                      ^^^^^^^^^^^^^ no matching const requirement in the caller after substitution

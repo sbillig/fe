@@ -8,7 +8,10 @@ use crate::analysis::name_resolution::{
     resolve_path_with_minter,
 };
 use crate::analysis::ty::canonical::Canonicalized;
-use crate::analysis::ty::{subst::substitute_complete, ty_lower::CompleteSubst};
+use crate::analysis::ty::{
+    subst::substitute_complete,
+    ty_lower::{CompleteSubst, lower_type_alias},
+};
 use crate::hir_def::{GenericArg, GenericArgListId, ItemKind, UnOp, scope_graph::ScopeId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,14 +56,11 @@ fn requirement_subst<'db>(
 // caller's premises are instantiated, so both sides compare in one basis.
 fn caller_args<'db>(
     db: &'db dyn HirAnalysisDb,
-    caller: WhereClauseOwner<'db>,
+    caller: GenericParamOwner<'db>,
     args: Vec<TyId<'db>>,
 ) -> Vec<TyId<'db>> {
-    let Some(owner) = GenericParamOwner::from_item_opt(caller.into()) else {
-        return args;
-    };
-    let identity = collect_generic_params(db, owner).params(db).to_vec();
-    CompleteSubst::for_owner(db, owner, identity)
+    let identity = collect_generic_params(db, caller).params(db).to_vec();
+    CompleteSubst::for_owner(db, caller, identity)
         .ok()
         .and_then(|subst| substitute_complete(db, args.clone(), &subst).ok())
         .unwrap_or(args)
@@ -183,25 +183,29 @@ pub(super) fn function_requirements_supported(db: &dyn HirAnalysisDb, func: Func
 fn requirement_premise_owner<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
-) -> Option<WhereClauseOwner<'db>> {
+) -> Option<GenericParamOwner<'db>> {
     if !matches!(owner, BodyOwner::Func(_) | BodyOwner::AnonConstBody { .. }) {
         return None;
     }
     premise_owner_in_scope(db, owner.scope())
 }
 
+/// The declaration whose generic parameters the premises at `origin` are
+/// stated over (see `caller_premises`).
 fn premise_owner_in_scope<'db>(
     db: &'db dyn HirAnalysisDb,
     origin: ScopeId<'db>,
-) -> Option<WhereClauseOwner<'db>> {
+) -> Option<GenericParamOwner<'db>> {
     let mut current = Some(origin);
     while let Some(scope) = current {
         match scope.item() {
+            // A trait method can neither state conditions nor assume a header's.
+            ItemKind::Func(func)
+                if matches!(func.scope().parent_item(db), Some(ItemKind::Trait(_))) =>
+            {
+                return None;
+            }
             item @ (ItemKind::Func(_) | ItemKind::Struct(_) | ItemKind::Enum(_)) => {
-                if matches!(item, ItemKind::Func(func) if !function_requirements_supported(db, func))
-                {
-                    return None;
-                }
                 let candidate = WhereClauseOwner::from_item_opt(item)?;
                 if candidate
                     .where_clause(db)
@@ -211,7 +215,10 @@ fn premise_owner_in_scope<'db>(
                 {
                     return None;
                 }
-                return Some(candidate);
+                return GenericParamOwner::from_item_opt(item);
+            }
+            item @ (ItemKind::Impl(_) | ItemKind::ImplTrait(_) | ItemKind::TypeAlias(_)) => {
+                return GenericParamOwner::from_item_opt(item);
             }
             ItemKind::Body(_) => current = scope.parent(db),
             // A nested declaration does not inherit function premises.
@@ -219,6 +226,95 @@ fn premise_owner_in_scope<'db>(
         }
     }
     None
+}
+
+/// The conditions that hold where premises are stated over `caller`'s
+/// generic parameters, each with the substitution that states it there:
+/// - the caller's own conditions, when its uses check them;
+/// - inside an impl, the conditions of the records and enums in its header,
+///   since every use of the impl instantiates the header with checked types
+///   (`check_entered_header`, and the receiver and argument types);
+/// - in a type alias, the conditions of the aliased type, since every
+///   application of the alias is checked after expansion.
+///
+/// An impl's own `where` conditions are not premises: they are rejected at
+/// the impl, and no use checks them.
+fn caller_premises<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: GenericParamOwner<'db>,
+) -> Vec<(Body<'db>, CompleteSubst<'db>)> {
+    let item = ItemKind::from(caller);
+    let mut premises = Vec::new();
+    let own = match caller {
+        GenericParamOwner::Func(func) => function_requirements_supported(db, func),
+        GenericParamOwner::Struct(_) | GenericParamOwner::Enum(_) => true,
+        _ => false,
+    };
+    if own
+        && let Some(owner) = WhereClauseOwner::from_item_opt(item)
+        && let Some(subst) = requirement_subst(
+            db,
+            item.scope(),
+            collect_generic_params(db, caller).params(db),
+        )
+    {
+        premises.extend(
+            owner
+                .where_clause(db)
+                .const_predicates(db)
+                .iter()
+                .map(|&predicate| (predicate, subst.clone())),
+        );
+    }
+    let implied = match caller {
+        GenericParamOwner::Func(func) => func
+            .scope()
+            .parent_item(db)
+            .map(|parent| header_types(db, parent))
+            .unwrap_or_default(),
+        GenericParamOwner::Impl(_) | GenericParamOwner::ImplTrait(_) => header_types(db, item),
+        GenericParamOwner::TypeAlias(alias) => {
+            vec![lower_type_alias(db, alias).alias_to.instantiate_identity()]
+        }
+        _ => Vec::new(),
+    };
+    for ty in caller_args(db, caller, implied) {
+        type_conditions(db, ty, &mut premises);
+    }
+    premises
+}
+
+/// The conditions of each fully applied record or enum in `ty`, instantiated
+/// with its arguments.
+fn type_conditions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    conditions: &mut Vec<(Body<'db>, CompleteSubst<'db>)>,
+) {
+    use crate::analysis::ty::adt_def::AdtRef;
+    let (base, args) = ty.decompose_ty_app(db);
+    for &arg in args {
+        type_conditions(db, arg, conditions);
+    }
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return;
+    };
+    let declaration = match adt.adt_ref(db) {
+        AdtRef::Struct(record) => WhereClauseOwner::Struct(record),
+        AdtRef::Enum(enum_) => WhereClauseOwner::Enum(enum_),
+    };
+    let predicates = declaration.where_clause(db).const_predicates(db);
+    if predicates.is_empty() {
+        return;
+    }
+    let Some(subst) = requirement_subst(db, ItemKind::from(declaration).scope(), args) else {
+        return;
+    };
+    conditions.extend(
+        predicates
+            .iter()
+            .map(|&predicate| (predicate, subst.clone())),
+    );
 }
 
 pub(super) fn check_body_requirements<'db>(
@@ -875,7 +971,7 @@ fn discharge_requirement<'db>(
     declaration: WhereClauseOwner<'db>,
     predicate: Body<'db>,
     args: Vec<TyId<'db>>,
-    caller: Option<WhereClauseOwner<'db>>,
+    caller: Option<GenericParamOwner<'db>>,
 ) -> Vec<FuncBodyDiag<'db>> {
     let expected = TyId::bool(db);
     let (diags, typed) = check_predicate_formation(db, predicate);
@@ -919,17 +1015,11 @@ fn discharge_requirement<'db>(
     let symbolic = predicate_flags(db, instantiated).contains(TyFlags::HAS_PARAM);
     if symbolic {
         let key = predicate_key(db, predicate, typed, predicate.expr(db), &subst);
-        let caller_subst = caller.and_then(|caller| {
-            let owner = GenericParamOwner::from_item_opt(caller.into())?;
-            let identity = collect_generic_params(db, owner).params(db);
-            requirement_subst(db, ItemKind::from(caller).scope(), identity)
-                .map(|subst| (caller, subst))
-        });
-        if let (Some(key), Some((caller, caller_subst))) = (&key, &caller_subst) {
-            for &premise in caller.where_clause(db).const_predicates(db) {
+        if let (Some(key), Some(caller)) = (&key, caller) {
+            for (premise, premise_subst) in caller_premises(db, caller) {
                 let (diags, typed) = check_predicate_formation(db, premise);
                 if (!diags.is_empty() && !static_assert_ignorable_type_diags(db, diags))
-                    || predicate_key(db, premise, typed, premise.expr(db), caller_subst).as_ref()
+                    || predicate_key(db, premise, typed, premise.expr(db), &premise_subst).as_ref()
                         != Some(key)
                 {
                     continue;
@@ -968,7 +1058,7 @@ fn requirement_cycle_initial<'db>(
     _declaration: WhereClauseOwner<'db>,
     predicate: Body<'db>,
     _args: Vec<TyId<'db>>,
-    _caller: Option<WhereClauseOwner<'db>>,
+    _caller: Option<GenericParamOwner<'db>>,
 ) -> Vec<FuncBodyDiag<'db>> {
     vec![BodyDiag::RecursiveConstRequirement(predicate.span().into()).into()]
 }
@@ -980,7 +1070,7 @@ fn requirement_cycle_recover<'db>(
     _declaration: WhereClauseOwner<'db>,
     _predicate: Body<'db>,
     _args: Vec<TyId<'db>>,
-    _caller: Option<WhereClauseOwner<'db>>,
+    _caller: Option<GenericParamOwner<'db>>,
 ) -> salsa::CycleRecoveryAction<Vec<FuncBodyDiag<'db>>> {
     salsa::CycleRecoveryAction::Iterate
 }

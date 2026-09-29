@@ -1,0 +1,8 @@
+// A header with a computed argument supplies the condition for that argument:
+// every well-formed `Bounded<{ M + 1 }>` has `M + 1 > 0`.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+
+impl<const M: usize> Bounded<{ M + 1 }> {
+    const fn make() -> Self { Self { value: 42 } }
+    const fn get(self) -> u256 { self.value }
+}

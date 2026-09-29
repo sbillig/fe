@@ -1,0 +1,10 @@
+// The header supplies exactly its types' conditions; `N > 0` does not
+// establish `N > 1`.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+struct Large<const N: usize> where N > 1 { value: u256 }
+const fn large<const N: usize>() -> u256 where N > 1 { 1 }
+
+impl<const N: usize> Bounded<N> {
+    fn widen(self) -> Large<N> { Large { value: self.value } }
+    fn check(self) -> u256 { large<N>() }
+}

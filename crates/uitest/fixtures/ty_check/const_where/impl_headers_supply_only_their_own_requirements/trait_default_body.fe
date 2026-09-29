@@ -1,0 +1,9 @@
+// A trait method assumes no conditions: it cannot state its own, it has no
+// impl header, and the types in its signature supply none.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+const fn positive<const N: usize>() -> u256 where N > 0 { 1 }
+
+trait Read {
+    fn read<const N: usize>(self) -> u256 { positive<N>() }
+    fn read_item<const N: usize>(self, _ item: Bounded<N>) -> u256 { positive<N>() }
+}

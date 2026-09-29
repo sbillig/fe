@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/impl_headers_supply_only_their_own_requirements/inferred_header.fe
+---
+error[3-0057]: const requirement is not satisfied
+   ┌─ inferred_header.fe:13:26
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+13 │ fn inherent() -> usize { Bounded::length([]) }
+   │                          ^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[3-0057]: const requirement is not satisfied
+   ┌─ inferred_header.fe:14:31
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+14 │ fn through_trait() -> usize { Bounded::count([]) }
+   │                               ^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
