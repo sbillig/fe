@@ -179,6 +179,57 @@ static bool scan_automatic_semicolon(TSLexer *lexer) {
 }
 
 
+// Advance past a string literal, starting at its opening quote, so that its
+// contents are never read as code. An escape is `\` and the character after it,
+// which keeps `"\\"` from swallowing the closing quote.
+static void advance_over_string_literal(TSLexer *lexer) {
+  advance(lexer);  // consume the opening '"'
+  while (!lexer->eof(lexer)) {
+    if (lexer->lookahead == '\\') {
+      advance(lexer);
+      if (lexer->eof(lexer)) return;
+      advance(lexer);
+      continue;
+    }
+    bool is_end = lexer->lookahead == '"';
+    advance(lexer);
+    if (is_end) return;
+  }
+}
+
+// Advance past a comment if one starts at the `/` the caller is looking at, so
+// that its text is never read as code. Consumes the `/` either way, since a lone
+// `/` is division and needs no further handling.
+static void advance_over_comment(TSLexer *lexer) {
+  advance(lexer);  // consume the '/'
+  if (lexer->lookahead == '/') {
+    while (!lexer->eof(lexer) && lexer->lookahead != '\n') advance(lexer);
+    return;
+  }
+  if (lexer->lookahead != '*') return;
+  advance(lexer);
+  int depth = 1;
+  while (depth > 0 && !lexer->eof(lexer)) {
+    if (lexer->lookahead == '*') {
+      advance(lexer);
+      if (!lexer->eof(lexer) && lexer->lookahead == '/') {
+        advance(lexer);
+        depth--;
+      }
+      continue;
+    }
+    if (lexer->lookahead == '/') {
+      advance(lexer);
+      if (!lexer->eof(lexer) && lexer->lookahead == '*') {
+        advance(lexer);
+        depth++;
+      }
+      continue;
+    }
+    advance(lexer);
+  }
+}
+
 // Whether a `<<` opens generic arguments whose first argument is a qualified
 // path, as in `Wrapped<<M as Model>::Point>`, rather than being a left shift.
 //
@@ -189,10 +240,15 @@ static bool scan_automatic_semicolon(TSLexer *lexer) {
 // because the `>` that closes its angle nesting is followed by ` limit`.
 //
 // Nesting depths mirror the single-`<` scan below, so a `)`, `]`, `}` or `;`
-// that closes something never opened settles it as a shift.
+// that closes something never opened settles it as a shift. String literals and
+// comments are skipped whole: the scan runs on to the end of the enclosing block
+// before giving up, and a `>::` in a message or a comment there is text, not the
+// close of a qualified path.
 static bool scan_qualified_path_after_lshift(TSLexer *lexer) {
   if (lexer->lookahead != '<') return false;
   advance(lexer);  // consume the second '<'
+  // `<<=` is a shift-assign; no type starts with `=`.
+  if (lexer->lookahead == '=') return false;
 
   int angle_depth = 1;
   int paren_depth = 0;
@@ -244,6 +300,8 @@ static bool scan_qualified_path_after_lshift(TSLexer *lexer) {
         if (lexer->lookahead != ':') return false;
         advance(lexer);
         return lexer->lookahead == ':';
+      case '"': advance_over_string_literal(lexer); continue;
+      case '/': advance_over_comment(lexer); continue;
       default:
         advance(lexer);
         continue;
