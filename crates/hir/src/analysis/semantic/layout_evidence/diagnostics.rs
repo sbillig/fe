@@ -60,10 +60,7 @@ pub fn collect_layout_evidence_diagnostic_vouchers<'db>(
             for &body in owner.where_clause(db).const_predicates(db) {
                 collect_owner(
                     db,
-                    BodyOwner::AnonConstBody {
-                        body,
-                        expected: crate::analysis::ty::ty_def::TyId::bool(db),
-                    },
+                    BodyOwner::const_predicate(db, body),
                     &mut seen,
                     &mut diagnostics,
                 );

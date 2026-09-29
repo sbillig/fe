@@ -92,6 +92,14 @@ impl<'db> EffectParamOwner<'db> {
 }
 
 impl<'db> BodyOwner<'db> {
+    /// A `where` clause condition, checked as a `bool` constant.
+    pub fn const_predicate(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Self {
+        Self::AnonConstBody {
+            body,
+            expected: TyId::bool(db),
+        }
+    }
+
     pub fn arithmetic_mode(self, db: &'db dyn HirAnalysisDb) -> ArithmeticMode {
         if let Self::Func(func) = self {
             return func.arithmetic_mode(db);

@@ -115,11 +115,7 @@ fn predicate_key<'db>(
     };
     Some(PredicateKey {
         ty: instantiate(typed.expr_ty(db, expr))?,
-        arithmetic: BodyOwner::AnonConstBody {
-            body,
-            expected: TyId::bool(db),
-        }
-        .arithmetic_mode(db),
+        arithmetic: BodyOwner::const_predicate(db, body).arithmetic_mode(db),
         operation: match typed.callable_expr(expr) {
             Some(callable) => Some(substitute_complete(db, callable.clone(), subst).ok()?),
             None => None,
@@ -255,10 +251,7 @@ pub(super) fn check_predicate_formation<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
 ) -> PredicateFormation<'db> {
-    let owner = BodyOwner::AnonConstBody {
-        body,
-        expected: TyId::bool(db),
-    };
+    let owner = BodyOwner::const_predicate(db, body);
     let (mut diags, typed) = infer_body(db, owner).clone();
     // A condition the parser could not read has no expression to check or
     // evaluate. The parser reported it, at its position.
@@ -306,14 +299,7 @@ pub(super) fn predicate_may_depend_on_params<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
 ) -> bool {
-    let typed = &infer_body(
-        db,
-        BodyOwner::AnonConstBody {
-            body,
-            expected: TyId::bool(db),
-        },
-    )
-    .1;
+    let typed = &infer_body(db, BodyOwner::const_predicate(db, body)).1;
     predicate_flags(db, typed.clone()).contains(TyFlags::HAS_PARAM)
 }
 
@@ -1109,10 +1095,7 @@ fn discharge_requirement<'db>(
             });
         }
     }
-    let owner = BodyOwner::AnonConstBody {
-        body: predicate,
-        expected: TyId::bool(db),
-    };
+    let owner = BodyOwner::const_predicate(db, predicate);
     match condition_outcome(db, owner, GenericSubst::for_body_owner(db, owner, args)) {
         ConditionOutcome::True => Discharge::Holds,
         ConditionOutcome::False => Discharge::Fails(RequirementFailure::False),
@@ -1152,15 +1135,9 @@ fn formation_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
 ) -> PredicateFormation<'db> {
-    let typed = infer_body(
-        db,
-        BodyOwner::AnonConstBody {
-            body,
-            expected: TyId::bool(db),
-        },
-    )
-    .1
-    .clone();
+    let typed = infer_body(db, BodyOwner::const_predicate(db, body))
+        .1
+        .clone();
     PredicateFormation {
         diags: vec![BodyDiag::RecursiveConstRequirement(body.span().into()).into()],
         typed,

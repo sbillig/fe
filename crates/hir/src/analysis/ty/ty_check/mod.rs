@@ -517,10 +517,7 @@ pub(crate) fn check_where_const_predicates<'db>(
         {
             continue;
         }
-        let owner = BodyOwner::AnonConstBody {
-            body,
-            expected: TyId::bool(db),
-        };
+        let owner = BodyOwner::const_predicate(db, body);
         let outcome = condition_outcome(db, owner, GenericSubst::none(db));
         diags.extend(const_predicate_outcome_diag(db, body, outcome));
     }
