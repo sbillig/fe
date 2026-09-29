@@ -1039,7 +1039,10 @@ fn parse_trait_item_block<S: TokenStream>(
 
         let checkpoint = attr::parse_attr_list(parser)?;
 
-        while parser.current_kind().is_some_and(|k| k.is_modifier_head()) {
+        while parser
+            .current_kind()
+            .is_some_and(super::super::syntax_kind::SyntaxKind::is_modifier_head)
+        {
             let kind = parser.current_kind().unwrap();
             parser.unexpected_token_error(format!(
                 "{} modifier is not allowed in this block",

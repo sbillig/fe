@@ -13,14 +13,14 @@ impl<'db> UsePathId<'db> {
         self.data(db)
             .last()
             .and_then(|seg| seg.to_opt())
-            .is_some_and(|seg| seg.is_glob())
+            .is_some_and(UsePathSegment::is_glob)
     }
 
     pub fn last_ident(&self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
         self.data(db)
             .last()
             .and_then(|seg| seg.to_opt())
-            .and_then(|seg| seg.ident())
+            .and_then(UsePathSegment::ident)
     }
 
     pub fn segment_len(&self, db: &dyn HirDb) -> usize {

@@ -224,7 +224,7 @@ fn parse_error_fields<'db>(
                 primary_range: field
                     .ty()
                     .map_or_else(|| field.syntax().text_range(), |t| t.syntax().text_range()),
-                struct_name: struct_name.map(|s| s.to_string()),
+                struct_name: struct_name.map(std::string::ToString::to_string),
                 field_name: name_tok.map(|n| n.text().to_string()),
             }
             .accumulate(db);

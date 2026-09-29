@@ -2251,7 +2251,7 @@ impl<'db> TyChecker<'db> {
                         contract
                             .fields(self.db)
                             .get(&ident)
-                            .map(|field| field.declared_shape_ty())?
+                            .map(crate::core::semantic::ContractFieldInfo::declared_shape_ty)?
                     }
                     LocalBinding::Local { .. } | LocalBinding::Param { .. } => provider.ty,
                 };

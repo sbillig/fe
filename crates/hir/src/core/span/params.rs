@@ -252,7 +252,7 @@ impl<'db> LazyTraitRefSpan<'db> {
                     .and_then(|tr| tr.path())
                     .and_then(|p| p.into_iter().last())
                     .and_then(|seg| seg.ident())
-                    .map(|tok| tok.into())
+                    .map(std::convert::Into::into)
             })
         }
 

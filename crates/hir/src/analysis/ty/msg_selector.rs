@@ -49,7 +49,11 @@ impl ModuleAnalysisPass for MsgAnalysisPass {
             diags.extend(check_msg_mod(db, top_mod, msg_mod, &mut ty_diags));
         }
 
-        diags.extend(ty_diags.iter().map(|d| d.to_voucher()));
+        diags.extend(
+            ty_diags
+                .iter()
+                .map(super::diagnostics::FuncBodyDiag::to_voucher),
+        );
         diags
     }
 }
@@ -138,7 +142,7 @@ fn check_variant_field_abi_requirements<'db>(
     for (idx, field_ty) in struct_
         .field_tys(db)
         .into_iter()
-        .map(|ty| ty.instantiate_identity())
+        .map(super::binder::Binder::instantiate_identity)
         .enumerate()
     {
         if field_ty.has_invalid(db) {
@@ -234,7 +238,7 @@ fn check_variant_signature_types<'db>(
     let field_tys: Vec<_> = struct_
         .field_tys(db)
         .into_iter()
-        .map(|ty| ty.instantiate_identity())
+        .map(super::binder::Binder::instantiate_identity)
         .collect();
 
     if parsed.arg_types.len() != field_tys.len() {

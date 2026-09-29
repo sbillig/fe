@@ -183,7 +183,7 @@ fn discover_fixtures(dir: &Utf8Path, filter: Option<&str>) -> Result<Vec<BenchFi
         .filter_map(Result::ok)
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
         .collect();
-    toml_files.sort_by_key(|e| e.file_name());
+    toml_files.sort_by_key(std::fs::DirEntry::file_name);
 
     for entry in toml_files {
         let path = Utf8PathBuf::from_path_buf(entry.path())

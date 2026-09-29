@@ -416,7 +416,7 @@ fn func_sig_to_doc<'a>(
         let mut buf = Vec::new();
         let _ = core_sig.clone().into_doc().render(10000, &mut buf);
         let s = String::from_utf8(buf).unwrap_or_default();
-        s.lines().next().map_or(0, |l| l.len())
+        s.lines().next().map_or(0, str::len)
     };
 
     // Force clauses to new lines if:
@@ -997,7 +997,7 @@ impl ToDoc for ast::RecvArm {
             let mut buf = Vec::new();
             let _ = core_sig.clone().into_doc().render(10000, &mut buf);
             let s = String::from_utf8(buf).unwrap_or_default();
-            s.lines().next().map_or(0, |l| l.len())
+            s.lines().next().map_or(0, str::len)
         };
 
         // Force uses to a new line if:

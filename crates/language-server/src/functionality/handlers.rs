@@ -182,7 +182,10 @@ pub async fn initialize(
     // knowing which shape the client used is load-bearing for workspace
     // root bugs. Behind an `allow(deprecated)` because `lsp-types` warns.
     #[allow(deprecated)]
-    let root_uri_summary = message.root_uri.as_ref().map(|u| u.to_string());
+    let root_uri_summary = message
+        .root_uri
+        .as_ref()
+        .map(std::string::ToString::to_string);
     #[allow(deprecated)]
     let root_path_summary = message.root_path.clone();
     info!(
@@ -676,7 +679,11 @@ pub async fn handle_files_need_diagnostics(
                 let msg = panic_info
                     .downcast_ref::<&str>()
                     .copied()
-                    .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
+                    .or_else(|| {
+                        panic_info
+                            .downcast_ref::<String>()
+                            .map(std::string::String::as_str)
+                    })
                     .unwrap_or("<non-string panic>");
                 error!("diagnostics_for_ingot panicked (skipping): {msg}");
                 continue;
@@ -833,7 +840,7 @@ pub async fn handle_formatting(
     match fmt::format_str(source, &fmt::Config::default()) {
         Ok(formatted) => {
             let end_line = source.split('\n').count().saturating_sub(1) as u32;
-            let end_character = source.rsplit('\n').next().map_or(0, |l| l.len()) as u32;
+            let end_character = source.rsplit('\n').next().map_or(0, str::len) as u32;
             let range = Range {
                 start: Position {
                     line: 0,

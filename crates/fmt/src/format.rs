@@ -53,7 +53,7 @@ pub fn format_str(source: &str, config: &Config) -> Result<String, FormatError> 
     // trailing whitespace on intentional blank lines inside blocks.
     let mut cleaned: String = formatted
         .lines()
-        .map(|line| line.trim_end())
+        .map(str::trim_end)
         .collect::<Vec<_>>()
         .join("\n");
 

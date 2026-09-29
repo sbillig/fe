@@ -102,7 +102,11 @@ impl LspDiagnostics for DriverDataBase {
                     let msg = panic_info
                         .downcast_ref::<&str>()
                         .copied()
-                        .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
+                        .or_else(|| {
+                            panic_info
+                                .downcast_ref::<String>()
+                                .map(std::string::String::as_str)
+                        })
                         .unwrap_or("<non-string panic>");
                     tracing::error!("MIR diagnostics panicked (skipping): {msg}");
                     // Intentional degradation: return empty MIR diagnostics rather

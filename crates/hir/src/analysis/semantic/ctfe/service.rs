@@ -920,7 +920,7 @@ fn force_const_term_operand_impl<'db>(
             let request = const_computation_for_instance(db, key, Vec::new());
             cx.force_computation(db, request)
                 .into_result()
-                .map(|value| value.value())
+                .map(super::request::VerifiedConstValueId::value)
                 .map_err(|stop| match stop {
                     EvalStop::Failed(EvalFailure::Ctfe(error)) => CtfeError::CalleeError {
                         origin,

@@ -231,7 +231,7 @@ fn write_module_tree(
         by_kind.entry(item.kind).or_default().push(item);
     }
     let mut kinds: Vec<_> = by_kind.keys().copied().collect();
-    kinds.sort_by_key(|k| k.display_order());
+    kinds.sort_by_key(super::model::DocItemKind::display_order);
 
     for kind in kinds {
         let items = &by_kind[&kind];
@@ -335,7 +335,7 @@ fn render_children(md: &mut String, children: &[DocChild]) {
         by_kind.entry(child.kind).or_default().push(child);
     }
     let mut kinds: Vec<_> = by_kind.keys().copied().collect();
-    kinds.sort_by_key(|k| k.display_order());
+    kinds.sort_by_key(super::model::DocChildKind::display_order);
 
     for kind in kinds {
         let items = &by_kind[&kind];

@@ -720,7 +720,7 @@ fn resolve_trait_symbol_ignoring_args<'db>(
     let mut traits = resolve_ident_to_bucket(db, query_path, parent_scope)
         .iter_ok()
         .filter(|res| res.is_visible(db, parent_scope))
-        .filter_map(|res| res.trait_());
+        .filter_map(crate::analysis::name_resolution::name_resolver::NameRes::trait_);
     let trait_ = traits.next()?;
     traits.next().is_none().then_some(trait_)
 }

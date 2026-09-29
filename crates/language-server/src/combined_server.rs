@@ -64,7 +64,7 @@ pub async fn run(
                 let scip_json = data
                     .get("scipData")
                     .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
+                    .map(std::string::ToString::to_string);
 
                 // Extract title from the doc index
                 let title = data
@@ -144,7 +144,7 @@ async fn handle_ws_lsp(
 ) {
     // Wait for the shared Backend actor to be ready (with timeout)
     let ready = {
-        let wait = actor_rx.wait_for(|v| v.is_some());
+        let wait = actor_rx.wait_for(std::option::Option::is_some);
         tokio::time::timeout(std::time::Duration::from_secs(30), wait)
             .await
             .is_ok_and(|r| r.is_ok())

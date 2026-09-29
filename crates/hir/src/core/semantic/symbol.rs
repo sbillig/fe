@@ -701,7 +701,10 @@ impl<'db> ReferenceIndex<'db> {
 
     /// Look up all references to a given scope.
     pub fn references_to(&self, scope: &ScopeId<'db>) -> &[IndexedReference<'db>] {
-        self.index.get(scope).map(|v| v.as_slice()).unwrap_or(&[])
+        self.index
+            .get(scope)
+            .map(std::vec::Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// Iterate all (target, references) pairs in the index.

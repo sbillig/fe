@@ -96,15 +96,23 @@ fn find_implementations<'db>(
         ItemKind::Struct(s) => s
             .all_impls(db)
             .into_iter()
-            .map(|i| i.scope())
-            .chain(s.all_impl_traits(db).into_iter().map(|i| i.scope()))
+            .map(fe_hir::hir_def::Impl::scope)
+            .chain(
+                s.all_impl_traits(db)
+                    .into_iter()
+                    .map(fe_hir::hir_def::ImplTrait::scope),
+            )
             .filter_map(|scope| to_lsp_location_from_scope(db, scope).ok())
             .collect(),
         ItemKind::Enum(e) => e
             .all_impls(db)
             .into_iter()
-            .map(|i| i.scope())
-            .chain(e.all_impl_traits(db).into_iter().map(|i| i.scope()))
+            .map(fe_hir::hir_def::Impl::scope)
+            .chain(
+                e.all_impl_traits(db)
+                    .into_iter()
+                    .map(fe_hir::hir_def::ImplTrait::scope),
+            )
             .filter_map(|scope| to_lsp_location_from_scope(db, scope).ok())
             .collect(),
         _ => vec![],

@@ -116,10 +116,14 @@ fn scopes_from_resolution<'db>(
     match result {
         Ok(res) => res.as_scope(db).into_iter().collect(),
         Err(err) => match &err.kind {
-            PathResErrorKind::NotFound { bucket, .. } => {
-                bucket.iter_ok().flat_map(|r| r.scope()).collect()
-            }
-            PathResErrorKind::Ambiguous(vec) => vec.iter().flat_map(|r| r.scope()).collect(),
+            PathResErrorKind::NotFound { bucket, .. } => bucket
+                .iter_ok()
+                .flat_map(crate::analysis::name_resolution::name_resolver::NameRes::scope)
+                .collect(),
+            PathResErrorKind::Ambiguous(vec) => vec
+                .iter()
+                .flat_map(crate::analysis::name_resolution::name_resolver::NameRes::scope)
+                .collect(),
             _ => vec![],
         },
     }

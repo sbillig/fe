@@ -43,7 +43,7 @@ impl<'db> ScopeGraph<'db> {
 
     /// Returns the direct child items of the given `scope`.
     pub fn child_items(&self, scope: ScopeId<'db>) -> impl Iterator<Item = ItemKind<'db>> + '_ {
-        self.children(scope).filter_map(|child| child.to_item())
+        self.children(scope).filter_map(ScopeId::to_item)
     }
 
     /// Returns the direct child scopes of the given `scope`

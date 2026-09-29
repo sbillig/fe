@@ -83,7 +83,7 @@ impl<'db> DynLazySpan<'db> {
     /// The HIR scope this span originates from (the item or body the span was
     /// built from), suitable as the "from scope" for visibility checks.
     pub fn scope(&self) -> Option<ScopeId<'db>> {
-        self.0.as_ref().map(|chain| chain.scope())
+        self.0.as_ref().map(transition::SpanTransitionChain::scope)
     }
 }
 impl LazySpan for DynLazySpan<'_> {

@@ -482,7 +482,7 @@ impl<'db> Borrowck<'db> {
                 ]);
             external.extend(
                 regions
-                    .flat_map(|region| region.clauses())
+                    .flat_map(super::super::capability::region::RegionSet::clauses)
                     .filter_map(|clause| {
                         SourceExpr::from_place(&clause.payload).map(|source| {
                             (

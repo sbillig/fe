@@ -621,7 +621,11 @@ impl<S: TokenStream> Parser<S> {
             }
         }
 
-        while let Some(next) = self.stream.peek().map(|tok| tok.syntax_kind()) {
+        while let Some(next) = self
+            .stream
+            .peek()
+            .map(token_stream::LexicalToken::syntax_kind)
+        {
             if self.is_trivia(next) {
                 let next = self.stream.next().unwrap();
                 self.next_trivias.push_back(next);
@@ -672,7 +676,11 @@ impl<S: TokenStream> Parser<S> {
     pub fn peek_three(&mut self) -> (Option<SyntaxKind>, Option<SyntaxKind>, Option<SyntaxKind>) {
         self.stream.set_bt_point();
 
-        while let Some(next) = self.stream.peek().map(|tok| tok.syntax_kind()) {
+        while let Some(next) = self
+            .stream
+            .peek()
+            .map(token_stream::LexicalToken::syntax_kind)
+        {
             if !(next.is_trivia() || next == SyntaxKind::Newline) {
                 break;
             }

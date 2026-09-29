@@ -183,7 +183,7 @@ fn semantic_indexed_dynamic_field_errors<'db>(
 
             let ast_field = ast_struct
                 .as_ref()
-                .and_then(|ast_struct| ast_struct.fields())
+                .and_then(fe_parser::ast::Struct::fields)
                 .and_then(|fields| fields.into_iter().nth(field_idx));
             let primary_range = ast_field.as_ref().map_or_else(
                 || parser::TextRange::empty(0.into()),
@@ -278,7 +278,7 @@ fn semantic_tuple_field_type_errors<'db>(
 
             let primary_range = ast_struct
                 .as_ref()
-                .and_then(|ast_struct| ast_struct.fields())
+                .and_then(fe_parser::ast::Struct::fields)
                 .and_then(|fields| fields.into_iter().nth(field_idx))
                 .and_then(|field| field.ty())
                 .map_or_else(

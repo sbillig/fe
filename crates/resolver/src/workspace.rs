@@ -364,7 +364,7 @@ fn discover_nested_configs(
             Err(_) => return Ok(()),
         };
         let mut subdirs: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| e.path().is_dir())
             .filter(|e| {
                 let name = e.file_name();

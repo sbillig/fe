@@ -1217,7 +1217,10 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     self.frames[frame_idx].current = cases
                         .iter()
                         .find(|(variant, _)| *variant == tag)
-                        .map_or_else(|| default.map_or(0, |bb| bb.index()), |(_, bb)| bb.index());
+                        .map_or_else(
+                            || default.map_or(0, cranelift_entity::EntityRef::index),
+                            |(_, bb)| bb.index(),
+                        );
                 }
                 STerminatorKind::Assert { message } => {
                     return Err(CtfeError::AssertionFailed {

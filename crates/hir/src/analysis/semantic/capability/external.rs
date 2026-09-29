@@ -750,12 +750,16 @@ impl<'db> ExternalSource<'db> {
             ExternalOrigin::Input(input) => input
                 .dereferences()
                 .iter()
-                .flat_map(|path| path.indices())
+                .flat_map(super::path::RegionPath::indices)
                 .collect(),
             ExternalOrigin::Memory { base, .. } => base.source.overlapping_object_indices(),
             _ => Vec::new(),
         };
-        indices.extend(self.dereferences.iter().flat_map(|path| path.indices()));
+        indices.extend(
+            self.dereferences
+                .iter()
+                .flat_map(super::path::RegionPath::indices),
+        );
         indices
     }
 

@@ -371,7 +371,7 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             })
         {
             let (body_diags, _) = ty_check::check_func_body(db, *func);
-            diags.extend(body_diags.iter().map(|diag| diag.to_voucher()));
+            diags.extend(body_diags.iter().map(diagnostics::FuncBodyDiag::to_voucher));
         }
 
         diags.extend(
@@ -388,7 +388,7 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                         .iter()
                         .chain(ty_check::check_const_value(db, const_))
                 })
-                .map(|diag| diag.to_voucher()),
+                .map(diagnostics::FuncBodyDiag::to_voucher),
         );
 
         diags.extend(
@@ -396,7 +396,7 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                 .all_impl_traits(db)
                 .iter()
                 .flat_map(|impl_trait| ty_check::check_impl_trait_const_bodies(db, *impl_trait))
-                .map(|diag| diag.to_voucher()),
+                .map(diagnostics::FuncBodyDiag::to_voucher),
         );
 
         diags.extend(
@@ -404,7 +404,7 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                 .all_traits(db)
                 .iter()
                 .flat_map(|trait_| ty_check::check_trait_const_default_bodies(db, *trait_))
-                .map(|diag| diag.to_voucher()),
+                .map(diagnostics::FuncBodyDiag::to_voucher),
         );
 
         diags.extend(
@@ -413,7 +413,7 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                 .iter()
                 .filter_map(|item| GenericParamOwner::from_item_opt(*item))
                 .flat_map(|owner| ty_check::check_generic_default_bodies(db, owner))
-                .map(|diag| diag.to_voucher()),
+                .map(diagnostics::FuncBodyDiag::to_voucher),
         );
 
         diags.extend(
@@ -421,7 +421,7 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                 .all_static_asserts(db)
                 .iter()
                 .flat_map(|assert_| ty_check::check_static_assert(db, *assert_).iter())
-                .map(|diag| diag.to_voucher()),
+                .map(diagnostics::FuncBodyDiag::to_voucher),
         );
 
         // Associated const bodies in inherent impl blocks live inside the impl
@@ -446,14 +446,14 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                     continue;
                 };
                 let (body_diags, _) = ty_check::check_anon_const_body(db, body, expected_ty);
-                diags.extend(body_diags.iter().map(|diag| diag.to_voucher()));
+                diags.extend(body_diags.iter().map(diagnostics::FuncBodyDiag::to_voucher));
                 // CTFE-validate the value, but only when it type-checks cleanly
                 // (otherwise the type error is the real diagnostic).
                 if body_diags.is_empty() {
                     diags.extend(
                         ty_check::const_body_ctfe_diags(db, body, expected_ty, policy)
                             .iter()
-                            .map(|diag| diag.to_voucher()),
+                            .map(diagnostics::FuncBodyDiag::to_voucher),
                     );
                 }
             }
@@ -551,24 +551,24 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
             diags.extend(
                 ty_check::check_contract_recv_blocks(db, contract)
                     .iter()
-                    .map(|diag| diag.to_voucher()),
+                    .map(diagnostics::FuncBodyDiag::to_voucher),
             );
 
             diags.extend(
                 ty_check::check_contract_field_address_spaces(db, contract)
                     .iter()
-                    .map(|diag| diag.to_voucher()),
+                    .map(diagnostics::FuncBodyDiag::to_voucher),
             );
 
             diags.extend(
                 ty_check::check_contract_immutable_fields_initialized(db, contract)
                     .iter()
-                    .map(|diag| diag.to_voucher()),
+                    .map(diagnostics::FuncBodyDiag::to_voucher),
             );
 
             if contract.init(db).is_some() {
                 let (body_diags, _) = ty_check::check_contract_init_body(db, contract);
-                diags.extend(body_diags.iter().map(|diag| diag.to_voucher()));
+                diags.extend(body_diags.iter().map(diagnostics::FuncBodyDiag::to_voucher));
             }
 
             let recvs = contract.recvs(db);
@@ -576,7 +576,7 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                 diags.extend(
                     ty_check::check_contract_recv_block(db, contract, recv_idx as u32)
                         .iter()
-                        .map(|diag| diag.to_voucher()),
+                        .map(diagnostics::FuncBodyDiag::to_voucher),
                 );
 
                 for (arm_idx, _) in recv.arms.data(db).iter().enumerate() {
@@ -586,7 +586,7 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                         recv_idx as u32,
                         arm_idx as u32,
                     );
-                    diags.extend(body_diags.iter().map(|diag| diag.to_voucher()));
+                    diags.extend(body_diags.iter().map(diagnostics::FuncBodyDiag::to_voucher));
                 }
             }
         }

@@ -849,7 +849,10 @@ fn scope_to_scip_symbol<'db>(
             // Anchor the const on its impl's target type. Named types use their
             // item symbol; primitives (`impl u256` in core/std) have no scope,
             // so synthesize a type symbol from the primitive's name.
-            let mut parent_sym = match self_ty.as_scope(db).and_then(|s| s.to_item()) {
+            let mut parent_sym = match self_ty
+                .as_scope(db)
+                .and_then(fe_hir::hir_def::scope_graph::ScopeId::to_item)
+            {
                 Some(target_item) => item_symbol(db, target_item, ingot_name, ingot_version)?.0,
                 None => primitive_type_symbol(db, self_ty, ingot_name, ingot_version)?,
             };

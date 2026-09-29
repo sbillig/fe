@@ -472,7 +472,7 @@ impl<'db> DecisionMatrix<'db> {
             .rows()
             .first()
             .into_iter()
-            .flat_map(|row| row.patterns())
+            .flat_map(matchcov::PatternRow::patterns)
             .all(|pat| matches!(pat, Pattern::Wildcard))
     }
 

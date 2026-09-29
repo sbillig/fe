@@ -131,12 +131,12 @@ impl<'db> Ingot<'db> {
 
     #[salsa::tracked]
     pub fn config(self, db: &'db dyn InputDb) -> Option<IngotConfig> {
-        self.parse_config(db).and_then(|result| result.ok())
+        self.parse_config(db).and_then(std::result::Result::ok)
     }
 
     #[salsa::tracked]
     pub fn config_parse_error(self, db: &'db dyn InputDb) -> Option<String> {
-        self.parse_config(db).and_then(|result| result.err())
+        self.parse_config(db).and_then(std::result::Result::err)
     }
 
     #[salsa::tracked]
@@ -172,7 +172,7 @@ impl<'db> Ingot<'db> {
     #[salsa::tracked]
     pub fn workspace_config(self, db: &'db dyn InputDb) -> Option<WorkspaceConfig> {
         self.parse_workspace_config(db)
-            .and_then(|result| result.ok())
+            .and_then(std::result::Result::ok)
     }
 
     #[salsa::tracked]

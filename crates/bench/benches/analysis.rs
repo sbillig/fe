@@ -74,7 +74,7 @@ fn test_files(path: &Utf8Path) -> Vec<(Utf8PathBuf, String)> {
 
     WalkDir::new(test_dir)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "fe"))
         .map(|e| {
             let path = Utf8PathBuf::from_path_buf(e.into_path()).unwrap();

@@ -477,7 +477,7 @@ util = { path = "ingots/util" }
             workspace
                 .version
                 .as_ref()
-                .map(|version| version.to_string()),
+                .map(std::string::ToString::to_string),
             Some("0.1.0".to_string())
         );
         assert_eq!(

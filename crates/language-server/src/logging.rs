@@ -371,7 +371,10 @@ impl Clone for RotatingFileWriter {
 
 impl std::io::Write for RotatingFileWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.bytes_written.saturating_add(buf.len() as u64) > state.cap_bytes {
             // Rotate: move current file to <name>.old.log and reopen.
             // Best-effort: if rename or reopen fails, drop into discard
@@ -402,7 +405,7 @@ impl std::io::Write for RotatingFileWriter {
     fn flush(&mut self) -> std::io::Result<()> {
         self.inner
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .file
             .flush()
     }

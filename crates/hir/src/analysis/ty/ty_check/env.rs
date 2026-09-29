@@ -1147,7 +1147,7 @@ fn param_name<'db>(
             .params(db)
             .data(db)
             .get(idx)
-            .and_then(|p| p.name()),
+            .and_then(crate::core::hir_def::params::FuncParam::name),
         ParamSite::EffectField(effect_site) => effect_param_name(db, effect_site, idx),
     }
 }

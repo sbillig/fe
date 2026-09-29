@@ -129,7 +129,10 @@ impl FilesResolver {
 
     pub fn with_patterns(patterns: &[&str]) -> Self {
         Self {
-            file_patterns: patterns.iter().map(|p| p.to_string()).collect(),
+            file_patterns: patterns
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             required_files: vec![],
             required_directories: vec![],
         }

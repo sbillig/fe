@@ -55,7 +55,7 @@ impl<'db> LazyUseAliasSpan<'db> {
                 .map(|node| {
                     ast::UseAlias::cast(node)
                         .and_then(|a| a.alias())
-                        .map(|n| n.into())
+                        .map(std::convert::Into::into)
                 })
                 .map_desugared(|root, desugared| match desugared {
                     DesugaredOrigin::Use(use_) => use_

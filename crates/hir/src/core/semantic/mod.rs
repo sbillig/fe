@@ -1870,7 +1870,7 @@ impl<'db> EffectEnvView<'db> {
     ) -> Option<ResolvedEffectBindingInfo<'db>> {
         resolved_effect_binding_infos_for_site(db, EffectEnvSite::new(db, self.site))
             .get(idx)
-            .and_then(|binding| binding.clone())
+            .and_then(std::clone::Clone::clone)
     }
 
     /// Returns the type of the effect binding as it is visible in the body.
@@ -2223,7 +2223,7 @@ pub fn resolved_effect_binding_infos_for_site<'db>(
         let idx = resolution.requirement_idx as usize;
         let Some(requirement) = requirements_by_idx
             .get(idx)
-            .and_then(|requirement| requirement.clone())
+            .and_then(std::clone::Clone::clone)
         else {
             continue;
         };
@@ -4932,7 +4932,9 @@ impl<'db> TraitAssocConstView<'db> {
     }
 
     pub fn default_body(self, db: &'db dyn HirDb) -> Option<crate::core::hir_def::Body<'db>> {
-        self.decl(db).default.and_then(|body| body.to_opt())
+        self.decl(db)
+            .default
+            .and_then(super::hir_def::Partial::to_opt)
     }
 
     pub fn hir_ty(self, db: &'db dyn HirDb) -> Option<TypeId<'db>> {

@@ -18,7 +18,10 @@ pub fn parse_pat<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<
 
     let token = parser.current_token();
     if has_mut {
-        match token.as_ref().map(|t| t.syntax_kind()) {
+        match token
+            .as_ref()
+            .map(super::token_stream::LexicalToken::syntax_kind)
+        {
             Some(Underscore | Dot2 | LParen) => {
                 parser.error_msg_on_current_token(&format!(
                     "`mut` is not allowed on `{}`",
@@ -287,7 +290,10 @@ fn parse_recv_arm_field_pat<S: TokenStream>(
 
     let token = parser.current_token();
     if has_mut {
-        match token.as_ref().map(|t| t.syntax_kind()) {
+        match token
+            .as_ref()
+            .map(super::token_stream::LexicalToken::syntax_kind)
+        {
             Some(Underscore | Dot2 | LParen) => {
                 parser.error_msg_on_current_token(&format!(
                     "`mut` is not allowed on `{}`",

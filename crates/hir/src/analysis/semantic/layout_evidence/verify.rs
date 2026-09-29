@@ -175,7 +175,7 @@ fn expr_map_ty<'db>(
         LayoutEvidenceExpr::CallResult { component } => call_output
             .filter(|output| output.is_runtime(*component))
             .and_then(|output| output.schema.component(*component))
-            .map(|output| output.map_ty())
+            .map(crate::analysis::ty::layout_bundle::LayoutBundleComponent::map_ty)
             .ok_or(LayoutEvidenceVerifyError::InvalidCallResult {
                 block,
                 statement,
@@ -951,7 +951,7 @@ pub fn verify_layout_evidence_body<'db>(
             if statement.call.is_some()
                 != call_signature
                     .as_ref()
-                    .is_some_and(|signature| signature.has_runtime_evidence())
+                    .is_some_and(crate::analysis::ty::layout_bundle::CallableLayoutBundleSignature::has_runtime_evidence)
             {
                 return Err(LayoutEvidenceVerifyError::CallPresence {
                     block: block_idx,

@@ -25,7 +25,7 @@ pub fn parse_type<S: TokenStream>(
         Some(SyntaxKind::LBracket) => parser.parse_cp(ArrayTypeScope::default(), checkpoint),
         Some(SyntaxKind::Not) => parser
             .parse_cp(NeverTypeScope::default(), checkpoint)
-            .map_err(|e| e.into()),
+            .map_err(std::convert::Into::into),
         _ => parser.parse_cp(PathTypeScope::default(), checkpoint),
     }
 }
