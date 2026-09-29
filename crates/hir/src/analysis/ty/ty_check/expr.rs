@@ -1743,8 +1743,7 @@ impl<'db> TyChecker<'db> {
                         {
                             assert_eq!(
                                 previous, specialization,
-                                "conflicting call-site provider specialization for function effect provider slot {} at {:?}",
-                                provider_idx, key_ty,
+                                "conflicting call-site provider specialization for function effect provider slot {provider_idx} at {key_ty:?}",
                             );
                         }
                     }

@@ -402,7 +402,7 @@ fn build_auto_import_completion<'db>(
 
     // module_path is already the full import path (e.g., "utils::func_with_args")
     // Create the import text edit
-    let import_text = format!("use {}\n", module_path);
+    let import_text = format!("use {module_path}\n");
     let import_edit = TextEdit {
         range: Range {
             start: import_position,
@@ -420,9 +420,9 @@ fn build_auto_import_completion<'db>(
     Some(CompletionItem {
         label: name_str,
         kind: Some(kind),
-        detail: Some(format!("use {} [{}]", module_path, detail)),
+        detail: Some(format!("use {module_path} [{detail}]")),
         label_details: Some(async_lsp::lsp_types::CompletionItemLabelDetails {
-            detail: Some(format!(" ({})", module_only)),
+            detail: Some(format!(" ({module_only})")),
             description: None,
         }),
         insert_text: Some(snippet),
@@ -460,13 +460,13 @@ fn build_func_snippet_and_detail<'db>(
         if ret_pretty == "()" {
             String::new()
         } else {
-            format!(" -> {}", ret_pretty)
+            format!(" -> {ret_pretty}")
         }
     };
     let detail = format!("fn {}({}){}", name_str, param_details.join(", "), ret_str);
 
     let snippet = if param_names.is_empty() {
-        format!("{}()$0", name_str)
+        format!("{name_str}()$0")
     } else {
         let tabstops: Vec<String> = param_names
             .iter()
@@ -735,7 +735,7 @@ fn collect_path_completions<'db>(
             }
             ItemKind::Mod(_) | ItemKind::TopMod(_) => {
                 // Modules get :: suffix
-                (CompletionItemKind::MODULE, Some(format!("{}::", name_str)))
+                (CompletionItemKind::MODULE, Some(format!("{name_str}::")))
             }
             _ => continue,
         };
@@ -921,14 +921,14 @@ fn build_callable_completion<'db>(
         if ret_pretty == "()" {
             String::new()
         } else {
-            format!(" -> {}", ret_pretty)
+            format!(" -> {ret_pretty}")
         }
     };
     let detail = format!("fn {}({}){}", name_str, param_details.join(", "), ret_str);
 
     // Build snippet with tabstops: name(${1:param1}, ${2:param2})
     let snippet = if param_names.is_empty() {
-        format!("{}()$0", name_str)
+        format!("{name_str}()$0")
     } else {
         let tabstops: Vec<String> = param_names
             .iter()
@@ -1027,7 +1027,7 @@ fn collect_trait_methods_for_type<'db>(
                 if !trait_in_scope && let Some(trait_name) = trait_def.name(db).to_opt() {
                     let trait_name_str = trait_name.data(db);
                     if let Some(ref detail) = completion.detail {
-                        completion.detail = Some(format!("{} (use {})", detail, trait_name_str));
+                        completion.detail = Some(format!("{detail} (use {trait_name_str})"));
                     }
                 }
                 items.push(completion);
@@ -1224,7 +1224,7 @@ fn name_res_to_completion<'db>(
             Some(CompletionItem {
                 label: name.to_string(),
                 kind: Some(CompletionItemKind::MODULE),
-                insert_text: Some(format!("{}::", name)),
+                insert_text: Some(format!("{name}::")),
                 ..Default::default()
             })
         }
@@ -1591,7 +1591,7 @@ mod tests {
     fn format_completion_item(item: &CompletionItem) -> String {
         let kind_str = item
             .kind
-            .map(|k| format!("{:?}", k))
+            .map(|k| format!("{k:?}"))
             .unwrap_or_else(|| "?".to_string());
 
         let mut result = format!("{} ({})", item.label, kind_str);
@@ -1603,7 +1603,7 @@ mod tests {
         }
 
         if let Some(ref detail) = item.detail {
-            result.push_str(&format!(" [{}]", detail));
+            result.push_str(&format!(" [{detail}]"));
         }
 
         // Show additional text edits (auto-imports)
@@ -1706,7 +1706,7 @@ mod tests {
             } else {
                 output.push_str("completions:\n");
                 for completion in &completions {
-                    output.push_str(&format!("  - {}\n", completion));
+                    output.push_str(&format!("  - {completion}\n"));
                 }
             }
             output.push('\n');

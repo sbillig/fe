@@ -340,7 +340,7 @@ mod tests {
                     annotations.push(GotoAnnotation {
                         ident_range,
                         segment_range: seg_span.range,
-                        label: format!("-> {}", label),
+                        label: format!("-> {label}"),
                     });
                 }
             }

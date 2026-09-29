@@ -95,7 +95,7 @@ fn load_library_dir(db: &mut dyn InputDb, base_url: &str, root: &Utf8Path) -> Re
 
     while let Some(dir) = stack.pop() {
         let entries = fs::read_dir(dir.as_std_path())
-            .map_err(|err| format!("Failed to read {}: {err}", dir))?
+            .map_err(|err| format!("Failed to read {dir}: {err}"))?
             .map(|entry| {
                 let entry = entry.map_err(|err| format!("Failed to read entry: {err}"))?;
                 let path = Utf8PathBuf::from_path_buf(entry.path())
@@ -125,7 +125,7 @@ fn load_library_dir(db: &mut dyn InputDb, base_url: &str, root: &Utf8Path) -> Re
                 .join(relative.as_str())
                 .map_err(|_| "Failed to join library path".to_string())?;
             let content = fs::read_to_string(path.as_std_path())
-                .map_err(|err| format!("Failed to read {}: {err}", path))?;
+                .map_err(|err| format!("Failed to read {path}: {err}"))?;
             db.workspace().update(db, url, content);
         }
     }

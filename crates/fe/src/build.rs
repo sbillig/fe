@@ -675,12 +675,12 @@ fn build_directory(
         Ok(content) => match Config::parse(&content) {
             Ok(config) => config,
             Err(err) => {
-                eprintln!("Error: Failed to parse {}/fe.toml: {err}", canonical);
+                eprintln!("Error: Failed to parse {canonical}/fe.toml: {err}");
                 return true;
             }
         },
         Err(err) => {
-            eprintln!("Error: Failed to read {}/fe.toml: {err}", canonical);
+            eprintln!("Error: Failed to read {canonical}/fe.toml: {err}");
             return true;
         }
     };

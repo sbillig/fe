@@ -659,16 +659,16 @@ impl fmt::Display for GitResolutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             GitResolutionError::PrepareCheckoutDirectory { path, source } => {
-                write!(f, "Failed to prepare checkout directory {}: {source}", path)
+                write!(f, "Failed to prepare checkout directory {path}: {source}")
             }
             GitResolutionError::CleanupCheckoutDirectory { path, source } => {
-                write!(f, "Failed to clean checkout directory {}: {source}", path)
+                write!(f, "Failed to clean checkout directory {path}: {source}")
             }
             GitResolutionError::CloneRepository { source, error } => {
                 write!(f, "Failed to clone repository {source}: {error}")
             }
             GitResolutionError::OpenRepository { path, error } => {
-                write!(f, "Failed to open existing checkout at {}: {error}", path)
+                write!(f, "Failed to open existing checkout at {path}: {error}")
             }
             GitResolutionError::InvalidRevision { rev, error } => write!(
                 f,
@@ -826,7 +826,7 @@ mod tests {
             .args(args)
             .status()
             .expect("git command");
-        assert!(status.success(), "git command failed: {:?}", args);
+        assert!(status.success(), "git command failed: {args:?}");
     }
 
     fn git_output(repo: &Utf8Path, args: &[&str]) -> String {
@@ -836,7 +836,7 @@ mod tests {
             .args(args)
             .output()
             .expect("git output");
-        assert!(output.status.success(), "git output failed: {:?}", args);
+        assert!(output.status.success(), "git output failed: {args:?}");
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 

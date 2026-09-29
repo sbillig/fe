@@ -8,7 +8,7 @@ fn run_fe(args: &[&str], cwd: &std::path::Path) -> (String, i32) {
         .env("NO_COLOR", "1")
         .current_dir(cwd)
         .output()
-        .unwrap_or_else(|_| panic!("Failed to run fe {:?}", args));
+        .unwrap_or_else(|_| panic!("Failed to run fe {args:?}"));
 
     let mut full_output = String::new();
     if !output.stdout.is_empty() {

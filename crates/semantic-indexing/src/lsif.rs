@@ -85,7 +85,7 @@ impl<W: Write> LsifEmitter<W> {
                 obj[&k] = v;
             }
         }
-        writeln!(self.writer, "{}", obj)?;
+        writeln!(self.writer, "{obj}")?;
         Ok(id)
     }
 
@@ -98,7 +98,7 @@ impl<W: Write> LsifEmitter<W> {
             "outV": out_v,
             "inV": in_v,
         });
-        writeln!(self.writer, "{}", obj)?;
+        writeln!(self.writer, "{obj}")?;
         Ok(id)
     }
 
@@ -120,7 +120,7 @@ impl<W: Write> LsifEmitter<W> {
         if let Some(doc) = document {
             obj["document"] = serde_json::json!(doc);
         }
-        writeln!(self.writer, "{}", obj)?;
+        writeln!(self.writer, "{obj}")?;
         Ok(id)
     }
 

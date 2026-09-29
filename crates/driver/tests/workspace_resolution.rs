@@ -582,9 +582,8 @@ name = "consumer"
 version = "0.1.0"
 
 [dependencies]
-core = {{ source = "{}", rev = "{}", name = "core", version = "0.1.0" }}
-"#,
-            source_url, rev
+core = {{ source = "{source_url}", rev = "{rev}", name = "core", version = "0.1.0" }}
+"#
         ),
     );
     write_file(&local_ingot.join("src/lib.fe"), "pub fn main() {}\n");
@@ -701,9 +700,8 @@ name = "consumer"
 version = "0.1.0"
 
 [dependencies]
-core = {{ source = "{}", rev = "{}", path = "workspace", name = "core", version = "0.1.0" }}
-"#,
-            source_url, rev
+core = {{ source = "{source_url}", rev = "{rev}", path = "workspace", name = "core", version = "0.1.0" }}
+"#
         ),
     );
     write_file(&local_ingot.join("src/lib.fe"), "pub fn main() {}\n");
@@ -837,9 +835,8 @@ name = "consumer"
 version = "0.1.0"
 
 [dependencies]
-core = {{ source = "{}", rev = "{}", path = "ingots/core" }}
-"#,
-            source_url, rev
+core = {{ source = "{source_url}", rev = "{rev}", path = "ingots/core" }}
+"#
         ),
     );
     write_file(&local_ingot.join("src/lib.fe"), "pub fn main() {}\n");
@@ -949,9 +946,8 @@ name = "consumer"
 version = "0.1.0"
 
 [dependencies]
-remote_core = {{ source = "{}", rev = "{}", name = "core", version = "0.1.0" }}
-"#,
-            source_url, rev
+remote_core = {{ source = "{source_url}", rev = "{rev}", name = "core", version = "0.1.0" }}
+"#
         ),
     );
     write_file(&local_ingot.join("src/lib.fe"), "pub fn main() {}\n");

@@ -99,7 +99,7 @@ impl<'a, 'db> Visitor<'db> for InlayHintCollector<'a, 'db> {
                     // Position hint after the pattern
                     let hint = InlayHint {
                         position: range.end,
-                        label: InlayHintLabel::String(format!(": {}", ty_str)),
+                        label: InlayHintLabel::String(format!(": {ty_str}")),
                         kind: Some(InlayHintKind::TYPE),
                         text_edits: None,
                         tooltip: None,

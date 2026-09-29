@@ -298,7 +298,7 @@ fn run_fe_main_impl(args: &[&str], cwd: Option<&Path>, extra_env: &[(&str, &str)
     }
     let output = cmd
         .output()
-        .unwrap_or_else(|_| panic!("Failed to run fe {:?}", args));
+        .unwrap_or_else(|_| panic!("Failed to run fe {args:?}"));
 
     FeOutput {
         stdout: normalize_output(&String::from_utf8_lossy(&output.stdout)),
@@ -3099,7 +3099,7 @@ fn test_tree_output(fixture: Fixture<&str>) {
 
     // Use the ingot directory name for the snapshot with _tree suffix
     let ingot_name = ingot_dir.file_name().unwrap().to_str().unwrap();
-    let snapshot_path = ingot_dir.join(format!("{}_tree", ingot_name));
+    let snapshot_path = ingot_dir.join(format!("{ingot_name}_tree"));
     snap_test!(output, snapshot_path.to_str().unwrap());
 }
 
@@ -3218,7 +3218,7 @@ fn test_cli_library(fixture: Fixture<&str>) {
         .expect("library fixture parent")
         .to_str()
         .unwrap();
-    let snapshot_path = app_dir.join(format!("library_{}", case_name));
+    let snapshot_path = app_dir.join(format!("library_{case_name}"));
     snap_test!(output, snapshot_path.to_str().unwrap());
 }
 

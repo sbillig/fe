@@ -47,7 +47,7 @@ fn run_fe_main_with_env(args: &[&str], extra_env: &[(&str, &str)]) -> (String, i
     }
     let output = command
         .output()
-        .unwrap_or_else(|_| panic!("Failed to run fe {:?}", args));
+        .unwrap_or_else(|_| panic!("Failed to run fe {args:?}"));
 
     let exit_code = output.status.code().unwrap_or(-1);
     (render_output(&output), exit_code)
