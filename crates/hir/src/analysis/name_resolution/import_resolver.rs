@@ -525,9 +525,7 @@ impl<'db> ImportResolver<'db> {
                 .resolved_external_ingots(self.db)
                 .iter()
                 .any(|(ingot_name, _)| *ingot_name == first_segment_ident)
-                || PrimTy::all_types()
-                    .iter()
-                    .any(|ty| ty.name(self.db) == first_segment_ident))
+                || PrimTy::from_name(self.db, first_segment_ident).is_some())
         {
             self.register_error(&i_use, NameResolutionError::Ambiguous(ThinVec::new()));
         }

@@ -13,11 +13,37 @@ pub enum PrimTy {
 
 impl PrimTy {
     pub fn name(self, db: &dyn HirDb) -> IdentId<'_> {
+        IdentId::new(db, self.as_str().to_string())
+    }
+
+    /// The builtin type named `name`, matched without interning every
+    /// builtin name.
+    pub fn from_name(db: &dyn HirDb, name: IdentId<'_>) -> Option<Self> {
+        let name = name.data(db);
+        Self::all_types()
+            .iter()
+            .copied()
+            .find(|prim| prim.as_str() == name)
+    }
+
+    fn as_str(self) -> &'static str {
         match self {
-            PrimTy::Bool => IdentId::make_bool(db),
-            PrimTy::Int(ty) => ty.name(db),
-            PrimTy::Uint(ty) => ty.name(db),
-            PrimTy::String => IdentId::new(db, "String".to_string()),
+            PrimTy::Bool => "bool",
+            PrimTy::Int(IntTy::I8) => "i8",
+            PrimTy::Int(IntTy::I16) => "i16",
+            PrimTy::Int(IntTy::I32) => "i32",
+            PrimTy::Int(IntTy::I64) => "i64",
+            PrimTy::Int(IntTy::I128) => "i128",
+            PrimTy::Int(IntTy::I256) => "i256",
+            PrimTy::Int(IntTy::Isize) => "isize",
+            PrimTy::Uint(UintTy::U8) => "u8",
+            PrimTy::Uint(UintTy::U16) => "u16",
+            PrimTy::Uint(UintTy::U32) => "u32",
+            PrimTy::Uint(UintTy::U64) => "u64",
+            PrimTy::Uint(UintTy::U128) => "u128",
+            PrimTy::Uint(UintTy::U256) => "u256",
+            PrimTy::Uint(UintTy::Usize) => "usize",
+            PrimTy::String => "String",
         }
     }
 
@@ -54,20 +80,6 @@ pub enum IntTy {
     Isize,
 }
 
-impl IntTy {
-    pub fn name(self, db: &dyn HirDb) -> IdentId<'_> {
-        match self {
-            IntTy::I8 => IdentId::make_i8(db),
-            IntTy::I16 => IdentId::make_i16(db),
-            IntTy::I32 => IdentId::make_i32(db),
-            IntTy::I64 => IdentId::make_i64(db),
-            IntTy::I128 => IdentId::make_i128(db),
-            IntTy::I256 => IdentId::make_i256(db),
-            IntTy::Isize => IdentId::make_isize(db),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UintTy {
     U8,
@@ -77,18 +89,4 @@ pub enum UintTy {
     U128,
     U256,
     Usize,
-}
-
-impl UintTy {
-    pub fn name(self, db: &dyn HirDb) -> IdentId<'_> {
-        match self {
-            UintTy::U8 => IdentId::make_u8(db),
-            UintTy::U16 => IdentId::make_u16(db),
-            UintTy::U32 => IdentId::make_u32(db),
-            UintTy::U64 => IdentId::make_u64(db),
-            UintTy::U128 => IdentId::make_u128(db),
-            UintTy::U256 => IdentId::make_u256(db),
-            UintTy::Usize => IdentId::make_usize(db),
-        }
-    }
 }

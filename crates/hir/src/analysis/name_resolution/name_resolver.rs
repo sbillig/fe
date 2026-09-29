@@ -600,12 +600,10 @@ impl<'db, 'a> NameResolver<'db, 'a> {
             });
 
         // 6. Look for the name in the builtin types.
-        for &prim in PrimTy::all_types() {
+        if let Some(prim) = PrimTy::from_name(self.db, query.name(self.db)) {
             // We don't care about the result of `push` because we assume builtin types are
             // guaranteed to be unique.
-            if query.name(self.db) == prim.name(self.db) {
-                bucket.push(&NameRes::new_prim(prim));
-            }
+            bucket.push(&NameRes::new_prim(prim));
         }
 
         bucket
