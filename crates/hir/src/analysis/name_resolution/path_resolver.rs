@@ -776,6 +776,8 @@ pub fn resolve_path<'db>(
 /// caller's minter so holes created during resolution (generic-arg wildcards,
 /// `= _` default completions) are keyed to the enclosing
 /// lowering execution rather than to this path's content-interned identity.
+/// Each resolved segment is also reported to the minter, which keeps it when
+/// its lowering records resolutions.
 pub(crate) fn resolve_path_with_minter<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
@@ -793,7 +795,7 @@ pub(crate) fn resolve_path_with_minter<'db>(
         resolve_tail_as_value,
         directive,
         true,
-        &mut |_, _| {},
+        &mut |path, res| minter.record_resolution(path, res),
         minter,
     )
 }
@@ -819,7 +821,10 @@ where
         resolve_tail_as_value,
         directive,
         true,
-        observer,
+        &mut |path, res| {
+            minter.record_resolution(path, res);
+            observer(path, res)
+        },
         minter,
     )
 }

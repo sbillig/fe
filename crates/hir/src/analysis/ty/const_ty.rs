@@ -465,6 +465,12 @@ pub(crate) struct LoweringContext<'db> {
     const_bodies: ConstBodyLowering,
     source_params: Option<GenericParamOwner<'db>>,
     default_capture: Option<(GenericParamOwner<'db>, SourceParamIndex)>,
+    /// Every path segment this lowering resolved, in resolution order, when
+    /// the caller asked for them (`recording_resolutions`).
+    resolutions: Option<std::cell::RefCell<Vec<(PathId<'db>, PathRes<'db>)>>>,
+    /// Set while lowering resolves a path that an anonymous constant's body
+    /// writes (`without_recording`).
+    recording_paused: std::cell::Cell<bool>,
 }
 
 impl<'db> LoweringContext<'db> {
@@ -488,7 +494,41 @@ impl<'db> LoweringContext<'db> {
             const_bodies,
             source_params: None,
             default_capture: None,
+            resolutions: None,
+            recording_paused: std::cell::Cell::new(false),
         }
+    }
+
+    /// Makes this lowering keep every path segment it resolves, with the
+    /// resolution, for `into_resolutions`.
+    pub(crate) fn recording_resolutions(mut self) -> Self {
+        self.resolutions = Some(Default::default());
+        self
+    }
+
+    /// Called by path resolution for each segment it resolves.
+    pub(crate) fn record_resolution(&self, path: PathId<'db>, res: &PathRes<'db>) {
+        if let Some(resolutions) = &self.resolutions
+            && !self.recording_paused.get()
+        {
+            resolutions.borrow_mut().push((path, res.clone()));
+        }
+    }
+
+    /// Runs `resolve` without recording its resolutions. A path written in
+    /// an anonymous constant's body belongs to that body, whose inference
+    /// records it, so a type lowering that reads the constant does not.
+    pub(crate) fn without_recording<R>(&self, resolve: impl FnOnce() -> R) -> R {
+        let paused = self.recording_paused.replace(true);
+        let result = resolve();
+        self.recording_paused.set(paused);
+        result
+    }
+
+    pub(crate) fn into_resolutions(self) -> Vec<(PathId<'db>, PathRes<'db>)> {
+        self.resolutions
+            .map(std::cell::RefCell::into_inner)
+            .unwrap_or_default()
     }
 
     pub(crate) fn holes(&self) -> &HoleMinter<'db> {

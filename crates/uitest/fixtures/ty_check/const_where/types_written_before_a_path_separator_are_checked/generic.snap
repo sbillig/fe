@@ -10,4 +10,4 @@ error[8-0093]: const requirement is not satisfied
   │                                      ----- required by this predicate
   ·
 6 │ fn unstated<const M: usize>() -> u256 { Bounded<M>::helper() }
-  │                                         ^^^^^^^^^^^^^^^^^^^^ no matching const requirement in the caller after substitution
+  │                                         ^^^^^^^^^^^^^^^^^^ no matching const requirement in the caller after substitution

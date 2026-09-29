@@ -10,7 +10,7 @@ error[8-0093]: const requirement is not satisfied
    │                                      ----- required by this predicate
    ·
 14 │ fn call() -> u256 { Bounded<0>::helper() }
-   │                     ^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+   │                     ^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
    ┌─ blanket_impl.fe:15:25
@@ -28,7 +28,7 @@ error[8-0093]: const requirement is not satisfied
    │                                   ----- required by this predicate
    ·
 16 │ fn enum_call() -> u256 { Choice<0>::helper() }
-   │                          ^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+   │                          ^^^^^^^^^^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
    ┌─ blanket_impl.fe:18:19

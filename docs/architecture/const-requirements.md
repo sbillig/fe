@@ -138,6 +138,20 @@ written type gives, and a binding, block, or branch that only carries the type
 do not report it again. Every unmet condition is `error[8-0093]`, whether the
 use is a type or a call.
 
+A type that a path passes through is written there too. In `Bounded<0>::Out`,
+`Bounded<0>::Out::make()`, `Holder<Bounded<0>::L>` and `Bounded<0>::helper()`,
+`Bounded<0>` is checked at the path, whatever the path names after it. Path
+resolution reports every segment it resolves, and the type checker and type
+lowering keep the constrained applications it passed through, so this holds
+at every segment of every path, in types, generic arguments, expressions and
+patterns.
+
+Inside an `impl`, the conditions of the records and enums in its header hold
+without restating them, so `impl<const N: usize> Bounded<N>` can call a helper
+that requires `N > 0`. This is sound because every way to reach the impl's
+items goes through a checked type: a path through its self type or trait
+arguments, a receiver or argument value, or a header that a call instantiates.
+
 A record with conditions must be fully applied where it is used as a type.
 Passing the unapplied constructor through a higher-kinded parameter is
 rejected, because nothing would carry its conditions to later applications.

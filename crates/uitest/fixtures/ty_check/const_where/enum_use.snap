@@ -19,4 +19,4 @@ error[8-0093]: const requirement is not satisfied
    │                                   ----- required by this predicate
    ·
 12 │     let _item = Choice<0>::Tuple(1)
-   │                 ^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+   │                 ^^^^^^^^^^^^^^^^ condition evaluated to `false`

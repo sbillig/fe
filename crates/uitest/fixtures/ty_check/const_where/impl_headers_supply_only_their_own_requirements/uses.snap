@@ -10,7 +10,7 @@ error[8-0093]: const requirement is not satisfied
   │                                      ----- required by this predicate
   ·
 9 │ fn qualified() -> u256 { Bounded<0>::make() }
-  │                          ^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+  │                          ^^^^^^^^^^^^^^^^ condition evaluated to `false`
 
 error[8-0093]: const requirement is not satisfied
    ┌─ uses.fe:10:40
@@ -19,7 +19,7 @@ error[8-0093]: const requirement is not satisfied
    │                                      ----- required by this predicate
    ·
 10 │ fn generic<const K: usize>() -> u256 { Bounded<K>::make() }
-   │                                        ^^^^^^^^^^^^^^^^^^ no matching const requirement in the caller after substitution
+   │                                        ^^^^^^^^^^^^^^^^ no matching const requirement in the caller after substitution
 
 error[8-0093]: const requirement is not satisfied
    ┌─ uses.fe:11:37

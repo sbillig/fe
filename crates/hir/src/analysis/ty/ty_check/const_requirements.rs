@@ -10,7 +10,7 @@ use crate::analysis::name_resolution::{
 use crate::analysis::ty::canonical::Canonicalized;
 use crate::analysis::ty::{
     subst::substitute_complete,
-    ty_lower::{CompleteSubst, SubstError, lower_type_alias},
+    ty_lower::{CompleteSubst, SubstError, lower_hir_ty_with_resolutions, lower_type_alias},
 };
 use crate::hir_def::{GenericArg, GenericArgListId, ItemKind, UnOp, scope_graph::ScopeId};
 
@@ -506,17 +506,30 @@ pub(super) fn check_body_requirements<'db>(
             _ => None,
         })
         .collect();
-    let written = written_applications(db, owner);
     // Requirements are checked where a type enters the body: a written type
-    // (`written_type_check`) or an instantiating expression. An expression
-    // does not report an application that a written type carries, since that
-    // type reports it. A pattern, a binding use, or a block or branch only
-    // carries a type that entered elsewhere, so checking it again repeats that
-    // report. A function-typed expression is not checked for its type
-    // arguments: they are written types, checked where they are written, or
-    // inferred from the argument and result expressions, which are checked
-    // themselves. The type before `::` in a path is neither, so an item
-    // reached through it checks that type itself (`check_entered_header`).
+    // (`written_type_check`), a path that passes through an application, or
+    // an instantiating expression. A path does not report an application
+    // that a written type carries, and an expression does not report one
+    // that either carries, since those report it. A pattern, a binding use,
+    // or a block or branch only carries a type that entered elsewhere, so
+    // checking it again repeats that report. A function-typed expression is
+    // not checked for its type arguments: they are written types, checked
+    // where they are written, or inferred from the argument and result
+    // expressions, which are checked themselves. An item reached through a
+    // path checks the header types it instantiates that no checked value
+    // carries (`check_entered_header`).
+    let mut written = written_applications(db, owner);
+    let mut reported_paths = Vec::new();
+    for (site, application) in &typed.path_applications {
+        if reported_paths.contains(&(site, *application)) {
+            continue;
+        }
+        reported_paths.push((site, *application));
+        if let Some(unmet) = check_path_application(db, *application, owner.scope(), &written) {
+            check.unmet(site.clone(), unmet.predicate, unmet.failure);
+        }
+    }
+    written.extend(typed.path_applications.iter().map(|&(_, ty)| ty));
     for (expr, data) in body.exprs(db).iter() {
         if typed.expr_binding(expr).is_some()
             || matches!(
@@ -709,6 +722,10 @@ fn path_res_tys<'db>(db: &'db dyn HirAnalysisDb, res: PathRes<'db>) -> Vec<TyId<
         PathRes::Trait(inst) | PathRes::TraitMethod(inst, _) => {
             tys.extend(inst.args(db).iter().copied());
         }
+        PathRes::TraitConst(receiver, inst, _) => {
+            tys.push(receiver);
+            tys.extend(inst.args(db).iter().copied());
+        }
         res => {
             res.map_over_ty(|ty| {
                 tys.push(ty);
@@ -717,6 +734,56 @@ fn path_res_tys<'db>(db: &'db dyn HirAnalysisDb, res: PathRes<'db>) -> Vec<TyId<
         }
     }
     tys
+}
+
+/// The applications of records and enums with conditions that a path
+/// resolution carries, at any depth: `Bounded<0>` for the segment `Bounded<0>`
+/// of `Bounded<0>::Out`, or for the receiver of `Bounded<0>::L`. Path
+/// resolution reports every segment it resolves, so the lowering of a written
+/// type and the inference of a body record these for every prefix of every
+/// path they resolve, and the requirement checks read them from there. This
+/// reads only declarations, so inference can call it while it resolves.
+pub(super) fn constrained_applications<'db>(
+    db: &'db dyn HirAnalysisDb,
+    res: &PathRes<'db>,
+) -> Vec<TyId<'db>> {
+    fn collect<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, found: &mut Vec<TyId<'db>>) {
+        for &arg in ty.decompose_ty_app(db).1 {
+            collect(db, arg, found);
+        }
+        if adt_declaration(db, ty).is_some_and(|declaration| {
+            !declaration.where_clause(db).const_predicates(db).is_empty()
+        }) && !found.contains(&ty)
+        {
+            found.push(ty);
+        }
+    }
+    let mut found = Vec::new();
+    for ty in path_res_tys(db, res.clone()) {
+        collect(db, ty, &mut found);
+    }
+    found
+}
+
+/// The first unmet requirement of an application that a path passed through.
+/// A partial application, such as `Bounded` in `Bounded::helper()`, is not an
+/// instantiation: inference supplies its arguments, and the header it
+/// instantiates is checked where the item is used (`check_entered_header`).
+/// A partial application written as a type is checked as that type.
+fn check_path_application<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    scope: ScopeId<'db>,
+    reported: &[TyId<'db>],
+) -> Option<TypeRequirementFailure<'db>> {
+    let declaration = adt_declaration(db, ty)?;
+    let arity = collect_generic_params(db, declaration.into())
+        .params(db)
+        .len();
+    if ty.decompose_ty_app(db).1.len() != arity {
+        return None;
+    }
+    check_type_requirements(db, ty, scope, reported)
 }
 
 /// The anonymous constants a body writes in expression and pattern
@@ -1265,7 +1332,7 @@ fn written_applications<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) 
     {
         for entry in written_types(db, item) {
             if let WrittenEntry::Type(written) = entry {
-                if let Some(ty) = written.lowered {
+                for &ty in written.lowered.iter().chain(&written.applications) {
                     examined(db, ty, &mut found);
                 }
             }
@@ -1307,6 +1374,8 @@ struct WrittenType<'db> {
     scope: ScopeId<'db>,
     /// Its lowering, unless that is invalid.
     lowered: Option<TyId<'db>>,
+    /// The constrained applications its paths passed through.
+    applications: Vec<TyId<'db>>,
     /// The index of the first entry nested in this type.
     nested_from: usize,
 }
@@ -1417,7 +1486,7 @@ fn written_types_query<'db>(
             let db = self.db;
             let scope = ctxt.scope();
             let assumptions = assumptions_at(db, scope);
-            let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+            let (ty, resolutions) = lower_hir_ty_with_resolutions(db, hir_ty, scope, assumptions);
             let bodies = match hir_ty.data(db) {
                 TypeKind::Array(_, Partial::Present(len)) => vec![*len],
                 TypeKind::Path(Partial::Present(path)) => path_const_bodies(db, *path),
@@ -1442,6 +1511,10 @@ fn written_types_query<'db>(
                     span: span.into(),
                     scope,
                     lowered: (!ty.has_invalid(db)).then_some(ty),
+                    applications: resolutions
+                        .iter()
+                        .flat_map(|(_, res)| constrained_applications(db, res))
+                        .collect(),
                     nested_from,
                 }));
             }
@@ -1464,8 +1537,8 @@ fn written_types_query<'db>(
 /// `item` itself (`written_types`), each reported where it is written. A
 /// type's nested types are checked first. A failure one of them reported
 /// entered there, so the enclosing type does not repeat it; a failure
-/// reachable only through an alias expansion is reported at the enclosing
-/// type.
+/// reachable only through an alias expansion, or through a type its paths
+/// pass through, is reported at the enclosing type.
 fn written_type_check<'db>(
     db: &'db dyn HirAnalysisDb,
     item: ItemKind<'db>,
@@ -1498,7 +1571,12 @@ fn written_type_check_query<'db>(
                     .collect();
                 let unmet = written
                     .lowered
-                    .and_then(|ty| check_type_requirements(db, ty, written.scope, &nested));
+                    .and_then(|ty| check_type_requirements(db, ty, written.scope, &nested))
+                    .or_else(|| {
+                        written.applications.iter().find_map(|&application| {
+                            check_path_application(db, application, written.scope, &nested)
+                        })
+                    });
                 unmet.map(|unmet| {
                     diags.push(unmet_requirement_diag(
                         written.span.clone(),

@@ -1,0 +1,85 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/types_written_before_a_path_separator_are_checked/const_arguments.fe
+---
+error[8-0093]: const requirement is not satisfied
+   ┌─ const_arguments.fe:10:28
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+10 │ fn trait_const(_ h: Holder<Bounded<0>::L>) {}
+   │                            ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ const_arguments.fe:11:31
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+11 │ fn inherent_const(_ h: Holder<Bounded<0>::K>) {}
+   │                               ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ const_arguments.fe:12:21
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+12 │ type Alias = Holder<Bounded<0>::L>
+   │                     ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ const_arguments.fe:13:29
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+13 │ fn turbofish() -> usize { g<Bounded<0>::L>() }
+   │                             ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ const_arguments.fe:14:29
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+14 │ fn local() { let _h: Holder<Bounded<0>::K> = Holder {} }
+   │                             ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ const_arguments.fe:15:31
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+15 │ fn record() { let _h = Holder<Bounded<0>::K> {} }
+   │                               ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ const_arguments.fe:16:41
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+16 │ fn unstated<const M: usize>(_ h: Holder<Bounded<M>::L>) {}
+   │                                         ^^^^^^^^^^^^^ no matching const requirement in the caller after substitution
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ const_arguments.fe:19:25
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+19 │ fn braced(_ h: Holder<{ Bounded<0>::L }>) {}
+   │                         ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ const_arguments.fe:20:21
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+20 │ fn length(_ a: [u8; Bounded<0>::L]) {}
+   │                     ^^^^^^^^^^^^^ condition evaluated to `false`

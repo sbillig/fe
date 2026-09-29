@@ -3497,7 +3497,13 @@ impl<'db> TyChecker<'db> {
             let ident_span: DynLazySpan<'db> = path_expr_span.clone().into();
             resolve_ident_expr(self.db, &self.env, path, ident_span, &minter)
         } else {
-            match self.resolve_path(path, true, path_span.clone(), &minter) {
+            match self.resolve_path(
+                path,
+                true,
+                path_span.clone(),
+                path_expr_span.clone().into(),
+                &minter,
+            ) {
                 Ok(r) => ResolvedPathInBody::Reso(r),
                 Err(err) => {
                     let expected_kind = if is_call_callee {
@@ -3900,17 +3906,18 @@ impl<'db> TyChecker<'db> {
             body: self.body(),
             site: BodyHoleSite::Expr(expr),
         });
-        let reso = match self.resolve_path(*path, true, path_span.clone(), &minter) {
-            Ok(reso) => reso,
-            Err(err) => {
-                if let Some(diag) =
-                    err.into_diag(self.db, *path, path_span, ExpectedPathKind::Record)
-                {
-                    self.push_diag(diag);
+        let reso =
+            match self.resolve_path(*path, true, path_span.clone(), span.clone().into(), &minter) {
+                Ok(reso) => reso,
+                Err(err) => {
+                    if let Some(diag) =
+                        err.into_diag(self.db, *path, path_span, ExpectedPathKind::Record)
+                    {
+                        self.push_diag(diag);
+                    }
+                    return ExprProp::invalid(self.db);
                 }
-                return ExprProp::invalid(self.db);
-            }
-        };
+            };
 
         match reso {
             PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {

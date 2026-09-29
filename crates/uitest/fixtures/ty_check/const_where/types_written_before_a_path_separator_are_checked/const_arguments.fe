@@ -1,0 +1,29 @@
+// A const argument written without braces that names a constant through a
+// constrained type checks that type, as the braced form does.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+struct Holder<const N: usize> {}
+trait HasL { const L: usize }
+impl<T> HasL for T { const L: usize = 1 }
+impl<const N: usize> Bounded<N> { const K: usize = 1 }
+fn g<const M: usize>() -> usize { M }
+
+fn trait_const(_ h: Holder<Bounded<0>::L>) {}
+fn inherent_const(_ h: Holder<Bounded<0>::K>) {}
+type Alias = Holder<Bounded<0>::L>
+fn turbofish() -> usize { g<Bounded<0>::L>() }
+fn local() { let _h: Holder<Bounded<0>::K> = Holder {} }
+fn record() { let _h = Holder<Bounded<0>::K> {} }
+fn unstated<const M: usize>(_ h: Holder<Bounded<M>::L>) {}
+// A braced argument or an array length is a body of its own, which reports
+// the type once.
+fn braced(_ h: Holder<{ Bounded<0>::L }>) {}
+fn length(_ a: [u8; Bounded<0>::L]) {}
+
+fn stated<const M: usize>(_ h: Holder<Bounded<M>::L>) where M > 0 {}
+impl<const N: usize> Bounded<N> {
+    fn inside(_ h: Holder<Self::K>) {}
+}
+fn allowed(_ h: Holder<Bounded<1>::L>) -> usize {
+    let _k = Holder<Bounded<1>::K> {}
+    g<Bounded<1>::L>()
+}

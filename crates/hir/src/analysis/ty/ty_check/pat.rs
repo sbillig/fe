@@ -420,7 +420,13 @@ impl<'db> TyChecker<'db> {
             body: self.body(),
             site: BodyHoleSite::Pat(pat),
         });
-        let res = self.resolve_path(*path, true, span.clone().path(), &minter);
+        let res = self.resolve_path(
+            *path,
+            true,
+            span.clone().path(),
+            span.clone().into(),
+            &minter,
+        );
 
         // Bare identifiers that don't resolve to a type/variant are local bindings,
         // unless the expected type is a msg type, in which case we try to resolve
@@ -776,7 +782,13 @@ impl<'db> TyChecker<'db> {
             body: self.body(),
             site: BodyHoleSite::Pat(pat),
         });
-        match self.resolve_path(path, true, span.clone().path(), &minter) {
+        match self.resolve_path(
+            path,
+            true,
+            span.clone().path(),
+            span.clone().into(),
+            &minter,
+        ) {
             Ok(res) => match res {
                 PathRes::Ty(ty)
                 | PathRes::TyAlias(_, ty)
@@ -953,8 +965,13 @@ impl<'db> TyChecker<'db> {
             body: self.body(),
             site: BodyHoleSite::Pat(pat),
         });
-        let (actual, analysis) = match self.resolve_path(*path, true, span.clone().path(), &minter)
-        {
+        let (actual, analysis) = match self.resolve_path(
+            *path,
+            true,
+            span.clone().path(),
+            span.clone().into(),
+            &minter,
+        ) {
             Ok(reso) => match reso {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty)
                     if RecordLike::from_ty(ty).is_record(self.db) =>

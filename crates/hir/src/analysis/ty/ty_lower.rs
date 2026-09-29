@@ -133,6 +133,27 @@ fn lower_hir_ty_impl<'db>(
     }
 }
 
+/// Lowers `ty` as [`lower_hir_ty`] does, and returns every path segment the
+/// lowering resolved, with its resolution: the segments of the paths written
+/// in `ty`, including generic arguments and qualified types, at every prefix.
+/// Aliases and associated types are lowered by their own queries, so the paths
+/// written in their declarations are not included.
+pub(crate) fn lower_hir_ty_with_resolutions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: HirTyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> (TyId<'db>, Vec<(PathId<'db>, PathRes<'db>)>) {
+    let minter = LoweringContext::new(HoleAnchor::TemplateTy {
+        ty,
+        scope,
+        assumptions,
+    })
+    .recording_resolutions();
+    let lowered = lower_hir_ty_impl(db, ty, scope, assumptions, &minter);
+    (lowered, minter.into_resolutions())
+}
+
 /// Lowers `ty` minting structural-hole identities through the caller's
 /// minter, so holes are keyed to the enclosing lowering execution instead of
 /// this type's content-interned identity. Use this instead of the memoized
@@ -425,7 +446,9 @@ pub(crate) fn lower_const_body_path<'db>(
     let path = const_body_simple_path(db, body)?;
     let assumptions = with_enclosing_trait_self_predicate(db, scope, assumptions);
     Some(
-        match resolve_path_with_minter(db, path, scope, assumptions, true, minter) {
+        match minter.without_recording(|| {
+            resolve_path_with_minter(db, path, scope, assumptions, true, minter)
+        }) {
             Ok(PathRes::Const(const_def, ty)) => {
                 if let Some(body) = const_def.body(db).to_opt() {
                     ConstTyId::from_body(db, body, Some(ty), Some(const_def))

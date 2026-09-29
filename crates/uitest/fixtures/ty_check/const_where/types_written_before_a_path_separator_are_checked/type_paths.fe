@@ -1,0 +1,27 @@
+// A constrained type written before `::` in a type path is checked, whatever
+// the path names after it.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+trait Mk { type Out }
+impl<T> Mk for T { type Out = u8 }
+fn g<T>() -> u256 { 1 }
+
+fn param(_ x: Bounded<0>::Out) {}
+fn local() { let _x: Bounded<0>::Out = 1 }
+fn turbofish() -> u256 { g<Bounded<0>::Out>() }
+type Alias = Bounded<0>::Out
+struct Field { x: Bounded<0>::Out }
+struct Default<T = Bounded<0>::Out> { x: T }
+trait Method { fn method(_ x: Bounded<0>::Out) }
+fn qualified(_ x: <Bounded<0> as Mk>::Out) {}
+fn unstated<const M: usize>(_ x: Bounded<M>::Out) {}
+
+mod inner {
+    pub struct Bounded<const N: usize> where N > 0 { value: u256 }
+}
+fn nested_module(_ x: inner::Bounded<0>::Out) {}
+
+fn stated<const M: usize>(_ x: Bounded<M>::Out) where M > 0 {}
+impl<const N: usize> Bounded<N> {
+    fn inside(_ x: Self::Out, _ y: Bounded<N>::Out) {}
+}
+fn allowed(_ x: Bounded<1>::Out, _ y: inner::Bounded<1>::Out) -> u256 { g<Bounded<1>::Out>() }

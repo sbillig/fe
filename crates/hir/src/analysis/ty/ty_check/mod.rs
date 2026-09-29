@@ -1184,6 +1184,7 @@ fn typed_body_for_bodyless_func<'db>(
         for_loop_seq: SecondaryMap::new(),
         expr_place: SecondaryMap::new(),
         expr_places: PrimaryMap::new(),
+        path_applications: Vec::new(),
     }
     .into()
 }
@@ -3140,11 +3141,14 @@ impl<'db> TyChecker<'db> {
         path: PathId<'db>,
         resolve_tail_as_value: bool,
         span: LazyPathSpan<'db>,
+        site: DynLazySpan<'db>,
         minter: &LoweringContext<'db>,
     ) -> Result<PathRes<'db>, PathResError<'db>> {
         let scope = self.env.scope();
         let mut invisible = None;
-        let mut check_visibility = |path: PathId<'db>, reso: &PathRes<'db>| {
+        let mut applications = Vec::new();
+        let mut observe_segment = |path: PathId<'db>, reso: &PathRes<'db>| {
+            applications.extend(const_requirements::constrained_applications(self.db, reso));
             if invisible.is_some() {
                 return;
             }
@@ -3159,10 +3163,13 @@ impl<'db> TyChecker<'db> {
             scope,
             self.env.assumptions(),
             resolve_tail_as_value,
-            &mut check_visibility,
+            &mut observe_segment,
             minter,
         ) {
-            Ok(r) => Ok(r.map_over_ty(|ty| self.instantiate_to_term(ty))),
+            Ok(r) => {
+                self.env.register_path_applications(site, applications);
+                Ok(r.map_over_ty(|ty| self.instantiate_to_term(ty)))
+            }
             Err(err) => Err(err),
         };
 
@@ -3446,6 +3453,11 @@ mod typed_body_tables {
         pub(super) for_loop_seq: SecondaryMap<StmtId, Option<ForLoopSeq<'db>>>,
         pub(super) expr_place: SecondaryMap<ExprId, PackedOption<ExprPlaceId>>,
         pub(super) expr_places: PrimaryMap<ExprPlaceId, Place<'db>>,
+        /// The constrained type applications that resolving the body's paths
+        /// passed through, at every segment, each with the span of the
+        /// expression or pattern whose path it is. Const requirements check
+        /// them there (`check_body_requirements`).
+        pub(super) path_applications: Vec<(DynLazySpan<'db>, TyId<'db>)>,
     }
 }
 use typed_body_tables::TypedBodyTables;
@@ -3761,6 +3773,9 @@ impl<'db> TyVisitable<'db> for TypedBody<'db> {
         for seq in self.for_loop_seq.values().flatten() {
             seq.visit_with(visitor);
         }
+        for (_, ty) in &self.path_applications {
+            ty.visit_with(visitor);
+        }
     }
 }
 
@@ -3816,6 +3831,9 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
         this.expr_places
             .values_mut()
             .for_each(|place| *place = place.clone().fold_with(db, folder));
+        this.path_applications
+            .iter_mut()
+            .for_each(|(_, ty)| *ty = ty.fold_with(db, folder));
         this
     }
 }
@@ -5433,6 +5451,7 @@ impl<'db> TypedBody<'db> {
             for_loop_seq: SecondaryMap::new(),
             expr_place: SecondaryMap::new(),
             expr_places: PrimaryMap::new(),
+            path_applications: Vec::new(),
         }
         .into()
     }
