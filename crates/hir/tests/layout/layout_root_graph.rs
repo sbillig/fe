@@ -23,10 +23,9 @@ use fe_hir::{
         },
     },
     core::semantic::{
-        AllocatedContractStorageLayout, AllocationUnitId, ContractFieldId, ContractLayoutError,
-        EnumOverlayGroup, FieldStorageLayout, LayoutBinding, LayoutBindingTarget,
-        LayoutInvariantError, LayoutProjection, LayoutViewKind, PlaceStep, RootCellId, RootRole,
-        StoragePlace, validate_allocated_contract_layout,
+        AllocatedContractStorageLayout, ContractFieldId, ContractLayoutError, EnumOverlayGroup,
+        FieldStorageLayout, LayoutBinding, LayoutInvariantError, LayoutProjection, LayoutViewKind,
+        PlaceStep, RootCellId, RootRole, StoragePlace, validate_allocated_contract_layout,
     },
     hir_def::{CallableDef, Contract, Expr, IdentId, ItemKind, Partial},
     test_db::{HirAnalysisTestDb, find_contract, format_diagnostics},
@@ -1321,11 +1320,6 @@ contract C { mut value: Wrapper<Slot> }
     };
     assert_eq!(leaves.len(), 2);
     assert!(
-        leaves
-            .iter()
-            .all(|leaf| matches!(leaf.target, LayoutBindingTarget::Scalar(_)))
-    );
-    assert!(
         layout
             .declared_concrete_ty(&db, &Default::default())
             .is_err()
@@ -1743,14 +1737,12 @@ contract C { mut value: Outer }
         [PlaceStep::EnumVariant(0), PlaceStep::EnumPayloadField(0)]
     );
     assert_eq!(inner.members.len(), 2);
-    assert_eq!(inner.reserved_extent, 1);
     let outer = layout
         .overlay_groups
         .iter()
         .find(|group| group.enum_place.steps.is_empty())
         .expect("outer enum overlay must be explicit");
     assert_eq!(outer.members.len(), 3);
-    assert_eq!(outer.reserved_extent, 1);
     validate_allocated_contract_layout(
         &db,
         contract.storage_layout(&db).allocated.as_ref().unwrap(),
@@ -1803,10 +1795,7 @@ contract C {
 
     assert_eq!(shared_one, shared_two);
     assert_ne!(shared_one, other);
-    let slot = |target| match target {
-        LayoutBindingTarget::Scalar(cell) => choice.cells[cell.0 as usize].allocation.unwrap().slot,
-        LayoutBindingTarget::Indexed(_) => panic!("enum roots should be scalar"),
-    };
+    let slot = |cell: RootCellId| choice.cells[cell.0 as usize].allocation.unwrap().slot;
     assert_ne!(slot(shared_one), slot(other));
     assert!(choice.overlay_groups.is_empty());
     assert_eq!(choice.slot_count, 3);
@@ -1827,25 +1816,16 @@ contract C {
         .fields
         .get_mut(&IdentId::new(&db, "choice".to_string()))
         .unwrap();
-    let (LayoutBindingTarget::Scalar(shared), LayoutBindingTarget::Scalar(other)) =
-        (shared_one, other)
-    else {
-        unreachable!()
-    };
     choice.cells[other.0 as usize]
         .allocation
         .as_mut()
         .unwrap()
-        .slot = choice.cells[shared.0 as usize].allocation.unwrap().slot;
+        .slot = choice.cells[shared_one.0 as usize].allocation.unwrap().slot;
     choice.overlay_groups.push(EnumOverlayGroup {
         enum_place: root,
         lane: 0,
-        members: vec![
-            AllocationUnitId::Scalar(shared),
-            AllocationUnitId::Scalar(other),
-        ],
+        members: vec![shared_one, other],
         space: ProviderAddressSpace::Storage,
-        reserved_extent: 1,
     });
     assert!(matches!(
         validate_allocated_contract_layout(&db, &invalid),
@@ -1958,7 +1938,7 @@ contract C {
     assert!(matches!(
         mutated_layout_error(&db, layout, |invalid| {
             invalid.fields.get_mut(&choice).unwrap().overlay_groups[0].members[0] =
-                AllocationUnitId::Scalar(RootCellId(u32::MAX));
+                RootCellId(u32::MAX);
         }),
         LayoutInvariantError::InvalidOverlayGroup { .. }
     ));

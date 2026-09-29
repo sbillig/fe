@@ -3570,7 +3570,6 @@ impl<'db> TyAlias<'db> {
                     Binder::bind(self.alias.into(), owner).instantiate(db, &completed)
                 }),
                 selector,
-                index_dimensions: root_use.index_dimensions.clone(),
             };
             if !instantiated.root_uses.contains(&root_use) {
                 instantiated.root_uses.push(root_use);
@@ -3624,7 +3623,6 @@ impl<'a, 'db> LayoutParamRootUseCollector<'a, 'db> {
                 value: *value,
                 owner: direct_owner,
                 selector,
-                index_dimensions: Vec::new(),
             });
             return;
         }

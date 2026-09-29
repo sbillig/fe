@@ -39,15 +39,15 @@ pub use reference::{
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 pub use storage_layout::{
-    AllocatedContractStorageLayout, AllocationUnitId, AssignedLayoutTy, AssignedRootValue,
-    ConcreteRootOccurrence, ConcreteRootOccurrenceId, ContractFieldId, ContractLayoutEntry,
-    ContractLayoutEntryKind, ContractLayoutError, ContractLayoutParameterOrigin,
-    ContractLayoutPath, ContractLayoutPathSegment, ContractLayoutReport, ContractLayoutValue,
+    AllocatedContractStorageLayout, AssignedLayoutTy, AssignedRootValue, ConcreteRootOccurrence,
+    ConcreteRootOccurrenceId, ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
+    ContractLayoutError, ContractLayoutParameterOrigin, ContractLayoutPath,
+    ContractLayoutPathSegment, ContractLayoutReport, ContractLayoutValue,
     ContractStorageLayoutResult, EnumOverlayGroup, ExplicitRootReservation, FieldStorageLayout,
-    LayoutBinding, LayoutBindingLeaf, LayoutBindingTarget, LayoutInvariantError, LayoutProjection,
-    LayoutRootFamily, LayoutRootFamilyId, LayoutSelection, LayoutViewError, LayoutViewKind,
-    PlaceStep, RootAllocation, RootCell, RootCellId, RootOccurrence, RootOccurrenceId, RootRole,
-    StoragePlace, ValidatedFieldLayoutPlan, validate_allocated_contract_layout,
+    LayoutBinding, LayoutBindingLeaf, LayoutInvariantError, LayoutProjection, LayoutSelection,
+    LayoutViewError, LayoutViewKind, PlaceStep, RootAllocation, RootCell, RootCellId,
+    RootOccurrence, RootOccurrenceId, RootRole, StoragePlace, ValidatedFieldLayoutPlan,
+    validate_allocated_contract_layout,
 };
 pub use symbol::{
     IndexedReference, ReferenceIndex, SignatureWithSpan, SourceLocation, SymbolKind, SymbolView,
@@ -5306,7 +5306,6 @@ impl<'db> FieldView<'db> {
                 | ContractLayoutError::AmbiguousLayoutBindingSelector { .. }
                 | ContractLayoutError::InconsistentLayoutRootType { .. }
                 | ContractLayoutError::LayoutRootNeedsLanding { .. }
-                | ContractLayoutError::LayoutRootNeedsIndex { .. }
                 | ContractLayoutError::InternalLayoutGraph) => {
                     let issue = match error {
                         ContractLayoutError::ConflictingLayoutRootSpaces { .. } => {
@@ -5329,9 +5328,6 @@ impl<'db> FieldView<'db> {
                         }
                         ContractLayoutError::LayoutRootNeedsLanding { .. } => {
                             crate::analysis::ty::diagnostics::ContractFieldLayoutIssue::RootNeedsLanding
-                        }
-                        ContractLayoutError::LayoutRootNeedsIndex { .. } => {
-                            crate::analysis::ty::diagnostics::ContractFieldLayoutIssue::RootNeedsIndex
                         }
                         ContractLayoutError::InternalLayoutGraph => {
                             crate::analysis::ty::diagnostics::ContractFieldLayoutIssue::InternalGraph

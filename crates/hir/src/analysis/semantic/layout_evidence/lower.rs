@@ -29,7 +29,7 @@ use crate::analysis::{
         ty_lower::layout_bundle_schema_for_semantic_value,
     },
 };
-use crate::semantic::{AssignedRootValue, LayoutProjection, LayoutViewKind, ProviderBinding};
+use crate::semantic::{LayoutProjection, LayoutViewKind, ProviderBinding};
 
 use super::{
     LayoutEvidenceAssignment, LayoutEvidenceBase, LayoutEvidenceBody, LayoutEvidenceCall,
@@ -288,26 +288,6 @@ fn layout_projections<'db>(
     Ok(projections)
 }
 
-fn assigned_component<'db>(
-    value: AssignedRootValue<'db>,
-    ty: TyId<'db>,
-    port: LayoutPortKey,
-) -> Result<ComponentExpr<'db>, LayoutEvidenceError<'db>> {
-    match value {
-        AssignedRootValue::Literal { slot, .. } => Ok(ComponentExpr {
-            expr: LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Constant(
-                LayoutEvidenceConstant {
-                    ty,
-                    base: LayoutEvidenceBase::Slot(slot),
-                },
-            )),
-            ty,
-            port,
-        }),
-        AssignedRootValue::Indexed { .. } => Err(LayoutEvidenceError::InvalidPlace),
-    }
-}
-
 fn assigned_provider_components<'db>(
     db: &'db dyn HirAnalysisDb,
     provider: &ProviderBinding<'db>,
@@ -361,11 +341,16 @@ fn assigned_provider_components<'db>(
             }
         }
         .ok_or(LayoutEvidenceError::ProviderPlace)?;
-        values.push(assigned_component(
-            value,
-            component.ty,
-            component.port.clone(),
-        )?);
+        values.push(ComponentExpr {
+            expr: LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Constant(
+                LayoutEvidenceConstant {
+                    ty: component.ty,
+                    base: LayoutEvidenceBase::Slot(value.slot),
+                },
+            )),
+            ty: component.ty,
+            port: component.port.clone(),
+        });
     }
     LayoutBundleValue::new(values)
 }

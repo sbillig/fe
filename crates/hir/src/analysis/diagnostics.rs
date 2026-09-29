@@ -2290,17 +2290,17 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     ContractFieldLayoutIssue::ConflictingRootSpaces => (
                         "one layout root was routed to conflicting address spaces",
                         "this field gives one semantic root incompatible storage spaces",
-                        "a scalar cell or indexed family has exactly one address space",
+                        "a layout root has exactly one address space",
                     ),
                     ContractFieldLayoutIssue::ExtentOverflow => (
                         "contract-field layout extent overflowed",
-                        "this field's inline span or indexed-family extent is too large",
+                        "this field's inline span is too large",
                         "all layout extents and row-major strides are computed with checked arithmetic",
                     ),
                     ContractFieldLayoutIssue::IncompleteProjection => (
                         "contract-field layout is incomplete",
                         "this field contains an ADT or array application that cannot be projected completely",
-                        "every layout-bearing application must have its full declared generic arity and every root-bearing array must have a known length",
+                        "every layout-bearing application must have its full declared generic arity and every array must have a known length",
                     ),
                     ContractFieldLayoutIssue::InconsistentArrayLength => (
                         "contract-field array length is inconsistent",
@@ -2321,11 +2321,6 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                         "layout root requires a concrete landing",
                         "this field observes a source root with more than one structural landing",
                         "select a concrete field or target place before requesting a scalar root value",
-                    ),
-                    ContractFieldLayoutIssue::RootNeedsIndex => (
-                        "layout root requires a concrete array index",
-                        "this field observes an indexed family without all required indices",
-                        "select every array dimension or use an operation that accepts a runtime affine root",
                     ),
                     ContractFieldLayoutIssue::InternalGraph => (
                         "contract layout graph failed validation",

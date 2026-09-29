@@ -142,7 +142,7 @@ fn layout_projections_from_callable_path(
                 projections.push(LayoutProjection::VariantField { variant, field });
             }
             LayoutBundlePathStep::Index => {
-                projections.push(LayoutProjection::Index(None));
+                projections.push(LayoutProjection::Index);
             }
             LayoutBundlePathStep::ConstParam(param) => {
                 projections.push(LayoutProjection::ConstParam(param));
@@ -985,7 +985,7 @@ impl<'db> TyChecker<'db> {
                     len,
                 })
             }
-            if let Some(projected) = self.contract_field_projected_index_ty(lhs_expr, rhs_expr) {
+            if let Some(projected) = self.contract_field_projected_index_ty(lhs_expr) {
                 return ExprProp::new(self.table.fold_ty(self.db, projected), lhs.is_mut);
             }
             return ExprProp::new(elem_ty, lhs.is_mut);
@@ -4167,12 +4167,9 @@ impl<'db> TyChecker<'db> {
         self.selected_contract_layout_ty(field, view, &selection)
     }
 
-    fn contract_field_projected_index_ty(&self, lhs: ExprId, index: ExprId) -> Option<TyId<'db>> {
+    fn contract_field_projected_index_ty(&self, lhs: ExprId) -> Option<TyId<'db>> {
         let (field, view, mut projections) = self.contract_field_layout_context(lhs)?;
-        projections.push(LayoutProjection::Index(
-            self.try_get_literal_int(index)
-                .and_then(|value| value.data(self.db).to_usize()),
-        ));
+        projections.push(LayoutProjection::Index);
         let selection = field
             .selection_for_projections(self.db, view, &projections)
             .ok()?;
@@ -4188,16 +4185,13 @@ impl<'db> TyChecker<'db> {
         match field.projected_concrete_ty(self.db, view, selection) {
             Ok(ty) => Some(ty),
             Err(
-                LayoutViewError::NonPhysicalRoot { .. }
-                | LayoutViewError::RootNeedsLanding { .. }
-                | LayoutViewError::RootNeedsIndex { .. },
+                LayoutViewError::NonPhysicalRoot { .. } | LayoutViewError::RootNeedsLanding { .. },
             ) => field
                 .project(self.db, view, selection)
                 .ok()
                 .map(|view| view.shape_ty()),
             Err(
                 LayoutViewError::RootNotClassified { .. }
-                | LayoutViewError::InvalidIndex { .. }
                 | LayoutViewError::MissingAllocation { .. }
                 | LayoutViewError::InvalidProjection,
             ) => None,
@@ -4249,15 +4243,7 @@ impl<'db> TyChecker<'db> {
             .filter_map(|projection| match projection {
                 PlaceProjection::Deref { .. } => None,
                 PlaceProjection::Field { index, .. } => Some(LayoutProjection::Field(*index)),
-                PlaceProjection::Index { index_expr, .. } => Some({
-                    let index = match index_expr.data(self.db, self.body()) {
-                        Partial::Present(Expr::Lit(LitKind::Int(value))) => {
-                            value.data(self.db).to_usize()
-                        }
-                        _ => None,
-                    };
-                    LayoutProjection::Index(index)
-                }),
+                PlaceProjection::Index { .. } => Some(LayoutProjection::Index),
             })
             .collect::<Vec<_>>();
         Some((field, layout_env.view, projections))

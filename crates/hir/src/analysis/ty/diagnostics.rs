@@ -281,7 +281,6 @@ pub enum ContractFieldLayoutIssue {
     AmbiguousBindingSelector,
     InconsistentRootType,
     RootNeedsLanding,
-    RootNeedsIndex,
     InternalGraph,
 }
 
