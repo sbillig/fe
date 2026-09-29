@@ -286,21 +286,23 @@ fn requirement_evaluation_cannot_reenter_an_unfinished_type_expression() {
     let (path, base) = fixture(
         "relational/requirement_evaluation_cannot_reenter_an_unfinished_type_expression/type_cycle.fe",
     );
+    let direct = edited(&base, "if flag<1>()", "if true");
+    let unmet = edited(&base, "count(N) == 0", "count(N) == 1");
     for first in ["count", "answer"] {
         let mut db = database();
         let file = input(&mut db, &path, "");
-        for cyclic in [true, false, true] {
-            let source = if cyclic {
-                base.clone()
-            } else {
-                edited(&base, "if flag<1>()", "if true")
-            };
+        for (source, holds) in [
+            (&base, true),
+            (&direct, true),
+            (&unmet, false),
+            (&base, true),
+        ] {
             file.set_text(&mut db).to(source.clone());
             let _ = check_func_body(&db, named(&db, file, first));
             let warm = diagnostics(&db, file);
-            assert_eq!(warm.is_empty(), !cyclic, "{first}: {warm}");
+            assert_eq!(warm.is_empty(), holds, "{first}: {warm}");
             let mut fresh = database();
-            let fresh_file = input(&mut fresh, &path, &source);
+            let fresh_file = input(&mut fresh, &path, source);
             assert_eq!(warm, diagnostics(&fresh, fresh_file));
         }
     }
@@ -734,5 +736,45 @@ fn record_requirement_cycles_converge_in_every_query_order() {
         let mut fresh = database();
         let fresh_file = input(&mut fresh, &path, &source);
         assert_eq!(warm, diagnostics(&fresh, fresh_file), "{first}");
+    }
+}
+
+#[test]
+fn constants_used_in_types_their_requirements_evaluate_converge_in_any_query_order() {
+    use hir::analysis::ty::ty_check::{check_const_body, check_func_body};
+    use hir::hir_def::ItemKind;
+    use salsa::Setter;
+    let (path, base) = fixture(
+        "relational/constants_used_in_types_their_requirements_evaluate_converge_in_any_query_order/constant_in_type.fe",
+    );
+    let unmet = edited(&base, "values[0] == 1", "values[0] == 2");
+    for first in ["C", "probe", "sized"] {
+        let mut db = database();
+        let file = input(&mut db, &path, "");
+        for (source, holds) in [(&base, true), (&unmet, false), (&base, true)] {
+            file.set_text(&mut db).to(source.clone());
+            if first == "C" {
+                let constant = db
+                    .top_mod(file)
+                    .all_items(&db)
+                    .iter()
+                    .find_map(|item| match item {
+                        ItemKind::Const(constant) => Some(*constant),
+                        _ => None,
+                    })
+                    .unwrap();
+                let _ = check_const_body(&db, constant);
+            } else {
+                let _ = check_func_body(&db, named(&db, file, first));
+            }
+            let warm = diagnostics(&db, file);
+            assert_eq!(warm.is_empty(), holds, "{first}: {warm}");
+            if !holds {
+                assert!(warm.contains("const requirement"), "{first}: {warm}");
+            }
+            let mut fresh = database();
+            let fresh_file = input(&mut fresh, &path, source);
+            assert_eq!(warm, diagnostics(&fresh, fresh_file), "{first}");
+        }
     }
 }

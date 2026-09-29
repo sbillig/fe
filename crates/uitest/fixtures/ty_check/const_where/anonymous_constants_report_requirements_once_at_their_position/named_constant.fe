@@ -1,0 +1,6 @@
+// A named constant's unmet requirement is reported once, at the constant,
+// not again at each type that uses it.
+const fn length<const N: usize>() -> usize where N > 0 { 1 }
+const C: usize = length<0>()
+fn first() -> [u8; C] { [0] }
+fn second(_ values: [u8; C]) {}

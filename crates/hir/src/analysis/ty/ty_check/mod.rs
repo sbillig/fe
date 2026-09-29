@@ -346,6 +346,49 @@ pub(crate) fn check_generic_default_body_types<'db>(
     owner: GenericParamOwner<'db>,
     param_idx: usize,
 ) -> Vec<DefaultConstBodyCheck<'db>> {
+    let Ok(Some(default)) = generic_default(db, owner, param_idx) else {
+        return Vec::new();
+    };
+    let bodies = match default {
+        GenericDefault::Const {
+            value: ConstGenericArgValue::Expr(Partial::Present(body)),
+            expected,
+        } => vec![(*body, expected.instantiate_identity())],
+        GenericDefault::Type(template) => {
+            unevaluated_const_bodies(db, &[template.instantiate_identity()])
+        }
+        GenericDefault::Const { .. } => Vec::new(),
+    };
+    bodies
+        .into_iter()
+        .filter(|(_, expected)| !expected.has_invalid(db))
+        .map(|(body, expected)| {
+            let body_diags = &check_anon_const_body(db, body, expected).0;
+            let diagnostics = if expected.has_param(db) {
+                body_diags
+                    .iter()
+                    .filter(|diag| !diag_depends_on_param_instantiation(db, diag))
+                    .cloned()
+                    .collect()
+            } else {
+                body_diags.clone()
+            };
+            DefaultConstBodyCheck {
+                body,
+                expected,
+                diagnostics,
+                ctfe_ready: body_diags.is_empty(),
+            }
+        })
+        .collect()
+}
+
+/// The anonymous constant bodies that `tys`, lowered with deferred const
+/// bodies, still hold, each with the type its position checks it against.
+pub(super) fn unevaluated_const_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    tys: &[TyId<'db>],
+) -> Vec<(Body<'db>, TyId<'db>)> {
     struct NestedConstBodies<'db> {
         db: &'db dyn HirAnalysisDb,
         seen: FxHashSet<(Body<'db>, TyId<'db>)>,
@@ -373,47 +416,15 @@ pub(crate) fn check_generic_default_body_types<'db>(
         }
     }
 
-    let Ok(Some(default)) = generic_default(db, owner, param_idx) else {
-        return Vec::new();
+    let mut nested = NestedConstBodies {
+        db,
+        seen: FxHashSet::default(),
+        bodies: Vec::new(),
     };
-    let bodies = match default {
-        GenericDefault::Const {
-            value: ConstGenericArgValue::Expr(Partial::Present(body)),
-            expected,
-        } => vec![(*body, expected.instantiate_identity())],
-        GenericDefault::Type(template) => {
-            let mut nested = NestedConstBodies {
-                db,
-                seen: FxHashSet::default(),
-                bodies: Vec::new(),
-            };
-            template.instantiate_identity().visit_with(&mut nested);
-            nested.bodies
-        }
-        GenericDefault::Const { .. } => Vec::new(),
-    };
-    bodies
-        .into_iter()
-        .filter(|(_, expected)| !expected.has_invalid(db))
-        .map(|(body, expected)| {
-            let body_diags = &check_anon_const_body(db, body, expected).0;
-            let diagnostics = if expected.has_param(db) {
-                body_diags
-                    .iter()
-                    .filter(|diag| !diag_depends_on_param_instantiation(db, diag))
-                    .cloned()
-                    .collect()
-            } else {
-                body_diags.clone()
-            };
-            DefaultConstBodyCheck {
-                body,
-                expected,
-                diagnostics,
-                ctfe_ready: body_diags.is_empty(),
-            }
-        })
-        .collect()
+    for ty in tys {
+        ty.visit_with(&mut nested);
+    }
+    nested.bodies
 }
 
 /// Whether a default-body diagnostic could be an artifact of checking

@@ -1,0 +1,26 @@
+// Every position that can hold an anonymous constant reports its unmet
+// requirement once, at the call inside it, and nothing else.
+const fn length<const N: usize>() -> usize where N > 0 { 1 }
+const fn id<const N: usize>() -> usize { N }
+struct Holder<const N: usize> { value: u256 }
+impl<const N: usize> Holder<N> {
+    fn make() -> u256 { 1 }
+    fn take<const K: usize>(self) -> u256 { self.value }
+}
+enum Choice<const N: usize> { Empty, Value(u256) }
+trait Tag<const K: usize> {}
+struct Plain {}
+struct Defaulted<T = [u8; { length<0>() }]> { value: u256 }
+
+fn let_type() { let _: [u8; { length<0>() }] = [0] }
+fn signature(_ values: [u8; { length<0>() }]) {}
+fn repeat() -> [u8; 1] { [0; { length<0>() }] }
+fn call_argument() -> usize { id<{ length<0>() }>() }
+fn function_value() { let _ = id<{ length<0>() }> }
+fn method_argument() -> u256 { Holder<1> { value: 1 }.take<{ length<0>() }>() }
+fn qualifier() -> u256 { Holder<{ length<0>() }>::make() }
+fn record() -> u256 { Holder<{ length<0>() }> { value: 1 }.value }
+fn variant() { let _ = Choice<{ length<0>() }>::Empty }
+fn nested() -> [u8; { id<{ length<0>() }>() }] { [0] }
+impl Tag<{ length<0>() }> for Plain {}
+fn bound<T: Tag<{ length<0>() }>>() {}

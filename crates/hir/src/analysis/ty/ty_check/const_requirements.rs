@@ -3,8 +3,9 @@
 //! resolved, typed expressions after substitution, without evaluating
 //! unknown parameters or assuming the obligation being checked.
 use super::*;
+use crate::analysis::name_resolution::resolve_path_with_minter;
 use crate::analysis::ty::{subst::substitute_complete, ty_lower::CompleteSubst};
-use crate::hir_def::{ItemKind, UnOp, scope_graph::ScopeId};
+use crate::hir_def::{GenericArg, GenericArgListId, ItemKind, UnOp, scope_graph::ScopeId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PredicateKey<'db> {
@@ -356,7 +357,199 @@ pub(super) fn check_body_requirements<'db>(
             }
         }
     }
+    for (nested, expected) in expression_const_bodies(db, body, typed) {
+        diags.extend(anon_const_requirements(db, nested, expected));
+    }
     diags
+}
+
+/// The unmet requirements of an anonymous constant checked against
+/// `expected`. Type lowering evaluates such a constant but does not check its
+/// requirements: checking them evaluates code, which can lower the type the
+/// constant is part of. So the constant's position owns them, and its owner
+/// calls this: `check_body_requirements` for expression positions and
+/// `check_declared_type_requirements` for types. An inference failure is
+/// reported by type lowering, so it has no requirements here.
+fn anon_const_requirements<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expected: TyId<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let owner = BodyOwner::AnonConstBody { body, expected };
+    let (diags, typed) = infer_body(db, owner);
+    if diags.is_empty() || static_assert_ignorable_type_diags(db, diags) {
+        check_body_requirements(db, owner, typed)
+    } else {
+        Vec::new()
+    }
+}
+
+/// The anonymous constants written directly in `path`'s segments, such as
+/// `{ n + 1 }` in `Bounded<{ n + 1 }>::helper`.
+fn path_const_bodies<'db>(db: &'db dyn HirAnalysisDb, path: PathId<'db>) -> Vec<Body<'db>> {
+    let mut bodies = Vec::new();
+    let mut segment = Some(path);
+    while let Some(current) = segment {
+        bodies.extend(generic_arg_const_bodies(db, current.generic_args(db)));
+        segment = current.parent(db);
+    }
+    bodies
+}
+
+fn generic_arg_const_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    args: GenericArgListId<'db>,
+) -> impl Iterator<Item = Body<'db>> + 'db {
+    args.data(db).iter().filter_map(|arg| match arg {
+        GenericArg::Const(arg) => match arg.value {
+            ConstGenericArgValue::Expr(Partial::Present(body)) => Some(body),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+/// Pairs each of `bodies` with the type lowering checks it against, read
+/// from `lowered`, a lowering that deferred its anonymous constants.
+fn positioned_const_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    lowered: &[TyId<'db>],
+    bodies: &[Body<'db>],
+) -> Vec<(Body<'db>, TyId<'db>)> {
+    unevaluated_const_bodies(db, lowered)
+        .into_iter()
+        .filter(|(body, _)| bodies.contains(body))
+        .collect()
+}
+
+/// The types a path resolution carries, including trait arguments.
+fn path_res_tys<'db>(db: &'db dyn HirAnalysisDb, res: PathRes<'db>) -> Vec<TyId<'db>> {
+    let mut tys = Vec::new();
+    match res {
+        PathRes::Trait(inst) | PathRes::TraitMethod(inst, _) => {
+            tys.extend(inst.args(db).iter().copied());
+        }
+        res => {
+            res.map_over_ty(|ty| {
+                tys.push(ty);
+                ty
+            });
+        }
+    }
+    tys
+}
+
+/// The anonymous constants a body writes in expression and pattern
+/// positions, with the type each position checks it against: array repeat
+/// lengths, explicit const arguments of calls, method calls and function
+/// values, and const arguments of the other path segments. Types written in
+/// the body are covered by `check_declared_type_requirements`.
+fn expression_const_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    typed: &TypedBody<'db>,
+) -> Vec<(Body<'db>, TyId<'db>)> {
+    let checked_const_ty = |ty: TyId<'db>| match ty.data(db) {
+        TyData::ConstTy(const_ty) if !ty.has_invalid(db) => Some(const_ty.ty(db)),
+        _ => None,
+    };
+    // Explicit arguments of a callable's own parameters, which the type
+    // checker applies after the path resolves.
+    let explicit_args = |expr: ExprId, args: GenericArgListId<'db>| {
+        let (definition, generic_args) = match typed.callable_expr(expr) {
+            Some(callable) => (callable.callable_def(), callable.generic_args().to_vec()),
+            None => {
+                let (base, generic_args) = typed.expr_ty(db, expr).decompose_ty_app(db);
+                let TyData::TyBase(TyBase::Func(definition)) = base.data(db) else {
+                    return Vec::new();
+                };
+                (*definition, generic_args.to_vec())
+            }
+        };
+        let offset = definition.offset_to_explicit_params_position(db);
+        args.data(db)
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, arg)| {
+                let GenericArg::Const(arg) = arg else {
+                    return None;
+                };
+                let ConstGenericArgValue::Expr(Partial::Present(body)) = arg.value else {
+                    return None;
+                };
+                Some((body, checked_const_ty(*generic_args.get(offset + idx)?)?))
+            })
+            .collect::<Vec<_>>()
+    };
+    // Arguments of the other segments, which path resolution applies. Each
+    // segment's arguments are read from the resolution of the path up to that
+    // segment: a qualifier such as `Holder<{ n }>` in `Holder<{ n }>::make` is
+    // a type, whatever the full path names.
+    let resolved_args = |path: PathId<'db>, value: bool| {
+        let mut entries = Vec::new();
+        let mut segment = Some((path, value));
+        while let Some((prefix, value)) = segment {
+            let bodies: Vec<_> = generic_arg_const_bodies(db, prefix.generic_args(db)).collect();
+            if !bodies.is_empty() {
+                let minter = LoweringContext::deferred(HoleAnchor::TemplatePath {
+                    path: prefix,
+                    scope: body.scope(),
+                    assumptions: typed.assumptions(),
+                });
+                let resolve = |value| {
+                    resolve_path_with_minter(
+                        db,
+                        prefix,
+                        body.scope(),
+                        typed.assumptions(),
+                        value,
+                        &minter,
+                    )
+                };
+                if let Ok(res) = resolve(value).or_else(|_| resolve(!value)) {
+                    entries.extend(positioned_const_bodies(db, &path_res_tys(db, res), &bodies));
+                }
+            }
+            segment = prefix.parent(db).map(|parent| (parent, false));
+        }
+        entries
+    };
+
+    let mut found: Vec<(Body<'db>, TyId<'db>)> = Vec::new();
+    for (expr, data) in body.exprs(db).iter() {
+        let entries = match data.borrowed().to_opt() {
+            Some(Expr::ArrayRep(_, len)) => len
+                .to_opt()
+                .and_then(|len| {
+                    let len_ty = *typed.expr_ty(db, expr).decompose_ty_app(db).1.get(1)?;
+                    Some(vec![(len, checked_const_ty(len_ty)?)])
+                })
+                .unwrap_or_default(),
+            Some(Expr::Path(Partial::Present(path))) => {
+                let mut entries = resolved_args(*path, true);
+                entries.extend(explicit_args(expr, path.generic_args(db)));
+                entries
+            }
+            Some(Expr::RecordInit(Partial::Present(path), _)) => resolved_args(*path, false),
+            Some(Expr::MethodCall(_, _, args, _)) => explicit_args(expr, *args),
+            _ => Vec::new(),
+        };
+        found.extend(entries);
+    }
+    for pat in body.pats(db).values() {
+        if let Some(
+            Pat::Path(Partial::Present(path), _)
+            | Pat::PathTuple(Partial::Present(path), _)
+            | Pat::Record(Partial::Present(path), _),
+        ) = pat.borrowed().to_opt()
+        {
+            found.extend(resolved_args(*path, true));
+        }
+    }
+    // A body appears in one position, but two lookups can both find it.
+    let mut seen = FxHashSet::default();
+    found.retain(|(body, _)| seen.insert(*body));
+    found
 }
 
 /// The types an impl's header instantiates: its self type and, for a trait
@@ -733,35 +926,122 @@ fn formation_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
-/// Check every authored type position, including unused defaults and aliases.
-/// Inferred expression types are checked separately after body inference.
+/// Check every authored type position, including unused defaults and aliases,
+/// and the anonymous constants written directly in types and trait
+/// references. Inferred expression types are checked separately after body
+/// inference.
 pub(crate) fn check_declared_type_requirements<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: crate::hir_def::TopLevelMod<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
+    use crate::hir_def::{TraitRefId, TypeKind};
     use crate::span::types::LazyTySpan;
-    use crate::visitor::{Visitor, VisitorCtxt, walk_type};
+    use crate::visitor::{
+        Visitor, VisitorCtxt, prelude::LazyTraitRefSpan, walk_trait_ref, walk_type,
+    };
     struct Checker<'db> {
         db: &'db dyn HirAnalysisDb,
         diags: Vec<FuncBodyDiag<'db>>,
         /// Failing type applications, in report order.
         reported: Vec<TyId<'db>>,
+        /// Type parameter defaults, and how deep the walk is inside one.
+        /// `check_generic_default_bodies` owns the anonymous constants there.
+        defaults: FxHashSet<crate::hir_def::TypeId<'db>>,
+        default_depth: usize,
+    }
+    fn assumptions_at<'db>(
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+    ) -> PredicateListId<'db> {
+        let mut enclosing = scope;
+        while matches!(enclosing.item(), ItemKind::Body(_)) {
+            let Some(parent) = enclosing.parent(db) else {
+                break;
+            };
+            enclosing = parent;
+        }
+        crate::semantic::constraints_for(db, enclosing.item())
+    }
+    impl<'db> Checker<'db> {
+        fn check_const_bodies(&mut self, lowered: &[TyId<'db>], bodies: &[Body<'db>]) {
+            for (body, expected) in positioned_const_bodies(self.db, lowered, bodies) {
+                self.diags
+                    .extend(anon_const_requirements(self.db, body, expected));
+            }
+        }
     }
     impl<'db> Visitor<'db> for Checker<'db> {
+        fn visit_generic_param(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, crate::visitor::prelude::LazyGenericParamSpan<'db>>,
+            param: &crate::hir_def::GenericParam<'db>,
+        ) {
+            if let crate::hir_def::GenericParam::Type(param) = param
+                && let Some(default) = param.default_ty
+            {
+                self.defaults.insert(default);
+            }
+            crate::visitor::walk_generic_param(self, ctxt, param);
+        }
+
+        // The default owner checks the constants of a default type, not the
+        // types written inside those constants' bodies.
+        fn visit_body(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, crate::visitor::prelude::LazyBodySpan<'db>>,
+            body: Body<'db>,
+        ) {
+            let depth = std::mem::take(&mut self.default_depth);
+            crate::visitor::walk_body(self, ctxt, body);
+            self.default_depth = depth;
+        }
+
+        fn visit_trait_ref(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, LazyTraitRefSpan<'db>>,
+            trait_ref: TraitRefId<'db>,
+        ) {
+            if let Some(path) = trait_ref.path(self.db).to_opt()
+                && self.default_depth == 0
+            {
+                let bodies = path_const_bodies(self.db, path);
+                if !bodies.is_empty() {
+                    let scope = ctxt.scope();
+                    let assumptions = assumptions_at(self.db, scope);
+                    let minter = LoweringContext::deferred(HoleAnchor::TemplatePath {
+                        path,
+                        scope,
+                        assumptions,
+                    });
+                    if let Ok(res) =
+                        resolve_path_with_minter(self.db, path, scope, assumptions, false, &minter)
+                    {
+                        let lowered = path_res_tys(self.db, res);
+                        self.check_const_bodies(&lowered, &bodies);
+                    }
+                }
+            }
+            walk_trait_ref(self, ctxt, trait_ref);
+        }
+
         fn visit_ty(
             &mut self,
             ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>,
             hir_ty: crate::hir_def::TypeId<'db>,
         ) {
             let scope = ctxt.scope();
-            let mut enclosing = scope;
-            while matches!(enclosing.item(), ItemKind::Body(_)) {
-                let Some(parent) = enclosing.parent(self.db) else {
-                    break;
-                };
-                enclosing = parent;
+            let assumptions = assumptions_at(self.db, scope);
+            let bodies = match hir_ty.data(self.db) {
+                TypeKind::Array(_, Partial::Present(len)) => vec![*len],
+                TypeKind::Path(Partial::Present(path)) => path_const_bodies(self.db, *path),
+                _ => Vec::new(),
+            };
+            let in_default = self.defaults.contains(&hir_ty);
+            self.default_depth += usize::from(in_default);
+            if !bodies.is_empty() && self.default_depth == 0 {
+                let lowered = lower_hir_ty_deferred(self.db, hir_ty, scope, assumptions);
+                self.check_const_bodies(&[lowered], &bodies);
             }
-            let assumptions = crate::semantic::constraints_for(self.db, enclosing.item());
             let ty = lower_hir_ty(self.db, hir_ty, scope, assumptions);
             let span = ctxt.span();
             // Nested authored types are checked first. A failure one of them
@@ -782,12 +1062,15 @@ pub(crate) fn check_declared_type_requirements<'db>(
                 self.reported.push(failing);
                 self.diags.push(diag.into());
             }
+            self.default_depth -= usize::from(in_default);
         }
     }
     let mut checker = Checker {
         db,
         diags: Vec::new(),
         reported: Vec::new(),
+        defaults: FxHashSet::default(),
+        default_depth: 0,
     };
     let mut ctxt = VisitorCtxt::new(db, top_mod.scope(), top_mod.span());
     checker.visit_top_mod(&mut ctxt, top_mod);

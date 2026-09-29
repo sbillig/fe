@@ -1,3 +1,7 @@
+// Evaluating `flag<1>`'s requirement runs `count`, whose type calls `flag<1>`
+// again. Type lowering evaluates that call without checking requirements, so
+// the requirement's evaluation never waits on itself: it holds exactly when
+// `count(1) == 0` does, in every query order.
 const fn flag<const N: usize>() -> bool where count(N) == 0 { true }
 const fn count(_ n: usize) -> usize { let values: [u8; { if flag<1>() { 0 } else { 0 } }] = []
  0 }

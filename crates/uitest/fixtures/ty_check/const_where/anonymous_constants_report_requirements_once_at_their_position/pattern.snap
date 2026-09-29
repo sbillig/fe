@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/anonymous_constants_report_requirements_once_at_their_position/pattern.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ pattern.fe:6:18
+  │
+2 │ const fn length<const N: usize>() -> usize where N > 0 { 1 }
+  │                                                  ----- required by this predicate
+  ·
+6 │         Choice<{ length<0>() }>::Value(value) => value
+  │                  ^^^^^^^^^^^ condition evaluated to `false`

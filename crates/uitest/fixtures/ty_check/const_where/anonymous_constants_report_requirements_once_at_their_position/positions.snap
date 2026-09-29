@@ -1,0 +1,121 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/anonymous_constants_report_requirements_once_at_their_position/positions.fe
+---
+error[8-0093]: const requirement is not satisfied
+   ┌─ positions.fe:13:29
+   │
+ 3 │ const fn length<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                  ----- required by this predicate
+   ·
+13 │ struct Defaulted<T = [u8; { length<0>() }]> { value: u256 }
+   │                             ^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ positions.fe:15:31
+   │
+ 3 │ const fn length<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                  ----- required by this predicate
+   ·
+15 │ fn let_type() { let _: [u8; { length<0>() }] = [0] }
+   │                               ^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ positions.fe:16:31
+   │
+ 3 │ const fn length<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                  ----- required by this predicate
+   ·
+16 │ fn signature(_ values: [u8; { length<0>() }]) {}
+   │                               ^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ positions.fe:17:32
+   │
+ 3 │ const fn length<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                  ----- required by this predicate
+   ·
+17 │ fn repeat() -> [u8; 1] { [0; { length<0>() }] }
+   │                                ^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ positions.fe:18:36
+   │
+ 3 │ const fn length<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                  ----- required by this predicate
+   ·
+18 │ fn call_argument() -> usize { id<{ length<0>() }>() }
+   │                                    ^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ positions.fe:19:36
+   │
+ 3 │ const fn length<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                  ----- required by this predicate
+   ·
+19 │ fn function_value() { let _ = id<{ length<0>() }> }
+   │                                    ^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ positions.fe:20:62
+   │
+ 3 │ const fn length<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                  ----- required by this predicate
+   ·
+20 │ fn method_argument() -> u256 { Holder<1> { value: 1 }.take<{ length<0>() }>() }
+   │                                                              ^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ positions.fe:21:35
+   │
+ 3 │ const fn length<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                  ----- required by this predicate
+   ·
+21 │ fn qualifier() -> u256 { Holder<{ length<0>() }>::make() }
+   │                                   ^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ positions.fe:22:32
+   │
+ 3 │ const fn length<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                  ----- required by this predicate
+   ·
+22 │ fn record() -> u256 { Holder<{ length<0>() }> { value: 1 }.value }
+   │                                ^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ positions.fe:23:33
+   │
+ 3 │ const fn length<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                  ----- required by this predicate
+   ·
+23 │ fn variant() { let _ = Choice<{ length<0>() }>::Empty }
+   │                                 ^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ positions.fe:24:28
+   │
+ 3 │ const fn length<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                  ----- required by this predicate
+   ·
+24 │ fn nested() -> [u8; { id<{ length<0>() }>() }] { [0] }
+   │                            ^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ positions.fe:25:12
+   │
+ 3 │ const fn length<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                  ----- required by this predicate
+   ·
+25 │ impl Tag<{ length<0>() }> for Plain {}
+   │            ^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ positions.fe:26:19
+   │
+ 3 │ const fn length<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                  ----- required by this predicate
+   ·
+26 │ fn bound<T: Tag<{ length<0>() }>>() {}
+   │                   ^^^^^^^^^^^ condition evaluated to `false`

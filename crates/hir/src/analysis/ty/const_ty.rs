@@ -21,7 +21,7 @@ use super::{
         selected_assoc_const_body_template,
     },
     trait_resolution::{Selection, TraitSolveCx, constraint::collect_constraints},
-    ty_check::{BodyOwner, check_anon_const_body, check_const_body},
+    ty_check::{BodyOwner, infer_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_error::first_invalid_ty_cause,
     ty_lower::{
@@ -1545,13 +1545,22 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
     let check_ty = template_ty.unwrap_or(expected_ty);
     let const_ty = const_ty.with_ty(db, expected_ty);
 
-    let (diags, typed_body) = if let Some(const_def) = const_def {
-        let result = check_const_body(db, *const_def);
-        (result.0.clone(), result.1.clone())
-    } else {
-        let result = check_anon_const_body(db, *body, check_ty);
-        (result.0.clone(), result.1.clone())
+    // Type lowering reads a body's inference, never its checked result.
+    // Checking discharges const requirements, which evaluates code that can
+    // lower this same type, so reading it here would close a query cycle.
+    // Requirements of a constant are reported by the constant's owner: a
+    // named constant's declaration, or the position of an anonymous one
+    // (`check_declared_type_requirements`, `check_body_requirements`).
+    let owner = match const_def {
+        Some(const_def) => BodyOwner::Const(*const_def),
+        None => BodyOwner::AnonConstBody {
+            body: *body,
+            expected: check_ty,
+        },
     };
+    let (diags, typed_body) = infer_body(db, owner);
+    // A named constant's checked body also rejects an invalid declared type.
+    let declared_type_invalid = const_def.is_some_and(|const_def| const_def.ty(db).has_invalid(db));
 
     if let Some((expected, given)) = diags.iter().find_map(|diag| match diag {
         FuncBodyDiag::Body(BodyDiag::TypeMismatch {
@@ -1565,22 +1574,7 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
         return Err(InvalidCause::ConstTyMismatch { expected, given });
     }
 
-    if let Some((primary, predicate, reason)) = diags.iter().find_map(|diag| match diag {
-        FuncBodyDiag::Body(BodyDiag::ConstRequirementNotSatisfied {
-            primary,
-            predicate,
-            reason,
-        }) => Some((primary.clone(), predicate.clone(), reason.clone())),
-        _ => None,
-    }) {
-        return Err(InvalidCause::ConstRequirementNotSatisfied {
-            primary,
-            predicate,
-            reason,
-        });
-    }
-
-    if !diags.is_empty() {
+    if !diags.is_empty() || declared_type_invalid {
         if let Some(cause) = typed_body
             .body()
             .and_then(|body| typed_body.expr_ty(db, body.expr(db)).invalid_cause(db))
@@ -2444,7 +2438,7 @@ pub(crate) fn const_body_resolution_reenters<'db>(
     visited.insert(start_body);
     let mut frontier = vec![(start_body, start_expected, start_capture.clone())];
     while let Some((body, expected, capture)) = frontier.pop() {
-        let typed_body = &check_anon_const_body(db, body, expected).1;
+        let typed_body = &infer_body(db, BodyOwner::AnonConstBody { body, expected }).1;
         for cref in typed_body.const_refs() {
             let next = match cref {
                 ConstRef::Const(const_) => const_
