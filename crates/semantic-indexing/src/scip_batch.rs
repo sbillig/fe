@@ -1768,10 +1768,9 @@ fn find_attr_ranges(text: &str) -> Vec<(usize, usize)> {
                 ranges.push((start, j));
                 i = j;
                 continue;
-            } else {
-                // Unterminated — stop scanning to avoid runaway masking.
-                break;
             }
+            // Unterminated — stop scanning to avoid runaway masking.
+            break;
         }
         i += 1;
     }

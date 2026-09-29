@@ -58,13 +58,13 @@ impl<'db> OpaqueWrite<'db> {
             } else {
                 semantics.representation_ty
             };
-            let contract = match OpaqueHandleContract::for_ty(db, self.scope, self.assumptions, ty)
+            let contract = if let Ok(Some(contract)) =
+                OpaqueHandleContract::for_ty(db, self.scope, self.assumptions, ty)
             {
-                Ok(Some(contract)) => contract,
-                Ok(None) | Err(_) => {
-                    failure = Some(UnresolvedCapability(ty));
-                    return Vec::new();
-                }
+                contract
+            } else {
+                failure = Some(UnresolvedCapability(ty));
+                return Vec::new();
             };
             let (witness_scope, source) = if saturated {
                 (

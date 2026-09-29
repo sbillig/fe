@@ -100,15 +100,14 @@ impl<'db> GenericSubst<'db> {
             }
             _ => None,
         };
-        match generic_owner {
-            Some(generic_owner) => Self::for_owner(db, generic_owner, args),
-            None => {
-                assert!(
-                    args.is_empty(),
-                    "{owner:?} has no generic context for {args:?}"
-                );
-                Self::none(db)
-            }
+        if let Some(generic_owner) = generic_owner {
+            Self::for_owner(db, generic_owner, args)
+        } else {
+            assert!(
+                args.is_empty(),
+                "{owner:?} has no generic context for {args:?}"
+            );
+            Self::none(db)
         }
     }
 

@@ -485,9 +485,8 @@ where
             InferenceValue::Bound(ty) => {
                 if ty == value {
                     return Ok(());
-                } else {
-                    return Err(UnificationError::TypeMismatch);
                 }
+                return Err(UnificationError::TypeMismatch);
             }
         };
 

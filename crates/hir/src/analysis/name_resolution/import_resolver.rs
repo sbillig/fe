@@ -262,9 +262,8 @@ impl<'db> ImportResolver<'db> {
         if *self.num_imported_res.entry(use_).or_default() == n_res {
             if is_decidable {
                 return (None, true);
-            } else {
-                return (Some(base_path_resolved), changed);
             }
+            return (Some(base_path_resolved), changed);
         }
 
         self.num_imported_res.insert(base_path_resolved.use_, n_res);
@@ -389,9 +388,8 @@ impl<'db> ImportResolver<'db> {
                 };
                 self.register_error(i_use, err);
                 return None;
-            } else {
-                return Some(IUseResolution::Unchanged(i_use.clone()));
-            };
+            }
+            return Some(IUseResolution::Unchanged(i_use.clone()));
         }
 
         // If the resolution is derived from glob import or external crate, we have to
@@ -815,12 +813,11 @@ impl<'db> IntermediateUse<'db> {
         debug_assert!(!bucket.is_empty());
         debug_assert!(!self.is_base_resolved(db));
 
-        let next_res = match bucket.pick(NameDomain::TYPE) {
-            Ok(res) => res.clone(),
-            Err(_) => {
-                let res = bucket.iter_ok().next().unwrap();
-                return Err(NameResolutionError::InvalidPathSegment(res.clone()));
-            }
+        let next_res = if let Ok(res) = bucket.pick(NameDomain::TYPE) {
+            res.clone()
+        } else {
+            let res = bucket.iter_ok().next().unwrap();
+            return Err(NameResolutionError::InvalidPathSegment(res.clone()));
         };
 
         if next_res.is_mod(db) || next_res.is_enum(db) {
@@ -911,16 +908,13 @@ impl<'db> IntermediateResolvedImports<'db> {
         let scope = i_use.original_scope;
         bucket.set_derivation(NameDerivation::NamedImported(i_use.use_));
 
-        let imported_name = match i_use.imported_name(db) {
-            Some(name) => name,
-            None => {
-                self.resolved_imports
-                    .unnamed_resolved
-                    .entry(scope)
-                    .or_default()
-                    .push(bucket);
-                return Ok(());
-            }
+        let Some(imported_name) = i_use.imported_name(db) else {
+            self.resolved_imports
+                .unnamed_resolved
+                .entry(scope)
+                .or_default()
+                .push(bucket);
+            return Ok(());
         };
 
         let imported_set = self

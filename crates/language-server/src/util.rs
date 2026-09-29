@@ -145,16 +145,13 @@ pub fn diag_to_lsp(
     diag: CompleteDiagnostic,
 ) -> FxHashMap<async_lsp::lsp_types::Url, Vec<async_lsp::lsp_types::Diagnostic>> {
     let mut result = FxHashMap::default();
-    let primary_span = match diag.primary_span() {
-        Some(span) => span,
-        None => {
-            tracing::warn!(
-                "dropping diagnostic {:?} ({}): no primary span",
-                diag.error_code,
-                diag.message,
-            );
-            return result;
-        }
+    let Some(primary_span) = diag.primary_span() else {
+        tracing::warn!(
+            "dropping diagnostic {:?} ({}): no primary span",
+            diag.error_code,
+            diag.message,
+        );
+        return result;
     };
     let primary_location = match to_lsp_location_from_span(db, primary_span) {
         Ok(loc) => loc,

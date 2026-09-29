@@ -522,14 +522,13 @@ fn preserve_actual_shape_boundary_for_runtime_source<'a, 'db>(
     if !actual_matches {
         return boundary;
     }
-    let actual = match carrier_value_class_ref(local, carriers) {
-        Some(actual) => actual.clone(),
-        None => {
-            let Some(actual) = env.semantic_value_class(carriers, local) else {
-                return boundary;
-            };
-            actual
-        }
+    let actual = if let Some(actual) = carrier_value_class_ref(local, carriers) {
+        actual.clone()
+    } else {
+        let Some(actual) = env.semantic_value_class(carriers, local) else {
+            return boundary;
+        };
+        actual
     };
     let actual = BoundaryMatcher::retarget_accepted_class(env.db(), &actual, &boundary.boundary);
     SpecializedBoundary {

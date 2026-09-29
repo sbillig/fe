@@ -591,42 +591,12 @@ fn create_selector_const<'db>(
         .attr_list()
         .and_then(|attr_list| parse_selector_attr(ctxt, attr_list));
 
-    let body = match parsed {
-        Some(parsed) => {
-            if let Some(error_kind) = parsed.error {
-                MsgDiagnostic {
-                    kind: error_kind,
-                    file,
-                    primary_range: parsed.range,
-                    secondary_range: None,
-                    variant_name: variant_name.to_string(),
-                }
-                .accumulate(db);
-                Body::lower_ast_with_variant(
-                    ctxt,
-                    None,
-                    TrackedItemVariant::NamelessBody,
-                    BodyKind::Anonymous,
-                )
-            } else if let Some(expr) = parsed.expr {
-                Body::lower_ast_nameless(ctxt, expr)
-            } else {
-                Body::lower_ast_with_variant(
-                    ctxt,
-                    None,
-                    TrackedItemVariant::NamelessBody,
-                    BodyKind::Anonymous,
-                )
-            }
-        }
-        None => {
-            let variant_range = variant
-                .name()
-                .map_or_else(|| variant.syntax().text_range(), |n| n.text_range());
+    let body = if let Some(parsed) = parsed {
+        if let Some(error_kind) = parsed.error {
             MsgDiagnostic {
-                kind: MsgDiagnosticKind::Missing,
+                kind: error_kind,
                 file,
-                primary_range: variant_range,
+                primary_range: parsed.range,
                 secondary_range: None,
                 variant_name: variant_name.to_string(),
             }
@@ -637,7 +607,34 @@ fn create_selector_const<'db>(
                 TrackedItemVariant::NamelessBody,
                 BodyKind::Anonymous,
             )
+        } else if let Some(expr) = parsed.expr {
+            Body::lower_ast_nameless(ctxt, expr)
+        } else {
+            Body::lower_ast_with_variant(
+                ctxt,
+                None,
+                TrackedItemVariant::NamelessBody,
+                BodyKind::Anonymous,
+            )
         }
+    } else {
+        let variant_range = variant
+            .name()
+            .map_or_else(|| variant.syntax().text_range(), |n| n.text_range());
+        MsgDiagnostic {
+            kind: MsgDiagnosticKind::Missing,
+            file,
+            primary_range: variant_range,
+            secondary_range: None,
+            variant_name: variant_name.to_string(),
+        }
+        .accumulate(db);
+        Body::lower_ast_with_variant(
+            ctxt,
+            None,
+            TrackedItemVariant::NamelessBody,
+            BodyKind::Anonymous,
+        )
     };
 
     AssocConstDef {

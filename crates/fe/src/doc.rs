@@ -480,12 +480,9 @@ fn extract_workspace(
     let canonical_root = workspace_root
         .canonicalize_utf8()
         .unwrap_or_else(|_| workspace_root.clone());
-    let base_url = match Url::from_directory_path(canonical_root.as_str()) {
-        Ok(u) => u,
-        Err(_) => {
-            eprintln!("Error: Failed to build URL for workspace root: {canonical_root}");
-            return None;
-        }
+    let Ok(base_url) = Url::from_directory_path(canonical_root.as_str()) else {
+        eprintln!("Error: Failed to build URL for workspace root: {canonical_root}");
+        return None;
     };
 
     let expanded = match resolver::workspace::expand_workspace_members(
