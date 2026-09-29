@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_type_undefined_name.fe
+---
+error[8-0012]: undefined variable
+  ┌─ const_type_undefined_name.fe:6:24
+  │
+6 │     let values: [u8; { undefined_fn() }] = [1, 2]
+  │                        ^^^^^^^^^^^^ undefined variable `undefined_fn`
+
+error[8-0012]: undefined variable
+   ┌─ const_type_undefined_name.fe:10:26
+   │
+10 │ fn signature() -> [u8; { undefined_value }] { [1] }
+   │                          ^^^^^^^^^^^^^^^ undefined variable `undefined_value`
+
+error[8-0012]: undefined variable
+   ┌─ const_type_undefined_name.fe:12:31
+   │
+12 │ fn argument() -> usize { id<{ undefined_value }>() }
+   │                               ^^^^^^^^^^^^^^^ undefined variable `undefined_value`

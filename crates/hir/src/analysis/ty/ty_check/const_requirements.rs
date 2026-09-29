@@ -3,7 +3,11 @@
 //! resolved, typed expressions after substitution, without evaluating
 //! unknown parameters or assuming the obligation being checked.
 use super::*;
-use crate::analysis::name_resolution::resolve_path_with_minter;
+use crate::analysis::name_resolution::{
+    method_selection::{MethodCandidate, select_method_candidate},
+    resolve_path_with_minter,
+};
+use crate::analysis::ty::canonical::Canonicalized;
 use crate::analysis::ty::{subst::substitute_complete, ty_lower::CompleteSubst};
 use crate::hir_def::{GenericArg, GenericArgListId, ItemKind, UnOp, scope_graph::ScopeId};
 
@@ -358,29 +362,45 @@ pub(super) fn check_body_requirements<'db>(
         }
     }
     for (nested, expected) in expression_const_bodies(db, body, typed) {
-        diags.extend(anon_const_requirements(db, nested, expected));
+        diags.extend(anon_const_position_diags(db, nested, expected));
     }
     diags
 }
 
-/// The unmet requirements of an anonymous constant checked against
-/// `expected`. Type lowering evaluates such a constant but does not check its
-/// requirements: checking them evaluates code, which can lower the type the
-/// constant is part of. So the constant's position owns them, and its owner
-/// calls this: `check_body_requirements` for expression positions and
-/// `check_declared_type_requirements` for types. An inference failure is
-/// reported by type lowering, so it has no requirements here.
-fn anon_const_requirements<'db>(
+/// What an anonymous constant checked against `expected` reports at its
+/// position: its unmet requirements, or the inference failures that its
+/// type's error cannot show. Type lowering evaluates such a constant but does
+/// not check its requirements, since checking them evaluates code, which can
+/// lower the type the constant is part of. So the constant's position owns
+/// them, and its owner calls this: `check_body_requirements` for expression
+/// positions and `check_declared_type_requirements` for types.
+fn anon_const_position_diags<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
     expected: TyId<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
+    use crate::analysis::ty::const_ty::{ConstBodyFailure, const_body_failure};
     let owner = BodyOwner::AnonConstBody { body, expected };
     let (diags, typed) = infer_body(db, owner);
     if diags.is_empty() || static_assert_ignorable_type_diags(db, diags) {
-        check_body_requirements(db, owner, typed)
-    } else {
-        Vec::new()
+        return check_body_requirements(db, owner, typed);
+    }
+    // A lone path to a constant is read as that constant, not checked as a
+    // body, so its failures are reported where the constant is.
+    let position = body.scope().parent(db).unwrap_or(body.scope());
+    if crate::analysis::ty::ty_lower::const_body_names_a_constant(
+        db,
+        body,
+        position,
+        typed.assumptions(),
+    ) {
+        return Vec::new();
+    }
+    match const_body_failure(db, body, diags, typed) {
+        ConstBodyFailure::AtPosition(_) => diags.clone(),
+        ConstBodyFailure::None | ConstBodyFailure::AtType(_) | ConstBodyFailure::Elsewhere => {
+            Vec::new()
+        }
     }
 }
 
@@ -453,20 +473,94 @@ fn expression_const_bodies<'db>(
         TyData::ConstTy(const_ty) if !ty.has_invalid(db) => Some(const_ty.ty(db)),
         _ => None,
     };
-    // Explicit arguments of a callable's own parameters, which the type
-    // checker applies after the path resolves.
-    let explicit_args = |expr: ExprId, args: GenericArgListId<'db>| {
-        let (definition, generic_args) = match typed.callable_expr(expr) {
-            Some(callable) => (callable.callable_def(), callable.generic_args().to_vec()),
-            None => {
-                let (base, generic_args) = typed.expr_ty(db, expr).decompose_ty_app(db);
-                let TyData::TyBase(TyBase::Func(definition)) = base.data(db) else {
-                    return Vec::new();
-                };
-                (*definition, generic_args.to_vec())
+    // The callable an expression calls or names, with the generic arguments
+    // inference gave it. A call whose explicit arguments failed has no
+    // checked callable, so its definition is found again from its path or
+    // receiver, without arguments.
+    let callee = |expr: ExprId| -> Option<(CallableDef<'db>, Vec<TyId<'db>>)> {
+        if let Some(callable) = typed.callable_expr(expr) {
+            return Some((callable.callable_def(), callable.generic_args().to_vec()));
+        }
+        let (base, generic_args) = typed.expr_ty(db, expr).decompose_ty_app(db);
+        if let TyData::TyBase(TyBase::Func(definition)) = base.data(db) {
+            return Some((*definition, generic_args.to_vec()));
+        }
+        let candidate_def = |candidate: MethodCandidate<'db>| match candidate {
+            MethodCandidate::InherentMethod(method) => method.def,
+            MethodCandidate::TraitMethod(method) | MethodCandidate::NeedsConfirmation(method) => {
+                CallableDef::Func(method.method)
             }
         };
+        let definition = match expr.data(db, body).borrowed().to_opt()? {
+            Expr::Path(Partial::Present(path)) => {
+                let minter = LoweringContext::deferred(HoleAnchor::TemplatePath {
+                    path: *path,
+                    scope: body.scope(),
+                    assumptions: typed.assumptions(),
+                });
+                match resolve_path_with_minter(
+                    db,
+                    *path,
+                    body.scope(),
+                    typed.assumptions(),
+                    true,
+                    &minter,
+                )
+                .ok()?
+                {
+                    PathRes::Func(ty) => match ty.base_ty(db).data(db) {
+                        TyData::TyBase(TyBase::Func(definition)) => *definition,
+                        _ => return None,
+                    },
+                    PathRes::Method(_, candidate) => candidate_def(candidate),
+                    PathRes::TraitMethod(_, method) => CallableDef::Func(method),
+                    _ => return None,
+                }
+            }
+            Expr::MethodCall(receiver, Partial::Present(name), _, _) => {
+                let receiver_ty = typed.expr_ty(db, *receiver);
+                if receiver_ty.has_invalid(db) {
+                    return None;
+                }
+                candidate_def(
+                    select_method_candidate(
+                        db,
+                        &Canonicalized::new(db, receiver_ty),
+                        *name,
+                        body.scope(),
+                        typed.assumptions(),
+                        None,
+                    )
+                    .ok()?,
+                )
+            }
+            _ => return None,
+        };
+        Some((definition, Vec::new()))
+    };
+    // Explicit arguments of a callable's own parameters, which the type
+    // checker applies after the path resolves. Each is checked against its
+    // parameter's type: the one its checked argument carries, or, for an
+    // argument that failed, the parameter's declared type.
+    let explicit_args = |expr: ExprId, args: GenericArgListId<'db>| {
+        let Some((definition, generic_args)) = callee(expr) else {
+            return Vec::new();
+        };
         let offset = definition.offset_to_explicit_params_position(db);
+        let expected = |index: usize| {
+            generic_args
+                .get(index)
+                .and_then(|&arg| checked_const_ty(arg))
+                .or_else(|| {
+                    let CallableDef::Func(func) = definition else {
+                        return None;
+                    };
+                    collect_generic_params(db, func.into())
+                        .params(db)
+                        .get(index)?
+                        .const_ty_ty(db)
+                })
+        };
         args.data(db)
             .iter()
             .enumerate()
@@ -477,7 +571,7 @@ fn expression_const_bodies<'db>(
                 let ConstGenericArgValue::Expr(Partial::Present(body)) = arg.value else {
                     return None;
                 };
-                Some((body, checked_const_ty(*generic_args.get(offset + idx)?)?))
+                Some((body, expected(offset + idx)?))
             })
             .collect::<Vec<_>>()
     };
@@ -518,11 +612,14 @@ fn expression_const_bodies<'db>(
     let mut found: Vec<(Body<'db>, TyId<'db>)> = Vec::new();
     for (expr, data) in body.exprs(db).iter() {
         let entries = match data.borrowed().to_opt() {
+            // A length is checked against the array's length parameter type.
             Some(Expr::ArrayRep(_, len)) => len
                 .to_opt()
                 .and_then(|len| {
-                    let len_ty = *typed.expr_ty(db, expr).decompose_ty_app(db).1.get(1)?;
-                    Some(vec![(len, checked_const_ty(len_ty)?)])
+                    let expected = TyId::array(db, TyId::unit(db))
+                        .applicable_ty(db)?
+                        .const_ty?;
+                    Some(vec![(len, expected)])
                 })
                 .unwrap_or_default(),
             Some(Expr::Path(Partial::Present(path))) => {
@@ -966,7 +1063,7 @@ pub(crate) fn check_declared_type_requirements<'db>(
         fn check_const_bodies(&mut self, lowered: &[TyId<'db>], bodies: &[Body<'db>]) {
             for (body, expected) in positioned_const_bodies(self.db, lowered, bodies) {
                 self.diags
-                    .extend(anon_const_requirements(self.db, body, expected));
+                    .extend(anon_const_position_diags(self.db, body, expected));
             }
         }
     }

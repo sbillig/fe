@@ -1522,6 +1522,67 @@ pub(crate) fn retype_hole_const_ty<'db>(
     matches!(const_ty.data(db), ConstTyData::Hole(..)).then(|| const_ty.with_ty(db, expected_ty))
 }
 
+/// How type lowering reports a constant whose body failed inference.
+pub(crate) enum ConstBodyFailure<'db> {
+    /// Inference succeeded.
+    None,
+    /// The type's error, which renders where the type is written.
+    AtType(InvalidCause<'db>),
+    /// The type's error renders nothing, because the failure has no
+    /// type-level form. An anonymous constant's position then reports the
+    /// body's own diagnostics (`check_declared_type_requirements`,
+    /// `check_body_requirements`); a named constant's declaration reports
+    /// them in any case.
+    AtPosition(InvalidCause<'db>),
+    /// Another check owns the failure: a trait impl's conformance check
+    /// reports its mismatched constants.
+    Elsewhere,
+}
+
+pub(crate) fn const_body_failure<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    diags: &[FuncBodyDiag<'db>],
+    typed_body: &super::ty_check::TypedBody<'db>,
+) -> ConstBodyFailure<'db> {
+    if let Some((expected, given)) = diags.iter().find_map(|diag| match diag {
+        FuncBodyDiag::Body(BodyDiag::TypeMismatch {
+            expected, given, ..
+        }) => Some((*expected, *given)),
+        _ => None,
+    }) {
+        if matches!(body.scope().parent_item(db), Some(ItemKind::ImplTrait(_))) {
+            return ConstBodyFailure::Elsewhere;
+        }
+        return ConstBodyFailure::AtType(InvalidCause::ConstTyMismatch { expected, given });
+    }
+    if diags.is_empty() {
+        return ConstBodyFailure::None;
+    }
+    let cause = const_body_result_cause(db, body, typed_body);
+    // The parser reports a parse error.
+    if matches!(cause, InvalidCause::ParseError)
+        || super::ty_error::diag_from_invalid_cause(crate::span::DynLazySpan::invalid(), &cause)
+            .is_some()
+    {
+        ConstBodyFailure::AtType(cause)
+    } else {
+        ConstBodyFailure::AtPosition(cause)
+    }
+}
+
+fn const_body_result_cause<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    typed_body: &super::ty_check::TypedBody<'db>,
+) -> InvalidCause<'db> {
+    typed_body
+        .body()
+        .and_then(|body| typed_body.expr_ty(db, body.expr(db)).invalid_cause(db))
+        .or_else(|| typed_body.result_ty().invalid_cause(db))
+        .unwrap_or(InvalidCause::InvalidConstTyExpr { body })
+}
+
 pub(crate) fn validate_unevaluated_const_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     const_ty: ConstTyId<'db>,
@@ -1559,30 +1620,16 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
         },
     };
     let (diags, typed_body) = infer_body(db, owner);
-    // A named constant's checked body also rejects an invalid declared type.
-    let declared_type_invalid = const_def.is_some_and(|const_def| const_def.ty(db).has_invalid(db));
-
-    if let Some((expected, given)) = diags.iter().find_map(|diag| match diag {
-        FuncBodyDiag::Body(BodyDiag::TypeMismatch {
-            expected, given, ..
-        }) => Some((*expected, *given)),
-        _ => None,
-    }) {
-        if matches!(body.scope().parent_item(db), Some(ItemKind::ImplTrait(_))) {
-            return Err(InvalidCause::Other);
-        }
-        return Err(InvalidCause::ConstTyMismatch { expected, given });
-    }
-
-    if !diags.is_empty() || declared_type_invalid {
-        if let Some(cause) = typed_body
-            .body()
-            .and_then(|body| typed_body.expr_ty(db, body.expr(db)).invalid_cause(db))
-            .or_else(|| typed_body.result_ty().invalid_cause(db))
-        {
+    match const_body_failure(db, *body, diags, typed_body) {
+        ConstBodyFailure::None => {}
+        ConstBodyFailure::AtType(cause) | ConstBodyFailure::AtPosition(cause) => {
             return Err(cause);
         }
-        return Err(InvalidCause::InvalidConstTyExpr { body: *body });
+        ConstBodyFailure::Elsewhere => return Err(InvalidCause::Other),
+    }
+    // A named constant's checked body also rejects an invalid declared type.
+    if const_def.is_some_and(|const_def| const_def.ty(db).has_invalid(db)) {
+        return Err(const_body_result_cause(db, *body, typed_body));
     }
 
     if const_def.is_some() {

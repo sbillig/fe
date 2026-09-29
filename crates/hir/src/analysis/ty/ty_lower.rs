@@ -389,62 +389,91 @@ fn lower_opt_const_body<'db>(
             UnevaluatedConstPolicy::DeferValidation,
         );
     }
-    let Some(path) = const_body_simple_path(db, body) else {
-        return ConstTyId::from_body(db, body, None, None);
-    };
+    lower_const_body_path(db, body, scope, assumptions, minter)
+        .unwrap_or_else(|| ConstTyId::from_body(db, body, None, None))
+}
 
+/// Whether lowering reads an anonymous constant as the constant, trait
+/// constant, const type or unit variant its lone path names, rather than
+/// checking it as a body (see `lower_const_body_path`).
+pub(crate) fn const_body_names_a_constant<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> bool {
+    const_body_simple_path(db, body).is_some_and(|path| {
+        let minter = LoweringContext::new(HoleAnchor::TemplatePath {
+            path,
+            scope,
+            assumptions,
+        });
+        lower_const_body_path(db, body, scope, assumptions, &minter).is_some()
+    })
+}
+
+/// How an anonymous constant that is a lone path lowers: to the constant,
+/// trait constant, const type or unit variant it names. `None` when the body
+/// is not such a path, and lowering checks it as a body of its own.
+pub(crate) fn lower_const_body_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    minter: &LoweringContext<'db>,
+) -> Option<ConstTyId<'db>> {
+    let path = const_body_simple_path(db, body)?;
     let assumptions = with_enclosing_trait_self_predicate(db, scope, assumptions);
-    match resolve_path_with_minter(db, path, scope, assumptions, true, minter) {
-        Ok(PathRes::Const(const_def, ty)) => {
-            if let Some(body) = const_def.body(db).to_opt() {
-                ConstTyId::from_body(db, body, Some(ty), Some(const_def))
-            } else {
-                ConstTyId::invalid(db, InvalidCause::ParseError)
+    Some(
+        match resolve_path_with_minter(db, path, scope, assumptions, true, minter) {
+            Ok(PathRes::Const(const_def, ty)) => {
+                if let Some(body) = const_def.body(db).to_opt() {
+                    ConstTyId::from_body(db, body, Some(ty), Some(const_def))
+                } else {
+                    ConstTyId::invalid(db, InvalidCause::ParseError)
+                }
             }
-        }
-        Ok(PathRes::TraitConst(recv_ty, inst, name)) => {
-            let mut args = inst.args(db).clone();
-            if let Some(self_arg) = args.first_mut() {
-                *self_arg = recv_ty;
-            }
-            let inst =
-                TraitInstId::new(db, inst.def(db), args, inst.assoc_type_bindings(db).clone());
+            Ok(PathRes::TraitConst(recv_ty, inst, name)) => {
+                let mut args = inst.args(db).clone();
+                if let Some(self_arg) = args.first_mut() {
+                    *self_arg = recv_ty;
+                }
+                let inst =
+                    TraitInstId::new(db, inst.def(db), args, inst.assoc_type_bindings(db).clone());
 
-            if let Some(expected_ty) = inst
-                .def(db)
-                .const_(db, name)
-                .and_then(|v| v.ty_binder(db))
-                .map(|b| b.instantiate(db, inst.args(db)))
-            {
-                // Defer evaluation: the use position's expected type may
-                // differ in integer shape from the const's declared type
-                // (e.g. a `u256` trait const used as an array length).
-                let assoc = AssocConstUse::new(scope, assumptions, inst, name);
-                super::const_ty::abstract_const_ty_from_assoc_const_use(db, assoc, expected_ty)
-            } else {
-                ConstTyId::invalid(db, InvalidCause::Other)
+                if let Some(expected_ty) = inst
+                    .def(db)
+                    .const_(db, name)
+                    .and_then(|v| v.ty_binder(db))
+                    .map(|b| b.instantiate(db, inst.args(db)))
+                {
+                    // Defer evaluation: the use position's expected type may
+                    // differ in integer shape from the const's declared type
+                    // (e.g. a `u256` trait const used as an array length).
+                    let assoc = AssocConstUse::new(scope, assumptions, inst, name);
+                    super::const_ty::abstract_const_ty_from_assoc_const_use(db, assoc, expected_ty)
+                } else {
+                    ConstTyId::invalid(db, InvalidCause::Other)
+                }
             }
-        }
-        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
-            if let TyData::ConstTy(const_ty) = ty.data(db) {
-                *const_ty
-            } else {
-                ConstTyId::from_body(db, body, None, None)
-            }
-        }
-        Ok(PathRes::EnumVariant(variant)) if variant.ty.is_unit_variant_only_enum(db) => {
-            const_ty_from_sem_const(
-                db,
-                enum_const(
+            Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => match ty.data(db) {
+                TyData::ConstTy(const_ty) => *const_ty,
+                _ => return None,
+            },
+            Ok(PathRes::EnumVariant(variant)) if variant.ty.is_unit_variant_only_enum(db) => {
+                const_ty_from_sem_const(
                     db,
-                    variant.ty,
-                    VariantIndex(variant.variant.idx),
-                    Box::new([]),
-                ),
-            )
-        }
-        _ => ConstTyId::from_body(db, body, None, None),
-    }
+                    enum_const(
+                        db,
+                        variant.ty,
+                        VariantIndex(variant.variant.idx),
+                        Box::new([]),
+                    ),
+                )
+            }
+            _ => return None,
+        },
+    )
 }
 
 fn lower_path_impl<'db>(
