@@ -559,22 +559,38 @@ pub struct GuardCache<'db> {
     disjunctions: FxHashMap<(Guard<'db>, Guard<'db>), Guard<'db>>,
     substitutions: FxHashMap<(Guard<'db>, IndexSubst<'db>), Option<Guard<'db>>>,
     canonical: CanonicalGuards<'db>,
+    pending: usize,
 }
 
 impl<'db> GuardCache<'db> {
-    /// Operations recorded between reclamation sweeps.
+    /// Operations recorded between reclamation sweeps. A sweep costs one pass over
+    /// the memo, so amortize it rather than rescanning once it is full.
     const SWEEP: usize = 4096;
 
     pub fn and(&mut self, lhs: &Guard<'db>, rhs: &Guard<'db>) -> Option<Guard<'db>> {
         let mut canonical = std::mem::take(&mut self.canonical);
-        let result = Self::cached(&mut self.conjunctions, lhs, rhs, &mut canonical, Guard::and);
+        let result = Self::cached(
+            &mut self.conjunctions,
+            lhs,
+            rhs,
+            &mut canonical,
+            &mut self.pending,
+            Guard::and,
+        );
         self.canonical = canonical;
         result
     }
 
     pub fn or(&mut self, lhs: &Guard<'db>, rhs: &Guard<'db>) -> Guard<'db> {
         let mut canonical = std::mem::take(&mut self.canonical);
-        let result = Self::cached(&mut self.disjunctions, lhs, rhs, &mut canonical, Guard::or);
+        let result = Self::cached(
+            &mut self.disjunctions,
+            lhs,
+            rhs,
+            &mut canonical,
+            &mut self.pending,
+            Guard::or,
+        );
         self.canonical = canonical;
         result
     }
@@ -590,6 +606,7 @@ impl<'db> GuardCache<'db> {
             guard,
             subst,
             &mut canonical,
+            &mut self.pending,
             Guard::substitute,
         );
         self.canonical = canonical;
@@ -610,6 +627,7 @@ impl<'db> GuardCache<'db> {
         lhs: &Guard<'db>,
         rhs: &K,
         canonical: &mut CanonicalGuards<'db>,
+        pending: &mut usize,
         operation: impl FnOnce(&Guard<'db>, &K) -> R,
     ) -> R {
         let key = (lhs.clone(), rhs.clone());
@@ -617,7 +635,9 @@ impl<'db> GuardCache<'db> {
             return result.clone();
         }
         let result = operation(lhs, rhs).shared(canonical);
-        if results.len() >= Self::SWEEP {
+        *pending += 1;
+        if *pending >= Self::SWEEP {
+            *pending = 0;
             results.retain(|_, result| !result.is_sole_owner());
         }
         results.insert(key, result.clone());

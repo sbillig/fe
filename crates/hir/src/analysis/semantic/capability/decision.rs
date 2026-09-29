@@ -42,9 +42,17 @@ enum Node<V, T> {
     Leaf(T),
     Branch {
         variable: V,
-        low: usize,
-        high: usize,
+        low: Child,
+        high: Child,
     },
+}
+
+/// A child position indexes its own graph's node list. Reduced graphs stay far
+/// below `u32::MAX` nodes, and a narrower child shrinks every branch.
+type Child = u32;
+
+fn child(index: usize) -> Child {
+    Child::try_from(index).expect("a decision graph fits u32 nodes")
 }
 
 #[derive(Clone, Debug)]
@@ -200,8 +208,8 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
         } else {
             self.intern(Node::Branch {
                 variable,
-                low,
-                high,
+                low: child(low),
+                high: child(high),
             })
         }
     }
@@ -219,7 +227,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
                 variable,
                 low,
                 high,
-            } if variable == split => (*low, *high),
+            } if variable == split => (*low as usize, *high as usize),
             _ => (node, node),
         }
     }
@@ -233,7 +241,11 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
                     variable,
                     low,
                     high,
-                } => self.branch(variable.clone(), mapped[*low], mapped[*high]),
+                } => self.branch(
+                    variable.clone(),
+                    mapped[*low as usize],
+                    mapped[*high as usize],
+                ),
             };
             mapped.push(id);
         }
@@ -341,8 +353,8 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
                 high,
             } => Node::Branch {
                 variable: variable.clone(),
-                low: self.visit(*low, nodes, numbering),
-                high: self.visit(*high, nodes, numbering),
+                low: child(self.visit(*low as usize, nodes, numbering)),
+                high: child(self.visit(*high as usize, nodes, numbering)),
             },
         };
         let canonical = nodes.len();
@@ -459,7 +471,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
                     low,
                     high,
                 } => {
-                    let (low, high) = (mapped[*low], mapped[*high]);
+                    let (low, high) = (mapped[*low as usize], mapped[*high as usize]);
                     match variable(key) {
                         Variable::Constant(value) => {
                             if value {
@@ -518,14 +530,22 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
                     variable,
                     low,
                     high,
-                } if quantified[variable] => {
-                    builder.apply(mapped[*low], mapped[*high], &join, true, &mut memo)
-                }
+                } if quantified[variable] => builder.apply(
+                    mapped[*low as usize],
+                    mapped[*high as usize],
+                    &join,
+                    true,
+                    &mut memo,
+                ),
                 Node::Branch {
                     variable,
                     low,
                     high,
-                } => builder.branch(variable.clone(), mapped[*low], mapped[*high]),
+                } => builder.branch(
+                    variable.clone(),
+                    mapped[*low as usize],
+                    mapped[*high as usize],
+                ),
             };
             mapped.push(result);
         }
@@ -546,7 +566,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
                 variable,
                 low,
                 high,
-            } if variable == split => (*low, *high),
+            } if variable == split => (*low as usize, *high as usize),
             _ => (node, node),
         }
     }
@@ -569,7 +589,9 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         for node in self.nodes.iter() {
             possible.push(match node {
                 Node::Leaf(value) => accepted(value),
-                Node::Branch { low, high, .. } => possible[*low] || possible[*high],
+                Node::Branch { low, high, .. } => {
+                    possible[*low as usize] || possible[*high as usize]
+                }
             });
         }
         if !possible[self.root()] {
@@ -583,9 +605,9 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
             high,
         } = &self.nodes[node]
         {
-            let value = !possible[*low];
+            let value = !possible[*low as usize];
             path.push((variable.clone(), value));
-            node = if value { *high } else { *low };
+            node = if value { *high as usize } else { *low as usize };
         }
         Some(path)
     }
