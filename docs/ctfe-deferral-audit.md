@@ -17,7 +17,7 @@ admission remains separately scoped as described below.
 | Source identity | Canonical terms are separate from occurrence provenance. Source descriptions retain ordered operand origins and call frames until required forcing. Identity/display views may project the canonical term. |
 | Specialization | Declaration templates are instantiated once at `instantiate_const_template`. Reification of already instantiated values/types does not apply positional substitution again. Scoped request specialization traverses inputs, result types, provider/impl environments and provenance. |
 | Execution | Whole-body execution uses admitted raw semantic bodies. Retained arithmetic, unary, cast, invocation, selected constant, repeat, index and field terms delegate to the ordered CTFE service. |
-| Normalization | Extraction accepts only a bounded, obligation-preserving whole expression. It rejects control flow, mutation, discarded operations and duplicate operand consumption; declaration recurrence stops inlining even when generic arguments change. |
+| Normalization | Extraction accepts only a bounded, obligation-preserving whole expression. It rejects control flow, mutation, discarded operations and duplicate operand consumption; declaration recurrence stops inlining even when generic arguments change. It also skips calls that pass providers, so a generic const expression that depends on one, such as a call to a helper whose body supplies a provider with `with`, stays opaque until its generic arguments are known (`ty_check/const_fn/trait_provider_generic_extent.fe`). |
 | Budgets | Term operands and ordinary invocation inputs share one attempt budget. Cached body outcomes retain their work cost. Term depth is bounded; machine and term repeats charge one step per allocated element before construction. The machine retains its existing separate const-reference query policy. |
 | Runtime | Preparation forces descriptions and imports verified values. Only explicitly classified formal layout evidence uses the evidence path. No scalar interpreter or unreified-success fallback remains in MIR lowering. |
 
@@ -121,13 +121,17 @@ Remaining adapters have explicit policies:
 
 ## Borrowing scope
 
-Source-level local references carrying provider metadata remain rejected by the
-previously scoped `InvalidProviderUse` restriction. Internal machine tests cover
-admitted reference lifetime, typed reads, mutation and discard/replay behavior.
-The generic stdlib `SolArraySuffix` declaration is covered, but its additional
-concrete execution probe reached this borrowing restriction while resolving an
-array extent. It is recorded in the existing borrowing issue and is not claimed
-as a passing concrete CTFE case. Provider admission has not been broadened.
+Borrows of a local in an evaluating frame (`ref x`, `mut x`, a projection of
+one, or such a borrow passed to or returned from a callee) are admitted since
+#1582. A borrow through a pointer or in another address space still fails with
+`InvalidProviderUse`, since CTFE has no memory outside its frames. An admitted
+immutable trait provider is a frame local as well, since its effect slot owns a
+copy of the provided value, so `ref self` provider methods evaluate. Internal
+machine tests cover admitted reference lifetime, typed reads, mutation,
+discard/replay behavior and the pointer rejection. The generic stdlib
+`SolArraySuffix` declaration is covered; before #1582 its additional concrete
+execution probe reached the borrowing restriction while resolving an array
+extent, and it is not claimed as a passing concrete CTFE case.
 
 ## Verification and performance
 

@@ -1,0 +1,29 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/const_eval/borrow_out_of_bounds.fe
+---
+error[3-0050]: index out of bounds in const context
+  ┌─ borrow_out_of_bounds.fe:9:13
+  │
+9 │     let a = ref values[idx]
+  │             ^^^^^^^^^^^^^^^ index is outside the evaluated value
+
+error[3-0050]: index out of bounds in const context
+   ┌─ borrow_out_of_bounds.fe:15:13
+   │
+15 │     let a = mut values[idx]
+   │             ^^^^^^^^^^^^^^^ index is outside the evaluated value
+
+error[3-0050]: index out of bounds in const context
+   ┌─ borrow_out_of_bounds.fe:21:5
+   │
+21 │     values[idx].get()
+   │     ^^^^^^^^^^^^^^^^^ index is outside the evaluated value
+
+error[3-0050]: index out of bounds in const context
+   ┌─ borrow_out_of_bounds.fe:25:13
+   │
+25 │     let a = ref values[idx]
+   │             ^^^^^^^^^^^^^^^ index is outside the evaluated value

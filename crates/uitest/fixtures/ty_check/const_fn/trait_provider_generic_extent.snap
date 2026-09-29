@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_fn/trait_provider_generic_extent.fe
+---
+error[8-0000]: type mismatch
+   ┌─ trait_provider_generic_extent.fe:36:22
+   │
+36 │     Plain<N> { data: wrapped.data }
+   │                      ^^^^^^^^^^^^ expected `[u8; (const N: usize + 1)]`, but `[u8; wrap<const N: usize>()]` is given

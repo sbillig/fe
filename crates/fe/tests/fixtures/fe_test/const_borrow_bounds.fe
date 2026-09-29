@@ -1,0 +1,63 @@
+struct S { x: u8 }
+
+impl S {
+    const fn get(ref self) -> u8 { 42 }
+}
+
+const fn borrowed(_ idx: usize) -> u8 {
+    let values: [u8; 2] = [1, 2]
+    let a = ref values[idx]
+    42
+}
+
+const fn borrowed_mut(_ idx: usize) -> u8 {
+    let mut values: [u8; 2] = [1, 2]
+    let a = mut values[idx]
+    42
+}
+
+const fn receiver(_ idx: usize) -> u8 {
+    let values: [S; 2] = [S { x: 1 }, S { x: 2 }]
+    values[idx].get()
+}
+
+const fn inner(_ values: ref [u8; 2], _ idx: usize) -> u8 {
+    let a = ref values[idx]
+    42
+}
+
+const fn through_ref(_ idx: usize) -> u8 {
+    let values: [u8; 2] = [1, 2]
+    inner(ref values, idx)
+}
+
+const IN_BOUNDS: [u8; 4] = [borrowed(1), borrowed_mut(1), receiver(1), through_ref(1)]
+
+#[test]
+fn in_bounds_borrows_evaluate() {
+    assert!(IN_BOUNDS == [42, 42, 42, 42])
+    assert!(borrowed(1) == 42)
+    assert!(borrowed_mut(1) == 42)
+    assert!(receiver(1) == 42)
+    assert!(through_ref(1) == 42)
+}
+
+#[test(should_revert)]
+fn out_of_bounds_borrow_reverts() {
+    borrowed(3)
+}
+
+#[test(should_revert)]
+fn out_of_bounds_mut_borrow_reverts() {
+    borrowed_mut(3)
+}
+
+#[test(should_revert)]
+fn out_of_bounds_receiver_borrow_reverts() {
+    receiver(3)
+}
+
+#[test(should_revert)]
+fn out_of_bounds_borrow_through_ref_reverts() {
+    through_ref(3)
+}

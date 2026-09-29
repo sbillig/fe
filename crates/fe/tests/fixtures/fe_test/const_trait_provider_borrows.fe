@@ -1,0 +1,124 @@
+// A trait provider's `ref self` methods and explicit `ref` borrows of the
+// provider evaluate at compile time, and agree with the same calls at runtime.
+trait Lookup {
+    const fn get(ref self, _ i: usize) -> u256
+
+    // A default method borrows the provider again for each call it makes.
+    const fn pair(ref self, _ i: usize, _ j: usize) -> u256 {
+        self.get(i) + self.get(j)
+    }
+}
+
+struct Table { xs: [u256; 4] }
+
+impl Lookup for Table {
+    const fn get(ref self, _ i: usize) -> u256 { self.xs[i] }
+}
+
+// Each receiver borrows the provider held by this call.
+const fn ends() -> u256 uses (table: Lookup) {
+    table.get(0) + table.get(3)
+}
+
+// An explicit borrow of the provider, kept in a local and passed to a helper.
+const fn read_at<L: Lookup>(_ table: ref L, _ i: usize) -> u256 {
+    table.get(i)
+}
+const fn middle() -> u256 uses (table: Lookup) {
+    let borrowed = ref table
+    read_at(borrowed, 1) + read_at(ref table, 2)
+}
+
+// The provider is forwarded to both callees, and each borrows its own copy.
+const fn both() -> u256 uses (table: Lookup) {
+    ends() * 100 + middle()
+}
+
+const fn from_literal() -> u256 {
+    with (Lookup = Table { xs: [1, 2, 3, 4] }) { both() }
+}
+const fn from_local() -> u256 {
+    let table = Table { xs: [5, 6, 7, 8] }
+    with (Lookup = table) { both() }
+}
+
+const FROM_LITERAL: u256 = from_literal()
+const FROM_LOCAL: u256 = from_local()
+
+// Providers from a generic impl and an enum, declared in another module.
+mod tables {
+    use super::Lookup
+
+    pub struct Grid<const N: usize> { pub xs: [u256; N] }
+    impl<const N: usize> Lookup for Grid<N> {
+        const fn get(ref self, _ i: usize) -> u256 { self.xs[i] }
+    }
+
+    pub enum Choice { Low, High }
+    impl Lookup for Choice {
+        const fn get(ref self, _ i: usize) -> u256 {
+            match self {
+                Choice::Low => 1
+                Choice::High => 1000
+            }
+        }
+    }
+}
+
+use tables::{Choice, Grid}
+
+const fn outer_pair() -> u256 uses (table: Lookup) {
+    table.pair(0, 3)
+}
+
+// An inherent method, and a trait method called through a generic bound.
+struct Report { scale: u256 }
+impl Report {
+    const fn total(self) -> u256 uses (table: Lookup) { self.scale * outer_pair() }
+}
+trait Summary {
+    const fn summary(self) -> u256 uses (table: Lookup)
+}
+impl Summary for Report {
+    const fn summary(self) -> u256 uses (table: Lookup) { self.scale + table.get(1) }
+}
+const fn summarize<S: Summary>(_ s: S) -> u256 uses (table: Lookup) {
+    s.summary()
+}
+
+const fn from_grid() -> u256 {
+    with (Lookup = Grid<4> { xs: [1, 2, 3, 4] }) {
+        Report { scale: 10 }.total() + summarize(Report { scale: 100 })
+    }
+}
+const fn from_choice() -> u256 {
+    with (Lookup = Choice::High) { outer_pair() }
+}
+
+// An associated const evaluated through the same calls.
+trait HasTotal {
+    const TOTAL: u256
+}
+impl HasTotal for Report {
+    const TOTAL: u256 = from_grid() + from_choice()
+}
+
+const FROM_GRID: u256 = from_grid()
+const FROM_CHOICE: u256 = from_choice()
+
+#[test]
+fn const_and_runtime_provider_borrows_agree() {
+    assert!(FROM_LITERAL == 505)
+    assert!(from_literal() == FROM_LITERAL)
+    assert!(FROM_LOCAL == 1313)
+    assert!(from_local() == FROM_LOCAL)
+}
+
+#[test]
+fn const_and_runtime_provider_borrow_positions_agree() {
+    assert!(FROM_GRID == 152)
+    assert!(from_grid() == FROM_GRID)
+    assert!(FROM_CHOICE == 2000)
+    assert!(from_choice() == FROM_CHOICE)
+    assert!(Report::TOTAL == 2152)
+}

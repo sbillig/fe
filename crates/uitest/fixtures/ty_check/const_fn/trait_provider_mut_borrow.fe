@@ -1,0 +1,23 @@
+// An immutable trait provider cannot be borrowed mutably in a `const fn`,
+// through a `mut self` receiver or explicitly.
+trait Lookup {
+    const fn get(ref self, _ i: usize) -> u256
+    const fn bump(mut self)
+}
+
+struct Table { xs: [u256; 4] }
+
+impl Lookup for Table {
+    const fn get(ref self, _ i: usize) -> u256 { self.xs[i] }
+    const fn bump(mut self) { self.xs[0] += 1 }
+}
+
+const fn bump_through_receiver() -> u256 uses (table: Lookup) {
+    table.bump()
+    table.get(0)
+}
+
+const fn bump_through_borrow() -> u256 uses (table: Lookup) {
+    let borrowed = mut table
+    borrowed.get(0)
+}

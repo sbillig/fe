@@ -1,0 +1,85 @@
+// Contract-owned bodies (`init` and `recv` arms) use `ref self` provider
+// methods at compile time, through a const item and array lengths, and the
+// same calls at runtime give the same values. At runtime a `recv` arm can also
+// supply a storage field as the provider; compile-time evaluation never sees
+// that provider.
+trait Lookup {
+    const fn get(ref self, _ i: usize) -> u256
+}
+
+struct Table { xs: [u256; 4] }
+
+impl Lookup for Table {
+    const fn get(ref self, _ i: usize) -> u256 { self.xs[i] }
+}
+
+const fn ends() -> u256 uses (table: Lookup) {
+    table.get(0) + table.get(3)
+}
+const fn sum() -> u256 {
+    with (Lookup = Table { xs: [1, 2, 3, 4] }) { ends() }
+}
+const fn count() -> usize {
+    with (Lookup = Table { xs: [1, 2, 3, 4] }) {
+        if ends() == 5 { 3 } else { 0 }
+    }
+}
+
+const SUM: u256 = sum()
+
+msg ReaderMsg {
+    #[selector = 0x10000001]
+    Compiled -> u256,
+    #[selector = 0x10000002]
+    Runtime -> u256,
+    #[selector = 0x10000003]
+    Length -> u256,
+    #[selector = 0x10000004]
+    Stored -> u256,
+    #[selector = 0x10000005]
+    FromField -> u256,
+}
+
+struct Store { at_init: u256 }
+
+pub contract Reader {
+    mut store: Store
+    mut table: Table
+
+    init() uses (mut store, mut table) {
+        // A compile-time length and a runtime call in `init`.
+        let xs: [u256; count()] = [SUM; count()]
+        store.at_init = xs[2] + sum()
+        table.xs[0] = 20
+        table.xs[3] = 22
+    }
+
+    recv ReaderMsg {
+        Compiled -> u256 { SUM }
+        Runtime -> u256 { sum() }
+        Length -> u256 {
+            let xs: [u256; count()] = [1; count()]
+            xs[0] + xs[1] + xs[2]
+        }
+        Stored -> u256 uses (store) { store.at_init }
+        FromField -> u256 uses (table) {
+            with (Lookup = table) { ends() }
+        }
+    }
+}
+
+#[test]
+fn const_and_runtime_provider_borrows_in_contract_agree() uses (evm: mut Evm) {
+    let reader = evm.create2<Reader>(value: 0, args: (), salt: 0)
+    assert!(reader.inner != 0)
+    let compiled: u256 = evm.call(addr: reader, gas: 100000, value: 0, message: ReaderMsg::Compiled {})
+    let runtime: u256 = evm.call(addr: reader, gas: 100000, value: 0, message: ReaderMsg::Runtime {})
+    let length: u256 = evm.call(addr: reader, gas: 100000, value: 0, message: ReaderMsg::Length {})
+    let stored: u256 = evm.call(addr: reader, gas: 100000, value: 0, message: ReaderMsg::Stored {})
+    let from_field: u256 = evm.call(addr: reader, gas: 100000, value: 0, message: ReaderMsg::FromField {})
+    assert!(compiled == 5)
+    assert!(runtime == compiled)
+    assert!(length == 3)
+    assert!(stored == 10)
+    assert!(from_field == 42)
+}
