@@ -1578,13 +1578,29 @@ fn written_types_query<'db>(
         ) {
             let db = self.db;
             let assumptions = assumptions_at(db, scope);
-            let (ty, resolutions) = lower_hir_ty_with_resolutions(
-                db,
-                hir_ty,
-                scope,
-                assumptions,
-                ConstBodyLowering::Eager,
-            );
+            let (ty, applications) = match hir_ty.data(db) {
+                // Only a path of two or more segments passes through types
+                // that its lowering does not hold. A one-segment path lowers
+                // to what it resolves to, its arguments are written types or
+                // anonymous constants of their own, and an alias's arguments
+                // are checked after expansion or as constants
+                // (`written_const_args`).
+                TypeKind::Path(Partial::Present(path)) if path.len(db) > 1 => {
+                    let (ty, resolutions) = lower_hir_ty_with_resolutions(
+                        db,
+                        hir_ty,
+                        scope,
+                        assumptions,
+                        ConstBodyLowering::Eager,
+                    );
+                    let applications = resolutions
+                        .iter()
+                        .flat_map(|(_, res)| constrained_applications(db, res))
+                        .collect();
+                    (ty, applications)
+                }
+                _ => (lower_hir_ty(db, hir_ty, scope, assumptions), Vec::new()),
+            };
             let in_default = self.defaults.contains(&hir_ty);
             self.default_depth += usize::from(in_default);
             if self.default_depth == 0 {
@@ -1600,10 +1616,7 @@ fn written_types_query<'db>(
                     span,
                     scope,
                     lowered: (!ty.has_invalid(db)).then_some(ty),
-                    applications: resolutions
-                        .iter()
-                        .flat_map(|(_, res)| constrained_applications(db, res))
-                        .collect(),
+                    applications,
                     nested_from,
                 }));
             }
