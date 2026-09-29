@@ -1,0 +1,11 @@
+// An anonymous constant in a type parameter's default that does not type
+// check is reported, also when the default does not hold it.
+struct Holder<const N: usize> {}
+struct Plain {}
+trait Mk { type Out }
+impl<const N: usize> Mk for Holder<N> { type Out = Plain }
+type Drop<const N: usize> = u8
+
+struct Dropped<T = Drop<{ nope }>> { t: T }
+struct Selecting<T = Holder<{ nope }>::Out> { t: T }
+struct Held<T = Holder<{ nope }>> { t: T }

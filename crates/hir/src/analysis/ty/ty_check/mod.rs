@@ -33,7 +33,7 @@ use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty};
 use crate::hir_def::{CallableDef, ConstGenericArgValue, ImplTrait, Trait};
 use crate::{
     hir_def::{
-        BinOp, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func,
+        BinOp, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
         GenericParamOwner, LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId,
         StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId,
         WhereClauseOwner,
@@ -74,7 +74,7 @@ use super::{
         TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key},
-    generic_defaults::{GenericDefault, generic_default},
+    generic_defaults::{GenericDefault, default_assumptions, generic_default},
     layout_holes::merge_equated_layout_holes,
     trait_def::{TraitInstId, resolve_trait_method_instance},
     trait_resolution::{
@@ -305,8 +305,10 @@ pub fn check_trait_const_default_bodies<'db>(
     diags
 }
 
-/// Checks const bodies in generic defaults at their declarations, including
-/// bodies nested in type defaults. A use may omit or override a default, so
+/// Checks const bodies in generic defaults at their declarations: a const
+/// parameter's default, and every anonymous constant written in a type
+/// parameter's default, including one that the lowered default does not hold
+/// (`written_type_const_args`). A use may omit or override a default, so
 /// applications cannot own these diagnostics.
 #[salsa::tracked(return_ref)]
 pub fn check_generic_default_bodies<'db>(
@@ -355,8 +357,24 @@ pub(crate) fn check_generic_default_body_types<'db>(
             value: ConstGenericArgValue::Expr(Partial::Present(body)),
             expected,
         } => vec![(*body, expected.instantiate_identity())],
-        GenericDefault::Type(template) => {
-            unevaluated_const_bodies(db, &[template.instantiate_identity()])
+        // The constants written in the default, not only those its lowering
+        // holds: an alias can drop one, and a qualifier can use one only to
+        // select an impl.
+        GenericDefault::Type(_) => {
+            let view = owner.param_view(db, param_idx);
+            let GenericParam::Type(param) = view.param else {
+                return Vec::new();
+            };
+            let Some(hir_ty) = param.default_ty else {
+                return Vec::new();
+            };
+            const_requirements::written_type_const_args(
+                db,
+                hir_ty,
+                view.span().into_type_param().default_ty(),
+                owner.scope(),
+                default_assumptions(db, owner),
+            )
         }
         GenericDefault::Const { .. } => Vec::new(),
     };

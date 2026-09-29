@@ -1515,7 +1515,8 @@ fn written_types_query<'db>(
         root: ItemKind<'db>,
         entries: Vec<WrittenEntry<'db>>,
         /// Type parameter defaults, and how deep the walk is inside one.
-        /// `check_generic_default_bodies` owns the anonymous constants there.
+        /// `check_generic_default_bodies` owns the anonymous constants there,
+        /// and finds them with the same rule (`written_type_const_args`).
         defaults: FxHashSet<crate::hir_def::TypeId<'db>>,
         default_depth: usize,
     }
@@ -1557,23 +1558,13 @@ fn written_types_query<'db>(
         ) {
             if let Some(path) = trait_ref.path(self.db).to_opt()
                 && self.default_depth == 0
-                && !path_const_bodies(self.db, path).is_empty()
             {
                 let scope = ctxt.scope();
-                let assumptions = assumptions_at(self.db, scope);
-                let minter = LoweringContext::deferred(HoleAnchor::TemplatePath {
-                    path,
-                    scope,
-                    assumptions,
-                })
-                .recording_resolutions();
-                let _ = resolve_path_with_minter(self.db, path, scope, assumptions, false, &minter);
-                self.entries
-                    .push(WrittenEntry::ConstBodies(segment_const_args(
-                        self.db,
-                        path,
-                        &minter.into_resolutions(),
-                    )));
+                let bodies =
+                    trait_ref_const_args(self.db, path, scope, assumptions_at(self.db, scope));
+                if !bodies.is_empty() {
+                    self.entries.push(WrittenEntry::ConstBodies(bodies));
+                }
             }
             walk_trait_ref(self, ctxt, trait_ref);
         }
@@ -1744,6 +1735,98 @@ fn written_type_check_query<'db>(
         reported.push(report);
     }
     diags
+}
+
+/// The anonymous constants written in `hir_ty` and in every type and trait
+/// reference nested in it, each with the type its position checks it
+/// against. This is the rule `written_types` applies to each type and trait
+/// reference it lists (`written_const_args`, `trait_ref_const_args`), for a
+/// type parameter's default, whose declaration check owns its constants
+/// (`check_generic_default_bodies`). A default's lowering does not hold every
+/// constant written in it: an alias can drop one, and a qualifier such as
+/// `Holder<{ n }>` in `Holder<{ n }>::Out` may only select an impl.
+pub(super) fn written_type_const_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    hir_ty: crate::hir_def::TypeId<'db>,
+    span: crate::span::types::LazyTySpan<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<(Body<'db>, TyId<'db>)> {
+    use crate::hir_def::TraitRefId;
+    use crate::span::types::LazyTySpan;
+    use crate::visitor::{
+        Visitor, VisitorCtxt,
+        prelude::{LazyBodySpan, LazyTraitRefSpan},
+        walk_trait_ref, walk_type,
+    };
+    struct Finder<'db> {
+        db: &'db dyn HirAnalysisDb,
+        assumptions: PredicateListId<'db>,
+        found: Vec<(Body<'db>, TyId<'db>)>,
+    }
+    impl<'db> Visitor<'db> for Finder<'db> {
+        fn visit_ty(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>,
+            hir_ty: crate::hir_def::TypeId<'db>,
+        ) {
+            self.found.extend(written_const_args(
+                self.db,
+                hir_ty,
+                ctxt.scope(),
+                self.assumptions,
+            ));
+            walk_type(self, ctxt, hir_ty);
+        }
+
+        fn visit_trait_ref(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, LazyTraitRefSpan<'db>>,
+            trait_ref: TraitRefId<'db>,
+        ) {
+            if let Some(path) = trait_ref.path(self.db).to_opt() {
+                self.found.extend(trait_ref_const_args(
+                    self.db,
+                    path,
+                    ctxt.scope(),
+                    self.assumptions,
+                ));
+            }
+            walk_trait_ref(self, ctxt, trait_ref);
+        }
+
+        // An anonymous constant's own body is checked as that constant.
+        fn visit_body(&mut self, _: &mut VisitorCtxt<'db, LazyBodySpan<'db>>, _: Body<'db>) {}
+    }
+    let mut finder = Finder {
+        db,
+        assumptions,
+        found: Vec::new(),
+    };
+    finder.visit_ty(&mut VisitorCtxt::new(db, scope, span), hir_ty);
+    finder.found
+}
+
+/// The anonymous constants passed to the segments of a trait reference's
+/// path, such as `{ n }` in `Tr<{ n }>`, each with the type of the parameter
+/// it is passed to (`segment_const_args`).
+fn trait_ref_const_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<(Body<'db>, TyId<'db>)> {
+    if path_const_bodies(db, path).is_empty() {
+        return Vec::new();
+    }
+    let minter = LoweringContext::deferred(HoleAnchor::TemplatePath {
+        path,
+        scope,
+        assumptions,
+    })
+    .recording_resolutions();
+    let _ = resolve_path_with_minter(db, path, scope, assumptions, false, &minter);
+    segment_const_args(db, path, &minter.into_resolutions())
 }
 
 /// The anonymous constants written directly in `hir_ty`, each with the type

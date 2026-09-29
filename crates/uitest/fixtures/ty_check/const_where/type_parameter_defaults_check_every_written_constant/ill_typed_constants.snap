@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/type_parameter_defaults_check_every_written_constant/ill_typed_constants.fe
+---
+error[8-0012]: undefined variable
+  ┌─ ill_typed_constants.fe:9:27
+  │
+9 │ struct Dropped<T = Drop<{ nope }>> { t: T }
+  │                           ^^^^ undefined variable `nope`
+
+error[8-0012]: undefined variable
+   ┌─ ill_typed_constants.fe:10:31
+   │
+10 │ struct Selecting<T = Holder<{ nope }>::Out> { t: T }
+   │                               ^^^^ undefined variable `nope`
+
+error[8-0012]: undefined variable
+   ┌─ ill_typed_constants.fe:11:26
+   │
+11 │ struct Held<T = Holder<{ nope }>> { t: T }
+   │                          ^^^^ undefined variable `nope`

@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/type_parameter_defaults_check_every_written_constant/reached_through_other_items.fe
+---
+error[8-0093]: const requirement is not satisfied
+   ┌─ reached_through_other_items.fe:11:27
+   │
+ 7 │ const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
+   │                                               ----- required by this predicate
+   ·
+11 │ struct Keyed<T = Holder<{ dec<0>() }>::Out> { t: T }
+   │                           ^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ reached_through_other_items.fe:15:30
+   │
+ 7 │ const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
+   │                                               ----- required by this predicate
+   ·
+15 │ struct Asserted<T = Holder<{ dec<0>() }>::Out> { t: T }
+   │                              ^^^^^^^^ condition evaluated to `false`

@@ -1,0 +1,58 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/type_parameter_defaults_check_every_written_constant/dropped_by_an_alias.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ dropped_by_an_alias.fe:6:21
+  │
+3 │ const fn positive<const N: usize>() -> usize where N > 0 { 1 }
+  │                                                    ----- required by this predicate
+  ·
+6 │ struct S<T = Drop<{ positive<0>() }>> { x: T }
+  │                     ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+  ┌─ dropped_by_an_alias.fe:7:19
+  │
+3 │ const fn positive<const N: usize>() -> usize where N > 0 { 1 }
+  │                                                    ----- required by this predicate
+  ·
+7 │ enum E<T = Drop<{ positive<0>() }>> { A(T) }
+  │                   ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+  ┌─ dropped_by_an_alias.fe:8:19
+  │
+3 │ const fn positive<const N: usize>() -> usize where N > 0 { 1 }
+  │                                                    ----- required by this predicate
+  ·
+8 │ type A<T = Drop<{ positive<0>() }>> = T
+  │                   ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+  ┌─ dropped_by_an_alias.fe:9:21
+  │
+3 │ const fn positive<const N: usize>() -> usize where N > 0 { 1 }
+  │                                                    ----- required by this predicate
+  ·
+9 │ trait Tr<T = Drop<{ positive<0>() }>> {}
+  │                     ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ dropped_by_an_alias.fe:10:17
+   │
+ 3 │ const fn positive<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                    ----- required by this predicate
+   ·
+10 │ fn f<T = Drop<{ positive<0>() }>>() {}
+   │                 ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ dropped_by_an_alias.fe:11:31
+   │
+ 3 │ const fn positive<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                    ----- required by this predicate
+   ·
+11 │ struct Nested<T = (u8, Drop<{ positive<0>() }>)> { x: T }
+   │                               ^^^^^^^^^^^^^ condition evaluated to `false`

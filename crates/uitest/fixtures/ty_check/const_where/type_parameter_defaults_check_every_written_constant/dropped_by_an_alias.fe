@@ -1,0 +1,16 @@
+// An anonymous constant in a type parameter's default is checked against its
+// parameter even when an alias drops it, whatever declares the parameter.
+const fn positive<const N: usize>() -> usize where N > 0 { 1 }
+type Drop<const N: usize> = u8
+
+struct S<T = Drop<{ positive<0>() }>> { x: T }
+enum E<T = Drop<{ positive<0>() }>> { A(T) }
+type A<T = Drop<{ positive<0>() }>> = T
+trait Tr<T = Drop<{ positive<0>() }>> {}
+fn f<T = Drop<{ positive<0>() }>>() {}
+struct Nested<T = (u8, Drop<{ positive<0>() }>)> { x: T }
+
+fn take(_ s: S, _ e: E, _ a: A, _ n: Nested) { f() }
+
+struct Allowed<T = Drop<{ positive<1>() }>> { x: T }
+struct Dependent<const N: usize, T = Drop<{ N + 1 }>> { x: T }
