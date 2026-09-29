@@ -232,26 +232,6 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
         }
     }
 
-    fn import(&mut self, decision: &Decision<V, T>) -> usize {
-        let mut mapped = Vec::with_capacity(decision.nodes.len());
-        for node in decision.nodes.iter() {
-            let id = match node {
-                Node::Leaf(value) => self.intern(Node::Leaf(value.clone())),
-                Node::Branch {
-                    variable,
-                    low,
-                    high,
-                } => self.branch(
-                    variable.clone(),
-                    mapped[*low as usize],
-                    mapped[*high as usize],
-                ),
-            };
-            mapped.push(id);
-        }
-        mapped[decision.root()]
-    }
-
     /// An `idempotent` join is also commutative, as in quantification, so
     /// equal operands and swapped pairs share work.
     fn apply(
@@ -291,6 +271,43 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
                 let high = self.apply(left_high, right_high, join, idempotent, memo);
                 self.branch(variable, low, high)
             };
+        memo.insert(key, result);
+        result
+    }
+
+    /// Apply over two finished graphs, reading them where they already live. Copying
+    /// both operands into the builder first doubled its nodes and its interning work
+    /// for every conjunction and union, and the copies were never the result.
+    fn apply_decisions(
+        &mut self,
+        left: &Decision<V, T>,
+        lhs: usize,
+        right: &Decision<V, T>,
+        rhs: usize,
+        join: &impl Fn(&T, &T) -> T,
+        memo: &mut FxHashMap<(Child, Child), usize>,
+    ) -> usize {
+        let key = (child(lhs), child(rhs));
+        if let Some(result) = memo.get(&key) {
+            return *result;
+        }
+        // Keep recursive frames small: only the split variable lives across calls.
+        let result = match (&left.nodes[lhs], &right.nodes[rhs]) {
+            (Node::Leaf(left), Node::Leaf(right)) => self.intern(Node::Leaf(join(left, right))),
+            _ => {
+                let variable = match (left.variable(lhs), right.variable(rhs)) {
+                    (Some(left), Some(right)) => left.min(right),
+                    (Some(variable), None) | (None, Some(variable)) => variable,
+                    (None, None) => unreachable!("two leaves are joined directly"),
+                }
+                .clone();
+                let (left_low, left_high) = left.cofactors(lhs, &variable);
+                let (right_low, right_high) = right.cofactors(rhs, &variable);
+                let low = self.apply_decisions(left, left_low, right, right_low, join, memo);
+                let high = self.apply_decisions(left, left_high, right, right_high, join, memo);
+                self.branch(variable, low, high)
+            }
+        };
         memo.insert(key, result);
         result
     }
@@ -436,7 +453,15 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
     }
 
     pub(super) fn is_leaf(&self, expected: &T) -> bool {
-        matches!(&self.nodes[self.root()], Node::Leaf(actual) if actual == expected)
+        self.leaf_value() == Some(expected)
+    }
+
+    /// The whole graph's value, when it decides nothing.
+    pub(super) fn leaf_value(&self) -> Option<&T> {
+        match &self.nodes[self.root()] {
+            Node::Leaf(value) => Some(value),
+            Node::Branch { .. } => None,
+        }
     }
 
     pub(super) fn leaves(&self) -> impl Iterator<Item = &T> {
@@ -553,11 +578,23 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
     }
 
     pub(super) fn apply(&self, other: &Self, leaf: impl Fn(&T, &T) -> T) -> Self {
-        let mut builder = Builder::with_capacity(self.nodes.len() + other.nodes.len());
-        let lhs = builder.import(self);
-        let rhs = builder.import(other);
-        let root = builder.apply(lhs, rhs, &leaf, false, &mut FxHashMap::default());
+        let mut builder = Builder::with_capacity(self.nodes.len().max(other.nodes.len()));
+        let root = builder.apply_decisions(
+            self,
+            self.root(),
+            other,
+            other.root(),
+            &leaf,
+            &mut FxHashMap::default(),
+        );
         builder.finish(root)
+    }
+
+    fn variable(&self, node: usize) -> Option<&V> {
+        match &self.nodes[node] {
+            Node::Leaf(_) => None,
+            Node::Branch { variable, .. } => Some(variable),
+        }
     }
 
     fn cofactors(&self, node: usize, split: &V) -> (usize, usize) {

@@ -511,7 +511,27 @@ impl<'db> IndexCondition<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ChoiceBit<'db> {
     bit: Reverse<u16>,
-    choice: ChoiceKey<'db>,
+    // One key is read by every bit node of its choice, and inlining it in each of
+    // them dominated the size of a branch.
+    choice: Arc<ChoiceKey<'db>>,
+}
+
+/// Rebuild keys once per distinct source key rather than once per bit node. The
+/// source graph's bits already share one key, so its address identifies it.
+fn renamed_choices<'db>(
+    mut rename: impl FnMut(&ChoiceKey<'db>) -> ChoiceKey<'db>,
+) -> impl FnMut(&ChoiceBit<'db>) -> Variable<ChoiceBit<'db>> {
+    let mut renamed = FxHashMap::default();
+    move |bit| {
+        let choice = renamed
+            .entry(Arc::as_ptr(&bit.choice) as usize)
+            .or_insert_with(|| Arc::new(rename(&bit.choice)))
+            .clone();
+        Variable::Symbol(ChoiceBit {
+            choice,
+            bit: bit.bit,
+        })
+    }
 }
 
 impl Ord for ChoiceBit<'_> {
@@ -549,7 +569,40 @@ impl PartialOrd for ChoiceBit<'_> {
     }
 }
 
-type Condition<'db> = Decision<ChoiceBit<'db>, IndexCondition<'db>>;
+/// Leaves sit behind a handle: inlining an index condition in every node made a
+/// branch pay for a payload only the leaves carry.
+type Leaf<'db> = Arc<IndexCondition<'db>>;
+type Condition<'db> = Decision<ChoiceBit<'db>, Leaf<'db>>;
+
+thread_local! {
+    static CONSTANT_LEAVES: [Leaf<'static>; 2] =
+        [Arc::new(IndexCondition::never()), Arc::new(IndexCondition::always())];
+}
+
+/// The two leaves every guard bottoms out in, shared rather than rebuilt.
+fn constant_leaf<'db>(value: bool) -> Leaf<'db> {
+    CONSTANT_LEAVES.with(|leaves| leaves[usize::from(value)].clone())
+}
+
+fn joined<'db>(
+    join: impl Fn(&IndexCondition<'db>, &IndexCondition<'db>) -> IndexCondition<'db>,
+) -> impl Fn(&Leaf<'db>, &Leaf<'db>) -> Leaf<'db> {
+    move |left, right| Arc::new(join(left, right))
+}
+
+trait ConstantLeaf {
+    fn is_always_leaf(&self) -> bool;
+    fn is_never_leaf(&self) -> bool;
+}
+
+impl ConstantLeaf for Condition<'_> {
+    fn is_always_leaf(&self) -> bool {
+        self.leaf_value().is_some_and(|leaf| leaf.is_always())
+    }
+    fn is_never_leaf(&self) -> bool {
+        self.leaf_value().is_some_and(|leaf| leaf.is_never())
+    }
+}
 
 /// Fixpoint iteration rebuilds values from the same guards, so their unions and
 /// intersections repeat. Guards are immutable; a cached result is the result.
@@ -721,7 +774,7 @@ impl<'db> Guard<'db> {
     pub fn always(scope: &BinderScope) -> Self {
         Self {
             scope: scope.clone(),
-            condition: Decision::leaf(IndexCondition::always()),
+            condition: Decision::leaf(constant_leaf(true)),
         }
     }
     pub fn scope(&self) -> &BinderScope {
@@ -730,29 +783,31 @@ impl<'db> Guard<'db> {
 
     pub fn and(&self, other: &Self) -> Option<Self> {
         assert_eq!(self.scope, other.scope, "guard scopes must match");
-        if self == other || other.condition.is_leaf(&IndexCondition::always()) {
+        if self == other || other.condition.is_always_leaf() {
             return Some(self.clone());
         }
-        if self.condition.is_leaf(&IndexCondition::always()) {
+        if self.condition.is_always_leaf() {
             return Some(other.clone());
         }
         Self::canonical(
             &self.scope,
-            self.condition.apply(&other.condition, IndexCondition::and),
+            self.condition
+                .apply(&other.condition, joined(IndexCondition::and)),
         )
     }
 
     pub fn or(&self, other: &Self) -> Self {
         assert_eq!(self.scope, other.scope, "guard scopes must match");
-        if self == other || self.condition.is_leaf(&IndexCondition::always()) {
+        if self == other || self.condition.is_always_leaf() {
             return self.clone();
         }
-        if other.condition.is_leaf(&IndexCondition::always()) {
+        if other.condition.is_always_leaf() {
             return other.clone();
         }
         Self::canonical(
             &self.scope,
-            self.condition.apply(&other.condition, IndexCondition::or),
+            self.condition
+                .apply(&other.condition, joined(IndexCondition::or)),
         )
         .expect("a union of satisfiable guards is satisfiable")
     }
@@ -809,6 +864,7 @@ impl<'db> Guard<'db> {
         for index in choice.path.indices() {
             self.scope.validate(index).expect("free choice binder");
         }
+        let choice = Arc::new(choice);
         let condition = Decision::chain(
             (0..bits).map(|bit| {
                 (
@@ -819,12 +875,13 @@ impl<'db> Guard<'db> {
                     value(bit),
                 )
             }),
-            IndexCondition::always(),
-            IndexCondition::never(),
+            constant_leaf(true),
+            constant_leaf(false),
         );
         Self::canonical(
             &self.scope,
-            self.condition.apply(&condition, IndexCondition::and),
+            self.condition
+                .apply(&condition, joined(IndexCondition::and)),
         )
     }
 
@@ -845,13 +902,8 @@ impl<'db> Guard<'db> {
         Self::canonical(
             subst.destination(),
             self.condition.map(
-                |bit| {
-                    Variable::Symbol(ChoiceBit {
-                        choice: bit.choice.map_indices(|index| subst.apply(*index)),
-                        bit: bit.bit,
-                    })
-                },
-                |condition| condition.substitute(subst),
+                renamed_choices(|choice| choice.map_indices(|index| subst.apply(*index))),
+                |condition| Arc::new(condition.substitute(subst)),
             ),
         )
     }
@@ -890,15 +942,9 @@ impl<'db> Guard<'db> {
         Self::canonical(
             &self.scope,
             self.condition.map(
-                |bit| {
-                    Variable::Symbol(ChoiceBit {
-                        choice: ChoiceKey::new(
-                            mappings[&bit.choice.occurrence],
-                            bit.choice.path.clone(),
-                        ),
-                        bit: bit.bit,
-                    })
-                },
+                renamed_choices(|choice| {
+                    ChoiceKey::new(mappings[&choice.occurrence], choice.path.clone())
+                }),
                 Clone::clone,
             ),
         )
@@ -911,8 +957,10 @@ impl<'db> Guard<'db> {
         }
         Self::canonical(
             &self.scope,
-            self.condition
-                .exists(|bit| repeated(bit.choice.occurrence), IndexCondition::or),
+            self.condition.exists(
+                |bit| repeated(bit.choice.occurrence),
+                joined(IndexCondition::or),
+            ),
         )
         .expect("existential quantification preserves feasibility")
     }
@@ -936,11 +984,11 @@ impl<'db> Guard<'db> {
                         .indices()
                         .any(|index| indices.contains(&index))
                 },
-                IndexCondition::or,
+                joined(IndexCondition::or),
             )
             .map(
                 |bit| Variable::Symbol(bit.clone()),
-                |condition| condition.project(|index| indices.contains(&index)),
+                |condition| Arc::new(condition.project(|index| indices.contains(&index))),
             );
         Self::canonical(&self.scope, condition)
             .expect("existential quantification preserves feasibility")
@@ -950,8 +998,9 @@ impl<'db> Guard<'db> {
         assert_eq!(self.scope, other.scope, "guard scopes must match");
         Self::canonical(
             &self.scope,
-            self.condition
-                .apply(&other.condition, |left, right| left.and(&right.not())),
+            self.condition.apply(&other.condition, |left, right| {
+                Arc::new(left.and(&right.not()))
+            }),
         )
     }
 
@@ -976,7 +1025,7 @@ impl<'db> Guard<'db> {
             &self.scope,
             self.condition.map(
                 |bit| Variable::Symbol(bit.clone()),
-                |condition| condition.project(|index| projected.contains(&index)),
+                |condition| Arc::new(condition.project(|index| projected.contains(&index))),
             ),
         )
         .expect("existential projection preserves feasibility")
@@ -985,8 +1034,10 @@ impl<'db> Guard<'db> {
     pub fn implies(&self, other: &Self) -> bool {
         assert_eq!(self.scope, other.scope, "guard scopes must match");
         self.condition
-            .apply(&other.condition, |left, right| left.and(&right.not()))
-            .is_leaf(&IndexCondition::never())
+            .apply(&other.condition, |left, right| {
+                Arc::new(left.and(&right.not()))
+            })
+            .is_never_leaf()
     }
 
     pub fn proves_equal(&self, lhs: IndexExpr<'db>, rhs: IndexExpr<'db>) -> bool {
@@ -1002,7 +1053,7 @@ impl<'db> Guard<'db> {
         let mut indices: BTreeSet<_> = self
             .condition
             .leaves()
-            .flat_map(IndexCondition::indices)
+            .flat_map(|leaf| leaf.indices())
             .collect();
         for bit in self.condition.variables() {
             indices.extend(bit.choice.path.indices());
@@ -1020,7 +1071,7 @@ impl<'db> Guard<'db> {
             + self
                 .condition
                 .leaves()
-                .map(IndexCondition::node_count)
+                .map(|leaf| leaf.node_count())
                 .sum::<usize>()
     }
 
@@ -1029,7 +1080,7 @@ impl<'db> Guard<'db> {
             &self.scope,
             self.condition.map(
                 |bit| Variable::Symbol(bit.clone()),
-                |old| old.and(condition),
+                |old| Arc::new(old.and(condition)),
             ),
         )
     }
@@ -1038,7 +1089,7 @@ impl<'db> Guard<'db> {
     // Identifying choice bits rebuilds the ordered graph and rejects conflicting variants;
     // no map collection is allowed to overwrite a contradictory requirement.
     fn canonical(scope: &BinderScope, condition: Condition<'db>) -> Option<Self> {
-        if condition.is_leaf(&IndexCondition::never()) {
+        if condition.is_never_leaf() {
             return None;
         }
         if condition.variables().all(|bit| {
@@ -1056,7 +1107,7 @@ impl<'db> Guard<'db> {
             .variables()
             .flat_map(|bit| bit.choice.path.indices())
             .collect();
-        let mut canonical = Decision::leaf(IndexCondition::never());
+        let mut canonical = Decision::leaf(constant_leaf(false));
         // Partition by distinct terminal conditions, not graph paths: shared suffixes
         // can represent exponentially many paths through a compact decision graph.
         for indices in condition.leaves().filter(|indices| !indices.is_never()) {
@@ -1067,29 +1118,25 @@ impl<'db> Guard<'db> {
                 .collect();
             let representatives = indices.representatives(&terms);
             let alternative = condition.map(
-                |bit| {
-                    Variable::Symbol(ChoiceBit {
-                        choice: bit.choice.map_indices(|index| {
-                            representatives.get(index).copied().unwrap_or(*index)
-                        }),
-                        bit: bit.bit,
-                    })
-                },
+                renamed_choices(|choice| {
+                    choice
+                        .map_indices(|index| representatives.get(index).copied().unwrap_or(*index))
+                }),
                 |leaf| {
                     if leaf == indices {
                         leaf.clone()
                     } else {
-                        IndexCondition::never()
+                        constant_leaf(false)
                     }
                 },
             );
-            canonical = canonical.apply(&alternative, IndexCondition::or);
+            canonical = canonical.apply(&alternative, joined(IndexCondition::or));
         }
         // Choice occurrences at equal indices must have equal tags. Complete the
         // graph outside these feasible valuations so equality partitions can reunite
         // without retaining a spurious dependence on an extra indexed choice.
         let choices: BTreeSet<_> = canonical.variables().map(|bit| &bit.choice).collect();
-        let mut care = Decision::leaf(IndexCondition::always());
+        let mut care = Decision::leaf(constant_leaf(true));
         for (position, left) in choices.iter().copied().enumerate() {
             for right in choices.iter().copied().skip(position + 1) {
                 if let Some(alias) = left.alias_condition(right) {
@@ -1106,16 +1153,17 @@ impl<'db> Guard<'db> {
                                 },
                             )
                         }),
-                        IndexCondition::always(),
-                        alias.not(),
+                        constant_leaf(true),
+                        Arc::new(alias.not()),
                     );
-                    care = care.apply(&equality, IndexCondition::and);
+                    care = care.apply(&equality, joined(IndexCondition::and));
                 }
             }
         }
-        let canonical =
-            canonical.restrict(&care, &IndexCondition::never(), IndexCondition::restrict)?;
-        (!canonical.is_leaf(&IndexCondition::never())).then(|| Self {
+        let canonical = canonical.restrict(&care, &constant_leaf(false), |value, care| {
+            value.restrict(care).map(Arc::new)
+        })?;
+        (!canonical.is_never_leaf()).then(|| Self {
             scope: scope.clone(),
             condition: canonical,
         })
