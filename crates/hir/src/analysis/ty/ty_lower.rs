@@ -753,7 +753,8 @@ pub struct CallableInputLayoutBackingSource {
 #[derive(Default)]
 struct CallableLayoutProjections<'db> {
     placeholders: Vec<TyId<'db>>,
-    component_placeholders: Vec<Vec<TyId<'db>>>,
+    /// The structural placeholder bound to each root component, if any.
+    component_placeholders: Vec<Option<TyId<'db>>>,
     /// Nonterminal declaration ports replaced by each terminal component.
     /// This preserves specialization topology without transporting both an
     /// aggregate carrier alias and its physical descendant.
@@ -1479,21 +1480,18 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             .collect::<Vec<_>>();
         let mut all_components = Vec::<(
             LayoutBundleComponent<'db>,
-            Vec<TyId<'db>>,
+            Option<TyId<'db>>,
             Vec<LayoutPortKey>,
         )>::new();
         let mut component_by_port = FxHashMap::<LayoutPortKey, usize>::default();
         for occurrence in value_occurrences {
-            let placeholders = match &occurrence.representative {
+            let placeholder = match &occurrence.representative {
                 LayoutBundleComponentKey::Root(root) => self
                     .placeholders
                     .iter()
                     .copied()
-                    .filter(|placeholder| self.placeholder_roots.get(placeholder) == Some(root))
-                    .collect(),
-                LayoutBundleComponentKey::Param(_) | LayoutBundleComponentKey::Static(_) => {
-                    Vec::new()
-                }
+                    .find(|placeholder| self.placeholder_roots.get(placeholder) == Some(root)),
+                LayoutBundleComponentKey::Param(_) | LayoutBundleComponentKey::Static(_) => None,
             };
             let refined_ports = self
                 .value_occurrences
@@ -1504,11 +1502,9 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                 .map(|ancestor| ancestor.port.clone())
                 .collect::<Vec<_>>();
             if let Some(existing) = component_by_port.get(&occurrence.port).copied() {
-                let (component, existing_placeholders, existing_refined_ports) =
-                    &mut all_components[existing];
+                let (component, _, existing_refined_ports) = &mut all_components[existing];
                 assert_eq!(
-                    component.representative,
-                    Some(occurrence.representative),
+                    component.representative, occurrence.representative,
                     "one layout port has multiple root values"
                 );
                 assert_eq!(
@@ -1519,11 +1515,6 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                     component.ty, occurrence.ty,
                     "one layout port has multiple scalar types"
                 );
-                for placeholder in placeholders {
-                    if !existing_placeholders.contains(&placeholder) {
-                        existing_placeholders.push(placeholder);
-                    }
-                }
                 for port in refined_ports {
                     if !existing_refined_ports.contains(&port) {
                         existing_refined_ports.push(port);
@@ -1535,12 +1526,12 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                     LayoutBundleComponent {
                         port: occurrence.port,
                         declaration: occurrence.declaration,
-                        representative: Some(occurrence.representative),
+                        representative: occurrence.representative,
                         ty: occurrence.ty,
                         supplied_const_params: Vec::new(),
                         dependent_const_params: Vec::new(),
                     },
-                    placeholders,
+                    placeholder,
                     refined_ports,
                 ));
             }
@@ -1549,9 +1540,9 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
         let mut components = Vec::with_capacity(all_components.len());
         let mut component_placeholders = Vec::with_capacity(all_components.len());
         let mut component_refined_ports = Vec::with_capacity(all_components.len());
-        for (component, placeholders, refined_ports) in all_components {
+        for (component, placeholder, refined_ports) in all_components {
             components.push(component);
-            component_placeholders.push(placeholders);
+            component_placeholders.push(placeholder);
             component_refined_ports.push(refined_ports);
         }
 
@@ -1856,32 +1847,26 @@ fn bind_callable_layout_bundle_interface<'db>(
     let mut schema = projection.schema.clone();
     bind_direct_layout_const_params(db, &mut schema);
     bind_projected_component_const_metadata(db, site, &mut schema, &projection.port_tys);
-    for (component, placeholders) in schema
+    for (component, placeholder) in schema
         .components
         .iter_mut()
         .zip(&projection.component_placeholders)
     {
-        for param in placeholders.iter().filter_map(|placeholder| {
+        let Some(param) = placeholder.and_then(|placeholder| {
             bindings
                 .iter()
-                .find_map(|(candidate, param)| (candidate == placeholder).then_some(*param))
-        }) {
-            if !component.supplied_const_params.contains(&param) {
-                component.supplied_const_params.push(param);
-            }
-            if !component.dependent_const_params.contains(&param) {
-                component.dependent_const_params.push(param);
-            }
+                .find_map(|(candidate, param)| (*candidate == placeholder).then_some(*param))
+        }) else {
+            continue;
+        };
+        if !component.supplied_const_params.contains(&param) {
+            component.supplied_const_params.push(param);
         }
-        if matches!(
-            component.representative,
-            Some(LayoutBundleComponentKey::Root(_))
-        ) && let Some(param) = placeholders.iter().find_map(|placeholder| {
-            bindings
-                .iter()
-                .find_map(|(candidate, param)| (candidate == placeholder).then_some(*param))
-        }) {
-            component.representative = Some(LayoutBundleComponentKey::Param(param));
+        if !component.dependent_const_params.contains(&param) {
+            component.dependent_const_params.push(param);
+        }
+        if matches!(component.representative, LayoutBundleComponentKey::Root(_)) {
+            component.representative = LayoutBundleComponentKey::Param(param);
         }
     }
     LayoutBundleInterface {
@@ -1895,7 +1880,7 @@ fn bind_direct_layout_const_params<'db>(
     schema: &mut LayoutBundleSchema<'db>,
 ) {
     for component in &mut schema.components {
-        if let Some(LayoutBundleComponentKey::Param(param)) = component.representative
+        if let LayoutBundleComponentKey::Param(param) = component.representative
             && matches!(
                 param.data(db),
                 TyData::ConstTy(const_ty)
@@ -2118,7 +2103,7 @@ fn preserve_declared_component_ports<'db>(
         .collect::<Vec<_>>();
     for component in missing {
         projection.schema.components.push(component);
-        projection.component_placeholders.push(Vec::new());
+        projection.component_placeholders.push(None);
         projection.component_refined_ports.push(Vec::new());
     }
     for alias in &declared.schema.view_aliases {
@@ -2164,9 +2149,9 @@ fn specialize_component_representative<'db>(
     owner: GenericParamOwner<'db>,
     args: &[TyId<'db>],
 ) {
-    if let Some(LayoutBundleComponentKey::Param(value)) = component.representative {
+    if let LayoutBundleComponentKey::Param(value) = component.representative {
         let value = Binder::bind(owner, value).instantiate(db, args);
-        component.representative = Some(specialized_layout_component_key(db, value));
+        component.representative = specialized_layout_component_key(db, value);
     }
     component.ty = Binder::bind(owner, component.ty).instantiate(db, args);
 }
@@ -2186,33 +2171,27 @@ fn specialize_callable_input_layout_interface<'db>(
         projection.transport = LayoutBundleTransport::all_runtime(&projection.schema);
         Vec::new()
     };
-    for (component, placeholders) in projection
+    for (component, placeholder) in projection
         .schema
         .components
         .iter_mut()
         .zip(&projection.component_placeholders)
     {
-        let values = placeholders
-            .iter()
-            .filter_map(|placeholder| {
-                let (_, bound) = bindings
-                    .iter()
-                    .find(|(candidate, _)| candidate == placeholder)?;
-                let TyData::ConstTy(const_ty) = bound.data(db) else {
-                    return Some(*bound);
-                };
-                let ConstTyData::TyParam(param, _) = const_ty.data(db) else {
-                    return Some(*bound);
-                };
-                Some(args.get(param.idx).copied().unwrap_or(*bound))
-            })
-            .collect::<Vec<_>>();
-        if let Some(value) = values.first().copied() {
-            component.representative = values
+        if let Some((_, bound)) = placeholder.and_then(|placeholder| {
+            bindings
                 .iter()
-                .copied()
-                .all(|candidate| same_layout_argument(db, value, candidate))
-                .then(|| specialized_layout_component_key(db, value));
+                .find(|(candidate, _)| *candidate == placeholder)
+        }) {
+            let value = match bound.data(db) {
+                TyData::ConstTy(const_ty) => match const_ty.data(db) {
+                    ConstTyData::TyParam(param, _) => {
+                        args.get(param.idx).copied().unwrap_or(*bound)
+                    }
+                    _ => *bound,
+                },
+                _ => *bound,
+            };
+            component.representative = specialized_layout_component_key(db, value);
         }
         if restored_ports.contains(&component.port) {
             let CallableLayoutSchemaSite::Input {
@@ -2896,8 +2875,8 @@ pub fn callable_input_layout_bundle_schema<'db>(
 ///
 /// This is ownership provenance for borrow checking, not runtime layout
 /// evidence. Aggregate ancestors are omitted when a descendant names the
-/// concrete carrier place. Indexed families retain the projection needed to
-/// decide whether a unique backing place exists.
+/// concrete carrier place. Projections through array elements are retained so
+/// callers can decide whether a unique backing place exists.
 pub fn callable_input_layout_backing_sources<'db>(
     db: &'db dyn HirAnalysisDb,
     func: crate::hir_def::Func<'db>,

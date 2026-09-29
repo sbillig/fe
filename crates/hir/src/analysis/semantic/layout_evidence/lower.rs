@@ -325,7 +325,7 @@ fn assigned_provider_components<'db>(
         let mut projections = base_projections.clone();
         projections.extend(layout_projections(component_path)?);
         let value = match &component.representative {
-            Some(LayoutBundleComponentKey::Root(root)) => field
+            LayoutBundleComponentKey::Root(root) => field
                 .root_value_for_evidence_projections(view, *root, component.ty, &projections)
                 .ok()
                 .or_else(|| {
@@ -335,8 +335,7 @@ fn assigned_provider_components<'db>(
                         &projections,
                     )
                 }),
-            None
-            | Some(LayoutBundleComponentKey::Param(_) | LayoutBundleComponentKey::Static(_)) => {
+            LayoutBundleComponentKey::Param(_) | LayoutBundleComponentKey::Static(_) => {
                 field.unique_root_value_for_evidence_projections(view, component.ty, &projections)
             }
         }
@@ -433,7 +432,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             let value = match (transport.component(component_id), &component.representative) {
                 (
                     Some(LayoutBundleComponentTransport::CompileTime),
-                    Some(LayoutBundleComponentKey::Static(base)),
+                    LayoutBundleComponentKey::Static(base),
                 ) => LayoutEvidenceComponentValue::Known(LayoutEvidenceConstant {
                     ty: component.ty,
                     base: LayoutEvidenceBase::Root(*base),
@@ -453,9 +452,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                 }
                 (
                     Some(LayoutBundleComponentTransport::CompileTime),
-                    None
-                    | Some(LayoutBundleComponentKey::Root(_))
-                    | Some(LayoutBundleComponentKey::Param(_)),
+                    LayoutBundleComponentKey::Root(_) | LayoutBundleComponentKey::Param(_),
                 ) => {
                     unreachable!("compile-time layout component must have a static key")
                 }
@@ -808,24 +805,16 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             Some(LayoutEvidenceComponentValue::Dynamic(_))
         );
         let source = match (is_runtime, &destination.representative) {
-            (false, Some(LayoutBundleComponentKey::Static(_))) => {
-                Self::static_component(destination)
-            }
-            (true, Some(LayoutBundleComponentKey::Static(_))) => self
+            (false, LayoutBundleComponentKey::Static(_)) => Self::static_component(destination),
+            (true, LayoutBundleComponentKey::Static(_)) => self
                 .declared_component_source(local, component, destination)?
                 .or_else(|| Self::static_component(destination)),
-            (
-                true,
-                None
-                | Some(LayoutBundleComponentKey::Root(_))
-                | Some(LayoutBundleComponentKey::Param(_)),
-            ) => self.declared_component_source(local, component, destination)?,
-            (
-                false,
-                None
-                | Some(LayoutBundleComponentKey::Root(_))
-                | Some(LayoutBundleComponentKey::Param(_)),
-            ) => unreachable!("compile-time layout component must have a static key"),
+            (true, LayoutBundleComponentKey::Root(_) | LayoutBundleComponentKey::Param(_)) => {
+                self.declared_component_source(local, component, destination)?
+            }
+            (false, LayoutBundleComponentKey::Root(_) | LayoutBundleComponentKey::Param(_)) => {
+                unreachable!("compile-time layout component must have a static key")
+            }
         }
         .ok_or(LayoutEvidenceError::MissingComponent { local, component })?;
         Self::retarget_component(local, component, target, source)
@@ -1721,7 +1710,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
     }
 
     fn static_component(component: &LayoutBundleComponent<'db>) -> Option<ComponentExpr<'db>> {
-        let Some(LayoutBundleComponentKey::Static(base)) = component.representative else {
+        let LayoutBundleComponentKey::Static(base) = component.representative else {
             return None;
         };
         Some(ComponentExpr {

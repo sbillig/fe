@@ -167,13 +167,13 @@ pub enum LayoutBundleComponentTransport {
 /// arguments equal: value transformations can change either path
 /// independently. `port` retains physical occurrence identity,
 /// `declaration` relates components through the callable's declared type, and
-/// `representative` is an optional instantiated scalar used only for
-/// allocation lookup and explicit const resolution.
+/// `representative` is the instantiated root key, used only for allocation
+/// lookup and explicit const resolution.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct LayoutBundleComponent<'db> {
     pub port: LayoutPortKey,
     pub declaration: LayoutBundleComponentDeclaration<'db>,
-    pub representative: Option<LayoutBundleComponentKey<'db>>,
+    pub representative: LayoutBundleComponentKey<'db>,
     pub ty: TyId<'db>,
     /// Declaration-level const parameters whose exact scalar value is
     /// supplied by this port. These identities survive specialization:
@@ -412,7 +412,7 @@ impl LayoutBundleTransport {
                 .map(|component| {
                     if matches!(
                         component.representative,
-                        Some(LayoutBundleComponentKey::Static(_))
+                        LayoutBundleComponentKey::Static(_)
                     ) {
                         LayoutBundleComponentTransport::CompileTime
                     } else {
@@ -473,7 +473,7 @@ impl<'db> LayoutBundleInterface<'db> {
             if matches!(transport, LayoutBundleComponentTransport::CompileTime)
                 && !matches!(
                     component.representative,
-                    Some(LayoutBundleComponentKey::Static(_))
+                    LayoutBundleComponentKey::Static(_)
                 )
             {
                 return Err(LayoutBundleInterfaceError::InvalidCompileTimeComponent {

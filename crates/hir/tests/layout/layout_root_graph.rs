@@ -2076,7 +2076,7 @@ fn concrete(map: StorageMap<u256, u256, 7>) {}
     assert_eq!(signature.output.schema.components.len(), 1);
     assert!(matches!(
         signature.inputs[0].interface.schema.components[0].representative,
-        Some(LayoutBundleComponentKey::Param(_))
+        LayoutBundleComponentKey::Param(_)
     ));
     assert_eq!(
         signature.inputs[0].interface.schema.components[0].representative,
@@ -2133,11 +2133,11 @@ fn concrete(map: StorageMap<u256, u256, 7>) {}
     let specialized = key.layout_bundle_signature(&db);
     assert!(matches!(
         specialized.inputs[0].interface.schema.components[0].representative,
-        Some(LayoutBundleComponentKey::Static(value)) if value == root
+        LayoutBundleComponentKey::Static(value) if value == root
     ));
     assert!(matches!(
         specialized.output.schema.components[0].representative,
-        Some(LayoutBundleComponentKey::Static(value)) if value == root
+        LayoutBundleComponentKey::Static(value) if value == root
     ));
     assert_eq!(
         specialized.inputs[0]

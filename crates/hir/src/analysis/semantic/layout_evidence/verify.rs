@@ -589,7 +589,7 @@ pub fn verify_layout_evidence_body<'db>(
                     if value.ty != schema.ty
                         || matches!(value.base, super::LayoutEvidenceBase::Root(root)
                             if root.const_ty_ty(db) != Some(value.ty))
-                        || !matches!(schema.representative, Some(LayoutBundleComponentKey::Static(expected))
+                        || !matches!(schema.representative, LayoutBundleComponentKey::Static(expected)
                             if value.base == super::LayoutEvidenceBase::Root(expected))
                     {
                         return Err(LayoutEvidenceVerifyError::InvalidComponentValue {
