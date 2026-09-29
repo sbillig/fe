@@ -44,11 +44,10 @@ enum PredicateTerm<'db> {
 // substitution instantiates a method's requirement with its callable arguments.
 fn requirement_subst<'db>(
     db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
+    declaration: WhereClauseOwner<'db>,
     args: &[TyId<'db>],
-) -> Option<CompleteSubst<'db>> {
-    let owner = GenericParamOwner::from_item_opt(scope.item())?;
-    CompleteSubst::for_owner(db, owner, args.to_vec()).ok()
+) -> Result<CompleteSubst<'db>, SubstError<'db>> {
+    CompleteSubst::for_owner(db, declaration.into(), args.to_vec())
 }
 
 // Arguments inferred in a method body can mention its impl's parameters as the
@@ -67,16 +66,24 @@ fn caller_args<'db>(
     substitute_complete(db, args, &subst)
 }
 
+/// The forwardable form of a predicate's expression, instantiated with
+/// `subst`, or `None` for an expression that cannot be forwarded. A
+/// substitution that fails is an error, not an expression that cannot be
+/// forwarded: it would report the wrong failure, or keep a premise from
+/// matching.
 fn predicate_key<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
     typed: &TypedBody<'db>,
     expr: ExprId,
     subst: &CompleteSubst<'db>,
-) -> Option<PredicateKey<'db>> {
-    let instantiate = |ty| substitute_complete(db, ty, subst).ok();
+) -> Result<Option<PredicateKey<'db>>, SubstError<'db>> {
+    let instantiate = |ty| substitute_complete(db, ty, subst);
     let child = |expr| predicate_key(db, body, typed, expr, subst);
-    let term = match expr.data(db, body).borrowed().to_opt()? {
+    let Some(data) = expr.data(db, body).borrowed().to_opt() else {
+        return Ok(None);
+    };
+    let term = match data {
         Expr::Lit(lit) => PredicateTerm::Literal(*lit),
         Expr::Path(_) => {
             if let Some(ValuePathRef::TypeConst(ty)) = typed.value_path_ref(expr) {
@@ -84,13 +91,14 @@ fn predicate_key<'db>(
             } else {
                 // A reference's lookup scope is provenance, not its identity.
                 // Keep the resolved declaration and substituted receiver/goal.
-                match typed.expr_const_ref(expr)? {
-                    ConstRef::Const(constant) => PredicateTerm::Const(constant),
-                    ConstRef::TraitConst(reference) => PredicateTerm::TraitConst(
-                        substitute_complete(db, reference.inst(), subst).ok()?,
+                match typed.expr_const_ref(expr) {
+                    None => return Ok(None),
+                    Some(ConstRef::Const(constant)) => PredicateTerm::Const(constant),
+                    Some(ConstRef::TraitConst(reference)) => PredicateTerm::TraitConst(
+                        substitute_complete(db, reference.inst(), subst)?,
                         reference.name(),
                     ),
-                    ConstRef::InherentConst(reference) => PredicateTerm::InherentConst(
+                    Some(ConstRef::InherentConst(reference)) => PredicateTerm::InherentConst(
                         reference.impl_(),
                         instantiate(reference.receiver_ty())?,
                         reference.name(),
@@ -99,30 +107,47 @@ fn predicate_key<'db>(
             }
         }
         Expr::Bin(lhs, rhs, op) => {
-            PredicateTerm::Binary(*op, Box::new(child(*lhs)?), Box::new(child(*rhs)?))
+            let (Some(lhs), Some(rhs)) = (child(*lhs)?, child(*rhs)?) else {
+                return Ok(None);
+            };
+            PredicateTerm::Binary(*op, Box::new(lhs), Box::new(rhs))
         }
-        Expr::Un(value, op) => PredicateTerm::Unary(*op, Box::new(child(*value)?)),
-        Expr::Cast(value, _) => PredicateTerm::Cast(Box::new(child(*value)?)),
+        Expr::Un(value, op) => {
+            let Some(value) = child(*value)? else {
+                return Ok(None);
+            };
+            PredicateTerm::Unary(*op, Box::new(value))
+        }
+        Expr::Cast(value, _) => {
+            let Some(value) = child(*value)? else {
+                return Ok(None);
+            };
+            PredicateTerm::Cast(Box::new(value))
+        }
         Expr::Call(_, call_args) => {
-            typed.callable_expr(expr)?;
-            PredicateTerm::Call(
-                call_args
-                    .iter()
-                    .map(|arg| child(arg.expr))
-                    .collect::<Option<_>>()?,
-            )
+            if typed.callable_expr(expr).is_none() {
+                return Ok(None);
+            }
+            let args = call_args
+                .iter()
+                .map(|arg| child(arg.expr))
+                .collect::<Result<Option<_>, _>>()?;
+            let Some(args) = args else {
+                return Ok(None);
+            };
+            PredicateTerm::Call(args)
         }
-        _ => return None,
+        _ => return Ok(None),
     };
-    Some(PredicateKey {
+    Ok(Some(PredicateKey {
         ty: instantiate(typed.expr_ty(db, expr))?,
         arithmetic: BodyOwner::const_predicate(db, body).arithmetic_mode(db),
-        operation: match typed.callable_expr(expr) {
-            Some(callable) => Some(substitute_complete(db, callable.clone(), subst).ok()?),
-            None => None,
-        },
+        operation: typed
+            .callable_expr(expr)
+            .map(|callable| substitute_complete(db, callable.clone(), subst))
+            .transpose()?,
         term,
-    })
+    }))
 }
 
 fn predicate_flags<'db>(db: &'db dyn HirAnalysisDb, mut typed: TypedBody<'db>) -> TyFlags {
@@ -377,14 +402,8 @@ fn caller_premises<'db>(
         GenericParamOwner::Struct(_) | GenericParamOwner::Enum(_) => true,
         _ => false,
     };
-    if own
-        && let Some(owner) = WhereClauseOwner::from_item_opt(item)
-        && let Some(subst) = requirement_subst(
-            db,
-            item.scope(),
-            collect_generic_params(db, caller).params(db),
-        )
-    {
+    if own && let Some(owner) = WhereClauseOwner::from_item_opt(item) {
+        let subst = requirement_subst(db, owner, collect_generic_params(db, caller).params(db))?;
         premises.extend(
             owner
                 .where_clause(db)
@@ -406,9 +425,25 @@ fn caller_premises<'db>(
         _ => Vec::new(),
     };
     for ty in caller_args(db, caller, implied)? {
-        type_conditions(db, ty, &mut premises);
+        type_conditions(db, ty, &mut premises)?;
     }
     Ok(premises)
+}
+
+/// The record or enum declaration of `ty`'s base, which states the
+/// conditions of its applications.
+fn adt_declaration<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Option<WhereClauseOwner<'db>> {
+    use crate::analysis::ty::adt_def::AdtRef;
+    let TyData::TyBase(TyBase::Adt(adt)) = ty.base_ty(db).data(db) else {
+        return None;
+    };
+    Some(match adt.adt_ref(db) {
+        AdtRef::Struct(record) => WhereClauseOwner::Struct(record),
+        AdtRef::Enum(enum_) => WhereClauseOwner::Enum(enum_),
+    })
 }
 
 /// The conditions of each fully applied record or enum in `ty`, instantiated
@@ -417,31 +452,40 @@ fn type_conditions<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
     conditions: &mut Vec<(Body<'db>, CompleteSubst<'db>)>,
-) {
-    use crate::analysis::ty::adt_def::AdtRef;
-    let (base, args) = ty.decompose_ty_app(db);
+) -> Result<(), SubstError<'db>> {
+    let (_, args) = ty.decompose_ty_app(db);
     for &arg in args {
-        type_conditions(db, arg, conditions);
+        type_conditions(db, arg, conditions)?;
     }
-    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
-        return;
-    };
-    let declaration = match adt.adt_ref(db) {
-        AdtRef::Struct(record) => WhereClauseOwner::Struct(record),
-        AdtRef::Enum(enum_) => WhereClauseOwner::Enum(enum_),
+    let Some(declaration) = adt_declaration(db, ty) else {
+        return Ok(());
     };
     let predicates = declaration.where_clause(db).const_predicates(db);
     if predicates.is_empty() {
-        return;
+        return Ok(());
     }
-    let Some(subst) = requirement_subst(db, ItemKind::from(declaration).scope(), args) else {
-        return;
-    };
+    let subst = requirement_subst(db, declaration, args)?;
     conditions.extend(
         predicates
             .iter()
             .map(|&predicate| (predicate, subst.clone())),
     );
+    Ok(())
+}
+
+/// A condition of a record or enum in `ty`, if any.
+fn first_condition<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<Body<'db>> {
+    ty.decompose_ty_app(db)
+        .1
+        .iter()
+        .find_map(|&arg| first_condition(db, arg))
+        .or_else(|| {
+            adt_declaration(db, ty)?
+                .where_clause(db)
+                .const_predicates(db)
+                .first()
+                .copied()
+        })
 }
 
 pub(super) fn check_body_requirements<'db>(
@@ -527,15 +571,31 @@ pub(super) fn check_body_requirements<'db>(
                 continue;
             }
         };
-        if let Some(unmet) = check_entered_header(
-            db,
-            typed,
-            expr,
-            callee_headers(db, func, args),
-            owner.scope(),
-            &written,
-        ) {
-            check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
+        match callee_headers(db, func, args) {
+            Ok(headers) => {
+                if let Some(unmet) =
+                    check_entered_header(db, typed, expr, headers, owner.scope(), &written)
+                {
+                    check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
+                }
+            }
+            // The instantiated headers are unknown, so a condition of a record
+            // or enum that they could carry, from the declared header or from
+            // the use's arguments, fails as a condition that discharge cannot
+            // instantiate does.
+            Err(_) => {
+                if let Some(predicate) = declared_callee_headers(db, func)
+                    .into_iter()
+                    .chain(args.iter().copied())
+                    .find_map(|ty| first_condition(db, ty))
+                {
+                    check.unmet(
+                        expr.span(body).into(),
+                        predicate,
+                        RequirementFailure::NotInstantiable,
+                    );
+                }
+            }
         }
         // Conditions are supported on free functions and inherent methods.
         // Other associated or generic owner contexts are rejected at their
@@ -865,29 +925,31 @@ fn header_types<'db>(db: &'db dyn HirAnalysisDb, item: ItemKind<'db>) -> Vec<TyI
     }
 }
 
+/// The header types of `func`'s parent in its declaration coordinates: an
+/// impl's header, or a trait's `Self` and parameters.
+fn declared_callee_headers<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> Vec<TyId<'db>> {
+    match func.scope().parent_item(db) {
+        Some(ItemKind::Trait(trait_)) => trait_.params(db).to_vec(),
+        Some(item) => header_types(db, item),
+        None => Vec::new(),
+    }
+}
+
 /// The header types a use of `func` with `args` instantiates: its impl's
-/// header, or a trait method's `Self` and trait arguments.
+/// header, or a trait method's `Self` and trait arguments. A header that
+/// cannot be instantiated with `args` is an error, since dropping it would
+/// skip the conditions it carries.
 fn callee_headers<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
     args: &[TyId<'db>],
-) -> Vec<TyId<'db>> {
-    match func.scope().parent_item(db) {
-        Some(ItemKind::Trait(trait_)) => args
-            .get(..trait_.params(db).len())
-            .map(<[_]>::to_vec)
-            .unwrap_or_default(),
-        Some(item @ (ItemKind::Impl(_) | ItemKind::ImplTrait(_))) => {
-            let Ok(subst) = CompleteSubst::for_owner(db, func.into(), args.to_vec()) else {
-                return Vec::new();
-            };
-            header_types(db, item)
-                .into_iter()
-                .filter_map(|ty| substitute_complete(db, ty, &subst).ok())
-                .collect()
-        }
-        _ => Vec::new(),
+) -> Result<Vec<TyId<'db>>, SubstError<'db>> {
+    let headers = declared_callee_headers(db, func);
+    if headers.is_empty() {
+        return Ok(headers);
     }
+    let subst = CompleteSubst::for_owner(db, func.into(), args.to_vec())?;
+    substitute_complete(db, headers, &subst)
 }
 
 /// The header types an associated constant path instantiates.
@@ -1053,7 +1115,7 @@ fn discharge_requirement<'db>(
         },
         None => args,
     };
-    let Some(subst) = requirement_subst(db, ItemKind::from(declaration).scope(), &args) else {
+    let Ok(subst) = requirement_subst(db, declaration, &args) else {
         return not_instantiable;
     };
     let Ok(mut instantiated) = substitute_complete(db, formation.typed.clone(), &subst) else {
@@ -1071,24 +1133,29 @@ fn discharge_requirement<'db>(
     }
     let symbolic = predicate_flags(db, instantiated).contains(TyFlags::HAS_PARAM);
     if symbolic {
-        let key = predicate_key(db, predicate, &formation.typed, predicate.expr(db), &subst);
+        let Ok(key) = predicate_key(db, predicate, &formation.typed, predicate.expr(db), &subst)
+        else {
+            return not_instantiable;
+        };
         if let (Some(key), Some(caller)) = (&key, caller) {
             let Ok(premises) = caller_premises(db, caller) else {
                 return not_instantiable;
             };
             for (premise, premise_subst) in premises {
                 let premise_formation = check_predicate_formation(db, premise);
-                if premise_formation.is_well_formed()
-                    && predicate_key(
-                        db,
-                        premise,
-                        &premise_formation.typed,
-                        premise.expr(db),
-                        &premise_subst,
-                    )
-                    .as_ref()
-                        == Some(key)
-                {
+                if !premise_formation.is_well_formed() {
+                    continue;
+                }
+                let Ok(premise_key) = predicate_key(
+                    db,
+                    premise,
+                    &premise_formation.typed,
+                    premise.expr(db),
+                    &premise_subst,
+                ) else {
+                    return not_instantiable;
+                };
+                if premise_key.as_ref() == Some(key) {
                     return Discharge::Holds;
                 }
             }

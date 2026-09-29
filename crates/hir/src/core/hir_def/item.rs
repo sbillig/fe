@@ -397,6 +397,20 @@ impl<'db> WhereClauseOwner<'db> {
     }
 }
 
+/// Every item with a `where` clause declares generic parameters.
+impl<'db> From<WhereClauseOwner<'db>> for GenericParamOwner<'db> {
+    fn from(owner: WhereClauseOwner<'db>) -> Self {
+        match owner {
+            WhereClauseOwner::Func(func) => Self::Func(func),
+            WhereClauseOwner::Struct(struct_) => Self::Struct(struct_),
+            WhereClauseOwner::Enum(enum_) => Self::Enum(enum_),
+            WhereClauseOwner::Impl(impl_) => Self::Impl(impl_),
+            WhereClauseOwner::Trait(trait_) => Self::Trait(trait_),
+            WhereClauseOwner::ImplTrait(impl_trait) => Self::ImplTrait(impl_trait),
+        }
+    }
+}
+
 #[salsa::tracked]
 #[derive(Debug)]
 pub struct TopLevelMod<'db> {
