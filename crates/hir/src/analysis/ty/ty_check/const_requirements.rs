@@ -596,6 +596,13 @@ pub(super) fn check_body_requirements<'db>(
         if direct_callees.contains(&expr) && typed.callable_expr(expr).is_none() {
             continue;
         }
+        // A call through a binding, block or branch calls a function value
+        // whose requirements were checked where the value is written.
+        if let Some(Expr::Call(callee, _)) = data.borrowed().to_opt()
+            && carries(*callee)
+        {
+            continue;
+        }
         let (definition, args) = if let Some(callable) = typed.callable_expr(expr) {
             (callable.callable_def(), callable.generic_args())
         } else {
