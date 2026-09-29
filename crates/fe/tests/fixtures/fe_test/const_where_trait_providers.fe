@@ -1,0 +1,65 @@
+// A const fn with a const `where` predicate can also take a trait provider.
+// The predicate is checked at each call, and the provider is used as a plain
+// value, whether its method borrows it (`ref self`) or takes it by value.
+
+trait RefLookup {
+    const fn get(ref self, _ i: usize) -> u256
+}
+
+struct RefTable { xs: [u256; 4] }
+
+impl RefLookup for RefTable {
+    const fn get(ref self, _ i: usize) -> u256 { self.xs[i] }
+}
+
+const fn ref_at<const N: usize>() -> u256 uses (table: RefLookup) where N < 4 {
+    table.get(N)
+}
+
+// Forwarding keeps both the predicate and the provider.
+const fn ref_forward<const N: usize>() -> u256 uses (table: RefLookup) where N < 4 {
+    ref_at<N>()
+}
+
+const fn ref_last() -> u256 {
+    with (RefLookup = RefTable { xs: [1, 2, 3, 4] }) { ref_at<3>() + ref_forward<0>() }
+}
+
+const REF_LAST: u256 = ref_last()
+
+#[test]
+fn ref_self_provider_const_and_runtime_agree() {
+    assert!(REF_LAST == 5)
+    assert!(ref_last() == REF_LAST)
+}
+
+trait ValueLookup {
+    const fn get(self, _ i: usize) -> u256
+}
+
+struct ValueTable { xs: [u256; 4] }
+impl Copy for ValueTable {}
+
+impl ValueLookup for ValueTable {
+    const fn get(self, _ i: usize) -> u256 { self.xs[i] }
+}
+
+const fn value_at<const N: usize>() -> u256 uses (table: ValueLookup) where N < 4 {
+    table.get(N)
+}
+
+const fn value_forward<const N: usize>() -> u256 uses (table: ValueLookup) where N < 4 {
+    value_at<N>()
+}
+
+const fn value_last() -> u256 {
+    with (ValueLookup = ValueTable { xs: [1, 2, 3, 4] }) { value_at<3>() + value_forward<0>() }
+}
+
+const VALUE_LAST: u256 = value_last()
+
+#[test]
+fn by_value_provider_const_and_runtime_agree() {
+    assert!(VALUE_LAST == 5)
+    assert!(value_last() == VALUE_LAST)
+}
