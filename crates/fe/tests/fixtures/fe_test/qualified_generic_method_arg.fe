@@ -1,0 +1,41 @@
+// A `<<` after a method name opens generic arguments only before a qualified
+// path, the same rule path segments use. `receiver.take<<M as Model>::Point>(x)`
+// passes an explicit type argument, while `s.bits << 1` stays a shift.
+pub trait Model {
+    type Point
+}
+
+pub struct M {}
+
+impl Model for M {
+    type Point = u256
+}
+
+pub struct S {
+    bits: u256,
+}
+
+impl S {
+    fn take<T>(self, _ value: T) -> T {
+        value
+    }
+}
+
+fn explicit_qualified_type_argument() -> u256 {
+    S { bits: 0 }.take<<M as Model>::Point>(42)
+}
+
+fn field_shift(_ s: S) -> u256 {
+    s.bits << 1
+}
+
+fn field_shift_around_cast(_ s: S, _ bits: u8) -> u256 {
+    s.bits << bits as u256 >> 1
+}
+
+#[test]
+fn qualified_generic_method_argument() {
+    assert!(explicit_qualified_type_argument() == 42)
+    assert!(field_shift(S { bits: 2 }) == 4)
+    assert!(field_shift_around_cast(S { bits: 1 }, 3) == 4)
+}

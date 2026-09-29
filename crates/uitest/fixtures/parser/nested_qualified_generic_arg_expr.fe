@@ -10,6 +10,10 @@ impl<T> Wrapped<T> {
     fn new(_ value: T) -> Self {
         Wrapped { value }
     }
+
+    fn pick<U>(self, _ value: U) -> U {
+        value
+    }
 }
 
 fn wrap<M: Model>(_ point: M::Point) -> Wrapped<<M as Model>::Point> {
@@ -18,4 +22,11 @@ fn wrap<M: Model>(_ point: M::Point) -> Wrapped<<M as Model>::Point> {
 
 fn rewrap<M: Model>(_ point: M::Point) -> Wrapped<<M as Model>::Point> {
     Wrapped<<M as Model>::Point> { value: point }
+}
+
+fn call_with_qualified_type_arg<M: Model>(
+    _ wrapped: Wrapped<<M as Model>::Point>,
+    _ point: M::Point,
+) -> M::Point {
+    wrapped.pick<<M as Model>::Point>(point)
 }

@@ -40,16 +40,7 @@ impl super::Parse for PathSegmentScope {
                 parser.bump();
 
                 if parser.current_kind_same_line() == Some(SyntaxKind::Lt) && is_lshift(parser) {
-                    // `<<` is a left shift unless it opens generic arguments
-                    // whose first argument is a qualified path, as in
-                    // `Wrapped<<T as Trait>::Item>`. No shift operand continues
-                    // with `>::`, so that prefix settles it, and a cast such as
-                    // `value << bits as u256 >> 1` stays a shift.
-                    if parser.probe(ProbeKind::LShiftOpensGenericArgs, |parser| {
-                        parser.bump();
-                        parser.parses_without_error(QualifiedTypeScope::default())
-                            && parser.current_kind() == Some(SyntaxKind::Colon2)
-                    }) {
+                    if lshift_opens_generic_args(parser) {
                         // Errors inside the arguments are reported as they are parsed.
                         let _ = parser.parse(GenericArgListScope::new(self.is_expr));
                     }
@@ -130,6 +121,22 @@ impl super::Parse for QualifiedTypeScope {
             ))
         }
     }
+}
+
+/// Whether the `<<` at the current position opens generic arguments whose first
+/// argument is a qualified path, as in `Wrapped<<T as Trait>::Item>`, rather
+/// than being a left shift.
+///
+/// No shift operand continues with `>::`, so that prefix settles it, and a cast
+/// such as `value << bits as u256 >> 1` stays a shift. Path segments and
+/// method calls must agree on this, or `Wrapped<<T as Trait>::Item>::new()`
+/// parses while `receiver.take<<T as Trait>::Item>(x)` does not.
+pub(super) fn lshift_opens_generic_args<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    parser.probe(ProbeKind::LShiftOpensGenericArgs, |parser| {
+        parser.bump();
+        parser.parses_without_error(QualifiedTypeScope::default())
+            && parser.current_kind() == Some(SyntaxKind::Colon2)
+    })
 }
 
 pub(super) fn is_qualified_type<S: TokenStream>(parser: &mut Parser<S>) -> bool {
