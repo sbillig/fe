@@ -53,6 +53,12 @@ struct PNode {
     next: **PNode,
 }
 
+impl Node {
+    fn set_value(mut self, _ value: u256) {
+        self.value = value
+    }
+}
+
 fn next_value(_ p: *Node) -> u256 {
     p.next.value
 }
@@ -142,6 +148,8 @@ fn test_recursive_joins() {
     assert(pick(a, b, use_first: true).next.value == 2)
     let chosen = if a.value == 1 { a.next } else { a }
     assert(chosen.next.value == 2)
+    (*pick(a, b, use_first: false)).set_value(3)
+    assert(b.value == 3)
 }
 
 #[test]

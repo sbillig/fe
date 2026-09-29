@@ -1176,8 +1176,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 BorrowActivation::Immediate
             };
             let receiver_prop = self.typed_body.expr_prop(self.db, receiver);
-            let place = if let Some(place) = self.typed_body.expr_place(receiver) {
-                self.lower_place_data(place)
+            let place = if let Some(place) = self.try_lower_place(receiver) {
+                place
             } else {
                 let value = self.lower_expr(receiver);
                 let local = self.alloc_local(
