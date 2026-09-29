@@ -663,18 +663,15 @@ impl DocIndex {
             // Build rich signature: "impl Trait for Type"
             let rich_signature = vec![
                 SignaturePart::text("impl "),
-                SignaturePart::link(&trait_simple_name, format!("{}/trait", trait_path)),
+                SignaturePart::link(&trait_simple_name, format!("{trait_path}/trait")),
                 SignaturePart::text(" for "),
-                SignaturePart::link(
-                    &type_simple_name,
-                    format!("{}/{}", type_path, type_kind_suffix),
-                ),
+                SignaturePart::link(&type_simple_name, format!("{type_path}/{type_kind_suffix}")),
             ];
 
             // Create implementor entry with correct URL and rich signature
             let implementor = DocImplementor {
                 type_name: type_simple_name.clone(),
-                type_url: format!("{}/{}", type_path, type_kind_suffix),
+                type_url: format!("{type_path}/{type_kind_suffix}"),
                 trait_name: trait_simple_name.clone(),
                 signature: trait_impl.signature.clone(),
                 rich_signature,
@@ -708,7 +705,7 @@ impl DocIndex {
                     let matches = item.path == target_type
                         || (!target_type.contains("::")
                             && (item.name == target_simple_name
-                                || item.path.ends_with(&format!("::{}", target_simple_name))));
+                                || item.path.ends_with(&format!("::{target_simple_name}"))));
 
                     if matches {
                         // Build rich signature for this trait impl if it's a trait impl (not inherent)
@@ -716,7 +713,7 @@ impl DocIndex {
                         {
                             // Look up the trait URL
                             let trait_url = lookup_trait(&trait_items, &trait_impl.trait_name)
-                                .map(|p| format!("{}/trait", p))
+                                .map(|p| format!("{p}/trait"))
                                 .unwrap_or_else(|| format!("{}/trait", trait_impl.trait_name));
 
                             // Use the target item's path and kind for the type URL
@@ -737,7 +734,7 @@ impl DocIndex {
                 if item.kind == DocItemKind::Trait && !trait_impl.trait_name.is_empty() {
                     let trait_matches = item.path == trait_impl.trait_name
                         || item.name == trait_simple_name
-                        || item.path.ends_with(&format!("::{}", trait_simple_name));
+                        || item.path.ends_with(&format!("::{trait_simple_name}"));
 
                     // Look up by item's full path first, then by simple name
                     let impls = trait_implementors

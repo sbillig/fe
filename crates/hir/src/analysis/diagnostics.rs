@@ -1619,7 +1619,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                         message: {
                             use crate::hir_def::GenericParamOwner;
                             let n_params = GenericParamOwner::TypeAlias(*alias).params(db).count();
-                            format!("expected at least {} arguments here", n_params)
+                            format!("expected at least {n_params} arguments here")
                         },
                         span: span.resolve(db),
                     },
@@ -2937,7 +2937,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         message,
                         sub_diagnostics: vec![SubDiagnostic {
                             style: LabelStyle::Primary,
-                            message: format!("unknown effect `{}`", key_str),
+                            message: format!("unknown effect `{key_str}`"),
                             span,
                         }],
                         notes: vec![
@@ -2952,7 +2952,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         message,
                         sub_diagnostics: vec![SubDiagnostic {
                             style: LabelStyle::Primary,
-                            message: format!("cannot resolve `{}` as a type or trait", key_str),
+                            message: format!("cannot resolve `{key_str}` as a type or trait"),
                             span,
                         }],
                         notes: vec![
@@ -3029,12 +3029,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
 
                 CompleteDiagnostic {
                     severity: Severity::Error,
-                    message: format!("missing effect `{}` required by `{}`", key_str, func_name),
+                    message: format!("missing effect `{key_str}` required by `{func_name}`"),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: format!(
-                            "`{}` requires effect `{}` to be in scope",
-                            func_name, key_str
+                            "`{func_name}` requires effect `{key_str}` to be in scope"
                         ),
                         span: primary.resolve(db),
                     }],
@@ -3060,8 +3059,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: format!(
-                            "effect `{}` is ambiguous when calling `{}`",
-                            key_str, func_name
+                            "effect `{key_str}` is ambiguous when calling `{func_name}`"
                         ),
                         span: primary.resolve(db),
                     }],
@@ -3085,14 +3083,14 @@ impl DiagnosticVoucher for BodyDiag<'_> {
 
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: format!("`{}` requires `mut {}`", func_name, key_str),
+                    message: format!("`{func_name}` requires `mut {key_str}`"),
                     span: primary.resolve(db),
                 }];
 
                 if let Some(span) = provided_span.as_ref().map(|s| s.resolve(db)) {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("effect `{}` is provided here", key_str),
+                        message: format!("effect `{key_str}` is provided here"),
                         span,
                     });
                 }
@@ -3100,8 +3098,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: format!(
-                        "effect `{}` must be mutable when calling `{}`",
-                        key_str, func_name
+                        "effect `{key_str}` must be mutable when calling `{func_name}`"
                     ),
                     sub_diagnostics,
                     notes: vec![
@@ -3132,8 +3129,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: format!(
-                        "expected `{}` for effect `{}`, found `{}`",
-                        expected_ty, key_str, given_ty
+                        "expected `{expected_ty}` for effect `{key_str}`, found `{given_ty}`"
                     ),
                     span: primary.resolve(db),
                 }];
@@ -3141,7 +3137,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 if let Some(span) = provided_span.as_ref().map(|s| s.resolve(db)) {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("effect `{}` is provided here", key_str),
+                        message: format!("effect `{key_str}` is provided here"),
                         span,
                     });
                 }
@@ -3149,8 +3145,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: format!(
-                        "effect `{}` provided to `{}` has type `{}`, but `{}` is required",
-                        key_str, func_name, given_ty, expected_ty
+                        "effect `{key_str}` provided to `{func_name}` has type `{given_ty}`, but `{expected_ty}` is required"
                     ),
                     sub_diagnostics,
                     notes: vec![],
@@ -3178,8 +3173,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: format!(
-                        "expected effect provider `{}`, found `{}` for `{}`",
-                        expected_ty, given_ty, key_str
+                        "expected effect provider `{expected_ty}`, found `{given_ty}` for `{key_str}`"
                     ),
                     span: primary.resolve(db),
                 }];
@@ -3187,7 +3181,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 if let Some(span) = provided_span.as_ref().map(|s| s.resolve(db)) {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("effect `{}` is provided here", key_str),
+                        message: format!("effect `{key_str}` is provided here"),
                         span,
                     });
                 }
@@ -3195,8 +3189,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: format!(
-                        "effect provider mismatch for `{}` when calling `{}`",
-                        key_str, func_name
+                        "effect provider mismatch for `{key_str}` when calling `{func_name}`"
                     ),
                     sub_diagnostics,
                     notes: vec![],
@@ -3224,8 +3217,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: format!(
-                        "`{}` must implement `{}` for effect `{}`",
-                        given_ty, trait_str, key_str
+                        "`{given_ty}` must implement `{trait_str}` for effect `{key_str}`"
                     ),
                     span: primary.resolve(db),
                 }];
@@ -3233,7 +3225,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 if let Some(span) = provided_span.as_ref().map(|s| s.resolve(db)) {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("effect `{}` is provided here", key_str),
+                        message: format!("effect `{key_str}` is provided here"),
                         span,
                     });
                 }
@@ -3241,8 +3233,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: format!(
-                        "effect `{}` supplied to `{}` does not satisfy `{}`",
-                        key_str, func_name, trait_str
+                        "effect `{key_str}` supplied to `{func_name}` does not satisfy `{trait_str}`"
                     ),
                     sub_diagnostics,
                     notes: vec![],
@@ -3263,14 +3254,12 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: format!(
-                        "keyed effect binding `{}` requires `{}` to implement `{}`",
-                        key_str, given_ty, trait_str
+                        "keyed effect binding `{key_str}` requires `{given_ty}` to implement `{trait_str}`"
                     ),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: format!(
-                            "`{}` does not implement `{}` for effect `{}`",
-                            given_ty, trait_str, key_str
+                            "`{given_ty}` does not implement `{trait_str}` for effect `{key_str}`"
                         ),
                         span: primary.resolve(db),
                     }],
@@ -4678,12 +4667,12 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let sub_diagnostics = vec![
                     SubDiagnostic {
                         style: LabelStyle::Primary,
-                        message: format!("`{}` is already handled", ty_str),
+                        message: format!("`{ty_str}` is already handled"),
                         span: primary.resolve(db),
                     },
                     SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("`{}` first handled here", ty_str),
+                        message: format!("`{ty_str}` first handled here"),
                         span: first_use.resolve(db),
                     },
                 ];

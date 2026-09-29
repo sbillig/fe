@@ -525,8 +525,7 @@ pub contract Token {
         assert!(
             ref_snippets.iter().filter(|s| *s == "Mint").count() >= 2,
             "references_to_target for Mint should find at least 2 refs \
-             (msg block + recv arm), got: {:?}",
-            ref_snippets
+             (msg block + recv arm), got: {ref_snippets:?}"
         );
     }
 }

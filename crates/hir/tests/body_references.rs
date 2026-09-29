@@ -46,7 +46,7 @@ fn body_references(fixture: Fixture<&str>) {
                             None => "unresolved".to_string(),
                         };
 
-                        let annotation = format!("{} -> {}", path_name, target_desc);
+                        let annotation = format!("{path_name} -> {target_desc}");
                         prop_formatter.push_prop(top_mod, pv.span(), annotation);
                     }
                     ReferenceView::FieldAccess(fv) => {

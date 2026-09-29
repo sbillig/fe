@@ -160,10 +160,7 @@ impl Display for Counter {
                 "Should find impl Display for Counter"
             );
         } else {
-            panic!(
-                "Expected Target::Scope for trait name, got {:?}",
-                resolution
-            );
+            panic!("Expected Target::Scope for trait name, got {resolution:?}");
         }
     }
 }

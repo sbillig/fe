@@ -194,7 +194,7 @@ pub fn generate_docs(
 
         if let Some(docs_url) = &found {
             println!("Found running language server with documentation at:");
-            println!("  {}", docs_url);
+            println!("  {docs_url}");
             println!();
             println!("The language server keeps docs in sync with your code.");
             println!("Open the URL above in your browser.");
@@ -793,7 +793,7 @@ fn detect_source_link_base(working_dir: &std::path::Path) -> Option<String> {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())?;
 
-    Some(format!("{}/blob/{}", CANONICAL_REPO, commit))
+    Some(format!("{CANONICAL_REPO}/blob/{commit}"))
 }
 
 /// Top-level shape of `docs.json`. A struct (rather than a `serde_json::json!`

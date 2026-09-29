@@ -583,10 +583,10 @@ pub fn scope_to_doc_path(db: &dyn SpannedHirDb, scope: ScopeId) -> Option<String
     {
         let parent = &qualified_path[..sep];
         let name = &qualified_path[sep + 2..];
-        return Some(format!("{}/msg~variant.{}", parent, name));
+        return Some(format!("{parent}/msg~variant.{name}"));
     }
 
-    Some(format!("{}/{}", qualified_path, kind_suffix))
+    Some(format!("{qualified_path}/{kind_suffix}"))
 }
 
 /// Map HIR ItemKind to URL suffix string.
@@ -647,7 +647,7 @@ pub fn qualify_path_with_ingot_name(db: &dyn SpannedHirDb, path: &str, ingot: In
         if path == "lib" {
             name
         } else if let Some(rest) = path.strip_prefix("lib::") {
-            format!("{}::{}", name, rest)
+            format!("{name}::{rest}")
         } else {
             path.to_string()
         }

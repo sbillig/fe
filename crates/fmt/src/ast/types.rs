@@ -482,7 +482,7 @@ fn block_list_inner<'a>(
     let alloc = &ctx.alloc;
 
     if items.is_empty() {
-        return alloc.text(format!("{}{}", open, close));
+        return alloc.text(format!("{open}{close}"));
     }
 
     let sep = alloc.text(",").append(alloc.line());

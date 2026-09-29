@@ -30,7 +30,7 @@ fn hir_desugar(fixture: Fixture<&str>) {
     // Parse and analyze the printed output to verify it's valid Fe code
     let mut roundtrip_db = HirAnalysisTestDb::default();
     let roundtrip_file =
-        roundtrip_db.new_stand_alone(format!("{}.roundtrip.fe", file_name).into(), &output);
+        roundtrip_db.new_stand_alone(format!("{file_name}.roundtrip.fe").into(), &output);
     let roundtrip_mod = map_file_to_mod(&roundtrip_db, roundtrip_file);
     roundtrip_db.assert_no_diags(roundtrip_mod);
 }

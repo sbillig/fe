@@ -7561,7 +7561,7 @@ fn erc20_has_role_self_ty_app_chain_is_acyclic() {
     let mut seen = rustc_hash::FxHashSet::default();
     let mut cursor = ty;
     loop {
-        assert!(seen.insert(cursor), "cyclic ty app chain at {:?}", cursor);
+        assert!(seen.insert(cursor), "cyclic ty app chain at {cursor:?}");
         match cursor.data(&db) {
             TyData::TyApp(lhs, _) => cursor = *lhs,
             _ => break,

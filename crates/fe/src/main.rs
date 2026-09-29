@@ -1305,15 +1305,15 @@ fn run_fmt(path: Option<&Utf8PathBuf>, check: bool) {
 fn print_diff(path: &Utf8PathBuf, original: &str, formatted: &str) {
     let diff = TextDiff::from_lines(original, formatted);
 
-    println!("{}", format!("Diff {}:", path).bold());
+    println!("{}", format!("Diff {path}:").bold());
     for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
         // Print hunk header
         println!("{}", format!("{}", hunk.header()).cyan());
         for change in hunk.iter_changes() {
             match change.tag() {
-                ChangeTag::Delete => print!("{}", format!("-{}", change).red()),
-                ChangeTag::Insert => print!("{}", format!("+{}", change).green()),
-                ChangeTag::Equal => print!(" {}", change),
+                ChangeTag::Delete => print!("{}", format!("-{change}").red()),
+                ChangeTag::Insert => print!("{}", format!("+{change}").green()),
+                ChangeTag::Equal => print!(" {change}"),
             };
         }
     }
@@ -1361,7 +1361,7 @@ fn format_single_file(path: &Utf8PathBuf, config: &fe_fmt::Config, check: bool) 
         if let Err(e) = fs::write(path.as_std_path(), &formatted) {
             return FormatResult::IoError(e);
         }
-        println!("Formatted {}", path);
+        println!("Formatted {path}");
     }
 
     FormatResult::Formatted {

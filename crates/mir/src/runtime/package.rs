@@ -1535,29 +1535,18 @@ fn runtime_class_for_visible_binding_entry<'db>(
         .any(|binding| same_owner_effect_binding(binding, entry.binding))
     {
         return owner_effect_binding_class(db, semantic, entry.binding).unwrap_or_else(|| {
-            panic!(
-                "runtime-visible owner effect binding has no runtime class: {:?}",
-                entry
-            )
+            panic!("runtime-visible owner effect binding has no runtime class: {entry:?}")
         });
     }
     if matches!(entry.binding, LocalBinding::Local { .. }) {
         return top_level_class_for_ty_in_env(db, env, entry.semantic_ty, AddressSpaceKind::Memory)
             .unwrap_or_else(|| {
-                panic!(
-                    "runtime-visible recv arg binding has no top-level runtime class: {:?}",
-                    entry
-                )
+                panic!("runtime-visible recv arg binding has no top-level runtime class: {entry:?}")
             });
     }
     runtime_visible_binding_class(db, semantic, entry.binding)
         .map(|class| runtime_param_class(db, typed_body, entry.binding, env, class))
-        .unwrap_or_else(|| {
-            panic!(
-                "runtime-visible typed binding has no runtime class: {:?}",
-                entry
-            )
-        })
+        .unwrap_or_else(|| panic!("runtime-visible typed binding has no runtime class: {entry:?}"))
 }
 
 fn owner_effect_binding_class<'db>(

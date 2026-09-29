@@ -144,9 +144,9 @@ impl<'db> DocExtractor<'db> {
             let simple_type = extract_simple_name(&target_type);
             let simple_trait = extract_simple_name(&trait_name);
             let impl_path = if parent_path.is_empty() {
-                format!("{}::impl_{}", simple_type, simple_trait)
+                format!("{simple_type}::impl_{simple_trait}")
             } else {
-                format!("{}::{}::impl_{}", parent_path, simple_type, simple_trait)
+                format!("{parent_path}::{simple_type}::impl_{simple_trait}")
             };
 
             let (signature, signature_span) = self.get_signature_with_span(impl_trait.into());
@@ -156,7 +156,7 @@ impl<'db> DocExtractor<'db> {
                 target_type,
                 DocTraitImpl {
                     trait_name,
-                    impl_url: format!("{}/impl", impl_path),
+                    impl_url: format!("{impl_path}/impl"),
                     signature,
                     rich_signature: vec![],
                     signature_span,
@@ -189,14 +189,14 @@ impl<'db> DocExtractor<'db> {
             let impl_suffix = if *count == 0 {
                 "impl".to_string()
             } else {
-                format!("impl_{}", count)
+                format!("impl_{count}")
             };
             *count += 1;
 
             let impl_path = if parent_path.is_empty() {
-                format!("{}::{}", simple_type, impl_suffix)
+                format!("{simple_type}::{impl_suffix}")
             } else {
-                format!("{}::{}::{}", parent_path, simple_type, impl_suffix)
+                format!("{parent_path}::{simple_type}::{impl_suffix}")
             };
 
             let (signature, signature_span) = self.get_signature_with_span(impl_.into());
@@ -206,7 +206,7 @@ impl<'db> DocExtractor<'db> {
                 target_type,
                 DocTraitImpl {
                     trait_name: String::new(), // Empty = inherent impl
-                    impl_url: format!("{}/impl", impl_path),
+                    impl_url: format!("{impl_path}/impl"),
                     signature,
                     rich_signature: vec![],
                     signature_span,
@@ -718,14 +718,14 @@ impl<'db> DocExtractor<'db> {
                         if arm.is_fallback(self.db) {
                             "_".to_string()
                         } else {
-                            format!("arm{}_{}", recv_idx, arm_idx)
+                            format!("arm{recv_idx}_{arm_idx}")
                         }
                     });
 
                 // Disambiguate duplicate arm names across multiple recv blocks
                 // (rare, but possible if the same msg type is handled twice).
                 let qualified_name = if let Some(ref msg) = msg_type_name {
-                    format!("{}::{}", msg, name)
+                    format!("{msg}::{name}")
                 } else {
                     name.clone()
                 };
@@ -800,7 +800,7 @@ impl<'db> DocExtractor<'db> {
                 let type_text = self
                     .get_field_type_text(field_view)
                     .unwrap_or_else(|| "?".to_string());
-                let signature = format!("{}: {}", name, type_text);
+                let signature = format!("{name}: {type_text}");
                 // Get visibility from the scope's data
                 let visibility = scope.data(self.db).vis;
 
@@ -831,7 +831,7 @@ impl<'db> DocExtractor<'db> {
                 let type_text = self
                     .get_field_type_text(field_view)
                     .unwrap_or_else(|| "?".to_string());
-                let signature = format!("{}: {}", name, type_text);
+                let signature = format!("{name}: {type_text}");
                 let visibility = scope.data(self.db).vis;
 
                 let signature_span = self.field_sig_span(field_view);
@@ -868,12 +868,12 @@ impl<'db> DocExtractor<'db> {
                             .filter_map(|i| self.get_tuple_elem_type_text(&enum_variant, i))
                             .collect();
                         if type_texts.is_empty() {
-                            format!("{}(...)", name)
+                            format!("{name}(...)")
                         } else {
                             format!("{}({})", name, type_texts.join(", "))
                         }
                     }
-                    VariantKind::Record(_) => format!("{} {{ ... }}", name),
+                    VariantKind::Record(_) => format!("{name} {{ ... }}"),
                 };
 
                 let signature_span = enum_variant
@@ -949,7 +949,7 @@ impl<'db> DocExtractor<'db> {
                     kind: DocChildKind::AssocType,
                     name: name_str.clone(),
                     docs,
-                    signature: format!("type {}", name_str),
+                    signature: format!("type {name_str}"),
                     rich_signature: vec![],
                     signature_span: None,
                     sig_scope: None,
@@ -1487,7 +1487,7 @@ mod tests {
             .file_stem()
             .unwrap()
             .to_string_lossy();
-        let dir = std::env::temp_dir().join(format!("fe_doc_static_{}", test_name));
+        let dir = std::env::temp_dir().join(format!("fe_doc_static_{test_name}"));
         let _ = std::fs::remove_dir_all(&dir);
 
         fe_web::static_site::StaticSiteGenerator::generate(&index, &dir)

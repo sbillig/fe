@@ -144,10 +144,7 @@ pub fn html_shell_full(
 
     let source_section = if let Some(base) = source_link_base {
         let safe_base = escape_script_content(base);
-        format!(
-            "\n  <script>window.FE_SOURCE_BASE = \"{}\";</script>",
-            safe_base
-        )
+        format!("\n  <script>window.FE_SOURCE_BASE = \"{safe_base}\";</script>")
     } else {
         String::new()
     };
@@ -158,43 +155,28 @@ pub fn html_shell_full(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{title}</title>
-  <style>{css}</style>
-  <style>{highlight_css}</style>
+  <title>{safe_title}</title>
+  <style>{STYLES_CSS}</style>
+  <style>{FE_HIGHLIGHT_CSS}</style>
 </head>
 <body>
-  <script>window.FE_DOC_INDEX = {json};</script>{scip_section}{source_section}
-  <script>{tree_sitter_js}</script>
+  <script>window.FE_DOC_INDEX = {safe_json};</script>{scip_section}{source_section}
+  <script>{TREE_SITTER_JS}</script>
   <script>{highlighter_js}</script>
-  <script>{code_block_js}</script>
-  <script>{signature_js}</script>
-  <script>{doc_item_js}</script>
-  <script>{symbol_link_js}</script>
-  <script>{search_js}</script>
-  <script>{doc_nav_js}</script>
-  <script>{doc_viewer_js}</script>
-  <fe-doc-viewer title="{title}" routing="hash" show-search></fe-doc-viewer>
+  <script>{FE_CODE_BLOCK_JS}</script>
+  <script>{FE_SIGNATURE_JS}</script>
+  <script>{FE_DOC_ITEM_JS}</script>
+  <script>{FE_SYMBOL_LINK_JS}</script>
+  <script>{FE_SEARCH_JS}</script>
+  <script>{FE_DOC_NAV_JS}</script>
+  <script>{FE_DOC_VIEWER_JS}</script>
+  <fe-doc-viewer title="{safe_title}" routing="hash" show-search></fe-doc-viewer>
   <script>
     // Signal data is ready for components using global store
     document.dispatchEvent(new CustomEvent('fe-web-ready'));
   </script>
 </body>
 </html>"#,
-        title = safe_title,
-        css = STYLES_CSS,
-        highlight_css = FE_HIGHLIGHT_CSS,
-        json = safe_json,
-        scip_section = scip_section,
-        source_section = source_section,
-        tree_sitter_js = TREE_SITTER_JS,
-        highlighter_js = highlighter_js,
-        code_block_js = FE_CODE_BLOCK_JS,
-        signature_js = FE_SIGNATURE_JS,
-        doc_item_js = FE_DOC_ITEM_JS,
-        symbol_link_js = FE_SYMBOL_LINK_JS,
-        search_js = FE_SEARCH_JS,
-        doc_nav_js = FE_DOC_NAV_JS,
-        doc_viewer_js = FE_DOC_VIEWER_JS,
     )
 }
 

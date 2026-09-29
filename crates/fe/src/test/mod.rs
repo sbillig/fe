@@ -633,7 +633,7 @@ fn build_suite_plans(
         let suite_key = if *seen == 1 {
             suite.clone()
         } else {
-            format!("{suite}-{}", seen)
+            format!("{suite}-{seen}")
         };
         plans.push(SuitePlan {
             index,
@@ -2775,7 +2775,7 @@ fn write_report_manifest(
     for r in results.iter().filter(|r| !r.passed) {
         out.push_str(&format!("- {}\n", r.name));
         if let Some(msg) = &r.error_message {
-            out.push_str(&format!("  {}\n", msg));
+            out.push_str(&format!("  {msg}\n"));
         }
     }
     let _ = std::fs::write(staging.join("manifest.txt"), out);

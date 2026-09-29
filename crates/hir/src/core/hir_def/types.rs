@@ -55,7 +55,7 @@ impl<'db> TypeId<'db> {
                     .map(print_ty)
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("({})", elems)
+                format!("({elems})")
             }
             TypeKind::Array(t, len_body) => {
                 let elem_ty = print_ty(t);
@@ -71,7 +71,7 @@ impl<'db> TypeId<'db> {
                         }
                     })
                     .unwrap_or_else(|| "<missing>".into());
-                format!("[{}; {}]", elem_ty, len_str)
+                format!("[{elem_ty}; {len_str}]")
             }
             TypeKind::Never => "!".into(),
         }

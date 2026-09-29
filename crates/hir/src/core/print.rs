@@ -199,7 +199,7 @@ impl<'db> AttrListId<'db> {
     /// Pretty-prints attributes with a trailing newline if non-empty.
     pub fn pretty_print_with_newline(self, db: &'db dyn HirDb) -> String {
         let s = self.pretty_print(db);
-        if s.is_empty() { s } else { format!("{}\n", s) }
+        if s.is_empty() { s } else { format!("{s}\n") }
     }
 }
 
@@ -220,7 +220,7 @@ impl<'db> NormalAttr<'db> {
         if let Some(value) = &self.value {
             format!("#[{path} = {}]", value.pretty_print(db))
         } else if self.args.is_empty() {
-            format!("#[{}]", path)
+            format!("#[{path}]")
         } else {
             let args = self
                 .args
@@ -228,7 +228,7 @@ impl<'db> NormalAttr<'db> {
                 .map(|arg| arg.pretty_print(db))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("#[{}({})]", path, args)
+            format!("#[{path}({args})]")
         }
     }
 }
@@ -271,7 +271,7 @@ impl<'db> GenericParamListId<'db> {
             .map(|p| p.pretty_print(db))
             .collect::<Vec<_>>()
             .join(", ");
-        format!("<{}>", params_str)
+        format!("<{params_str}>")
     }
 }
 
@@ -345,7 +345,7 @@ impl KindBound {
             KindBound::Abs(lhs, rhs) => {
                 let lhs = unwrap_partial_ref(lhs, "KindBound::Abs lhs").pretty_print();
                 let rhs = unwrap_partial_ref(rhs, "KindBound::Abs rhs").pretty_print();
-                format!("{} -> {}", lhs, rhs)
+                format!("{lhs} -> {rhs}")
             }
         }
     }
@@ -368,7 +368,7 @@ impl<'db> WhereClauseId<'db> {
             .map(|p| p.pretty_print(db))
             .collect::<Vec<_>>()
             .join(", ");
-        format!(" where {}", preds)
+        format!(" where {preds}")
     }
 }
 
@@ -393,7 +393,7 @@ impl<'db> FuncParamListId<'db> {
             .map(|p| p.pretty_print(db))
             .collect::<Vec<_>>()
             .join(", ");
-        format!("({})", params_str)
+        format!("({params_str})")
     }
 }
 
@@ -455,7 +455,7 @@ impl<'db> EffectParamListId<'db> {
             .map(|p| p.pretty_print(db))
             .collect::<Vec<_>>()
             .join(", ");
-        format!(" uses ({})", params_str)
+        format!(" uses ({params_str})")
     }
 }
 
@@ -505,7 +505,7 @@ impl<'db> Pat<'db> {
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("({})", pats_str)
+                format!("({pats_str})")
             }
             Pat::Path(path, is_mut) => {
                 let mut result = String::new();
@@ -714,7 +714,7 @@ impl<'db> Expr<'db> {
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("({})", exprs_str)
+                format!("({exprs_str})")
             }
 
             Expr::Array(exprs) => {
@@ -726,7 +726,7 @@ impl<'db> Expr<'db> {
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("[{}]", exprs_str)
+                format!("[{exprs_str}]")
             }
 
             Expr::ArrayRep(expr, len) => {
@@ -830,7 +830,7 @@ impl<'db> Expr<'db> {
                 } else {
                     format!("{{ {} }}", expr_ref.pretty_print(db, body, indent))
                 };
-                format!("with ({}) {}", bindings_str, body_str)
+                format!("with ({bindings_str}) {body_str}")
             }
         }
     }
@@ -1217,7 +1217,7 @@ impl<'db> FieldDefListId<'db> {
             .collect::<Vec<_>>()
             .join(",\n");
 
-        format!("{{\n{},\n}}", fields_str)
+        format!("{{\n{fields_str},\n}}")
     }
 }
 
@@ -1267,7 +1267,7 @@ impl<'db> VariantDefListId<'db> {
             .collect::<Vec<_>>()
             .join(",\n");
 
-        format!("{{\n{},\n}}", variants_str)
+        format!("{{\n{variants_str},\n}}")
     }
 }
 
@@ -1290,7 +1290,7 @@ impl<'db> VariantDef<'db> {
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                result.push_str(&format!("({})", types));
+                result.push_str(&format!("({types})"));
             }
             VariantKind::Record(fields) => {
                 result.push(' ');
@@ -1329,7 +1329,7 @@ impl<'db> Contract<'db> {
         // Fields
         for field in self.hir_fields(db).data(db) {
             let field_str = format_field_def(field, db, 1);
-            result.push_str(&format!("{},\n", field_str));
+            result.push_str(&format!("{field_str},\n"));
         }
 
         // Get child items (init function, etc.)

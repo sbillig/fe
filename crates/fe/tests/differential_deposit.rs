@@ -585,10 +585,7 @@ fn differential_deposit() {
     }
 
     let report = report.render();
-    println!(
-        "Differential deposit — correctness OK across {} deposits.",
-        deposit_count
-    );
+    println!("Differential deposit — correctness OK across {deposit_count} deposits.");
     println!();
     println!("{report}");
     let snapshot_path = fixture_dir().join("gas_report");

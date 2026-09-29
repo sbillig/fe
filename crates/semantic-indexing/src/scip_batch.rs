@@ -521,7 +521,7 @@ fn process_module<'db>(
                     let url = if parent_url.contains('~') {
                         parent_url.clone()
                     } else {
-                        format!("{}~{}.{}", parent_url, anchor, child_name)
+                        format!("{parent_url}~{anchor}.{child_name}")
                     };
                     doc_urls.insert(child_symbol.clone(), url);
                 }
@@ -662,7 +662,7 @@ fn index_unnamed_item_generic_params<'db>(
         let Some(child_name) = child.name(db) else {
             continue;
         };
-        let child_symbol = format!("{}{}", parent_symbol, child_name);
+        let child_symbol = format!("{parent_symbol}{child_name}");
         let child_view = SymbolView::new(child_scope);
         index_generic_params_for(
             db,
@@ -772,7 +772,7 @@ fn index_generic_params_for<'db>(
             continue;
         };
         let gp_name_str = gp_name.data(db).to_string();
-        let gp_symbol = format!("{}[{}]", parent_symbol, gp_name_str);
+        let gp_symbol = format!("{parent_symbol}[{gp_name_str}]");
 
         if let Some(doc) = documents.get_mut(doc_url) {
             if doc.seen_symbols.insert(gp_symbol.clone()) {
@@ -1021,7 +1021,7 @@ pub fn scip_to_json_data(index: &types::Index, doc_urls: &HashMap<String, String
                         .find(|p| !p.is_empty() && **p != "/")
                         .map(|s| {
                             let name = s.trim_end_matches('/').trim_end_matches('#');
-                            format!("{}.fe", name)
+                            format!("{name}.fe")
                         })
                 })
                 .unwrap_or_else(|| "input.fe".to_string())
@@ -1131,7 +1131,7 @@ pub fn enrich_signatures_with_base(
         let parent_url = item.url_path();
         for child in &item.children {
             let anchor = format!("{}.{}", child.kind.anchor_prefix(), child.name);
-            let url = format!("{}~{}", parent_url, anchor);
+            let url = format!("{parent_url}~{anchor}");
             name_seen
                 .entry(child.name.clone())
                 .and_modify(|existing| {
@@ -1145,7 +1145,7 @@ pub fn enrich_signatures_with_base(
         for trait_impl in &item.trait_impls {
             for method in &trait_impl.methods {
                 let anchor = format!("method.{}", method.name);
-                let url = format!("{}~{}", parent_url, anchor);
+                let url = format!("{parent_url}~{anchor}");
                 name_seen
                     .entry(method.name.clone())
                     .and_modify(|existing| {
@@ -1331,7 +1331,7 @@ pub fn enrich_signatures_with_base(
 
         // Item signature
         if let Some(ref span) = item.signature_span {
-            let scope = format!("__sig__/{}", parent_url);
+            let scope = format!("__sig__/{parent_url}");
 
             // Find the SCIP symbol for this item using its unique doc URL path.
             // This avoids display_name collisions (e.g. multiple types named "Option").
@@ -1375,7 +1375,7 @@ pub fn enrich_signatures_with_base(
         for child in &mut item.children {
             if let Some(ref span) = child.signature_span {
                 let anchor = format!("{}.{}", child.kind.anchor_prefix(), child.name);
-                let scope = format!("__sig__/{}/{}", parent_url, anchor);
+                let scope = format!("__sig__/{parent_url}/{anchor}");
                 let sig = if child.signature.is_empty() {
                     &child.name
                 } else {
@@ -1415,7 +1415,7 @@ pub fn enrich_signatures_with_base(
             };
 
             if let Some(ref span) = trait_impl.signature_span {
-                let scope = format!("__sig__/{}/{}", parent_url, impl_anchor);
+                let scope = format!("__sig__/{parent_url}/{impl_anchor}");
                 let occs = build_virtual_occurrences(
                     span,
                     &trait_impl.signature,
@@ -1469,7 +1469,7 @@ pub fn enrich_signatures_with_base(
         for imp in &mut item.implementors {
             if let Some(ref span) = imp.signature_span {
                 let type_anchor = sanitize_anchor_name(&imp.type_name);
-                let scope = format!("__sig__/{}/impl-{}", parent_url, type_anchor);
+                let scope = format!("__sig__/{parent_url}/impl-{type_anchor}");
                 let occs = build_virtual_occurrences(
                     span,
                     &imp.signature,
