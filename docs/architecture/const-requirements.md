@@ -138,19 +138,43 @@ written type gives, and a binding, block, or branch that only carries the type
 do not report it again. Every unmet condition is `error[8-0093]`, whether the
 use is a type or a call.
 
+These checks find the positions where a type enters. As a backstop that does
+not depend on listing them, the type that inference gives each expression and
+the generic arguments it infers for each call are checked too, and an
+application that no position reported is reported once, at the first
+expression that carries it. This catches a type that only trait solving
+supplies, such as `U = Bounded<0>` in `call(Holder<0> {})` with
+`fn call<U, T: Tr<U>>(_ x: T)` and `impl<const N: usize> Tr<Bounded<N>> for Holder<N>`.
+
 A type that a path passes through is written there too. In `Bounded<0>::Out`,
 `Bounded<0>::Out::make()`, `Holder<Bounded<0>::L>` and `Bounded<0>::helper()`,
 `Bounded<0>` is checked at the path, whatever the path names after it. Path
 resolution reports every segment it resolves, and the type checker and type
 lowering keep the constrained applications it passed through, so this holds
-at every segment of every path, in types, generic arguments, expressions and
-patterns. An argument is checked even when an alias drops it.
+at every segment of every path, in types, generic arguments, expressions,
+patterns and `with` keys. An anonymous constant passed to a segment is checked
+against that segment's own parameter, even when its value never reaches what
+the path names: when an alias drops it, or when it only selects an impl, as in
+`Holder<{ dec<0>() }>::Out`.
 
-Inside an `impl`, the conditions of the records and enums in its header hold
-without restating them, so `impl<const N: usize> Bounded<N>` can call a helper
-that requires `N > 0`. This is sound because every way to reach the impl's
-items goes through a checked type: a path through its self type or trait
-arguments, a receiver or argument value, or a header that a call instantiates.
+Inside an `impl`, the conditions of the records and enums in its self type
+hold without restating them, so `impl<const N: usize> Bounded<N>` can call a
+helper that requires `N > 0`. This rests on the self type being checked
+wherever the impl is reached: a path through it is checked at every segment,
+a receiver, and the type that trait solving matches the impl against, is the
+type of a checked value or a written type, and a call checks the header types
+it instantiates.
+
+A trait impl's trait arguments supply no conditions. Trait solving can select
+`impl<const N: usize> Tr<Bounded<N>> for Holder<N>` for `Holder<0>` with the
+argument `Bounded<0>`, which no written type holds, for example to satisfy a
+bound `T: Tr<U>` of `fn call<U, T: Tr<U>>(_ x: T)`. So `Bounded<N>` in that
+header needs `N > 0`, which the impl cannot state, and the impl is rejected;
+the call that infers `Bounded<0>` is rejected too, by the check of inferred
+types.
+A concrete trait argument such as `Tr<Bounded<1>>` is checked where it is
+written. Checking well-formedness obligations when trait solving selects an
+impl would lift this limit.
 
 A record with conditions must be fully applied where it is used as a type.
 Passing the unapplied constructor through a higher-kinded parameter is
