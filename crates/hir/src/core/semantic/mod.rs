@@ -300,9 +300,7 @@ fn contract_effect_layout_param_name<'db>(
     layout_idx: usize,
 ) -> IdentId<'db> {
     let site_name = |ident: Option<IdentId<'db>>, fallback: &str| {
-        ident
-            .map(|ident| ident.data(db).to_string())
-            .unwrap_or_else(|| fallback.to_string())
+        ident.map_or_else(|| fallback.to_string(), |ident| ident.data(db).to_string())
     };
     let prefix = match site {
         EffectParamSite::Contract(contract) => {
@@ -731,11 +729,10 @@ fn elaborate_func_param_ty<'db>(
     };
 
     if had_layout_hole {
-        let func_name = func
-            .name(db)
-            .to_opt()
-            .map(|name| name.data(db).to_string())
-            .unwrap_or_else(|| "<anonymous>".to_string());
+        let func_name = func.name(db).to_opt().map_or_else(
+            || "<anonymous>".to_string(),
+            |name| name.data(db).to_string(),
+        );
         debug_assert!(
             !ty_contains_const_hole(db, ty) || ty.has_invalid(db),
             "unelaborated layout hole remained in callable parameter type for {func_name} param {param_idx}: {}",
@@ -1497,8 +1494,7 @@ impl<'db> RecvView<'db> {
             .recvs(db)
             .data(db)
             .get(self.recv_idx(db) as usize)
-            .map(|r| r.arms.data(db).len())
-            .unwrap_or(0);
+            .map_or(0, |r| r.arms.data(db).len());
         (0..len).map(move |arm_idx| RecvArmView::new(db, self, arm_idx as u32))
     }
 }
@@ -1531,8 +1527,7 @@ impl<'db> RecvArmView<'db> {
 
     pub fn effects(self, db: &'db dyn HirDb) -> EffectParamListId<'db> {
         self.arm(db)
-            .map(|a| a.effects)
-            .unwrap_or_else(|| EffectParamListId::new(db, Vec::new()))
+            .map_or_else(|| EffectParamListId::new(db, Vec::new()), |a| a.effects)
     }
 
     pub fn effective_effect_env(self, db: &'db dyn HirAnalysisDb) -> EffectEnvView<'db> {
@@ -3008,8 +3003,7 @@ impl<'db> Func<'db> {
         let len = self
             .params_list(db)
             .to_opt()
-            .map(|l| l.data(db).len())
-            .unwrap_or(0);
+            .map_or(0, |l| l.data(db).len());
         (0..len).map(move |idx| FuncParamView { func: self, idx })
     }
 
@@ -3257,16 +3251,13 @@ impl<'db> WherePredicateView<'db> {
 
     /// True if the lowered subject type is a const type.
     pub fn subject_is_const(self, db: &'db dyn HirAnalysisDb) -> bool {
-        self.subject_ty(db)
-            .map(|t| t.is_const_ty(db))
-            .unwrap_or(false)
+        self.subject_ty(db).is_some_and(|t| t.is_const_ty(db))
     }
 
     /// True if the lowered subject type is concrete (no generic params) and not invalid.
     pub fn subject_is_concrete(self, db: &'db dyn HirAnalysisDb) -> bool {
         self.subject_ty(db)
-            .map(|t| !t.has_invalid(db) && !t.has_param(db))
-            .unwrap_or(false)
+            .is_some_and(|t| !t.has_invalid(db) && !t.has_param(db))
     }
 
     /// Diagnostics for all bounds (trait and kind) of this predicate.
@@ -3765,10 +3756,10 @@ impl<'db> Impl<'db> {
     /// Semantic implementor type of this inherent impl.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let assumptions = constraints_for(db, self.into());
-        self.type_ref(db)
-            .to_opt()
-            .map(|hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions))
-            .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
+        self.type_ref(db).to_opt().map_or_else(
+            || TyId::invalid(db, InvalidCause::ParseError),
+            |hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions),
+        )
     }
 
     /// Type lowering errors for the implementor type.
@@ -3928,10 +3919,10 @@ impl<'db> ImplTrait<'db> {
     /// Semantic self type of this impl-trait block.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let assumptions = constraints_for(db, self.into());
-        self.type_ref(db)
-            .to_opt()
-            .map(|hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions))
-            .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
+        self.type_ref(db).to_opt().map_or_else(
+            || TyId::invalid(db, InvalidCause::ParseError),
+            |hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions),
+        )
     }
 
     /// Type lowering errors for the implementor type.

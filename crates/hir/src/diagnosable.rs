@@ -672,8 +672,7 @@ impl<'db> ImplTrait<'db> {
             ty::diagnostics::ImplDiag::InvalidEffectHandleRaw {
                 primary: self
                     .associated_type_span(db, raw)
-                    .map(|span| span.ty().into())
-                    .unwrap_or_else(|| self.span().ty().into()),
+                    .map_or_else(|| self.span().ty().into(), |span| span.ty().into()),
                 raw_ty,
                 failure,
             }
@@ -997,8 +996,7 @@ impl<'db> ImplTrait<'db> {
                 ) {
                     let assoc_ty_span = self
                         .associated_type_span(db, name)
-                        .map(|s| s.ty().into())
-                        .unwrap_or_else(|| self.span().ty().into());
+                        .map_or_else(|| self.span().ty().into(), |s| s.ty().into());
 
                     diags.push(
                         TraitConstraintDiag::TraitBoundNotSat {

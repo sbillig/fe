@@ -293,14 +293,11 @@ pub fn log_startup_info() {
     let ppid = parent_pid();
     let argv: Vec<String> = std::env::args().collect();
     let cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|e| format!("<error: {e}>"));
+        .map_or_else(|e| format!("<error: {e}>"), |p| p.display().to_string());
     let binary = std::env::current_exe()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|e| format!("<error: {e}>"));
-    let log_file = default_log_file_path()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "<none>".to_owned());
+        .map_or_else(|e| format!("<error: {e}>"), |p| p.display().to_string());
+    let log_file =
+        default_log_file_path().map_or_else(|| "<none>".to_owned(), |p| p.display().to_string());
     let version = env!("CARGO_PKG_VERSION");
 
     tracing::info!(
@@ -352,7 +349,7 @@ struct RotatingState {
 impl RotatingFileWriter {
     fn new(path: PathBuf, cap_bytes: u64) -> std::io::Result<Self> {
         let file = open_log_file(&path)?;
-        let bytes_written = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let bytes_written = file.metadata().map_or(0, |m| m.len());
         Ok(Self {
             inner: Arc::new(Mutex::new(RotatingState {
                 path,
@@ -533,10 +530,10 @@ pub fn setup_panic_hook() {
                 "<non-string panic payload>".to_owned()
             };
 
-            let location = panic_info
-                .location()
-                .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
-                .unwrap_or_else(|| "<unknown>".to_owned());
+            let location = panic_info.location().map_or_else(
+                || "<unknown>".to_owned(),
+                |l| format!("{}:{}:{}", l.file(), l.line(), l.column()),
+            );
 
             let backtrace = Backtrace::force_capture();
             let context_stack = crate::panic_context::format_stack();

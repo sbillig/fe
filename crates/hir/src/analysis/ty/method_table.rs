@@ -391,8 +391,7 @@ impl<'db> MethodCollector<'db> {
             let receiver_ty = receiver.instantiate_identity();
             receiver_ty
                 .as_capability(self.db)
-                .map(|(_, inner)| inner)
-                .unwrap_or(receiver_ty)
+                .map_or(receiver_ty, |(_, inner)| inner)
         } else {
             ty
         };

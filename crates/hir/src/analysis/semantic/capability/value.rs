@@ -845,11 +845,10 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                         .find(|(key, _)| key == variant)
                         .expect("invalid enum projection")
                         .1;
-                    let child = variants
-                        .iter()
-                        .find(|(key, _)| key == variant)
-                        .map(|(_, child)| child.clone())
-                        .unwrap_or_else(|| self.empty(shape, current.scope()));
+                    let child = variants.iter().find(|(key, _)| key == variant).map_or_else(
+                        || self.empty(shape, current.scope()),
+                        |(_, child)| child.clone(),
+                    );
                     let ValueChildren::Product(fields) = &child.0.children else {
                         unreachable!()
                     };

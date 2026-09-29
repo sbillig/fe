@@ -291,9 +291,10 @@ pub fn generate_docs(
 
     match action {
         Some(crate::DocAction::Static { self_contained }) => {
-            let output_dir = output
-                .map(|p| p.as_std_path().to_path_buf())
-                .unwrap_or_else(|| std::path::PathBuf::from("docs"));
+            let output_dir = output.map_or_else(
+                || std::path::PathBuf::from("docs"),
+                |p| p.as_std_path().to_path_buf(),
+            );
 
             let source_link_base = detect_source_link_base(path.as_std_path());
 
@@ -371,9 +372,10 @@ pub fn generate_docs(
             }
         }
         Some(crate::DocAction::Pages { base_url }) => {
-            let output_dir = output
-                .map(|p| p.as_std_path().to_path_buf())
-                .unwrap_or_else(|| std::path::PathBuf::from("docs"));
+            let output_dir = output.map_or_else(
+                || std::path::PathBuf::from("docs"),
+                |p| p.as_std_path().to_path_buf(),
+            );
             if let Err(e) = fe_web::starlight::generate(&index, &output_dir, base_url) {
                 eprintln!("Error generating markdown pages: {e}");
                 std::process::exit(1);

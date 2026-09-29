@@ -551,8 +551,7 @@ impl<'db> TyChecker<'db> {
             let ptr_ty = prop
                 .ty
                 .as_capability(self.db)
-                .map(|(_, inner)| inner)
-                .unwrap_or(prop.ty);
+                .map_or(prop.ty, |(_, inner)| inner);
             if let Some(pointee) = ptr_ty.as_ptr(self.db) {
                 return ExprProp::new(pointee, true);
             }
@@ -590,8 +589,7 @@ impl<'db> TyChecker<'db> {
             let place_ty = prop
                 .ty
                 .as_capability(self.db)
-                .map(|(_, inner)| inner)
-                .unwrap_or(prop.ty);
+                .map_or(prop.ty, |(_, inner)| inner);
             let borrow_provider = self
                 .env
                 .expr_place(*lhs)
@@ -968,8 +966,7 @@ impl<'db> TyChecker<'db> {
         let lhs_place_ty = lhs
             .ty
             .as_capability(self.db)
-            .map(|(_, inner)| inner)
-            .unwrap_or(lhs.ty);
+            .map_or(lhs.ty, |(_, inner)| inner);
         if matches!(op, BinOp::Index) && lhs_place_ty.is_array(self.db) {
             // Built-in array indexing (TODO: move to trait impl)
             let args = lhs_place_ty.generic_args(self.db);
@@ -1072,8 +1069,7 @@ impl<'db> TyChecker<'db> {
                 };
                 let operand_ty = operand_ty
                     .as_capability(self.db)
-                    .map(|(_, inner)| inner)
-                    .unwrap_or(operand_ty);
+                    .map_or(operand_ty, |(_, inner)| inner);
                 let operand_ty = self.normalize_ty(operand_ty);
                 if operand_ty.has_invalid(self.db) {
                     return PendingPrimitiveOpResolution::Done;
@@ -1122,13 +1118,11 @@ impl<'db> TyChecker<'db> {
                 };
                 let lhs_ty = lhs_ty
                     .as_capability(self.db)
-                    .map(|(_, inner)| inner)
-                    .unwrap_or(lhs_ty);
+                    .map_or(lhs_ty, |(_, inner)| inner);
                 let lhs_ty = self.normalize_ty(lhs_ty);
                 let rhs_ty = rhs_ty
                     .as_capability(self.db)
-                    .map(|(_, inner)| inner)
-                    .unwrap_or(rhs_ty);
+                    .map_or(rhs_ty, |(_, inner)| inner);
                 let rhs_ty = self.normalize_ty(rhs_ty);
                 if lhs_ty.has_invalid(self.db) || rhs_ty.has_invalid(self.db) {
                     return PendingPrimitiveOpResolution::Done;
@@ -1308,10 +1302,7 @@ impl<'db> TyChecker<'db> {
         for binding in bindings {
             let value_prop = self.check_expr_unknown(binding.value);
 
-            let is_mut = value_prop
-                .binding
-                .map(|b| b.is_mut())
-                .unwrap_or(value_prop.is_mut);
+            let is_mut = value_prop.binding.map_or(value_prop.is_mut, |b| b.is_mut());
 
             let provided = ProvidedEffect {
                 origin: EffectOrigin::With {
@@ -1489,11 +1480,10 @@ impl<'db> TyChecker<'db> {
             receiver,
             false,
         );
-        let arg_ty = self
-            .env
-            .typed_expr(arg_expr)
-            .map(|prop| self.normalize_ty(prop.ty))
-            .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other));
+        let arg_ty = self.env.typed_expr(arg_expr).map_or_else(
+            || TyId::invalid(self.db, InvalidCause::Other),
+            |prop| self.normalize_ty(prop.ty),
+        );
         if !ty_may_be_code_region_token(self.db, arg_ty) {
             return None;
         }
@@ -2036,8 +2026,7 @@ impl<'db> TyChecker<'db> {
                     actual: provider
                         .ty
                         .as_capability(self.db)
-                        .map(|(_, inner)| inner)
-                        .unwrap_or(provider.ty),
+                        .map_or(provider.ty, |(_, inner)| inner),
                 },
             );
             self.rollback_state(snapshot);
@@ -2050,8 +2039,7 @@ impl<'db> TyChecker<'db> {
                             actual: provider
                                 .ty
                                 .as_capability(self.db)
-                                .map(|(_, inner)| inner)
-                                .unwrap_or(provider.ty),
+                                .map_or(provider.ty, |(_, inner)| inner),
                         }),
                         trait_solutions: SmallVec::new(),
                         provider_resolution: None,
@@ -2179,9 +2167,7 @@ impl<'db> TyChecker<'db> {
                         .map(|binding| Place::new(PlaceBase::Binding(binding))),
                 };
                 (
-                    place
-                        .map(super::EffectArg::Place)
-                        .unwrap_or(super::EffectArg::Unknown),
+                    place.map_or(super::EffectArg::Unknown, super::EffectArg::Place),
                     super::EffectPassMode::ByPlace,
                 )
             }
@@ -2199,8 +2185,7 @@ impl<'db> TyChecker<'db> {
                     EffectOrigin::With { value_expr } => super::EffectArg::Value(value_expr),
                     EffectOrigin::Param { .. } => provider
                         .binding
-                        .map(super::EffectArg::Binding)
-                        .unwrap_or(super::EffectArg::Unknown),
+                        .map_or(super::EffectArg::Unknown, super::EffectArg::Binding),
                 },
                 super::EffectPassMode::ByValue,
             ),
@@ -2248,8 +2233,7 @@ impl<'db> TyChecker<'db> {
                     LocalBinding::EffectParam { site, idx, .. } => self
                         .env
                         .resolved_provider_binding(site, idx)
-                        .map(|binding| binding.provider_ty)
-                        .unwrap_or(provider.ty),
+                        .map_or(provider.ty, |binding| binding.provider_ty),
                     LocalBinding::Param {
                         site: ParamSite::EffectField(effect_site),
                         ..
@@ -2400,43 +2384,45 @@ impl<'db> TyChecker<'db> {
             .filter(|provider| {
                 target_ty.is_none_or(|target_ty| provider.effective_target_ty() == target_ty)
             })
-            .map(|provider| ProviderBinding {
-                provider_idx: slot.provider_idx,
-                ..provider
-            })
-            .unwrap_or_else(|| {
-                let provider_ty = self
-                    .inferred_provider_ty_for_effect_arg(
-                        provided,
-                        arg,
-                        pass_mode,
-                        provider_target_ty,
-                    )
-                    .unwrap_or_else(|| self.table.fold_ty(self.db, provided.ty));
-                let semantics = provider_semantics_for_specialized_call(
-                    self.db,
-                    self.env.scope(),
-                    self.env.assumptions(),
-                    provider_ty,
-                    target_ty,
-                    provider_space,
-                    match pass_mode {
-                        super::EffectPassMode::ByPlace => ProviderTransport::ByPlace,
-                        super::EffectPassMode::ByTempPlace => ProviderTransport::ByTempPlace,
-                        super::EffectPassMode::ByValue | super::EffectPassMode::Unknown => {
-                            ProviderTransport::ByValue
-                        }
-                    },
-                );
-                ProviderBinding {
+            .map_or_else(
+                || {
+                    let provider_ty = self
+                        .inferred_provider_ty_for_effect_arg(
+                            provided,
+                            arg,
+                            pass_mode,
+                            provider_target_ty,
+                        )
+                        .unwrap_or_else(|| self.table.fold_ty(self.db, provided.ty));
+                    let semantics = provider_semantics_for_specialized_call(
+                        self.db,
+                        self.env.scope(),
+                        self.env.assumptions(),
+                        provider_ty,
+                        target_ty,
+                        provider_space,
+                        match pass_mode {
+                            super::EffectPassMode::ByPlace => ProviderTransport::ByPlace,
+                            super::EffectPassMode::ByTempPlace => ProviderTransport::ByTempPlace,
+                            super::EffectPassMode::ByValue | super::EffectPassMode::Unknown => {
+                                ProviderTransport::ByValue
+                            }
+                        },
+                    );
+                    ProviderBinding {
+                        provider_idx: slot.provider_idx,
+                        provider_ty,
+                        is_mut: provided.is_mut,
+                        source: slot.source,
+                        semantics,
+                        layout_env: None,
+                    }
+                },
+                |provider| ProviderBinding {
                     provider_idx: slot.provider_idx,
-                    provider_ty,
-                    is_mut: provided.is_mut,
-                    source: slot.source,
-                    semantics,
-                    layout_env: None,
-                }
-            });
+                    ..provider
+                },
+            );
         EffectProviderSpecialization {
             provider,
             provenance,
@@ -4065,8 +4051,7 @@ impl<'db> TyChecker<'db> {
         let lhs_ty = typed_lhs.ty;
         let lhs_place_ty = lhs_ty
             .as_capability(self.db)
-            .map(|(_, inner)| inner)
-            .unwrap_or(lhs_ty);
+            .map_or(lhs_ty, |(_, inner)| inner);
         // let lhs_ty = normalize_ty(self.db, lhs_ty, self.env.scope(), self.env.assumptions());
 
         if lhs_place_ty.has_invalid(self.db) {
@@ -4995,8 +4980,7 @@ impl<'db> TyChecker<'db> {
         let base_place_ty = base_prop
             .ty
             .as_capability(self.db)
-            .map(|(_, inner)| inner)
-            .unwrap_or(base_prop.ty);
+            .map_or(base_prop.ty, |(_, inner)| inner);
         if base_place_ty.is_array(self.db) {
             let args = base_place_ty.generic_args(self.db);
             let lhs_ty = args[0];
@@ -5633,8 +5617,7 @@ fn resolve_ident_expr<'db>(
                             let from_implicit = name
                                 .derivation
                                 .use_stmt()
-                                .map(|use_| use_.is_synthetic_use(db))
-                                .unwrap_or(false);
+                                .is_some_and(|use_| use_.is_synthetic_use(db));
                             cand_spans.push((span, from_implicit));
                         }
                     }

@@ -811,23 +811,22 @@ fn describe_runtime_instance<'db>(
         RuntimeInstanceSource::Semantic(semantic) => {
             let owner = semantic.key(db).owner(db);
             let owner_desc = match owner {
-                BodyOwner::Func(func) => func
-                    .name(db)
-                    .to_opt()
-                    .map(|name| format!("func {}", name.data(db)))
-                    .unwrap_or_else(|| format!("func {func:?}")),
+                BodyOwner::Func(func) => func.name(db).to_opt().map_or_else(
+                    || format!("func {func:?}"),
+                    |name| format!("func {}", name.data(db)),
+                ),
                 BodyOwner::Const(const_) => format!("const {const_:?}"),
                 BodyOwner::AnonConstBody { .. } => format!("{owner:?}"),
-                BodyOwner::ContractInit { contract } => contract
-                    .name(db)
-                    .to_opt()
-                    .map(|name| format!("contract-init {}", name.data(db)))
-                    .unwrap_or_else(|| format!("{owner:?}")),
-                BodyOwner::ContractRecvArm { contract, .. } => contract
-                    .name(db)
-                    .to_opt()
-                    .map(|name| format!("contract-recv {}", name.data(db)))
-                    .unwrap_or_else(|| format!("{owner:?}")),
+                BodyOwner::ContractInit { contract } => contract.name(db).to_opt().map_or_else(
+                    || format!("{owner:?}"),
+                    |name| format!("contract-init {}", name.data(db)),
+                ),
+                BodyOwner::ContractRecvArm { contract, .. } => {
+                    contract.name(db).to_opt().map_or_else(
+                        || format!("{owner:?}"),
+                        |name| format!("contract-recv {}", name.data(db)),
+                    )
+                }
             };
             format!("semantic owner={owner_desc} params={:?}", key.params(db))
         }
@@ -1747,8 +1746,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     .and_then(|proof| {
                         (proof.local == *value && proof.variant == *variant).then_some(proof.value)
                     })
-                    .map(Ok)
-                    .unwrap_or_else(|| self.local_value(*value))?;
+                    .map_or_else(|| self.local_value(*value), Ok)?;
                 let variant = self.variant_ref(*variant)?;
                 let field = self.index_value(field.0.into());
                 let dst = dst.ok_or_else(|| {
@@ -6467,8 +6465,10 @@ fn code_region_symbol<'db>(
         .code_regions(db)
         .iter()
         .find(|resolved| resolved.region(db) == region)
-        .map(|resolved| resolved.symbol(db).clone())
-        .unwrap_or_else(|| format!("code_region_{}", stable_hash(&region)))
+        .map_or_else(
+            || format!("code_region_{}", stable_hash(&region)),
+            |resolved| resolved.symbol(db).clone(),
+        )
 }
 
 fn immediate_to_u64_index(imm: Immediate) -> Option<u64> {

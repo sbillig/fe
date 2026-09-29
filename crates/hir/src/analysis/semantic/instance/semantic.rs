@@ -923,9 +923,10 @@ fn specialize_provider_address_space<'db>(
 impl<'db> SemanticInstance<'db> {
     #[salsa::tracked]
     pub fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
-        instantiated_effect_env(db, self)
-            .map(|env| env.assumptions(db))
-            .unwrap_or_else(|| semantic_instance_base_assumptions_for_key(db, self.key(db)))
+        instantiated_effect_env(db, self).map_or_else(
+            || semantic_instance_base_assumptions_for_key(db, self.key(db)),
+            |env| env.assumptions(db),
+        )
     }
 
     #[salsa::tracked(
@@ -1908,8 +1909,7 @@ fn instantiate_provider_bindings_for_key<'db>(
             specializations
                 .get(&provider.provider_idx)
                 .cloned()
-                .map(Ok)
-                .unwrap_or_else(|| instantiate_provider_binding(db, key, provider))
+                .map_or_else(|| instantiate_provider_binding(db, key, provider), Ok)
         })
         .collect()
 }

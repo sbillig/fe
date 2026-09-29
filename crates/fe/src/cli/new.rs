@@ -58,9 +58,8 @@ fn create_workspace_layout(
     fs::create_dir_all(base)
         .map_err(|err| format!("Failed to create workspace directory {base}: {err}"))?;
 
-    let workspace_name = explicit_name
-        .map(ToString::to_string)
-        .unwrap_or_else(|| infer_workspace_name(base));
+    let workspace_name =
+        explicit_name.map_or_else(|| infer_workspace_name(base), ToString::to_string);
     let version = explicit_version.unwrap_or(DEFAULT_VERSION);
 
     let workspace_config = base.join("fe.toml");
@@ -99,9 +98,7 @@ fn create_ingot_layout(
     fs::create_dir_all(&src_dir)
         .map_err(|err| format!("Failed to create src directory {src_dir}: {err}"))?;
 
-    let name = explicit_name
-        .map(ToString::to_string)
-        .unwrap_or_else(|| infer_ingot_name(base));
+    let name = explicit_name.map_or_else(|| infer_ingot_name(base), ToString::to_string);
     let version = explicit_version.unwrap_or(DEFAULT_VERSION);
 
     let config_path = base.join("fe.toml");

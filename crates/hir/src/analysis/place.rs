@@ -116,8 +116,7 @@ impl<'db> Place<'db> {
                 let base_ty = expr_ty(*base);
                 let ptr_ty = base_ty
                     .as_capability(db)
-                    .map(|(_, inner)| inner)
-                    .unwrap_or(base_ty);
+                    .map_or(base_ty, |(_, inner)| inner);
                 ptr_ty.as_ptr(db)?;
                 let mut place =
                     Place::from_expr_in_body_with(db, body, *base, expr_binding, expr_ty)?;

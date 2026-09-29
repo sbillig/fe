@@ -50,8 +50,7 @@ impl ToDoc for ast::LitPat {
 impl ToDoc for ast::TuplePat {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         self.elems()
-            .map(|elems| elems.to_doc(ctx))
-            .unwrap_or_else(|| ctx.alloc.text("()"))
+            .map_or_else(|| ctx.alloc.text("()"), |elems| elems.to_doc(ctx))
     }
 }
 
@@ -102,8 +101,7 @@ impl ToDoc for ast::PathTuplePat {
 
         let elems_doc = self
             .elems()
-            .map(|elems| elems.to_doc(ctx))
-            .unwrap_or_else(|| alloc.text("()"));
+            .map_or_else(|| alloc.text("()"), |elems| elems.to_doc(ctx));
 
         path.append(elems_doc)
     }
@@ -120,8 +118,7 @@ impl ToDoc for ast::RecordPat {
 
         let fields_doc = self
             .fields()
-            .map(|fields| fields.to_doc(ctx))
-            .unwrap_or_else(|| alloc.text("{}"));
+            .map_or_else(|| alloc.text("{}"), |fields| fields.to_doc(ctx));
 
         path.append(alloc.text(" ")).append(fields_doc)
     }

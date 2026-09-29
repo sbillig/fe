@@ -47,15 +47,13 @@ pub async fn handle_completion(
         .context
         .as_ref()
         .and_then(|ctx| ctx.trigger_character.as_ref())
-        .map(|c| c == ".")
-        .unwrap_or(false);
+        .is_some_and(|c| c == ".");
 
     // Method 2: Check if character before cursor is a dot (handles manual completion invoke)
     let char_before_is_dot = cursor
         .checked_sub(1.into())
         .and_then(|pos| file_text.get(usize::from(pos)..usize::from(cursor)))
-        .map(|s| s == ".")
-        .unwrap_or(false);
+        .is_some_and(|s| s == ".");
 
     let is_member_access = trigger_is_dot || char_before_is_dot;
 
@@ -64,15 +62,13 @@ pub async fn handle_completion(
         .context
         .as_ref()
         .and_then(|ctx| ctx.trigger_character.as_ref())
-        .map(|c| c == ":")
-        .unwrap_or(false);
+        .is_some_and(|c| c == ":");
 
     // Check for "::" before cursor
     let is_path_completion = cursor
         .checked_sub(2.into())
         .and_then(|pos| file_text.get(usize::from(pos)..usize::from(cursor)))
-        .map(|s| s == "::")
-        .unwrap_or(false)
+        .is_some_and(|s| s == "::")
         || trigger_is_colon;
 
     if is_member_access {
@@ -414,8 +410,7 @@ fn build_auto_import_completion<'db>(
     // Extract just the module portion for display (everything before the last ::)
     let module_only = module_path
         .rsplit_once("::")
-        .map(|(m, _)| m)
-        .unwrap_or(module_path);
+        .map_or(module_path, |(m, _)| m);
 
     Some(CompletionItem {
         label: name_str,
@@ -445,10 +440,10 @@ fn build_func_snippet_and_detail<'db>(
         if param.is_self_param(db) {
             continue;
         }
-        let param_name = param
-            .name(db)
-            .map(|n| n.data(db).to_string())
-            .unwrap_or_else(|| format!("arg{}", param_names.len()));
+        let param_name = param.name(db).map_or_else(
+            || format!("arg{}", param_names.len()),
+            |n| n.data(db).to_string(),
+        );
         let param_ty = param.ty(db);
         param_details.push(format!("{}: {}", param_name, param_ty.pretty_print(db)));
         param_names.push(param_name);
@@ -638,8 +633,7 @@ fn collect_path_completions<'db>(
     // Look for whitespace, operators, or other non-path characters
     let path_start = before_colons
         .rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != ':')
-        .map(|i| i + 1)
-        .unwrap_or(0);
+        .map_or(0, |i| i + 1);
 
     let full_path = before_colons[path_start..].trim();
     if full_path.is_empty() {
@@ -904,10 +898,10 @@ fn build_callable_completion<'db>(
             continue; // Skip self parameter in completion
         }
 
-        let param_name = param
-            .name(db)
-            .map(|n| n.data(db).to_string())
-            .unwrap_or_else(|| format!("arg{}", param_names.len()));
+        let param_name = param.name(db).map_or_else(
+            || format!("arg{}", param_names.len()),
+            |n| n.data(db).to_string(),
+        );
 
         let param_ty = param.ty(db);
         param_details.push(format!("{}: {}", param_name, param_ty.pretty_print(db)));
@@ -1591,8 +1585,7 @@ mod tests {
     fn format_completion_item(item: &CompletionItem) -> String {
         let kind_str = item
             .kind
-            .map(|k| format!("{k:?}"))
-            .unwrap_or_else(|| "?".to_string());
+            .map_or_else(|| "?".to_string(), |k| format!("{k:?}"));
 
         let mut result = format!("{} ({})", item.label, kind_str);
 
@@ -1633,15 +1626,13 @@ mod tests {
         let is_member_access = cursor
             .checked_sub(1.into())
             .and_then(|pos| file_text.get(usize::from(pos)..usize::from(cursor)))
-            .map(|s| s == ".")
-            .unwrap_or(false);
+            .is_some_and(|s| s == ".");
 
         // Check if this is path completion (chars before cursor are '::')
         let is_path_completion = cursor
             .checked_sub(2.into())
             .and_then(|pos| file_text.get(usize::from(pos)..usize::from(cursor)))
-            .map(|s| s == "::")
-            .unwrap_or(false);
+            .is_some_and(|s| s == "::");
 
         if is_member_access {
             collect_member_completions(db, top_mod, cursor, &mut items);

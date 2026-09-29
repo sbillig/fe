@@ -242,8 +242,7 @@ fn build_signature_help<'db>(
     let func_name = func
         .name(db)
         .to_opt()
-        .map(|n| n.data(db).to_string())
-        .unwrap_or_else(|| "<anonymous>".to_string());
+        .map_or_else(|| "<anonymous>".to_string(), |n| n.data(db).to_string());
 
     // Build parameter info
     let mut params = Vec::new();

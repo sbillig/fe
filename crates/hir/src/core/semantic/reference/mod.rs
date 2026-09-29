@@ -452,8 +452,7 @@ impl<'db> FieldAccessView<'db> {
         }
         let receiver_ty = receiver_ty
             .as_capability(db)
-            .map(|(_, inner)| inner)
-            .unwrap_or(receiver_ty);
+            .map_or(receiver_ty, |(_, inner)| inner);
 
         // Resolve the field scope using RecordLike
         let record_like = RecordLike::from_ty(receiver_ty);

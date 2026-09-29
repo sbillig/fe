@@ -653,11 +653,9 @@ impl<'db> Callable<'db> {
                 .and_then(|params| params.get(i).copied())
                 .map(|param| param.mode(db));
             let given_ty = tc.normalize_ty(given.expr_prop.ty);
-            let given_string_source_ty = given
-                .expr_prop
-                .binding
-                .map(|binding| tc.normalize_ty(tc.env.lookup_binding_ty(&binding)))
-                .unwrap_or(given_ty);
+            let given_string_source_ty = given.expr_prop.binding.map_or(given_ty, |binding| {
+                tc.normalize_ty(tc.env.lookup_binding_ty(&binding))
+            });
             let const_string_arg_ty = if matches!(self.callable_def, CallableDef::Func(func) if func.is_const(db))
                 && expected.is_ty_var(db)
                 && let TyData::TyVar(var) = given_string_source_ty.base_ty(db).data(db)

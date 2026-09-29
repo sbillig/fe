@@ -744,8 +744,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 pub(crate) fn enum_tag_ty<'db>(db: &'db dyn HirAnalysisDb, enum_ty: TyId<'db>) -> TyId<'db> {
     let variant_count = enum_ty
         .as_enum(db)
-        .map(|enum_| enum_.len_variants(db))
-        .unwrap_or(0);
+        .map_or(0, |enum_| enum_.len_variants(db));
     let prim = match enum_tag_bits(variant_count) {
         8 => PrimTy::U8,
         16 => PrimTy::U16,

@@ -200,8 +200,7 @@ fn print_node_with_alias(
             .metadata
             .version
             .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| "null".to_string());
+            .map_or_else(|| "null".to_string(), ToString::to_string);
 
         // Show "ingot_name as alias" if alias differs from ingot name
         match alias {
@@ -217,13 +216,11 @@ fn print_node_with_alias(
     let is_in_cycle = context.cycle_nodes.contains(&node);
     let will_close_cycle = seen.contains(&node);
 
-    let is_remote_edge = parent_url
-        .map(|parent| {
-            context
-                .remote_edges
-                .contains(&(parent.clone(), ingot_path.clone()))
-        })
-        .unwrap_or(false);
+    let is_remote_edge = parent_url.is_some_and(|parent| {
+        context
+            .remote_edges
+            .contains(&(parent.clone(), ingot_path.clone()))
+    });
 
     let mut label = base_label;
 

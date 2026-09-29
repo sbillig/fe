@@ -21,11 +21,10 @@ impl<'db> LazyUsePathSpan<'db> {
                         .map(|n| n.syntax().clone().into())
                 })
                 .map_desugared(|root, desugared| match desugared {
-                    DesugaredOrigin::Use(use_) => use_
-                        .path
-                        .get(idx)
-                        .map(|ptr| ResolvedOriginKind::Node(ptr.syntax_node_ptr().to_node(&root)))
-                        .unwrap_or_else(|| ResolvedOriginKind::None),
+                    DesugaredOrigin::Use(use_) => use_.path.get(idx).map_or_else(
+                        || ResolvedOriginKind::None,
+                        |ptr| ResolvedOriginKind::Node(ptr.syntax_node_ptr().to_node(&root)),
+                    ),
                     _ => ResolvedOriginKind::None,
                 })
         }

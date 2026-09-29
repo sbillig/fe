@@ -475,8 +475,7 @@ impl<'db> EffectParam<'db> {
             &self
                 .key_ty
                 .to_opt()
-                .map(|ty| ty.pretty_print(db))
-                .unwrap_or_else(|| "_".to_string()),
+                .map_or_else(|| "_".to_string(), |ty| ty.pretty_print(db)),
         );
         result
     }
@@ -632,8 +631,7 @@ impl<'db> Expr<'db> {
                 let expr = unwrap_partial_ref(expr.data(db, body), "Cast::expr");
                 let ty = ty
                     .to_opt()
-                    .map(|ty| ty.pretty_print(db))
-                    .unwrap_or_else(|| "<missing>".into());
+                    .map_or_else(|| "<missing>".into(), |ty| ty.pretty_print(db));
                 format!("{} as {}", expr.pretty_print(db, body, indent), ty)
             }
 

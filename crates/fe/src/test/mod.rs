@@ -662,9 +662,7 @@ fn build_suite_plans(
 
 fn effective_jobs(requested: usize, suite_count: usize, grouped: bool) -> usize {
     let requested = if requested == 0 {
-        std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1)
+        std::thread::available_parallelism().map_or(1, |n| n.get())
     } else {
         requested
     };
@@ -1080,8 +1078,7 @@ fn suite_preparation_status(
             .and_then(|message| message.lines().next())
             .map(str::trim)
             .filter(|message| !message.is_empty())
-            .map(str::to_owned)
-            .unwrap_or_else(|| "suite preparation failed".to_string());
+            .map_or_else(|| "suite preparation failed".to_string(), str::to_owned);
         return (StreamStatusKind::Error, message);
     }
 
@@ -2416,12 +2413,10 @@ fn maybe_write_suite_ir(
 fn suite_name_for_path(path: &Utf8PathBuf) -> String {
     let raw = if path.is_file() {
         path.file_stem()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "tests".to_string())
+            .map_or_else(|| "tests".to_string(), |s| s.to_string())
     } else {
         path.file_name()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "tests".to_string())
+            .map_or_else(|| "tests".to_string(), |s| s.to_string())
     };
     let sanitized = sanitize_filename(&raw);
     if sanitized.is_empty() {

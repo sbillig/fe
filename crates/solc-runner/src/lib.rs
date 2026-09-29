@@ -220,8 +220,7 @@ fn run_solc_with_path(input: &str, solc_path: Option<&str>) -> Result<String, Yu
             output
                 .status
                 .code()
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "unknown".into())
+                .map_or_else(|| "unknown".into(), |code| code.to_string())
         )));
     }
 
@@ -326,8 +325,7 @@ mod tests {
         Command::new(solc_path)
             .arg("--version")
             .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
+            .is_ok_and(|status| status.success())
     }
     #[test]
     fn build_standard_json_contains_fields() {

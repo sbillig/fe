@@ -1038,8 +1038,7 @@ impl RuntimeInstance {
                     let parent_in_constructor = self
                         .frame_stack
                         .last()
-                        .map(|frame| frame.in_constructor)
-                        .unwrap_or(false);
+                        .is_some_and(|frame| frame.in_constructor);
                     let child_kind = self
                         .pending_invocations
                         .iter_mut()

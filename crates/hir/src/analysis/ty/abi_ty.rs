@@ -402,7 +402,7 @@ fn is_core_dyn_string_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
 }
 
 pub(crate) fn is_dynamic_event_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
-    let ty = ty.as_capability(db).map(|(_, inner)| inner).unwrap_or(ty);
+    let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
     // Fixed arrays inherit their element's ABI dynamism, including through aliases.
     if ty.is_array(db) {
         let (_, args) = ty.decompose_ty_app(db);
