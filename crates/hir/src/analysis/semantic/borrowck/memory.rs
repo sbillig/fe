@@ -12,7 +12,7 @@ use crate::analysis::{
     semantic::{
         FieldIndex, SemOrigin,
         capability::{
-            external::{ExternalOrigin, ExternalSource, ReferentContract},
+            external::{ExternalOrigin, ExternalSource, MemoryOffset, ReferentContract},
             footprint::AccessExtent,
             guard::Guard,
             handle::{
@@ -263,7 +263,7 @@ impl<'db> Borrowck<'db> {
                             self.db,
                             source,
                             target_ty,
-                            Some((target_ty, IndexExpr::FormalValue(1))),
+                            MemoryOffset::Element(target_ty, IndexExpr::FormalValue(1)),
                         ),
                         path: RegionPath::default(),
                         views: Default::default(),
@@ -276,7 +276,7 @@ impl<'db> Borrowck<'db> {
                             self.db,
                             source,
                             target_ty,
-                            Some((TyId::u8(self.db), IndexExpr::FormalValue(1))),
+                            MemoryOffset::Element(TyId::u8(self.db), IndexExpr::FormalValue(1)),
                         ),
                         path: RegionPath::default(),
                         views: Default::default(),

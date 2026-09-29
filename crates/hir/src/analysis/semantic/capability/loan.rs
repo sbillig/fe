@@ -1,7 +1,9 @@
 //! Static borrow definitions and exact, parameterized occurrences held by values.
+use rustc_hash::FxHashSet;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
+    external::{ExternalSource, FeedbackRepeats, FeedbackSlot},
     guard::{Guard, ValueOccurrence},
     index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     region::RegionSet,
@@ -101,12 +103,21 @@ impl<'db> CapabilityRef<'db> {
         }
     }
 
-    /// See `RegionSet::widen_raw_memory_replacements`. Native capabilities
+    /// See `RegionSet::widen_feedback`. Native capabilities
     /// keep their conditions, which decide whether invalidation is deferred.
-    pub fn widen_raw_memory_replacements(&self) -> Self {
+    pub(super) fn widen_feedback(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        domain: &Guard<'db>,
+        repeats: FeedbackRepeats<'_, 'db>,
+        previous: &[FeedbackSlot<'_, 'db>],
+        invariant_replacements: &FxHashSet<ExternalSource<'db>>,
+    ) -> Option<Self> {
         match self {
-            Self::Address(region) => Self::Address(region.widen_raw_memory_replacements()),
-            _ => self.clone(),
+            Self::Address(region) => region
+                .widen_feedback(db, domain, repeats, previous, invariant_replacements)
+                .map(Self::Address),
+            _ => None,
         }
     }
 

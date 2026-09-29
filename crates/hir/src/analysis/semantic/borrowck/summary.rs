@@ -21,7 +21,10 @@ use crate::{
             BorrowActivation, FieldIndex, SemOrigin, SemanticInstance,
             capability::{
                 birth::AllocationBirth,
-                external::{ClobberCondition, ExternalOrigin, ExternalSource, ReferentContract},
+                external::{
+                    ClobberCondition, ExternalOrigin, ExternalSource, MemoryOffset,
+                    ReferentContract,
+                },
                 footprint::{AccessExtent, AccessFootprint},
                 guard::{ChoiceKey, Guard, ValueOccurrence},
                 handle::{
@@ -1638,11 +1641,14 @@ impl<'db> Borrowck<'db> {
             }
             ExternalOrigin::Memory {
                 base,
-                element,
+                offset,
                 target_ty,
             } => {
                 self.verify_source(base, scope, None, false)?;
-                if element.is_some_and(|(_, index)| scope.validate(index).is_err()) {
+                if offset
+                    .index()
+                    .is_some_and(|index| scope.validate(index).is_err())
+                {
                     return Err(invalid("memory element has a free selector"));
                 }
                 (
@@ -2573,11 +2579,11 @@ impl<'db> Borrowck<'db> {
             }
             ExternalOrigin::Memory {
                 base,
-                element,
+                offset,
                 target_ty,
             } => {
                 let base = instantiations.resolve(self, base, scope)?;
-                let region = self.memory_region(&base.region, *target_ty, *element, origin)?;
+                let region = self.memory_region(&base.region, *target_ty, *offset, origin)?;
                 (
                     Resolution {
                         invalidated: base.invalidated,
@@ -2964,7 +2970,7 @@ impl<'db> SignatureValues<'_, 'db> {
                             db,
                             source,
                             semantics.target_ty,
-                            None,
+                            MemoryOffset::Zero,
                         ));
                     } else if candidate.ty != semantics.target_ty {
                         source.source = source.source.widen();
@@ -3454,7 +3460,7 @@ fn raw(_ ptr: *Outer) {}
                         &db,
                         base.clone(),
                         ty,
-                        Some((ty, IndexExpr::Const(index))),
+                        MemoryOffset::Element(ty, IndexExpr::Const(index)),
                     )),
                     path: RegionPath::default(),
                     views: Default::default(),
@@ -3578,7 +3584,7 @@ fn raw(_ ptr: *Outer) {}
                             &db,
                             base.clone(),
                             ty,
-                            Some((ty, IndexExpr::Const(index))),
+                            MemoryOffset::Element(ty, IndexExpr::Const(index)),
                         )),
                         path: RegionPath::default(),
                         views: Default::default(),
@@ -3598,7 +3604,7 @@ fn raw(_ ptr: *Outer) {}
                     .memory_region(
                         &base.region,
                         ty,
-                        Some((ty, IndexExpr::Const(index))),
+                        MemoryOffset::Element(ty, IndexExpr::Const(index)),
                         origin,
                     )
                     .unwrap()
@@ -3936,7 +3942,7 @@ fn raw(_ ptr: *Outer) {}
                         &db,
                         source.clone(),
                         TyId::ptr_to(&db, contract.ty),
-                        None,
+                        MemoryOffset::Zero,
                     )
                     .follow(RegionPath::default(), contract, false),
                     ..source.clone()
