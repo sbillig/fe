@@ -1,0 +1,3 @@
+// A condition the parser cannot read is reported by the parser, at its
+// position. Checking adds nothing, since it has no expression to check.
+fn f() where own {}

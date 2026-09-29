@@ -260,6 +260,15 @@ pub(super) fn check_predicate_formation<'db>(
         expected: TyId::bool(db),
     };
     let (mut diags, typed) = infer_body(db, owner).clone();
+    // A condition the parser could not read has no expression to check or
+    // evaluate. The parser reported it, at its position.
+    if matches!(body.expr(db).data(db, body), Partial::Absent) {
+        return PredicateFormation {
+            diags,
+            typed,
+            status: FormationStatus::IllFormed,
+        };
+    }
     let mut recursive = false;
     if diags.is_empty() || static_assert_ignorable_type_diags(db, &diags) {
         diags.extend(
