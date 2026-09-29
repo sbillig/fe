@@ -577,13 +577,25 @@ impl<'db> Borrowck<'db> {
     pub fn borrow_summary(
         &mut self,
     ) -> Result<BorrowSummaryComputation<'db>, SemanticDiagnostic<'db>> {
+        if let Some(computation) = self.unsolved_borrow_summary()? {
+            return Ok(computation);
+        }
+        self.solve()?;
+        self.solved_borrow_summary()
+    }
+
+    /// The summary of an intrinsic contract or a bodiless declaration, which
+    /// is not solved.
+    pub(super) fn unsolved_borrow_summary(
+        &self,
+    ) -> Result<Option<BorrowSummaryComputation<'db>>, SemanticDiagnostic<'db>> {
         if let Some(summary) = self.intrinsic_summary()? {
             self.verify_summary(&summary)?;
-            return Ok(BorrowSummaryComputation {
+            return Ok(Some(BorrowSummaryComputation {
                 summary: Some(summary),
                 blocked: None,
                 pending: Default::default(),
-            });
+            }));
         }
         if self
             .instance
@@ -592,15 +604,21 @@ impl<'db> Borrowck<'db> {
             .body(self.db)
             .is_none()
         {
-            return Ok(BorrowSummaryComputation {
+            return Ok(Some(BorrowSummaryComputation {
                 summary: Some(signature_summary(self.db, self.instance, true)?),
                 blocked: None,
                 pending: PendingSemanticValidation {
                     callees: [self.instance.key(self.db)].into(),
                 },
-            });
+            }));
         }
-        self.solve()?;
+        Ok(None)
+    }
+
+    /// The summary of the solved body.
+    pub(super) fn solved_borrow_summary(
+        &mut self,
+    ) -> Result<BorrowSummaryComputation<'db>, SemanticDiagnostic<'db>> {
         let recursive_unresolved = !self.recursive_calls.is_empty()
             && (self.blocked.is_some() || !self.pending.callees.is_empty());
         let summary = if (!self.pending.callees.is_empty()

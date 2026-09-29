@@ -1,6 +1,7 @@
 use crate::analysis::semantic::capability::{region::RegionSet, state::BorrowState};
 use crate::analysis::semantic::diagnostics::{
-    SemanticDiagnostic, SemanticDiagnosticKind, SemanticNormalizationFailure, operand_origin,
+    SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind, SemanticNormalizationFailure,
+    operand_origin,
 };
 
 use crate::analysis::{
@@ -19,36 +20,59 @@ use crate::analysis::{
     },
 };
 
-use super::solver::Borrowck;
+use super::{
+    check::provisional_borrow_analysis_query,
+    ir::CallSiteRefinements,
+    solver::{BorrowSummaryMode, Borrowck},
+};
 
+/// The provider refinements of `instance`'s call sites. The provisional
+/// analysis records them when it solves the body for its summary.
 pub(crate) fn provisional_call_site_provider_refinements<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> Result<Vec<CallSiteProviderRefinement>, SemanticNormalizationFailure<'db>> {
-    let body = normalize_semantic_body_provisional(db, instance)?.body;
-    let mut borrowck = Borrowck::new_with_body(
-        db,
-        instance,
-        body,
-        super::solver::BorrowSummaryMode::Provisional,
-    )
-    .map_err(SemanticNormalizationFailure::InternalFailure)?;
-    borrowck
-        .solve()
-        .map_err(SemanticNormalizationFailure::InternalFailure)?;
-    if let Some(blocked) = borrowck.blocked.clone() {
-        return Err(SemanticNormalizationFailure::Blocked(blocked));
+) -> CallSiteRefinements<'db> {
+    if let Some(refinements) = &provisional_borrow_analysis_query(db, instance).refinements {
+        return refinements.clone();
     }
-    CallSiteProviderRefiner { borrowck }
-        .refine()
-        .map_err(SemanticNormalizationFailure::InternalFailure)
+    let rejected = |diag| CallSiteRefinements::Rejected(SemanticDiagnosticId::new(db, diag));
+    let body = match normalize_semantic_body_provisional(db, instance) {
+        Ok(artifacts) => artifacts.body,
+        Err(SemanticNormalizationFailure::Blocked(_)) => return CallSiteRefinements::Blocked,
+        Err(
+            SemanticNormalizationFailure::Rejected(diag)
+            | SemanticNormalizationFailure::InternalFailure(diag),
+        ) => return rejected(diag),
+    };
+    let mut borrowck =
+        match Borrowck::new_with_body(db, instance, body, BorrowSummaryMode::Provisional) {
+            Ok(borrowck) => borrowck,
+            Err(diag) => return rejected(diag),
+        };
+    match borrowck.solve() {
+        Ok(()) => solved_call_site_refinements(&borrowck),
+        Err(diag) => rejected(diag),
+    }
 }
 
-struct CallSiteProviderRefiner<'db> {
-    borrowck: Borrowck<'db>,
+/// The provider refinements of a solved provisional body.
+pub(super) fn solved_call_site_refinements<'db>(
+    borrowck: &Borrowck<'db>,
+) -> CallSiteRefinements<'db> {
+    if borrowck.blocked.is_some() {
+        return CallSiteRefinements::Blocked;
+    }
+    match (CallSiteProviderRefiner { borrowck }).refine() {
+        Ok(refinements) => CallSiteRefinements::Refined(refinements),
+        Err(diag) => CallSiteRefinements::Rejected(SemanticDiagnosticId::new(borrowck.db, diag)),
+    }
 }
 
-impl<'db> CallSiteProviderRefiner<'db> {
+struct CallSiteProviderRefiner<'a, 'db> {
+    borrowck: &'a Borrowck<'db>,
+}
+
+impl<'db> CallSiteProviderRefiner<'_, 'db> {
     fn refine(&self) -> Result<Vec<CallSiteProviderRefinement>, SemanticDiagnostic<'db>> {
         let mut out = Vec::new();
         for (bb_idx, block) in self.borrowck.body.blocks.iter().enumerate() {

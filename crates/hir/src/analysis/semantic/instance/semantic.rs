@@ -8,9 +8,10 @@ use crate::{
             CallSiteId, PlaceProvenance, RuntimeSizeError, SBlockId, SExpr, SStmtKind,
             STerminatorKind, SemOrigin, SemanticBody, SemanticCalleeRef, SemanticLocalRole,
             ValueProvenance, VariantIndex,
+            borrowck::CallSiteRefinements,
             diagnostics::{
                 SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
-                SemanticDiagnosticLabel, SemanticDiagnosticSpan, SemanticNormalizationFailure,
+                SemanticDiagnosticLabel, SemanticDiagnosticSpan,
             },
             effect_param_site,
             lower::{BindingRoleMode, lower_to_smir, lower_to_smir_with_call_sites},
@@ -509,24 +510,19 @@ fn final_call_site_data<'db>(
         match crate::analysis::semantic::borrowck::provisional_call_site_provider_refinements(
             db, instance,
         ) {
-            Ok(refinements) => refinements,
-            Err(SemanticNormalizationFailure::Blocked(_)) => {
+            CallSiteRefinements::Refined(refinements) => refinements,
+            CallSiteRefinements::Blocked => {
                 return CallSiteFinalizationData {
                     call_sites,
                     for_loop_call_sites,
                     diagnostic: None,
                 };
             }
-            Err(
-                SemanticNormalizationFailure::Rejected(diag)
-                | SemanticNormalizationFailure::InternalFailure(diag),
-            ) => {
+            CallSiteRefinements::Rejected(diagnostic) => {
                 return CallSiteFinalizationData {
                     call_sites,
                     for_loop_call_sites,
-                    diagnostic: Some(crate::analysis::semantic::SemanticDiagnosticId::new(
-                        db, diag,
-                    )),
+                    diagnostic: Some(diagnostic),
                 };
             }
         }

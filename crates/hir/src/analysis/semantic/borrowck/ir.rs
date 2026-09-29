@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use crate::analysis::{
     semantic::{
-        SemOrigin, SemanticInstance, SemanticInstanceKey,
+        CallSiteProviderRefinement, SemOrigin, SemanticInstance, SemanticInstanceKey,
         capability::{
             footprint::{AccessExtent, AccessFootprint},
             guard::Guard,
@@ -150,6 +150,26 @@ pub enum SemanticBorrowCheckResult<'db> {
     Pending(PendingSemanticValidation<'db>),
     Blocked(BlockedSemanticBody<'db>),
     Err(SemanticDiagnosticId<'db>),
+}
+
+/// The provisional summary of a body together with the provider refinements
+/// of its call sites, both read from one provisional solve.
+#[derive(Clone, Debug, PartialEq, Eq, Update)]
+pub(crate) struct ProvisionalBorrowAnalysis<'db> {
+    pub summary: SemanticBorrowSummaryResult<'db>,
+    /// `None` when the summary did not come from solving the body; call-site
+    /// finalization then solves the body itself.
+    pub refinements: Option<CallSiteRefinements<'db>>,
+}
+
+/// The provider address spaces a solved provisional body passes to its
+/// callees' effect parameters.
+#[derive(Clone, Debug, PartialEq, Eq, Update)]
+pub(crate) enum CallSiteRefinements<'db> {
+    Refined(Vec<CallSiteProviderRefinement>),
+    /// Upstream causes block the provisional body.
+    Blocked,
+    Rejected(SemanticDiagnosticId<'db>),
 }
 
 /// The final summary of a body together with the local validation of the same
