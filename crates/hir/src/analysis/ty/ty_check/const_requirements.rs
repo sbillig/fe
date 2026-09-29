@@ -383,14 +383,20 @@ fn premise_owner_in_scope<'db>(
 /// The conditions that hold where premises are stated over `caller`'s
 /// generic parameters, each with the substitution that states it there:
 /// - the caller's own conditions, when its uses check them;
-/// - inside an impl, the conditions of the records and enums in its header,
-///   since every use of the impl instantiates the header with checked types
-///   (`check_entered_header`, and the receiver and argument types);
+/// - inside an impl, the conditions of the records and enums in its self
+///   type, since every use of the impl instantiates the self type with a
+///   checked type (`check_entered_header`, and the receiver and argument
+///   types);
 /// - in a type alias, the conditions of the aliased type, since every
 ///   application of the alias is checked after expansion.
 ///
 /// An impl's own `where` conditions are not premises: they are rejected at
-/// the impl, and no use checks them.
+/// the impl, and no use checks them. Nor are the conditions of a trait impl's
+/// trait arguments: trait solving can select the impl with arguments that no
+/// written or checked type holds, as `call(Holder<0> {})` selects
+/// `impl<const N: usize> Tr<Bounded<N>> for Holder<N>` for a bound `T: Tr<U>`.
+/// So `Bounded<N>` in that header needs a condition the impl cannot state, and
+/// the impl is rejected where it writes it.
 fn caller_premises<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: GenericParamOwner<'db>,
@@ -416,15 +422,14 @@ fn caller_premises<'db>(
         GenericParamOwner::Func(func) => func
             .scope()
             .parent_item(db)
-            .map(|parent| header_types(db, parent))
-            .unwrap_or_default(),
-        GenericParamOwner::Impl(_) | GenericParamOwner::ImplTrait(_) => header_types(db, item),
+            .and_then(|parent| impl_self_ty(db, parent)),
+        GenericParamOwner::Impl(_) | GenericParamOwner::ImplTrait(_) => impl_self_ty(db, item),
         GenericParamOwner::TypeAlias(alias) => {
-            vec![lower_type_alias(db, alias).alias_to.instantiate_identity()]
+            Some(lower_type_alias(db, alias).alias_to.instantiate_identity())
         }
-        _ => Vec::new(),
+        _ => None,
     };
-    for ty in caller_args(db, caller, implied)? {
+    for ty in caller_args(db, caller, implied.into_iter().collect())? {
         type_conditions(db, ty, &mut premises)?;
     }
     Ok(premises)
@@ -979,16 +984,21 @@ fn expression_const_bodies<'db>(
 /// The types an impl's header instantiates: its self type and, for a trait
 /// impl, the trait's arguments, in the impl's declaration coordinates.
 fn header_types<'db>(db: &'db dyn HirAnalysisDb, item: ItemKind<'db>) -> Vec<TyId<'db>> {
+    let mut tys: Vec<_> = impl_self_ty(db, item).into_iter().collect();
+    if let ItemKind::ImplTrait(impl_trait) = item
+        && let Some(inst) = impl_trait.trait_inst(db)
+    {
+        tys.extend(inst.args(db).iter().copied());
+    }
+    tys
+}
+
+/// The self type of an impl or trait impl, in its declaration coordinates.
+fn impl_self_ty<'db>(db: &'db dyn HirAnalysisDb, item: ItemKind<'db>) -> Option<TyId<'db>> {
     match item {
-        ItemKind::Impl(impl_) => vec![impl_.ty(db)],
-        ItemKind::ImplTrait(impl_trait) => {
-            let mut tys = vec![impl_trait.ty(db)];
-            if let Some(inst) = impl_trait.trait_inst(db) {
-                tys.extend(inst.args(db).iter().copied());
-            }
-            tys
-        }
-        _ => Vec::new(),
+        ItemKind::Impl(impl_) => Some(impl_.ty(db)),
+        ItemKind::ImplTrait(impl_trait) => Some(impl_trait.ty(db)),
+        _ => None,
     }
 }
 
