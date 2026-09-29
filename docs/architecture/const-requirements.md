@@ -144,7 +144,7 @@ A type that a path passes through is written there too. In `Bounded<0>::Out`,
 resolution reports every segment it resolves, and the type checker and type
 lowering keep the constrained applications it passed through, so this holds
 at every segment of every path, in types, generic arguments, expressions and
-patterns.
+patterns. An argument is checked even when an alias drops it.
 
 Inside an `impl`, the conditions of the records and enums in its header hold
 without restating them, so `impl<const N: usize> Bounded<N>` can call a helper

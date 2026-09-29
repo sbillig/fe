@@ -1496,12 +1496,10 @@ fn written_types_query<'db>(
             self.default_depth += usize::from(in_default);
             if !bodies.is_empty() && self.default_depth == 0 {
                 let lowered = lower_hir_ty_deferred(db, hir_ty, scope, assumptions);
-                self.entries
-                    .push(WrittenEntry::ConstBodies(positioned_const_bodies(
-                        db,
-                        &[lowered],
-                        &bodies,
-                    )));
+                let mut positioned = positioned_const_bodies(db, &[lowered], &bodies);
+                let dropped = dropped_alias_arguments(db, &resolutions, &bodies, &positioned);
+                positioned.extend(dropped);
+                self.entries.push(WrittenEntry::ConstBodies(positioned));
             }
             let span = ctxt.span();
             let nested_from = self.entries.len();
@@ -1590,4 +1588,44 @@ fn written_type_check_query<'db>(
         reported.push(report);
     }
     diags
+}
+
+/// The anonymous constants passed to a type alias that the alias does not
+/// use, each with the type of the alias parameter it is passed to. An alias
+/// can drop an argument, so the lowered type does not hold it
+/// (`positioned_const_bodies`), but it is checked like any other argument.
+fn dropped_alias_arguments<'db>(
+    db: &'db dyn HirAnalysisDb,
+    resolutions: &[(PathId<'db>, PathRes<'db>)],
+    bodies: &[Body<'db>],
+    positioned: &[(Body<'db>, TyId<'db>)],
+) -> Vec<(Body<'db>, TyId<'db>)> {
+    let mut dropped = Vec::new();
+    for (path, res) in resolutions {
+        let PathRes::TyAlias(alias, _) = res else {
+            continue;
+        };
+        for (idx, arg) in path.generic_args(db).data(db).iter().enumerate() {
+            let GenericArg::Const(arg) = arg else {
+                continue;
+            };
+            let ConstGenericArgValue::Expr(Partial::Present(body)) = arg.value else {
+                continue;
+            };
+            if !bodies.contains(&body)
+                || positioned.iter().any(|&(positioned, _)| positioned == body)
+                || dropped.iter().any(|&(dropped, _)| dropped == body)
+            {
+                continue;
+            }
+            if let Some(expected) = alias
+                .params(db)
+                .get(idx)
+                .and_then(|param| param.const_ty_ty(db))
+            {
+                dropped.push((body, expected));
+            }
+        }
+    }
+    dropped
 }

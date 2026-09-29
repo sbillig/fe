@@ -1,0 +1,16 @@
+// An argument is checked even when the alias it is passed to does not use it.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+const fn positive<const N: usize>() -> usize where N > 0 { 1 }
+type Drop<const N: usize> = u8
+type DropType<T> = u8
+
+fn param(_ x: Drop<{ positive<0>() }>) {}
+fn local() -> u8 {
+    let x: Drop<{ positive<0>() }> = 1
+    x
+}
+fn type_argument(_ x: DropType<Bounded<0>>) {}
+fn named(_ x: Drop<Bounded<0>::K>) {}
+impl<const N: usize> Bounded<N> { const K: usize = 1 }
+
+fn allowed(_ x: Drop<{ positive<1>() }>, _ y: DropType<Bounded<1>>) {}
