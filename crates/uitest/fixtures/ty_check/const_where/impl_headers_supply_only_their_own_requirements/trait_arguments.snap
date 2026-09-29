@@ -58,6 +58,15 @@ error[8-0093]: const requirement is not satisfied
    │                             ^^^^^^^^ no matching const requirement in the caller after substitution
 
 error[8-0093]: const requirement is not satisfied
+   ┌─ trait_arguments.fe:30:14
+   │
+ 6 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+30 │     let _h = call(Holder<0> {})
+   │              ^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
    ┌─ trait_arguments.fe:44:10
    │
  6 │ struct Bounded<const N: usize> where N > 0 { value: u256 }

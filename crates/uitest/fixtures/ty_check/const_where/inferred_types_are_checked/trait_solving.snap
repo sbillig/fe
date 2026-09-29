@@ -1,0 +1,40 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/inferred_types_are_checked/trait_solving.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ trait_solving.fe:8:25
+  │
+5 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+  │                                      ----- required by this predicate
+  ·
+8 │ impl<const N: usize> Tr<Bounded<N>> for Holder<N> {
+  │                         ^^^^^^^^^^ no matching const requirement in the caller after substitution
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ trait_solving.fe:13:24
+   │
+ 5 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+13 │ fn solved() -> usize { call(x: Holder<0> {}) }
+   │                        ^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ trait_solving.fe:15:13
+   │
+ 5 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+15 │     let f = call
+   │             ^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ trait_solving.fe:21:24
+   │
+ 5 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+21 │ fn method() -> usize { Holder<0> {}.method(x: Holder<0> {}) }
+   │                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`

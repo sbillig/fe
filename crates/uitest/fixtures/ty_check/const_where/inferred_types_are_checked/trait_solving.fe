@@ -1,0 +1,23 @@
+// A generic argument that trait solving infers is checked, although no
+// written type, path or expression type holds it: `call(Holder<0> {})` infers
+// `U = Bounded<0>` from the impl. The impl itself is rejected for writing
+// `Bounded<N>` in its trait argument, which it cannot assume.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+struct Holder<const N: usize> {}
+trait Tr<U> { fn go(self) -> usize }
+impl<const N: usize> Tr<Bounded<N>> for Holder<N> {
+    fn go(self) -> usize { N }
+}
+
+fn call<U, T: Tr<U>>(x: T) -> usize { x.go() }
+fn solved() -> usize { call(x: Holder<0> {}) }
+fn value() -> usize {
+    let f = call
+    f(x: Holder<0> {})
+}
+impl Holder<0> {
+    fn method<U, T: Tr<U>>(self, x: T) -> usize { x.go() }
+}
+fn method() -> usize { Holder<0> {}.method(x: Holder<0> {}) }
+
+fn allowed() -> usize { call(x: Holder<1> {}) }

@@ -254,6 +254,18 @@ impl<'db> RequirementCheck<'db> {
             .push(unmet_requirement_diag(primary, predicate, failure));
     }
 
+    /// Reports a type application's unmet requirement, and keeps the
+    /// application in `entered`.
+    fn unmet_type(
+        &mut self,
+        primary: DynLazySpan<'db>,
+        unmet: TypeRequirementFailure<'db>,
+        entered: &mut FxHashSet<TyId<'db>>,
+    ) {
+        entered.insert(unmet.ty);
+        self.unmet(primary, unmet.predicate, unmet.failure);
+    }
+
     fn extend(&mut self, other: Self) {
         self.recursive |= other.recursive;
         self.diags.extend(other.diags);
@@ -519,42 +531,47 @@ pub(super) fn check_body_requirements<'db>(
     // that either carries, since those report it. A pattern, a binding use,
     // or a block or branch only carries a type that entered elsewhere, so
     // checking it again repeats that report. A function-typed expression is
-    // not checked for its type arguments: they are written types, checked
-    // where they are written, or inferred from the argument and result
-    // expressions, which are checked themselves. An item reached through a
-    // path checks the header types it instantiates that no checked value
-    // carries (`check_entered_header`).
+    // not checked for its type arguments here: they are written types,
+    // checked where they are written, or inferred, and the check of inferred
+    // types at the end covers them. An item reached through a path checks
+    // the header types it instantiates that no checked value carries
+    // (`check_entered_header`).
     let mut written = written_applications(db, owner);
+    // The failing applications reported below.
+    let mut entered = FxHashSet::default();
     let mut reported_paths = FxHashSet::default();
     for (site, application) in &typed.path_applications {
         if !reported_paths.insert((site, *application)) {
             continue;
         }
         if let Some(unmet) = check_path_application(db, *application, owner.scope(), &written) {
-            check.unmet(site.clone(), unmet.predicate, unmet.failure);
+            check.unmet_type(site.clone(), unmet, &mut entered);
         }
     }
     written.extend(typed.path_applications.iter().map(|&(_, ty)| ty));
-    for (expr, data) in body.exprs(db).iter() {
-        if typed.expr_binding(expr).is_some()
+    // Whether `expr` only carries a type that entered elsewhere.
+    let carries = |expr: ExprId| {
+        typed.expr_binding(expr).is_some()
             || matches!(
-                data.borrowed().to_opt(),
+                expr.data(db, body).borrowed().to_opt(),
                 Some(Expr::Block(..) | Expr::If(..) | Expr::Match(..) | Expr::With(..))
             )
-        {
+    };
+    for (expr, data) in body.exprs(db).iter() {
+        if carries(expr) {
             continue;
         }
         let ty = typed.expr_ty(db, expr);
         if !matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)))
             && let Some(unmet) = check_type_requirements(db, ty, owner.scope(), &written)
         {
-            check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
+            check.unmet_type(expr.span(body).into(), unmet, &mut entered);
         }
         if let Some(headers) = const_ref_headers(db, typed, expr)
             && let Some(unmet) =
                 check_entered_header(db, typed, expr, headers, owner.scope(), &written)
         {
-            check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
+            check.unmet_type(expr.span(body).into(), unmet, &mut entered);
         }
         if direct_callees.contains(&expr) && typed.callable_expr(expr).is_none() {
             continue;
@@ -584,7 +601,7 @@ pub(super) fn check_body_requirements<'db>(
                         &written,
                     )
                 {
-                    check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
+                    check.unmet_type(expr.span(body).into(), unmet, &mut entered);
                 }
                 continue;
             }
@@ -594,7 +611,7 @@ pub(super) fn check_body_requirements<'db>(
                 if let Some(unmet) =
                     check_entered_header(db, typed, expr, headers, owner.scope(), &written)
                 {
-                    check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
+                    check.unmet_type(expr.span(body).into(), unmet, &mut entered);
                 }
             }
             // The instantiated headers are unknown, so a condition of a record
@@ -640,6 +657,40 @@ pub(super) fn check_body_requirements<'db>(
             ) {
                 check.unmet(expr.span(body).into(), predicate, failure);
             }
+        }
+    }
+    // Every type that inference gave an expression is checked too, whatever
+    // the position: the expression's own type, including a function value's
+    // generic arguments, and the generic arguments inferred for each call and
+    // method call. The checks above find the positions where a type enters;
+    // this one does not depend on listing them. It catches, for example,
+    // `U = Bounded<0>` inferred by trait solving for `call(Holder<0> {})` with
+    // `fn call<U, T: Tr<U>>(_ x: T)`, which no written type, path or
+    // expression type holds. An application reported above is not reported
+    // again, and any other is reported once, at the first expression that
+    // carries it. Patterns, binding uses, blocks and branches are left out:
+    // their types come from an expression here or from the signature, and a
+    // signature type reaches the body with its layout holes instantiated, so
+    // it would not match the written type that reported it.
+    let mut reported = written;
+    reported.extend(entered);
+    let inferred = body
+        .exprs(db)
+        .keys()
+        .filter(|&expr| !carries(expr))
+        .flat_map(|expr| {
+            let callable_args = typed
+                .callable_expr(expr)
+                .map(|callable| callable.generic_args().to_vec())
+                .unwrap_or_default();
+            std::iter::once(typed.expr_ty(db, expr))
+                .chain(callable_args)
+                .map(move |ty| (expr, ty))
+        });
+    for (expr, ty) in inferred {
+        while let Some(unmet) = check_type_requirements(db, ty, owner.scope(), &reported) {
+            reported.insert(unmet.ty);
+            check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
         }
     }
     for (nested, expected) in expression_const_bodies(db, body, typed) {
