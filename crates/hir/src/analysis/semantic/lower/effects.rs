@@ -47,8 +47,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         for binding in bindings {
             let value_expr = binding.value;
             let source = if self.is_root_provider_expr(value_expr) {
-                if let Some(place) = self.typed_body.expr_place(value_expr) {
-                    WithBindingSource::Place(self.capture_place(place))
+                if let Some(place) = self.try_lower_place_expr(value_expr, true) {
+                    WithBindingSource::Place(place)
                 } else {
                     let value = self.lower_expr(value_expr);
                     let local =
