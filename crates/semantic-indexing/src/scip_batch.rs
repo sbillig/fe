@@ -129,7 +129,7 @@ fn item_symbol<'db>(
     package_name: &str,
     package_version: &str,
 ) -> Option<(String, String)> {
-    let pretty_path = ScopeId::from_item(item).pretty_path(db)?.to_string();
+    let pretty_path = ScopeId::from_item(item).pretty_path(db)?;
     let mut descriptors = Vec::new();
     let mut parts = pretty_path.split("::").peekable();
     while let Some(part) = parts.next() {
@@ -2000,8 +2000,7 @@ mod tests {
         let file_path = temp.path().join("test.fe");
         let mut db = driver::DriverDataBase::default();
         let url = file_url(&file_path);
-        db.workspace()
-            .touch(&mut db, url.clone(), Some(code.to_string()));
+        db.workspace().touch(&mut db, url, Some(code.to_string()));
         let ingot_url = dir_url(temp.path());
         generate_scip(&db, &ingot_url).expect("generate scip index")
     }
@@ -2292,8 +2291,7 @@ fn make_point() -> Point {
         let file_path = temp.path().join("test.fe");
         let mut db = driver::DriverDataBase::default();
         let url = file_url(&file_path);
-        db.workspace()
-            .touch(&mut db, url.clone(), Some(code.to_string()));
+        db.workspace().touch(&mut db, url, Some(code.to_string()));
         let ingot_url = dir_url(temp.path());
         let ctx = index_util::IngotContext::resolve(&db, &ingot_url).unwrap();
 
@@ -2518,7 +2516,7 @@ impl<E> Applicative for Result<E> {
         let url = file_url(&file_path);
         db.workspace().touch(
             &mut db,
-            url.clone(),
+            url,
             Some(
                 "use core::result::Result\nfn foo() -> Result<u8> {\n    Result::Ok\n}\n"
                     .to_string(),

@@ -186,7 +186,7 @@ pub fn generate_docs(
                 if let Some(info) = LspServerInfo::read_from_workspace(current)
                     && info.is_alive()
                 {
-                    return info.docs_url.clone();
+                    return info.docs_url;
                 }
                 current = current.parent()?;
             }

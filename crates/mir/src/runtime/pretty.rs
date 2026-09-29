@@ -145,7 +145,7 @@ pub fn format_runtime_package<'db>(db: &'db dyn MirDb, package: &RuntimePackage<
         let names = package
             .root_objects(db)
             .iter()
-            .map(|object| object.name(db).clone())
+            .map(|object| object.name(db))
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(out, "  root_objects: [{names}]");

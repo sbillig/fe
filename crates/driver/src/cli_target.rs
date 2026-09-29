@@ -67,7 +67,7 @@ pub fn resolve_cli_target(
                 && let Ok(canonical) = path.canonicalize_utf8()
                 && let Some(root) = ancestor_fe_toml_dirs(canonical.as_std_path())
                     .first()
-                    .and_then(|root| Utf8PathBuf::from_path_buf(root.to_path_buf()).ok())
+                    .and_then(|root| Utf8PathBuf::from_path_buf(root.clone()).ok())
             {
                 let config_path = root.join("fe.toml");
                 if let Ok(content) = fs::read_to_string(&config_path)

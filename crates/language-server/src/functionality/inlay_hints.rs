@@ -14,7 +14,7 @@ pub async fn handle_inlay_hints(
     backend: &Backend,
     params: async_lsp::lsp_types::InlayHintParams,
 ) -> Result<Option<Vec<InlayHint>>, ResponseError> {
-    let url = backend.map_client_uri_to_internal(params.text_document.uri.clone());
+    let url = backend.map_client_uri_to_internal(params.text_document.uri);
 
     let file = backend
         .db

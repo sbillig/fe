@@ -248,7 +248,7 @@ impl<'db> Ingot<'db> {
                                         member.url.clone()
                                     }
                                 };
-                                Some((dependency.alias.clone(), url))
+                                Some((dependency.alias, url))
                             })
                             .collect()
                     }
@@ -361,7 +361,7 @@ impl Workspace {
                 .is_some_and(|dir| dir.as_str() == base_url.as_str());
 
             if is_under_src || is_at_root {
-                return Some(Ingot::new(db, base_url.clone(), None, kind));
+                return Some(Ingot::new(db, base_url, None, kind));
             }
 
             tracing::debug!(
@@ -471,7 +471,7 @@ mod tests {
 
         // Add all files to the index
         index
-            .set(&mut db, url_config.clone(), config)
+            .set(&mut db, url_config, config)
             .expect("Failed to set config file");
         index
             .set(&mut db, url_lib.clone(), lib)

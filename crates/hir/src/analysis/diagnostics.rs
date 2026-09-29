@@ -1554,7 +1554,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     message: "invalid type argument kind".to_string(),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
-                        message: msg.to_string(),
+                        message: msg,
                         span: span.resolve(db),
                     }],
                     notes: vec![],
@@ -1689,7 +1689,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     message: "duplicate type bound is not allowed.".to_string(),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
-                        message: msg.to_string(),
+                        message: msg,
                         span: span.resolve(db),
                     }],
                     notes: vec![],
@@ -4970,14 +4970,14 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
 
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: msg.to_string(),
+                    message: msg,
                     span: span.resolve(db),
                 }];
 
                 if let Some(subgoal) = unsat_subgoal {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: subgoal.to_string(),
+                        message: subgoal,
                         span: span.resolve(db),
                     });
                 }
@@ -5341,7 +5341,7 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     message: "method has stricter bounds than trait".to_string(),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
-                        message: message.clone(),
+                        message,
                         span: span.resolve(db),
                     }],
                     notes: vec![],

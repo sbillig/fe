@@ -316,7 +316,7 @@ fn create_topic0_const<'db>(
         ))),
     );
 
-    let origin: HirOrigin<ast::Expr> = HirOrigin::desugared(desugared.clone());
+    let origin: HirOrigin<ast::Expr> = HirOrigin::desugared(desugared);
 
     let id = ctxt.joined_id(TrackedItemVariant::NamelessBody);
     let mut body_ctxt = super::body::BodyCtxt::new(ctxt, id);

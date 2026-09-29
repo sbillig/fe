@@ -49,7 +49,7 @@ pub(crate) fn spawn_backend(
 ) -> ActorRef<Backend, LspActorKey> {
     info!("Spawning backend actor");
     let client_for_actor = client.clone();
-    let client_for_logging = client.clone();
+    let client_for_logging = client;
     ActorBuilder::new()
         .with_name(name)
         .with_state_init(move || {

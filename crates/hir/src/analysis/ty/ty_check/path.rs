@@ -131,7 +131,7 @@ impl<'tc, 'db, 'a> RecordInitChecker<'tc, 'db, 'a> {
             let missing_fields: Vec<_> = expected_labels
                 .iter()
                 .filter(|f| !self.already_given.contains_key(f))
-                .cloned()
+                .copied()
                 .collect();
 
             if !missing_fields.is_empty() {

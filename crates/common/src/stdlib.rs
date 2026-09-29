@@ -153,7 +153,7 @@ fn clear_library(db: &mut dyn InputDb, base_url: &str) {
     let urls: Vec<Url> = workspace
         .items_at_base(db, base)
         .iter()
-        .map(|(url, _)| url.clone())
+        .map(|(url, _)| url)
         .collect();
     for url in urls {
         workspace.remove(db, &url);

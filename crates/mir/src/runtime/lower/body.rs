@@ -2909,7 +2909,7 @@ impl<'db> RmirEmitter<'db> {
                     NRootKind::Provider { binding } => {
                         let binding = binding.clone();
                         let value_ty = root.ty;
-                        let path = place.path.iter().cloned().collect::<Vec<_>>();
+                        let path = place.path.iter().copied().collect::<Vec<_>>();
                         return self.lower_provider_handle_value_extract_path_read(
                             bb, dst, &binding, value_ty, &path,
                         );
@@ -2924,7 +2924,7 @@ impl<'db> RmirEmitter<'db> {
                 None => return false,
             },
         };
-        let path = place.path.iter().cloned().collect::<Vec<_>>();
+        let path = place.path.iter().copied().collect::<Vec<_>>();
         self.lower_value_extract_path_read(bb, dst, base, &path)
     }
 

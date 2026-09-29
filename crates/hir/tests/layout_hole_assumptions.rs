@@ -263,11 +263,8 @@ pub contract C {
     let receiver_ty = typed_body
         .expr_ty(&db, receiver_expr)
         .pretty_print(&db)
-        .to_string();
-    let try_lock_ty = typed_body
-        .expr_ty(&db, try_lock)
-        .pretty_print(&db)
-        .to_string();
+        .clone();
+    let try_lock_ty = typed_body.expr_ty(&db, try_lock).pretty_print(&db).clone();
     let balances_ty = typed_body
         .pat_ty(&db, balances_pat)
         .pretty_print(&db)
@@ -475,10 +472,7 @@ pub contract C {
         "Mutex<StorageMap<Address, u256, 0>>"
     );
     assert_eq!(
-        typed_body
-            .expr_ty(&db, try_lock)
-            .pretty_print(&db)
-            .to_string(),
+        typed_body.expr_ty(&db, try_lock).pretty_print(&db).clone(),
         "Option<mut StorageMap<Address, u256, 0>>"
     );
     assert_eq!(

@@ -1137,7 +1137,7 @@ fn emit_parallel_suite_outcome(
     let (prepared, output) = prepare_suite_job(&plan, cfg.filter.as_deref(), cfg.shared.as_ref());
     if !output.is_empty() {
         let _ = outcome_tx.send(JobOutcome::Text {
-            suite_key: plan.suite_key.clone(),
+            suite_key: plan.suite_key,
             text: output,
         });
     }
@@ -1207,7 +1207,7 @@ fn emit_grouped_suite_outcome(
         finalize_suite_state(state, cfg.shared.as_ref(), cfg.filter.as_deref());
     if !output.is_empty() {
         let _ = outcome_tx.send(JobOutcome::Text {
-            suite_key: plan.suite_key.clone(),
+            suite_key: plan.suite_key,
             text: output,
         });
     }

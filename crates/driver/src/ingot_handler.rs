@@ -522,7 +522,7 @@ impl<'a> IngotHandler<'a> {
                 if let Some(name) = arguments.name.clone() {
                     let mut base =
                         GitDescription::new(remote.source.clone(), remote.rev.to_string());
-                    if let Some(path) = remote.path.clone() {
+                    if let Some(path) = remote.path {
                         base = base.with_path(path);
                     }
                     let descriptor = IngotDescriptor::RemoteByName { base, name };
@@ -531,7 +531,7 @@ impl<'a> IngotHandler<'a> {
                 } else {
                     let mut next_description =
                         GitDescription::new(remote.source.clone(), remote.rev.to_string());
-                    if let Some(path) = remote.path.clone() {
+                    if let Some(path) = remote.path {
                         next_description = next_description.with_path(path);
                     }
                     let descriptor = IngotDescriptor::Remote(next_description);
@@ -642,7 +642,7 @@ impl<'a> IngotHandler<'a> {
         }
 
         let name = member.name.clone().or(ingot.metadata.name.clone());
-        let version = member.version.clone().or(ingot.metadata.version.clone());
+        let version = member.version.clone().or(ingot.metadata.version);
         Ok((name, version))
     }
 
@@ -659,7 +659,7 @@ impl<'a> IngotHandler<'a> {
             });
         }
 
-        let workspace = workspace_config.workspace.clone();
+        let workspace = workspace_config.workspace;
         let workspace_dependency_aliases: HashSet<_> = workspace
             .dependencies
             .iter()
@@ -858,7 +858,6 @@ impl<'a> IngotHandler<'a> {
                 let version = ingot
                     .metadata
                     .version
-                    .clone()
                     .or_else(|| workspace_version_for_member(self.db, ingot_url));
                 Some((name, version))
             }
@@ -1255,9 +1254,7 @@ impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
             })
         });
 
-        let canonical_description = workspace_member_alias
-            .clone()
-            .unwrap_or_else(|| descriptor.clone());
+        let canonical_description = workspace_member_alias.unwrap_or_else(|| descriptor.clone());
 
         let concrete_description = match &origin {
             IngotOrigin::Local => IngotDescriptor::Local(ingot_url.clone()),

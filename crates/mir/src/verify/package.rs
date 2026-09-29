@@ -35,7 +35,7 @@ impl<'db> RuntimeProgramView<'db> for PackageView<'db> {
     }
 
     fn body(&self, id: crate::instance::RuntimeInstance<'db>) -> crate::runtime::RuntimeBody<'db> {
-        id.body(self.db).clone()
+        id.body(self.db)
     }
 
     fn layout(&self, id: crate::runtime::LayoutId<'db>) -> crate::runtime::Layout<'db> {
@@ -74,9 +74,7 @@ pub fn verify_runtime_package<'db>(
     let mut seen_symbols = FxHashSet::default();
     for function in functions {
         if !seen_symbols.insert(function.symbol(db).clone()) {
-            return Err(VerifyError::DuplicateRuntimeSymbol(
-                function.symbol(db).clone(),
-            ));
+            return Err(VerifyError::DuplicateRuntimeSymbol(function.symbol(db)));
         }
         let owner = function.owner(db);
         verify_contract_storage_seam(db, &owner)?;
@@ -90,9 +88,7 @@ pub fn verify_runtime_package<'db>(
     }
     for region in package.code_regions(db) {
         if !seen_symbols.insert(region.symbol(db).clone()) {
-            return Err(VerifyError::DuplicateRuntimeSymbol(
-                region.symbol(db).clone(),
-            ));
+            return Err(VerifyError::DuplicateRuntimeSymbol(region.symbol(db)));
         }
         verify_resolved_code_region(db, &region, &function_instances, &objects)?;
     }

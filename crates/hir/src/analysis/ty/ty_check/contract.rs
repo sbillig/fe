@@ -875,7 +875,7 @@ pub fn check_contract_immutable_fields_initialized<'db>(
                 Err(_) => FxHashSet::default(),
             }
         } else {
-            required.clone()
+            required
         }
     } else {
         required

@@ -1488,7 +1488,7 @@ fn collect_contract_names(
     let mut names: Vec<_> = package
         .root_objects(db)
         .iter()
-        .map(|object| object.name(db).clone())
+        .map(|object| object.name(db))
         .collect();
     names.sort();
     names.dedup();
@@ -1573,11 +1573,7 @@ fn collect_ingot_abi_artifact_names(
     let mut names = BTreeSet::new();
     for top_mod in ingot.all_modules(db) {
         for contract in top_mod.all_contracts(db) {
-            let Some(name) = contract
-                .name(db)
-                .to_opt()
-                .map(|name| name.data(db).to_string())
-            else {
+            let Some(name) = contract.name(db).to_opt().map(|name| name.data(db).clone()) else {
                 continue;
             };
             let Some(result) = crate::abi::generate_contract_abi(db, *top_mod, &name)? else {

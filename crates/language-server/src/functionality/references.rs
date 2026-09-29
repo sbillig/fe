@@ -318,10 +318,7 @@ mod tests {
         let fe_source_path = fixture.path();
         let file_url = Url::from_file_path(fe_source_path).unwrap();
 
-        let ingot = db
-            .workspace()
-            .containing_ingot(&db, file_url.clone())
-            .unwrap();
+        let ingot = db.workspace().containing_ingot(&db, file_url).unwrap();
         assert_eq!(ingot.kind(&db), IngotKind::Local);
 
         let mut formatter = ReferenceFormatter::new();

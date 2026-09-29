@@ -98,10 +98,9 @@ fn manual_contract_root_metadata<'db>(
     func: Func<'db>,
 ) -> Option<ManualContractRootMetadata<'db>> {
     let (contract_name, section) = match func.manual_contract_root_attr(db)? {
-        ManualContractRootAttr::Init { contract_name } => (
-            contract_name.data(db).to_string(),
-            ManualContractSection::Init,
-        ),
+        ManualContractRootAttr::Init { contract_name } => {
+            (contract_name.data(db).clone(), ManualContractSection::Init)
+        }
         ManualContractRootAttr::Runtime { contract_name } => (
             contract_name.data(db).to_string(),
             ManualContractSection::Runtime,

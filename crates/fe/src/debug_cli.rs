@@ -795,7 +795,7 @@ mod tests {
         .unwrap();
         let args = DevDebugValidateArgs {
             format: DebugExportFormat::Ethdebug,
-            input: out.clone(),
+            input: out,
             schema_version: "pinned".to_string(),
             attribution_details: Some(attribution_details.clone()),
             verify_json: None,

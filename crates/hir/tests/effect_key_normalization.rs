@@ -4657,10 +4657,7 @@ fn caller()
     );
     let env = instantiated_effect_env(&db, nested_instance).expect("missing nested effect env");
     assert_eq!(
-        env.providers(&db)[0]
-            .provider_ty
-            .pretty_print(&db)
-            .to_string(),
+        env.providers(&db)[0].provider_ty.pretty_print(&db).clone(),
         "StorageMap<u256, u256, 0>"
     );
 
@@ -5465,10 +5462,7 @@ fn root_trait_effect_bindings_specialize_call_to_concrete_evm() {
         .iter()
         .find(|provider| provider.provider_idx == call_provider_idx)
         .expect("expected specialized call provider binding");
-    assert_eq!(
-        call_provider.provider_ty.pretty_print(&db).to_string(),
-        "Evm"
-    );
+    assert_eq!(call_provider.provider_ty.pretty_print(&db).clone(), "Evm");
     assert_eq!(
         call_provider
             .semantics
@@ -5529,10 +5523,7 @@ fn with_bound_plain_effect_params_specialize_to_memory_capabilities() {
         .iter()
         .find(|provider| provider.provider_idx == value_provider_idx)
         .expect("expected specialized value provider binding");
-    assert_eq!(
-        value_provider.provider_ty.pretty_print(&db).to_string(),
-        "u256"
-    );
+    assert_eq!(value_provider.provider_ty.pretty_print(&db).clone(), "u256");
     assert!(value_provider.is_mut);
     assert_eq!(
         value_provider

@@ -457,7 +457,7 @@ pub async fn handle_file_change(
                 backend
                     .db
                     .workspace()
-                    .update(&mut backend.db, url.clone(), contents);
+                    .update(&mut backend.db, url, contents);
             }
         }
         ChangeKind::Create => {
@@ -470,7 +470,7 @@ pub async fn handle_file_change(
                 backend
                     .db
                     .workspace()
-                    .update(&mut backend.db, url.clone(), contents);
+                    .update(&mut backend.db, url, contents);
 
                 // If a fe.toml was created, discover and load all files in the new ingot
                 if is_fe_toml && let Some(ingot_dir) = path.parent() {
@@ -493,7 +493,7 @@ pub async fn handle_file_change(
                 backend
                     .db
                     .workspace()
-                    .update(&mut backend.db, url.clone(), contents);
+                    .update(&mut backend.db, url, contents);
 
                 // If fe.toml was modified, re-scan the ingot for any new files
                 if is_fe_toml && let Some(ingot_dir) = path.parent() {
@@ -637,10 +637,7 @@ pub async fn handle_files_need_diagnostics(
         .iter()
         .filter_map(|NeedsDiagnostics(url)| {
             let url = backend.map_client_uri_to_internal(url.clone());
-            backend
-                .db
-                .workspace()
-                .containing_ingot(&backend.db, url.clone())
+            backend.db.workspace().containing_ingot(&backend.db, url)
         })
         .collect();
 
@@ -824,7 +821,7 @@ pub async fn handle_formatting(
         return Ok(None);
     }
 
-    let url = backend.map_client_uri_to_internal(params.text_document.uri.clone());
+    let url = backend.map_client_uri_to_internal(params.text_document.uri);
 
     let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
         warn!("handle_formatting: file not found `{url}`");
