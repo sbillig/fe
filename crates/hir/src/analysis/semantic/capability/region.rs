@@ -1,4 +1,5 @@
 //! Canonical guarded referent regions. Structural slots and storage paths are distinct.
+use rustc_hash::FxHashSet;
 #[cfg(test)]
 use std::cell::Cell;
 use std::{
@@ -7,13 +8,17 @@ use std::{
 };
 
 use super::{
-    external::{ExternalOrigin, ExternalSource, ReferentContract},
+    external::{
+        ExternalOrigin, ExternalSource, FeedbackRepeats, FeedbackSlot, ReferentContract,
+        feedback_clause_guard,
+    },
     footprint::AccessFootprint,
     guard::{Guard, ValueOccurrence},
     handle::HandleAddressSpace,
     index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     path::{Projection, RegionPath},
     repack::{ReferentRepackId, ReferentViews},
+    source::SourceExpr,
     value::Guarded,
 };
 use crate::{
@@ -65,8 +70,8 @@ impl<'db> RegionRoot<'db> {
         }
     }
 
-    pub fn is_reachable(&self) -> bool {
-        matches!(self, Self::External(source) if source.is_reachable())
+    pub fn is_widened(&self) -> bool {
+        matches!(self, Self::External(source) if source.is_widened())
     }
 
     pub fn may_alias_unknown(&self, other: &Self) -> bool {
@@ -172,7 +177,7 @@ impl<'db> RegionSet<'db> {
         let [clause] = &*self.clauses else {
             return None;
         };
-        (!clause.payload.root.is_reachable() && clause.guard.scope() == &self.scope)
+        (!clause.payload.root.is_widened() && clause.guard.scope() == &self.scope)
             .then_some(DefiniteWrite(self))
     }
 
@@ -280,22 +285,37 @@ impl<'db> RegionSet<'db> {
         )
     }
 
-    /// Loop feedback widens conditional replacements of pointers stored in
-    /// raw memory to the closed arbitrary-memory family of their contract.
-    pub fn widen_raw_memory_replacements(&self) -> Self {
-        Self::new(
-            &self.scope,
-            self.clauses.iter().map(|clause| {
-                let mut clause = clause.clone();
-                if let RegionRoot::External(source) = &clause.payload.root
-                    && source.is_raw_memory_replacement()
-                {
-                    clause.payload.root =
-                        RegionRoot::External(ExternalSource::opaque_memory(source.contract));
-                }
-                clause
-            }),
-        )
+    /// Return `None` for an unchanged region, avoiding clause canonicalization.
+    pub(super) fn widen_feedback(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        domain: &Guard<'db>,
+        repeats: FeedbackRepeats<'_, 'db>,
+        previous: &[FeedbackSlot<'_, 'db>],
+        invariant_replacements: &FxHashSet<ExternalSource<'db>>,
+    ) -> Option<Self> {
+        let mut clauses = None;
+        for (index, clause) in self.clauses.iter().enumerate() {
+            if let RegionRoot::External(source) = &clause.payload.root
+                && let Some(guard) = feedback_clause_guard(&clause.guard, domain, repeats)
+                && let Some(source) = source.widen_feedback(
+                    db,
+                    &SourceExpr {
+                        source: source.clone(),
+                        path: clause.payload.path.clone(),
+                        views: clause.payload.views.clone(),
+                        invalidated: false,
+                    },
+                    &guard,
+                    previous,
+                    invariant_replacements,
+                )
+            {
+                let clauses = clauses.get_or_insert_with(|| self.clauses.to_vec());
+                clauses[index].payload.root = RegionRoot::External(source);
+            }
+        }
+        clauses.map(|clauses| Self::new(&self.scope, clauses))
     }
 
     /// Previous executions own fresh witnesses, independent of the next execution.
@@ -514,7 +534,7 @@ impl<'db> RegionSet<'db> {
                 // Their field paths cannot prove disjointness without base identity.
                 if allow_unknown
                     && left.payload.root.may_alias_unknown(&right.payload.root)
-                    && (left.payload.root != right.payload.root || left.payload.root.is_reachable())
+                    && (left.payload.root != right.payload.root || left.payload.root.is_widened())
                 {
                     if let Some(guard) = left.guard.and(&right.guard).and_then(|guard| {
                         left.payload

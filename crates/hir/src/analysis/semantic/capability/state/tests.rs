@@ -5,7 +5,7 @@ use crate::{
         semantic::{
             BorrowActivation, FieldIndex, SemOrigin,
             capability::{
-                external::{ExternalOrigin, ExternalSource, ReferentContract},
+                external::{ExternalOrigin, ExternalSource, MemoryOffset, ReferentContract},
                 handle::{
                     AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
                     OpaqueWriteSite,
@@ -186,7 +186,7 @@ fn input_cell<'db>(
         db,
         SourceExpr::whole(base),
         ty,
-        Some((stride, index)),
+        MemoryOffset::Element(stride, index),
     ))
 }
 
@@ -401,7 +401,7 @@ fn allocation_cell<'db>(
         db,
         SourceExpr::whole(base),
         ty,
-        Some((ty, index)),
+        MemoryOffset::Element(ty, index),
     ))
 }
 
@@ -1616,7 +1616,7 @@ fn loop_feedback_separates_old_selectors_from_current_execution() {
         }]
     });
     let mut state = BorrowState::new(&mut values, [], [(root(&db, 0), initial)]);
-    state.forget_iteration(&mut values, |index| index == selector, |_| false);
+    state.forget_iteration(&mut values, None, |index| index == selector, |_| false);
     let previous = state.storage().next().unwrap().1;
     let entry = &previous.direct()[0];
     let old = entry.payload.loan().unwrap().args[0];
@@ -1630,7 +1630,7 @@ fn loop_feedback_separates_old_selectors_from_current_execution() {
             .is_some()
     );
     let stable = state.clone();
-    state.forget_iteration(&mut values, |index| index == selector, |_| false);
+    state.forget_iteration(&mut values, None, |index| index == selector, |_| false);
     assert_eq!(state, stable);
 }
 
@@ -1763,7 +1763,7 @@ fn arbitrary_memory_offsets_may_overlap_without_becoming_typed_identity() {
             invalidated: false,
         },
         ty,
-        Some((TyId::u256(&db), IndexExpr::Const(100))),
+        MemoryOffset::Element(TyId::u256(&db), IndexExpr::Const(100)),
     );
     assert_eq!(
         cast, source,

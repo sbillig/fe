@@ -2,23 +2,26 @@
 //!
 //! A carrier describes its referent region. Loading that region reads a separate
 //! structural value; updating it never changes the carrier or its loan identity.
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     birth::AllocationBirth,
-    external::StorageMatch,
+    external::{
+        FeedbackPlaces, FeedbackRepeats, FeedbackSlot, StorageMatch, feedback_clause_guard,
+    },
     footprint::AccessFootprint,
     guard::{Guard, ValueOccurrence},
     handle::AddressOccurrence,
     index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     loan::{CapabilityRef, LoanDef},
     opaque::OpaqueWrite,
-    path::{RegionPath, StructuralPath},
+    path::{RegionPath, StructuralPath, aligned_index_pairs},
     region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace},
     repack::RepackError,
     semantics::UnresolvedCapability,
     shape::ShapeId,
+    source::SourceExpr,
     value::{Guarded, IndexPayload, ValueId, ValueInterner, ValueLimits},
 };
 use crate::analysis::{HirAnalysisDb, semantic::normalized::NValueId};
@@ -84,6 +87,27 @@ pub struct CertifiedContents<'db> {
     pub scope: BinderScope,
     pub coverage: Guard<'db>,
     pub contents: CapabilityValue<'db>,
+}
+
+/// Prior feedback places of one holder, per structural leaf path.
+type SlotSources<'db> = Vec<(StructuralPath<IndexExpr<'db>>, FeedbackPlaces<'db>)>;
+
+/// Align a current leaf path with a prior one. Constant element indices name
+/// distinct slots; other selectors are left to the feedback guards, which also
+/// carry the leaf domains, such as an array default excluding exact members.
+fn slot_alignment<'db>(
+    current: &StructuralPath<IndexExpr<'db>>,
+    previous: &StructuralPath<IndexExpr<'db>>,
+) -> Option<Vec<(IndexExpr<'db>, IndexExpr<'db>)>> {
+    let mut pairs = Vec::new();
+    aligned_index_pairs(current.as_slice(), previous.as_slice(), &mut pairs)?;
+    if pairs.iter().any(
+        |pair| matches!(pair, (IndexExpr::Const(left), IndexExpr::Const(right)) if left != right),
+    ) {
+        return None;
+    }
+    pairs.retain(|pair| !matches!(pair, (IndexExpr::Const(_), IndexExpr::Const(_))));
+    Some(pairs)
 }
 
 impl<'db> BorrowState<'db> {
@@ -318,6 +342,7 @@ impl<'db> BorrowState<'db> {
     pub fn forget_iteration(
         &mut self,
         values: &mut CapabilityValues<'db>,
+        previous: Option<&Self>,
         repeated: impl Fn(IndexExpr<'db>) -> bool + Copy,
         occurrence: impl Fn(ValueOccurrence) -> bool + Copy,
     ) {
@@ -364,18 +389,104 @@ impl<'db> BorrowState<'db> {
         let mut guards = std::mem::take(values.guards());
         let mut forgotten = FxHashMap::default();
         let mut destination = CapabilityValues::new(values.db, ValueLimits::default());
-        for value in self.values.values_mut().chain(self.contents.values_mut()) {
-            let mapped = values.map_payloads(value, &mut destination, |_, _, entry, domain| {
+        // Prior places per structural leaf: a leaf grows only from slots that
+        // may be its own, not from a sibling pointer of the same aggregate.
+        // A leaf with no possible counterpart before, such as a new enum
+        // variant or a newly populated element, is not widened on this edge:
+        // the header then holds its slot, so growth through it is found on
+        // the next feedback within its own history. Leaf paths come from the
+        // holder's shape, so only finitely many such edges occur.
+        let mut sources: FxHashMap<CapabilityValue<'db>, SlotSources<'db>> = FxHashMap::default();
+        let mut invariant_replacements = FxHashSet::default();
+        let repeats = FeedbackRepeats {
+            index: &repeated,
+            occurrence: &occurrence,
+        };
+        if let Some(previous) = previous {
+            for value in previous.values.values().chain(previous.contents.values()) {
+                sources.entry(value.clone()).or_insert_with(|| {
+                    let mut slots = FxHashMap::<_, FeedbackPlaces<'db>>::default();
+                    for leaf in values.leaves(value, ValueOccurrence::Summary).iter() {
+                        let CapabilityRef::Address(region) = &leaf.payload else {
+                            continue;
+                        };
+                        let slot = slots.entry(leaf.path.clone()).or_default();
+                        for clause in region.clauses() {
+                            let RegionRoot::External(source) = &clause.payload.root else {
+                                continue;
+                            };
+                            let Some(guard) =
+                                feedback_clause_guard(&clause.guard, &leaf.guard, repeats)
+                            else {
+                                continue;
+                            };
+                            let place = SourceExpr {
+                                source: source.clone(),
+                                path: clause.payload.path.clone(),
+                                views: clause.payload.views.clone(),
+                                invalidated: false,
+                            };
+                            slot.entry(place).or_default().insert(guard);
+                        }
+                    }
+                    // Copying a pointer between holders does not introduce a
+                    // new overwrite. Preserve conditions already in the state.
+                    // The replacement an offset of one is based on is held too.
+                    invariant_replacements.extend(
+                        slots
+                            .values()
+                            .flat_map(FeedbackPlaces::keys)
+                            .map(|place| &place.source)
+                            .filter(|source| source.is_raw_memory_replacement())
+                            .flat_map(|source| [Some(source), source.replacement_root()])
+                            .flatten()
+                            .cloned(),
+                    );
+                    slots.into_iter().collect()
+                });
+            }
+        }
+        let holders = self
+            .values
+            .iter_mut()
+            .map(|(id, value)| (value, previous.and_then(|previous| previous.values.get(id))));
+        let storage = self.contents.iter_mut().map(|(root, value)| {
+            (
+                value,
+                previous.and_then(|previous| previous.contents.get(root)),
+            )
+        });
+        for (value, prior) in holders.chain(storage) {
+            let prior_sources = prior.and_then(|prior| sources.get(prior));
+            let mapped = values.map_payloads(value, &mut destination, |_, path, entry, domain| {
                 forgotten
-                    .entry((entry.payload.clone(), domain.clone()))
+                    .entry((
+                        entry.payload.clone(),
+                        domain.clone(),
+                        prior.cloned(),
+                        path.clone(),
+                    ))
                     .or_insert_with(|| {
+                        let previous_slots: Vec<_> = prior_sources
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|(prior, places)| {
+                                slot_alignment(path, prior)
+                                    .map(|pairs| FeedbackSlot { pairs, places })
+                            })
+                            .collect();
                         let guard = domain.forget_occurrences(occurrence);
-                        // Replacement families must not grow with the iteration
-                        // count; the caller loses only their overlap conditions.
                         let payload = entry
                             .payload
-                            .forget_occurrences(occurrence)
-                            .widen_raw_memory_replacements();
+                            .widen_feedback(
+                                values.db,
+                                domain,
+                                repeats,
+                                &previous_slots,
+                                &invariant_replacements,
+                            )
+                            .unwrap_or_else(|| entry.payload.clone())
+                            .forget_occurrences(occurrence);
                         let mut scope = guard.scope().clone();
                         let indices: BTreeSet<_> = guard
                             .indices()
@@ -958,7 +1069,7 @@ impl<'db> BorrowState<'db> {
                 for (root, contents) in &self.contents {
                     if !root.may_alias_unknown(&clause.payload.root)
                         || (root == &clause.payload.root
-                            && !root.is_reachable()
+                            && !root.is_widened()
                             && root.indices().next().is_none())
                     {
                         continue;

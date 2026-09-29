@@ -131,10 +131,14 @@ impl<'db> OpaqueWrite<'db> {
                         ) {
                             return None;
                         }
+                        // A write through a conditional replacement keeps that
+                        // replacement's condition as its prerequisite, on the
+                        // overwrite handle that offsets and summaries restate.
                         if !native
                             && raw_memory_cell
                             && matches!(&clause.payload.root,
-                                RegionRoot::External(written) if written.is_arbitrary())
+                                RegionRoot::External(written)
+                                    if written.is_arbitrary() && !written.has_clobber_dependency())
                         {
                             return Some((guard, family.clone()));
                         }

@@ -2,7 +2,7 @@
 use common::layout::enum_tag_bits;
 
 use super::{
-    external::ExternalOrigin,
+    external::{ExternalOrigin, MemoryOffset},
     handle::HandleAddressSpace,
     index::{IndexExpr, IndexSubst},
     path::Projection,
@@ -226,7 +226,7 @@ impl<'db> LinearAddress<'db> {
             && !source.is_reachable()
             && let ExternalOrigin::Memory {
                 base,
-                element,
+                offset,
                 target_ty,
             } = &source.origin
         {
@@ -238,7 +238,9 @@ impl<'db> LinearAddress<'db> {
                     views: base.views.clone(),
                 },
             )?;
-            if let Some((stride, index)) = element {
+            if *offset == MemoryOffset::Unknown {
+                address.offset = None;
+            } else if let MemoryOffset::Element(stride, index) = offset {
                 address.offset = address.offset.and_then(|offset| {
                     let IndexExpr::Const(index) = index else {
                         return None;
@@ -347,7 +349,7 @@ mod tests {
                     invalidated: false,
                 },
                 ty,
-                Some((TyId::u8(db), offset)),
+                MemoryOffset::Element(TyId::u8(db), offset),
             )),
             RegionPath::default(),
         )
@@ -365,7 +367,12 @@ mod tests {
             );
             let cell = |base, index| {
                 let base = SourceExpr::whole(base);
-                ExternalSource::memory(&db, base, ty, Some((ty, IndexExpr::Const(index))))
+                ExternalSource::memory(
+                    &db,
+                    base,
+                    ty,
+                    MemoryOffset::Element(ty, IndexExpr::Const(index)),
+                )
             };
             let region = |source| {
                 RegionSet::singleton(

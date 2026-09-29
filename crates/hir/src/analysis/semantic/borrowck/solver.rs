@@ -16,7 +16,7 @@ use crate::analysis::{
         FieldIndex, SConst, SemConstScalar, SemConstValue, SemOrigin, SemanticInstance,
         capability::{
             birth::AllocationBirth,
-            external::ExternalSource,
+            external::{ExternalSource, MemoryOffset},
             guard::{ChoiceKey, Guard, ValueOccurrence},
             handle::{AddressOccurrence, OpaqueHandleContract, OpaqueHandleRef, OpaqueWriteSite},
             index::{BinderScope, IndexExpr},
@@ -724,7 +724,7 @@ impl<'db> Borrowck<'db> {
                             .feedback(NBlockId::new(index), successor.block)
                         {
                             let repeated = self.inventory.loops.repeated(iteration);
-                            edge.forget_iteration(&mut self.inventory.values,
+                            edge.forget_iteration(&mut self.inventory.values, incoming[successor.block.index()].as_ref(),
                             |index| matches!(index, IndexExpr::Iteration(region) if region == iteration) || matches!(index, IndexExpr::Runtime(value) if repeated.contains(&value)),
                             |occurrence| self.inventory.loops.repeats_occurrence(iteration, occurrence));
                         }
@@ -820,7 +820,7 @@ impl<'db> Borrowck<'db> {
         &self,
         region: &RegionSet<'db>,
         target_ty: TyId<'db>,
-        element: Option<(TyId<'db>, IndexExpr<'db>)>,
+        offset: MemoryOffset<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<RegionSet<'db>, SemanticDiagnostic<'db>> {
         let mut clauses = Vec::new();
@@ -832,7 +832,7 @@ impl<'db> Borrowck<'db> {
                 guard: clause.guard.clone(),
                 payload: SymbolicPlace {
                     root: RegionRoot::External(ExternalSource::memory(
-                        self.db, source, target_ty, element,
+                        self.db, source, target_ty, offset,
                     )),
                     path: RegionPath::default(),
                     views: Default::default(),
@@ -1055,7 +1055,12 @@ impl<'db> Borrowck<'db> {
                         .is_some()
                     {
                         let region = self.resolve_capability(&source).region;
-                        self.memory_region(&region, target_ty, None, statement.origin)?
+                        self.memory_region(
+                            &region,
+                            target_ty,
+                            MemoryOffset::Zero,
+                            statement.origin,
+                        )?
                     } else {
                         let contract = OpaqueHandleContract::for_ty(
                             self.db,

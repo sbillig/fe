@@ -1,5 +1,7 @@
 //! Typed external storage identities, including followed and widened referents.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::{
     HirAnalysisDb,
@@ -15,9 +17,9 @@ use crate::analysis::{
 
 use super::{
     footprint::AccessExtent,
-    guard::Guard,
+    guard::{Guard, ValueOccurrence},
     handle::{AddressOccurrence, HandleAddressSpace, OpaqueHandleRef},
-    index::{BinderScope, IndexExpr, IndexSubst},
+    index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     path::{RegionPath, aligned_index_pairs},
     region::{ProviderRegionId, RegionRoot},
     source::{InputSource, SourceExpr},
@@ -128,9 +130,27 @@ pub enum ExternalOrigin<'db> {
     /// This is a memory location, never a structural Index on a scalar type.
     Memory {
         base: Box<SourceExpr<'db>>,
-        element: Option<(TyId<'db>, IndexExpr<'db>)>,
+        offset: MemoryOffset<'db>,
         target_ty: TyId<'db>,
     },
+}
+
+/// An unknown displacement retains its physical base, but names no definite cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MemoryOffset<'db> {
+    Zero,
+    Element(TyId<'db>, IndexExpr<'db>),
+    Unknown,
+}
+
+impl<'db> MemoryOffset<'db> {
+    pub fn index(self) -> Option<IndexExpr<'db>> {
+        match self {
+            Self::Zero => Some(IndexExpr::Const(0)),
+            Self::Element(_, index) => Some(index),
+            Self::Unknown => None,
+        }
+    }
 }
 
 /// A source names storage, not the representation of the handle used to reach it.
@@ -163,10 +183,6 @@ pub struct StorageMatch<'db> {
     pub typed: Option<Guard<'db>>,
     /// The definite-update embedding; a widened representation has none.
     pub write: Option<Guarded<'db, BTreeMap<IndexExpr<'db>, IndexExpr<'db>>>>,
-}
-
-fn element_offset<'db>(element: Option<(TyId<'db>, IndexExpr<'db>)>) -> IndexExpr<'db> {
-    element.map_or(IndexExpr::Const(0), |(_, index)| index)
 }
 
 /// Transport a definite write into family coordinates. Request binders map to
@@ -203,6 +219,150 @@ fn write_embedding<'db>(
     })
 }
 
+/// Places held in one structural slot before a loop feedback edge, with the
+/// leaf-domain and clause guards under which each is held.
+pub(super) type FeedbackPlaces<'db> = FxHashMap<SourceExpr<'db>, BTreeSet<Guard<'db>>>;
+
+/// A prior slot that may be the current leaf's own, with the alignment of the
+/// current (left) and prior (right) element selectors of the two slots.
+pub(super) struct FeedbackSlot<'a, 'db> {
+    pub pairs: Vec<(IndexExpr<'db>, IndexExpr<'db>)>,
+    pub places: &'a FeedbackPlaces<'db>,
+}
+
+/// The facts a loop feedback edge forgets: choices and selectors that a new
+/// execution may take differently. Facts fixed before the loop, such as a
+/// choice or runtime value computed outside it, still separate clauses.
+#[derive(Clone, Copy)]
+pub(super) struct FeedbackRepeats<'a, 'db> {
+    pub index: &'a dyn Fn(IndexExpr<'db>) -> bool,
+    pub occurrence: &'a dyn Fn(ValueOccurrence) -> bool,
+}
+
+/// Only facts that hold in every execution separate a recomputed base from a
+/// derived one. Forgetting the repeated ones can only admit more.
+fn feedback_guard<'db>(guard: &Guard<'db>, repeats: FeedbackRepeats<'_, 'db>) -> Guard<'db> {
+    guard
+        .forget_occurrences(|occurrence| (repeats.occurrence)(occurrence))
+        .forget_indices(|index| (repeats.index)(index))
+}
+
+/// A clause guard restricted to the domain of its structural leaf, such as
+/// the disequalities excluding exact members from an array default. `None`
+/// if the clause cannot hold there. A domain outside the clause's scope
+/// adds nothing, which can only admit more.
+pub(super) fn feedback_clause_guard<'db>(
+    clause: &Guard<'db>,
+    domain: &Guard<'db>,
+    repeats: FeedbackRepeats<'_, 'db>,
+) -> Option<Guard<'db>> {
+    let guard = if clause
+        .scope()
+        .existential_extension_of(domain.scope())
+        .is_some()
+    {
+        clause.and(&domain.in_scope(clause.scope()))?
+    } else {
+        clause.clone()
+    };
+    Some(feedback_guard(&guard, repeats))
+}
+
+/// Whether aligned selectors of the current clause (left) and an ancestor's
+/// clause (right) can be equal under both guards, with the ancestor's
+/// binders renamed apart. A selector bound outside its guard's scope
+/// constrains nothing.
+fn selectors_may_agree<'db>(
+    current: &Guard<'db>,
+    previous: &Guard<'db>,
+    pairs: impl IntoIterator<Item = (IndexExpr<'db>, IndexExpr<'db>)>,
+) -> bool {
+    let fresh = previous.scope().freshening(current.scope());
+    let pairs: Vec<_> = pairs
+        .into_iter()
+        .filter(|(left, right)| {
+            current.scope().validate(*left).is_ok() && previous.scope().validate(*right).is_ok()
+        })
+        .map(|(left, right)| (left, fresh.apply(right)))
+        .collect();
+    let Some(previous) = previous.substitute(&fresh) else {
+        return false;
+    };
+    current
+        .in_scope(previous.scope())
+        .and(&previous)
+        .and_then(|guard| guard.with_equalities(pairs))
+        .is_some()
+}
+
+/// Whether a prior place is itself an offset or load chain over an earlier
+/// value of the same prior slot and element, under selectors that can agree.
+/// Growth passes through its own slot again; a sibling slot holding the base
+/// of a fixed offset is no evidence of growth.
+fn derived_from_prior<'db>(
+    place: &SourceExpr<'db>,
+    guards: &BTreeSet<Guard<'db>>,
+    slot: &FeedbackSlot<'_, 'db>,
+) -> bool {
+    // Both places are held in `slot`: equate their element selectors.
+    let elements: Vec<_> = slot
+        .pairs
+        .iter()
+        .map(|(_, prior)| (*prior, *prior))
+        .collect();
+    let mut pairs = Vec::new();
+    let mut source = &place.source;
+    while let ExternalOrigin::Memory { base, .. } = &source.origin {
+        if slot.places.iter().any(|(ancestor, ancestor_guards)| {
+            pairs.clear();
+            place_correspondence(base, ancestor, &mut pairs).is_some()
+                && guards.iter().any(|guard| {
+                    ancestor_guards.iter().any(|ancestor| {
+                        selectors_may_agree(guard, ancestor, pairs.iter().chain(&elements).copied())
+                    })
+                })
+        }) {
+            return true;
+        }
+        source = &base.source;
+    }
+    false
+}
+
+/// Whether aligned index pairs rename existential binders one-to-one and
+/// agree on every other index: each binder maps to one binder, and no two
+/// binders map to the same one.
+pub(super) fn is_existential_renaming<'db>(pairs: &[(IndexExpr<'db>, IndexExpr<'db>)]) -> bool {
+    let existential =
+        |index: &IndexExpr<'db>| index.bound_namespace() == Some(IndexNamespace::Existential);
+    let mut forward = FxHashMap::default();
+    let mut backward = FxHashMap::default();
+    pairs.iter().all(
+        |(left, right)| match (existential(left), existential(right)) {
+            (true, true) => {
+                *forward.entry(*left).or_insert(*right) == *right
+                    && *backward.entry(*right).or_insert(*left) == *left
+            }
+            (false, false) => left == right,
+            _ => false,
+        },
+    )
+}
+
+/// Align a current base with a prior place: the same storage expression up
+/// to its selectors, including referent paths and views.
+fn place_correspondence<'db>(
+    base: &SourceExpr<'db>,
+    previous: &SourceExpr<'db>,
+    pairs: &mut Vec<(IndexExpr<'db>, IndexExpr<'db>)>,
+) -> Option<()> {
+    if base.views != previous.views {
+        return None;
+    }
+    base.source.correspondence(&previous.source, pairs)?;
+    aligned_index_pairs(base.path.as_slice(), previous.path.as_slice(), pairs)
+}
+
 impl<'db> ClobberCondition<'db> {
     pub fn new(
         mut target: SourceExpr<'db>,
@@ -214,15 +374,8 @@ impl<'db> ClobberCondition<'db> {
         // rather than making a loop's later writes unconditionally arbitrary.
         // Dropping the additional overlap test is conservative and keeps the
         // condition depth bounded across repeated writes and summary calls.
-        let mut dependency = &written.source;
-        loop {
-            if let Some(condition) = &dependency.clobber {
-                return (**condition).clone();
-            }
-            let ExternalOrigin::Memory { base, .. } = &dependency.origin else {
-                break;
-            };
-            dependency = &base.source;
+        if let Some(condition) = written.source.clobber_dependency() {
+            return condition.clone();
         }
         target.source.erase_clobber_conditions();
         written.source.erase_clobber_conditions();
@@ -235,8 +388,6 @@ impl<'db> ClobberCondition<'db> {
 }
 
 impl<'db> ExternalSource<'db> {
-    pub const MAX_OFFSET_DEPTH: usize = 4;
-
     pub fn opaque_memory(contract: ReferentContract<'db>) -> Self {
         Self {
             origin: ExternalOrigin::OpaqueMemory,
@@ -292,6 +443,25 @@ impl<'db> ExternalSource<'db> {
             } => Some(Self::unknown(*contract, *occurrence, arguments.clone())),
             _ => None,
         }
+    }
+
+    /// The corruption condition under which this address, or the base it
+    /// is offset from, exists.
+    fn clobber_dependency(&self) -> Option<&ClobberCondition<'db>> {
+        let mut dependency = self;
+        loop {
+            if let Some(condition) = &dependency.clobber {
+                return Some(condition);
+            }
+            let ExternalOrigin::Memory { base, .. } = &dependency.origin else {
+                return None;
+            };
+            dependency = &base.source;
+        }
+    }
+
+    pub(super) fn has_clobber_dependency(&self) -> bool {
+        self.clobber_dependency().is_some()
     }
 
     fn erase_clobber_conditions(&mut self) {
@@ -389,7 +559,7 @@ impl<'db> ExternalSource<'db> {
         db: &'db dyn HirAnalysisDb,
         mut base: SourceExpr<'db>,
         target_ty: TyId<'db>,
-        mut element: Option<(TyId<'db>, IndexExpr<'db>)>,
+        mut offset: MemoryOffset<'db>,
     ) -> Self {
         if matches!(base.source.origin, ExternalOrigin::OpaqueMemory) {
             return Self::opaque_memory(ReferentContract::new(
@@ -398,45 +568,47 @@ impl<'db> ExternalSource<'db> {
                 base.source.contract.address_space,
             ));
         }
-        if element.is_some_and(|(_, index)| index == IndexExpr::Const(0)) {
-            element = None;
+        if matches!(offset, MemoryOffset::Element(_, IndexExpr::Const(0))) {
+            offset = MemoryOffset::Zero;
         }
-        // Repeated casts at the same address retain one physical base.
-        if base.path.is_empty()
+        // Casts and unknown displacements retain one physical base. An offset
+        // of an unknown offset stays unknown, without following stored pointers.
+        while base.path.is_empty()
             && base.views.iter().next().is_none()
             && base.source.dereferences.is_empty()
             && !base.source.reachable
             && let ExternalOrigin::Memory {
                 base: original,
-                element: old,
+                offset: old,
                 ..
             } = &base.source.origin
-            && (element.is_none() || old.is_none())
+            && (offset == MemoryOffset::Zero
+                || *old == MemoryOffset::Zero
+                || offset == MemoryOffset::Unknown
+                || *old == MemoryOffset::Unknown)
         {
-            element = element.or(*old);
+            offset = if offset == MemoryOffset::Unknown || *old == MemoryOffset::Unknown {
+                MemoryOffset::Unknown
+            } else if offset == MemoryOffset::Zero {
+                *old
+            } else {
+                offset
+            };
             base = *original.clone();
         }
-        if element.is_none()
+        if offset == MemoryOffset::Zero
             && base.path.is_empty()
             && base.views.iter().next().is_none()
             && base.source.contract.ty == target_ty
         {
             return base.source;
         }
-        // A pointer offset from itself in a loop would nest a new base on
-        // every iteration. Like a long dereference chain, a deep offset chain
-        // is widened so that the loop's provenance reaches a fixed point.
-        if base.source.offset_depth() >= Self::MAX_OFFSET_DEPTH {
-            let mut source = base.source.widen();
-            source.contract = ReferentContract::new(db, target_ty, source.contract.address_space);
-            return source;
-        }
         Self {
             contract: ReferentContract::new(db, target_ty, base.source.contract.address_space),
-            uncertain: base.source.uncertain(),
+            uncertain: base.source.uncertain() || offset == MemoryOffset::Unknown,
             origin: ExternalOrigin::Memory {
                 base: Box::new(base),
-                element,
+                offset,
                 target_ty,
             },
             clobber: None,
@@ -464,15 +636,132 @@ impl<'db> ExternalSource<'db> {
         }
     }
 
-    /// The number of nested offsets or casts into one object. A followed
-    /// pointer names another object and starts a new chain.
-    fn offset_depth(&self) -> usize {
-        match &self.origin {
-            ExternalOrigin::Memory { base, .. } if self.dereferences.is_empty() => {
-                1 + base.source.offset_depth()
-            }
-            _ => 0,
+    /// Whether `self`, the replacement root of `offset`, was held before the
+    /// loop. The root itself must be one exactly. An offset embeds its root in
+    /// its own clause, which renumbers the root's clause-local witnesses, so
+    /// there a pure renaming of existential binders suffices.
+    fn is_invariant_replacement(&self, offset: &Self, invariant: &FxHashSet<Self>) -> bool {
+        if invariant.contains(self) {
+            return true;
         }
+        if std::ptr::eq(self, offset) {
+            return false;
+        }
+        let mut pairs = Vec::new();
+        invariant.iter().any(|replacement| {
+            pairs.clear();
+            self.correspondence(replacement, &mut pairs).is_some()
+                && self
+                    .metadata_correspondence(replacement, &mut pairs)
+                    .is_some()
+                && is_existential_renaming(&pairs)
+        })
+    }
+
+    /// The conditional replacement an offset or cast of one is based on.
+    pub(super) fn replacement_root(&self) -> Option<&Self> {
+        let mut source = self;
+        loop {
+            if source.clobber.is_some() {
+                return Some(source);
+            }
+            match &source.origin {
+                ExternalOrigin::Memory { base, .. } if source.dereferences.is_empty() => {
+                    source = &base.source;
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn has_unknown_offset(&self) -> bool {
+        matches!(&self.origin, ExternalOrigin::Memory { base, offset, .. }
+            if *offset == MemoryOffset::Unknown || base.source.has_unknown_offset())
+    }
+
+    /// A family cannot justify an exact alias or a definite storage update.
+    pub fn is_widened(&self) -> bool {
+        self.reachable
+            || matches!(&self.origin, ExternalOrigin::Memory { base, offset, .. }
+                if *offset == MemoryOffset::Unknown || base.source.is_widened())
+    }
+
+    /// Only feedback that adds provenance needs widening. An invariant source
+    /// retains its exact offset and caller-dischargeable overwrite condition.
+    /// `place` is the current clause's place rooted at `self` and `guard` its
+    /// feedback guard; `previous` holds the prior slots that may be its own.
+    pub(super) fn widen_feedback(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        place: &SourceExpr<'db>,
+        guard: &Guard<'db>,
+        previous: &[FeedbackSlot<'_, 'db>],
+        invariant_replacements: &FxHashSet<Self>,
+    ) -> Option<Self> {
+        if previous.iter().any(|slot| slot.places.contains_key(place))
+            || invariant_replacements.contains(self)
+        {
+            return None;
+        }
+        // A replacement created in the loop would add alternatives on every
+        // iteration. One held before the loop is invariant, and so is its
+        // condition; an offset of it is widened only if it grows.
+        if self.is_raw_memory_replacement()
+            && !self
+                .replacement_root()
+                .is_some_and(|root| root.is_invariant_replacement(self, invariant_replacements))
+        {
+            return Some(Self::opaque_memory(self.contract));
+        }
+        let mut source = self;
+        let mut followed = false;
+        let mut pairs = Vec::new();
+        while let ExternalOrigin::Memory { base, .. } = &source.origin {
+            followed |= !source.dereferences.is_empty() || source.reachable;
+            // Forgetting an iteration renumbers existential selectors. Match
+            // the ancestor's structure, not its binder numbers, to recognize
+            // growth. This proves no equality: the widened result retains the
+            // current base and its arguments, and only forgets displacement.
+            // A base whose aligned selectors contradict every guard of the
+            // ancestor, such as `offset(base, 2)` against `offset(base, 1)`,
+            // or whose slot cannot be the ancestor's, is recomputed rather
+            // than derived from it.
+            // An ancestor that is not itself derived from another prior place
+            // may be an invariant base the loop recomputes from, as in
+            // `p = offset(offset(base, 32), 32)` after `p = offset(base, 32)`.
+            // Growth nests prior values in each other, so it is widened one
+            // feedback later, when its ancestor is derived as well.
+            if previous.iter().any(|slot| {
+                slot.places.iter().any(|(previous_place, guards)| {
+                    pairs.clear();
+                    place_correspondence(base, previous_place, &mut pairs).is_some()
+                        && guards.iter().any(|previous| {
+                            selectors_may_agree(
+                                guard,
+                                previous,
+                                pairs.iter().chain(&slot.pairs).copied(),
+                            )
+                        })
+                        && derived_from_prior(previous_place, guards, slot)
+                })
+            }) {
+                // Offsets stay within the same physical allocation. Loading a
+                // pointer may instead reach another object, so retain no such
+                // allocation guarantee for a growing offset/load chain.
+                return Some(if followed {
+                    Self::opaque_memory(self.contract)
+                } else {
+                    Self::memory(
+                        db,
+                        SourceExpr::whole(self.clone()),
+                        self.contract.ty,
+                        MemoryOffset::Unknown,
+                    )
+                });
+            }
+            source = &base.source;
+        }
+        None
     }
 
     /// Rewrites construction occurrences through every nested memory base.
@@ -579,10 +868,13 @@ impl<'db> ExternalSource<'db> {
                 handle.arguments.to_vec()
             }
             ExternalOrigin::Unknown { arguments, .. } => arguments.to_vec(),
-            ExternalOrigin::Memory { base, element, .. } => base
-                .indices()
-                .chain(element.iter().map(|(_, index)| *index))
-                .collect(),
+            ExternalOrigin::Memory { base, offset, .. } => {
+                let index = match offset {
+                    MemoryOffset::Element(_, index) => Some(*index),
+                    _ => None,
+                };
+                base.indices().chain(index).collect()
+            }
             ExternalOrigin::Provider { .. }
             | ExternalOrigin::Local(_)
             | ExternalOrigin::OpaqueMemory => Vec::new(),
@@ -638,15 +930,19 @@ impl<'db> ExternalSource<'db> {
             }
             ExternalOrigin::Memory {
                 base,
-                element,
+                offset,
                 target_ty,
             } => {
                 result.origin = ExternalOrigin::Memory {
                     target_ty: target_ty.fold_with(db, &mut subst.clone()),
                     base: Box::new(base.substitute(db, subst)),
-                    element: element.map(|(ty, index)| {
-                        (ty.fold_with(db, &mut subst.clone()), subst.apply(index))
-                    }),
+                    offset: match *offset {
+                        MemoryOffset::Element(ty, index) => MemoryOffset::Element(
+                            ty.fold_with(db, &mut subst.clone()),
+                            subst.apply(index),
+                        ),
+                        offset => offset,
+                    },
                 };
             }
             ExternalOrigin::Input(_) | ExternalOrigin::Local(_) | ExternalOrigin::OpaqueMemory => {}
@@ -677,7 +973,7 @@ impl<'db> ExternalSource<'db> {
             },
             ExternalOrigin::Memory {
                 base,
-                element,
+                offset,
                 target_ty,
             } => ExternalOrigin::Memory {
                 target_ty: *target_ty,
@@ -687,7 +983,12 @@ impl<'db> ExternalSource<'db> {
                     path: base.path.substitute(subst),
                     views: base.views.clone(),
                 }),
-                element: element.map(|(ty, index)| (ty, subst.apply(index))),
+                offset: match *offset {
+                    MemoryOffset::Element(ty, index) => {
+                        MemoryOffset::Element(ty, subst.apply(index))
+                    }
+                    offset => offset,
+                },
             },
             ExternalOrigin::Allocation(handle) => ExternalOrigin::Allocation(OpaqueHandleRef {
                 arguments: handle
@@ -766,13 +1067,14 @@ impl<'db> ExternalSource<'db> {
             .as_ref()
             .filter(|_| {
                 !matches!(self.origin, ExternalOrigin::OpaqueMemory)
+                    && !self.has_unknown_offset()
                     && !instance
                         .overlapping_object_indices()
                         .iter()
                         .any(|index| matches!(index, IndexExpr::Bound(_)))
             })
             .map(|embedding| embedding.guard.clone());
-        let write = embedding.filter(|_| !self.reachable && !instance.reachable);
+        let write = embedding.filter(|_| !self.is_widened() && !instance.is_widened());
         Some(StorageMatch {
             substitution,
             guard,
@@ -802,7 +1104,7 @@ impl<'db> ExternalSource<'db> {
     fn zero_wrapper_base(&self) -> Option<(&SourceExpr<'db>, IndexExpr<'db>)> {
         let ExternalOrigin::Memory {
             base,
-            element,
+            offset,
             target_ty,
         } = &self.origin
         else {
@@ -815,11 +1117,11 @@ impl<'db> ExternalSource<'db> {
             && base.source.dereferences.is_empty()
             && !base.source.reachable
             && base.source.contract.ty == *target_ty)
-            .then_some((base.as_ref(), element_offset(*element)))
+            .then_some((base.as_ref(), offset.index()?))
     }
 
     /// Align the index roles of two structurally identical typed locations.
-    /// An omitted element offset is logical zero, and a same-type zero-offset
+    /// A same-type zero-offset
     /// wrapper corresponds to its base. Exact identity is the conjunction of
     /// the aligned index equalities.
     fn correspondence(
@@ -837,28 +1139,29 @@ impl<'db> ExternalSource<'db> {
             (
                 ExternalOrigin::Memory {
                     base: left,
-                    element: left_element,
+                    offset: left_offset,
                     target_ty: left_ty,
                 },
                 ExternalOrigin::Memory {
                     base: right,
-                    element: right_element,
+                    offset: right_offset,
                     target_ty: right_ty,
                 },
             ) => {
                 if left_ty != right_ty
                     || left.views != right.views
-                    || matches!((left_element, right_element),
-                        (Some((left, _)), Some((right, _))) if left != right)
+                    || matches!((left_offset, right_offset),
+                        (MemoryOffset::Element(left, _), MemoryOffset::Element(right, _)) if left != right)
                 {
                     return None;
                 }
                 left.source.correspondence(&right.source, pairs)?;
                 aligned_index_pairs(left.path.as_slice(), right.path.as_slice(), pairs)?;
-                pairs.push((
-                    element_offset(*left_element),
-                    element_offset(*right_element),
-                ));
+                match (left_offset.index(), right_offset.index()) {
+                    (Some(left), Some(right)) => pairs.push((left, right)),
+                    (None, None) => {}
+                    _ => return None,
+                }
             }
             (ExternalOrigin::Memory { .. }, _) => {
                 let (base, selector) = self.zero_wrapper_base()?;
@@ -980,9 +1283,10 @@ impl<'db> ExternalSource<'db> {
         match &self.origin {
             ExternalOrigin::Memory {
                 base,
-                element,
+                offset,
                 target_ty,
-            } if element.is_none_or(|(stride, _)| stride == *target_ty)
+            } if (*offset == MemoryOffset::Zero
+                || matches!(offset, MemoryOffset::Element(stride, _) if stride == target_ty))
                 && self.dereferences.is_empty()
                 && !self.reachable
                 && !base.source.uncertain() =>
@@ -1028,7 +1332,7 @@ impl<'db> ExternalSource<'db> {
         typed: bool,
     ) -> Option<Guard<'db>> {
         let mut pairs = Vec::new();
-        let exact = if !self.reachable && !other.reachable {
+        let exact = if !self.is_widened() && !other.is_widened() {
             self.correspondence(other, &mut pairs)
                 .and_then(|()| guard.with_equalities(pairs))
         } else {

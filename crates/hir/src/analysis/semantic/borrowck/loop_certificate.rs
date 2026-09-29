@@ -6,7 +6,7 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             capability::{
-                external::ExternalOrigin,
+                external::{ExternalOrigin, MemoryOffset},
                 footprint::{AccessExtent, AccessFootprint},
                 guard::Guard,
                 index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
@@ -371,7 +371,7 @@ impl<'db> Borrowck<'db> {
         };
         let selector = match &actual.origin {
             ExternalOrigin::Memory {
-                element: Some((_, selector)),
+                offset: MemoryOffset::Element(_, selector),
                 ..
             } => *selector,
             _ if kind == ContentsCertificateKind::LastWrite => IndexExpr::Const(0),
@@ -393,7 +393,7 @@ impl<'db> Borrowck<'db> {
                 };
                 let member = match &source.origin {
                     ExternalOrigin::Memory {
-                        element: Some((_, member)),
+                        offset: MemoryOffset::Element(_, member),
                         ..
                     } if member.bound_namespace() == Some(IndexNamespace::InputSlot)
                         && contents.scope().variables().collect::<Vec<_>>() == vec![*member] =>
@@ -575,10 +575,12 @@ impl<'db> Borrowck<'db> {
             .ok_or(FrontierRejection::UnsupportedLoopShape)?;
         let repeated = self.inventory.loops.repeated(iteration).clone();
         let block = proof.step.candidate.body.index();
-        let mut state = self.before[block][proof.step.store_statement].clone();
+        let before = &self.before[block][proof.step.store_statement];
+        let mut state = before.clone();
         let loops = &self.inventory.loops;
         state.forget_iteration(
             &mut self.inventory.values,
+            Some(before),
             |index| {
                 matches!(index, IndexExpr::Iteration(region) if region == iteration)
                     || matches!(index, IndexExpr::Runtime(value) if repeated.contains(&value))
