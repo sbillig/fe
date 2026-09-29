@@ -4801,8 +4801,7 @@ fn by_ref_trait_provider_storage_bug_fixture_keeps_callables_on_all_typed_calls(
         let name = func
             .name(&db)
             .to_opt()
-            .map(|name| name.data(&db).to_string())
-            .unwrap_or_else(|| "<fn>".to_string());
+            .map_or_else(|| "<fn>".to_string(), |name| name.data(&db).to_string());
         assert_all_calls_have_callables(&db, &name, typed_body);
     }
 
@@ -4812,8 +4811,7 @@ fn by_ref_trait_provider_storage_bug_fixture_keeps_callables_on_all_typed_calls(
             let name = func
                 .name(&db)
                 .to_opt()
-                .map(|name| name.data(&db).to_string())
-                .unwrap_or_else(|| "<fn>".to_string());
+                .map_or_else(|| "<fn>".to_string(), |name| name.data(&db).to_string());
             assert_all_calls_have_callables(&db, &format!("impl::{name}"), typed_body);
         }
     }

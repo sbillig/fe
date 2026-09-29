@@ -3025,16 +3025,18 @@ impl<'db> ConstTyId<'db> {
                 return crate::analysis::semantic::consts::retype_sem_const_description(
                     db, *value, ty,
                 )
-                .map(|value| const_ty_from_sem_const(db, value))
-                .unwrap_or_else(|| {
-                    Self::invalid(
-                        db,
-                        InvalidCause::ConstTyMismatch {
-                            expected: ty,
-                            given: self.ty(db),
-                        },
-                    )
-                });
+                .map_or_else(
+                    || {
+                        Self::invalid(
+                            db,
+                            InvalidCause::ConstTyMismatch {
+                                expected: ty,
+                                given: self.ty(db),
+                            },
+                        )
+                    },
+                    |value| const_ty_from_sem_const(db, value),
+                );
             }
             ConstTyData::Computation {
                 description,

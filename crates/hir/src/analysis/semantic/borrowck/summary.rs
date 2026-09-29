@@ -2404,18 +2404,18 @@ impl<'db> Borrowck<'db> {
             .substitute(&subst)
             .and_then(|guard| {
                 guard.map_occurrences(|occurrence| match occurrence {
-                    ValueOccurrence::Argument(param) => inputs
-                        .occurrence(param)
-                        .map(|occurrence| match occurrence {
+                    ValueOccurrence::Argument(param) => inputs.occurrence(param).map_or(
+                        ValueOccurrence::CallChoice {
+                            result,
+                            choice: param,
+                        },
+                        |occurrence| match occurrence {
                             ValueOccurrence::Value(value) => {
                                 ValueOccurrence::Value(self.forwarded_value(value))
                             }
                             other => other,
-                        })
-                        .unwrap_or(ValueOccurrence::CallChoice {
-                            result,
-                            choice: param,
-                        }),
+                        },
+                    ),
                     ValueOccurrence::SummaryChoice(choice) => {
                         ValueOccurrence::CallChoice { result, choice }
                     }

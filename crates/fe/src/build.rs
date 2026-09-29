@@ -168,7 +168,7 @@ fn write_build_manifest(
     out.push_str(&format!("emit: {}\n", describe_emit_selection(emit)));
     out.push_str(&format!(
         "out_dir: {}\n",
-        out_dir.map(|p| p.as_str()).unwrap_or("<default>")
+        out_dir.map_or("<default>", |p| p.as_str())
     ));
     out.push_str(&format!(
         "status: {}\n",
@@ -596,21 +596,19 @@ fn build_file(
 
     let default_out_dir = canonical
         .parent()
-        .map(|parent| parent.join("out"))
-        .unwrap_or_else(|| Utf8PathBuf::from("out"));
+        .map_or_else(|| Utf8PathBuf::from("out"), |parent| parent.join("out"));
     let out_dir = out_dir.cloned().unwrap_or(default_out_dir);
-    let ir_file_stem = canonical
-        .file_stem()
-        .map(|stem| sanitize_name_with_default(stem, "module"))
-        .unwrap_or_else(|| "module".to_string());
+    let ir_file_stem = canonical.file_stem().map_or_else(
+        || "module".to_string(),
+        |stem| sanitize_name_with_default(stem, "module"),
+    );
     let report_dir = report_scope_dir(
         report,
         &format!(
             "file-{}",
             canonical
                 .file_stem()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "build".to_string())
+                .map_or_else(|| "build".to_string(), |s| s.to_string())
         ),
     );
     build_top_mod(
@@ -702,8 +700,7 @@ fn build_directory(
                     "ingot-{}",
                     canonical
                         .file_name()
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| "build".to_string())
+                        .map_or_else(|| "build".to_string(), |s| s.to_string())
                 ),
             );
             build_ingot_url(
@@ -1176,9 +1173,10 @@ fn build_ingot_url(
         return BuildSummary { had_errors: true };
     }
 
-    let ir_file_stem = ir_file_stem
-        .map(|name| sanitize_name_with_default(name, "module"))
-        .unwrap_or_else(|| derive_ingot_ir_file_stem(db, ingot));
+    let ir_file_stem = ir_file_stem.map_or_else(
+        || derive_ingot_ir_file_stem(db, ingot),
+        |name| sanitize_name_with_default(name, "module"),
+    );
 
     #[cfg(feature = "cranelift")]
     if backend.is_native() {

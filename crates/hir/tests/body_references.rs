@@ -35,8 +35,7 @@ fn body_references(fixture: Fixture<&str>) {
                             .path
                             .ident(&db)
                             .to_opt()
-                            .map(|id| id.data(&db).to_string())
-                            .unwrap_or_else(|| "<complex>".to_string());
+                            .map_or_else(|| "<complex>".to_string(), |id| id.data(&db).to_string());
 
                         // Try to resolve the target
                         let resolution = pv.target(&db);

@@ -191,15 +191,14 @@ fn check_variant_field_abi_requirements<'db>(
             }
         };
 
-        let primary_range = msg_variant_field(db, top_mod, struct_, idx)
-            .map(|field| {
+        let primary_range = msg_variant_field(db, top_mod, struct_, idx).map_or_else(
+            || msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector),
+            |field| {
                 field
                     .ty()
                     .map_or(field.syntax().text_range(), |ty| ty.syntax().text_range())
-            })
-            .unwrap_or_else(|| {
-                msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector)
-            });
+            },
+        );
         diags.push(Box::new(MsgDiagnostic {
             kind,
             file: top_mod.file(db),
@@ -267,11 +266,10 @@ fn check_variant_signature_types<'db>(
             .and_then(|field| field.name.to_opt())
             .map(|name| name.data(db).to_string())
             .unwrap_or_default();
-        let range = msg_variant_field(db, top_mod, struct_, idx)
-            .map(|field| field.syntax().text_range())
-            .unwrap_or_else(|| {
-                msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector)
-            });
+        let range = msg_variant_field(db, top_mod, struct_, idx).map_or_else(
+            || msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector),
+            |field| field.syntax().text_range(),
+        );
         diags.push(Box::new(MsgDiagnostic {
             kind: MsgDiagnosticKind::AbiTypeMismatch {
                 selector_ty: selector_ty.clone(),

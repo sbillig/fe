@@ -157,8 +157,7 @@ impl<'db> PathResDiag<'db> {
                 let from_implicit = name
                     .derivation
                     .use_stmt()
-                    .map(|use_| use_.is_synthetic_use(db))
-                    .unwrap_or(false);
+                    .is_some_and(|use_| use_.is_synthetic_use(db));
                 Some((span, from_implicit))
             })
             .collect();

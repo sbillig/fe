@@ -684,8 +684,10 @@ mod tests {
             .content()
             .lines()
             .position(|line| line.contains(needle))
-            .map(|index| index as u32 + 1)
-            .unwrap_or_else(|| panic!("{} should contain {needle:?}", fixture.path()))
+            .map_or_else(
+                || panic!("{} should contain {needle:?}", fixture.path()),
+                |index| index as u32 + 1,
+            )
     }
 
     /// A compiler-generated panic block with exactly one requesting statement

@@ -946,10 +946,10 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
     eprintln!("Documentation: http://127.0.0.1:{actual_port}");
 
     // Write .fe-lsp.json for discovery
-    let workspace_root_path = resolved_root
-        .as_ref()
-        .map(|r| r.as_std_path().to_path_buf())
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let workspace_root_path = resolved_root.as_ref().map_or_else(
+        || std::env::current_dir().unwrap(),
+        |r| r.as_std_path().to_path_buf(),
+    );
 
     // Inspect any existing .fe-lsp.json. This is purely diagnostic: we
     // always proceed with writing our own, since the file is a discovery

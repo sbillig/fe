@@ -123,8 +123,7 @@ impl CheckoutCoverage {
             (Self::Full, _) | (_, Self::Full) => Self::Full,
             (Self::Sparse(current), Self::Sparse(requested)) => {
                 common_relative_root(current.as_path(), requested.as_path())
-                    .map(Self::Sparse)
-                    .unwrap_or(Self::Full)
+                    .map_or(Self::Full, Self::Sparse)
             }
         }
     }
@@ -304,10 +303,10 @@ impl GitResolver {
                 return Ok(CheckoutStatus::Existing);
             }
 
-            let target_coverage = current_coverage
-                .as_ref()
-                .map(|current| current.merge(&requested_coverage))
-                .unwrap_or_else(|| requested_coverage.clone());
+            let target_coverage = current_coverage.as_ref().map_or_else(
+                || requested_coverage.clone(),
+                |current| current.merge(&requested_coverage),
+            );
             let destination_is_initially_empty = false;
             self.checkout_revision(
                 &mut repo,

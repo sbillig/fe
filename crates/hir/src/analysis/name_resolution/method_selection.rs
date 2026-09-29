@@ -192,7 +192,7 @@ struct CandidateAssembler<'db, 'a> {
 }
 
 fn receiver_is_ty_param_like<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
-    let receiver_ty = ty.as_capability(db).map(|(_, inner)| inner).unwrap_or(ty);
+    let receiver_ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
     matches!(
         receiver_ty.base_ty(db).data(db),
         TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
@@ -286,7 +286,7 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
     }
 
     fn allow_trait(&self, trait_def: Trait<'db>) -> bool {
-        self.trait_.map(|t| t == trait_def).unwrap_or(true)
+        self.trait_.is_none_or(|t| t == trait_def)
     }
 
     fn insert_impl_trait_method_cand(&mut self, implementor: ImplementorId<'db>) {

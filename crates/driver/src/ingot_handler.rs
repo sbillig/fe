@@ -637,8 +637,7 @@ impl<'a> IngotHandler<'a> {
                     .metadata
                     .version
                     .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| "<missing version>".to_string())
+                    .map_or_else(|| "<missing version>".to_string(), ToString::to_string)
             ));
         }
 

@@ -638,8 +638,7 @@ fn index_unnamed_item_generic_params<'db>(
     let impl_offset = item
         .span()
         .resolve(db)
-        .map(|s| u32::from(s.range.start()))
-        .unwrap_or(0);
+        .map_or(0, |s| u32::from(s.range.start()));
     let parent_symbol = format!("fe fe {} {} __impl_{} ", ctx.name, ctx.version, impl_offset);
 
     let sym_view = SymbolView::from_item(item);
@@ -907,8 +906,7 @@ fn emit_cross_ingot_references<'db>(
             let name = index_util::ingot_display_name(db, target_ingot);
             let version = target_ingot
                 .version(db)
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "0.0.0".to_string());
+                .map_or_else(|| "0.0.0".to_string(), |v| v.to_string());
             (name, version)
         });
 
@@ -1786,7 +1784,7 @@ fn byte_offset_to_sig_line_col(sig_text: &str, byte_offset: usize) -> (i32, i32)
     let clamped = floor_char_boundary(sig_text, byte_offset.min(sig_text.len()));
     let prefix = &sig_text[..clamped];
     let line = prefix.bytes().filter(|&b| b == b'\n').count() as i32;
-    let last_newline = prefix.rfind('\n').map(|p| p + 1).unwrap_or(0);
+    let last_newline = prefix.rfind('\n').map_or(0, |p| p + 1);
     let col = (clamped - last_newline) as i32;
     (line, col)
 }
@@ -2306,7 +2304,7 @@ fn make_point() -> Point {
             let item_scope = ScopeId::from_item(
                 scope_graph
                     .items_dfs(&db)
-                    .find(|i| i.name(&db).map(|n| *n.data(&db) == "Foo").unwrap_or(false))
+                    .find(|i| i.name(&db).is_some_and(|n| *n.data(&db) == "Foo"))
                     .expect("Foo item"),
             );
             for child in scope_graph.children(item_scope) {

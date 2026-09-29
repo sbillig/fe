@@ -228,8 +228,7 @@ fn format_call_constraint_source<'db>(
     let callable_name = required_by
         .callable_def
         .name(db)
-        .map(|name| name.data(db).to_string())
-        .unwrap_or_else(|| "callable".to_string());
+        .map_or_else(|| "callable".to_string(), |name| name.data(db).to_string());
     format!("required by this bound on `{callable_name}`")
 }
 
@@ -1051,8 +1050,7 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 let label = match segment.kind(db) {
                     PathKind::Ident { ident, .. } => ident
                         .to_opt()
-                        .map(|id| id.data(db).to_owned())
-                        .unwrap_or_else(|| segment.pretty_print(db)),
+                        .map_or_else(|| segment.pretty_print(db), |id| id.data(db).to_owned()),
                     PathKind::QualifiedType { type_, trait_ } => {
                         let ty = type_.pretty_print(db);
                         let trait_name = trait_.pretty_print(db);
@@ -3022,9 +3020,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             Self::MissingEffect { primary, func, key } => {
                 let func_name = func
                     .name(db)
-                    .to_opt()
-                    .map(|n| n.data(db).to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string());
+                    .to_opt().map_or_else(|| "<unknown>".to_string(), |n| n.data(db).to_string());
                 let key_str = key.pretty_print(db);
 
                 CompleteDiagnostic {
@@ -3048,9 +3044,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             Self::AmbiguousEffect { primary, func, key } => {
                 let func_name = func
                     .name(db)
-                    .to_opt()
-                    .map(|n| n.data(db).to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string());
+                    .to_opt().map_or_else(|| "<unknown>".to_string(), |n| n.data(db).to_string());
                 let key_str = key.pretty_print(db);
 
                 CompleteDiagnostic {
@@ -3076,9 +3070,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             } => {
                 let func_name = func
                     .name(db)
-                    .to_opt()
-                    .map(|n| n.data(db).to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string());
+                    .to_opt().map_or_else(|| "<unknown>".to_string(), |n| n.data(db).to_string());
                 let key_str = key.pretty_print(db);
 
                 let mut sub_diagnostics = vec![SubDiagnostic {
@@ -3119,9 +3111,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             } => {
                 let func_name = func
                     .name(db)
-                    .to_opt()
-                    .map(|n| n.data(db).to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string());
+                    .to_opt().map_or_else(|| "<unknown>".to_string(), |n| n.data(db).to_string());
                 let key_str = key.pretty_print(db);
                 let expected_ty = expected.pretty_print(db).to_string();
                 let given_ty = given.pretty_print(db).to_string();
@@ -3163,9 +3153,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             } => {
                 let func_name = func
                     .name(db)
-                    .to_opt()
-                    .map(|n| n.data(db).to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string());
+                    .to_opt().map_or_else(|| "<unknown>".to_string(), |n| n.data(db).to_string());
                 let key_str = key.pretty_print(db);
                 let expected_ty = expected.pretty_print(db).to_string();
                 let given_ty = given.pretty_print(db).to_string();
@@ -3207,9 +3195,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             } => {
                 let func_name = func
                     .name(db)
-                    .to_opt()
-                    .map(|n| n.data(db).to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string());
+                    .to_opt().map_or_else(|| "<unknown>".to_string(), |n| n.data(db).to_string());
                 let key_str = key.pretty_print(db);
                 let trait_str = trait_req.pretty_print(db, false);
                 let given_ty = given.pretty_print(db).to_string();
@@ -3693,9 +3679,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     }],
                     notes: vec![
                         suggestion
-                            .as_ref()
-                            .map(|s| format!("help: try `{s}`"))
-                            .unwrap_or_else(|| format!("help: try `{kw} <place>`")),
+                            .as_ref().map_or_else(|| format!("help: try `{kw} <place>`"), |s| format!("help: try `{s}`")),
                     ],
                     error_code,
                 }
@@ -4199,27 +4183,23 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         let na: String = a
                             .def(db)
                             .name(db)
-                            .to_opt()
-                            .map(|id| id.data(db).to_string())
-                            .unwrap_or_else(|| {
+                            .to_opt().map_or_else(|| {
                                 a.pretty_print(db, false)
                                     .split('<')
                                     .next()
                                     .unwrap_or("")
                                     .to_string()
-                            });
+                            }, |id| id.data(db).to_string());
                         let nb: String = b
                             .def(db)
                             .name(db)
-                            .to_opt()
-                            .map(|id| id.data(db).to_string())
-                            .unwrap_or_else(|| {
+                            .to_opt().map_or_else(|| {
                                 b.pretty_print(db, false)
                                     .split('<')
                                     .next()
                                     .unwrap_or("")
                                     .to_string()
-                            });
+                            }, |id| id.data(db).to_string());
                         na.cmp(&nb)
                     });
                 }
@@ -4363,9 +4343,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     MustUseSubject::Function(CallableDef::Func(func)) => {
                         let name = func
                             .name(db)
-                            .to_opt()
-                            .map(|name| name.data(db).to_string())
-                            .unwrap_or_else(|| "<anonymous>".to_string());
+                            .to_opt().map_or_else(|| "<anonymous>".to_string(), |name| name.data(db).to_string());
                         (
                             format!("return value of function `{name}`"),
                             "this function is marked `#[must_use]`".to_string(),
@@ -4758,8 +4736,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             BodyDiag::ConstFnNonConstCall { primary, callee } => {
                 let name = callee
                     .name(db)
-                    .map(|n| n.data(db).as_str())
-                    .unwrap_or("<unknown>");
+                    .map_or("<unknown>", |n| n.data(db).as_str());
                 CompleteDiagnostic::new(
                     severity,
                     "non-const call in `const fn`".to_string(),
@@ -4783,8 +4760,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             BodyDiag::ConstFnEffectfulCall { primary, callee } => {
                 let name = callee
                     .name(db)
-                    .map(|n| n.data(db).as_str())
-                    .unwrap_or("<unknown>");
+                    .map_or("<unknown>", |n| n.data(db).as_str());
                 CompleteDiagnostic::new(
                     severity,
                     "effectful call in `const fn`".to_string(),
@@ -5176,11 +5152,10 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                         let original_idx = offset + *param_idx;
                         let owner = GenericParamOwner::Func(*func);
 
-                        owner
-                            .params(db)
-                            .nth(original_idx)
-                            .map(|p| p.name_span().resolve(db))
-                            .unwrap_or_else(|| impl_m.param_list_span().resolve(db))
+                        owner.params(db).nth(original_idx).map_or_else(
+                            || impl_m.param_list_span().resolve(db),
+                            |p| p.name_span().resolve(db),
+                        )
                     }
                     _ => impl_m.param_list_span().resolve(db),
                 };

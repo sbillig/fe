@@ -338,17 +338,16 @@ impl<'db> ExternalSource<'db> {
         target_ty: TyId<'db>,
     ) -> Self {
         let binding = provider.binding(db);
-        let space = binding
-            .semantics
-            .address_space
-            .map(HandleAddressSpace::Known)
-            .unwrap_or_else(|| {
+        let space = binding.semantics.address_space.map_or_else(
+            || {
                 if binding.semantics.kind == ProviderKind::RootObject {
                     HandleAddressSpace::Known(ProviderAddressSpace::Memory)
                 } else {
                     HandleAddressSpace::Unspecified
                 }
-            });
+            },
+            HandleAddressSpace::Known,
+        );
         Self {
             origin: ExternalOrigin::Provider {
                 provider,

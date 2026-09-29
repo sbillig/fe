@@ -622,8 +622,7 @@ fn create_selector_const<'db>(
         None => {
             let variant_range = variant
                 .name()
-                .map(|n| n.text_range())
-                .unwrap_or_else(|| variant.syntax().text_range());
+                .map_or_else(|| variant.syntax().text_range(), |n| n.text_range());
             MsgDiagnostic {
                 kind: MsgDiagnosticKind::Missing,
                 file,

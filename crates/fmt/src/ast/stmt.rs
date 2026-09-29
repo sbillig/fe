@@ -34,8 +34,7 @@ impl ToDoc for ast::LetStmt {
 
         let ty_doc = self
             .type_annotation()
-            .map(|ty| alloc.text(": ").append(ty.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |ty| alloc.text(": ").append(ty.to_doc(ctx)));
 
         match self.initializer() {
             Some(init) if is_chain(&init) => {
@@ -187,10 +186,10 @@ impl ToDoc for ast::ReturnStmt {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
 
-        let expr_doc = self
-            .expr()
-            .map(|expr| alloc.text(" ").append(expr.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+        let expr_doc = self.expr().map_or_else(
+            || alloc.nil(),
+            |expr| alloc.text(" ").append(expr.to_doc(ctx)),
+        );
 
         alloc.text("return").append(expr_doc)
     }
