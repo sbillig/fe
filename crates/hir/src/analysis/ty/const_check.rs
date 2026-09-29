@@ -64,22 +64,28 @@ impl<'db> ConstFnChecker<'db, '_> {
         self.diags.push(diag.into());
     }
 
-    fn check_callable(&mut self, primary: DynLazySpan<'db>, callable: &Callable<'db>) {
+    /// Reports a callee that a `const fn` cannot call, and returns whether it
+    /// reported one.
+    fn check_callable(&mut self, primary: DynLazySpan<'db>, callable: &Callable<'db>) -> bool {
         let Some(callee) = self.callable_func(callable) else {
-            return;
+            return false;
         };
 
-        if !callee.is_const(self.db) {
-            self.push(BodyDiag::ConstFnNonConstCall {
+        let diag = if !callee.is_const(self.db) {
+            BodyDiag::ConstFnNonConstCall {
                 primary,
                 callee: callable.callable_def(),
-            });
+            }
         } else if !const_effects_supported(self.db, callee) {
-            self.push(BodyDiag::ConstFnEffectfulCall {
+            BodyDiag::ConstFnEffectfulCall {
                 primary,
                 callee: callable.callable_def(),
-            });
-        }
+            }
+        } else {
+            return false;
+        };
+        self.push(diag);
+        true
     }
 
     fn callable_func(&self, callable: &Callable<'db>) -> Option<Func<'db>> {
@@ -103,25 +109,30 @@ impl<'db> ConstFnChecker<'db, '_> {
     }
 
     fn check_call_target(&mut self, expr: ExprId) {
-        if let Some(callable) = self.typed_body.callable_expr(expr) {
-            self.check_callable(expr.span(self.body).into(), callable);
-            if self.typed_body.call_effect_args(expr).is_some_and(|args| {
-                args.iter().any(|arg| {
-                    arg.required_mut
-                        || arg.key_kind != super::effects::EffectKeyKind::Trait
-                        || arg.pass_mode != EffectPassMode::ByValue
-                        || arg.layout_view != EffectArgLayoutView::Direct
-                        || arg.provider.is_some_and(|space| {
-                            space != crate::analysis::ty::provider::ProviderAddressSpace::Memory
-                        })
-                        || arg.provider_target_ty.is_some()
-                })
-            }) {
-                self.push(BodyDiag::ConstFnEffectfulCall {
-                    primary: expr.span(self.body).into(),
-                    callee: callable.callable_def(),
-                });
-            }
+        let Some(callable) = self.typed_body.callable_expr(expr) else {
+            return;
+        };
+        // One diagnostic per call: the providers a call passes are checked
+        // only when the callee itself may be called.
+        if self.check_callable(expr.span(self.body).into(), callable) {
+            return;
+        }
+        if self.typed_body.call_effect_args(expr).is_some_and(|args| {
+            args.iter().any(|arg| {
+                arg.required_mut
+                    || arg.key_kind != super::effects::EffectKeyKind::Trait
+                    || arg.pass_mode != EffectPassMode::ByValue
+                    || arg.layout_view != EffectArgLayoutView::Direct
+                    || arg.provider.is_some_and(|space| {
+                        space != crate::analysis::ty::provider::ProviderAddressSpace::Memory
+                    })
+                    || arg.provider_target_ty.is_some()
+            })
+        }) {
+            self.push(BodyDiag::ConstFnEffectfulCall {
+                primary: expr.span(self.body).into(),
+                callee: callable.callable_def(),
+            });
         }
     }
 

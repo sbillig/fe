@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_fn/nonconst_call_with_mut_provider.fe
+---
+error[8-0062]: non-const call in `const fn`
+   ┌─ nonconst_call_with_mut_provider.fe:22:9
+   │
+15 │ fn runtime_mut() -> u256 uses (value: mut Compute<Item = u256>) {
+   │    ----------- callee defined here
+   ·
+22 │         runtime_mut()
+   │         ^^^^^^^^^^^^^ `runtime_mut` is not a `const fn`

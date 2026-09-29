@@ -1,0 +1,24 @@
+// A call to a non-const function is reported once, even when the callee also
+// needs an effect that a `const fn` cannot supply.
+trait Compute: Copy {
+    type Item
+    const fn compute(self) -> Self::Item
+}
+
+struct Number { value: u256 }
+impl Copy for Number {}
+impl Compute for Number {
+    type Item = u256
+    const fn compute(self) -> u256 { self.value }
+}
+
+fn runtime_mut() -> u256 uses (value: mut Compute<Item = u256>) {
+    value.compute()
+}
+
+const fn caller() -> u256 {
+    let mut number = Number { value: 1 }
+    with (Compute<Item = u256> = number) {
+        runtime_mut()
+    }
+}
