@@ -4,7 +4,7 @@ use salsa::Accumulator as _;
 use super::{
     FileLowerCtxt,
     attr::{has_named_attr, lower_attrs_without_named, named_attr_specs},
-    hir_builder::{BodyBuilder, HirBuilder},
+    hir_builder::{BodyBuilder, DecodeInputBindings, HirBuilder},
     msg::{
         build_decode_head_pos_expr, create_head_size_assoc_const, create_is_dynamic_assoc_const,
         create_payload_size_func,
@@ -396,6 +396,83 @@ fn lower_decode_impl<'db>(
                 body.return_record_self(&field_names);
             },
         );
+
+        // The inherited `decode_from_bounded` and `decode_from_prechecked_head`
+        // would decode through `decode_from`, which checks dynamic fields
+        // against the whole input instead of `input_len`. Pass the bound to
+        // every field, like the tuple impls in `core::abi`.
+        let u256_ty = builder.ty_ident(builder.ident("u256"));
+        let input_ident = builder.generated_ident("abi_struct_input");
+        let pos_ident = builder.generated_ident("abi_struct_pos");
+        let input_len_ident = builder.generated_ident("abi_struct_input_len");
+        for prechecked in [true, false] {
+            let byte_input = builder.core_abi_trait_ref("ByteInput");
+            let (generic_params, input_ty) = builder.type_param_with_trait_bound("I", byte_input);
+            let params = builder.params([
+                builder.param_underscore_named(input_ident, input_ty),
+                builder.param_underscore_named(pos_ident, u256_ty),
+                builder.param_underscore_named(input_len_ident, u256_ty),
+            ]);
+            let name = if prechecked {
+                "decode_from_prechecked_head"
+            } else {
+                "decode_from_bounded"
+            };
+            builder.func_generic_inline_always(
+                name,
+                generic_params,
+                params,
+                Some(builder.self_ty()),
+                FuncModifiers::new(Visibility::Private, false, false, false),
+                |body| {
+                    if prechecked {
+                        let input = DecodeInputBindings {
+                            input_ident,
+                            input_ty,
+                            base_ident: pos_ident,
+                            input_len_ident,
+                        };
+                        for (idx, (name, ty)) in field_specs.iter().copied().enumerate() {
+                            let head_pos =
+                                build_decode_head_pos_expr(body, pos_ident, &field_specs[..idx]);
+                            body.decode_field_into(
+                                "decode_field_from_prechecked_head",
+                                name,
+                                ty,
+                                input,
+                                head_pos,
+                            );
+                        }
+                        body.return_record_self(&field_names);
+                    } else {
+                        // core::abi::decode_frame_from<Sol, Self, I>(input, pos, input_len)
+                        let db = body.db();
+                        let args = GenericArgListId::given(
+                            db,
+                            [body.sol_ty(), TypeId::fallback_self_ty(db), input_ty]
+                                .into_iter()
+                                .map(|ty| {
+                                    GenericArg::Type(TypeGenericArg {
+                                        ty: Partial::Present(ty),
+                                    })
+                                })
+                                .collect(),
+                        );
+                        let callee = body.path_expr(
+                            PathId::from_ident(db, body.roots().core)
+                                .push_str(db, "abi")
+                                .push_str_args(db, "decode_frame_from", args),
+                        );
+                        let args = [input_ident, pos_ident, input_len_ident]
+                            .into_iter()
+                            .map(|ident| body.ident_expr(ident))
+                            .collect();
+                        let call = body.call_expr(callee, args);
+                        body.emit_return(Some(call));
+                    }
+                },
+            );
+        }
     });
 }
 

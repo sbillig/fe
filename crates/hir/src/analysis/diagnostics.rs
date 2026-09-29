@@ -748,6 +748,15 @@ impl DiagnosticVoucher for crate::EventError {
                         .to_string(),
                 ],
             ),
+            EventErrorKind::IndexedCompositeField { ty } => (
+                9,
+                "indexed composite event fields are not supported".to_string(),
+                format!("`{ty}` requires Solidity's hashing of its encoding into the topic"),
+                vec![
+                    "remove `#[indexed]` from this field; arrays and `#[abi]` structs are supported as event data"
+                        .to_string(),
+                ],
+            ),
         };
 
         let error_code = GlobalErrorCode::new(DiagnosticPass::EventLower, code);
@@ -824,6 +833,14 @@ impl DiagnosticVoucher for crate::ErrorDiagnostic {
                 "this struct already gets an ABI encoding from `#[event]` or `#[error]`"
                     .to_string(),
                 vec!["remove `#[abi]`".to_string()],
+            ),
+            ErrorDiagnosticKind::AbiArrayElemNotCopy { ty, elem_ty } => (
+                8,
+                "fixed-array ABI fields need `Copy` elements".to_string(),
+                format!("`{ty}` holds a fixed array of `{elem_ty}`, which is not `Copy`"),
+                vec![format!(
+                    "implement `Copy` for `{elem_ty}`, or use `DynArray<{elem_ty}>`"
+                )],
             ),
         };
 

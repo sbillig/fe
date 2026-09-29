@@ -1,11 +1,16 @@
 use crate::analysis::{
     HirAnalysisDb,
     diagnostics::DiagnosticVoucher,
-    ty::{abi_ty::is_dynamic_event_ty, adt_def::AdtRef, ty_lower::lower_hir_ty},
+    ty::{
+        abi_ty::{is_composite_event_ty, is_dynamic_event_ty},
+        adt_def::AdtRef,
+        non_copy_array_abi_fields,
+        ty_lower::lower_hir_ty,
+    },
 };
 use crate::{
-    AbiFieldContext, AbiFieldDiagnostic, AttrMisuseError, ErrorDiagnostic, EventError,
-    EventErrorKind, FieldModifierError, MsgDiagnostic, ParserError,
+    AbiFieldContext, AbiFieldDiagnostic, AttrMisuseError, ErrorDiagnostic, ErrorDiagnosticKind,
+    EventError, EventErrorKind, FieldModifierError, MsgDiagnostic, ParserError,
     hir_def::{ModuleTree, TopLevelMod},
     lower::{parse_file_impl, scope_graph_impl, top_mod_ast},
     semantic::constraints_for,
@@ -177,9 +182,15 @@ fn semantic_indexed_dynamic_field_errors<'db>(
                 continue;
             };
             let resolved_ty = lower_hir_ty(db, field_ty, event_struct.scope(), assumptions);
-            if !is_dynamic_event_ty(db, resolved_ty) {
+            let ty = resolved_ty.pretty_print(db).to_string();
+            let kind = if is_dynamic_event_ty(db, resolved_ty) {
+                EventErrorKind::IndexedDynamicField { ty }
+            } else if is_composite_event_ty(db, resolved_ty) && !resolved_ty.is_tuple(db) {
+                // Tuples are already rejected as event fields.
+                EventErrorKind::IndexedCompositeField { ty }
+            } else {
                 continue;
-            }
+            };
 
             let ast_field = ast_struct
                 .as_ref()
@@ -194,9 +205,7 @@ fn semantic_indexed_dynamic_field_errors<'db>(
                 },
             );
             diags.push(EventError {
-                kind: EventErrorKind::IndexedDynamicField {
-                    ty: resolved_ty.pretty_print(db).to_string(),
-                },
+                kind,
                 file: top_mod.file(db),
                 primary_range,
                 struct_name: event_struct
@@ -338,8 +347,50 @@ impl ModuleAnalysisPass for ErrorLowerPass {
             semantic_tuple_field_type_errors(db, top_mod, AbiFieldContext::Error)
                 .map(|d| Box::new(d) as _),
         );
+        diags.extend(non_copy_array_field_errors(db, top_mod).map(|d| Box::new(d) as _));
         diags
     }
+}
+
+fn non_copy_array_field_errors<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+) -> impl Iterator<Item = ErrorDiagnostic> {
+    let root = top_mod_ast(db, top_mod).syntax().clone();
+    non_copy_array_abi_fields(db, top_mod)
+        .into_iter()
+        .map(move |field| {
+            let primary_range = field
+                .ast_struct
+                .syntax_node_ptr()
+                .try_to_node(&root)
+                .and_then(ast::Struct::cast)
+                .and_then(|ast_struct| ast_struct.fields())
+                .and_then(|fields| fields.into_iter().nth(field.field_idx))
+                .and_then(|field| field.ty())
+                .map_or_else(
+                    || parser::TextRange::empty(0.into()),
+                    |ty| ty.syntax().text_range(),
+                );
+            let hir_field = &field.struct_.hir_fields(db).data(db)[field.field_idx];
+            ErrorDiagnostic {
+                kind: ErrorDiagnosticKind::AbiArrayElemNotCopy {
+                    ty: field.field_ty.pretty_print(db).to_string(),
+                    elem_ty: field.elem_ty.pretty_print(db).to_string(),
+                },
+                file: top_mod.file(db),
+                primary_range,
+                struct_name: field
+                    .struct_
+                    .name(db)
+                    .to_opt()
+                    .map(|name| name.data(db).to_string()),
+                field_name: hir_field
+                    .name
+                    .to_opt()
+                    .map(|name| name.data(db).to_string()),
+            }
+        })
 }
 
 /// Analysis pass that collects generic attribute misuse diagnostics.

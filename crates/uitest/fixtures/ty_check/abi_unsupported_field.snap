@@ -21,9 +21,9 @@ error[6-0003]: trait bound is not satisfied
   8 │ │ }
     │ ╰─^ `Plain` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:293:32
+    ┌─ src/abi.fe:300:32
     │
-293 │ pub fn dynamic_payload_size<T: AbiSize>(_ value: T) -> u256 {
+300 │ pub fn dynamic_payload_size<T: AbiSize>(_ value: T) -> u256 {
     │                                ------- required by this bound on `dynamic_payload_size`
 
 error[6-0003]: trait bound is not satisfied
@@ -35,9 +35,9 @@ error[6-0003]: trait bound is not satisfied
   8 │ │ }
     │ ╰─^ `Plain` doesn't implement `AbiSpan<Sol>`
     │
-    ┌─ src/abi.fe:462:14
+    ┌─ src/abi.fe:483:14
     │
-462 │     where T: AbiSpan<A> + AbiSize,
+483 │     where T: AbiSpan<A> + AbiSize,
     │              ---------- required by this bound on `abi_record_field_end`
 
 error[6-0003]: trait bound is not satisfied
@@ -49,9 +49,9 @@ error[6-0003]: trait bound is not satisfied
   8 │ │ }
     │ ╰─^ `Plain` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:462:27
+    ┌─ src/abi.fe:483:27
     │
-462 │     where T: AbiSpan<A> + AbiSize,
+483 │     where T: AbiSpan<A> + AbiSize,
     │                           ------- required by this bound on `abi_record_field_end`
 
 error[6-0003]: trait bound is not satisfied
@@ -63,9 +63,9 @@ error[6-0003]: trait bound is not satisfied
   8 │ │ }
     │ ╰─^ `Plain` doesn't implement `AbiSpan<Sol>`
     │
-    ┌─ src/abi.fe:462:14
+    ┌─ src/abi.fe:483:14
     │
-462 │     where T: AbiSpan<A> + AbiSize,
+483 │     where T: AbiSpan<A> + AbiSize,
     │              ---------- required by this bound on `abi_record_field_end`
 
 error[6-0003]: trait bound is not satisfied
@@ -77,9 +77,9 @@ error[6-0003]: trait bound is not satisfied
   8 │ │ }
     │ ╰─^ `Plain` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:462:27
+    ┌─ src/abi.fe:483:27
     │
-462 │     where T: AbiSpan<A> + AbiSize,
+483 │     where T: AbiSpan<A> + AbiSize,
     │                           ------- required by this bound on `abi_record_field_end`
 
 error[6-0003]: trait bound is not satisfied
@@ -91,9 +91,9 @@ error[6-0003]: trait bound is not satisfied
   8 │ │ }
     │ ╰─^ `Plain` doesn't implement `Encode<Sol>`
     │
-    ┌─ src/abi.fe:392:14
+    ┌─ src/abi.fe:399:14
     │
-392 │     where T: Encode<A> + AbiSize
+399 │     where T: Encode<A> + AbiSize
     │              --------- required by this bound on `encode_field_at`
 
 error[6-0003]: trait bound is not satisfied
@@ -105,9 +105,9 @@ error[6-0003]: trait bound is not satisfied
   8 │ │ }
     │ ╰─^ `Plain` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:392:26
+    ┌─ src/abi.fe:399:26
     │
-392 │     where T: Encode<A> + AbiSize
+399 │     where T: Encode<A> + AbiSize
     │                          ------- required by this bound on `encode_field_at`
 
 error[6-0003]: trait bound is not satisfied
@@ -119,9 +119,9 @@ error[6-0003]: trait bound is not satisfied
   8 │ │ }
     │ ╰─^ `Plain` doesn't implement `Decode<Sol>`
     │
-    ┌─ src/abi.fe:316:14
+    ┌─ src/abi.fe:323:14
     │
-316 │     where T: Decode<A> + AbiSize,
+323 │     where T: Decode<A> + AbiSize,
     │              --------- required by this bound on `decode_field`
 
 error[6-0003]: trait bound is not satisfied
@@ -133,7 +133,35 @@ error[6-0003]: trait bound is not satisfied
   8 │ │ }
     │ ╰─^ `Plain` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:316:26
+    ┌─ src/abi.fe:323:26
     │
-316 │     where T: Decode<A> + AbiSize,
+323 │     where T: Decode<A> + AbiSize,
     │                          ------- required by this bound on `decode_field`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ abi_unsupported_field.fe:5:1
+    │
+  5 │ ╭ #[abi]
+  6 │ │ struct Wrapper {
+  7 │ │     inner: Plain,
+  8 │ │ }
+    │ ╰─^ `Plain` doesn't implement `Decode<Sol>`
+    │
+    ┌─ src/abi.fe:375:14
+    │
+375 │     where T: Decode<A> + AbiSize,
+    │              --------- required by this bound on `decode_field_from_prechecked_head`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ abi_unsupported_field.fe:5:1
+    │
+  5 │ ╭ #[abi]
+  6 │ │ struct Wrapper {
+  7 │ │     inner: Plain,
+  8 │ │ }
+    │ ╰─^ `Plain` doesn't implement `AbiSize`
+    │
+    ┌─ src/abi.fe:375:26
+    │
+375 │     where T: Decode<A> + AbiSize,
+    │                          ------- required by this bound on `decode_field_from_prechecked_head`

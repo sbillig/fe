@@ -871,6 +871,19 @@ where
         input: DecodeInputBindings<'db>,
         head_pos: ExprId,
     ) {
+        self.decode_field_into("decode_msg_field_from", target_ident, ty, input, head_pos);
+    }
+
+    /// `let target: ty = core::abi::<decode_fn><Sol, ty, I>(input, base:,
+    /// head_pos:, input_len:)`.
+    pub(super) fn decode_field_into(
+        &mut self,
+        decode_fn: &str,
+        target_ident: IdentId<'db>,
+        ty: TypeId<'db>,
+        input: DecodeInputBindings<'db>,
+        head_pos: ExprId,
+    ) {
         let db = self.db();
         let decode_args = GenericArgListId::given(
             db,
@@ -888,7 +901,7 @@ where
         );
         let decode_path = PathId::from_ident(db, self.roots.core)
             .push_str(db, "abi")
-            .push_str_args(db, "decode_msg_field_from", decode_args);
+            .push_str_args(db, decode_fn, decode_args);
         let decode_callee = self.path_expr(decode_path);
         let input_expr = self.ident_expr(input.input_ident);
         let base_expr = self.ident_expr(input.base_ident);

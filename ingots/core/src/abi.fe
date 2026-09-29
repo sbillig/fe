@@ -3988,6 +3988,10 @@ impl<A: Abi, T, const N: usize> Decode<A> for [T; N]
     where T: Decode<A> + AbiSize + Copy
 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
+        // Empty arrays contain no values to initialize or decode.
+        if N == 0 {
+            return *ptr::alloc<[T; N]>()
+        }
         let first = decode_field<A, T, D>(mut d)
         let mut out: [T; N] = [first; N]
         let mut i: usize = 1
@@ -4002,6 +4006,10 @@ impl<A: Abi, T, const N: usize> Decode<A> for [T; N]
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
+        // Empty arrays contain no values to initialize or decode.
+        if N == 0 {
+            return *ptr::alloc<[T; N]>()
+        }
         let first = decode_field_from<A, T, I>(input, base: pos, head_pos: pos)
         let mut out: [T; N] = [first; N]
         let mut i: usize = 1
@@ -4018,6 +4026,10 @@ impl<A: Abi, T, const N: usize> Decode<A> for [T; N]
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
+        // Empty arrays contain no values to initialize or decode.
+        if N == 0 {
+            return *ptr::alloc<[T; N]>()
+        }
         let first = decode_field_from_prechecked_head<A, T, I>(input, base: pos, head_pos: pos, input_len: input_len)
         let mut out: [T; N] = [first; N]
         let mut i: usize = 1

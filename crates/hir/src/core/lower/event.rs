@@ -36,6 +36,7 @@ pub enum EventErrorKind {
     GenericEventStruct,
     TooManyIndexedFields { indexed_count: usize },
     IndexedDynamicField { ty: String },
+    IndexedCompositeField { ty: String },
 }
 
 pub(super) fn is_event_struct(ast: &ast::Struct) -> bool {

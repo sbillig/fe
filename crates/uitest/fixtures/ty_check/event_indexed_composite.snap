@@ -1,0 +1,36 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/event_indexed_composite.fe
+---
+error[10-0007]: unsupported ABI field type
+   ┌─ event_indexed_composite.fe:26:11
+   │
+26 │     pair: Pair,
+   │           ^^^^ `(u256, u256)` is not supported as an event field
+   │
+   = tuples are not supported in event or custom error fields; use a struct type for grouped data
+
+error[10-0009]: indexed composite event fields are not supported
+   ┌─ event_indexed_composite.fe:15:10
+   │
+15 │     key: Key,
+   │          ^^^ `Key` requires Solidity's hashing of its encoding into the topic
+   │
+   = remove `#[indexed]` from this field; arrays and `#[abi]` structs are supported as event data
+
+error[10-0009]: indexed composite event fields are not supported
+   ┌─ event_indexed_composite.fe:17:12
+   │
+17 │     pairs: Pairs,
+   │            ^^^^^ `[(u256, u256); 2]` requires Solidity's hashing of its encoding into the topic
+   │
+   = remove `#[indexed]` from this field; arrays and `#[abi]` structs are supported as event data
+
+error[10-0009]: indexed composite event fields are not supported
+   ┌─ event_indexed_composite.fe:19:12
+   │
+19 │     words: Words,
+   │            ^^^^^ `[u256; 2]` requires Solidity's hashing of its encoding into the topic
+   │
+   = remove `#[indexed]` from this field; arrays and `#[abi]` structs are supported as event data

@@ -13,6 +13,9 @@ use crate::analysis::ty::{
     const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
     ty_def::{InvalidCause, PrimTy, TyBase, TyData, TyId},
 };
+use crate::analysis::ty::{trait_resolution::PredicateListId, ty_is_copy};
+use crate::core::hir_def::scope_graph::ScopeId;
+use crate::span::{DesugaredOrigin, HirOrigin};
 
 /// The Solidity ABI type of a semantic Fe type.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -414,6 +417,48 @@ pub(crate) fn is_dynamic_event_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool 
         || ["Bytes", "DynString", "DynArray"]
             .into_iter()
             .any(|name| is_core_adt_named(db, ty, name))
+}
+
+/// Fixed arrays, tuples and `#[abi]` structs. Solidity hashes the encoding
+/// of such an indexed value into its topic, which `#[event]` does not
+/// generate; only one-word values implement `TopicValue`.
+pub(crate) fn is_composite_event_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
+    let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
+    ty.is_array(db)
+        || ty.is_tuple(db)
+        || matches!(
+            ty.adt_ref(db),
+            Some(AdtRef::Struct(struct_))
+                if matches!(struct_.origin(db), HirOrigin::Desugared(DesugaredOrigin::AbiStruct(_)))
+        )
+}
+
+/// The first fixed-array element type in `ty`, looking through fixed arrays,
+/// tuples and `DynArray`s, that is not `Copy`. The core fixed-array ABI
+/// codecs need `Copy` elements, since an array element cannot be moved out
+/// by index.
+pub(crate) fn non_copy_fixed_array_elem<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<TyId<'db>> {
+    let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
+    if ty.is_array(db) {
+        let (_, args) = ty.decompose_ty_app(db);
+        let elem = *args.first()?;
+        // Name the innermost culprit: `Key` rather than `[Key; 1]`.
+        return non_copy_fixed_array_elem(db, scope, elem, assumptions)
+            .or_else(|| (!ty_is_copy(db, scope, elem, assumptions)).then_some(elem));
+    }
+    if ty.is_tuple(db) {
+        let (_, args) = ty.decompose_ty_app(db);
+        return args
+            .iter()
+            .find_map(|&elem| non_copy_fixed_array_elem(db, scope, elem, assumptions));
+    }
+    core_dyn_array_elem_ty(db, ty)
+        .and_then(|elem| non_copy_fixed_array_elem(db, scope, elem, assumptions))
 }
 
 /// Recognise `std::abi::sol` SolCompat wrapper types like `Uint160` / `Int24`

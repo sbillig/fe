@@ -1,6 +1,6 @@
 // `#[abi]` structs implement `SolCompat` as the Solidity tuple of their
 // fields, so they can be event and error fields.
-use std::abi::{Bytes, Bytes32, DynArray, dyn_array_from}
+use std::abi::{Bytes, Bytes32, DynArray, SolCompat, dyn_array_from}
 use std::evm::{Address, Evm, Log, revert_error}
 
 #[abi]
@@ -50,6 +50,22 @@ pub struct Orders {
     pub i: u256,
 }
 
+// Tuple fields spell their Solidity tuple type.
+#[abi]
+pub struct Tuples {
+    pub pair: (u256, Address),
+    pub single: (bool,),
+    pub quad: (u8, u16, u32, u64),
+    pub unit: (),
+}
+
+// 16 elements is the largest tuple arity.
+type Wide16 = (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)
+const WIDE16_HASH: u256 = core::keccak(<Wide16 as SolCompat>::SOL_TYPE)
+
+#[event]
+struct TupleEvent { tuples: Tuples }
+
 #[event]
 struct Offered {
     offer: DynArray<Item>,
@@ -93,6 +109,10 @@ fn abi_struct_event_topics() {
     // keccak256("OrdersEvent(((uint8,address,uint256,uint256)[],((uint8,address,uint256,uint256),bytes)[],uint256,uint256,uint256,uint256,uint256,uint256,uint256))")
     assert!(OrdersEvent::TOPIC0 == 0x3639c754d04f0ebf08e07ee4b74dd225851aebde4feb904783436dc6c89f1288)
     assert!(Pair::TOPIC0 == 0x44042ff68b2c73faef022cb89fb09f843af2259cea24f2ad474607b05d8abeaa)
+    // keccak256("TupleEvent(((uint256,address),(bool),(uint8,uint16,uint32,uint64),()))")
+    assert!(TupleEvent::TOPIC0 == 0x487b51dd6cea96a1b2c470869e12c3901946f79127de534ac9a803b7906093fa)
+    // keccak256("(uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8)")
+    assert!(WIDE16_HASH == 0x70a4f9110d5b6eb01facb4ce24ff6ea6e4b85af583214a673231757ecfbefeee)
 }
 
 #[test]

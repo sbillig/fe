@@ -340,6 +340,7 @@ fn events_with_indexed_dynamic_fields<'db>(
                 && field.type_ref().to_opt().is_some_and(|field_ty| {
                     let field_ty = lower_hir_ty(db, field_ty, event_struct.scope(), assumptions);
                     abi_ty::is_dynamic_event_ty(db, field_ty)
+                        || abi_ty::is_composite_event_ty(db, field_ty)
                 })
         }) {
             events.insert(event_origin.clone());
@@ -347,6 +348,56 @@ fn events_with_indexed_dynamic_fields<'db>(
     }
 
     events
+}
+
+/// A field of an `#[abi]`, `#[event]` or `#[error]` struct whose type holds
+/// a fixed array of non-`Copy` elements, which the fixed-array ABI codecs
+/// cannot handle.
+pub(crate) struct NonCopyArrayAbiField<'db> {
+    pub(crate) struct_: crate::hir_def::Struct<'db>,
+    pub(crate) origin: DesugaredOrigin,
+    pub(crate) ast_struct: parser::ast::AstPtr<parser::ast::Struct>,
+    pub(crate) field_idx: usize,
+    pub(crate) field_ty: TyId<'db>,
+    pub(crate) elem_ty: TyId<'db>,
+}
+
+pub(crate) fn non_copy_array_abi_fields<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+) -> Vec<NonCopyArrayAbiField<'db>> {
+    let mut fields = Vec::new();
+    for struct_ in top_mod.all_structs(db).iter().copied() {
+        let HirOrigin::Desugared(origin) = struct_.origin(db) else {
+            continue;
+        };
+        let ast_struct = match origin {
+            DesugaredOrigin::AbiStruct(origin) => origin.abi_struct.clone(),
+            DesugaredOrigin::Event(origin) => origin.event_struct.clone(),
+            DesugaredOrigin::Error(origin) => origin.error_struct.clone(),
+            _ => continue,
+        };
+        let assumptions = crate::semantic::constraints_for(db, struct_.into());
+        for (field_idx, field) in struct_.hir_fields(db).data(db).iter().enumerate() {
+            let Some(hir_ty) = field.type_ref().to_opt() else {
+                continue;
+            };
+            let field_ty = lower_hir_ty(db, hir_ty, struct_.scope(), assumptions);
+            if let Some(elem_ty) =
+                abi_ty::non_copy_fixed_array_elem(db, struct_.scope(), field_ty, assumptions)
+            {
+                fields.push(NonCopyArrayAbiField {
+                    struct_,
+                    origin: origin.clone(),
+                    ast_struct: ast_struct.clone(),
+                    field_idx,
+                    field_ty,
+                    elem_ty,
+                });
+            }
+        }
+    }
+    fields
 }
 
 impl ModuleAnalysisPass for BodyAnalysisPass {
@@ -358,15 +409,23 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         // Check function and const bodies; contract-specific analysis is handled separately.
         let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
         let indexed_dynamic_events = events_with_indexed_dynamic_fields(db, top_mod);
+        // Reported once at the field by the `ErrorLower` pass.
+        let non_copy_array_structs: FxHashSet<DesugaredOrigin> =
+            non_copy_array_abi_fields(db, top_mod)
+                .into_iter()
+                .map(|field| field.origin)
+                .collect();
+        let keep = |origin: &DesugaredOrigin| !non_copy_array_structs.contains(origin);
         for func in top_mod
             .all_funcs(db)
             .iter()
             // Generated ABI body failures are diagnosed once at their source declarations.
             .filter(|func| match func.origin(db) {
                 HirOrigin::Desugared(DesugaredOrigin::Msg(_)) => false,
-                HirOrigin::Desugared(DesugaredOrigin::Event(event)) => {
-                    !indexed_dynamic_events.contains(event)
+                HirOrigin::Desugared(origin @ DesugaredOrigin::Event(event)) => {
+                    !indexed_dynamic_events.contains(event) && keep(origin)
                 }
+                HirOrigin::Desugared(origin) => keep(origin),
                 _ => true,
             })
         {
@@ -410,6 +469,10 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             top_mod
                 .all_impl_traits(db)
                 .iter()
+                .filter(|impl_trait| match impl_trait.origin(db) {
+                    HirOrigin::Desugared(origin) => keep(origin),
+                    _ => true,
+                })
                 .flat_map(|impl_trait| ty_check::check_impl_trait_const_bodies(db, *impl_trait))
                 .map(|diag| diag.to_voucher()),
         );

@@ -3,12 +3,10 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/event_indexed_static_array_alias.fe
 ---
-error[6-0003]: trait bound is not satisfied
-  ┌─ event_indexed_static_array_alias.fe:3:1
+error[10-0009]: indexed composite event fields are not supported
+  ┌─ event_indexed_static_array_alias.fe:6:13
   │
-3 │ ╭ #[event]
-4 │ │ struct IndexedArray {
-5 │ │     #[indexed]
-6 │ │     values: Values,
-7 │ │ }
-  │ ╰─^ `[[u256; 2]; 3]` doesn't implement `TopicValue`
+6 │     values: Values,
+  │             ^^^^^^ `[[u256; 2]; 3]` requires Solidity's hashing of its encoding into the topic
+  │
+  = remove `#[indexed]` from this field; arrays and `#[abi]` structs are supported as event data

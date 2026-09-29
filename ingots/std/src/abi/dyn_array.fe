@@ -5,13 +5,12 @@ use core::abi::{
     Encode,
     abi_field_head_size,
     decode_field_from_prechecked_head,
-    dynamic_payload_size,
-    encode_field_at,
+    encode_alloc,
     store_word,
 }
 use ingot::abi::{Sol, StaticAbi}
 use core::ptr::{self, MemSpan}
-use ingot::evm::panic::{PANIC_INDEX_OUT_OF_BOUNDS, Panic}
+use ingot::evm::panic::{PANIC_ASSERT, PANIC_INDEX_OUT_OF_BOUNDS, Panic}
 use ingot::evm::revert_error
 
 /// Element access for `DynArray<T>`.
@@ -67,9 +66,13 @@ impl<T> DynArrayAccess<T> for DynArray<T>
 
 /// A `DynArray` holding `values` in order.
 ///
-/// Works for every ABI element type, including dynamic ones: the
+/// Works for copyable ABI element types, including dynamic ones: the
 /// `bytes[]` built by `dyn_array_from([a, b])` encodes like Solidity's
 /// `new bytes[](2)` filled with `a` and `b`.
+///
+/// Elements must implement `Copy`: array indexing cannot currently consume
+/// distinct non-copyable elements in a loop. For a non-`Copy` ABI struct,
+/// encode individual values with `encode_abi_payload` instead.
 pub fn dyn_array_from<T, const N: usize>(_ values: [T; N]) -> DynArray<T>
     where T: Encode<Sol> + AbiSize + Copy
 {
@@ -90,21 +93,62 @@ pub fn canonical_dyn_array<T>(_ values: DynArray<T>) -> DynArray<T>
 {
     let count = values.len()
     let head = abi_field_head_size<T>()
+    if !T::IS_DYNAMIC {
+        // Zero-size elements such as `()` encode no bytes, so only the length
+        // word is written, however long the array.
+        if head == 0 {
+            let data = ptr::alloc_bytes(32)
+            store_word(ptr: data, value: count)
+            return DynArray::from_abi_tail(data, len: count, size: 32)
+        }
+        // The size is known up front, so each element is decoded once and
+        // re-encoded in place.
+        let size = 32 + count * head
+        let data = ptr::alloc_bytes(size)
+        store_word(ptr: data, value: count)
+        let mut i: u256 = 0
+        while i < count {
+            values.get(i).encode(ptr::offset_bytes(data, 32 + i * head))
+            i += 1
+        }
+        return DynArray::from_abi_tail(data, len: count, size)
+    }
+
+    // Dynamic elements: the canonical size is only known after decoding.
+    // Encode each element's tail once while sizing and copy the tails into
+    // place afterwards, instead of decoding every element a second time.
+    let tails = ptr::alloc_array<MemSpan>(count)
     let mut size = 32 + count * head
     let mut i: u256 = 0
     while i < count {
-        size += dynamic_payload_size(values.get(i))
+        let encoded = encode_alloc<Sol, T>(values.get(i)).span()
+        size += encoded.len()
+        tails[i as usize] = encoded
         i += 1
     }
     let data = ptr::alloc_bytes(size)
     store_word(ptr: data, value: count)
+    let root = ptr::offset_bytes(data, 32)
     let mut tail = count * head
     i = 0
     while i < count {
-        tail = encode_field_at<Sol, T>(values.get(i), ptr::offset_bytes(data, 32), head_pos: i * head, tail)
+        let encoded = tails[i as usize]
+        store_word(ptr: ptr::offset_bytes(root, i * head), value: tail)
+        ptr::copy(ptr::offset_bytes(root, tail), encoded)
+        tail += encoded.len()
         i += 1
     }
     DynArray::from_abi_tail(data, len: count, size)
+}
+
+/// `StaticAbi` is public, so a downstream type can implement it despite a
+/// dynamic encoding. `MemVec` sizes its storage by `HEAD_SIZE` and encodes
+/// in place, so both constructors reject such a type with `Panic(0x01)`. The
+/// check is a constant and folds away for genuinely static types.
+fn assert_static_layout<T: AbiSize>() {
+    if T::IS_DYNAMIC {
+        revert_error(Panic::from(PANIC_ASSERT))
+    }
 }
 
 /// A fixed-length mutable array of static-size ABI elements in linear memory.
@@ -115,8 +159,8 @@ pub fn canonical_dyn_array<T>(_ values: DynArray<T>) -> DynArray<T>
 ///
 /// The length is fixed at creation; there is no `push`/growth API. Elements
 /// are stored at their ABI head size, so any `StaticAbi` type works: one-word
-/// values as well as tuples, fixed arrays and `#[abi]` structs of static
-/// types. Dynamic values (`Bytes`, `DynString`, arrays, or structs holding
+/// values as well as tuples, fixed arrays (of `Copy` elements) and `#[abi]`
+/// structs of static types. Dynamic values (`Bytes`, `DynString`, arrays, or structs holding
 /// them) do not implement `StaticAbi`, so constructing a `MemVec` of them does
 /// not compile.
 pub struct MemVec<T> {
@@ -129,6 +173,7 @@ impl<T> MemVec<T>
 {
     /// A zero-initialized array of `len` elements.
     pub fn zeroed(_ len: u256) -> Self {
+        assert_static_layout<T>()
         let total = len * T::HEAD_SIZE
         let ptr = ptr::alloc_bytes(total)
         ptr::zero_bytes(ptr, total)
@@ -139,6 +184,7 @@ impl<T> MemVec<T>
     ///
     /// Mutating the copy leaves `source` untouched.
     pub fn from_dyn_array(_ source: DynArray<T>) -> Self {
+        assert_static_layout<T>()
         let total = source.len() * T::HEAD_SIZE
         let ptr = ptr::alloc_bytes(total)
         ptr::copy(ptr, source.encoded_span().slice(offset: 32, len: total))

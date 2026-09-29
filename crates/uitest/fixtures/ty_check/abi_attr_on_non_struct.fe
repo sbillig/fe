@@ -11,3 +11,7 @@ trait T {}
 
 #[abi]
 mod m {}
+
+mod n {
+    #![abi]
+}
