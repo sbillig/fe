@@ -803,8 +803,8 @@ fn infer_body_query<'db>(
     (diags, typed_body)
 }
 
-// A requirement evaluated from a type expression can depend on the body
-// currently being inferred. Start that cycle with a failed template, never a
+// A constant evaluated from a type expression can call the body currently
+// being inferred. Start that cycle with a failed template, never a
 // provisional successful value; existing query handlers may still iterate.
 fn infer_body_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -835,19 +835,14 @@ fn infer_body_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
-/// A failed requirement in a type expression must not supply a CTFE value
-/// that could make the same requirement succeed on a later cycle iteration.
-pub(crate) fn inference_has_failed_const_requirements(diags: &[FuncBodyDiag<'_>]) -> bool {
+/// Whether inference met a type lowering cycle. Its typed body is then a
+/// provisional fixpoint value, which compile-time evaluation must not run:
+/// a value computed from it could make the cycle converge on a success.
+pub(crate) fn inference_met_lowering_cycle(diags: &[FuncBodyDiag<'_>]) -> bool {
     diags.iter().any(|diag| {
         matches!(
             diag,
-            FuncBodyDiag::Body(
-                BodyDiag::ConstRequirementNotSatisfied { .. }
-                    | BodyDiag::RecursiveConstRequirement(_)
-            ) | FuncBodyDiag::Ty(TyDiagCollection::Ty(
-                TyLowerDiag::ConstRequirementNotSatisfied { .. }
-                    | TyLowerDiag::TypeLoweringCycle(_)
-            ))
+            FuncBodyDiag::Ty(TyDiagCollection::Ty(TyLowerDiag::TypeLoweringCycle(_)))
         )
     })
 }

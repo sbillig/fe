@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/unmet_requirement_in_an_evaluated_body.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ unmet_requirement_in_an_evaluated_body.fe:6:30
+  │
+5 │ const fn bounded<const N: usize>() -> u256 where N > 0 { 42 }
+  │                                                  ----- required by this predicate
+6 │ const fn helper() -> usize { bounded<0>() as usize }
+  │                              ^^^^^^^^^^^^ condition evaluated to `false`
