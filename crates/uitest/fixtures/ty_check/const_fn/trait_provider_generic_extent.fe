@@ -1,0 +1,37 @@
+// A generic array extent is compared symbolically only through calls without
+// providers. `wrap<N>()` supplies a provider inside its body, so its extent
+// stays opaque and does not unify with `plain<N>()`, although both evaluate to
+// `N + 1` for every concrete `N`.
+trait Compute: Copy {
+    type Item
+    const fn compute(self) -> Self::Item
+}
+
+struct Size { value: usize }
+impl Copy for Size {}
+impl Compute for Size {
+    type Item = usize
+    const fn compute(self) -> usize { self.value }
+}
+
+const fn plain<const N: usize>() -> usize { N + 1 }
+const fn plus<const N: usize>() -> usize uses (size: Compute<Item = usize>) {
+    N + size.compute()
+}
+const fn wrap<const N: usize>() -> usize {
+    with (Compute<Item = usize> = Size { value: 1 }) { plus<N>() }
+}
+
+struct Plain<const N: usize> { data: [u8; plain<N>()] }
+struct Wrapped<const N: usize> { data: [u8; wrap<N>()] }
+
+// Concrete extents evaluate, so both fields have three elements.
+fn concrete() -> Plain<2> {
+    let wrapped = Wrapped<2> { data: [1; 3] }
+    Plain<2> { data: wrapped.data }
+}
+
+// A generic extent that goes through a provider is not reduced.
+fn generic<const N: usize>(_ wrapped: Wrapped<N>) -> Plain<N> {
+    Plain<N> { data: wrapped.data }
+}
