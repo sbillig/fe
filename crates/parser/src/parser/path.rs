@@ -1,7 +1,7 @@
 use crate::{ParseError, SyntaxKind, TextRange, TextSize};
 
 use super::{
-    Parser, define_scope,
+    Parser, ProbeKind, define_scope,
     expr::{is_lshift, is_lt_eq},
     param::{GenericArgListScope, TraitRefScope},
     token_stream::TokenStream,
@@ -39,16 +39,29 @@ impl super::Parse for PathSegmentScope {
             Some(kind) if is_path_segment(kind) => {
                 parser.bump();
 
+                if parser.current_kind_same_line() == Some(SyntaxKind::Lt) && is_lshift(parser) {
+                    if lshift_opens_generic_args(parser) {
+                        // Errors inside the arguments are reported as they are parsed.
+                        let _ = parser.parse(GenericArgListScope::new(self.is_expr));
+                    }
+                    return Ok(());
+                }
+
                 let is_turbofish = parser.current_kind_same_line() == Some(SyntaxKind::Colon2)
                     && parser.peek_two() == (Some(SyntaxKind::Colon2), Some(SyntaxKind::Lt));
 
                 if (is_turbofish
                     || (parser.current_kind_same_line() == Some(SyntaxKind::Lt)
-                        && !(is_lt_eq(parser) || is_lshift(parser))))
-                    && parser.dry_run(|parser| {
-                        parser.bump_if(SyntaxKind::Colon2);
-                        parser.parses_without_error(GenericArgListScope::new(self.is_expr))
-                    })
+                        && !is_lt_eq(parser)))
+                    && parser.probe(
+                        ProbeKind::GenericArgList {
+                            is_expr: self.is_expr,
+                        },
+                        |parser| {
+                            parser.bump_if(SyntaxKind::Colon2);
+                            parser.parses_without_error(GenericArgListScope::new(self.is_expr))
+                        },
+                    )
                 {
                     if is_turbofish {
                         parser.bump_trivias();
@@ -60,7 +73,7 @@ impl super::Parse for PathSegmentScope {
                     }
                     parser
                         .parse(GenericArgListScope::new(self.is_expr))
-                        .expect("dry_run suggests this will succeed");
+                        .expect("the probe suggests this will succeed");
                 }
                 Ok(())
             }
@@ -90,7 +103,13 @@ impl super::Parse for QualifiedTypeScope {
                 ));
             }
         }
-        parser.bump_expected(SyntaxKind::AsKw);
+        if !parser.bump_if(SyntaxKind::AsKw) {
+            return Err(ParseError::expected(
+                &[SyntaxKind::AsKw],
+                None,
+                parser.end_of_prev_token,
+            ));
+        }
         parser.parse(TraitRefScope::default())?;
         if parser.bump_if(SyntaxKind::Gt) {
             Ok(())
@@ -104,16 +123,28 @@ impl super::Parse for QualifiedTypeScope {
     }
 }
 
+/// Whether the `<<` at the current position opens generic arguments whose first
+/// argument is a qualified path, as in `Wrapped<<T as Trait>::Item>`, rather
+/// than being a left shift.
+///
+/// No shift operand continues with `>::`, so that prefix settles it, and a cast
+/// such as `value << bits as u256 >> 1` stays a shift. Path segments and
+/// method calls must agree on this, or `Wrapped<<T as Trait>::Item>::new()`
+/// parses while `receiver.take<<T as Trait>::Item>(x)` does not.
+pub(super) fn lshift_opens_generic_args<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    parser.probe(ProbeKind::LShiftOpensGenericArgs, |parser| {
+        parser.bump();
+        parser.parses_without_error(QualifiedTypeScope::default())
+            && parser.current_kind() == Some(SyntaxKind::Colon2)
+    })
+}
+
 pub(super) fn is_qualified_type<S: TokenStream>(parser: &mut Parser<S>) -> bool {
-    parser
-        .dry_run(|parser| {
-            if !parser.bump_if(SyntaxKind::Lt) {
-                return None;
-            }
-            parse_type(parser, None).ok()?;
-            (parser.current_kind() == Some(SyntaxKind::AsKw)).then_some(())
-        })
-        .is_some()
+    parser.probe(ProbeKind::QualifiedType, |parser| {
+        parser.bump_if(SyntaxKind::Lt)
+            && parse_type(parser, None).is_ok()
+            && parser.current_kind() == Some(SyntaxKind::AsKw)
+    })
 }
 
 pub(super) fn is_path_segment(kind: SyntaxKind) -> bool {

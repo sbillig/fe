@@ -1,0 +1,26 @@
+pub trait Arrow {
+    type Dom
+}
+
+// Only `T` implements `Arrow`, so neither `Self::Dom` nor `U::Dom` may
+// resolve through the bound on `T`.
+pub trait Eval<T: Arrow> {
+    fn eval(_ value: Self::Dom)
+}
+
+pub trait EvalWhere<T>
+where
+    T: Arrow,
+{
+    fn eval(_ value: Self::Dom)
+}
+
+pub fn other_param<T: Arrow, U>(_ value: U::Dom) {}
+
+pub fn own_param<T: Arrow, U>(_ value: T::Dom) {}
+
+// `Self::Dom` comes from the supertrait alone. The bound on `T` must not
+// offer a second candidate and make the reference ambiguous.
+pub trait EvalSuper<T: Arrow>: Arrow {
+    fn eval(_ value: Self::Dom)
+}

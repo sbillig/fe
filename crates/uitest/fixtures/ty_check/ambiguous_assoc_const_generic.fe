@@ -1,0 +1,19 @@
+trait Gen<A> {
+    const X: usize
+}
+
+struct Foo {}
+
+impl Gen<u8> for Foo {
+    const X: usize = 1
+}
+
+impl Gen<u16> for Foo {
+    const X: usize = 2
+}
+
+// Both candidates are `Gen`, so the labels and the hint must name the type
+// argument.
+fn f() -> usize {
+    Foo::X
+}

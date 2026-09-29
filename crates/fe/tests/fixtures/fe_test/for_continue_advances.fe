@@ -1,0 +1,162 @@
+#[test]
+fn unconditional_continue_advances_sequence() {
+    let mut visits: usize = 0
+    for i in 0..5 {
+        visits += 1
+        assert!(visits <= 5)
+        continue
+    }
+    assert!(visits == 5)
+}
+
+#[test]
+fn nested_continue_advances_only_inner_sequence() {
+    let mut visits: usize = 0
+    let mut sum: usize = 0
+    for outer in 0..3 {
+        for inner in 0..4 {
+            visits += 1
+            assert!(visits <= 12)
+            if inner % 2 == 0 { continue }
+            sum += outer + inner
+        }
+    }
+    assert!(visits == 12)
+    assert!(sum == 18)
+}
+
+#[test]
+fn continue_and_break_preserve_sequence_order() {
+    let mut visits: usize = 0
+    for i in 0..8 {
+        visits += 1
+        assert!(visits <= 5)
+        if i < 4 { continue }
+        assert!(i == 4)
+        break
+    }
+    assert!(visits == 5)
+}
+
+#[test]
+fn while_continue_does_not_advance_enclosing_sequence() {
+    let mut visits: usize = 0
+    let mut sum: usize = 0
+    for outer in 0..3 {
+        let mut inner: usize = 0
+        while inner < 3 {
+            inner += 1
+            visits += 1
+            assert!(visits <= 9)
+            if inner < 3 { continue }
+            sum += outer
+        }
+    }
+    assert!(visits == 9)
+    assert!(sum == 3)
+}
+
+#[test]
+fn unconditional_break_leaves_after_first_element() {
+    let mut visits: usize = 0
+    for i in 0..5 {
+        visits += 1
+        break
+    }
+    assert!(visits == 1)
+}
+
+fn first(_ values: [usize; 3]) -> usize {
+    for value in values {
+        return value
+    }
+    0
+}
+
+#[test]
+fn unconditional_return_yields_first_element() {
+    assert!(first([7, 8, 9]) == 7)
+}
+
+fn leading_zero(_ values: [usize; 3]) -> bool {
+    for value in values {
+        if value == 0 { return true } else { break }
+    }
+    false
+}
+
+#[test]
+fn exiting_on_every_branch_inspects_only_first_element() {
+    assert!(leading_zero([0, 5, 5]))
+    assert!(!leading_zero([5, 0, 0]))
+}
+
+fn abort() -> ! {
+    let code: u256 = 1
+    std::evm::revert(code)
+}
+
+#[test(should_revert)]
+fn diverging_body_reverts() {
+    for i in 0..3 {
+        abort()
+    }
+}
+
+fn ignore(_ value: usize, _ other: usize) {}
+
+#[test(should_revert)]
+fn continue_after_diverging_argument_is_unreachable() {
+    for i in 0..3 {
+        ignore(abort(), { continue })
+    }
+}
+
+fn first_even(_ values: [u256; 5]) -> u256 {
+    for value in values {
+        if value % 2 == 1 {
+            continue
+        } else {
+            return value
+        }
+    }
+    return 0
+}
+
+#[test]
+fn continue_arm_advances_when_other_arms_exit() {
+    assert!(first_even([1, 3, 6, 5, 8]) == 6)
+    assert!(first_even([1, 3, 5, 7, 9]) == 0)
+}
+
+#[test]
+fn continue_or_break_in_every_arm() {
+    let mut visits: usize = 0
+    let mut last: usize = 0
+    for i in 0..8 {
+        visits += 1
+        assert!(visits <= 4)
+        last = i
+        match i < 3 {
+            true => { continue }
+            false => { break }
+        }
+    }
+    assert!(visits == 4)
+    assert!(last == 3)
+}
+
+#[test]
+fn only_inner_body_always_exits() {
+    let mut outer_visits: usize = 0
+    let mut inner_visits: usize = 0
+    for outer in 0..3 {
+        outer_visits += 1
+        for inner in 0..4 {
+            inner_visits += 1
+            break
+        }
+    }
+    assert!(outer_visits == 3)
+    assert!(inner_visits == 3)
+}

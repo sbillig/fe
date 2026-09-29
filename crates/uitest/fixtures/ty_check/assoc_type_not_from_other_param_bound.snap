@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_type_not_from_other_param_bound.fe
+---
+error[2-0002]: `Dom` is not found
+  ┌─ assoc_type_not_from_other_param_bound.fe:8:28
+  │
+8 │     fn eval(_ value: Self::Dom)
+  │                            ^^^ `Dom` is not found
+
+error[2-0002]: `Dom` is not found
+   ┌─ assoc_type_not_from_other_param_bound.fe:15:28
+   │
+15 │     fn eval(_ value: Self::Dom)
+   │                            ^^^ `Dom` is not found
+
+error[2-0002]: `Dom` is not found
+   ┌─ assoc_type_not_from_other_param_bound.fe:18:45
+   │
+18 │ pub fn other_param<T: Arrow, U>(_ value: U::Dom) {}
+   │                                             ^^^ `Dom` is not found

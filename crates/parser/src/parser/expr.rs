@@ -10,7 +10,7 @@ use super::{
     expr_atom::{self, is_expr_atom_head},
     param::{CallArgListScope, GenericArgListScope},
     pat::parse_pat,
-    path::is_qualified_type,
+    path::{is_qualified_type, lshift_opens_generic_args},
     token_stream::TokenStream,
 };
 use crate::{ExpectedKind, ParseError, SyntaxKind, TextRange};
@@ -805,12 +805,18 @@ fn is_method_call<S: TokenStream>(parser: &mut Parser<S>) -> bool {
         // After the identifier, require `<` or `(` to be on the same line
         parser.set_newline_as_trivia(false);
 
-        if parser.current_kind() == Some(SyntaxKind::Lt)
-            && (is_lt_eq(parser)
-                || is_lshift(parser)
-                || !parser.parses_without_error(GenericArgListScope::default()))
-        {
-            return false;
+        if parser.current_kind() == Some(SyntaxKind::Lt) {
+            // A `<<` here opens generic arguments only before a qualified path,
+            // the same rule path segments use; otherwise it is a left shift on a
+            // field, as in `value.bits << 1`.
+            let opens_generic_args = if is_lshift(parser) {
+                lshift_opens_generic_args(parser)
+            } else {
+                !is_lt_eq(parser)
+            };
+            if !opens_generic_args || !parser.parses_without_error(GenericArgListScope::default()) {
+                return false;
+            }
         }
 
         if parser.current_kind() != Some(SyntaxKind::LParen) {

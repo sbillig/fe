@@ -1,0 +1,15 @@
+pub trait Base {
+    type Item
+}
+
+pub trait Left: Base<Item = u256> {}
+
+pub trait Right: Base {}
+
+pub trait Both: Left + Right {}
+
+// The generic-receiver form of the diamond: `T::Item` reaches `Base::Item`
+// through both supertraits, one carrying the equality.
+pub fn take<T: Both>(_ value: T::Item) -> T::Item {
+    value
+}

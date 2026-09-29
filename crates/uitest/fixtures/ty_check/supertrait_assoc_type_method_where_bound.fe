@@ -1,0 +1,16 @@
+pub trait Base {
+    type Item
+}
+
+pub trait Extra {
+    type Item
+}
+
+// `Base` is implied by the supertrait and `Extra` by the method's own where
+// clause. Both declare `Item`, so `Self::Item` is ambiguous; picking the
+// inherited one silently would type the method against the wrong item.
+pub trait Sub: Base {
+    fn take(_ value: Self::Item)
+    where
+        Self: Extra
+}

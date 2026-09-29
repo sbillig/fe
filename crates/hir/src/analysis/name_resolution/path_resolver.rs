@@ -1168,6 +1168,7 @@ where
                 LayoutHoleArgSite::Path(path),
                 minter,
             );
+            let evidence = assoc_ty_candidate_evidence(db, ty, assumptions);
             let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>, TyId<'db>)> =
                 IndexMap::new();
             for (inst, ty_candidate) in assoc_tys.iter().copied() {
@@ -1197,7 +1198,7 @@ where
                     .get(&ident)
                     .copied()
                     .map_or(applied, |bound| TyId::foldl(db, bound, &seg_args));
-                let norm = normalize_ty(db, candidate_ty, scope, assumptions);
+                let norm = normalize_ty(db, candidate_ty, scope, evidence);
                 dedup.entry(norm).or_insert((inst, applied, norm));
             }
 
@@ -1687,6 +1688,50 @@ pub(crate) fn find_associated_type<'db>(
     find_associated_type_in_mode(db, scope, ty, name, assumptions, ConstBodyLowering::Eager)
 }
 
+/// The bounds implied by a trait's own `Self: Trait` predicate.
+///
+/// Header positions such as a trait method signature deliberately withhold the
+/// self-predicate from `assumptions`, because assuming it while the trait's
+/// interface is still being lowered can recurse through the in-progress
+/// definition (see `header_constraints_for`). Its implied bounds are still
+/// sound for naming and comparing associated types, which never discharges a
+/// goal, so they are reconstructed locally where they are needed.
+fn trait_self_implied_bounds<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+) -> PredicateListId<'db> {
+    PredicateListId::new(db, vec![trait_self_predicate(db, trait_)]).extend_all_bounds(db)
+}
+
+/// Evidence for comparing associated-type candidates with each other: the
+/// caller's assumptions and everything they imply, plus the enclosing trait's
+/// implied bounds when the receiver is that trait's `Self`.
+///
+/// Without the implied bounds a supertrait equality such as
+/// `Left: Base<Item = u256>` is invisible while normalizing, so a binding-free
+/// projection reached through a second supertrait cannot be recognized as the
+/// same type, and two paths to one declaration are reported as an ambiguity.
+fn assoc_ty_candidate_evidence<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> PredicateListId<'db> {
+    let evidence = assumptions.extend_all_bounds(db);
+    if let TyData::TyParam(param) = ty.data(db)
+        && param.is_trait_self()
+        && let Some(trait_) = param.owner.resolve_to::<Trait>(db)
+    {
+        let mut list = evidence.list(db).to_vec();
+        for &bound in trait_self_implied_bounds(db, trait_).list(db) {
+            if !list.contains(&bound) {
+                list.push(bound);
+            }
+        }
+        return PredicateListId::new(db, list);
+    }
+    evidence
+}
+
 fn find_associated_type_in_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -1714,16 +1759,35 @@ fn find_associated_type_in_mode<'db>(
     }
 
     let scope_ingot = scope.ingot(db);
+    let mut candidates = SmallVec::new();
 
     if let TyData::TyParam(param) = original_ty.data(db) {
-        // Trait self, in trait or impl trait. Associated type must be in this trait.
+        // Trait self, in trait or impl trait. Associated type must be in this trait
+        // or, inside a trait, in one of its supertraits.
         if param.is_trait_self() {
             if let Some(trait_) = param.owner.resolve_to::<Trait>(db) {
+                let trait_inst = trait_self_predicate(db, trait_);
                 if trait_.assoc_ty(db, name).is_some() {
-                    let trait_inst =
-                        TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
                     let assoc_ty = TyId::assoc_ty(db, trait_inst.trait_ref(db), name);
                     return Ok(smallvec![(trait_inst, assoc_ty)]);
+                }
+
+                // The trait's `Self` also satisfies the trait's declared supertraits,
+                // so their associated types are reachable as `Self::Name` too. Bounds
+                // on the trait's own associated types have another self type and are
+                // skipped. In a header position such as a trait method signature
+                // `assumptions` does not carry the enclosing trait's own `Self`
+                // bounds, so these are merged with the contextual candidates
+                // collected below rather than returned here: a method-level
+                // `where Self: Extra` is an equally valid source and must
+                // participate in ambiguity resolution.
+                for &bound in trait_self_implied_bounds(db, trait_).list(db) {
+                    if bound.def(db) != trait_
+                        && bound.self_ty(db) == original_ty
+                        && let Some(assoc_ty) = bound.project_assoc_ty(db, name)
+                    {
+                        candidates.push((bound, assoc_ty));
+                    }
                 }
             } else if let Some(impl_trait) = param.owner.resolve_to::<ImplTrait>(db)
                 && let Some(trait_inst) = impl_trait.trait_inst(db)
@@ -1734,7 +1798,6 @@ fn find_associated_type_in_mode<'db>(
         }
     }
 
-    let mut candidates = SmallVec::new();
     let search_ingots = [
         Some(scope_ingot),
         original_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
@@ -1745,11 +1808,13 @@ fn find_associated_type_in_mode<'db>(
 
         // Only consult explicit bounds for type-parameter receivers; concrete
         // receivers get their candidates from impl lookup to avoid spurious
-        // ambiguity between bounds and implementations.
+        // ambiguity between bounds and implementations. The parameters in
+        // these bounds are the ones in scope, so they are matched as they
+        // are: freshening them would let a bound on `T` match `U` or `Self`.
         if let TyData::TyParam(_) = original_ty.data(db) {
             for &trait_inst in assumptions.list(db) {
                 let snapshot = cx.snapshot();
-                let pred_self_ty = cx.instantiate_with_fresh_vars(trait_inst.self_ty(db));
+                let pred_self_ty = cx.materialize(trait_inst.self_ty(db));
 
                 if cx.unify::<TyId<'db>>(lhs_ty, pred_self_ty).is_ok() {
                     let trait_inst = cx.materialize(trait_inst);
@@ -1864,6 +1929,12 @@ fn find_associated_type_in_mode<'db>(
 
         Ok(())
     })?;
+
+    // Supertrait and contextual bounds can reach the same projection, e.g. a
+    // method that restates a bound the enclosing trait already implies. Two
+    // paths to one declaration are not an ambiguity.
+    let mut seen = IndexSet::new();
+    candidates.retain(|candidate| seen.insert(*candidate));
 
     Ok(candidates)
 }

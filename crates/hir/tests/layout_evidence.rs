@@ -26,7 +26,7 @@ use fe_hir::{
         },
     },
     core::semantic::ContractLayoutError,
-    hir_def::{CallableDef, IdentId, ItemKind},
+    hir_def::{CallableDef, IdentId, ItemKind, TopLevelMod},
     test_db::{HirAnalysisTestDb, find_contract, find_func},
 };
 use layout_test_support::{parse_module, parse_ok};
@@ -65,6 +65,87 @@ fn assert_layoutizes(name: &str, src: &str) {
 
 fn assert_trusted_layoutizes(name: &str, src: &str) {
     assert_layoutizes_in(name, src, true);
+}
+
+/// Reads a fixture from `test_files/layout_evidence`, returning its real path
+/// and its text.
+fn layout_evidence_fixture(name: &str) -> (Utf8PathBuf, String) {
+    let path = Utf8PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test_files/layout_evidence"
+    ))
+    .join(name);
+    let text = std::fs::read_to_string(&path).expect("fixture should be readable");
+    (path, text)
+}
+
+#[test]
+fn finite_nested_options_through_named_fields_have_finite_layouts() {
+    let (path, text) = layout_evidence_fixture("finite_nested_options.fe");
+    assert_layoutizes(path.as_str(), &text);
+}
+
+#[test]
+fn expanding_structural_type_arguments_do_not_expand_layouts_forever() {
+    let (path, text) = layout_evidence_fixture("expanding_structural_arguments.fe");
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(path, &text);
+    let (top_mod, _) = db.top_mod(file);
+    assert!(reports_non_regular_cycle(&db, top_mod, "inspect"));
+}
+
+/// Whether the layout schema of the first input of function `name` reports a
+/// non-regular view cycle.
+fn reports_non_regular_cycle<'db>(
+    db: &'db HirAnalysisTestDb,
+    top_mod: TopLevelMod<'db>,
+    name: &str,
+) -> bool {
+    let inspect = get_or_build_semantic_instance(
+        db,
+        identity_semantic_instance_key(db, BodyOwner::Func(find_func(db, top_mod, name))),
+    );
+    let signature = inspect.key(db).layout_bundle_signature(db);
+    signature.inputs[0]
+        .interface
+        .schema
+        .non_regular_view_cycle
+        .is_some()
+}
+
+/// Growth through an inserted wrapper, directly or through a second type, is
+/// still caught by the growth guard. The check runs on a worker thread so a
+/// layout walk that never terminates fails the test instead of hanging it.
+#[test]
+fn expanding_layouts_through_wrappers_are_rejected_in_bounded_time() {
+    let (path, text) = layout_evidence_fixture("expanding_through_wrappers.fe");
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(path, &text);
+        let (top_mod, _) = db.top_mod(file);
+        for name in ["inspect_wrapped", "inspect_ping"] {
+            let rejected = reports_non_regular_cycle(&db, top_mod, name);
+            sender
+                .send((name, rejected))
+                .expect("test thread is waiting");
+        }
+    });
+    for _ in 0..2 {
+        let (name, rejected) = match receiver.recv_timeout(std::time::Duration::from_secs(60)) {
+            Ok(result) => result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                panic!("layout growth check did not finish within 60 seconds")
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("layout growth check panicked")
+            }
+        };
+        assert!(
+            rejected,
+            "`{name}` should be reported as a non-regular cycle"
+        );
+    }
 }
 
 fn assert_layoutizes_in(name: &str, src: &str, std_module: bool) {

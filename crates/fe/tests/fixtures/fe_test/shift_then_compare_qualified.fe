@@ -1,0 +1,47 @@
+// A shift whose right operand is a qualified associated constant, followed by a
+// comparison, must stay a shift: `(value << <T as Model>::BITS) > limit`.
+// The generic-argument trial for `Wrapped<<T as Model>::Point>` must not claim
+// these tokens.
+pub trait Model {
+    const BITS: u256
+}
+
+pub struct M {}
+
+impl Model for M {
+    const BITS: u256 = 3
+}
+
+fn gt<T: Model>(_ value: u256, _ limit: u256) -> bool {
+    value << <T as Model>::BITS > limit
+}
+
+fn ge<T: Model>(_ value: u256, _ limit: u256) -> bool {
+    value << <T as Model>::BITS >= limit
+}
+
+fn tight<T: Model>(_ value: u256, _ limit: u256) -> bool {
+    value<<<T as Model>::BITS > limit
+}
+
+fn shr<T: Model>(_ value: u256) -> u256 {
+    value << <T as Model>::BITS >> 1
+}
+
+fn identity(_ b: bool) -> bool {
+    b
+}
+
+fn in_call<T: Model>(_ value: u256, _ limit: u256) -> bool {
+    identity(value << <T as Model>::BITS > limit)
+}
+
+#[test]
+fn shift_then_compare_with_qualified_operand() {
+    assert!(gt<M>(1, 7))
+    assert!(!gt<M>(1, 8))
+    assert!(ge<M>(1, 8))
+    assert!(tight<M>(1, 7))
+    assert!(shr<M>(1) == 4)
+    assert!(in_call<M>(1, 7))
+}

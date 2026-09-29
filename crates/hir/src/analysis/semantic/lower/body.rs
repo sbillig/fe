@@ -217,6 +217,7 @@ struct SmirLowerInputs<'a, 'db> {
 pub(super) struct LoopScope {
     pub(super) continue_bb: SBlockId,
     pub(super) break_bb: SBlockId,
+    pub(super) has_reachable_continue: bool,
 }
 
 impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
@@ -1324,16 +1325,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Stmt::While(cond, body_expr) => self.lower_while(*cond, *body_expr),
             Stmt::For(pat, iter, body_expr, _) => self.lower_for(stmt, *pat, *iter, *body_expr),
             Stmt::Continue => {
-                let scope = self
-                    .loop_stack
-                    .last()
-                    .copied()
-                    .expect("continue outside loop");
-                self.set_terminator(
-                    self.current,
-                    origin,
-                    STerminatorKind::Goto(scope.continue_bb),
-                );
+                let is_reachable = !self.is_terminated(self.current);
+                let scope = self.loop_stack.last_mut().expect("continue outside loop");
+                scope.has_reachable_continue |= is_reachable;
+                let continue_bb = scope.continue_bb;
+                self.set_terminator(self.current, origin, STerminatorKind::Goto(continue_bb));
             }
             Stmt::Break => {
                 let scope = self.loop_stack.last().copied().expect("break outside loop");
@@ -1369,6 +1365,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.loop_stack.push(LoopScope {
             continue_bb: cond_bb,
             break_bb: exit_bb,
+            has_reachable_continue: false,
         });
         self.switch_to(body_bb);
         let _ = self.lower_expr(body_expr);
@@ -1418,6 +1415,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
         let cond_bb = self.new_block();
         let body_bb = self.new_block();
+        let advance_bb = self.new_block();
         let exit_bb = self.new_block();
         self.set_synthetic_terminator(self.current, STerminatorKind::Goto(cond_bb));
 
@@ -1440,8 +1438,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         );
 
         self.loop_stack.push(LoopScope {
-            continue_bb: cond_bb,
+            continue_bb: advance_bb,
             break_bb: exit_bb,
+            has_reachable_continue: false,
         });
         self.switch_to(body_bb);
         let get_effect_args = self.lower_effect_arg_slice(&for_loop_call_sites.get.effect_args);
@@ -1466,7 +1465,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
         self.bind_pattern(pat, elem);
         let _ = self.lower_expr(body_expr);
-        if !self.is_terminated(self.current) {
+        let falls_through = !self.is_terminated(self.current);
+        if falls_through {
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(advance_bb));
+        }
+        let scope = self.loop_stack.pop().expect("for loop scope");
+        if falls_through || scope.has_reachable_continue {
+            // Both normal fallthrough and `continue` must advance the sequence.
+            self.switch_to(advance_bb);
             let one = self.emit_expr(
                 usize_ty,
                 SExpr::Const(SConst::from_trusted_source(
@@ -1487,8 +1493,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 expr: SExpr::UseValue(SOperand::synthetic(next)),
             });
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(cond_bb));
+        } else {
+            // Every body path leaves the loop, so nothing reaches the advance
+            // block. Close it like a dead `if`/`match` join rather than leaving
+            // it to read `idx_local` from a block unreachable from entry.
+            self.set_synthetic_terminator(advance_bb, STerminatorKind::Goto(advance_bb));
         }
-        self.loop_stack.pop();
         self.switch_to(exit_bb);
     }
 

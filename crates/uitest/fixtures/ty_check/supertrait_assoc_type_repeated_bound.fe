@@ -1,0 +1,8 @@
+pub trait Base {
+    type Item
+}
+
+// The same supertrait listed twice, once with an equality, is one candidate.
+pub trait Sub: Base + Base<Item = u256> {
+    fn take(_ value: Self::Item)
+}

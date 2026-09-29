@@ -1,4 +1,7 @@
-use std::{collections::VecDeque, convert::Infallible};
+use std::{
+    collections::{HashMap, VecDeque},
+    convert::Infallible,
+};
 
 pub(crate) use item::ItemListScope;
 use smallvec::SmallVec;
@@ -66,8 +69,29 @@ pub struct Parser<S: TokenStream> {
     dry_run_states: Vec<DryRunState<S>>,
     dry_run_next_trivias_pool: Vec<VecDeque<S::Token>>,
 
+    /// Outcomes of the speculative probes run so far, see [`Parser::probe`].
+    probe_cache: HashMap<(rowan::TextSize, bool, ProbeKind), bool>,
+    /// `parents.len()` on entry to each [`Parser::probe`] currently running, so
+    /// `recover` can confine itself to the scopes the innermost probe created.
+    probe_scope_floors: Vec<usize>,
+
     /// Whether or not to recover from syntax errors automatically.
     recovery_mode: RecoveryMode,
+}
+
+/// A speculative parse used only to disambiguate what follows, identified so
+/// its outcome can be reused at the same position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ProbeKind {
+    /// `<Type as Trait>`, as opposed to a comparison or shift.
+    QualifiedType,
+    /// `<<` opening generic arguments whose first argument is a qualified
+    /// path, as opposed to a left shift.
+    LShiftOpensGenericArgs,
+    /// A path followed by `(`, i.e. a call in const generic argument position.
+    ConstCall,
+    /// A generic argument list, as opposed to a comparison.
+    GenericArgList { is_expr: bool },
 }
 
 impl<S: TokenStream> Parser<S> {
@@ -84,6 +108,8 @@ impl<S: TokenStream> Parser<S> {
             next_trivias: VecDeque::new(),
             dry_run_states: Vec::new(),
             dry_run_next_trivias_pool: Vec::new(),
+            probe_cache: HashMap::new(),
+            probe_scope_floors: Vec::new(),
             recovery_mode,
         }
     }
@@ -384,6 +410,43 @@ impl<S: TokenStream> Parser<S> {
         self.try_recover().map_err(|r| r.add_err_proof(proof))
     }
 
+    /// Runs a disambiguation probe in dry run mode, reusing the outcome of an
+    /// identical probe already run at this position.
+    ///
+    /// `dry_run` reverts the stream, position, buffered trivia and errors, and
+    /// leaves the tree builder untouched, so a probe depends only on the position
+    /// it starts from and on whether newlines are trivia there. The input never
+    /// changes during a parse, so an outcome stays valid.
+    ///
+    /// Error recovery is the one thing that would otherwise read more than the
+    /// input: `recover` searches the enclosing scope stack for a token to stop
+    /// at, so how far it consumes depends on where the probe was run from. A
+    /// probe therefore records its scope depth in `probe_scope_floors` and
+    /// `recover` searches no further out than that, which is what a probe
+    /// already means -- would this construct parse here, on its own? -- since a
+    /// probe's tree and errors are discarded either way. With recovery confined,
+    /// every outcome is a function of the key alone and can be reused, malformed
+    /// input included.
+    ///
+    /// Nesting is what makes caching worthwhile: each level of
+    /// `Wrap<<T as Model>::Point>` probes the positions inside it, and every
+    /// enclosing level probes them all again, so without this the same position
+    /// is re-parsed a multiple of times per level of depth.
+    pub(crate) fn probe<F>(&mut self, kind: ProbeKind, f: F) -> bool
+    where
+        F: FnOnce(&mut Self) -> bool,
+    {
+        let key = (self.current_pos, self.is_newline_trivia, kind);
+        if let Some(&outcome) = self.probe_cache.get(&key) {
+            return outcome;
+        }
+        self.probe_scope_floors.push(self.parents.len());
+        let outcome = self.dry_run(f);
+        self.probe_scope_floors.pop();
+        self.probe_cache.insert(key, outcome);
+        outcome
+    }
+
     /// Runs the parser in the dry run mode.
     ///
     /// Any changes to the parser state will be reverted.
@@ -504,6 +567,9 @@ impl<S: TokenStream> Parser<S> {
         if self.recovery_mode == RecoveryMode::NoRecover {
             return (None, None);
         }
+        // Inside a probe, only the scopes the probe itself opened may stop the
+        // scan, so its outcome does not depend on the enclosing context.
+        let floor = self.probe_scope_floors.last().copied().unwrap_or(0);
 
         let mut unexpected = None;
         let mut match_scope_index = None;
@@ -512,6 +578,7 @@ impl<S: TokenStream> Parser<S> {
                 .parents
                 .iter()
                 .enumerate()
+                .skip(floor)
                 .rev()
                 .find(|(_i, scope)| scope.is_recovery_match(kind))
             {

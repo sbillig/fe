@@ -1,0 +1,18 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/supertrait_assoc_type_method_where_bound.fe
+---
+error[2-0009]: ambiguous associated type `Item`
+   ┌─ supertrait_assoc_type_method_where_bound.fe:13:28
+   │
+ 1 │ pub trait Base {
+   │           ---- candidate: `Base`
+   ·
+ 5 │ pub trait Extra {
+   │           ----- candidate: `Extra`
+   ·
+13 │     fn take(_ value: Self::Item)
+   │                            ^^^^ associated type `Item` is ambiguous
+   │
+   = hint: specify the trait explicitly: `<Self as Base>::Item`

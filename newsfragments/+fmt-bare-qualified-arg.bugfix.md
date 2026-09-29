@@ -1,0 +1,1 @@
+`fe fmt` no longer joins a bare qualified first generic argument onto the opening `<`, which turned `Wrapped< <T as Model>>` into `Wrapped<<T as Model>>` and changed how it parsed. It now formats as `Wrapped< <T as Model> >`.
