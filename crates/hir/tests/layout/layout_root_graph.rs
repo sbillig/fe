@@ -9,15 +9,14 @@ use fe_hir::{
         },
         ty::{
             LayoutBundleComponentId, LayoutBundleComponentKey, LayoutBundleComponentTransport,
-            LayoutBundleInterfaceError, LayoutBundlePathStep, LayoutEvidencePathStep,
-            ProviderAddressSpace,
+            LayoutBundleInterfaceError, LayoutBundlePathStep, LayoutBundleUnrepresentable,
+            LayoutEvidencePathStep, ProviderAddressSpace,
             const_ty::CallableInputLayoutHoleOrigin,
             ty_check::{
                 BodyOwner, ReturnProjectionStep, ReturnProvenance, ReturnSource,
                 check_contract_init_body, check_func_body,
             },
             ty_lower::{
-                CallableInputLayoutBackingSource, callable_input_layout_backing_index_lengths,
                 callable_input_layout_backing_sources, callable_input_layout_bundle_schema,
                 callable_layout_bundle_signature,
             },
@@ -2055,68 +2054,6 @@ contract C {
 }
 
 #[test]
-fn callable_projection_sources_retain_nested_array_dimensions() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-struct Slot<const ROOT: u256 = _> {}
-
-fn get_slot<const ROOT: u256>(values: [[Slot<ROOT>; 3]; 2], row: usize, col: usize) {
-    let value = values[row][col]
-}
-"#,
-    );
-    let func = top_mod
-        .children_non_nested(&db)
-        .find_map(|item| match item {
-            ItemKind::Func(func)
-                if func
-                    .name(&db)
-                    .to_opt()
-                    .is_some_and(|name| name.data(&db) == "get_slot") =>
-            {
-                Some(func)
-            }
-            _ => None,
-        })
-        .expect("missing get_slot function");
-    let expected_path = vec![
-        LayoutBundlePathStep::Index,
-        LayoutBundlePathStep::Index,
-        LayoutBundlePathStep::ConstParam(0),
-    ];
-    let sources = (0..CallableDef::Func(func).params(&db).len())
-        .flat_map(|param_idx| callable_input_layout_backing_sources(&db, func, param_idx))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        sources,
-        [CallableInputLayoutBackingSource {
-            origin: CallableInputLayoutHoleOrigin::ValueParam(0),
-            projection: expected_path,
-        }]
-    );
-
-    assert_eq!(
-        callable_input_layout_backing_index_lengths(&db, func, &sources[0]),
-        Some(vec![2, 3])
-    );
-    let schema = callable_input_layout_bundle_schema(
-        &db,
-        func,
-        CallableInputLayoutHoleOrigin::ValueParam(0),
-    )
-    .expect("missing nested-array evidence schema");
-    assert_eq!(schema.components.len(), 1);
-    assert_eq!(schema.components[0].rank(), 2);
-    assert_eq!(
-        schema.components[0].port.value_path,
-        [LayoutEvidencePathStep::Index, LayoutEvidencePathStep::Index]
-    );
-    assert_eq!(schema.components[0].dimensions, [2, 3]);
-}
-
-#[test]
 fn callable_layout_bundle_signature_is_declared_for_inputs_and_outputs() {
     parse_ok!(
         db,
@@ -2165,8 +2102,6 @@ fn concrete(map: StorageMap<u256, u256, 7>) {}
         signature.inputs[0].interface.schema.components[0].representative,
         signature.output.schema.components[0].representative
     );
-    assert_eq!(signature.inputs[0].interface.schema.components[0].rank(), 0);
-    assert_eq!(signature.output.schema.components[0].rank(), 0);
     assert_eq!(signature.inputs[0].interface.runtime_descriptor_count(), 1);
     assert_eq!(signature.output.runtime_descriptor_count(), 1);
     assert_eq!(signature.output.schema.components[0].port.value_path, []);
@@ -2558,7 +2493,7 @@ fn consume_outer<const WRAPPER: u256, const TARGET: u256>(
 }
 
 #[test]
-fn callable_layout_bundle_groups_array_base_and_indexed_landing() {
+fn callable_array_input_of_layout_roots_is_unrepresentable() {
     parse_ok!(
         db,
         top_mod,
@@ -2590,13 +2525,10 @@ fn read(maps: [StorageMap<u256, u256>; 2], lane: usize, key: u256) -> u256 {
         CallableInputLayoutHoleOrigin::ValueParam(0),
     )
     .expect("missing array input layout bundle");
-    assert_eq!(schema.components.len(), 1);
-    assert!(schema.components[0].supplied_const_params.len() >= 2);
-    assert_eq!(schema.components[0].rank(), 1);
-    assert_eq!(schema.components[0].dimensions, [2]);
+    assert!(schema.components.is_empty());
     assert_eq!(
-        schema.components[0].port.value_path,
-        [LayoutEvidencePathStep::Index]
+        schema.unrepresentable,
+        Some(LayoutBundleUnrepresentable::RootArray { array: Vec::new() })
     );
 }
 

@@ -2044,28 +2044,11 @@ fn entry_semantic_args_sort_key<'db>(
         .iter()
         .map(|arg| {
             let target = callable_layout_param_port_sort_key(&arg.target);
-            let map_ty = &arg.value.map_ty;
-            let dimensions = map_ty
-                .dimensions
-                .iter()
-                .map(usize::to_string)
-                .collect::<Vec<_>>()
-                .join(".");
-            let strides = arg
-                .value
-                .strides
-                .iter()
-                .map(usize::to_string)
-                .collect::<Vec<_>>()
-                .join(".");
             let base = match arg.value.base {
                 LayoutEvidenceBase::Root(root) => format!("root:{}", type_identity(db, root)),
                 LayoutEvidenceBase::Slot(slot) => format!("slot:{slot}"),
             };
-            format!(
-                "{target}:{}:[{dimensions}]:{base}:[{strides}]",
-                type_identity(db, map_ty.scalar_ty),
-            )
+            format!("{target}:{}:{base}", type_identity(db, arg.value.ty))
         })
         .collect::<Vec<_>>()
         .join(",");
@@ -2094,7 +2077,6 @@ fn callable_layout_param_port_sort_key(port: &CallableLayoutParamPort) -> String
         .map(|step| match step {
             LayoutEvidencePathStep::Field(field) => format!("f{field}"),
             LayoutEvidencePathStep::Variant(variant) => format!("v{variant}"),
-            LayoutEvidencePathStep::Index => "i".to_string(),
             LayoutEvidencePathStep::EffectTarget => "t".to_string(),
         })
         .collect::<Vec<_>>()
@@ -2295,18 +2277,6 @@ fn scalar_role_sort_key<'db>(db: &'db dyn MirDb, role: &ScalarRole<'db>) -> Stri
         ScalarRole::EnumTag { enum_layout } => {
             format!("enum_tag:{}", layout_sort_key(db, *enum_layout))
         }
-        ScalarRole::LayoutMap {
-            scalar_ty,
-            dimensions,
-        } => format!(
-            "layout_map:{}:[{}]",
-            type_identity(db, *scalar_ty),
-            dimensions
-                .iter()
-                .map(usize::to_string)
-                .collect::<Vec<_>>()
-                .join(".")
-        ),
     }
 }
 

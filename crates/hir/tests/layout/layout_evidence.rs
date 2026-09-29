@@ -773,8 +773,8 @@ fn take_right(value: Right) {}
         right.interface.schema.components[0].port
     );
     assert_eq!(
-        left.interface.schema.components[0].map_ty(),
-        right.interface.schema.components[0].map_ty()
+        left.interface.schema.components[0].ty,
+        right.interface.schema.components[0].ty
     );
     assert!(
         right

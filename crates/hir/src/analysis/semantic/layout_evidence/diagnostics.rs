@@ -201,14 +201,6 @@ impl DiagnosticVoucher for LayoutEvidenceDiagnostic<'_> {
                 ),
                 false,
             ),
-            LayoutEvidenceError::UnprojectedConstBinding { source, .. } => (
-                4,
-                format!(
-                    "this inferred slot refers to the indexed layout family {}; project a specific element before using the slot as a scalar",
-                    format_source(source)
-                ),
-                false,
-            ),
             LayoutEvidenceError::MissingConstBinding { .. } => (
                 6,
                 "this inferred slot is only present inside a derived layout expression, so its original value is unavailable at runtime".to_string(),
@@ -251,8 +243,7 @@ impl LayoutEvidenceDiagnostic<'_> {
         let owner = self.instance.key(db).owner(db);
         let span = match &self.error {
             LayoutEvidenceError::AmbiguousConstBinding { origin, .. }
-            | LayoutEvidenceError::MissingConstBinding { origin, .. }
-            | LayoutEvidenceError::UnprojectedConstBinding { origin, .. } => {
+            | LayoutEvidenceError::MissingConstBinding { origin, .. } => {
                 span_for_origin_from_body(db, owner.body(db), *origin)
             }
             LayoutEvidenceError::InvalidSchema {
@@ -267,7 +258,7 @@ impl LayoutEvidenceDiagnostic<'_> {
             | LayoutEvidenceError::ConflictingContextualSource { local, .. }
             | LayoutEvidenceError::AmbiguousComponentBinding { local, .. }
             | LayoutEvidenceError::IncompatibleComponent { dst: local, .. }
-            | LayoutEvidenceError::MapTypeMismatch { dst: local, .. } => {
+            | LayoutEvidenceError::RootTypeMismatch { dst: local, .. } => {
                 resolve_local_source_span(db, self.instance, *local)
             }
             LayoutEvidenceError::Blocked(_)
@@ -335,7 +326,6 @@ fn format_port(port: &LayoutPortKey) -> String {
         match step {
             LayoutEvidencePathStep::Field(index) => path.push_str(&format!(".field#{index}")),
             LayoutEvidencePathStep::Variant(index) => path.push_str(&format!("::variant#{index}")),
-            LayoutEvidencePathStep::Index => path.push_str("[]"),
             LayoutEvidencePathStep::EffectTarget => path.push_str(".target"),
         }
     }
