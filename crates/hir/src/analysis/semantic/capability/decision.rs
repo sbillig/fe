@@ -14,12 +14,31 @@ thread_local! {
     static INTERN_ATTEMPTS: Cell<usize> = const { Cell::new(0) };
 }
 
+/// What identifies a completed graph for accounting: its canonical hash, node
+/// count, node size and node type. The type belongs here because graphs of
+/// different node types share sizes and can share a hash, and counting two of
+/// them as copies of one structure reports duplication that does not exist.
+#[cfg(test)]
+type GraphFingerprint = (u64, usize, usize, &'static str);
+
 #[cfg(test)]
 thread_local! {
     // Live backing allocations per completed graph, keyed by its canonical hash,
     // node count and node size. Separate operations that complete an equal graph
     // each allocate their own slice, so a structure can hold several copies.
-    static LIVE_GRAPHS: RefCell<FxHashMap<(u64, usize, usize), usize>> = RefCell::default();
+    static LIVE_GRAPHS: RefCell<FxHashMap<GraphFingerprint, usize>> = RefCell::default();
+}
+
+/// Diagnostic: the structures with more than one live backing allocation, as
+/// (node count, node size, copies).
+#[cfg(test)]
+pub(super) fn duplicated_graphs() -> Vec<(usize, &'static str, usize)> {
+    LIVE_GRAPHS.with_borrow(|live| {
+        live.iter()
+            .filter(|(_, copies)| **copies > 1)
+            .map(|((_, nodes, _, name), copies)| (*nodes, *name, *copies))
+            .collect()
+    })
 }
 
 /// Live completed-graph storage: backing allocations, distinct structures, and the
@@ -31,7 +50,7 @@ pub(super) fn live_graph_storage() -> (usize, usize, usize) {
             live.values().sum(),
             live.len(),
             live.iter()
-                .map(|((_, nodes, bytes), copies)| nodes * bytes * (copies - 1))
+                .map(|((_, nodes, bytes, _), copies)| nodes * bytes * (copies - 1))
                 .sum(),
         )
     })
@@ -72,7 +91,12 @@ impl<V: Hash, T: Hash> Decision<V, T> {
         #[cfg(test)]
         LIVE_GRAPHS.with_borrow_mut(|live| {
             *live
-                .entry((hash, nodes.len(), size_of::<Node<V, T>>()))
+                .entry((
+                    hash,
+                    nodes.len(),
+                    size_of::<Node<V, T>>(),
+                    std::any::type_name::<Node<V, T>>(),
+                ))
                 .or_default() += 1;
         });
         Self { hash, nodes }
@@ -86,7 +110,12 @@ impl<V, T> Drop for Decision<V, T> {
         if Arc::strong_count(&self.nodes) > 1 {
             return;
         }
-        let key = (self.hash, self.nodes.len(), size_of::<Node<V, T>>());
+        let key = (
+            self.hash,
+            self.nodes.len(),
+            size_of::<Node<V, T>>(),
+            std::any::type_name::<Node<V, T>>(),
+        );
         // A thread may drop graphs after its own thread locals are destroyed.
         let _ = LIVE_GRAPHS.try_with(|live| {
             let mut live = live.borrow_mut();
@@ -124,16 +153,18 @@ impl<V: Ord, T: Ord> Ord for Decision<V, T> {
     }
 }
 
-impl<V, T: Ord> Decision<V, T> {
-    /// The derived node order, with variables compared by `variable`.
-    pub(super) fn cmp_by<W>(
+impl<V, T> Decision<V, T> {
+    /// The derived node order, with variables and leaves compared by the caller,
+    /// which a slot-indexed decision needs since its slots name its own tables.
+    pub(super) fn cmp_by<W, U>(
         &self,
-        other: &Decision<W, T>,
+        other: &Decision<W, U>,
         mut variable: impl FnMut(&V, &W) -> Ordering,
+        mut leaf: impl FnMut(&T, &U) -> Ordering,
     ) -> Ordering {
         for (left, right) in self.nodes.iter().zip(other.nodes.iter()) {
             let ordering = match (left, right) {
-                (Node::Leaf(left), Node::Leaf(right)) => left.cmp(right),
+                (Node::Leaf(left), Node::Leaf(right)) => leaf(left, right),
                 (Node::Leaf(_), Node::Branch { .. }) => Ordering::Less,
                 (Node::Branch { .. }, Node::Leaf(_)) => Ordering::Greater,
                 (

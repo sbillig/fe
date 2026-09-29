@@ -3,12 +3,12 @@
 //! Index conditions use reduced bit decisions over Fe's 256-bit `usize`, so equality,
 //! disequality, and bounds share one Boolean algebra. Enum decisions have index conditions
 //! as leaves. Neither graph enumerates array elements or depends on construction order.
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::{
     cell::RefCell,
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet},
-    hash::Hash,
+    hash::{Hash, Hasher},
     sync::Arc,
 };
 
@@ -139,6 +139,16 @@ enum BitOperation {
 }
 
 thread_local! {
+    /// One backing graph per distinct bit decision, for the same reason as
+    /// `SHARED_CHOICES`: an operation that reduces to a constant would otherwise
+    /// keep its own copy of a graph the constants already denote.
+    static SHARED_BITS: RefCell<FxHashSet<BitDecision>> = RefCell::default();
+    /// One backing graph per distinct choice decision. Separate operations that
+    /// complete an equal graph would otherwise each keep their own copy, and every
+    /// value, region and summary holding one would keep it alive. Slots name a
+    /// condition's own tables, so these carry no database lifetime and equal graphs
+    /// really are interchangeable.
+    static SHARED_CHOICES: RefCell<FxHashSet<ChoiceDecision>> = RefCell::default();
     static CONSTANT_BITS: [BitDecision; 2] = [Decision::leaf(false), Decision::leaf(true)];
     static BIT_OPERATIONS: RefCell<FxHashMap<BitOperation, Option<BitDecision>>> =
         RefCell::default();
@@ -193,11 +203,16 @@ impl Ord for IndexCondition<'_> {
         if self == other {
             return Ordering::Equal;
         }
-        self.decision.cmp_by(&other.decision, |left, right| {
-            left.bit.cmp(&right.bit).then_with(|| {
-                self.indices[usize::from(left.slot)].cmp(&other.indices[usize::from(right.slot)])
-            })
-        })
+        self.decision.cmp_by(
+            &other.decision,
+            |left, right| {
+                left.bit.cmp(&right.bit).then_with(|| {
+                    self.indices[usize::from(left.slot)]
+                        .cmp(&other.indices[usize::from(right.slot)])
+                })
+            },
+            bool::cmp,
+        )
     }
 }
 
@@ -236,7 +251,10 @@ impl<'db> IndexCondition<'db> {
             used[usize::from(bit.slot)] = true;
         }
         if used.iter().all(|used| *used) {
-            return Self { indices, decision };
+            return Self {
+                indices,
+                decision: shared_bits(decision),
+            };
         }
         let mut next = 0;
         // An unread slot's target is never consulted.
@@ -257,7 +275,7 @@ impl<'db> IndexCondition<'db> {
                 .zip(&used)
                 .filter_map(|(index, used)| used.then_some(*index))
                 .collect(),
-            decision: BitOperation::Substitute(decision, targets).run().unwrap(),
+            decision: shared_bits(BitOperation::Substitute(decision, targets).run().unwrap()),
         }
     }
 
@@ -305,19 +323,19 @@ impl<'db> IndexCondition<'db> {
             (IndexExpr::Const(_), IndexExpr::Const(_)) => Self::never(),
             (IndexExpr::Const(value), index) => Self {
                 indices: Arc::new([index]),
-                decision: Decision::chain(
+                decision: shared_bits(Decision::chain(
                     (0..INDEX_BITS).map(|bit| (SlotBit::new(0, bit), constant_bit(value, bit))),
                     true,
                     false,
-                ),
+                )),
             },
             (lhs, rhs) => Self {
                 indices: Arc::new([lhs, rhs]),
-                decision: Decision::equal_bits(
+                decision: shared_bits(Decision::equal_bits(
                     (0..INDEX_BITS).map(|bit| (SlotBit::new(0, bit), SlotBit::new(1, bit))),
                     true,
                     false,
-                ),
+                )),
             },
         }
     }
@@ -386,7 +404,7 @@ impl<'db> IndexCondition<'db> {
     fn not(&self) -> Self {
         Self {
             indices: self.indices.clone(),
-            decision: BitOperation::Not(self.decision.clone()).run().unwrap(),
+            decision: shared_bits(BitOperation::Not(self.decision.clone()).run().unwrap()),
         }
     }
     fn implies(&self, other: &Self) -> bool {
@@ -508,78 +526,9 @@ impl<'db> IndexCondition<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct ChoiceBit<'db> {
-    bit: Reverse<u16>,
-    // One key is read by every bit node of its choice, and inlining it in each of
-    // them dominated the size of a branch.
-    choice: Arc<ChoiceKey<'db>>,
-}
-
-/// Rebuild keys once per distinct source key rather than once per bit node. The
-/// source graph's bits already share one key, so its address identifies it.
-fn renamed_choices<'db>(
-    mut rename: impl FnMut(&ChoiceKey<'db>) -> ChoiceKey<'db>,
-) -> impl FnMut(&ChoiceBit<'db>) -> Variable<ChoiceBit<'db>> {
-    let mut renamed = FxHashMap::default();
-    move |bit| {
-        let choice = renamed
-            .entry(Arc::as_ptr(&bit.choice) as usize)
-            .or_insert_with(|| Arc::new(rename(&bit.choice)))
-            .clone();
-        Variable::Symbol(ChoiceBit {
-            choice,
-            bit: bit.bit,
-        })
-    }
-}
-
-impl Ord for ChoiceBit<'_> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Interleaving unrelated enum words makes unions of tag tests exponential.
-        // Keep each independent occurrence/structural slot together. Within one
-        // slot, indexed selections may alias, so interleave their bits to keep
-        // the exact tag-equality relations in Guard::canonical compact as well.
-        self.choice
-            .occurrence
-            .cmp(&other.choice.occurrence)
-            .then_with(|| {
-                self.choice
-                    .path
-                    .as_slice()
-                    .iter()
-                    .map(|step| step.map_index(|_| ()))
-                    .cmp(
-                        other
-                            .choice
-                            .path
-                            .as_slice()
-                            .iter()
-                            .map(|step| step.map_index(|_| ())),
-                    )
-            })
-            .then_with(|| self.bit.cmp(&other.bit))
-            .then_with(|| self.choice.path.cmp(&other.choice.path))
-    }
-}
-
-impl PartialOrd for ChoiceBit<'_> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
 /// Leaves sit behind a handle: inlining an index condition in every node made a
 /// branch pay for a payload only the leaves carry.
 type Leaf<'db> = Arc<IndexCondition<'db>>;
-
-/// A guard's decision over enum choices, with index conditions at its leaves.
-///
-/// The operations are named in terms of choice keys and leaves rather than the
-/// graph underneath, because that is the whole vocabulary guards need and it is
-/// what a slot-indexed table would have to intercept.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct Condition<'db>(Decision<ChoiceBit<'db>, Leaf<'db>>);
 
 thread_local! {
     static CONSTANT_LEAVES: [Leaf<'static>; 2] =
@@ -591,32 +540,344 @@ fn constant_leaf<'db>(value: bool) -> Leaf<'db> {
     CONSTANT_LEAVES.with(|leaves| leaves[usize::from(value)].clone())
 }
 
-fn joined<'db>(
-    join: impl Fn(&IndexCondition<'db>, &IndexCondition<'db>) -> IndexCondition<'db>,
-) -> impl Fn(&Leaf<'db>, &Leaf<'db>) -> Leaf<'db> {
-    move |left, right| Arc::new(join(left, right))
+/// A choice bit in one slot of a condition's sorted choice table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct SlotChoice {
+    /// Independent occurrences and structural slots stay apart: interleaving them
+    /// makes unions of unrelated tag tests exponential.
+    group: u16,
+    /// Within one group, bits interleave, so indexed selections that may alias keep
+    /// exact tag equalities compact. This field order reproduces `ChoiceBit`'s.
+    bit: Reverse<u16>,
+    slot: u16,
+}
+
+/// Choice decisions name table slots rather than keys, so a decision carries no
+/// database lifetime and equal graphs can be shared process-wide.
+type ChoiceDecision = Decision<SlotChoice, u32>;
+
+/// A guard's decision over enum choices, with index conditions at its leaves.
+///
+/// The operations are named in terms of choice keys and leaves rather than the
+/// graph underneath, because that is the whole vocabulary guards need, and it is
+/// what lets the graph itself name only slots.
+#[derive(Clone, Debug)]
+struct Condition<'db> {
+    /// Sorted and distinct: exactly the choices the decision reads.
+    choices: Arc<[Arc<ChoiceKey<'db>>]>,
+    /// Sorted and distinct: exactly the leaves the decision reaches.
+    leaves: Arc<[Leaf<'db>]>,
+    decision: ChoiceDecision,
+    /// Conditions nest inside interned guards and key several maps, so hash the
+    /// tables once rather than on every enclosing hash.
+    hash: u64,
+}
+
+/// The one graph denoting this bit structure, so equal decisions share storage.
+fn shared_bits(decision: BitDecision) -> BitDecision {
+    SHARED_BITS.with_borrow_mut(|shared| {
+        if let Some(existing) = shared.get(&decision) {
+            return existing.clone();
+        }
+        if shared.len() >= 1 << 16 {
+            shared.retain(|decision| !decision.is_sole_owner());
+        }
+        shared.insert(decision.clone());
+        decision
+    })
+}
+
+/// The one graph denoting this structure, so equal decisions share their storage.
+/// A graph nothing else holds is dead weight, so drop those as the table grows.
+fn shared_decision(decision: ChoiceDecision) -> ChoiceDecision {
+    SHARED_CHOICES.with_borrow_mut(|shared| {
+        if let Some(existing) = shared.get(&decision) {
+            return existing.clone();
+        }
+        if shared.len() >= 1 << 16 {
+            shared.retain(|decision| !decision.is_sole_owner());
+        }
+        shared.insert(decision.clone());
+        decision
+    })
+}
+
+/// Choices order by occurrence, then by the shape of their path with indices
+/// erased, then by the path itself. Bits sort between the shape and the path,
+/// which is what `SlotChoice`'s field order expresses.
+fn choice_order(left: &ChoiceKey<'_>, right: &ChoiceKey<'_>) -> Ordering {
+    left.occurrence
+        .cmp(&right.occurrence)
+        .then_with(|| choice_shape(left).cmp(&choice_shape(right)))
+        .then_with(|| left.path.cmp(&right.path))
+}
+
+fn choice_shape(key: &ChoiceKey<'_>) -> Vec<Projection<()>> {
+    key.path
+        .as_slice()
+        .iter()
+        .map(|step| step.map_index(|_| ()))
+        .collect()
+}
+
+/// Group boundaries fall where the occurrence or the path shape changes.
+fn choice_groups(choices: &[Arc<ChoiceKey<'_>>]) -> Arc<[u16]> {
+    let mut groups = Vec::with_capacity(choices.len());
+    let mut group = 0u16;
+    for (position, choice) in choices.iter().enumerate() {
+        if position > 0 {
+            let previous = &choices[position - 1];
+            if previous.occurrence != choice.occurrence
+                || choice_shape(previous) != choice_shape(choice)
+            {
+                group += 1;
+            }
+        }
+        groups.push(group);
+    }
+    groups.into()
+}
+
+impl PartialEq for Condition<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash
+            && self.decision == other.decision
+            && self.choices == other.choices
+            && self.leaves == other.leaves
+    }
+}
+
+impl Eq for Condition<'_> {}
+
+impl Hash for Condition<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
+}
+
+impl Ord for Condition<'_> {
+    /// Order as the decision over the choices and leaves themselves, since slots
+    /// name each condition's own tables.
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self == other {
+            return Ordering::Equal;
+        }
+        self.decision.cmp_by(
+            &other.decision,
+            |left, right| {
+                left.bit.cmp(&right.bit).then_with(|| {
+                    choice_order(
+                        &self.choices[usize::from(left.slot)],
+                        &other.choices[usize::from(right.slot)],
+                    )
+                })
+            },
+            |left, right| self.leaves[*left as usize].cmp(&other.leaves[*right as usize]),
+        )
+    }
+}
+
+impl PartialOrd for Condition<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl<'db> Condition<'db> {
+    /// Build a condition over the tables a decision actually reads, dropping slots
+    /// and leaves it does not, so equal conditions have equal tables.
+    fn compact(
+        choices: Vec<Arc<ChoiceKey<'db>>>,
+        leaves: Vec<Leaf<'db>>,
+        decision: ChoiceDecision,
+    ) -> Self {
+        let mut read_choice = vec![false; choices.len()];
+        for bit in decision.variables() {
+            read_choice[usize::from(bit.slot)] = true;
+        }
+        let mut read_leaf = vec![false; leaves.len()];
+        for leaf in decision.leaves() {
+            read_leaf[*leaf as usize] = true;
+        }
+        let dense = |read: &[bool]| {
+            let mut next = 0u32;
+            read.iter()
+                .map(|read| {
+                    read.then(|| {
+                        next += 1;
+                        next - 1
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let choice_slots = dense(&read_choice);
+        let choices: Vec<_> = choices
+            .into_iter()
+            .zip(&read_choice)
+            .filter_map(|(choice, read)| read.then_some(choice))
+            .collect();
+        // Leaves arrive in whatever order an operation produced them, so sort them:
+        // equal conditions must have equal tables or they compare unequal, which
+        // would cost the very sharing the tables exist for.
+        let mut kept: Vec<_> = leaves
+            .iter()
+            .enumerate()
+            .zip(&read_leaf)
+            .filter_map(|((slot, leaf), read)| read.then_some((leaf.clone(), slot)))
+            .collect();
+        kept.sort_by(|(left, _), (right, _)| left.cmp(right));
+        let mut leaf_slots = vec![None; leaves.len()];
+        for (position, (_, slot)) in kept.iter().enumerate() {
+            leaf_slots[*slot] = Some(u32::try_from(position).expect("leaf table fits"));
+        }
+        let leaves: Vec<_> = kept.into_iter().map(|(leaf, _)| leaf).collect();
+        let groups = choice_groups(&choices);
+        let sorted = leaf_slots
+            .iter()
+            .enumerate()
+            .all(|(slot, mapped)| *mapped == Some(u32::try_from(slot).unwrap()));
+        let decision = if read_choice.iter().all(|read| *read) && sorted {
+            decision
+        } else {
+            decision.map(
+                |bit| {
+                    Variable::Symbol(SlotChoice {
+                        group: groups[choice_slots[usize::from(bit.slot)].unwrap() as usize],
+                        bit: bit.bit,
+                        slot: u16::try_from(choice_slots[usize::from(bit.slot)].unwrap()).unwrap(),
+                    })
+                },
+                |leaf| leaf_slots[*leaf as usize].unwrap(),
+            )
+        };
+        Self::new(choices.into(), leaves.into(), decision)
+    }
+
+    fn new(
+        choices: Arc<[Arc<ChoiceKey<'db>>]>,
+        leaves: Arc<[Leaf<'db>]>,
+        decision: ChoiceDecision,
+    ) -> Self {
+        let decision = shared_decision(decision);
+        let mut hasher = FxHasher::default();
+        choices.hash(&mut hasher);
+        leaves.hash(&mut hasher);
+        decision.hash(&mut hasher);
+        Self {
+            choices,
+            leaves,
+            decision,
+            hash: hasher.finish(),
+        }
+    }
+
+    /// Express both decisions over one merged pair of tables.
+    fn aligned(
+        &self,
+        other: &Self,
+    ) -> (
+        Vec<Arc<ChoiceKey<'db>>>,
+        Vec<Leaf<'db>>,
+        ChoiceDecision,
+        ChoiceDecision,
+    ) {
+        let mut choices: Vec<_> = self
+            .choices
+            .iter()
+            .chain(other.choices.iter())
+            .cloned()
+            .collect();
+        choices.sort_by(|left, right| choice_order(left, right));
+        choices.dedup_by(|left, right| choice_order(left, right).is_eq());
+        let mut leaves: Vec<_> = self
+            .leaves
+            .iter()
+            .chain(other.leaves.iter())
+            .cloned()
+            .collect();
+        leaves.sort();
+        leaves.dedup();
+        let groups = choice_groups(&choices);
+        let relabel = |condition: &Self| {
+            if condition.choices.len() == choices.len() && condition.leaves.len() == leaves.len() {
+                return condition.decision.clone();
+            }
+            condition.decision.map(
+                |bit| {
+                    let slot = choices
+                        .binary_search_by(|candidate| {
+                            choice_order(candidate, &condition.choices[usize::from(bit.slot)])
+                        })
+                        .expect("a merged table holds every choice");
+                    Variable::Symbol(SlotChoice {
+                        group: groups[slot],
+                        bit: bit.bit,
+                        slot: u16::try_from(slot).expect("choice table fits a slot"),
+                    })
+                },
+                |leaf| {
+                    leaves
+                        .binary_search(&condition.leaves[*leaf as usize])
+                        .expect("a merged table holds every leaf") as u32
+                },
+            )
+        };
+        let (left, right) = (relabel(self), relabel(other));
+        (choices, leaves, left, right)
+    }
+
+    /// Join two aligned decisions. The leaves are resolved into a product table
+    /// first, so the join itself reads only slots: that keeps it a pure function of
+    /// lifetime-free arguments, which is what lets equal joins be shared.
+    fn joined(
+        &self,
+        other: &Self,
+        join: impl Fn(&IndexCondition<'db>, &IndexCondition<'db>) -> IndexCondition<'db>,
+    ) -> Self {
+        let (choices, leaves, left, right) = self.aligned(other);
+        let width = leaves.len();
+        let mut results: Vec<Leaf<'db>> = Vec::new();
+        let mut product = vec![0u32; width * width];
+        for (row, value) in leaves.iter().enumerate() {
+            for (column, care) in leaves.iter().enumerate() {
+                product[row * width + column] = intern_leaf(&mut results, join(value, care));
+            }
+        }
+        let decision = left.apply(&right, |left, right| {
+            product[*left as usize * width + *right as usize]
+        });
+        Self::compact(choices, results, decision)
+    }
+
     fn constant(value: bool) -> Self {
-        Self(Decision::leaf(constant_leaf(value)))
+        Self::new(
+            Arc::from(Vec::new()),
+            Arc::from(vec![constant_leaf(value)]),
+            Decision::leaf(0),
+        )
     }
 
     /// One choice's tag bits, accepting exactly the valuation `value` describes.
     fn choice_bits(choice: &Arc<ChoiceKey<'db>>, bits: u16, value: impl Fn(u16) -> bool) -> Self {
-        Self(Decision::chain(
+        let decision = Decision::chain(
             (0..bits).map(|bit| {
                 (
-                    ChoiceBit {
-                        choice: choice.clone(),
+                    SlotChoice {
+                        group: 0,
                         bit: Reverse(bit),
+                        slot: 0,
                     },
                     value(bit),
                 )
             }),
-            constant_leaf(true),
-            constant_leaf(false),
-        ))
+            1,
+            0,
+        );
+        Self::compact(
+            vec![choice.clone()],
+            vec![constant_leaf(false), constant_leaf(true)],
+            decision,
+        )
     }
 
     /// Two choices agree on every tag bit, or `mismatch` holds.
@@ -625,106 +886,214 @@ impl<'db> Condition<'db> {
         right: &Arc<ChoiceKey<'db>>,
         mismatch: Leaf<'db>,
     ) -> Self {
-        Self(Decision::equal_bits(
+        let mut choices = vec![left.clone(), right.clone()];
+        choices.sort_by(|left, right| choice_order(left, right));
+        choices.dedup_by(|left, right| choice_order(left, right).is_eq());
+        let groups = choice_groups(&choices);
+        let slot = |key: &Arc<ChoiceKey<'db>>| {
+            let slot = choices
+                .binary_search_by(|candidate| choice_order(candidate, key))
+                .expect("both choices are in the table");
+            SlotChoice {
+                group: groups[slot],
+                bit: Reverse(0),
+                slot: u16::try_from(slot).expect("choice table fits a slot"),
+            }
+        };
+        let (left_slot, right_slot) = (slot(left), slot(right));
+        let decision = Decision::equal_bits(
             (0..u16::BITS as u16).map(|bit| {
                 (
-                    ChoiceBit {
+                    SlotChoice {
                         bit: Reverse(bit),
-                        choice: left.clone(),
+                        ..left_slot
                     },
-                    ChoiceBit {
+                    SlotChoice {
                         bit: Reverse(bit),
-                        choice: right.clone(),
+                        ..right_slot
                     },
                 )
             }),
-            constant_leaf(true),
-            mismatch,
-        ))
+            1,
+            0,
+        );
+        Self::compact(choices, vec![mismatch, constant_leaf(true)], decision)
+    }
+
+    fn leaf_value(&self) -> Option<&Leaf<'db>> {
+        self.decision
+            .leaf_value()
+            .map(|slot| &self.leaves[*slot as usize])
     }
 
     fn is_always(&self) -> bool {
-        self.0.leaf_value().is_some_and(|leaf| leaf.is_always())
+        self.leaf_value().is_some_and(|leaf| leaf.is_always())
     }
 
     fn is_never(&self) -> bool {
-        self.0.leaf_value().is_some_and(|leaf| leaf.is_never())
+        self.leaf_value().is_some_and(|leaf| leaf.is_never())
     }
 
     fn and(&self, other: &Self) -> Self {
-        Self(self.0.apply(&other.0, joined(IndexCondition::and)))
+        self.joined(other, IndexCondition::and)
     }
 
     fn or(&self, other: &Self) -> Self {
-        Self(self.0.apply(&other.0, joined(IndexCondition::or)))
+        self.joined(other, IndexCondition::or)
     }
 
     /// Everything this decision accepts that `other` rejects.
     fn without(&self, other: &Self) -> Self {
-        Self(
-            self.0
-                .apply(&other.0, |left, right| Arc::new(left.and(&right.not()))),
-        )
+        self.joined(other, |left, right| left.and(&right.not()))
     }
 
     /// Rebuild the choice keys this decision reads.
     fn map_keys(&self, rename: impl FnMut(&ChoiceKey<'db>) -> ChoiceKey<'db>) -> Self {
-        Self(self.0.map(renamed_choices(rename), Clone::clone))
+        self.map_keys_and_leaves(rename, Clone::clone)
     }
 
-    fn map_leaves(&self, mut leaf: impl FnMut(&Leaf<'db>) -> Leaf<'db>) -> Self {
-        Self(
-            self.0
-                .map(|bit| Variable::Symbol(bit.clone()), |old| leaf(old)),
-        )
+    fn map_leaves(&self, leaf: impl FnMut(&Leaf<'db>) -> Leaf<'db>) -> Self {
+        self.map_keys_and_leaves(Clone::clone, leaf)
     }
 
     /// Rebuild keys and leaves together, as canonicalization does per alternative.
+    /// Either can reorder its table, so both are rebuilt and the decision is
+    /// expressed over the new order.
     fn map_keys_and_leaves(
         &self,
-        rename: impl FnMut(&ChoiceKey<'db>) -> ChoiceKey<'db>,
+        mut rename: impl FnMut(&ChoiceKey<'db>) -> ChoiceKey<'db>,
         mut leaf: impl FnMut(&Leaf<'db>) -> Leaf<'db>,
     ) -> Self {
-        Self(self.0.map(renamed_choices(rename), |old| leaf(old)))
+        let renamed: Vec<Arc<ChoiceKey<'db>>> = self
+            .choices
+            .iter()
+            .map(|choice| Arc::new(rename(choice)))
+            .collect();
+        let mut choices = renamed.clone();
+        choices.sort_by(|left, right| choice_order(left, right));
+        choices.dedup_by(|left, right| choice_order(left, right).is_eq());
+        let groups = choice_groups(&choices);
+        let mapped: Vec<Leaf<'db>> = self.leaves.iter().map(&mut leaf).collect();
+        let mut leaves = mapped.clone();
+        leaves.sort();
+        leaves.dedup();
+        let decision = self.decision.map(
+            |bit| {
+                let slot = choices
+                    .binary_search_by(|candidate| {
+                        choice_order(candidate, &renamed[usize::from(bit.slot)])
+                    })
+                    .expect("every renamed choice is in the table");
+                Variable::Symbol(SlotChoice {
+                    group: groups[slot],
+                    bit: bit.bit,
+                    slot: u16::try_from(slot).expect("choice table fits a slot"),
+                })
+            },
+            |old| {
+                u32::try_from(
+                    leaves
+                        .binary_search(&mapped[*old as usize])
+                        .expect("every mapped leaf is in the table"),
+                )
+                .expect("leaf table fits")
+            },
+        );
+        Self::compact(choices, leaves, decision)
     }
 
     /// Existentially quantify every key the predicate selects.
     fn forget_keys(&self, mut selected: impl FnMut(&ChoiceKey<'db>) -> bool) -> Self {
-        Self(
-            self.0
-                .exists(|bit| selected(&bit.choice), joined(IndexCondition::or)),
-        )
+        // Quantification joins its own results, so unlike a pairwise apply its leaves
+        // must come from a table closed under the join. Grow one as it goes rather
+        // than tabulating a product the results would escape.
+        let leaves = RefCell::new(self.leaves.to_vec());
+        let joins = RefCell::new(FxHashMap::<(u32, u32), u32>::default());
+        let decision = self.decision.exists(
+            |bit| selected(&self.choices[usize::from(bit.slot)]),
+            |left, right| {
+                if let Some(slot) = joins.borrow().get(&(*left, *right)) {
+                    return *slot;
+                }
+                let joined = {
+                    let leaves = leaves.borrow();
+                    leaves[*left as usize].or(&leaves[*right as usize])
+                };
+                let slot = intern_leaf(&mut leaves.borrow_mut(), joined);
+                joins.borrow_mut().insert((*left, *right), slot);
+                slot
+            },
+        );
+        Self::compact(self.choices.to_vec(), leaves.into_inner(), decision)
     }
 
     /// Complete this decision outside the valuations `care` admits.
     fn restricted(&self, care: &Self) -> Option<Self> {
-        self.0
-            .restrict(&care.0, &constant_leaf(false), |value, care| {
-                value.restrict(care).map(Arc::new)
-            })
-            .map(Self)
+        let (choices, leaves, decision, care) = self.aligned(care);
+        let width = leaves.len();
+        let mut results: Vec<Leaf<'db>> = Vec::new();
+        let mut product = vec![None; width * width];
+        for (row, value) in leaves.iter().enumerate() {
+            for (column, care) in leaves.iter().enumerate() {
+                product[row * width + column] = value
+                    .restrict(care)
+                    .map(|restricted| intern_leaf(&mut results, restricted));
+            }
+        }
+        // Restriction reads this against the care decision's own leaves, so it names
+        // a slot in the merged table, not in the results. A table without `never`
+        // has no slot that could match, which no care leaf would have anyway.
+        let never = Arc::new(IndexCondition::never());
+        let empty = leaves
+            .iter()
+            .position(|leaf| *leaf == never)
+            .map_or(u32::MAX, |slot| {
+                u32::try_from(slot).expect("leaf table fits")
+            });
+        let decision = decision.restrict(&care, &empty, |value, care| {
+            product[*value as usize * width + *care as usize]
+        })?;
+        Some(Self::compact(choices, results, decision))
     }
 
     fn keys(&self) -> impl Iterator<Item = &ChoiceKey<'db>> {
-        self.0.variables().map(|bit| &*bit.choice)
+        self.choices.iter().map(|choice| &**choice)
     }
 
     /// The keys as shared handles, for rebuilding decisions over them.
     fn key_handles(&self) -> impl Iterator<Item = &Arc<ChoiceKey<'db>>> {
-        self.0.variables().map(|bit| &bit.choice)
+        self.choices.iter()
     }
 
     fn leaves(&self) -> impl Iterator<Item = &Leaf<'db>> {
-        self.0.leaves()
+        self.leaves.iter()
     }
 
     fn node_count(&self) -> usize {
-        self.0.node_count() + self.0.leaves().map(|leaf| leaf.node_count()).sum::<usize>()
+        self.decision.node_count()
+            + self
+                .leaves
+                .iter()
+                .map(|leaf| leaf.node_count())
+                .sum::<usize>()
     }
 
     fn is_sole_owner(&self) -> bool {
-        self.0.is_sole_owner()
+        self.decision.is_sole_owner()
     }
+}
+
+/// Place a leaf in a result table, reusing the slot of an equal one.
+fn intern_leaf<'db>(results: &mut Vec<Leaf<'db>>, leaf: IndexCondition<'db>) -> u32 {
+    let leaf = Arc::new(leaf);
+    let slot = results
+        .iter()
+        .position(|result| *result == leaf)
+        .unwrap_or_else(|| {
+            results.push(leaf);
+            results.len() - 1
+        });
+    u32::try_from(slot).expect("leaf table fits")
 }
 
 /// Fixpoint iteration rebuilds values from the same guards, so their unions and

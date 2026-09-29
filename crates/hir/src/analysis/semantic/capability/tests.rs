@@ -8,7 +8,7 @@ use std::{
 
 use super::{
     birth::AllocationBirth,
-    decision::live_graph_storage,
+    decision::{duplicated_graphs, live_graph_storage},
     external::{
         AddressProvenance, ClobberCondition, ExternalOrigin, ExternalSource, FeedbackPlaces,
         FeedbackRepeats, FeedbackSlot, MemoryOffset, ProviderStorage, ReferentContract,
@@ -3914,7 +3914,8 @@ fn repeated_cached_guard_operations_share_one_backing_allocation() {
     assert_eq!(
         (allocations, excess),
         (distinct, 0),
-        "{allocations} live graph allocations hold {excess} bytes beyond {distinct} distinct graphs"
+        "{allocations} live allocations hold {excess} bytes beyond {distinct} distinct: {:?}",
+        duplicated_graphs()
     );
 }
 
