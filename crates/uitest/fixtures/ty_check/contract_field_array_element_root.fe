@@ -5,4 +5,6 @@ struct Slot<T, const ROOT: u256 = _> {}
 contract C {
     // Array elements share one type, so they cannot carry distinct layout roots.
     values: StorPtr<[Slot<u256>; 2]>,
+    // The rule holds at every length, including zero.
+    empty: StorPtr<[Slot<u256>; 0]>,
 }

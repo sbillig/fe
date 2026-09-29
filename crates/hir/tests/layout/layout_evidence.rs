@@ -540,6 +540,7 @@ fn plain(values: [u256; 2]) {}
         messages,
         [
             "array of layout-root values in `caller`",
+            "array of layout-root values in `empty`",
             "array of layout-root values in `explicit`",
             "array of layout-root values in `generic`",
             "array of layout-root values in `inferred`",
@@ -1845,7 +1846,7 @@ fn choose<const ROOT: u256>(left: bool) -> Rooted<ROOT> {
 }
 
 #[test]
-fn zero_length_arrays_do_not_require_runtime_layout_evidence() {
+fn zero_length_arrays_of_layout_root_values_are_rejected() {
     parse_ok!(
         db,
         top_mod,
@@ -1861,9 +1862,15 @@ fn empty<const ROOT: u256>() -> [Rooted<ROOT>; 0] {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "empty"))),
     );
-    let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    assert!(evidence.output.schema.components.is_empty());
-    assert!(evidence.params.is_empty());
+    let error = layout_evidence_body(&db, instance)
+        .expect_err("a zero-length array of layout-root values is still rejected");
+    assert!(
+        matches!(
+            error.unrepresentable(),
+            Some(LayoutBundleUnrepresentable::RootArray { .. })
+        ),
+        "{error:?}"
+    );
 }
 
 #[test]

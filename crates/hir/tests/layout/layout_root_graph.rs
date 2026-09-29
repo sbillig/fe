@@ -463,7 +463,6 @@ struct Phantom<T> { value: u256 }
 
 contract C {
     mut phantom: Phantom<Handle<Root>>,
-    mut zero: [Handle<Root>; 0],
     mut live: Root,
 }
 "#,
@@ -472,7 +471,6 @@ contract C {
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
     assert!(field(&db, contract, "phantom").occurrences.is_empty());
-    assert!(field(&db, contract, "zero").occurrences.is_empty());
     assert_eq!(
         field(&db, contract, "live").cells[0]
             .allocation
@@ -741,7 +739,6 @@ struct Phantom<T> { value: u256 }
 struct Slot<const ROOT: u256 = _> {}
 
 contract C {
-    mut zero: [Rooted<1>; 0],
     mut phantom: Phantom<Rooted<2>>,
     mut live: Rooted<3>,
     mut first: Slot,
@@ -753,7 +750,6 @@ contract C {
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
-    assert!(field(&db, contract, "zero").concrete_occurrences.is_empty());
     assert!(
         field(&db, contract, "phantom")
             .concrete_occurrences
@@ -1537,13 +1533,22 @@ contract C {
     mut nested: [Holder; 2],
     mut unknown_len: Slots,
     mut empty: [Slot; 0],
+    mut explicit_empty: [Slot<7>; 0],
     mut plain: [u256; 2],
+    mut plain_empty: [u256; 0],
 }
 "#,
     );
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db);
-    for field in ["inferred", "explicit", "nested", "unknown_len"] {
+    for field in [
+        "inferred",
+        "explicit",
+        "nested",
+        "unknown_len",
+        "empty",
+        "explicit_empty",
+    ] {
         let errors = layout
             .field_errors(&IdentId::new(&db, field.to_string()))
             .unwrap_or_else(|| panic!("`{field}` must be rejected"));
@@ -1554,7 +1559,7 @@ contract C {
             "{field}: {errors:?}"
         );
     }
-    for field in ["empty", "plain"] {
+    for field in ["plain", "plain_empty"] {
         assert!(
             layout
                 .field_errors(&IdentId::new(&db, field.to_string()))
@@ -2513,7 +2518,7 @@ fn read(maps: [StorageMap<u256, u256>; 2], lane: usize, key: u256) -> u256 {
 }
 
 #[test]
-fn zero_length_callable_arrays_have_no_layout_evidence() {
+fn zero_length_callable_arrays_of_layout_roots_are_unrepresentable() {
     parse_ok!(
         db,
         top_mod,
@@ -2545,10 +2550,9 @@ fn ignore(values: [Slot; 0]) {}
     .expect("missing zero-length input schema");
 
     assert!(schema.components.is_empty());
-    assert!(
-        callable_layout_bundle_signature(&db, func)
-            .inputs
-            .is_empty()
+    assert_eq!(
+        schema.unrepresentable,
+        Some(LayoutBundleUnrepresentable::RootArray { array: Vec::new() })
     );
 }
 

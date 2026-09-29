@@ -1972,9 +1972,6 @@ impl<'db> FieldCollector<'db> {
             }
             return WalkOutput::empty();
         };
-        if len == 0 {
-            return WalkOutput::empty();
-        }
         let element = instantiate_layout_template(
             self.db,
             element,
@@ -1994,9 +1991,12 @@ impl<'db> FieldCollector<'db> {
             mode,
         );
         // Every element shares one element type, so the elements cannot carry
-        // distinct layout roots.
+        // distinct layout roots. This holds at every extent, including zero.
         if (self.occurrences.len(), self.concrete_occurrences.len()) != occurrences {
             self.push_error(ContractLayoutError::LayoutRootArray { array: ty });
+            return WalkOutput::empty();
+        }
+        if len == 0 {
             return WalkOutput::empty();
         }
         let Some(inline_span) = output.inline_span.checked_mul(len) else {

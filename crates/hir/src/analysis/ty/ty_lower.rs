@@ -1091,10 +1091,10 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
         }
         if ty.is_array(self.db) {
             if let Some(&element) = ty.generic_args(self.db).first() {
-                // Slot identities follow the structural traversal, even when
-                // the extent is deferred or zero. Only physical evidence needs
-                // a known nonzero extent. Skipping the traversal would both lose
-                // indexed slots and renumber roots in later sibling fields.
+                // The element is traversed even when the extent is deferred or
+                // zero: roots must be detected at every extent, and skipping
+                // the traversal would renumber roots in later sibling fields.
+                // Only the projected-type tables need a known nonzero extent.
                 let extent = ty
                     .array_len(self.db)
                     .filter(|&len| materialized && len != 0);
@@ -1213,7 +1213,7 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
         });
         let args = ty.generic_args(self.db);
         let forwarded_params = forwarded_layout_params(self.db, adt);
-        for (param_idx, arg) in args.iter().copied().enumerate().filter(|_| materialized) {
+        for (param_idx, arg) in args.iter().copied().enumerate() {
             if !matches!(arg.data(self.db), TyData::ConstTy(_)) {
                 continue;
             }
@@ -1224,7 +1224,11 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             let declared_layout_param = adt
                 .param_set(self.db)
                 .const_param_default_is_slot_layout_hole(self.db, param_idx);
-            let bound_arg = self.record_ty(path, arg, index_lengths);
+            let bound_arg = if materialized {
+                self.record_ty(path, arg, index_lengths)
+            } else {
+                self.bind_ty(arg)
+            };
             let placeholders = collect_unique_layout_placeholders_in_order(self.db, bound_arg);
             if placeholders.is_empty() && !self.in_array_element {
                 self.port_tys
