@@ -2,6 +2,7 @@
 use rustc_hash::FxHashSet;
 #[cfg(test)]
 use std::cell::Cell;
+use std::sync::Arc;
 use std::{
     cmp::{Ordering, min},
     collections::{BTreeMap, BTreeSet},
@@ -149,7 +150,9 @@ pub struct SymbolicPlace<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RegionSet<'db> {
     scope: BinderScope,
-    clauses: Box<[Guarded<'db, SymbolicPlace<'db>>]>,
+    // Regions are cloned on every capability lookup, so share the clauses rather
+    // than copying them.
+    clauses: Arc<[Guarded<'db, SymbolicPlace<'db>>]>,
 }
 
 /// Proof that one typed store selects a unique destination under its guard.
@@ -184,7 +187,7 @@ impl<'db> RegionSet<'db> {
     pub fn empty(scope: &BinderScope) -> Self {
         Self {
             scope: scope.clone(),
-            clauses: Box::new([]),
+            clauses: Arc::from(Vec::new()),
         }
     }
 
@@ -393,7 +396,7 @@ impl<'db> RegionSet<'db> {
             scope,
             regions.into_iter().flat_map(|region| {
                 assert_eq!(&region.scope, scope, "region scopes must match");
-                region.clauses.into_vec()
+                region.clauses.iter().cloned().collect::<Vec<_>>()
             }),
         )
     }
@@ -555,8 +558,8 @@ impl<'db> RegionSet<'db> {
         assert_eq!(self.scope, other.scope, "region scopes must match");
         let mut clauses = Vec::new();
         let mut uncertain = false;
-        for left in &self.clauses {
-            for right in &other.clauses {
+        for left in self.clauses.iter() {
+            for right in other.clauses.iter() {
                 let (left, right, ..) = open_clause_pair(left, right, &self.scope);
                 // Distinct raw-handle occurrences can name overlapping bases.
                 // Their field paths cannot prove disjointness without base identity.
@@ -686,7 +689,7 @@ impl<'db> RegionSet<'db> {
             &self.scope,
             self.clauses.iter().filter_map(|moved| {
                 let mut remaining = Some(moved.guard.clone());
-                for write in &written.clauses {
+                for write in written.clauses.iter() {
                     if write.guard.scope() != &self.scope
                         || write.payload.path.as_slice().len() > moved.payload.path.as_slice().len()
                     {
