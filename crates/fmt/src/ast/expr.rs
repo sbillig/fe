@@ -979,7 +979,7 @@ impl ToDoc for ast::IfExpr {
             self.syntax(),
             indent,
             |node| {
-                if let Some(expr) = ast::Expr::cast(node.clone()) {
+                if let Some(expr) = ast::Expr::cast(node) {
                     expr_count += 1;
                     let piece = TokenPiece::new(expr.to_doc(ctx));
                     return Some(if expr_count == 1 {

@@ -523,7 +523,7 @@ impl<'db> CtfeConstValue<'db> {
                 value: SemConstScalar::Int { value },
             } => CtfeConstKind::Int {
                 ty,
-                value: CtfeInt::from_bigint(db, ty, value.clone()),
+                value: CtfeInt::from_bigint(db, ty, value),
             },
             SemConstValue::Scalar {
                 ty,
@@ -556,7 +556,7 @@ impl<'db> CtfeConstValue<'db> {
                 value: SemConstScalar::Int { value },
             } => CtfeConstKind::Int {
                 ty,
-                value: CtfeInt::from_bigint(db, ty, value.clone()),
+                value: CtfeInt::from_bigint(db, ty, value),
             },
             SemConstValue::Scalar {
                 ty,
@@ -1977,11 +1977,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 else {
                     return Err(CtfeError::NotConstEvaluable { origin });
                 };
-                Ok(u256_from_bigint(&normalize_int_to_shape(
-                    value.clone(),
-                    256,
-                    false,
-                )))
+                Ok(u256_from_bigint(&normalize_int_to_shape(value, 256, false)))
             }
             _ => Err(CtfeError::NotConstEvaluable { origin }),
         }
@@ -2009,7 +2005,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 else {
                     return Err(CtfeError::NotConstEvaluable { origin });
                 };
-                value.clone()
+                value
             }
             _ => return Err(CtfeError::NotConstEvaluable { origin }),
         };
@@ -2438,7 +2434,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 SemConstValue::Scalar {
                     value: SemConstScalar::Int { value },
                     ..
-                } => Ok(value.clone()),
+                } => Ok(value),
                 _ => Err(CtfeError::InvalidOperation {
                     origin,
                     message: "expected int".into(),
@@ -2476,7 +2472,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     ty,
                     value: SemConstScalar::Int { value },
                 } if int_ty_shape(self.db, ty) == Some((bits, signed)) => Ok(Some(
-                    u256_from_bigint(&normalize_int_to_shape(value.clone(), bits, false)),
+                    u256_from_bigint(&normalize_int_to_shape(value, bits, false)),
                 )),
                 SemConstValue::Scalar {
                     value: SemConstScalar::Int { .. },

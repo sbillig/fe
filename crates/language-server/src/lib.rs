@@ -99,7 +99,7 @@ pub async fn run_stdio_server(combined: Option<CombinedServerConfig>) {
             .layer(LifecycleLayer::default())
             .layer(CatchUnwindLayer::default())
             .layer(ConcurrencyLayer::default())
-            .layer(ClientProcessMonitorLayer::new(client.clone()))
+            .layer(ClientProcessMonitorLayer::new(client))
             .service(lsp_service)
     });
 
@@ -139,7 +139,7 @@ pub async fn run_tcp_server(port: u16, timeout: Duration) {
                     .layer(LifecycleLayer::default())
                     .layer(CatchUnwindLayer::default())
                     .layer(ConcurrencyLayer::default())
-                    .layer(ClientProcessMonitorLayer::new(client.clone()))
+                    .layer(ClientProcessMonitorLayer::new(client))
                     .service(router)
             });
             let logging = logging::setup_default_subscriber(client);

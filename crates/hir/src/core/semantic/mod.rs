@@ -729,10 +729,10 @@ fn elaborate_func_param_ty<'db>(
     };
 
     if had_layout_hole {
-        let func_name = func.name(db).to_opt().map_or_else(
-            || "<anonymous>".to_string(),
-            |name| name.data(db).to_string(),
-        );
+        let func_name = func
+            .name(db)
+            .to_opt()
+            .map_or_else(|| "<anonymous>".to_string(), |name| name.data(db).clone());
         debug_assert!(
             !ty_contains_const_hole(db, ty) || ty.has_invalid(db),
             "unelaborated layout hole remained in callable parameter type for {func_name} param {param_idx}: {}",

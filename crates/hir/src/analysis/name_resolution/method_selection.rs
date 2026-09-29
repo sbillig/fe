@@ -940,7 +940,7 @@ fn test_it() {
         let impls = impls_for_ty(&db, std_ingot, Canonical::new(&db, address));
         let impl_trait_names: Vec<_> = impls
             .iter()
-            .map(|imp| imp.trait_(&db).pretty_print(&db, false).to_string())
+            .map(|imp| imp.trait_(&db).pretty_print(&db, false))
             .collect();
 
         assert!(

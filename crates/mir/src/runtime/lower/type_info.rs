@@ -228,7 +228,7 @@ pub(crate) fn runtime_array_len<'db>(
     demand_concrete_array_length(db, len, len)
         .map_err(|error| {
             let reason = match error {
-                ConcreteArrayLengthError::Invalid(cause) => cause.pretty_print(db).to_string(),
+                ConcreteArrayLengthError::Invalid(cause) => cause.pretty_print(db),
                 ConcreteArrayLengthError::Mismatch => {
                     "canonical and source array lengths disagree".to_string()
                 }

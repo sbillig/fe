@@ -610,8 +610,7 @@ mod tests {
     fn generate_test_lsif(code: &str) -> String {
         let mut db = DriverDataBase::default();
         let url = url::Url::parse("file:///test.fe").unwrap();
-        db.workspace()
-            .touch(&mut db, url.clone(), Some(code.to_string()));
+        db.workspace().touch(&mut db, url, Some(code.to_string()));
 
         let ingot_url = url::Url::parse("file:///").unwrap();
         let mut output = Vec::new();

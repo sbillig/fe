@@ -935,7 +935,7 @@ impl<'db> TyId<'db> {
 
         let TyData::TyBase(base) = base.data(db) else {
             return Some(ApplicableTyProp {
-                kind: applicable_kind.clone(),
+                kind: applicable_kind,
                 const_ty: None,
             });
         };
@@ -967,7 +967,7 @@ impl<'db> TyId<'db> {
         };
 
         Some(ApplicableTyProp {
-            kind: applicable_kind.clone(),
+            kind: applicable_kind,
             const_ty,
         })
     }

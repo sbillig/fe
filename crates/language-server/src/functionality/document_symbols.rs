@@ -12,7 +12,7 @@ pub async fn handle_document_symbols(
     backend: &Backend,
     params: async_lsp::lsp_types::DocumentSymbolParams,
 ) -> Result<Option<DocumentSymbolResponse>, ResponseError> {
-    let url = backend.map_client_uri_to_internal(params.text_document.uri.clone());
+    let url = backend.map_client_uri_to_internal(params.text_document.uri);
 
     let file = backend
         .db

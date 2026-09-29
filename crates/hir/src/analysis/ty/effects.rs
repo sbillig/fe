@@ -158,9 +158,7 @@ pub fn place_effect_provider_param_index_map<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
 ) -> Vec<Option<usize>> {
-    func_implicit_param_plan(db, func)
-        .provider_param_index_by_effect
-        .clone()
+    func_implicit_param_plan(db, func).provider_param_index_by_effect
 }
 
 pub(crate) fn resolve_effect_key<'db>(

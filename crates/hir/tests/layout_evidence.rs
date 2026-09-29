@@ -579,10 +579,7 @@ fn forward<const ROOT: u256>(ptr: Ptr<Rooted<ROOT>>) -> Rooted<ROOT> {
         }
         let owner = instance.key(&db).owner(&db);
         let name = match owner {
-            BodyOwner::Func(func) => func
-                .name(&db)
-                .to_opt()
-                .map(|name| name.data(&db).to_string()),
+            BodyOwner::Func(func) => func.name(&db).to_opt().map(|name| name.data(&db).clone()),
             _ => None,
         };
         layout_evidence_body(&db, instance).unwrap_or_else(|error| {

@@ -70,7 +70,7 @@ impl MockLspClient {
     /// Spawn the real server and connect a mock client.
     pub async fn start() -> Self {
         let (server_main, server_client_socket) = MainLoop::new_server(|client| {
-            let lsp_service = setup(client.clone(), "test-actor".to_string());
+            let lsp_service = setup(client, "test-actor".to_string());
             ServiceBuilder::new()
                 .layer(LifecycleLayer::default())
                 .layer(ConcurrencyLayer::default())
@@ -107,7 +107,7 @@ impl MockLspClient {
 
         let (client_main, server_socket) = MainLoop::new_client(move |_| {
             let diags = diag_collector.clone();
-            let logs = log_collector.clone();
+            let logs = log_collector;
             let mut router = async_lsp::router::Router::new(());
             router
                 .notification::<PublishDiagnostics>(move |_, params| {
