@@ -4,6 +4,8 @@
 //! disequality, and bounds share one Boolean algebra. Enum decisions have index conditions
 //! as leaves. Neither graph enumerates array elements or depends on construction order.
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
+#[cfg(test)]
+use std::cell::Cell;
 use std::{
     cell::RefCell,
     cmp::{Ordering, Reverse},
@@ -25,6 +27,11 @@ use crate::analysis::semantic::{
 };
 
 const INDEX_BITS: u16 = 256;
+
+#[cfg(test)]
+thread_local! {
+    static RESTRICTIONS: Cell<usize> = const { Cell::new(0) };
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ValueOccurrence {
@@ -488,6 +495,8 @@ impl<'db> IndexCondition<'db> {
     }
 
     fn restrict(&self, care: &Self) -> Option<Self> {
+        #[cfg(test)]
+        RESTRICTIONS.set(RESTRICTIONS.get() + 1);
         let (indices, decision, care) = self.aligned(care);
         BitOperation::Restrict(decision, care)
             .run()
@@ -852,27 +861,23 @@ impl<'db> Condition<'db> {
         (choices, leaves, left, right)
     }
 
-    /// Join two aligned decisions. The leaves are resolved into a product table
-    /// first, so the join itself reads only slots: that keeps it a pure function of
-    /// lifetime-free arguments, which is what lets equal joins be shared.
+    /// Join two aligned decisions, joining leaves only as the traversal reaches them.
+    /// A reduced graph holds each leaf once and the traversal memoizes node pairs,
+    /// so each reachable pair is joined once. Tabulating every pair of the merged
+    /// table instead also joined pairs no valuation reaches, including pairs from
+    /// the same side, which made sparse joins quadratic in their leaves.
     fn joined(
         &self,
         other: &Self,
         join: impl Fn(&IndexCondition<'db>, &IndexCondition<'db>) -> IndexCondition<'db>,
     ) -> Self {
         let (choices, leaves, left, right) = self.aligned(other);
-        let width = leaves.len();
-        let mut results: Vec<Leaf<'db>> = Vec::new();
-        let mut product = vec![0u32; width * width];
-        for (row, value) in leaves.iter().enumerate() {
-            for (column, care) in leaves.iter().enumerate() {
-                product[row * width + column] = intern_leaf(&mut results, join(value, care));
-            }
-        }
+        let results = RefCell::new(Vec::new());
         let decision = left.apply(&right, |left, right| {
-            product[*left as usize * width + *right as usize]
+            let joined = join(&leaves[*left as usize], &leaves[*right as usize]);
+            intern_leaf(&mut results.borrow_mut(), joined)
         });
-        Self::compact(choices, results, decision)
+        Self::compact(choices, results.into_inner(), decision)
     }
 
     fn constant(value: bool) -> Self {
@@ -1054,18 +1059,9 @@ impl<'db> Condition<'db> {
     }
 
     /// Complete this decision outside the valuations `care` admits.
+    /// Leaf pairs are restricted as the traversal reaches them, as in `joined`.
     fn restricted(&self, care: &Self) -> Option<Self> {
         let (choices, leaves, decision, care) = self.aligned(care);
-        let width = leaves.len();
-        let mut results: Vec<Leaf<'db>> = Vec::new();
-        let mut product = vec![None; width * width];
-        for (row, value) in leaves.iter().enumerate() {
-            for (column, care) in leaves.iter().enumerate() {
-                product[row * width + column] = value
-                    .restrict(care)
-                    .map(|restricted| intern_leaf(&mut results, restricted));
-            }
-        }
         // Restriction reads this against the care decision's own leaves, so it names
         // a slot in the merged table, not in the results. A table without `never`
         // has no slot that could match, which no care leaf would have anyway.
@@ -1076,10 +1072,13 @@ impl<'db> Condition<'db> {
             .map_or(u32::MAX, |slot| {
                 u32::try_from(slot).expect("leaf table fits")
             });
+        let results = RefCell::new(Vec::new());
         let decision = decision.restrict(&care, &empty, |value, care| {
-            product[*value as usize * width + *care as usize]
+            leaves[*value as usize]
+                .restrict(&leaves[*care as usize])
+                .map(|restricted| intern_leaf(&mut results.borrow_mut(), restricted))
         })?;
-        Some(Self::compact(choices, results, decision))
+        Some(Self::compact(choices, results.into_inner(), decision))
     }
 
     fn keys(&self) -> impl Iterator<Item = &ChoiceKey<'db>> {
@@ -1603,6 +1602,47 @@ mod tests {
             shared.graphs.retain(|graph| !graph.is_sole_owner());
             shared.graphs.len()
         })
+    }
+
+    /// Each side selects one of 32 index conditions by one enum choice, so only
+    /// matching alternatives meet: 33 reachable leaf pairs, against 65 * 65 in the
+    /// merged table.
+    fn alternatives<'db>(scope: &BinderScope, index: u32) -> Guard<'db> {
+        let choice = ChoiceKey::new(ValueOccurrence::Argument(0), StructuralPath::default());
+        (0..32)
+            .map(|variant| {
+                Guard::always(scope)
+                    .with_variant(choice.clone(), VariantIndex(variant))
+                    .unwrap()
+                    .with_equality(
+                        IndexExpr::Runtime(NValueId::from_u32(index)),
+                        IndexExpr::Const(variant.into()),
+                    )
+                    .unwrap()
+            })
+            .reduce(|left, right| left.or(&right))
+            .unwrap()
+    }
+
+    #[test]
+    fn joins_and_restrictions_evaluate_only_reachable_leaf_pairs() {
+        let scope = BinderScope::default();
+        let (left, right) = (alternatives(&scope, 0), alternatives(&scope, 1));
+        let joins = Cell::new(0);
+        let joined = left.condition.joined(&right.condition, |left, right| {
+            joins.set(joins.get() + 1);
+            left.and(right)
+        });
+        assert_eq!(joined, left.condition.and(&right.condition));
+        assert_eq!(joins.get(), 33, "a join evaluated unreachable leaf pairs");
+        // Restriction never evaluates a leaf the care decision excludes.
+        let before = RESTRICTIONS.get();
+        left.condition.restricted(&right.condition).unwrap();
+        assert_eq!(
+            RESTRICTIONS.get() - before,
+            32,
+            "a restriction evaluated unreachable leaf pairs"
+        );
     }
 
     #[test]
