@@ -265,8 +265,7 @@ fn display_missing_pattern<'db>(
             ConstructorKind::Variant(variant, _) => {
                 let variant_name = variant
                     .name(db)
-                    .map(|name| name.to_string())
-                    .unwrap_or_else(|| "UnknownVariant".to_string());
+                    .map_or_else(|| "UnknownVariant".to_string(), |name| name.to_string());
                 let enum_name = match variant.enum_.name(db) {
                     crate::core::hir_def::Partial::Present(name) => name.data(db).to_string(),
                     crate::core::hir_def::Partial::Absent => "UnknownEnum".to_string(),

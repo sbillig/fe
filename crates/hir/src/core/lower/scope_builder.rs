@@ -122,8 +122,7 @@ impl<'db> ScopeGraphBuilder<'db> {
                 inner
                     .name(self.db)
                     .to_opt()
-                    .map(EdgeKind::mod_)
-                    .unwrap_or_else(EdgeKind::anon)
+                    .map_or_else(EdgeKind::anon, EdgeKind::mod_)
             }
 
             Func(inner) => {
@@ -160,8 +159,7 @@ impl<'db> ScopeGraphBuilder<'db> {
                 inner
                     .name(self.db)
                     .to_opt()
-                    .map(EdgeKind::value)
-                    .unwrap_or_else(EdgeKind::anon)
+                    .map_or_else(EdgeKind::anon, EdgeKind::value)
             }
 
             Struct(inner) => {
@@ -177,8 +175,7 @@ impl<'db> ScopeGraphBuilder<'db> {
                 inner
                     .name(self.db)
                     .to_opt()
-                    .map(EdgeKind::type_)
-                    .unwrap_or_else(EdgeKind::anon)
+                    .map_or_else(EdgeKind::anon, EdgeKind::type_)
             }
 
             Contract(inner) => {
@@ -194,8 +191,7 @@ impl<'db> ScopeGraphBuilder<'db> {
                 inner
                     .name(self.db)
                     .to_opt()
-                    .map(EdgeKind::type_)
-                    .unwrap_or_else(EdgeKind::anon)
+                    .map_or_else(EdgeKind::anon, EdgeKind::type_)
             }
 
             Enum(inner) => {
@@ -211,8 +207,7 @@ impl<'db> ScopeGraphBuilder<'db> {
                 inner
                     .name(self.db)
                     .to_opt()
-                    .map(EdgeKind::type_)
-                    .unwrap_or_else(EdgeKind::anon)
+                    .map_or_else(EdgeKind::anon, EdgeKind::type_)
             }
 
             TypeAlias(inner) => {
@@ -225,8 +220,7 @@ impl<'db> ScopeGraphBuilder<'db> {
                 inner
                     .name(self.db)
                     .to_opt()
-                    .map(EdgeKind::type_)
-                    .unwrap_or_else(EdgeKind::anon)
+                    .map_or_else(EdgeKind::anon, EdgeKind::type_)
             }
 
             Impl(inner) => {
@@ -256,8 +250,7 @@ impl<'db> ScopeGraphBuilder<'db> {
                 inner
                     .name(self.db)
                     .to_opt()
-                    .map(EdgeKind::trait_)
-                    .unwrap_or_else(EdgeKind::anon)
+                    .map_or_else(EdgeKind::anon, EdgeKind::trait_)
             }
 
             ImplTrait(inner) => {
@@ -277,8 +270,7 @@ impl<'db> ScopeGraphBuilder<'db> {
                 inner
                     .name(self.db)
                     .to_opt()
-                    .map(EdgeKind::value)
-                    .unwrap_or_else(EdgeKind::anon)
+                    .map_or_else(EdgeKind::anon, EdgeKind::value)
             }
 
             StaticAssert(_) => {
@@ -366,8 +358,7 @@ impl<'db> ScopeGraphBuilder<'db> {
             let kind = field
                 .name
                 .to_opt()
-                .map(EdgeKind::field)
-                .unwrap_or_else(EdgeKind::anon);
+                .map_or_else(EdgeKind::anon, EdgeKind::field);
             self.graph.add_edge(parent_node, field_node, kind)
         }
     }
@@ -390,8 +381,7 @@ impl<'db> ScopeGraphBuilder<'db> {
             let kind = variant_def
                 .name
                 .to_opt()
-                .map(EdgeKind::variant)
-                .unwrap_or_else(EdgeKind::anon);
+                .map_or_else(EdgeKind::anon, EdgeKind::variant);
 
             if let VariantKind::Record(fields) = variant_def.kind {
                 self.add_field_scope(variant_node, FieldParent::Variant(variant), fields)
@@ -416,11 +406,10 @@ impl<'db> ScopeGraphBuilder<'db> {
             let kind = param
                 .name
                 .to_opt()
-                .map(|name| match name {
+                .map_or_else(EdgeKind::anon, |name| match name {
                     FuncParamName::Ident(ident) => EdgeKind::value(ident),
                     FuncParamName::Underscore => EdgeKind::anon(),
-                })
-                .unwrap_or_else(EdgeKind::anon);
+                });
             self.graph.add_edge(parent_node, func_param_node, kind)
         }
     }
@@ -440,8 +429,7 @@ impl<'db> ScopeGraphBuilder<'db> {
             let kind = param
                 .name()
                 .to_opt()
-                .map(EdgeKind::generic_param)
-                .unwrap_or_else(EdgeKind::anon);
+                .map_or_else(EdgeKind::anon, EdgeKind::generic_param);
             self.graph.add_edge(parent_node, generic_param_node, kind)
         }
     }
@@ -456,8 +444,7 @@ impl<'db> ScopeGraphBuilder<'db> {
             let kind = trait_type
                 .name
                 .to_opt()
-                .map(EdgeKind::trait_type)
-                .unwrap_or_else(EdgeKind::anon);
+                .map_or_else(EdgeKind::anon, EdgeKind::trait_type);
             self.graph.add_edge(parent_node, trait_type_node, kind)
         }
     }
@@ -472,8 +459,7 @@ impl<'db> ScopeGraphBuilder<'db> {
             let kind = assoc_const
                 .name
                 .to_opt()
-                .map(EdgeKind::value)
-                .unwrap_or_else(EdgeKind::anon);
+                .map_or_else(EdgeKind::anon, EdgeKind::value);
             self.graph.add_edge(parent_node, const_node, kind)
         }
     }
@@ -488,8 +474,7 @@ impl<'db> ScopeGraphBuilder<'db> {
             let kind = assoc_const
                 .name
                 .to_opt()
-                .map(EdgeKind::value)
-                .unwrap_or_else(EdgeKind::anon);
+                .map_or_else(EdgeKind::anon, EdgeKind::value);
             self.graph.add_edge(parent_node, const_node, kind)
         }
     }

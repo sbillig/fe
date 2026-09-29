@@ -517,12 +517,10 @@ pub(super) fn escape_source<'db>(
             let name = match &borrowck.body.roots[root.index()].kind {
                 NRootKind::LocalSlot {
                     binding: Some(binding),
-                } => borrowck
-                    .body
-                    .template_owner
-                    .body(borrowck.db)
-                    .map(|body| binding.pretty_name_in_body(borrowck.db, body))
-                    .unwrap_or_else(|| format!("%r{}", root.index())),
+                } => borrowck.body.template_owner.body(borrowck.db).map_or_else(
+                    || format!("%r{}", root.index()),
+                    |body| binding.pretty_name_in_body(borrowck.db, body),
+                ),
                 _ => format!("%r{}", root.index()),
             };
             if matches!(boundary, Boundary::Retained) {

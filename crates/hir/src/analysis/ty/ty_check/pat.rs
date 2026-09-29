@@ -479,8 +479,9 @@ impl<'db> TyChecker<'db> {
             Ok(PathRes::Const(const_def, ty)) => (
                 ty,
                 self.eval_const_pattern_literal(ConstRef::Const(const_def), expected)
-                    .map(|lit| self.literal_constructor_status(expected, lit))
-                    .unwrap_or(PatternAnalysisStatus::Unsupported),
+                    .map_or(PatternAnalysisStatus::Unsupported, |lit| {
+                        self.literal_constructor_status(expected, lit)
+                    }),
             ),
 
             Ok(PathRes::TraitConst(recv_ty, inst, name)) => {
@@ -534,8 +535,9 @@ impl<'db> TyChecker<'db> {
                     (
                         ty,
                         self.eval_const_pattern_literal(cref, expected)
-                            .map(|lit| self.literal_constructor_status(expected, lit))
-                            .unwrap_or(PatternAnalysisStatus::Unsupported),
+                            .map_or(PatternAnalysisStatus::Unsupported, |lit| {
+                                self.literal_constructor_status(expected, lit)
+                            }),
                     )
                 } else {
                     (
@@ -563,8 +565,9 @@ impl<'db> TyChecker<'db> {
                     (
                         ty,
                         self.eval_const_pattern_literal(cref, expected)
-                            .map(|lit| self.literal_constructor_status(expected, lit))
-                            .unwrap_or(PatternAnalysisStatus::Unsupported),
+                            .map_or(PatternAnalysisStatus::Unsupported, |lit| {
+                                self.literal_constructor_status(expected, lit)
+                            }),
                     )
                 } else {
                     (

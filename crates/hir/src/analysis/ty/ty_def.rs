@@ -522,10 +522,7 @@ impl<'db> TyId<'db> {
     }
 
     pub fn is_core_dyn_string(self, db: &'db dyn HirAnalysisDb) -> bool {
-        let ty = self
-            .as_capability(db)
-            .map(|(_, inner)| inner)
-            .unwrap_or(self);
+        let ty = self.as_capability(db).map_or(self, |(_, inner)| inner);
         let base = ty.base_ty(db);
         let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
             return false;
@@ -1492,8 +1489,7 @@ impl<'db> TyParam<'db> {
                     let effect_name = effect
                         .name(db)
                         .or_else(|| effect.key_path(db).and_then(|path| path.ident(db).to_opt()))
-                        .map(|ident| ident.data(db).to_string())
-                        .unwrap_or_else(|| "_effect".to_string());
+                        .map_or_else(|| "_effect".to_string(), |ident| ident.data(db).to_string());
                     return effect_name;
                 }
             }
@@ -1694,20 +1690,17 @@ impl<'db> TyBase<'db> {
 
             Self::Adt(adt) => adt
                 .name(db)
-                .map(|i| i.data(db).to_string())
-                .unwrap_or_else(|| "<unknown>".to_string()),
+                .map_or_else(|| "<unknown>".to_string(), |i| i.data(db).to_string()),
 
             Self::Contract(contract) => contract
                 .name(db)
                 .to_opt()
-                .map(|i| i.data(db).to_string())
-                .unwrap_or_else(|| "<unknown>".to_string()),
+                .map_or_else(|| "<unknown>".to_string(), |i| i.data(db).to_string()),
 
             Self::Func(func) => format!(
                 "fn {}",
                 func.name(db)
-                    .map(|n| n.data(db).to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string())
+                    .map_or_else(|| "<unknown>".to_string(), |n| n.data(db).to_string())
             ),
         }
     }

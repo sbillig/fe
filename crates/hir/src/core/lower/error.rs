@@ -80,8 +80,7 @@ pub(super) fn lower_error_struct<'db>(
     if !generic_params.data(db).is_empty() {
         let range = ast
             .generic_params()
-            .map(|g| g.syntax().text_range())
-            .unwrap_or_else(|| ast.syntax().text_range());
+            .map_or_else(|| ast.syntax().text_range(), |g| g.syntax().text_range());
         ErrorDiagnostic {
             kind: ErrorDiagnosticKind::GenericErrorStruct,
             file,
@@ -224,8 +223,7 @@ fn parse_error_fields<'db>(
                 file,
                 primary_range: field
                     .ty()
-                    .map(|t| t.syntax().text_range())
-                    .unwrap_or_else(|| field.syntax().text_range()),
+                    .map_or_else(|| field.syntax().text_range(), |t| t.syntax().text_range()),
                 struct_name: struct_name.map(|s| s.to_string()),
                 field_name: name_tok.map(|n| n.text().to_string()),
             }

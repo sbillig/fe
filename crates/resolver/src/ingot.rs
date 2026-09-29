@@ -421,11 +421,10 @@ impl IngotResolverImpl {
         description: &GitDescription,
         checkout_path: &Utf8Path,
     ) -> Result<Url, IngotResolutionError> {
-        let ingot_path = description
-            .path
-            .as_ref()
-            .map(|relative| checkout_path.join(relative))
-            .unwrap_or_else(|| checkout_path.to_owned());
+        let ingot_path = description.path.as_ref().map_or_else(
+            || checkout_path.to_owned(),
+            |relative| checkout_path.join(relative),
+        );
         if !ingot_path.exists() || !ingot_path.is_dir() {
             let url = Url::from_directory_path(ingot_path.as_std_path())
                 .or_else(|_| Url::from_file_path(ingot_path.as_std_path()))
@@ -659,10 +658,9 @@ impl IngotResolverImpl {
                     .files
                     .iter()
                     .find(|file| file.path.as_str().ends_with("fe.toml"))
-                    .map(|config_file| FeTomlProbe::Present {
+                    .map_or(FeTomlProbe::Missing, |config_file| FeTomlProbe::Present {
                         kind_hint: infer_config_kind(&config_file.content),
-                    })
-                    .unwrap_or(FeTomlProbe::Missing);
+                    });
 
                 <H as ResolutionHandler<IngotResolverImpl>>::on_resolution_event(
                     self.handler,

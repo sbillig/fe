@@ -454,8 +454,7 @@ pub async fn handle_file_change(
     let is_fe_toml = path
         .file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name == "fe.toml")
-        .unwrap_or(false);
+        .is_some_and(|name| name == "fe.toml");
 
     match message.kind {
         ChangeKind::Open(contents) => {

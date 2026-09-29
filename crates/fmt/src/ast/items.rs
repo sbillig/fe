@@ -393,13 +393,12 @@ fn func_sig_to_doc<'a>(
 
     let params_doc = sig
         .params()
-        .map(|params| params.to_doc(ctx))
-        .unwrap_or_else(|| alloc.text("()"));
+        .map_or_else(|| alloc.text("()"), |params| params.to_doc(ctx));
 
-    let ret_doc = sig
-        .ret_ty()
-        .map(|ty| alloc.text(" -> ").append(ty.to_doc(ctx)))
-        .unwrap_or_else(|| alloc.nil());
+    let ret_doc = sig.ret_ty().map_or_else(
+        || alloc.nil(),
+        |ty| alloc.text(" -> ").append(ty.to_doc(ctx)),
+    );
 
     let has_uses = sig.uses_clause().is_some();
     let has_where = sig.where_clause().is_some();
@@ -417,7 +416,7 @@ fn func_sig_to_doc<'a>(
         let mut buf = Vec::new();
         let _ = core_sig.clone().into_doc().render(10000, &mut buf);
         let s = String::from_utf8(buf).unwrap_or_default();
-        s.lines().next().map(|l| l.len()).unwrap_or(0)
+        s.lines().next().map_or(0, |l| l.len())
     };
 
     // Force clauses to new lines if:
@@ -427,16 +426,16 @@ fn func_sig_to_doc<'a>(
     let force_where_break = has_where && (ctx.config.where_new_line || core_flat_len > 60);
     let force_clause_break = force_uses_break || force_where_break;
 
-    let uses_doc = sig
-        .uses_clause()
-        .map(|u| {
+    let uses_doc = sig.uses_clause().map_or_else(
+        || alloc.nil(),
+        |u| {
             if force_uses_break {
                 alloc.hardline().append(u.to_doc(ctx))
             } else {
                 alloc.line().append(u.to_doc(ctx))
             }
-        })
-        .unwrap_or_else(|| alloc.nil());
+        },
+    );
 
     let where_clause = if force_where_break {
         where_doc_forced(sig, ctx)
@@ -687,15 +686,14 @@ impl ToDoc for ast::Struct {
 
         let name = self
             .name()
-            .map(|n| alloc.text(ctx.token(&n)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
         let generics = generics_doc(self, ctx);
         let where_clause = where_doc(self, ctx);
 
-        let fields_doc = self
-            .fields()
-            .map(|f| alloc.text(" ").append(f.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.text(" {}"));
+        let fields_doc = self.fields().map_or_else(
+            || alloc.text(" {}"),
+            |f| alloc.text(" ").append(f.to_doc(ctx)),
+        );
 
         attrs
             .append(modifier)
@@ -885,12 +883,9 @@ impl ToDoc for ast::Contract {
 
             let name = self
                 .name()
-                .map(|n| alloc.text(ctx.token(&n)))
-                .unwrap_or_else(|| alloc.nil());
+                .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
 
-            let uses_doc = uses_doc
-                .map(|u| alloc.text(" ").append(u))
-                .unwrap_or_else(|| alloc.nil());
+            let uses_doc = uses_doc.map_or_else(|| alloc.nil(), |u| alloc.text(" ").append(u));
 
             return attrs
                 .append(modifier)
@@ -930,18 +925,15 @@ impl ToDoc for ast::ContractInit {
 
         let params_doc = self
             .params()
-            .map(|params| params.to_doc(ctx))
-            .unwrap_or_else(|| alloc.text("()"));
+            .map_or_else(|| alloc.text("()"), |params| params.to_doc(ctx));
 
         let uses_doc = self
             .uses_clause()
-            .map(|u| alloc.line().append(u.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |u| alloc.line().append(u.to_doc(ctx)));
 
         let body_doc = self
             .body()
-            .map(|b| alloc.line().append(b.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |b| alloc.line().append(b.to_doc(ctx)));
 
         attrs
             .append(alloc.text("init"))
@@ -962,13 +954,12 @@ impl ToDoc for ast::ContractRecv {
 
         let path_doc = self
             .path()
-            .map(|p| alloc.text(" ").append(p.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |p| alloc.text(" ").append(p.to_doc(ctx)));
 
-        let arms_doc = self
-            .arms()
-            .map(|arms| alloc.text(" ").append(arms.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.text(" {}"));
+        let arms_doc = self.arms().map_or_else(
+            || alloc.text(" {}"),
+            |arms| alloc.text(" ").append(arms.to_doc(ctx)),
+        );
 
         attrs
             .append(alloc.text("recv"))
@@ -991,15 +982,12 @@ impl ToDoc for ast::RecvArm {
 
         let attrs = attrs_doc(self, ctx);
 
-        let pat_doc = self
-            .pat()
-            .map(|p| p.to_doc(ctx))
-            .unwrap_or_else(|| alloc.nil());
+        let pat_doc = self.pat().map_or_else(|| alloc.nil(), |p| p.to_doc(ctx));
 
-        let ret_ty_doc = self
-            .ret_ty()
-            .map(|ty| alloc.text(" -> ").append(ty.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+        let ret_ty_doc = self.ret_ty().map_or_else(
+            || alloc.nil(),
+            |ty| alloc.text(" -> ").append(ty.to_doc(ctx)),
+        );
 
         let has_uses = self.uses_clause().is_some();
 
@@ -1009,7 +997,7 @@ impl ToDoc for ast::RecvArm {
             let mut buf = Vec::new();
             let _ = core_sig.clone().into_doc().render(10000, &mut buf);
             let s = String::from_utf8(buf).unwrap_or_default();
-            s.lines().next().map(|l| l.len()).unwrap_or(0)
+            s.lines().next().map_or(0, |l| l.len())
         };
 
         // Force uses to a new line if:
@@ -1017,28 +1005,28 @@ impl ToDoc for ast::RecvArm {
         // - the core signature is long (> 40 chars)
         let force_uses_break = has_uses && (ctx.config.uses_new_line || core_flat_len > 40);
 
-        let uses_doc = self
-            .uses_clause()
-            .map(|u| {
+        let uses_doc = self.uses_clause().map_or_else(
+            || alloc.nil(),
+            |u| {
                 if force_uses_break {
                     alloc.hardline().append(u.to_doc(ctx))
                 } else {
                     alloc.text(" ").append(u.to_doc(ctx))
                 }
-            })
-            .unwrap_or_else(|| alloc.nil());
+            },
+        );
 
-        let body_doc = self
-            .body()
-            .map(|b| {
+        let body_doc = self.body().map_or_else(
+            || alloc.nil(),
+            |b| {
                 if force_uses_break {
                     // If uses broke to new line, put body on new line too
                     alloc.hardline().append(b.to_doc(ctx))
                 } else {
                     alloc.text(" ").append(b.to_doc(ctx))
                 }
-            })
-            .unwrap_or_else(|| alloc.nil());
+            },
+        );
 
         attrs
             .append(pat_doc)
@@ -1059,15 +1047,14 @@ impl ToDoc for ast::Enum {
 
         let name = self
             .name()
-            .map(|n| alloc.text(ctx.token(&n)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
         let generics = generics_doc(self, ctx);
         let where_clause = where_doc(self, ctx);
 
-        let variants_doc = self
-            .variants()
-            .map(|v| alloc.text(" ").append(v.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.text(" {}"));
+        let variants_doc = self.variants().map_or_else(
+            || alloc.text(" {}"),
+            |v| alloc.text(" ").append(v.to_doc(ctx)),
+        );
 
         attrs
             .append(modifier)
@@ -1104,8 +1091,7 @@ impl ToDoc for ast::VariantDef {
 
         let name = self
             .name()
-            .map(|n| alloc.text(ctx.token(&n)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
 
         let kind_doc = match self.kind() {
             ast::VariantKind::Unit => alloc.nil(),
@@ -1158,21 +1144,19 @@ impl ToDoc for ast::Trait {
 
         let name = self
             .name()
-            .map(|n| alloc.text(ctx.token(&n)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
         let generics = generics_doc(self, ctx);
 
         let super_traits = self
             .super_trait_list()
-            .map(|s| s.to_doc(ctx))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |s| s.to_doc(ctx));
 
         let where_clause = where_doc(self, ctx);
 
-        let items_doc = self
-            .item_list()
-            .map(|items| alloc.text(" ").append(items.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.text(" {}"));
+        let items_doc = self.item_list().map_or_else(
+            || alloc.text(" {}"),
+            |items| alloc.text(" ").append(items.to_doc(ctx)),
+        );
 
         attrs
             .append(modifier)
@@ -1211,18 +1195,14 @@ impl ToDoc for ast::TraitTypeItem {
 
         let name = self
             .name()
-            .map(|n| alloc.text(ctx.token(&n)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
 
-        let bounds_doc = self
-            .bounds()
-            .map(|b| b.to_doc(ctx))
-            .unwrap_or_else(|| alloc.nil());
+        let bounds_doc = self.bounds().map_or_else(|| alloc.nil(), |b| b.to_doc(ctx));
 
-        let ty_doc = self
-            .ty()
-            .map(|ty| alloc.text(" = ").append(ty.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+        let ty_doc = self.ty().map_or_else(
+            || alloc.nil(),
+            |ty| alloc.text(" = ").append(ty.to_doc(ctx)),
+        );
 
         attrs
             .append(alloc.text("type "))
@@ -1242,18 +1222,15 @@ impl ToDoc for ast::TraitConstItem {
 
         let name = self
             .name()
-            .map(|n| alloc.text(ctx.token(&n)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
 
         let ty_doc = self
             .ty()
-            .map(|ty| alloc.text(": ").append(ty.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |ty| alloc.text(": ").append(ty.to_doc(ctx)));
 
         let value_doc = self
             .value()
-            .map(|v| alloc.text(" = ").append(v.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |v| alloc.text(" = ").append(v.to_doc(ctx)));
 
         let modifier = modifier_doc(self, ctx);
 
@@ -1277,15 +1254,14 @@ impl ToDoc for ast::Impl {
 
         let ty_doc = self
             .ty()
-            .map(|ty| alloc.text(" ").append(ty.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |ty| alloc.text(" ").append(ty.to_doc(ctx)));
 
         let where_clause = where_doc(self, ctx);
 
-        let items_doc = self
-            .item_list()
-            .map(|items| alloc.text(" ").append(items.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.text(" {}"));
+        let items_doc = self.item_list().map_or_else(
+            || alloc.text(" {}"),
+            |items| alloc.text(" ").append(items.to_doc(ctx)),
+        );
 
         attrs
             .append(alloc.text("impl"))
@@ -1322,20 +1298,19 @@ impl ToDoc for ast::ImplTrait {
 
         let trait_doc = self
             .trait_ref()
-            .map(|t| alloc.text(" ").append(t.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |t| alloc.text(" ").append(t.to_doc(ctx)));
 
-        let ty_doc = self
-            .ty()
-            .map(|ty| alloc.text(" for ").append(ty.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+        let ty_doc = self.ty().map_or_else(
+            || alloc.nil(),
+            |ty| alloc.text(" for ").append(ty.to_doc(ctx)),
+        );
 
         let where_clause = where_doc(self, ctx);
 
-        let items_doc = self
-            .item_list()
-            .map(|items| alloc.text(" ").append(items.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.text(" {}"));
+        let items_doc = self.item_list().map_or_else(
+            || alloc.text(" {}"),
+            |items| alloc.text(" ").append(items.to_doc(ctx)),
+        );
 
         attrs
             .append(alloc.text("impl"))
@@ -1358,18 +1333,15 @@ impl ToDoc for ast::Const {
 
         let name = self
             .name()
-            .map(|n| alloc.text(ctx.token(&n)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
 
         let ty_doc = self
             .ty()
-            .map(|ty| alloc.text(": ").append(ty.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |ty| alloc.text(": ").append(ty.to_doc(ctx)));
 
         let value_doc = self
             .value()
-            .map(|v| alloc.text(" = ").append(v.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |v| alloc.text(" = ").append(v.to_doc(ctx)));
 
         attrs
             .append(modifier)
@@ -1389,8 +1361,7 @@ impl ToDoc for ast::StaticAssert {
         let attrs = attrs_doc(self, ctx);
         let condition = self
             .condition()
-            .map(|condition| condition.to_doc(ctx))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |condition| condition.to_doc(ctx));
 
         attrs
             .append(alloc.text("static_assert("))
@@ -1410,8 +1381,7 @@ impl ToDoc for ast::Use {
 
         let tree_doc = self
             .use_tree()
-            .map(|t| t.to_doc(ctx))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |t| t.to_doc(ctx));
 
         attrs
             .append(modifier)
@@ -1512,14 +1482,13 @@ impl ToDoc for ast::TypeAlias {
 
         let alias = self
             .alias()
-            .map(|a| alloc.text(ctx.token(&a)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |a| alloc.text(ctx.token(&a)));
         let generics = generics_doc(self, ctx);
 
-        let ty_doc = self
-            .ty()
-            .map(|ty| alloc.text(" = ").append(ty.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+        let ty_doc = self.ty().map_or_else(
+            || alloc.nil(),
+            |ty| alloc.text(" = ").append(ty.to_doc(ctx)),
+        );
 
         attrs
             .append(modifier)
@@ -1541,17 +1510,16 @@ impl ToDoc for ast::Mod {
 
         let name = self
             .name()
-            .map(|n| alloc.text(ctx.token(&n)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
 
-        let items_doc = self
-            .items()
-            .map(|items| {
+        let items_doc = self.items().map_or_else(
+            || alloc.nil(),
+            |items| {
                 alloc
                     .text(" ")
                     .append(block_items_doc(items.syntax(), ast::Item::cast, ctx))
-            })
-            .unwrap_or_else(|| alloc.nil());
+            },
+        );
 
         attrs
             .append(modifier)
@@ -1569,10 +1537,10 @@ impl ToDoc for ast::Extern {
 
         let attrs = attrs_doc(self, ctx);
 
-        let items_doc = self
-            .extern_block()
-            .map(|items| alloc.text(" ").append(items.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.text(" {}"));
+        let items_doc = self.extern_block().map_or_else(
+            || alloc.text(" {}"),
+            |items| alloc.text(" ").append(items.to_doc(ctx)),
+        );
 
         attrs.append(alloc.text("extern")).append(items_doc)
     }
@@ -1595,13 +1563,12 @@ impl ToDoc for ast::Msg {
 
         let name = self
             .name()
-            .map(|n| alloc.text(ctx.token(&n)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
 
-        let variants_doc = self
-            .variants()
-            .map(|v| alloc.text(" ").append(v.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.text(" {}"));
+        let variants_doc = self.variants().map_or_else(
+            || alloc.text(" {}"),
+            |v| alloc.text(" ").append(v.to_doc(ctx)),
+        );
 
         attrs
             .append(modifier)
@@ -1636,18 +1603,16 @@ impl ToDoc for ast::MsgVariant {
 
         let name = self
             .name()
-            .map(|n| alloc.text(ctx.token(&n)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
 
         let params_doc = self
             .params()
-            .map(|p| alloc.text(" ").append(p.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |p| alloc.text(" ").append(p.to_doc(ctx)));
 
-        let ret_ty_doc = self
-            .ret_ty()
-            .map(|ty| alloc.text(" -> ").append(ty.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+        let ret_ty_doc = self.ret_ty().map_or_else(
+            || alloc.nil(),
+            |ty| alloc.text(" -> ").append(ty.to_doc(ctx)),
+        );
 
         attrs.append(name).append(params_doc).append(ret_ty_doc)
     }

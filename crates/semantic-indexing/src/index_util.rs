@@ -23,15 +23,14 @@ pub(crate) fn is_container_item(item: ItemKind) -> bool {
 
 /// Resolve the display name for an ingot, using config metadata with kind-based fallback.
 pub(crate) fn ingot_display_name(db: &dyn InputDb, ingot: Ingot) -> String {
-    ingot
-        .config(db)
-        .and_then(|c| c.metadata.name)
-        .map(|n| n.to_string())
-        .unwrap_or_else(|| match ingot.kind(db) {
+    ingot.config(db).and_then(|c| c.metadata.name).map_or_else(
+        || match ingot.kind(db) {
             common::ingot::IngotKind::Core => "core".to_string(),
             common::ingot::IngotKind::Std => "std".to_string(),
             _ => "unknown".to_string(),
-        })
+        },
+        |n| n.to_string(),
+    )
 }
 
 /// Byte-offset index of line starts in a text string.
@@ -74,10 +73,7 @@ impl LineIndex {
     /// Column is a byte offset from the start of the line (matching SCIP's
     /// UTF-8 position encoding).
     pub fn byte_offset_from_line_col(&self, line: usize, col: usize) -> usize {
-        self.offsets
-            .get(line)
-            .map(|&start| start + col)
-            .unwrap_or(0)
+        self.offsets.get(line).map_or(0, |&start| start + col)
     }
 }
 
@@ -101,8 +97,7 @@ impl<'db> IngotContext<'db> {
         let name = ingot_display_name(db, ingot);
         let version = ingot
             .version(db)
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "0.0.0".to_string());
+            .map_or_else(|| "0.0.0".to_string(), |v| v.to_string());
 
         // Pre-warm per-module reference resolution in parallel.
         // This populates salsa's cache before the tracked query reads it.

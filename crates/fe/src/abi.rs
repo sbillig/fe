@@ -109,8 +109,7 @@ pub fn generate_contract_abi(
         .find(|c| {
             c.name(db)
                 .to_opt()
-                .map(|n| n.data(db).as_str() == contract_name)
-                .unwrap_or(false)
+                .is_some_and(|n| n.data(db).as_str() == contract_name)
         })
         .copied()
     else {
@@ -208,8 +207,7 @@ fn recv_arm_to_abi_entry(
     let variant_name = variant_struct
         .name(db)
         .to_opt()
-        .map(|name| name.data(db).to_string())
-        .unwrap_or_else(|| "<unknown>".to_string());
+        .map_or_else(|| "<unknown>".to_string(), |name| name.data(db).to_string());
     if !variant_has_canonical_json_abi_shape(db, variant_struct) {
         return Ok(RecvArmAbiEmission::Skip(format!(
             "skipping recv arm `{variant_name}`: ABI shape is not compiler-known for manual `MsgVariant` impls; only `msg`-generated variants are emitted"

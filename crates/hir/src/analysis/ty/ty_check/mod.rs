@@ -901,8 +901,9 @@ fn typed_body_for_bodyless_func<'db>(
             let mut ty = *func
                 .arg_tys(db)
                 .get(idx)
-                .map(|binder| binder.skip_binder())
-                .unwrap_or(&TyId::invalid(db, InvalidCause::ParseError));
+                .map_or(&TyId::invalid(db, InvalidCause::ParseError), |binder| {
+                    binder.skip_binder()
+                });
             if !ty.is_star_kind(db) || (!view.is_self_param(db) && ty_contains_const_hole(db, ty)) {
                 ty = TyId::invalid(db, InvalidCause::Other);
             }
@@ -1362,8 +1363,7 @@ impl<'db> TyChecker<'db> {
             place
                 .projections
                 .last()
-                .map(|projection| projection.result_ty())
-                .unwrap_or(binding_ty),
+                .map_or(binding_ty, |projection| projection.result_ty()),
             self.env.scope(),
             self.env.assumptions(),
         );
@@ -2088,16 +2088,12 @@ impl<'db> TyChecker<'db> {
                                 if let Some(kind) =
                                     self.code_region_method_kind(recv_ty, pending.method_name)
                                     && call_args.len() == 1
-                                    && self
-                                        .env
-                                        .typed_expr(call_args[0].expr)
-                                        .map(|prop| {
-                                            ty_may_be_code_region_token(
-                                                db,
-                                                normalize_ty(db, prop.ty, scope, assumptions),
-                                            )
-                                        })
-                                        .unwrap_or(false)
+                                    && self.env.typed_expr(call_args[0].expr).is_some_and(|prop| {
+                                        ty_may_be_code_region_token(
+                                            db,
+                                            normalize_ty(db, prop.ty, scope, assumptions),
+                                        )
+                                    })
                                 {
                                     self.env.register_code_region_intrinsic(
                                         pending.expr,

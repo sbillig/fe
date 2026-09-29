@@ -74,8 +74,10 @@ pub async fn run(
                     .and_then(|a| a.first())
                     .and_then(|m| m.get("name"))
                     .and_then(|n| n.as_str())
-                    .map(|n| format!("{n} — Fe Documentation"))
-                    .unwrap_or_else(|| "Fe Documentation".to_string());
+                    .map_or_else(
+                        || "Fe Documentation".to_string(),
+                        |n| format!("{n} — Fe Documentation"),
+                    );
 
                 let mut new_html = fe_web::assets::html_shell_full(
                     &title,

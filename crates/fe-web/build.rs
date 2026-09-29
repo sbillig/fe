@@ -49,8 +49,7 @@ fn main() {
 
 fn stamp_matches(stamp_file: &Path, expected_stamp: &str) -> bool {
     fs::read_to_string(stamp_file)
-        .map(|stamp| stamp.trim_end_matches(['\r', '\n']) == expected_stamp)
-        .unwrap_or(false)
+        .is_ok_and(|stamp| stamp.trim_end_matches(['\r', '\n']) == expected_stamp)
 }
 
 fn tree_sitter_inputs(grammar_dir: &Path) -> Vec<(&'static str, PathBuf)> {

@@ -40,10 +40,7 @@ pub(super) fn parse_expr_atom<S: TokenStream>(
         Some(SyntaxKind::Ident) => {
             // Contextual 'with': only treat as with-block when:
             // ident text is "with" AND we can parse a WithParamList AND next is '{'
-            let is_with = parser
-                .current_token()
-                .map(|t| t.text() == "with")
-                .unwrap_or(false)
+            let is_with = parser.current_token().is_some_and(|t| t.text() == "with")
                 && matches!(
                     parser.peek_n_non_trivia(2).as_slice(),
                     [SyntaxKind::Ident, SyntaxKind::LParen]
@@ -164,10 +161,7 @@ impl super::Parse for WithExprScope {
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         // Expect `with` identifier
-        let is_with = parser
-            .current_token()
-            .map(|t| t.text() == "with")
-            .unwrap_or(false);
+        let is_with = parser.current_token().is_some_and(|t| t.text() == "with");
         if !is_with {
             return parser.error_and_recover("expected `with`");
         }

@@ -105,8 +105,7 @@ fn builtin_core_calls_have_semantic_lowerings() {
                 let name = func
                     .name(&db)
                     .to_opt()
-                    .map(|name| name.data(&db).to_string())
-                    .unwrap_or_else(|| "<fn>".to_string());
+                    .map_or_else(|| "<fn>".to_string(), |name| name.data(&db).to_string());
                 missing.push(format!("{name}: {expr:?}"));
             }
         }

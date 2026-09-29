@@ -1097,8 +1097,7 @@ impl<'db> ImplementorId<'db> {
                 contract
                     .name(db)
                     .to_opt()
-                    .map(|n| n.data(db).to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string())
+                    .map_or_else(|| "<unknown>".to_string(), |n| n.data(db).to_string())
             ),
             ImplementorOrigin::Assumption => {
                 panic!("requested HIR impl-trait for assumption-based implementor")
@@ -1396,8 +1395,7 @@ impl<'db> TraitInstId<'db> {
                 .def(db)
                 .name(db)
                 .to_opt()
-                .map(|n| n.data(db).as_str())
-                .unwrap_or("<unknown>")
+                .map_or("<unknown>", |n| n.data(db).as_str())
                 .to_string();
 
             let mut args = self.args(db).iter().map(|ty| ty.pretty_print(db));

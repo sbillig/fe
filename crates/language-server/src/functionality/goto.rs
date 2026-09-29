@@ -106,12 +106,10 @@ pub async fn handle_goto_definition(
             }
             let start = text[..offset]
                 .rfind(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-                .map(|i| i + 1)
-                .unwrap_or(0);
+                .map_or(0, |i| i + 1);
             let end = text[offset..]
                 .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-                .map(|i| i + offset)
-                .unwrap_or(text.len());
+                .map_or(text.len(), |i| i + offset);
             let line_offsets = crate::util::calculate_line_offsets(text);
             let to_pos = |off: usize| -> async_lsp::lsp_types::Position {
                 let line = line_offsets
@@ -334,8 +332,7 @@ mod tests {
                         .segment(idx)
                         .ident()
                         .resolve(db)
-                        .map(|s| s.range)
-                        .unwrap_or(seg_span.range);
+                        .map_or(seg_span.range, |s| s.range);
 
                     annotations.push(GotoAnnotation {
                         ident_range,
@@ -362,8 +359,10 @@ mod tests {
         let mut files = SimpleFiles::new();
         let filename = std::path::Path::new(fixture.path())
             .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| fixture.path().to_string());
+            .map_or_else(
+                || fixture.path().to_string(),
+                |s| s.to_string_lossy().to_string(),
+            );
         let normalized_fixture = normalize_newlines(fixture.content()).into_owned();
         let file_id = files.add(filename, normalized_fixture);
 

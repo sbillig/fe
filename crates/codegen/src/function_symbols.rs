@@ -302,21 +302,18 @@ fn semantic_leaf_component<'db>(db: &'db DriverDataBase, owner: BodyOwner<'db>) 
         BodyOwner::Func(func) => func
             .name(db)
             .to_opt()
-            .map(|name| name.data(db).to_string())
-            .unwrap_or_else(|| "__anon".to_string()),
+            .map_or_else(|| "__anon".to_string(), |name| name.data(db).to_string()),
         BodyOwner::Const(const_) => const_
             .name(db)
             .to_opt()
-            .map(|name| name.data(db).to_string())
-            .unwrap_or_else(|| "__const".to_string()),
+            .map_or_else(|| "__const".to_string(), |name| name.data(db).to_string()),
         BodyOwner::AnonConstBody { .. } => "__anon_const".to_string(),
         BodyOwner::ContractInit { contract } => format!(
             "__{}_init",
             contract
                 .name(db)
                 .to_opt()
-                .map(|name| name.data(db).to_string())
-                .unwrap_or_else(|| "contract".to_string())
+                .map_or_else(|| "contract".to_string(), |name| name.data(db).to_string())
         ),
         BodyOwner::ContractRecvArm {
             contract,
@@ -327,8 +324,7 @@ fn semantic_leaf_component<'db>(db: &'db DriverDataBase, owner: BodyOwner<'db>) 
             contract
                 .name(db)
                 .to_opt()
-                .map(|name| name.data(db).to_string())
-                .unwrap_or_else(|| "contract".to_string()),
+                .map_or_else(|| "contract".to_string(), |name| name.data(db).to_string()),
             recv_idx,
             arm_idx
         ),
