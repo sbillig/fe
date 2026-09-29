@@ -525,12 +525,11 @@ pub(super) fn check_body_requirements<'db>(
     // path checks the header types it instantiates that no checked value
     // carries (`check_entered_header`).
     let mut written = written_applications(db, owner);
-    let mut reported_paths = Vec::new();
+    let mut reported_paths = FxHashSet::default();
     for (site, application) in &typed.path_applications {
-        if reported_paths.contains(&(site, *application)) {
+        if !reported_paths.insert((site, *application)) {
             continue;
         }
-        reported_paths.push((site, *application));
         if let Some(unmet) = check_path_application(db, *application, owner.scope(), &written) {
             check.unmet(site.clone(), unmet.predicate, unmet.failure);
         }
@@ -839,7 +838,7 @@ fn check_path_application<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
     scope: ScopeId<'db>,
-    reported: &[TyId<'db>],
+    reported: &FxHashSet<TyId<'db>>,
 ) -> Option<TypeRequirementFailure<'db>> {
     let declaration = adt_declaration(db, ty)?;
     let arity = collect_generic_params(db, declaration.into())
@@ -1094,7 +1093,7 @@ fn check_entered_header<'db>(
     expr: ExprId,
     headers: Vec<TyId<'db>>,
     scope: ScopeId<'db>,
-    written: &[TyId<'db>],
+    written: &FxHashSet<TyId<'db>>,
 ) -> Option<TypeRequirementFailure<'db>> {
     let body = typed.body()?;
     let is_function =
@@ -1152,7 +1151,7 @@ fn check_type_requirements<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
     scope: ScopeId<'db>,
-    reported: &[TyId<'db>],
+    reported: &FxHashSet<TyId<'db>>,
 ) -> Option<TypeRequirementFailure<'db>> {
     let (base, args) = ty.decompose_ty_app(db);
     for &arg in args {
@@ -1362,10 +1361,12 @@ fn assumptions_at<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Predi
 /// reports a written type's unmet requirement where the type is written, so a
 /// path or expression that carries the same application does not report it
 /// again.
-fn written_applications<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> Vec<TyId<'db>> {
-    fn examined<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, found: &mut Vec<TyId<'db>>) {
-        if !found.contains(&ty) {
-            found.push(ty);
+fn written_applications<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> FxHashSet<TyId<'db>> {
+    fn examined<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, found: &mut FxHashSet<TyId<'db>>) {
+        if found.insert(ty) {
             for &arg in ty.decompose_ty_app(db).1 {
                 examined(db, arg, found);
             }
@@ -1376,7 +1377,7 @@ fn written_applications<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) 
         BodyOwner::Const(const_) => Some(ItemKind::Const(const_)),
         _ => None,
     };
-    let mut found = Vec::new();
+    let mut found = FxHashSet::default();
     for item in signature
         .into_iter()
         .chain(owner.body(db).map(ItemKind::Body))
@@ -1666,7 +1667,7 @@ fn written_type_check_query<'db>(
                 None
             }
             WrittenEntry::Type(written) => {
-                let nested: Vec<_> = reported[written.nested_from..]
+                let nested: FxHashSet<_> = reported[written.nested_from..]
                     .iter()
                     .flatten()
                     .copied()
