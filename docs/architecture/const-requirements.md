@@ -152,10 +152,15 @@ A type that a path passes through is written there too. In `Bounded<0>::Out`,
 resolution reports every segment it resolves, and the type checker and type
 lowering keep the constrained applications it passed through, so this holds
 at every segment of every path, in types, generic arguments, expressions,
-patterns and `with` keys. An anonymous constant passed to a segment is checked
-against that segment's own parameter, even when its value never reaches what
-the path names: when an alias drops it, or when it only selects an impl, as in
-`Holder<{ dec<0>() }>::Out`.
+patterns and `with` keys. An anonymous constant passed to a type, trait or
+alias segment is checked against that segment's own parameter, even when its
+value never reaches what the path names: when an alias drops it, or when it
+only selects an impl, as in `Holder<{ dec<0>() }>::Out`. The same holds in a
+type parameter's default, such as `struct S<T = Holder<{ dec<0>() }>::Out>`,
+whose declaration finds its constants by the same rule rather than in the
+lowered default. An enum variant or module segment has no generic parameters,
+and arguments written on it, such as `Choice::Empty<{ dec<0>() }>`, are
+ignored and never evaluated, as on master.
 
 Inside an `impl`, the conditions of the records and enums in its self type
 hold without restating them, so `impl<const N: usize> Bounded<N>` can call a
