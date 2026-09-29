@@ -70,10 +70,18 @@ pub struct LayoutViewAlias {
     pub canonical: LayoutEvidencePath,
 }
 
+/// A value shape that no finite layout-evidence interface can represent.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub struct NonRegularLayoutViewCycle {
-    pub canonical: LayoutEvidencePath,
-    pub recursive: LayoutEvidencePath,
+pub enum LayoutBundleUnrepresentable {
+    /// A recursive effect-handle target view changes its layout arguments.
+    NonRegularViewCycle {
+        canonical: LayoutEvidencePath,
+        recursive: LayoutEvidencePath,
+    },
+    /// Every element of an array shares one element type, so the elements
+    /// cannot carry distinct layout roots. Arrays of root-bearing values are
+    /// rejected rather than given per-element roots.
+    RootArray { array: LayoutEvidencePath },
 }
 
 /// One component port in the complete callable input interface.
@@ -247,7 +255,7 @@ impl<'db> LayoutBundleComponent<'db> {
 pub struct LayoutBundleSchema<'db> {
     pub components: Vec<LayoutBundleComponent<'db>>,
     pub view_aliases: Vec<LayoutViewAlias>,
-    pub non_regular_view_cycle: Option<NonRegularLayoutViewCycle>,
+    pub unrepresentable: Option<LayoutBundleUnrepresentable>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -288,19 +296,15 @@ pub enum LayoutBundleSchemaError {
         first: usize,
         second: usize,
     },
-    NonRegularViewCycle {
-        canonical: LayoutEvidencePath,
-        recursive: LayoutEvidencePath,
-    },
+    Unrepresentable(LayoutBundleUnrepresentable),
 }
 
 impl<'db> LayoutBundleSchema<'db> {
     pub fn validate(&self) -> Result<(), LayoutBundleSchemaError> {
-        if let Some(cycle) = &self.non_regular_view_cycle {
-            return Err(LayoutBundleSchemaError::NonRegularViewCycle {
-                canonical: cycle.canonical.clone(),
-                recursive: cycle.recursive.clone(),
-            });
+        if let Some(unrepresentable) = &self.unrepresentable {
+            return Err(LayoutBundleSchemaError::Unrepresentable(
+                unrepresentable.clone(),
+            ));
         }
         for (idx, alias) in self.view_aliases.iter().enumerate() {
             if alias.alias.len() <= alias.canonical.len()

@@ -2117,30 +2117,28 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
-            Self::ContractFieldUnknownLayoutArrayLength { span, ty } => {
+            Self::ContractFieldLayoutRootArray { span, element } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message:
-                        "this root-bearing array does not have a compile-time-known length"
-                            .to_string(),
+                    message: "the elements of this array carry storage layout roots".to_string(),
                     span: span.resolve(db),
                 }];
-                if let Some(name_span) = ty.name_span(db) {
-                    let type_name = ty.base_ty(db).pretty_print(db);
+                if let Some(name_span) = element.name_span(db) {
+                    let type_name = element.base_ty(db).pretty_print(db);
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("`{type_name}` is defined here"),
+                        message: format!("`{type_name}` carries storage layout roots"),
                         span: name_span.resolve(db),
                     });
                 }
 
                 CompleteDiagnostic {
                     severity: Severity::Error,
-                    message: "cannot allocate a layout-root array with an unknown length"
-                        .to_string(),
+                    message: "arrays of layout-root values are not supported".to_string(),
                     sub_diagnostics,
                     notes: vec![
-                        "indexed root families reserve one checked contiguous region, so every dimension must evaluate before contract layout".to_string(),
+                        "every element of an array has the same type, so the elements cannot have distinct layout roots".to_string(),
+                        "use separate fields, or one map whose key includes the index".to_string(),
                     ],
                     error_code,
                 }

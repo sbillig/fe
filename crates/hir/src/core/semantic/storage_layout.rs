@@ -588,7 +588,7 @@ pub enum ContractLayoutError<'db> {
     UnresolvedStaticSlotSpace { owner: TyId<'db> },
     AmbiguousStaticSlot { owner: TyId<'db> },
     ConflictingLayoutRootSpaces { root: LayoutRootId<'db> },
-    UnknownArrayLengthWithLayoutRoots { array: TyId<'db> },
+    LayoutRootArray { array: TyId<'db> },
     LayoutExtentOverflow,
     IncompleteAdtLayoutProjection { ty: TyId<'db> },
     AmbiguousLayoutBindingSelector { root: LayoutRootId<'db> },
@@ -627,9 +627,7 @@ impl ContractLayoutError<'_> {
             Self::ConflictingLayoutRootSpaces { .. } => {
                 "one layout root has conflicting address spaces"
             }
-            Self::UnknownArrayLengthWithLayoutRoots { .. } => {
-                "root-bearing array length is not known"
-            }
+            Self::LayoutRootArray { .. } => "array elements carry layout roots",
             Self::LayoutExtentOverflow => "layout extent overflowed",
             Self::IncompleteAdtLayoutProjection { .. } => "layout projection is incomplete",
             Self::AmbiguousLayoutBindingSelector { .. } => "layout binding selector is ambiguous",
@@ -2164,9 +2162,7 @@ impl<'db> FieldCollector<'db> {
         }
         let Some(len) = len else {
             if contains_layout_roots(self.db, element) {
-                self.push_error(ContractLayoutError::UnknownArrayLengthWithLayoutRoots {
-                    array: ty,
-                });
+                self.push_error(ContractLayoutError::LayoutRootArray { array: ty });
             } else {
                 self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
             }
@@ -2188,6 +2184,7 @@ impl<'db> FieldCollector<'db> {
             instance: element.instance,
             len,
         });
+        let occurrences = (self.occurrences.len(), self.concrete_occurrences.len());
         let mut output = self.walk_ty(
             ConcreteTypeView::new(element.ty, source_element),
             element.instance,
@@ -2195,6 +2192,12 @@ impl<'db> FieldCollector<'db> {
             &element_dimensions,
             mode,
         );
+        // Every element shares one element type, so the elements cannot carry
+        // distinct layout roots.
+        if (self.occurrences.len(), self.concrete_occurrences.len()) != occurrences {
+            self.push_error(ContractLayoutError::LayoutRootArray { array: ty });
+            return WalkOutput::empty();
+        }
         let Some(inline_span) = output.inline_span.checked_mul(len) else {
             self.push_error(ContractLayoutError::LayoutExtentOverflow);
             return WalkOutput {

@@ -2852,9 +2852,9 @@ fn blocked_contract_body_keeps_its_declaration_layout_signature() {
 struct Rooted<const ROOT: u256 = _> {}
 
 pub contract InvalidInit {
-    values: [Rooted; 2]
+    value: Rooted
 
-    init() uses (values) {
+    init() uses (value) {
         missing
     }
 }

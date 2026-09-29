@@ -9,8 +9,8 @@ use crate::analysis::{
     },
     ty::{
         CallableLayoutParamPort, LayoutBundleComponentId, LayoutBundleInterface,
-        LayoutBundleInterfaceError, LayoutBundleSchema, LayoutBundleSchemaError, LayoutMapTy,
-        LayoutPortKey,
+        LayoutBundleInterfaceError, LayoutBundleSchema, LayoutBundleSchemaError,
+        LayoutBundleUnrepresentable, LayoutMapTy, LayoutPortKey,
         const_ty::{CallableInputLayoutHoleOrigin, ConstTyData},
         ty_check::BodyOwner,
         ty_def::TyId,
@@ -276,6 +276,27 @@ pub enum LayoutEvidenceError<'db> {
         source: CallableLayoutParamPort,
     },
     Verify(LayoutEvidenceVerifyError),
+}
+
+impl<'db> LayoutEvidenceError<'db> {
+    /// The value shape that a finite layout-evidence interface cannot
+    /// represent, when that is the cause of this error.
+    pub fn unrepresentable(&self) -> Option<&LayoutBundleUnrepresentable> {
+        match self {
+            Self::InvalidSchema {
+                error: LayoutBundleSchemaError::Unrepresentable(unrepresentable),
+                ..
+            }
+            | Self::InvalidInterface {
+                error:
+                    LayoutBundleInterfaceError::Schema(LayoutBundleSchemaError::Unrepresentable(
+                        unrepresentable,
+                    )),
+                ..
+            } => Some(unrepresentable),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

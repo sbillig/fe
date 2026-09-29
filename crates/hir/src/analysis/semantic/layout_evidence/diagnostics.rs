@@ -16,9 +16,8 @@ use crate::{
             identity_semantic_instance_key,
         },
         ty::{
-            CallableLayoutParamPort, LayoutBundleInterfaceError, LayoutBundleSchemaError,
-            LayoutEvidencePathStep, LayoutPortKey, const_ty::CallableInputLayoutHoleOrigin,
-            ty_check::BodyOwner,
+            CallableLayoutParamPort, LayoutBundleUnrepresentable, LayoutEvidencePathStep,
+            LayoutPortKey, const_ty::CallableInputLayoutHoleOrigin, ty_check::BodyOwner,
         },
     },
     hir_def::{ItemKind, TopLevelMod},
@@ -148,18 +147,32 @@ impl DiagnosticVoucher for LayoutEvidenceDiagnostic<'_> {
             return diagnostic.to_complete(db);
         }
 
+        let unrepresentable = self.error.unrepresentable();
+        if let Some(LayoutBundleUnrepresentable::RootArray { .. }) = unrepresentable {
+            return CompleteDiagnostic::new(
+                Severity::Error,
+                format!(
+                    "array of layout-root values in `{}`",
+                    checker_name(db, self.instance)
+                ),
+                vec![SubDiagnostic::new(
+                    LabelStyle::Primary,
+                    "the elements of this array carry storage layout roots".to_string(),
+                    self.primary_span(db),
+                )],
+                vec![
+                    "every element of an array has the same type, so the elements cannot have distinct layout roots".to_string(),
+                    "use separate fields, or one map whose key includes the index".to_string(),
+                ],
+                GlobalErrorCode::new(DiagnosticPass::SemanticLayoutEvidence, 8),
+            );
+        }
         let (local_code, message, internal) = match &self.error {
-            LayoutEvidenceError::InvalidSchema {
-                error: LayoutBundleSchemaError::NonRegularViewCycle { .. },
-                ..
-            }
-            | LayoutEvidenceError::InvalidInterface {
-                error:
-                    LayoutBundleInterfaceError::Schema(
-                        LayoutBundleSchemaError::NonRegularViewCycle { .. },
-                    ),
-                ..
-            } => (
+            _ if matches!(
+                unrepresentable,
+                Some(LayoutBundleUnrepresentable::NonRegularViewCycle { .. })
+            ) =>
+            (
                 7,
                 "a recursive `EffectHandle::Target` cycle changes its layout arguments and cannot be represented by a finite layout-evidence interface".to_string(),
                 false,

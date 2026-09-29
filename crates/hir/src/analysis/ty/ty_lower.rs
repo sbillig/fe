@@ -27,8 +27,8 @@ use super::{
         CallableLayoutBundleInput, CallableLayoutBundleSignature, LayoutBundleComponent,
         LayoutBundleComponentDeclaration, LayoutBundleComponentKey, LayoutBundleComponentTransport,
         LayoutBundleInterface, LayoutBundlePath, LayoutBundlePathStep, LayoutBundleSchema,
-        LayoutBundleTransport, LayoutEvidencePath, LayoutEvidencePathStep, LayoutPortKey,
-        LayoutRootPort, LayoutViewAlias, NonRegularLayoutViewCycle,
+        LayoutBundleTransport, LayoutBundleUnrepresentable, LayoutEvidencePath,
+        LayoutEvidencePathStep, LayoutPortKey, LayoutRootPort, LayoutViewAlias,
     },
     layout_holes::{
         LayoutInstantiation, LayoutRootUse, LayoutTemplateSubst, LayoutViewRecurrence,
@@ -783,7 +783,7 @@ struct CallableLayoutProjectionCollector<'db> {
     port_tys: FxHashMap<LayoutPortKey, TyId<'db>>,
     adt_stack: Vec<CallableLayoutAdtFrame<'db>>,
     view_aliases: Vec<LayoutViewAlias>,
-    non_regular_view_cycle: Option<NonRegularLayoutViewCycle>,
+    unrepresentable: Option<LayoutBundleUnrepresentable>,
     expand_effect_targets: bool,
     bound_roots: FxHashMap<LayoutRootId<'db>, TyId<'db>>,
 }
@@ -1130,6 +1130,8 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                             .count() as u32,
                     )],
                 );
+                let array_path = evidence_path.clone();
+                let occurrences = self.value_occurrences.len();
                 path.push(LayoutBundlePathStep::Index);
                 evidence_path.push(LayoutEvidencePathStep::Index);
                 if let Some(len) = extent {
@@ -1149,6 +1151,12 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                 }
                 evidence_path.pop();
                 path.pop();
+                if self.value_occurrences.len() != occurrences {
+                    self.unrepresentable
+                        .get_or_insert(LayoutBundleUnrepresentable::RootArray {
+                            array: array_path,
+                        });
+                }
             }
             return;
         }
@@ -1206,11 +1214,12 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             LayoutViewRecurrence::NonRegular { ancestor } => {
                 if materialized {
                     let frame = &self.adt_stack[ancestor];
-                    self.non_regular_view_cycle
-                        .get_or_insert_with(|| NonRegularLayoutViewCycle {
+                    self.unrepresentable.get_or_insert_with(|| {
+                        LayoutBundleUnrepresentable::NonRegularViewCycle {
                             canonical: frame.evidence_path.clone(),
                             recursive: evidence_path.clone(),
-                        });
+                        }
+                    });
                 }
                 return;
             }
@@ -1575,11 +1584,11 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
         let schema = LayoutBundleSchema {
             components,
             view_aliases: self.view_aliases,
-            non_regular_view_cycle: self.non_regular_view_cycle,
+            unrepresentable: self.unrepresentable,
         };
         let transport = LayoutBundleTransport::inferred(&schema);
         debug_assert!(
-            schema.non_regular_view_cycle.is_some() || schema.validate().is_ok(),
+            schema.unrepresentable.is_some() || schema.validate().is_ok(),
             "callable layout collector produced an invalid schema: {schema:#?}",
         );
         CallableLayoutProjections {
@@ -1663,7 +1672,7 @@ fn callable_layout_projections_for_ty_with_effect_targets<'db>(
         port_tys: FxHashMap::default(),
         adt_stack: Vec::new(),
         view_aliases: Vec::new(),
-        non_regular_view_cycle: None,
+        unrepresentable: None,
         expand_effect_targets,
         bound_roots: FxHashMap::default(),
     };
@@ -2044,7 +2053,7 @@ fn output_witness_layout_interface<'db>(
     let schema = LayoutBundleSchema {
         components,
         view_aliases: output.schema.view_aliases.clone(),
-        non_regular_view_cycle: output.schema.non_regular_view_cycle.clone(),
+        unrepresentable: output.schema.unrepresentable.clone(),
     };
     LayoutBundleInterface::all_runtime(schema)
 }
@@ -2143,8 +2152,8 @@ fn preserve_declared_component_ports<'db>(
             projection.schema.view_aliases.push(alias.clone());
         }
     }
-    if projection.schema.non_regular_view_cycle.is_none() {
-        projection.schema.non_regular_view_cycle = declared.schema.non_regular_view_cycle.clone();
+    if projection.schema.unrepresentable.is_none() {
+        projection.schema.unrepresentable = declared.schema.unrepresentable.clone();
     }
     let declared_transport = declared
         .schema
@@ -2255,7 +2264,7 @@ fn specialize_callable_input_layout_interface<'db>(
         );
     }
     debug_assert!(
-        schema.non_regular_view_cycle.is_some() || schema.validate().is_ok(),
+        schema.unrepresentable.is_some() || schema.validate().is_ok(),
         "layout specialization produced an invalid schema: {schema:#?}",
     );
     LayoutBundleInterface {
@@ -2362,7 +2371,7 @@ pub(crate) fn specialized_callable_layout_bundle_signature_with_normalizer<'db>(
         &declared_output.port_tys,
     );
     debug_assert!(
-        output_schema.non_regular_view_cycle.is_some() || output_schema.validate().is_ok(),
+        output_schema.unrepresentable.is_some() || output_schema.validate().is_ok(),
         "layout output specialization produced an invalid schema: {output_schema:#?}",
     );
     let output = LayoutBundleInterface {

@@ -5,11 +5,12 @@ use hir::analysis::{
     semantic::{
         EvalOutcome, FieldIndex, LayoutEvidenceBase, LayoutEvidenceBody,
         LayoutEvidenceComponentValue, LayoutEvidenceConstBinding, LayoutEvidenceConstant,
-        LayoutEvidenceExpr, LayoutEvidenceIndex, LayoutEvidenceOperand, RuntimeSizeError, SBlockId,
-        SConst, SLocalId, SStmtId, SemConstId, SemConstScalar, SemConstValue, SemOrigin,
-        SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticConstRef,
-        SemanticInstance, SemanticInstanceKey, SemanticLocalRole, VariantIndex, eval_const_ref,
-        generated_callee_key, get_or_build_semantic_instance, layout_evidence_body,
+        LayoutEvidenceError, LayoutEvidenceExpr, LayoutEvidenceIndex, LayoutEvidenceOperand,
+        RuntimeSizeError, SBlockId, SConst, SLocalId, SStmtId, SemConstId, SemConstScalar,
+        SemConstValue, SemOrigin, SemanticCalleeRef, SemanticCodeRegionRef,
+        SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance, SemanticInstanceKey,
+        SemanticLocalRole, VariantIndex, eval_const_ref, generated_callee_key,
+        get_or_build_semantic_instance, layout_evidence_body,
         normalized::{
             NBlockId, NDataPath, NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace,
             NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind, NSuccessor,
@@ -19,7 +20,7 @@ use hir::analysis::{
         verify_layout_evidence_runtime_compatibility,
     },
     ty::{
-        CallableLayoutParamPort,
+        CallableLayoutParamPort, LayoutBundleUnrepresentable,
         const_expr::ConstExpr,
         const_ty::ConstTyData,
         corelib::{
@@ -170,16 +171,30 @@ pub fn lower_to_rmir<'db>(
     Ok(emitter.finish())
 }
 
+/// Instantiation-dependent array roots are only visible after specialization,
+/// so they surface here rather than as a definition-site diagnostic.
+fn layout_evidence_failure<'db>(
+    key: SemanticInstanceKey<'db>,
+    error: &LayoutEvidenceError<'db>,
+) -> LowerError {
+    LowerError::Unsupported(
+        if let Some(LayoutBundleUnrepresentable::RootArray { .. }) = error.unrepresentable() {
+            "an array in this instantiation has elements that carry storage layout roots; \
+             arrays of layout-root values are not supported"
+                .to_string()
+        } else {
+            format!("layout evidence lowering failed for {key:?}: {error:?}")
+        },
+    )
+}
+
 pub(super) fn check_runtime_body_supported<'db>(
     db: &'db dyn MirDb,
     key: SemanticInstanceKey<'db>,
     body: &RuntimeSemanticBody<'db>,
 ) -> Result<(), LowerError> {
-    let evidence = layout_evidence_body(db, body.owner()).map_err(|error| {
-        LowerError::Unsupported(format!(
-            "layout evidence lowering failed for {key:?}: {error:?}"
-        ))
-    })?;
+    let evidence = layout_evidence_body(db, body.owner())
+        .map_err(|error| layout_evidence_failure(key, &error))?;
     for block in &body.normalized.blocks {
         for stmt in &block.statements {
             if let NStatementKind::Define {
@@ -635,12 +650,8 @@ impl<'db> RmirEmitter<'db> {
         } = inferred;
         let semantic_carriers = carriers.clone();
         let env = RuntimeTypeEnv::for_semantic(db, semantic);
-        let layout_evidence = layout_evidence_body(db, semantic).map_err(|error| {
-            LowerError::Unsupported(format!(
-                "layout evidence lowering failed for {:?}: {error:?}",
-                semantic.key(db)
-            ))
-        })?;
+        let layout_evidence = layout_evidence_body(db, semantic)
+            .map_err(|error| layout_evidence_failure(semantic.key(db), &error))?;
         verify_layout_evidence_runtime_compatibility(
             db,
             &semantic_body.normalized,

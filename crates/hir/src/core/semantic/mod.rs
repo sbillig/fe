@@ -5273,8 +5273,11 @@ impl<'db> FieldView<'db> {
                 | ContractLayoutError::AmbiguousStaticSlot { .. } => {
                     TyLowerDiag::StaticSlotSpaceUnresolved { span, ty }
                 }
-                ContractLayoutError::UnknownArrayLengthWithLayoutRoots { .. } => {
-                    TyLowerDiag::ContractFieldUnknownLayoutArrayLength { span, ty }
+                ContractLayoutError::LayoutRootArray { array } => {
+                    TyLowerDiag::ContractFieldLayoutRootArray {
+                        span,
+                        element: array.generic_args(db).first().copied().unwrap_or(*array),
+                    }
                 }
                 ContractLayoutError::AmbiguousProviderLayout => {
                     TyLowerDiag::ContractFieldProviderLayoutAmbiguous { span, ty }
@@ -5345,7 +5348,7 @@ impl<'db> FieldView<'db> {
                         | ContractLayoutError::NonRegularProviderCycle
                         | ContractLayoutError::UnresolvedStaticSlotSpace { .. }
                         | ContractLayoutError::AmbiguousStaticSlot { .. }
-                        | ContractLayoutError::UnknownArrayLengthWithLayoutRoots { .. } => {
+                        | ContractLayoutError::LayoutRootArray { .. } => {
                             unreachable!()
                         }
                     };
