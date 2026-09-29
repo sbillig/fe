@@ -570,16 +570,23 @@ fn semantic_callee_key_with_assumptions<'db>(
                     normalize_ty(db, nominal, impl_env.normalization_scope(db), assumptions)
                         == selected
                 })
-            && nominal_func.arg_tys(db).len() == body_func.arg_tys(db).len()
-            && (0..nominal_func.arg_tys(db).len()).all(|idx| {
-                let nominal = callable
-                    .arg_ty(db, idx)
-                    .expect("nominal input arity changed");
-                let body =
-                    CallableDef::Func(body_func).arg_tys(db)[idx].instantiate(db, &subst_args);
-                normalize_ty(db, nominal, impl_env.normalization_scope(db), assumptions)
-                    == normalize_ty(db, body, owner.scope(), PredicateListId::empty_list(db))
-            })
+            && {
+                let body_args = body_func.arg_tys(db);
+                nominal_func.arg_tys(db).len() == body_args.len()
+                    && body_args.iter().enumerate().all(|(idx, body)| {
+                        let nominal = callable
+                            .arg_ty(db, idx)
+                            .expect("nominal input arity changed");
+                        let body = body.instantiate(db, &subst_args);
+                        normalize_ty(db, nominal, impl_env.normalization_scope(db), assumptions)
+                            == normalize_ty(
+                                db,
+                                body,
+                                owner.scope(),
+                                PredicateListId::empty_list(db),
+                            )
+                    })
+            }
             && normalize_ty(
                 db,
                 callable.ret_ty(db),

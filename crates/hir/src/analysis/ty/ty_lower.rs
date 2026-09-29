@@ -3193,9 +3193,7 @@ pub(crate) fn callable_input_layout_origin_ty<'db>(
                 CallableInputLayoutHoleOrigin::ValueParam(idx) => idx,
                 CallableInputLayoutHoleOrigin::Effect(_) => unreachable!(),
             };
-            func.arg_tys(db)
-                .get(idx)
-                .map(|ty| ty.instantiate_identity())
+            func.arg_ty(db, idx).map(|ty| ty.instantiate_identity())
         }
         CallableInputLayoutHoleOrigin::Effect(effect_idx) => {
             let assumptions =

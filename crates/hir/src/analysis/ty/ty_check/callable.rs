@@ -457,8 +457,7 @@ impl<'db> Callable<'db> {
     pub fn arg_ty(&self, db: &'db dyn HirAnalysisDb, idx: usize) -> Option<TyId<'db>> {
         let arg = self
             .callable_def
-            .arg_tys(db)
-            .get(idx)?
+            .arg_ty(db, idx)?
             .instantiate(db, &self.generic_args);
         Some(self.normalize_with_trait_evidence(db, arg))
     }
@@ -526,7 +525,8 @@ impl<'db> Callable<'db> {
     ) {
         let db = tc.db;
 
-        let expected_arity = self.callable_def.arg_tys(db).len();
+        let expected_arg_tys = self.callable_def.arg_tys(db);
+        let expected_arity = expected_arg_tys.len();
         let given_arity = if receiver.is_some() {
             call_args.len() + 1
         } else {
@@ -544,7 +544,6 @@ impl<'db> Callable<'db> {
             return;
         }
 
-        let expected_arg_tys = self.callable_def.arg_tys(db);
         let func_params: Option<Vec<_>> = match self.callable_def {
             CallableDef::Func(func) => {
                 let params: Vec<_> = func.params(db).collect();
