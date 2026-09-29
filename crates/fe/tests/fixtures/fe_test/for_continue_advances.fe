@@ -111,3 +111,52 @@ fn continue_after_diverging_argument_is_unreachable() {
         ignore(abort(), { continue })
     }
 }
+
+fn first_even(_ values: [u256; 5]) -> u256 {
+    for value in values {
+        if value % 2 == 1 {
+            continue
+        } else {
+            return value
+        }
+    }
+    return 0
+}
+
+#[test]
+fn continue_arm_advances_when_other_arms_exit() {
+    assert!(first_even([1, 3, 6, 5, 8]) == 6)
+    assert!(first_even([1, 3, 5, 7, 9]) == 0)
+}
+
+#[test]
+fn continue_or_break_in_every_arm() {
+    let mut visits: usize = 0
+    let mut last: usize = 0
+    for i in 0..8 {
+        visits += 1
+        assert!(visits <= 4)
+        last = i
+        match i < 3 {
+            true => { continue }
+            false => { break }
+        }
+    }
+    assert!(visits == 4)
+    assert!(last == 3)
+}
+
+#[test]
+fn only_inner_body_always_exits() {
+    let mut outer_visits: usize = 0
+    let mut inner_visits: usize = 0
+    for outer in 0..3 {
+        outer_visits += 1
+        for inner in 0..4 {
+            inner_visits += 1
+            break
+        }
+    }
+    assert!(outer_visits == 3)
+    assert!(inner_visits == 3)
+}
