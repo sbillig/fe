@@ -1,0 +1,20 @@
+// A braced argument of a qualifier is checked against the qualifier's own
+// parameter, even when its value never reaches the type the path names. Here
+// `dec<0>()` wraps to `usize::MAX` and only selects an impl.
+struct Holder<const N: usize> {}
+struct Plain {}
+trait Mk { type Out }
+#[arithmetic(unchecked)]
+const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
+const MAX: usize = 115792089237316195423570985008687907853269984665640564039457584007913129639935
+impl Mk for Holder<MAX> { type Out = Plain }
+impl Holder<MAX> { const K: usize = 1 }
+fn g<T>() -> u8 { 1 }
+
+fn param(_ x: Holder<{ dec<0>() }>::Out) {}
+fn local() { let _x: Holder<{ dec<0>() }>::Out = Plain {} }
+fn turbofish() -> u8 { g<Holder<{ dec<0>() }>::Out>() }
+fn argument(_ h: Holder<Holder<{ dec<0>() }>::K>) {}
+
+fn allowed(_ x: Holder<{ dec<1>() + MAX }>::Out) {}
+fn allowed_argument(_ h: Holder<Holder<{ dec<1>() + MAX }>::K>) {}

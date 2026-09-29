@@ -9,6 +9,7 @@ use crate::analysis::name_resolution::{
 };
 use crate::analysis::ty::canonical::Canonicalized;
 use crate::analysis::ty::{
+    const_ty::ConstBodyLowering,
     subst::substitute_complete,
     ty_lower::{CompleteSubst, SubstError, lower_hir_ty_with_resolutions, lower_type_alias},
 };
@@ -720,6 +721,65 @@ fn positioned_const_bodies<'db>(
         .collect()
 }
 
+/// The anonymous constants passed to `path`'s segments, each with the type of
+/// the parameter it is passed to, read from that segment's own resolution in
+/// `resolutions` (a lowering that deferred its anonymous constants). An
+/// argument is checked there even when its value never reaches what the path
+/// names: an alias can drop it, and a qualifier such as `Holder<{ n }>` in
+/// `Holder<{ n }>::Out` may only select an impl. A segment that did not
+/// resolve, and an argument that its segment has no const parameter for, are
+/// reported by resolution and lowering. The explicit arguments of a callable
+/// are applied with the call, so its uses check them
+/// (`expression_const_bodies`).
+fn segment_const_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    resolutions: &[(PathId<'db>, PathRes<'db>)],
+) -> Vec<(Body<'db>, TyId<'db>)> {
+    let mut found = Vec::new();
+    let mut segment = Some(path);
+    while let Some(current) = segment {
+        segment = current.parent(db);
+        let args = current.generic_args(db);
+        let bodies: Vec<_> = generic_arg_const_bodies(db, args).collect();
+        if bodies.is_empty() {
+            continue;
+        }
+        let Some(res) = resolutions
+            .iter()
+            .rev()
+            .find_map(|(resolved, res)| (*resolved == current).then_some(res))
+        else {
+            continue;
+        };
+        match res {
+            // An alias's arguments are its own parameters', whether or not the
+            // aliased type uses them.
+            PathRes::TyAlias(alias, _) => {
+                for (arg, param) in args.data(db).iter().zip(alias.params(db)) {
+                    if let GenericArg::Const(arg) = arg
+                        && let ConstGenericArgValue::Expr(Partial::Present(body)) = arg.value
+                        && let Some(expected) = param.const_ty_ty(db)
+                    {
+                        found.push((body, expected));
+                    }
+                }
+            }
+            res => found.extend(positioned_const_bodies(
+                db,
+                &path_res_tys(db, res.clone()),
+                &bodies,
+            )),
+        }
+    }
+    found
+}
+
+/// The type of an array's length, which a length is checked against.
+fn array_length_ty<'db>(db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+    TyId::array(db, TyId::unit(db)).applicable_ty(db)?.const_ty
+}
+
 /// The types a path resolution carries, including trait arguments.
 fn path_res_tys<'db>(db: &'db dyn HirAnalysisDb, res: PathRes<'db>) -> Vec<TyId<'db>> {
     let mut tys = Vec::new();
@@ -907,59 +967,40 @@ fn expression_const_bodies<'db>(
             })
             .collect::<Vec<_>>()
     };
-    // Arguments of the other segments, which path resolution applies. Each
-    // segment's arguments are read from the resolution of the path up to that
-    // segment: a qualifier such as `Holder<{ n }>` in `Holder<{ n }>::make` is
-    // a type, whatever the full path names.
-    let resolved_args = |path: PathId<'db>, value: bool| {
-        let mut entries = Vec::new();
-        let mut segment = Some((path, value));
-        while let Some((prefix, value)) = segment {
-            let bodies: Vec<_> = generic_arg_const_bodies(db, prefix.generic_args(db)).collect();
-            if !bodies.is_empty() {
-                let minter = LoweringContext::deferred(HoleAnchor::TemplatePath {
-                    path: prefix,
-                    scope: body.scope(),
-                    assumptions: typed.assumptions(),
-                });
-                let resolve = |value| {
-                    resolve_path_with_minter(
-                        db,
-                        prefix,
-                        body.scope(),
-                        typed.assumptions(),
-                        value,
-                        &minter,
-                    )
-                };
-                if let Ok(res) = resolve(value).or_else(|_| resolve(!value)) {
-                    entries.extend(positioned_const_bodies(db, &path_res_tys(db, res), &bodies));
-                }
-            }
-            segment = prefix.parent(db).map(|parent| (parent, false));
+    // Arguments of the path's segments, which path resolution applies, each
+    // checked against its segment's own resolution (`segment_const_args`).
+    let segment_args = |path: PathId<'db>, value: bool| {
+        if path_const_bodies(db, path).is_empty() {
+            return Vec::new();
         }
-        entries
+        let minter = LoweringContext::deferred(HoleAnchor::TemplatePath {
+            path,
+            scope: body.scope(),
+            assumptions: typed.assumptions(),
+        })
+        .recording_resolutions();
+        let resolve = |value| {
+            resolve_path_with_minter(db, path, body.scope(), typed.assumptions(), value, &minter)
+        };
+        // A tail that is not a value can still be a type, as a record's is.
+        if resolve(value).is_err() {
+            let _ = resolve(!value);
+        }
+        segment_const_args(db, path, &minter.into_resolutions())
     };
 
     let mut found: Vec<(Body<'db>, TyId<'db>)> = Vec::new();
     for (expr, data) in body.exprs(db).iter() {
         let entries = match data.borrowed().to_opt() {
-            // A length is checked against the array's length parameter type.
-            Some(Expr::ArrayRep(_, len)) => len
-                .to_opt()
-                .and_then(|len| {
-                    let expected = TyId::array(db, TyId::unit(db))
-                        .applicable_ty(db)?
-                        .const_ty?;
-                    Some(vec![(len, expected)])
-                })
-                .unwrap_or_default(),
+            Some(Expr::ArrayRep(_, len)) => {
+                len.to_opt().zip(array_length_ty(db)).into_iter().collect()
+            }
             Some(Expr::Path(Partial::Present(path))) => {
-                let mut entries = resolved_args(*path, true);
+                let mut entries = segment_args(*path, true);
                 entries.extend(explicit_args(expr, path.generic_args(db)));
                 entries
             }
-            Some(Expr::RecordInit(Partial::Present(path), _)) => resolved_args(*path, false),
+            Some(Expr::RecordInit(Partial::Present(path), _)) => segment_args(*path, false),
             Some(Expr::MethodCall(_, _, args, _)) => explicit_args(expr, *args),
             _ => Vec::new(),
         };
@@ -972,7 +1013,7 @@ fn expression_const_bodies<'db>(
             | Pat::Record(Partial::Present(path), _),
         ) = pat.borrowed().to_opt()
         {
-            found.extend(resolved_args(*path, true));
+            found.extend(segment_args(*path, true));
         }
     }
     // A body appears in one position, but two lookups can both find it.
@@ -1464,26 +1505,23 @@ fn written_types_query<'db>(
         ) {
             if let Some(path) = trait_ref.path(self.db).to_opt()
                 && self.default_depth == 0
+                && !path_const_bodies(self.db, path).is_empty()
             {
-                let bodies = path_const_bodies(self.db, path);
-                if !bodies.is_empty() {
-                    let scope = ctxt.scope();
-                    let assumptions = assumptions_at(self.db, scope);
-                    let minter = LoweringContext::deferred(HoleAnchor::TemplatePath {
+                let scope = ctxt.scope();
+                let assumptions = assumptions_at(self.db, scope);
+                let minter = LoweringContext::deferred(HoleAnchor::TemplatePath {
+                    path,
+                    scope,
+                    assumptions,
+                })
+                .recording_resolutions();
+                let _ = resolve_path_with_minter(self.db, path, scope, assumptions, false, &minter);
+                self.entries
+                    .push(WrittenEntry::ConstBodies(segment_const_args(
+                        self.db,
                         path,
-                        scope,
-                        assumptions,
-                    });
-                    if let Ok(res) =
-                        resolve_path_with_minter(self.db, path, scope, assumptions, false, &minter)
-                    {
-                        let lowered = path_res_tys(self.db, res);
-                        self.entries
-                            .push(WrittenEntry::ConstBodies(positioned_const_bodies(
-                                self.db, &lowered, &bodies,
-                            )));
-                    }
-                }
+                        &minter.into_resolutions(),
+                    )));
             }
             walk_trait_ref(self, ctxt, trait_ref);
         }
@@ -1496,20 +1534,20 @@ fn written_types_query<'db>(
             let db = self.db;
             let scope = ctxt.scope();
             let assumptions = assumptions_at(db, scope);
-            let (ty, resolutions) = lower_hir_ty_with_resolutions(db, hir_ty, scope, assumptions);
-            let bodies = match hir_ty.data(db) {
-                TypeKind::Array(_, Partial::Present(len)) => vec![*len],
-                TypeKind::Path(Partial::Present(path)) => path_const_bodies(db, *path),
-                _ => Vec::new(),
-            };
+            let (ty, resolutions) = lower_hir_ty_with_resolutions(
+                db,
+                hir_ty,
+                scope,
+                assumptions,
+                ConstBodyLowering::Eager,
+            );
             let in_default = self.defaults.contains(&hir_ty);
             self.default_depth += usize::from(in_default);
-            if !bodies.is_empty() && self.default_depth == 0 {
-                let lowered = lower_hir_ty_deferred(db, hir_ty, scope, assumptions);
-                let mut positioned = positioned_const_bodies(db, &[lowered], &bodies);
-                let dropped = dropped_alias_arguments(db, &resolutions, &bodies, &positioned);
-                positioned.extend(dropped);
-                self.entries.push(WrittenEntry::ConstBodies(positioned));
+            if self.default_depth == 0 {
+                let bodies = written_const_args(db, hir_ty, scope, assumptions);
+                if !bodies.is_empty() {
+                    self.entries.push(WrittenEntry::ConstBodies(bodies));
+                }
             }
             let span = ctxt.span();
             let nested_from = self.entries.len();
@@ -1600,42 +1638,31 @@ fn written_type_check_query<'db>(
     diags
 }
 
-/// The anonymous constants passed to a type alias that the alias does not
-/// use, each with the type of the alias parameter it is passed to. An alias
-/// can drop an argument, so the lowered type does not hold it
-/// (`positioned_const_bodies`), but it is checked like any other argument.
-fn dropped_alias_arguments<'db>(
+/// The anonymous constants written directly in `hir_ty`, each with the type
+/// its position checks it against: an array's length, or the arguments of its
+/// path's segments (`segment_const_args`).
+fn written_const_args<'db>(
     db: &'db dyn HirAnalysisDb,
-    resolutions: &[(PathId<'db>, PathRes<'db>)],
-    bodies: &[Body<'db>],
-    positioned: &[(Body<'db>, TyId<'db>)],
+    hir_ty: crate::hir_def::TypeId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
 ) -> Vec<(Body<'db>, TyId<'db>)> {
-    let mut dropped = Vec::new();
-    for (path, res) in resolutions {
-        let PathRes::TyAlias(alias, _) = res else {
-            continue;
-        };
-        for (idx, arg) in path.generic_args(db).data(db).iter().enumerate() {
-            let GenericArg::Const(arg) = arg else {
-                continue;
-            };
-            let ConstGenericArgValue::Expr(Partial::Present(body)) = arg.value else {
-                continue;
-            };
-            if !bodies.contains(&body)
-                || positioned.iter().any(|&(positioned, _)| positioned == body)
-                || dropped.iter().any(|&(dropped, _)| dropped == body)
-            {
-                continue;
-            }
-            if let Some(expected) = alias
-                .params(db)
-                .get(idx)
-                .and_then(|param| param.const_ty_ty(db))
-            {
-                dropped.push((body, expected));
-            }
+    use crate::hir_def::TypeKind;
+    match hir_ty.data(db) {
+        TypeKind::Array(_, Partial::Present(len)) => array_length_ty(db)
+            .map(|expected| (*len, expected))
+            .into_iter()
+            .collect(),
+        TypeKind::Path(Partial::Present(path)) if !path_const_bodies(db, *path).is_empty() => {
+            let (_, resolutions) = lower_hir_ty_with_resolutions(
+                db,
+                hir_ty,
+                scope,
+                assumptions,
+                ConstBodyLowering::Deferred,
+            );
+            segment_const_args(db, *path, &resolutions)
         }
+        _ => Vec::new(),
     }
-    dropped
 }

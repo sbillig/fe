@@ -133,22 +133,27 @@ fn lower_hir_ty_impl<'db>(
     }
 }
 
-/// Lowers `ty` as [`lower_hir_ty`] does, and returns every path segment the
-/// lowering resolved, with its resolution: the segments of the paths written
-/// in `ty`, including generic arguments and qualified types, at every prefix.
-/// Aliases and associated types are lowered by their own queries, so the paths
-/// written in their declarations are not included.
+/// Lowers `ty` as [`lower_hir_ty`] or [`lower_hir_ty_deferred`] does, as
+/// `const_bodies` says, and returns every path segment the lowering resolved,
+/// with its resolution: the segments of the paths written in `ty`, including
+/// generic arguments and qualified types, at every prefix. Aliases and
+/// associated types are lowered by their own queries, so the paths written in
+/// their declarations are not included.
 pub(crate) fn lower_hir_ty_with_resolutions<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: HirTyId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    const_bodies: ConstBodyLowering,
 ) -> (TyId<'db>, Vec<(PathId<'db>, PathRes<'db>)>) {
-    let minter = LoweringContext::new(HoleAnchor::TemplateTy {
-        ty,
-        scope,
-        assumptions,
-    })
+    let minter = LoweringContext::for_const_bodies(
+        HoleAnchor::TemplateTy {
+            ty,
+            scope,
+            assumptions,
+        },
+        const_bodies,
+    )
     .recording_resolutions();
     let lowered = lower_hir_ty_impl(db, ty, scope, assumptions, &minter);
     (lowered, minter.into_resolutions())

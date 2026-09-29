@@ -1,0 +1,20 @@
+// An argument is checked in an expression or pattern path even when the
+// alias it is passed to does not use it.
+struct Plain {}
+impl Plain { fn make() -> u8 { 1 } }
+struct Pair<const A: usize, const B: usize> {}
+impl<const A: usize, const B: usize> Pair<A, B> { fn make() -> u8 { 2 } }
+const fn positive<const N: usize>() -> usize where N > 0 { 1 }
+type Drop<const N: usize> = Plain
+type Fixed<const N: usize> = Pair<1, 2>
+
+fn call() -> u8 { Drop<{ positive<0>() }>::make() }
+fn record() { let _p = Drop<{ positive<0>() }> {} }
+fn pattern(p: Plain) -> u8 {
+    match p {
+        Drop<{ positive<0>() }> {} => 1
+    }
+}
+fn other_target() -> u8 { Fixed<{ positive<0>() }>::make() }
+
+fn allowed() -> u8 { Drop<{ positive<1>() }>::make() + Fixed<{ positive<1>() }>::make() }
