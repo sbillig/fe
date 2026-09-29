@@ -558,30 +558,51 @@ pub(super) fn condition_outcome<'db>(
     }
 }
 
+/// The error of a condition whose evaluation was blocked on an unknown
+/// dependency.
+fn blocked_condition_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    condition: Body<'db>,
+    info: &BlockedInfo<'db>,
+) -> FuncBodyDiag<'db> {
+    let (primary, dependency) = blocked_const_detail(db, condition, info);
+    BodyDiag::ConstDependencyMustBeKnown {
+        primary,
+        dependency,
+    }
+    .into()
+}
+
+/// The error of a condition whose evaluation failed, when the failure has a
+/// rendered form.
+fn failed_condition_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    condition: Body<'db>,
+    cause: InvalidCause<'db>,
+) -> Option<FuncBodyDiag<'db>> {
+    TyId::invalid(db, cause)
+        .emit_diag(db, condition.span().into())
+        .map(FuncBodyDiag::from)
+}
+
 /// Reports a const predicate's outcome at its declaration. The predicate
-/// holds only when it evaluates to `true`.
+/// holds only when it evaluates to `true`, and any other outcome is an error.
 fn const_predicate_outcome_diag<'db>(
     db: &'db dyn HirAnalysisDb,
     predicate: Body<'db>,
     outcome: ConditionOutcome<'db>,
 ) -> Option<FuncBodyDiag<'db>> {
-    let span = || predicate.span().into();
+    let unknown = || BodyDiag::ConstValueMustBeKnown(predicate.span().into()).into();
     Some(match outcome {
         ConditionOutcome::True => return None,
-        ConditionOutcome::False => BodyDiag::WhereConstPredicateFailed(span()).into(),
-        ConditionOutcome::NotBool => BodyDiag::ConstValueMustBeKnown(span()).into(),
-        ConditionOutcome::Blocked(info) => {
-            let (primary, dependency) = blocked_const_detail(db, predicate, &info);
-            BodyDiag::ConstDependencyMustBeKnown {
-                primary,
-                dependency,
-            }
-            .into()
+        ConditionOutcome::False => {
+            BodyDiag::WhereConstPredicateFailed(predicate.span().into()).into()
         }
-        ConditionOutcome::Failed(cause) => TyId::invalid(db, cause)
-            .emit_diag(db, span())
-            .map(FuncBodyDiag::from)
-            .unwrap_or_else(|| BodyDiag::ConstValueMustBeKnown(span()).into()),
+        ConditionOutcome::NotBool => unknown(),
+        ConditionOutcome::Blocked(info) => blocked_condition_diag(db, predicate, &info),
+        ConditionOutcome::Failed(cause) => {
+            failed_condition_diag(db, predicate, cause).unwrap_or_else(unknown)
+        }
     })
 }
 
@@ -622,60 +643,41 @@ pub fn check_static_assert<'db>(
         return body_diags.clone();
     }
 
-    match eval_body_owner_const(db, owner, GenericSubst::none(db)) {
-        EvalOutcome::Ready(value) => match static_assert_bool_value(db, value) {
-            Some(true) => {}
-            Some(false) => {
-                let mut diags = body_diags.clone();
-                let comparison = if body_diags.is_empty() {
-                    assert_.comparison(db).and_then(|comparison| {
-                        static_assert_comparison_values(db, condition, typed_body, comparison)
-                    })
-                } else {
-                    None
-                };
-                diags.push(
-                    BodyDiag::StaticAssertFailed {
-                        primary: condition.span().into(),
-                        comparison,
-                    }
-                    .into(),
-                );
-                return diags;
-            }
-            None => {
-                let cause = InvalidCause::ConstEvalInvariant {
-                    body: condition,
-                    expr: condition.expr(db),
-                    message: "static assertion CTFE returned a non-boolean value".into(),
-                };
-                let ty = TyId::invalid(db, cause);
-                return ty
-                    .emit_diag(db, condition.span().into())
-                    .into_iter()
-                    .map(Into::into)
-                    .collect();
-            }
-        },
-        EvalOutcome::Blocked(info) => {
-            let (primary, dependency) = blocked_const_detail(db, condition, &info);
-            return vec![
-                BodyDiag::ConstDependencyMustBeKnown {
-                    primary,
-                    dependency,
+    match condition_outcome(db, owner, GenericSubst::none(db)) {
+        ConditionOutcome::True => Vec::new(),
+        ConditionOutcome::False => {
+            let mut diags = body_diags.clone();
+            let comparison = if body_diags.is_empty() {
+                assert_.comparison(db).and_then(|comparison| {
+                    static_assert_comparison_values(db, condition, typed_body, comparison)
+                })
+            } else {
+                None
+            };
+            diags.push(
+                BodyDiag::StaticAssertFailed {
+                    primary: condition.span().into(),
+                    comparison,
                 }
                 .into(),
-            ];
+            );
+            diags
         }
-        EvalOutcome::Failed(failure) => {
-            let ty = TyId::invalid(db, invalid_cause_from_eval_failure(db, owner, failure));
-            if let Some(diag) = ty.emit_diag(db, condition.span().into()) {
-                return vec![diag.into()];
-            }
+        ConditionOutcome::NotBool => {
+            let cause = InvalidCause::ConstEvalInvariant {
+                body: condition,
+                expr: condition.expr(db),
+                message: "static assertion CTFE returned a non-boolean value".into(),
+            };
+            failed_condition_diag(db, condition, cause)
+                .into_iter()
+                .collect()
         }
+        ConditionOutcome::Blocked(info) => vec![blocked_condition_diag(db, condition, &info)],
+        ConditionOutcome::Failed(cause) => failed_condition_diag(db, condition, cause)
+            .into_iter()
+            .collect(),
     }
-
-    Vec::new()
 }
 
 fn static_assert_bool_value<'db>(
