@@ -9,6 +9,7 @@ use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet},
     hash::{Hash, Hasher},
+    iter,
     sync::Arc,
     thread::LocalKey,
 };
@@ -143,13 +144,13 @@ thread_local! {
     /// One backing graph per distinct bit decision, for the same reason as
     /// `SHARED_CHOICES`: an operation that reduces to a constant would otherwise
     /// keep its own copy of a graph the constants already denote.
-    static SHARED_BITS: RefCell<FxHashSet<BitDecision>> = RefCell::default();
+    static SHARED_BITS: RefCell<SharedGraphs<SlotBit, bool>> = RefCell::default();
     /// One backing graph per distinct choice decision. Separate operations that
     /// complete an equal graph would otherwise each keep their own copy, and every
     /// value, region and summary holding one would keep it alive. Slots name a
     /// condition's own tables, so these carry no database lifetime and equal graphs
     /// really are interchangeable.
-    static SHARED_CHOICES: RefCell<FxHashSet<ChoiceDecision>> = RefCell::default();
+    static SHARED_CHOICES: RefCell<SharedGraphs<SlotChoice, u32>> = RefCell::default();
     static CONSTANT_BITS: [BitDecision; 2] = [Decision::leaf(false), Decision::leaf(true)];
     static BIT_OPERATIONS: RefCell<FxHashMap<BitOperation, Option<BitDecision>>> =
         RefCell::default();
@@ -586,20 +587,44 @@ struct Condition<'db> {
     hash: u64,
 }
 
+/// Graphs shared by structure, and the nodes added since the last sweep and kept by
+/// it. Graphs range from one node to six figures, so their nodes, not their number,
+/// measure what the table retains.
+struct SharedGraphs<V, T> {
+    graphs: FxHashSet<Decision<V, T>>,
+    added: usize,
+    kept: usize,
+}
+
+impl<V, T> Default for SharedGraphs<V, T> {
+    fn default() -> Self {
+        Self {
+            graphs: FxHashSet::default(),
+            added: 0,
+            kept: 0,
+        }
+    }
+}
+
 /// The one graph denoting this structure, so equal decisions share their storage.
-/// A graph nothing else holds is dead weight, so drop those as the table grows.
+/// A graph nothing else holds is dead weight. Sweeping those once the table has
+/// added as many nodes as the last sweep kept bounds the dead storage by the live
+/// storage, and amortizes each pass over the nodes it waited for.
 fn shared<V: Clone + Ord + Hash, T: Clone + Eq + Hash>(
-    table: &'static LocalKey<RefCell<FxHashSet<Decision<V, T>>>>,
+    table: &'static LocalKey<RefCell<SharedGraphs<V, T>>>,
     decision: Decision<V, T>,
 ) -> Decision<V, T> {
     table.with_borrow_mut(|shared| {
-        if let Some(existing) = shared.get(&decision) {
+        if let Some(existing) = shared.graphs.get(&decision) {
             return existing.clone();
         }
-        if shared.len() >= 1 << 16 {
-            shared.retain(|decision| !decision.is_sole_owner());
+        shared.added += decision.node_count();
+        if shared.added >= shared.kept.max(1 << 16) {
+            shared.graphs.retain(|graph| !graph.is_sole_owner());
+            shared.kept = shared.graphs.iter().map(Decision::node_count).sum();
+            shared.added = 0;
         }
-        shared.insert(decision.clone());
+        shared.graphs.insert(decision.clone());
         decision
     })
 }
@@ -1078,10 +1103,6 @@ impl<'db> Condition<'db> {
                 .map(|leaf| leaf.node_count())
                 .sum::<usize>()
     }
-
-    fn is_sole_owner(&self) -> bool {
-        self.decision.is_sole_owner()
-    }
 }
 
 /// Place a leaf in a result table, reusing the slot of an equal one.
@@ -1097,48 +1118,44 @@ fn intern_leaf<'db>(results: &mut Vec<Leaf<'db>>, leaf: IndexCondition<'db>) -> 
     u32::try_from(slot).expect("leaf table fits")
 }
 
+/// Results of one guard operation by its operands; `None` records an infeasible one.
+type Memo<'db, K> = FxHashMap<(Guard<'db>, K), Option<Guard<'db>>>;
+
 /// Fixpoint iteration rebuilds values from the same guards, so their unions and
 /// intersections repeat. Guards are immutable; a cached result is the result.
+///
+/// Separate operations that complete an equal guard would each allocate its tables,
+/// and interned values, regions and summaries would retain every copy, so the cache
+/// also keeps one representative per structure and hands that out instead.
 #[derive(Default)]
 pub struct GuardCache<'db> {
-    conjunctions: FxHashMap<(Guard<'db>, Guard<'db>), Option<Guard<'db>>>,
-    disjunctions: FxHashMap<(Guard<'db>, Guard<'db>), Option<Guard<'db>>>,
-    substitutions: FxHashMap<(Guard<'db>, IndexSubst<'db>), Option<Guard<'db>>>,
-    canonical: CanonicalGuards<'db>,
-    pending: usize,
+    conjunctions: Memo<'db, Guard<'db>>,
+    disjunctions: Memo<'db, Guard<'db>>,
+    substitutions: Memo<'db, IndexSubst<'db>>,
+    /// Each representative keeps its own node count, so a sweep never rewalks graphs.
+    representatives: FxHashMap<Guard<'db>, usize>,
+    /// Storage recorded since the last sweep and kept by it: one for each operation,
+    /// and a representative's nodes.
+    recorded: usize,
+    kept: usize,
 }
 
 impl<'db> GuardCache<'db> {
-    /// Operations recorded between reclamation sweeps. A sweep costs one pass over
-    /// the memo, so amortize it rather than rescanning once it is full.
+    /// The least storage recorded between sweeps.
     const SWEEP: usize = 4096;
 
     pub fn and(&mut self, lhs: &Guard<'db>, rhs: &Guard<'db>) -> Option<Guard<'db>> {
-        let mut canonical = std::mem::take(&mut self.canonical);
-        let result = Self::cached(
-            &mut self.conjunctions,
-            lhs,
-            rhs,
-            &mut canonical,
-            &mut self.pending,
-            Guard::and,
-        );
-        self.canonical = canonical;
-        result
+        self.cached(|cache| &mut cache.conjunctions, lhs, rhs, Guard::and)
     }
 
     pub fn or(&mut self, lhs: &Guard<'db>, rhs: &Guard<'db>) -> Guard<'db> {
-        let mut canonical = std::mem::take(&mut self.canonical);
-        let result = Self::cached(
-            &mut self.disjunctions,
+        self.cached(
+            |cache| &mut cache.disjunctions,
             lhs,
             rhs,
-            &mut canonical,
-            &mut self.pending,
             |lhs, rhs| Some(lhs.or(rhs)),
-        );
-        self.canonical = canonical;
-        result.expect("a union of satisfiable guards is satisfiable")
+        )
+        .expect("a union of satisfiable guards is satisfiable")
     }
 
     pub fn substitute(
@@ -1146,105 +1163,110 @@ impl<'db> GuardCache<'db> {
         guard: &Guard<'db>,
         subst: &IndexSubst<'db>,
     ) -> Option<Guard<'db>> {
-        let mut canonical = std::mem::take(&mut self.canonical);
-        let result = Self::cached(
-            &mut self.substitutions,
+        self.cached(
+            |cache| &mut cache.substitutions,
             guard,
             subst,
-            &mut canonical,
-            &mut self.pending,
             Guard::substitute,
-        );
-        self.canonical = canonical;
-        result
+        )
     }
 
-    pub fn canonical(&mut self) -> &mut CanonicalGuards<'db> {
-        &mut self.canonical
+    /// The representative of this guard's structure, which the guard becomes if
+    /// there is none yet.
+    pub fn share(&mut self, guard: Guard<'db>) -> Guard<'db> {
+        if let Some((shared, _)) = self.representatives.get_key_value(&guard) {
+            return shared.clone();
+        }
+        let nodes = guard.node_count();
+        self.representatives.insert(guard.clone(), nodes);
+        self.record(nodes);
+        guard
     }
 
     /// Recomputing an operation rebuilds a complete decision graph even when an equal
     /// one is already live, so hand back the shared representative rather than the
-    /// fresh copy. Entries hold representatives, and a representative nothing else
-    /// holds is dead storage, so sweep those instead of discarding the whole memo:
-    /// clearing it would only make the same graphs be rebuilt again.
+    /// fresh copy.
     fn cached<K: Clone + Eq + Hash>(
-        results: &mut FxHashMap<(Guard<'db>, K), Option<Guard<'db>>>,
+        &mut self,
+        results: fn(&mut Self) -> &mut Memo<'db, K>,
         lhs: &Guard<'db>,
         rhs: &K,
-        canonical: &mut CanonicalGuards<'db>,
-        pending: &mut usize,
         operation: impl FnOnce(&Guard<'db>, &K) -> Option<Guard<'db>>,
     ) -> Option<Guard<'db>> {
         let key = (lhs.clone(), rhs.clone());
-        if let Some(result) = results.get(&key) {
+        if let Some(result) = results(self).get(&key) {
             return result.clone();
         }
-        let result = operation(lhs, rhs).map(|guard| canonical.share(guard));
-        *pending += 1;
-        if *pending >= Self::SWEEP {
-            *pending = 0;
-            // An entry nothing else holds is dead storage; an infeasible one owns
-            // nothing and costs only its key.
-            results.retain(|_, result| result.as_ref().is_some_and(Guard::is_sole_owner));
-        }
-        results.insert(key, result.clone());
+        let result = operation(lhs, rhs).map(|guard| self.share(guard));
+        results(self).insert(key, result.clone());
+        self.record(1);
         result
     }
-}
 
-/// Separate operations that complete an equal guard each allocate a complete
-/// decision graph, and interned values, regions and summaries then retain every
-/// copy. Equal guards are interchangeable, so keep one representative per
-/// structure and let the other copies drop.
-#[derive(Default)]
-pub struct CanonicalGuards<'db> {
-    /// Each entry keeps its own node count, so reclaiming never rewalks the graphs.
-    guards: FxHashMap<Guard<'db>, usize>,
-    nodes: usize,
-    pending: usize,
-}
-
-impl<'db> CanonicalGuards<'db> {
-    /// Inserts between reclamation sweeps. A sweep costs one pass over the table, so
-    /// amortized it is constant per insert.
-    const SWEEP: usize = 1024;
-
-    pub fn share(&mut self, guard: Guard<'db>) -> Guard<'db> {
-        if let Some((shared, _)) = self.guards.get_key_value(&guard) {
-            return shared.clone();
+    /// Sweep once the cache has recorded as much storage as the last sweep kept. That
+    /// bounds what the cache holds for nobody else by what it holds for the analysis,
+    /// and amortizes each pass over the records it waited for.
+    fn record(&mut self, storage: usize) {
+        self.recorded += storage;
+        if self.recorded >= self.kept.max(Self::SWEEP) {
+            self.sweep();
         }
-        // A representative nothing else holds is dead storage. Dropping those keeps
-        // the table's own retention proportional to what the analysis still holds,
-        // so sharing never has to be given up to bound memory.
-        self.pending += 1;
-        if self.pending >= Self::SWEEP {
-            self.pending = 0;
-            self.guards.retain(|guard, _| !guard.is_sole_owner());
-            self.nodes = self.guards.values().sum();
-        }
-        let nodes = guard.node_count();
-        self.nodes += nodes;
-        self.guards.insert(guard.clone(), nodes);
-        guard
     }
 
-    pub fn retained_nodes(&self) -> usize {
-        self.nodes
+    /// Keep exactly the entries and representatives whose guards something outside
+    /// the cache still holds. Entries and representatives hold one another, so each
+    /// guard's references from anywhere in the cache are counted first: comparing
+    /// against a single owner would let the cache keep its own guards alive forever.
+    /// A hot result stays with its operands, and an infeasible one costs only them.
+    /// Clearing instead would only make the same graphs be rebuilt again.
+    fn sweep(&mut self) {
+        let mut held = FxHashMap::<*const Condition<'db>, usize>::default();
+        let pairs = self.conjunctions.iter().chain(&self.disjunctions);
+        for guard in self
+            .representatives
+            .keys()
+            .chain(pairs.flat_map(|((lhs, rhs), result)| [lhs, rhs].into_iter().chain(result)))
+            .chain(
+                self.substitutions
+                    .iter()
+                    .flat_map(|((guard, _), result)| iter::once(guard).chain(result)),
+            )
+        {
+            *held.entry(Arc::as_ptr(&guard.condition)).or_default() += 1;
+        }
+        let live = |guard: &Guard<'db>| {
+            Arc::strong_count(&guard.condition) > held[&Arc::as_ptr(&guard.condition)]
+        };
+        for results in [&mut self.conjunctions, &mut self.disjunctions] {
+            results.retain(|(lhs, rhs), result| {
+                live(lhs) && live(rhs) && result.as_ref().is_none_or(live)
+            });
+        }
+        self.substitutions
+            .retain(|(guard, _), result| live(guard) && result.as_ref().is_none_or(live));
+        self.representatives.retain(|guard, _| live(guard));
+        self.kept = self.conjunctions.len()
+            + self.disjunctions.len()
+            + self.substitutions.len()
+            + self.representatives.values().sum::<usize>();
+        self.recorded = 0;
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Guard<'db> {
     scope: BinderScope,
-    condition: Condition<'db>,
+    /// A guard's own allocation, so whether anything still holds the guard is a
+    /// question about this handle. The decision graph inside is shared by every
+    /// condition of the same shape, and by the table sharing it, so it cannot say.
+    condition: Arc<Condition<'db>>,
 }
 
 impl<'db> Guard<'db> {
     pub fn always(scope: &BinderScope) -> Self {
         Self {
             scope: scope.clone(),
-            condition: Condition::constant(true),
+            condition: Arc::new(Condition::constant(true)),
         }
     }
     pub fn scope(&self) -> &BinderScope {
@@ -1480,11 +1502,6 @@ impl<'db> Guard<'db> {
         indices
     }
 
-    /// No other guard holds this condition's backing graph.
-    pub fn is_sole_owner(&self) -> bool {
-        self.condition.is_sole_owner()
-    }
-
     pub fn node_count(&self) -> usize {
         self.condition.node_count()
     }
@@ -1512,7 +1529,7 @@ impl<'db> Guard<'db> {
         }) {
             return Some(Self {
                 scope: scope.clone(),
-                condition,
+                condition: Arc::new(condition),
             });
         }
         let choice_indices: BTreeSet<_> = condition
@@ -1559,7 +1576,80 @@ impl<'db> Guard<'db> {
         let canonical = canonical.restricted(&care)?;
         (!canonical.is_never()).then(|| Self {
             scope: scope.clone(),
-            condition: canonical,
+            condition: Arc::new(canonical),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn selected<'db>(scope: &BinderScope, occurrence: u16) -> Guard<'db> {
+        Guard::always(scope)
+            .with_variant(
+                ChoiceKey::new(
+                    ValueOccurrence::Value(NValueId::from_u32(occurrence.into())),
+                    StructuralPath::default(),
+                ),
+                VariantIndex(occurrence),
+            )
+            .unwrap()
+    }
+
+    /// Sweep the shared choice graphs and count the ones something still holds.
+    fn live_choice_graphs() -> usize {
+        SHARED_CHOICES.with_borrow_mut(|shared| {
+            shared.graphs.retain(|graph| !graph.is_sole_owner());
+            shared.graphs.len()
+        })
+    }
+
+    #[test]
+    fn cache_sweeps_keep_exactly_the_guards_held_outside_the_cache() {
+        let scope = BinderScope::default();
+        let before = live_choice_graphs();
+        let mut cache = GuardCache::default();
+        let (left, right) = (selected(&scope, 0), selected(&scope, 1));
+        let hot = cache.and(&left, &right).unwrap();
+        // Operations whose operands and results only the cache holds afterwards.
+        for occurrence in 2..34 {
+            cache.or(
+                &selected(&scope, occurrence),
+                &selected(&scope, occurrence + 32),
+            );
+        }
+        cache.sweep();
+        assert_eq!(
+            (
+                cache.conjunctions.len(),
+                cache.disjunctions.len(),
+                cache.representatives.len()
+            ),
+            (1, 0, 1),
+            "a sweep kept dead entries or dropped the live one"
+        );
+        let again = cache.and(&left, &right).unwrap();
+        assert!(
+            Arc::ptr_eq(&again.condition, &hot.condition),
+            "a sweep dropped a result the analysis still holds"
+        );
+        // Once the analysis lets go, neither the cache nor the shared graph table
+        // keeps the other's guards alive.
+        drop((left, right, hot, again));
+        cache.sweep();
+        assert_eq!(
+            (
+                cache.conjunctions.len(),
+                cache.disjunctions.len(),
+                cache.representatives.len()
+            ),
+            (0, 0, 0)
+        );
+        assert_eq!(
+            live_choice_graphs(),
+            before,
+            "released guards pinned their graphs"
+        );
     }
 }

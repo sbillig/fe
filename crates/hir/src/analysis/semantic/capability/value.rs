@@ -206,10 +206,6 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         }
     }
 
-    pub fn canonical_guards(&self) -> &RefCell<GuardCache<'db>> {
-        &self.guards
-    }
-
     pub fn metrics(&self) -> ValueMetrics {
         self.metrics
     }
@@ -1618,7 +1614,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         node.direct = canonical
             .into_iter()
             .map(|((_, payload), guard)| Guarded {
-                guard: self.guards.borrow_mut().canonical().share(guard),
+                guard: self.guards.borrow_mut().share(guard),
                 payload,
             })
             .collect();
