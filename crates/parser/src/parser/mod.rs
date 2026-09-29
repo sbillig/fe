@@ -71,6 +71,9 @@ pub struct Parser<S: TokenStream> {
 
     /// Outcomes of the speculative probes run so far, see [`Parser::probe`].
     probe_cache: HashMap<(rowan::TextSize, bool, ProbeKind), bool>,
+    /// `parents.len()` on entry to each [`Parser::probe`] currently running, so
+    /// `recover` can confine itself to the scopes the innermost probe created.
+    probe_scope_floors: Vec<usize>,
 
     /// Whether or not to recover from syntax errors automatically.
     recovery_mode: RecoveryMode,
@@ -106,6 +109,7 @@ impl<S: TokenStream> Parser<S> {
             dry_run_states: Vec::new(),
             dry_run_next_trivias_pool: Vec::new(),
             probe_cache: HashMap::new(),
+            probe_scope_floors: Vec::new(),
             recovery_mode,
         }
     }
@@ -410,17 +414,19 @@ impl<S: TokenStream> Parser<S> {
     /// identical probe already run at this position.
     ///
     /// `dry_run` reverts the stream, position, buffered trivia and errors, and
-    /// leaves the tree builder untouched, so a probe that records no error
-    /// depends only on the position it starts from and on whether newlines are
-    /// trivia there. The input never changes during a parse, so such an outcome
-    /// stays valid.
+    /// leaves the tree builder untouched, so a probe depends only on the position
+    /// it starts from and on whether newlines are trivia there. The input never
+    /// changes during a parse, so an outcome stays valid.
     ///
-    /// An outcome reached through error recovery is *not* reused: `recover`
-    /// searches the whole enclosing scope stack for a token to stop at, so how
-    /// far it consumes, and therefore the outcome, can depend on where the probe
-    /// was run from. Those probes are re-run, as they were before this cache.
-    /// Detecting them takes both the error list and the dry run's own error
-    /// flag, because recovery raises only the latter while in dry run mode.
+    /// Error recovery is the one thing that would otherwise read more than the
+    /// input: `recover` searches the enclosing scope stack for a token to stop
+    /// at, so how far it consumes depends on where the probe was run from. A
+    /// probe therefore records its scope depth in `probe_scope_floors` and
+    /// `recover` searches no further out than that, which is what a probe
+    /// already means -- would this construct parse here, on its own? -- since a
+    /// probe's tree and errors are discarded either way. With recovery confined,
+    /// every outcome is a function of the key alone and can be reused, malformed
+    /// input included.
     ///
     /// Nesting is what makes caching worthwhile: each level of
     /// `Wrap<<T as Model>::Point>` probes the positions inside it, and every
@@ -434,18 +440,10 @@ impl<S: TokenStream> Parser<S> {
         if let Some(&outcome) = self.probe_cache.get(&key) {
             return outcome;
         }
-        let err_num = self.errors.len();
-        let (outcome, is_context_free) = self.dry_run(|parser| {
-            let outcome = f(parser);
-            // `recover` reports an error in dry run mode by raising the dry
-            // run's own flag instead of adding to `errors`, so the error list
-            // alone would call a recovered probe error free and cache it.
-            let recovered = parser.dry_run_states.last().is_some_and(|state| state.err);
-            (outcome, !recovered && parser.errors.len() == err_num)
-        });
-        if is_context_free {
-            self.probe_cache.insert(key, outcome);
-        }
+        self.probe_scope_floors.push(self.parents.len());
+        let outcome = self.dry_run(f);
+        self.probe_scope_floors.pop();
+        self.probe_cache.insert(key, outcome);
         outcome
     }
 
@@ -569,6 +567,9 @@ impl<S: TokenStream> Parser<S> {
         if self.recovery_mode == RecoveryMode::NoRecover {
             return (None, None);
         }
+        // Inside a probe, only the scopes the probe itself opened may stop the
+        // scan, so its outcome does not depend on the enclosing context.
+        let floor = self.probe_scope_floors.last().copied().unwrap_or(0);
 
         let mut unexpected = None;
         let mut match_scope_index = None;
@@ -577,6 +578,7 @@ impl<S: TokenStream> Parser<S> {
                 .parents
                 .iter()
                 .enumerate()
+                .skip(floor)
                 .rev()
                 .find(|(_i, scope)| scope.is_recovery_match(kind))
             {
