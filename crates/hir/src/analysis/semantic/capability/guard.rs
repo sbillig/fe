@@ -10,6 +10,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     hash::{Hash, Hasher},
     sync::Arc,
+    thread::LocalKey,
 };
 
 use super::{
@@ -253,7 +254,7 @@ impl<'db> IndexCondition<'db> {
         if used.iter().all(|used| *used) {
             return Self {
                 indices,
-                decision: shared_bits(decision),
+                decision: shared(&SHARED_BITS, decision),
             };
         }
         let mut next = 0;
@@ -275,7 +276,10 @@ impl<'db> IndexCondition<'db> {
                 .zip(&used)
                 .filter_map(|(index, used)| used.then_some(*index))
                 .collect(),
-            decision: shared_bits(BitOperation::Substitute(decision, targets).run().unwrap()),
+            decision: shared(
+                &SHARED_BITS,
+                BitOperation::Substitute(decision, targets).run().unwrap(),
+            ),
         }
     }
 
@@ -323,19 +327,25 @@ impl<'db> IndexCondition<'db> {
             (IndexExpr::Const(_), IndexExpr::Const(_)) => Self::never(),
             (IndexExpr::Const(value), index) => Self {
                 indices: Arc::new([index]),
-                decision: shared_bits(Decision::chain(
-                    (0..INDEX_BITS).map(|bit| (SlotBit::new(0, bit), constant_bit(value, bit))),
-                    true,
-                    false,
-                )),
+                decision: shared(
+                    &SHARED_BITS,
+                    Decision::chain(
+                        (0..INDEX_BITS).map(|bit| (SlotBit::new(0, bit), constant_bit(value, bit))),
+                        true,
+                        false,
+                    ),
+                ),
             },
             (lhs, rhs) => Self {
                 indices: Arc::new([lhs, rhs]),
-                decision: shared_bits(Decision::equal_bits(
-                    (0..INDEX_BITS).map(|bit| (SlotBit::new(0, bit), SlotBit::new(1, bit))),
-                    true,
-                    false,
-                )),
+                decision: shared(
+                    &SHARED_BITS,
+                    Decision::equal_bits(
+                        (0..INDEX_BITS).map(|bit| (SlotBit::new(0, bit), SlotBit::new(1, bit))),
+                        true,
+                        false,
+                    ),
+                ),
             },
         }
     }
@@ -404,7 +414,10 @@ impl<'db> IndexCondition<'db> {
     fn not(&self) -> Self {
         Self {
             indices: self.indices.clone(),
-            decision: shared_bits(BitOperation::Not(self.decision.clone()).run().unwrap()),
+            decision: shared(
+                &SHARED_BITS,
+                BitOperation::Not(self.decision.clone()).run().unwrap(),
+            ),
         }
     }
     fn implies(&self, other: &Self) -> bool {
@@ -573,24 +586,13 @@ struct Condition<'db> {
     hash: u64,
 }
 
-/// The one graph denoting this bit structure, so equal decisions share storage.
-fn shared_bits(decision: BitDecision) -> BitDecision {
-    SHARED_BITS.with_borrow_mut(|shared| {
-        if let Some(existing) = shared.get(&decision) {
-            return existing.clone();
-        }
-        if shared.len() >= 1 << 16 {
-            shared.retain(|decision| !decision.is_sole_owner());
-        }
-        shared.insert(decision.clone());
-        decision
-    })
-}
-
 /// The one graph denoting this structure, so equal decisions share their storage.
 /// A graph nothing else holds is dead weight, so drop those as the table grows.
-fn shared_decision(decision: ChoiceDecision) -> ChoiceDecision {
-    SHARED_CHOICES.with_borrow_mut(|shared| {
+fn shared<V: Clone + Ord + Hash, T: Clone + Eq + Hash>(
+    table: &'static LocalKey<RefCell<FxHashSet<Decision<V, T>>>>,
+    decision: Decision<V, T>,
+) -> Decision<V, T> {
+    table.with_borrow_mut(|shared| {
         if let Some(existing) = shared.get(&decision) {
             return existing.clone();
         }
@@ -608,16 +610,15 @@ fn shared_decision(decision: ChoiceDecision) -> ChoiceDecision {
 fn choice_order(left: &ChoiceKey<'_>, right: &ChoiceKey<'_>) -> Ordering {
     left.occurrence
         .cmp(&right.occurrence)
-        .then_with(|| choice_shape(left).cmp(&choice_shape(right)))
+        .then_with(|| choice_shape(left).cmp(choice_shape(right)))
         .then_with(|| left.path.cmp(&right.path))
 }
 
-fn choice_shape(key: &ChoiceKey<'_>) -> Vec<Projection<()>> {
+fn choice_shape<'a>(key: &'a ChoiceKey<'_>) -> impl Iterator<Item = Projection<()>> + 'a {
     key.path
         .as_slice()
         .iter()
         .map(|step| step.map_index(|_| ()))
-        .collect()
 }
 
 /// Group boundaries fall where the occurrence or the path shape changes.
@@ -628,7 +629,7 @@ fn choice_groups(choices: &[Arc<ChoiceKey<'_>>]) -> Arc<[u16]> {
         if position > 0 {
             let previous = &choices[position - 1];
             if previous.occurrence != choice.occurrence
-                || choice_shape(previous) != choice_shape(choice)
+                || !choice_shape(previous).eq(choice_shape(choice))
             {
                 group += 1;
             }
@@ -758,7 +759,7 @@ impl<'db> Condition<'db> {
         leaves: Arc<[Leaf<'db>]>,
         decision: ChoiceDecision,
     ) -> Self {
-        let decision = shared_decision(decision);
+        let decision = shared(&SHARED_CHOICES, decision);
         let mut hasher = FxHasher::default();
         choices.hash(&mut hasher);
         leaves.hash(&mut hasher);
