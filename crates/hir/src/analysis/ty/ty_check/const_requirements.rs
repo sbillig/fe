@@ -506,17 +506,17 @@ pub(super) fn check_body_requirements<'db>(
             _ => None,
         })
         .collect();
-    let written = written_type_applications(db, owner);
-    // Requirements are checked where a type enters the body: an authored type
-    // (checked by `check_declared_type_requirements`) or an instantiating
-    // expression. An expression does not report an application that a
-    // written type carries, since that type reports it. A pattern, a binding use, or a block or branch only carries a
-    // type that entered elsewhere, so checking it again repeats that report.
-    // A function-typed expression is not checked for its type arguments: they
-    // are written types, checked where they are written, or inferred from the
-    // argument and result expressions, which are checked themselves. The type
-    // before `::` in a path is neither, so an item reached through it checks
-    // that type itself (`check_entered_header`).
+    let written = written_applications(db, owner);
+    // Requirements are checked where a type enters the body: a written type
+    // (`written_type_check`) or an instantiating expression. An expression
+    // does not report an application that a written type carries, since that
+    // type reports it. A pattern, a binding use, or a block or branch only
+    // carries a type that entered elsewhere, so checking it again repeats that
+    // report. A function-typed expression is not checked for its type
+    // arguments: they are written types, checked where they are written, or
+    // inferred from the argument and result expressions, which are checked
+    // themselves. The type before `::` in a path is neither, so an item
+    // reached through it checks that type itself (`check_entered_header`).
     for (expr, data) in body.exprs(db).iter() {
         if typed.expr_binding(expr).is_some()
             || matches!(
@@ -1239,102 +1239,132 @@ fn assumptions_at<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Predi
     crate::semantic::constraints_for(db, enclosing.item())
 }
 
-/// The type applications in the types written in `owner`'s signature and
-/// body, lowered as `check_declared_type_requirements` lowers them. That check
-/// reports a written type's unmet requirement where the type is written, so
-/// an expression that carries the same application does not report it again.
-/// A `where` clause is left out: its conditions are checked in their own
-/// context.
-fn written_type_applications<'db>(
-    db: &'db dyn HirAnalysisDb,
-    owner: BodyOwner<'db>,
-) -> Vec<TyId<'db>> {
-    use crate::hir_def::{TypeId, WhereClauseId};
-    use crate::visitor::{
-        Visitor, VisitorCtxt,
-        prelude::{LazyTySpan, LazyWhereClauseSpan},
-        walk_type,
-    };
-    struct Collector<'db> {
-        db: &'db dyn HirAnalysisDb,
-        applications: FxHashSet<TyId<'db>>,
-    }
-    impl<'db> Collector<'db> {
-        fn collect(&mut self, ty: TyId<'db>) {
-            if self.applications.insert(ty) {
-                for &arg in ty.decompose_ty_app(self.db).1 {
-                    self.collect(arg);
-                }
+/// The applications that the types written in `owner`'s signature and body
+/// carry, as `written_types` lists them for `written_type_check`. That check
+/// reports a written type's unmet requirement where the type is written, so a
+/// path or expression that carries the same application does not report it
+/// again.
+fn written_applications<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> Vec<TyId<'db>> {
+    fn examined<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, found: &mut Vec<TyId<'db>>) {
+        if !found.contains(&ty) {
+            found.push(ty);
+            for &arg in ty.decompose_ty_app(db).1 {
+                examined(db, arg, found);
             }
         }
     }
-    impl<'db> Visitor<'db> for Collector<'db> {
-        fn visit_where_clause(
-            &mut self,
-            _: &mut VisitorCtxt<'db, LazyWhereClauseSpan<'db>>,
-            _: WhereClauseId<'db>,
-        ) {
-        }
-
-        fn visit_ty(&mut self, ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>, hir_ty: TypeId<'db>) {
-            let scope = ctxt.scope();
-            let ty = lower_hir_ty(self.db, hir_ty, scope, assumptions_at(self.db, scope));
-            // The same types `check_declared_type_requirements` checks.
-            if !ty.has_invalid(self.db) && ctxt.span().is_some() {
-                self.collect(ty);
-            }
-            walk_type(self, ctxt, hir_ty);
-        }
-    }
-    let mut collector = Collector {
-        db,
-        applications: FxHashSet::default(),
-    };
-    let item = match owner {
+    let signature = match owner {
         BodyOwner::Func(func) => Some(ItemKind::Func(func)),
         BodyOwner::Const(const_) => Some(ItemKind::Const(const_)),
         _ => None,
     };
-    if let Some(item) = item {
-        collector.visit_item(&mut VisitorCtxt::with_item(db, item), item);
-    } else if let Some(body) = owner.body(db) {
-        collector.visit_body(&mut VisitorCtxt::with_body(db, body), body);
+    let mut found = Vec::new();
+    for item in signature
+        .into_iter()
+        .chain(owner.body(db).map(ItemKind::Body))
+    {
+        for entry in written_types(db, item) {
+            if let WrittenEntry::Type(written) = entry {
+                if let Some(ty) = written.lowered {
+                    examined(db, ty, &mut found);
+                }
+            }
+        }
     }
-    collector.applications.into_iter().collect()
+    found
 }
 
 /// Check every authored type position, including unused defaults and aliases,
 /// and the anonymous constants written directly in types and trait
-/// references. Inferred expression types are checked separately after body
-/// inference.
+/// references. Each item and body of the module is checked on its own
+/// (`written_type_check`). Inferred expression types are checked separately
+/// after body inference.
 pub(crate) fn check_declared_type_requirements<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: crate::hir_def::TopLevelMod<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
+    top_mod
+        .all_items(db)
+        .iter()
+        .flat_map(|&item| written_type_check(db, item).iter().cloned())
+        .collect()
+}
+
+/// A position in an item or body that `written_type_check` checks, in the
+/// order it checks them.
+#[derive(Debug, Clone, PartialEq, Eq, Update)]
+enum WrittenEntry<'db> {
+    /// Anonymous constants written in a type or trait reference, each with
+    /// the type its position checks it against.
+    ConstBodies(Vec<(Body<'db>, TyId<'db>)>),
+    /// A written type, listed after the types nested in it.
+    Type(WrittenType<'db>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Update)]
+struct WrittenType<'db> {
+    span: DynLazySpan<'db>,
+    scope: ScopeId<'db>,
+    /// Its lowering, unless that is invalid.
+    lowered: Option<TyId<'db>>,
+    /// The index of the first entry nested in this type.
+    nested_from: usize,
+}
+
+#[salsa::interned]
+struct WrittenTypeRegion<'db> {
+    item: ItemKind<'db>,
+}
+
+/// The types written in `item` itself, and the anonymous constants written
+/// in them. An item or body nested in it is a region of its own, since
+/// `TopLevelMod::all_items` lists every item and body of a module, including
+/// the default of a const parameter. Listing them only lowers types, so a
+/// body's requirement check can read the list while a requirement is being
+/// discharged; `written_type_check` discharges.
+fn written_types<'db>(db: &'db dyn HirAnalysisDb, item: ItemKind<'db>) -> &'db [WrittenEntry<'db>] {
+    written_types_query(db, WrittenTypeRegion::new(db, item))
+}
+
+#[salsa::tracked(return_ref)]
+fn written_types_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    region: WrittenTypeRegion<'db>,
+) -> Vec<WrittenEntry<'db>> {
     use crate::hir_def::{TraitRefId, TypeKind};
     use crate::span::types::LazyTySpan;
     use crate::visitor::{
-        Visitor, VisitorCtxt, prelude::LazyTraitRefSpan, walk_trait_ref, walk_type,
+        Visitor, VisitorCtxt,
+        prelude::{LazyBodySpan, LazyItemSpan, LazyTraitRefSpan},
+        walk_body, walk_item, walk_trait_ref, walk_type,
     };
-    struct Checker<'db> {
+    struct Collector<'db> {
         db: &'db dyn HirAnalysisDb,
-        diags: Vec<FuncBodyDiag<'db>>,
-        /// Failing type applications, in report order.
-        reported: Vec<TyId<'db>>,
+        root: ItemKind<'db>,
+        entries: Vec<WrittenEntry<'db>>,
         /// Type parameter defaults, and how deep the walk is inside one.
         /// `check_generic_default_bodies` owns the anonymous constants there.
         defaults: FxHashSet<crate::hir_def::TypeId<'db>>,
         default_depth: usize,
     }
-    impl<'db> Checker<'db> {
-        fn check_const_bodies(&mut self, lowered: &[TyId<'db>], bodies: &[Body<'db>]) {
-            for (body, expected) in positioned_const_bodies(self.db, lowered, bodies) {
-                self.diags
-                    .extend(anon_const_position_check(self.db, body, expected).diags);
+    impl<'db> Visitor<'db> for Collector<'db> {
+        // Nested items and bodies are their own regions.
+        fn visit_item(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, LazyItemSpan<'db>>,
+            item: ItemKind<'db>,
+        ) {
+            if item == self.root {
+                walk_item(self, ctxt, item);
             }
         }
-    }
-    impl<'db> Visitor<'db> for Checker<'db> {
+
+        fn visit_body(&mut self, ctxt: &mut VisitorCtxt<'db, LazyBodySpan<'db>>, body: Body<'db>) {
+            if ItemKind::Body(body) == self.root {
+                walk_body(self, ctxt, body);
+            }
+        }
+
         fn visit_generic_param(
             &mut self,
             ctxt: &mut VisitorCtxt<'db, crate::visitor::prelude::LazyGenericParamSpan<'db>>,
@@ -1346,18 +1376,6 @@ pub(crate) fn check_declared_type_requirements<'db>(
                 self.defaults.insert(default);
             }
             crate::visitor::walk_generic_param(self, ctxt, param);
-        }
-
-        // The default owner checks the constants of a default type, not the
-        // types written inside those constants' bodies.
-        fn visit_body(
-            &mut self,
-            ctxt: &mut VisitorCtxt<'db, crate::visitor::prelude::LazyBodySpan<'db>>,
-            body: Body<'db>,
-        ) {
-            let depth = std::mem::take(&mut self.default_depth);
-            crate::visitor::walk_body(self, ctxt, body);
-            self.default_depth = depth;
         }
 
         fn visit_trait_ref(
@@ -1381,7 +1399,10 @@ pub(crate) fn check_declared_type_requirements<'db>(
                         resolve_path_with_minter(self.db, path, scope, assumptions, false, &minter)
                     {
                         let lowered = path_res_tys(self.db, res);
-                        self.check_const_bodies(&lowered, &bodies);
+                        self.entries
+                            .push(WrittenEntry::ConstBodies(positioned_const_bodies(
+                                self.db, &lowered, &bodies,
+                            )));
                     }
                 }
             }
@@ -1393,49 +1414,102 @@ pub(crate) fn check_declared_type_requirements<'db>(
             ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>,
             hir_ty: crate::hir_def::TypeId<'db>,
         ) {
+            let db = self.db;
             let scope = ctxt.scope();
-            let assumptions = assumptions_at(self.db, scope);
-            let bodies = match hir_ty.data(self.db) {
+            let assumptions = assumptions_at(db, scope);
+            let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+            let bodies = match hir_ty.data(db) {
                 TypeKind::Array(_, Partial::Present(len)) => vec![*len],
-                TypeKind::Path(Partial::Present(path)) => path_const_bodies(self.db, *path),
+                TypeKind::Path(Partial::Present(path)) => path_const_bodies(db, *path),
                 _ => Vec::new(),
             };
             let in_default = self.defaults.contains(&hir_ty);
             self.default_depth += usize::from(in_default);
             if !bodies.is_empty() && self.default_depth == 0 {
-                let lowered = lower_hir_ty_deferred(self.db, hir_ty, scope, assumptions);
-                self.check_const_bodies(&[lowered], &bodies);
+                let lowered = lower_hir_ty_deferred(db, hir_ty, scope, assumptions);
+                self.entries
+                    .push(WrittenEntry::ConstBodies(positioned_const_bodies(
+                        db,
+                        &[lowered],
+                        &bodies,
+                    )));
             }
-            let ty = lower_hir_ty(self.db, hir_ty, scope, assumptions);
             let span = ctxt.span();
-            // Nested authored types are checked first. A failure one of them
-            // reported entered there, so the enclosing type does not repeat it;
-            // a failure reachable only through an alias expansion is reported here.
-            let nested = self.reported.len();
+            let nested_from = self.entries.len();
             walk_type(self, ctxt, hir_ty);
-            if !ty.has_invalid(self.db)
-                && let Some(span) = span
-                && let Some(unmet) =
-                    check_type_requirements(self.db, ty, scope, &self.reported[nested..])
-            {
-                self.reported.push(unmet.ty);
-                self.diags.push(unmet_requirement_diag(
-                    span.into(),
-                    unmet.predicate,
-                    unmet.failure,
-                ));
+            if let Some(span) = span {
+                self.entries.push(WrittenEntry::Type(WrittenType {
+                    span: span.into(),
+                    scope,
+                    lowered: (!ty.has_invalid(db)).then_some(ty),
+                    nested_from,
+                }));
             }
             self.default_depth -= usize::from(in_default);
         }
     }
-    let mut checker = Checker {
+    let root = region.item(db);
+    let mut collector = Collector {
         db,
-        diags: Vec::new(),
-        reported: Vec::new(),
+        root,
+        entries: Vec::new(),
         defaults: FxHashSet::default(),
         default_depth: 0,
     };
-    let mut ctxt = VisitorCtxt::new(db, top_mod.scope(), top_mod.span());
-    checker.visit_top_mod(&mut ctxt, top_mod);
-    checker.diags
+    collector.visit_item(&mut VisitorCtxt::with_item(db, root), root);
+    collector.entries
+}
+
+/// The unmet requirements of the types and anonymous constants written in
+/// `item` itself (`written_types`), each reported where it is written. A
+/// type's nested types are checked first. A failure one of them reported
+/// entered there, so the enclosing type does not repeat it; a failure
+/// reachable only through an alias expansion is reported at the enclosing
+/// type.
+fn written_type_check<'db>(
+    db: &'db dyn HirAnalysisDb,
+    item: ItemKind<'db>,
+) -> &'db Vec<FuncBodyDiag<'db>> {
+    written_type_check_query(db, WrittenTypeRegion::new(db, item))
+}
+
+#[salsa::tracked(return_ref)]
+fn written_type_check_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    region: WrittenTypeRegion<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let entries = written_types(db, region.item(db));
+    let mut diags = Vec::new();
+    // The failing application each entry reported, if any.
+    let mut reported: Vec<Option<TyId<'db>>> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let report = match entry {
+            WrittenEntry::ConstBodies(bodies) => {
+                for &(body, expected) in bodies {
+                    diags.extend(anon_const_position_check(db, body, expected).diags);
+                }
+                None
+            }
+            WrittenEntry::Type(written) => {
+                let nested: Vec<_> = reported[written.nested_from..]
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect();
+                let unmet = written
+                    .lowered
+                    .and_then(|ty| check_type_requirements(db, ty, written.scope, &nested));
+                unmet.map(|unmet| {
+                    diags.push(unmet_requirement_diag(
+                        written.span.clone(),
+                        unmet.predicate,
+                        unmet.failure,
+                    ));
+                    unmet.ty
+                })
+            }
+        };
+        reported.push(report);
+    }
+    diags
 }
