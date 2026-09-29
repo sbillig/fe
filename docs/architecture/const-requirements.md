@@ -160,7 +160,7 @@ type parameter's default, such as `struct S<T = Holder<{ dec<0>() }>::Out>`,
 whose declaration finds its constants by the same rule rather than in the
 lowered default. An enum variant or module segment has no generic parameters,
 and arguments written on it, such as `Choice::Empty<{ dec<0>() }>`, are
-ignored and never evaluated, as on master.
+ignored and never evaluated.
 
 Inside an `impl`, the conditions of the records and enums in its self type
 hold without restating them, so `impl<const N: usize> Bounded<N>` can call a
