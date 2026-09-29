@@ -763,6 +763,13 @@ impl<'db> Func<'db> {
         )
     }
 
+    /// Whether the function is a free function or belongs to an inherent
+    /// `impl`, rather than to a trait or a trait impl.
+    pub fn is_free_or_inherent(self, db: &dyn HirDb) -> bool {
+        !self.is_associated_func(db)
+            || matches!(self.scope().parent_item(db), Some(ItemKind::Impl(_)))
+    }
+
     pub fn param_label(self, db: &'db dyn HirDb, idx: usize) -> Option<IdentId<'db>> {
         self.params_list(db)
             .to_opt()?

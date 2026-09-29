@@ -694,13 +694,7 @@ fn collect_generic_params_cycle_initial<'db>(
     // Retaining them lets anonymous signature constants resolve their binders
     // while the implicit layout plan converges.
     match owner {
-        GenericParamOwner::Func(func)
-            if !func.is_associated_func(db)
-                || matches!(
-                    func.scope().parent_item(db),
-                    Some(crate::hir_def::ItemKind::Impl(_))
-                ) =>
-        {
+        GenericParamOwner::Func(func) if func.is_free_or_inherent(db) => {
             GenericParamCollector::new(db, owner, false).finalize()
         }
         _ => GenericParamTypeSet::empty(db, owner.scope()),

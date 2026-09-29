@@ -468,9 +468,7 @@ pub(crate) fn check_where_const_predicates<'db>(
         return diags;
     }
     let generic_declaration = match owner {
-        WhereClauseOwner::Func(func)
-            if const_requirements::function_requirements_supported(db, func) =>
-        {
+        WhereClauseOwner::Func(func) if func.is_free_or_inherent(db) => {
             Some(GenericParamOwner::Func(func))
         }
         WhereClauseOwner::Struct(record) => Some(GenericParamOwner::Struct(record)),

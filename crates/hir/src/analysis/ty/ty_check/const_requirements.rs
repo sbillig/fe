@@ -317,12 +317,6 @@ pub(super) fn predicate_may_depend_on_params<'db>(
     predicate_flags(db, typed.clone()).contains(TyFlags::HAS_PARAM)
 }
 
-// Inherent calls keep ordinary method resolution. Requirements constrain the
-// resolved call; they do not participate in candidate selection.
-pub(super) fn function_requirements_supported(db: &dyn HirAnalysisDb, func: Func<'_>) -> bool {
-    !func.is_associated_func(db) || matches!(func.scope().parent_item(db), Some(ItemKind::Impl(_)))
-}
-
 // Requirements scope over function signatures/bodies and ADT fields, but
 // their formation must be checked without those assumptions. In particular,
 // nested anonymous constants inside a predicate are part of its formation.
@@ -392,7 +386,7 @@ fn caller_premises<'db>(
     let item = ItemKind::from(caller);
     let mut premises = Vec::new();
     let own = match caller {
-        GenericParamOwner::Func(func) => function_requirements_supported(db, func),
+        GenericParamOwner::Func(func) => func.is_free_or_inherent(db),
         GenericParamOwner::Struct(_) | GenericParamOwner::Enum(_) => true,
         _ => false,
     };
@@ -556,12 +550,15 @@ pub(super) fn check_body_requirements<'db>(
         ) {
             check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
         }
-        // Unsupported associated or generic owner contexts are rejected at
-        // their declarations.
+        // Conditions are supported on free functions and inherent methods.
+        // Other associated or generic owner contexts are rejected at their
+        // declarations. Inherent calls keep ordinary method resolution:
+        // requirements constrain the resolved call and do not take part in
+        // candidate selection.
         let predicates = WhereClauseOwner::Func(func)
             .where_clause(db)
             .const_predicates(db);
-        if predicates.is_empty() || !function_requirements_supported(db, func) {
+        if predicates.is_empty() || !func.is_free_or_inherent(db) {
             continue;
         }
         let caller = caller.filter(|_| args.iter().any(|ty| ty.has_param(db)));
