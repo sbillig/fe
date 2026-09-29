@@ -398,12 +398,40 @@ impl<'db> RegionSet<'db> {
         )
     }
 
+    /// Replace clause guards with shared representatives. Sharing preserves guard
+    /// equality and scope, so the canonical clause set is unchanged.
+    pub fn share_guards(&self, mut share: impl FnMut(Guard<'db>) -> Guard<'db>) -> Self {
+        Self {
+            scope: self.scope.clone(),
+            clauses: self
+                .clauses
+                .iter()
+                .map(|clause| Guarded {
+                    guard: share(clause.guard.clone()),
+                    payload: clause.payload.clone(),
+                })
+                .collect(),
+        }
+    }
+
     pub fn with_guard(&self, guard: &Guard<'db>) -> Self {
+        self.restricted(guard, |left, right| left.and(right))
+    }
+
+    /// Restrict every clause, conjoining through the caller's guard operation. Summary
+    /// instantiation restricts many leaves by the same guard, and each conjunction
+    /// otherwise rebuilds a complete decision graph, so callers that hold the shared
+    /// guard cache pass it here.
+    pub fn restricted(
+        &self,
+        guard: &Guard<'db>,
+        mut and: impl FnMut(&Guard<'db>, &Guard<'db>) -> Option<Guard<'db>>,
+    ) -> Self {
         Self::new(
             &self.scope,
             self.clauses.iter().filter_map(|clause| {
                 Some(Guarded {
-                    guard: clause.guard.and(&guard.in_scope(clause.guard.scope()))?,
+                    guard: and(&clause.guard, &guard.in_scope(clause.guard.scope()))?,
                     payload: clause.payload.clone(),
                 })
             }),

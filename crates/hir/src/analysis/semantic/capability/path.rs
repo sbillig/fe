@@ -4,6 +4,7 @@ use crate::analysis::{
     semantic::{FieldIndex, SemanticInstance, VariantIndex},
     ty::ty_def::TyId,
 };
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Projection<I> {
@@ -30,21 +31,21 @@ impl<I> Projection<I> {
 
 /// Slots within a semantic value. A path never implicitly dereferences a capability.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct StructuralPath<I>(Box<[Projection<I>]>);
+pub struct StructuralPath<I>(Arc<[Projection<I>]>);
 
 /// Projections into referent storage; distinct from structural capability slots.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RegionPath<I>(Box<[Projection<I>]>);
+pub struct RegionPath<I>(Arc<[Projection<I>]>);
 
 macro_rules! path_impl {
     ($path:ident) => {
         impl<I> Default for $path<I> {
             fn default() -> Self {
-                Self(Box::new([]))
+                Self(Arc::from(Vec::new()))
             }
         }
         impl<I> $path<I> {
-            pub fn new(steps: impl Into<Box<[Projection<I>]>>) -> Self {
+            pub fn new(steps: impl Into<Arc<[Projection<I>]>>) -> Self {
                 Self(steps.into())
             }
             pub fn as_slice(&self) -> &[Projection<I>] {

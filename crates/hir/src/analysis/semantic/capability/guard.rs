@@ -139,6 +139,7 @@ enum BitOperation {
 }
 
 thread_local! {
+    static CONSTANT_BITS: [BitDecision; 2] = [Decision::leaf(false), Decision::leaf(true)];
     static BIT_OPERATIONS: RefCell<FxHashMap<BitOperation, Option<BitDecision>>> =
         RefCell::default();
 }
@@ -210,7 +211,9 @@ impl<'db> IndexCondition<'db> {
     fn constant(value: bool) -> Self {
         Self {
             indices: Arc::new([]),
-            decision: Decision::leaf(value),
+            // Every guard leaf is one of these two, and a fresh leaf would be
+            // another backing graph denoting the same constant.
+            decision: CONSTANT_BITS.with(|bits| bits[usize::from(value)].clone()),
         }
     }
     fn always() -> Self {
@@ -555,17 +558,25 @@ pub struct GuardCache<'db> {
     conjunctions: FxHashMap<(Guard<'db>, Guard<'db>), Option<Guard<'db>>>,
     disjunctions: FxHashMap<(Guard<'db>, Guard<'db>), Guard<'db>>,
     substitutions: FxHashMap<(Guard<'db>, IndexSubst<'db>), Option<Guard<'db>>>,
+    canonical: CanonicalGuards<'db>,
 }
 
 impl<'db> GuardCache<'db> {
-    const LIMIT: usize = 4096;
+    /// Operations recorded between reclamation sweeps.
+    const SWEEP: usize = 4096;
 
     pub fn and(&mut self, lhs: &Guard<'db>, rhs: &Guard<'db>) -> Option<Guard<'db>> {
-        Self::cached(&mut self.conjunctions, lhs, rhs, Guard::and)
+        let mut canonical = std::mem::take(&mut self.canonical);
+        let result = Self::cached(&mut self.conjunctions, lhs, rhs, &mut canonical, Guard::and);
+        self.canonical = canonical;
+        result
     }
 
     pub fn or(&mut self, lhs: &Guard<'db>, rhs: &Guard<'db>) -> Guard<'db> {
-        Self::cached(&mut self.disjunctions, lhs, rhs, Guard::or)
+        let mut canonical = std::mem::take(&mut self.canonical);
+        let result = Self::cached(&mut self.disjunctions, lhs, rhs, &mut canonical, Guard::or);
+        self.canonical = canonical;
+        result
     }
 
     pub fn substitute(
@@ -573,25 +584,110 @@ impl<'db> GuardCache<'db> {
         guard: &Guard<'db>,
         subst: &IndexSubst<'db>,
     ) -> Option<Guard<'db>> {
-        Self::cached(&mut self.substitutions, guard, subst, Guard::substitute)
+        let mut canonical = std::mem::take(&mut self.canonical);
+        let result = Self::cached(
+            &mut self.substitutions,
+            guard,
+            subst,
+            &mut canonical,
+            Guard::substitute,
+        );
+        self.canonical = canonical;
+        result
     }
 
-    fn cached<K: Clone + Eq + Hash, R: Clone>(
+    pub fn canonical(&mut self) -> &mut CanonicalGuards<'db> {
+        &mut self.canonical
+    }
+
+    /// Recomputing an operation rebuilds a complete decision graph even when an equal
+    /// one is already live, so hand back the shared representative rather than the
+    /// fresh copy. Entries hold representatives, and a representative nothing else
+    /// holds is dead storage, so sweep those instead of discarding the whole memo:
+    /// clearing it would only make the same graphs be rebuilt again.
+    fn cached<K: Clone + Eq + Hash, R: Shareable<'db>>(
         results: &mut FxHashMap<(Guard<'db>, K), R>,
         lhs: &Guard<'db>,
         rhs: &K,
+        canonical: &mut CanonicalGuards<'db>,
         operation: impl FnOnce(&Guard<'db>, &K) -> R,
     ) -> R {
         let key = (lhs.clone(), rhs.clone());
         if let Some(result) = results.get(&key) {
             return result.clone();
         }
-        let result = operation(lhs, rhs);
-        if results.len() >= Self::LIMIT {
-            results.clear();
+        let result = operation(lhs, rhs).shared(canonical);
+        if results.len() >= Self::SWEEP {
+            results.retain(|_, result| !result.is_sole_owner());
         }
         results.insert(key, result.clone());
         result
+    }
+}
+
+/// An operation result whose guards can be replaced by shared representatives.
+trait Shareable<'db>: Clone {
+    fn shared(self, canonical: &mut CanonicalGuards<'db>) -> Self;
+    fn is_sole_owner(&self) -> bool;
+}
+
+impl<'db> Shareable<'db> for Guard<'db> {
+    fn shared(self, canonical: &mut CanonicalGuards<'db>) -> Self {
+        canonical.share(self)
+    }
+    fn is_sole_owner(&self) -> bool {
+        Guard::is_sole_owner(self)
+    }
+}
+
+impl<'db> Shareable<'db> for Option<Guard<'db>> {
+    fn shared(self, canonical: &mut CanonicalGuards<'db>) -> Self {
+        self.map(|guard| canonical.share(guard))
+    }
+    fn is_sole_owner(&self) -> bool {
+        // An infeasible result owns nothing, so keeping it costs only its key.
+        self.as_ref().is_some_and(Guard::is_sole_owner)
+    }
+}
+
+/// Separate operations that complete an equal guard each allocate a complete
+/// decision graph, and interned values, regions and summaries then retain every
+/// copy. Equal guards are interchangeable, so keep one representative per
+/// structure and let the other copies drop.
+#[derive(Default)]
+pub struct CanonicalGuards<'db> {
+    /// Each entry keeps its own node count, so reclaiming never rewalks the graphs.
+    guards: FxHashMap<Guard<'db>, usize>,
+    nodes: usize,
+    pending: usize,
+}
+
+impl<'db> CanonicalGuards<'db> {
+    /// Inserts between reclamation sweeps. A sweep costs one pass over the table, so
+    /// amortized it is constant per insert.
+    const SWEEP: usize = 1024;
+
+    pub fn share(&mut self, guard: Guard<'db>) -> Guard<'db> {
+        if let Some((shared, _)) = self.guards.get_key_value(&guard) {
+            return shared.clone();
+        }
+        // A representative nothing else holds is dead storage. Dropping those keeps
+        // the table's own retention proportional to what the analysis still holds,
+        // so sharing never has to be given up to bound memory.
+        self.pending += 1;
+        if self.pending >= Self::SWEEP {
+            self.pending = 0;
+            self.guards.retain(|guard, _| !guard.is_sole_owner());
+            self.nodes = self.guards.values().sum();
+        }
+        let nodes = guard.node_count();
+        self.nodes += nodes;
+        self.guards.insert(guard.clone(), nodes);
+        guard
+    }
+
+    pub fn retained_nodes(&self) -> usize {
+        self.nodes
     }
 }
 
@@ -892,6 +988,11 @@ impl<'db> Guard<'db> {
             indices.extend(bit.choice.path.indices());
         }
         indices
+    }
+
+    /// No other guard holds this condition's backing graph.
+    pub fn is_sole_owner(&self) -> bool {
+        self.condition.is_sole_owner()
     }
 
     pub fn node_count(&self) -> usize {

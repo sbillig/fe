@@ -233,7 +233,7 @@ impl<'db> BorrowState<'db> {
                 .iter()
                 .filter_map(|entry| {
                     Some(Guarded {
-                        guard: values.guards().and(&entry.guard, &guard)?,
+                        guard: values.guards().borrow_mut().and(&entry.guard, &guard)?,
                         payload: entry.payload,
                     })
                 })
@@ -386,9 +386,9 @@ impl<'db> BorrowState<'db> {
             }
         }
         // Each iteration forgets the same guards again, and values share clauses.
-        let mut guards = std::mem::take(values.guards());
+        // The temporary interner shares one cache with this one, so reuse survives.
         let mut forgotten = FxHashMap::default();
-        let mut destination = CapabilityValues::new(values.db, ValueLimits::default());
+        let mut destination = CapabilityValues::sharing(values, ValueLimits::default());
         // Prior places per structural leaf: a leaf grows only from slots that
         // may be its own, not from a sibling pointer of the same aggregate.
         // A leaf with no possible counterpart before, such as a new enum
@@ -504,7 +504,8 @@ impl<'db> BorrowState<'db> {
                             .collect();
                         let subst = IndexSubst::new(guard.scope(), &scope, bindings)
                             .expect("previous value occurrence witnesses");
-                        guards.substitute(&guard, &subst).map(|guard| Guarded {
+                        let substituted = values.guards().borrow_mut().substitute(&guard, &subst);
+                        substituted.map(|guard| Guarded {
                             guard,
                             payload: payload.substitute(values.db, &subst),
                         })
@@ -515,7 +516,6 @@ impl<'db> BorrowState<'db> {
             });
             *value = destination.widen(&mapped);
         }
-        *values.guards() = guards;
     }
 
     pub fn value(&self, id: NValueId) -> &CapabilityValue<'db> {

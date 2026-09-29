@@ -284,10 +284,12 @@ impl<'db> Borrowck<'db> {
         regions
             .entry(entry.clone())
             .or_insert_with(|| {
+                let canonical = self.inventory.values.canonical_guards();
                 entry
                     .payload
                     .region(self.db, &self.inventory.loans, entry.guard.scope())
                     .with_guard(&entry.guard)
+                    .share_guards(|guard| canonical.borrow_mut().canonical().share(guard))
             })
             .clone()
     }

@@ -8,13 +8,14 @@ use std::{
 
 use super::{
     birth::AllocationBirth,
+    decision::live_graph_storage,
     external::{
         AddressProvenance, ClobberCondition, ExternalOrigin, ExternalSource, FeedbackPlaces,
         FeedbackRepeats, FeedbackSlot, MemoryOffset, ProviderStorage, ReferentContract,
         feedback_clause_guard, is_existential_renaming,
     },
     footprint::{AccessExtent, AccessFootprint},
-    guard::{ChoiceKey, Guard, ValueOccurrence},
+    guard::{ChoiceKey, Guard, GuardCache, ValueOccurrence},
     handle::{
         AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
         OpaqueWriteSite,
@@ -3870,4 +3871,96 @@ fn raw_and_hashed_addresses_never_share_structural_identity() {
         assert_eq!(source.substitute(&db, &identity), *source);
         assert_eq!(source.address_base(&db).as_ref(), Some(source));
     }
+}
+
+#[test]
+fn repeated_cached_guard_operations_share_one_backing_allocation() {
+    let base = scope();
+    let word = |from: u32, to: u32| {
+        (from..to)
+            .try_fold(Guard::always(&base), |guard, index| {
+                guard.with_variant(
+                    ChoiceKey::new(
+                        ValueOccurrence::Value(NValueId::from_u32(index)),
+                        StructuralPath::default(),
+                    ),
+                    VariantIndex(1),
+                )
+            })
+            .unwrap()
+    };
+    let (left, right) = (word(0, 32), word(32, 64));
+    let mut cache = GuardCache::default();
+    // Exactness first: a cached result equals the operation's own result. The
+    // reference copy is deliberately unshared and drops with this statement.
+    let conjunction = cache.and(&left, &right).unwrap();
+    assert_eq!(conjunction, left.and(&right).unwrap());
+    let disjunction = cache.or(&left, &right);
+    assert_eq!(disjunction, left.or(&right));
+    // Repeating an operation must hand back the shared graph, not rebuild it.
+    let mut owners = Vec::new();
+    for _ in 0..16 {
+        owners.push(cache.and(&left, &right).unwrap());
+        owners.push(cache.or(&right, &left));
+    }
+    for owner in &owners {
+        assert!(*owner == conjunction || *owner == disjunction);
+    }
+    let (allocations, distinct, excess) = live_graph_storage();
+    assert_eq!(
+        (allocations, excess),
+        (distinct, 0),
+        "{allocations} live graph allocations hold {excess} bytes beyond {distinct} distinct graphs"
+    );
+}
+
+#[test]
+fn cached_region_restriction_matches_exactly_and_shares_graph_storage() {
+    let db = HirAnalysisTestDb::default();
+    let base = scope();
+    let root = test_roots::local(&db, NRootId::from_u32(0));
+    // Summary instantiation restricts many leaves by one guard on every sweep.
+    let restriction = (0..64)
+        .try_fold(Guard::always(&base), |guard, index| {
+            guard.with_variant(
+                ChoiceKey::new(
+                    ValueOccurrence::Value(NValueId::from_u32(index)),
+                    StructuralPath::default(),
+                ),
+                VariantIndex(1),
+            )
+        })
+        .unwrap();
+    let region = RegionSet::new(
+        &base,
+        (0..16u32).map(|index| Guarded {
+            guard: Guard::always(&base)
+                .with_variant(
+                    ChoiceKey::new(ValueOccurrence::Argument(index), StructuralPath::default()),
+                    VariantIndex(1),
+                )
+                .unwrap(),
+            payload: SymbolicPlace {
+                root: root.clone(),
+                path: RegionPath::new([Projection::Index(IndexExpr::Const(index as usize))]),
+                views: Default::default(),
+            },
+        }),
+    );
+    let mut cache = GuardCache::default();
+    let restricted = region.restricted(&restriction, |left, right| cache.and(left, right));
+    // Exactness against the uncached operation; its copy drops with this statement.
+    assert_eq!(restricted, region.with_guard(&restriction));
+    let repeated: Vec<_> = (0..16)
+        .map(|_| region.restricted(&restriction, |left, right| cache.and(left, right)))
+        .collect();
+    for actual in &repeated {
+        assert_eq!(*actual, restricted);
+    }
+    let (allocations, distinct, excess) = live_graph_storage();
+    assert_eq!(
+        (allocations, excess),
+        (distinct, 0),
+        "{allocations} live graph allocations hold {excess} bytes beyond {distinct} distinct graphs"
+    );
 }

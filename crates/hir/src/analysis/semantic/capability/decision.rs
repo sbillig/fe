@@ -1,6 +1,6 @@
 //! Reduced ordered decision graphs with canonical, allocation-independent node numbering.
 #[cfg(test)]
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::{
@@ -12,6 +12,29 @@ use std::{
 #[cfg(test)]
 thread_local! {
     static INTERN_ATTEMPTS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
+    // Live backing allocations per completed graph, keyed by its canonical hash,
+    // node count and node size. Separate operations that complete an equal graph
+    // each allocate their own slice, so a structure can hold several copies.
+    static LIVE_GRAPHS: RefCell<FxHashMap<(u64, usize, usize), usize>> = RefCell::default();
+}
+
+/// Live completed-graph storage: backing allocations, distinct structures, and the
+/// bytes held beyond one copy of each structure.
+#[cfg(test)]
+pub(super) fn live_graph_storage() -> (usize, usize, usize) {
+    LIVE_GRAPHS.with_borrow(|live| {
+        (
+            live.values().sum(),
+            live.len(),
+            live.iter()
+                .map(|((_, nodes, bytes), copies)| nodes * bytes * (copies - 1))
+                .sum(),
+        )
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -37,10 +60,34 @@ impl<V: Hash, T: Hash> Decision<V, T> {
     fn new(nodes: Arc<[Node<V, T>]>) -> Self {
         let mut hasher = FxHasher::default();
         nodes.hash(&mut hasher);
-        Self {
-            hash: hasher.finish(),
-            nodes,
+        let hash = hasher.finish();
+        #[cfg(test)]
+        LIVE_GRAPHS.with_borrow_mut(|live| {
+            *live
+                .entry((hash, nodes.len(), size_of::<Node<V, T>>()))
+                .or_default() += 1;
+        });
+        Self { hash, nodes }
+    }
+}
+
+// Test accounting only: the last owner of a backing slice releases its storage.
+#[cfg(test)]
+impl<V, T> Drop for Decision<V, T> {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.nodes) > 1 {
+            return;
         }
+        let key = (self.hash, self.nodes.len(), size_of::<Node<V, T>>());
+        // A thread may drop graphs after its own thread locals are destroyed.
+        let _ = LIVE_GRAPHS.try_with(|live| {
+            let mut live = live.borrow_mut();
+            let copies = live.get_mut(&key).expect("counted graph");
+            *copies -= 1;
+            if *copies == 0 {
+                live.remove(&key);
+            }
+        });
     }
 }
 
@@ -510,6 +557,11 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
 
     pub(super) fn node_count(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// No other decision holds this backing graph, so keeping it shares nothing.
+    pub(super) fn is_sole_owner(&self) -> bool {
+        Arc::strong_count(&self.nodes) == 1
     }
 
     pub(super) fn witness(&self, mut accepted: impl FnMut(&T) -> bool) -> Option<Vec<(V, bool)>> {

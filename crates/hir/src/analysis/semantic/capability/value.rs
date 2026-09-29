@@ -12,8 +12,10 @@ use crate::analysis::{
 };
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
     hash::{BuildHasher, Hash, Hasher},
+    rc::Rc,
     sync::Arc,
 };
 
@@ -107,7 +109,7 @@ pub struct ValueInterner<'db, P> {
     pub(super) db: &'db dyn HirAnalysisDb,
     nodes: FxHashMap<StructuredValue<'db, P>, ValueId<'db, P>>,
     normalized: FxHashMap<(BinderScope, Guarded<'db, P>), Guarded<'db, P>>,
-    guards: GuardCache<'db>,
+    guards: Rc<RefCell<GuardCache<'db>>>,
     limits: ValueLimits,
     metrics: ValueMetrics,
 }
@@ -184,10 +186,23 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             db,
             nodes: FxHashMap::default(),
             normalized: FxHashMap::default(),
-            guards: GuardCache::default(),
+            guards: Rc::default(),
             limits,
             metrics: ValueMetrics::default(),
         }
+    }
+
+    /// A temporary interner that keeps the analysis interner's guard sharing. Values
+    /// remapped through it stay backed by the same graphs as the originals.
+    pub fn sharing<Q>(other: &ValueInterner<'db, Q>, limits: ValueLimits) -> Self {
+        Self {
+            guards: other.guards.clone(),
+            ..Self::new(other.db, limits)
+        }
+    }
+
+    pub fn canonical_guards(&self) -> &RefCell<GuardCache<'db>> {
+        &self.guards
     }
 
     pub fn metrics(&self) -> ValueMetrics {
@@ -591,6 +606,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                 Some(Guarded {
                     guard: self
                         .guards
+                        .borrow_mut()
                         .and(&entry.guard, &guard.in_scope(entry.guard.scope()))?,
                     payload: entry.payload.clone(),
                 })
@@ -633,8 +649,13 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         })
     }
 
-    pub fn guards(&mut self) -> &mut GuardCache<'db> {
-        &mut self.guards
+    pub fn guards(&self) -> &RefCell<GuardCache<'db>> {
+        &self.guards
+    }
+
+    /// A handle to the shared cache, usable while this interner is itself borrowed.
+    pub fn guard_cache(&self) -> Rc<RefCell<GuardCache<'db>>> {
+        self.guards.clone()
     }
 
     pub fn substitute(
@@ -1332,9 +1353,13 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     .direct
                     .iter()
                     .flat_map(|entry| {
-                        destination
+                        // Release the cache before the callback: it may share this
+                        // cache through its own interner.
+                        let restricted = destination
                             .guards
-                            .and(&entry.guard, &domain.in_scope(entry.guard.scope()))
+                            .borrow_mut()
+                            .and(&entry.guard, &domain.in_scope(entry.guard.scope()));
+                        restricted
                             .map(|domain| map(semantics, path, entry, &domain))
                             .unwrap_or_default()
                     })
@@ -1576,14 +1601,17 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     vacant.insert(entry.guard);
                 }
                 Entry::Occupied(mut occupied) => {
-                    let guard = self.guards.or(occupied.get(), &entry.guard);
+                    let guard = self.guards.borrow_mut().or(occupied.get(), &entry.guard);
                     occupied.insert(guard);
                 }
             }
         }
         node.direct = canonical
             .into_iter()
-            .map(|((_, payload), guard)| Guarded { guard, payload })
+            .map(|((_, payload), guard)| Guarded {
+                guard: self.guards.borrow_mut().canonical().share(guard),
+                payload,
+            })
             .collect();
         if let Some(value) = self.nodes.get(&node) {
             return value.clone();
