@@ -31,7 +31,8 @@ a condition. `where ({ ... })` also works.
 ## Ground conditions
 
 A condition that mentions no generic parameter is checked at its declaration,
-even if nothing uses the item. Only evaluation to `true` succeeds. Type errors,
+even if nothing uses the item, and a failure is reported only there, not again
+at each use. Only evaluation to `true` succeeds. Type errors,
 non-const operations, failed execution, recursion and exhausted evaluation
 limits are errors. Conditions go through ordinary semantic borrow and layout
 checking as anonymous const bodies. They add no solver assumptions and do not
@@ -130,9 +131,12 @@ to justify itself, including in nested anonymous constants.
 
 Declared type positions and inferred body types use the same checker; inferred
 types are checked after inference. An unmet condition is reported once, where
-the type enters: at the innermost written type, or at the expression that
-instantiates it. An enclosing type, a call's generic arguments, and a binding,
-block, or branch that only carries the type do not report it again.
+the type enters: at the innermost written type, or, when no type written in
+the same signature or body carries it, at the expression that instantiates it.
+An enclosing type, a call's generic arguments, an expression whose type a
+written type gives, and a binding, block, or branch that only carries the type
+do not report it again. Every unmet condition is `error[8-0093]`, whether the
+use is a type or a call.
 
 A record with conditions must be fully applied where it is used as a type.
 Passing the unapplied constructor through a higher-kinded parameter is
