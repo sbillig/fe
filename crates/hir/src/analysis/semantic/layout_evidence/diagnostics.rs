@@ -56,15 +56,8 @@ pub fn collect_layout_evidence_diagnostic_vouchers<'db>(
         .iter()
         .filter(|item| item.top_mod(db) == top_mod)
     {
-        if let Some(owner) = crate::hir_def::WhereClauseOwner::from_item_opt(*item) {
-            for &body in owner.where_clause(db).const_predicates(db) {
-                collect_owner(
-                    db,
-                    BodyOwner::const_predicate(db, body),
-                    &mut seen,
-                    &mut diagnostics,
-                );
-            }
+        for owner in BodyOwner::const_predicates_of(db, *item) {
+            collect_owner(db, owner, &mut seen, &mut diagnostics);
         }
         match item {
             ItemKind::Func(func) => {

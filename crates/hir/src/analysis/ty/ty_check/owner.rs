@@ -100,6 +100,22 @@ impl<'db> BodyOwner<'db> {
         }
     }
 
+    /// The `where` clause conditions `item` declares, as body owners.
+    pub fn const_predicates_of(
+        db: &'db dyn HirAnalysisDb,
+        item: ItemKind<'db>,
+    ) -> impl Iterator<Item = Self> + 'db {
+        crate::hir_def::WhereClauseOwner::from_item_opt(item)
+            .into_iter()
+            .flat_map(move |owner| {
+                owner
+                    .where_clause(db)
+                    .const_predicates(db)
+                    .iter()
+                    .map(move |&body| Self::const_predicate(db, body))
+            })
+    }
+
     pub fn arithmetic_mode(self, db: &'db dyn HirAnalysisDb) -> ArithmeticMode {
         if let Self::Func(func) = self {
             return func.arithmetic_mode(db);

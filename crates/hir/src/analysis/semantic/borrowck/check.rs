@@ -422,16 +422,8 @@ fn collect_top_mod_semantic_borrow_diagnostic_vouchers<'db>(
         .iter()
         .filter(|item| item.top_mod(db) == top_mod)
     {
-        if let Some(owner) = crate::hir_def::WhereClauseOwner::from_item_opt(*item) {
-            for &body in owner.where_clause(db).const_predicates(db) {
-                collect_owner(
-                    db,
-                    BodyOwner::const_predicate(db, body),
-                    seen_owners,
-                    seen_diags,
-                    diags,
-                );
-            }
+        for owner in BodyOwner::const_predicates_of(db, *item) {
+            collect_owner(db, owner, seen_owners, seen_diags, diags);
         }
         match item {
             ItemKind::Func(func) => {
