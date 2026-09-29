@@ -233,6 +233,60 @@ fn tree_sitter_parse_newline_lt_continuations() {
     }
 }
 
+/// The compiler reads a `<<` as generic arguments when a qualified path follows,
+/// in expression position as well as in type position, so the grammar has to
+/// agree or editors flag valid code. A `<<` with anything else after it is still
+/// a shift.
+#[test]
+fn tree_sitter_parse_qualified_first_generic_arg_in_expressions() {
+    let mut parser = new_parser();
+
+    const PRELUDE: &str =
+        "trait Model {\n    type Point\n}\nstruct Wrapped<T> {\n    value: T,\n}\nstruct M {}\n";
+
+    let accepted = [
+        (
+            "associated_function_call",
+            "fn f(p: u256) -> Wrapped<<M as Model>::Point> {\n    Wrapped<<M as Model>::Point>::new(p)\n}\n",
+        ),
+        (
+            "record_literal",
+            "fn f(p: u256) -> Wrapped<<M as Model>::Point> {\n    Wrapped<<M as Model>::Point> { value: p }\n}\n",
+        ),
+        (
+            "method_call",
+            "fn f(w: Wrapped<u256>, p: u256) -> u256 {\n    w.pick<<M as Model>::Point>(p)\n}\n",
+        ),
+    ];
+
+    for (name, body) in accepted {
+        let source = format!("{PRELUDE}{body}");
+        let errors = parse_errors(&mut parser, &source);
+        assert!(
+            errors.is_empty(),
+            "unexpected parse errors for {name}:\n{}",
+            errors.join("\n"),
+        );
+    }
+
+    // `<<` followed by an operand rather than a qualified path is a shift, and a
+    // qualified operand whose `>` is a comparison rather than `>::` still is.
+    assert_eq!(
+        body_expression_kinds(
+            &mut parser,
+            "fn shift(value: u256, bits: u8) -> u256 {\n    value << bits as u256 >> 1\n}\n",
+        ),
+        ["binary_expression"],
+    );
+    assert_eq!(
+        body_expression_kinds(
+            &mut parser,
+            "fn compare(value: u8, limit: u8) -> bool {\n    value << <M as Model>::BITS > limit\n}\n",
+        ),
+        ["binary_expression"],
+    );
+}
+
 #[test]
 fn tree_sitter_matches_line_start_star_policy() {
     let mut parser = new_parser();

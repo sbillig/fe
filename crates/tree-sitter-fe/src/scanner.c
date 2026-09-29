@@ -179,6 +179,79 @@ static bool scan_automatic_semicolon(TSLexer *lexer) {
 }
 
 
+// Whether a `<<` opens generic arguments whose first argument is a qualified
+// path, as in `Wrapped<<M as Model>::Point>`, rather than being a left shift.
+//
+// The caller has consumed the first `<` and marked the token end, so this only
+// looks ahead. It scans the second `<` to its matching `>` and requires `::` to
+// follow, the same prefix rule the compiler's parser uses: no shift operand
+// continues with `>::`, so `value << <T as Model>::BITS > limit` stays a shift
+// because the `>` that closes its angle nesting is followed by ` limit`.
+//
+// Nesting depths mirror the single-`<` scan below, so a `)`, `]`, `}` or `;`
+// that closes something never opened settles it as a shift.
+static bool scan_qualified_path_after_lshift(TSLexer *lexer) {
+  if (lexer->lookahead != '<') return false;
+  advance(lexer);  // consume the second '<'
+
+  int angle_depth = 1;
+  int paren_depth = 0;
+  int bracket_depth = 0;
+  int brace_depth = 0;
+
+  while (!lexer->eof(lexer)) {
+    switch (lexer->lookahead) {
+      case '(': paren_depth++; advance(lexer); continue;
+      case ')':
+        if (paren_depth == 0) return false;
+        paren_depth--;
+        advance(lexer);
+        continue;
+      case '[': bracket_depth++; advance(lexer); continue;
+      case ']':
+        if (bracket_depth == 0) return false;
+        bracket_depth--;
+        advance(lexer);
+        continue;
+      case '{': brace_depth++; advance(lexer); continue;
+      case '}':
+        if (brace_depth == 0) return false;
+        brace_depth--;
+        advance(lexer);
+        continue;
+      case ';':
+        if (bracket_depth == 0 && brace_depth == 0) return false;
+        advance(lexer);
+        continue;
+      case '<':
+        if (paren_depth == 0 && bracket_depth == 0 && brace_depth == 0) {
+          angle_depth++;
+        }
+        advance(lexer);
+        continue;
+      case '>':
+        if (paren_depth != 0 || bracket_depth != 0 || brace_depth != 0) {
+          advance(lexer);
+          continue;
+        }
+        advance(lexer);
+        if (--angle_depth > 0) continue;
+        // The qualified path is closed; `::` after it is what distinguishes it
+        // from a shift.
+        while (lexer->lookahead == ' ' || lexer->lookahead == '\t') {
+          advance(lexer);
+        }
+        if (lexer->lookahead != ':') return false;
+        advance(lexer);
+        return lexer->lookahead == ':';
+      default:
+        advance(lexer);
+        continue;
+    }
+  }
+  return false;
+}
+
 bool tree_sitter_fe_external_scanner_scan(void *payload, TSLexer *lexer,
                                           const bool *valid_symbols) {
   (void)payload;
@@ -226,13 +299,23 @@ bool tree_sitter_fe_external_scanner_scan(void *payload, TSLexer *lexer,
 
       if (next == '<') {
         // Could be << (shift), <<= (shift-assign), or nested generics <<T as...
-        // If only GENERIC_OPEN is valid (no COMPARISON_LT), this is a generic
-        // context (e.g., start of qualified path <<T as Trait>::Item as ...>).
-        // Emit just the first '<' as GENERIC_OPEN.
-        if (valid_symbols[GENERIC_OPEN] && !valid_symbols[COMPARISON_LT]) {
+        if (valid_symbols[GENERIC_OPEN]) {
           lexer->mark_end(lexer);  // mark end after first '<'
-          lexer->result_symbol = GENERIC_OPEN;
-          return true;
+          // In a type position COMPARISON_LT is not valid, so nothing else the
+          // '<<' could be: this is the start of a qualified path such as
+          // <<T as Trait>::Item as ...>.
+          if (!valid_symbols[COMPARISON_LT]) {
+            lexer->result_symbol = GENERIC_OPEN;
+            return true;
+          }
+          // In an expression position both are valid, so apply the same rule
+          // the compiler's parser uses and require a qualified path after the
+          // '<<'. Without this, `Wrapped<<M as Model>::Point>::new(p)` lexes a
+          // shift and fails to parse even though the compiler accepts it.
+          if (scan_qualified_path_after_lshift(lexer)) {
+            lexer->result_symbol = GENERIC_OPEN;
+            return true;
+          }
         }
         // Otherwise let the internal lexer handle << / <<=
         return false;
