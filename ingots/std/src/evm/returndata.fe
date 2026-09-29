@@ -1,0 +1,207 @@
+use core::abi::{AbiSize, ByteInput, Decode, DynString, store_word}
+use core::Copy
+use core::error::ErrorVariant
+use core::num::IntDowncast
+use core::ptr
+use core::ptr::MemSpan
+use ingot::abi::Sol
+use ingot::abi::sol::decode_output_at
+use ingot::evm::ops::{mload, returndatacopy, returndatasize, revert_empty}
+
+/// Selector of Solidity's builtin `Error(string)`.
+const ERROR_STRING_SELECTOR: u256 = 0x08c379a0
+
+/// Selector of Solidity's builtin `Panic(uint256)`.
+const PANIC_SELECTOR: u256 = 0x4e487b71
+
+/// A read-only view over the current EVM returndata buffer.
+///
+/// Reads go straight to the buffer with `RETURNDATACOPY`, so returndata can
+/// be inspected or ABI-decoded in place without first copying all of it into
+/// memory (compare `copy_returndata`). `base` marks the first byte visible
+/// through this view, like `CallData::with_base`.
+///
+/// The view is not a snapshot: every external call or contract creation
+/// replaces the returndata buffer, and later reads see the new contents.
+pub struct ReturnData { pub base: u256 }
+
+impl Copy for ReturnData {}
+
+impl ReturnData {
+    /// A view of the whole current returndata.
+    #[inline(always)]
+    pub fn new() -> Self {
+        ReturnData { base: 0 }
+    }
+
+    /// A view of the current returndata starting at byte `base`.
+    #[inline(always)]
+    pub fn with_base(_ base: u256) -> Self {
+        ReturnData { base }
+    }
+
+    /// Strictly decode Solidity ABI output from this view, with the same
+    /// rules as `decode_returndata`. Malformed data reverts without data.
+    pub fn decode<T>(self) -> T where T: Decode<Sol> + AbiSize {
+        decode_output_at(self, 0)
+    }
+}
+
+impl ByteInput for ReturnData {
+    /// Bytes visible through the view: `returndatasize() - base`, or zero if
+    /// `base` is past the end.
+    #[inline(always)]
+    fn len(self) -> u256 {
+        let total = returndatasize()
+        if self.base > total {
+            0
+        } else {
+            total - self.base
+        }
+    }
+
+    /// The 32 bytes at `byte_offset`. Bytes past the end of the view read as
+    /// zero, like `CALLDATALOAD`, so an out-of-range read never hits
+    /// `RETURNDATACOPY`'s exceptional halt.
+    #[arithmetic(unchecked)]
+    fn word_at(self, _ byte_offset: u256) -> u256 {
+        let len = self.len()
+        if byte_offset >= len {
+            return 0
+        }
+        // `byte_offset < len` implies `base + byte_offset < returndatasize()`.
+        let available = len - byte_offset
+        let scratch = ptr::FixedMemBuffer<32>::alloc()
+        if available < 32 {
+            store_word(ptr: scratch.ptr(), value: 0)
+            returndatacopy(
+                dest: scratch.ptr(),
+                offset: self.base + byte_offset,
+                len: available,
+            )
+        } else {
+            returndatacopy(
+                dest: scratch.ptr(),
+                offset: self.base + byte_offset,
+                len: 32,
+            )
+        }
+        mload(scratch.ptr())
+    }
+
+    #[arithmetic(unchecked)]
+    fn byte_at(self, _ byte_offset: u256) -> u8 {
+        let word_offset = byte_offset - (byte_offset % 32)
+        let word = self.word_at(word_offset)
+        let idx = byte_offset - word_offset
+        let shift = (31 - idx) * 8
+        (word >> shift).downcast_truncate()
+    }
+
+    /// Copy `len` bytes at `src_offset`; reverts without data if the range
+    /// is not inside the view.
+    fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
+        let input_len = self.len()
+        if src_offset > input_len || len > input_len - src_offset {
+            revert_empty()
+        }
+        returndatacopy(dest: dest, offset: self.base + src_offset, len: len)
+    }
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn copy_to_memory_unchecked(self, dest: *u8, src_offset: u256, len: u256) {
+        returndatacopy(dest: dest, offset: self.base + src_offset, len: len)
+    }
+}
+
+/// The 4-byte selector at the start of revert data, or `None` if `data` is
+/// shorter than 4 bytes. The length of the rest is not checked.
+///
+/// `data` is any byte input, e.g. `CallOutcome::returndata()` or
+/// `ReturnData::new()`.
+pub fn revert_selector<I: ByteInput>(_ data: I) -> Option<u32> {
+    if data.len() < 4 {
+        return Option::None
+    }
+    Option::Some((data.word_at(0) >> 224) as u32)
+}
+
+/// Whether `data` has the shape of the custom error `E`: it starts with
+/// `E`'s selector, and the ABI payload after it is exactly `E`'s encoded
+/// size when `E` is static, or at least `E`'s head size when `E` has
+/// dynamic fields (whose tails are not validated).
+///
+/// For a static `E` this is exactly "`data` is some `revert_error(E {..})`
+/// payload", without decoding field values. Use `revert_selector` to match
+/// on the selector alone.
+///
+/// `data` is typically `CallOutcome::returndata()`; for the live returndata
+/// buffer use `revert_selector(ReturnData::new())` and `ReturnData::len`.
+pub fn is_error<E>(_ data: MemSpan) -> bool where E: ErrorVariant<Sol> {
+    let len = data.len()
+    if len < 4 || (data.word_at(0) >> 224) as u32 != <E as ErrorVariant<Sol>>::SELECTOR {
+        return false
+    }
+    let payload_len = len - 4
+    if E::IS_DYNAMIC {
+        payload_len >= E::HEAD_SIZE
+    } else {
+        payload_len == E::HEAD_SIZE
+    }
+}
+
+/// The message of a Solidity `Error(string)` revert, accepted and rejected
+/// exactly like Solidity's `catch Error(string memory reason)` clause.
+///
+/// Returns `None` (the clause would not match) unless all of these hold:
+/// - `data` is at least 68 bytes and starts with `0x08c379a0`;
+/// - the string offset `o` (word at byte 4) is at most `2^64 - 1` and
+///   `o + 36 <= len`;
+/// - the string length `n` (word at byte `4 + o`) is at most `2^64 - 1` and
+///   `o + 36 + n <= len`.
+///
+/// Like Solidity, the offset need not be 32, trailing bytes and missing tail
+/// padding are allowed, and the bytes are not checked to be valid UTF-8.
+/// The message is copied into a fresh `DynString`.
+pub fn decode_error_string<I: ByteInput>(_ data: I) -> Option<DynString> {
+    let size = data.len()
+    if size < 0x44 || data.word_at(0) >> 224 != ERROR_STRING_SELECTOR {
+        return Option::None
+    }
+    let offset = data.word_at(4)
+    if offset > 0xffffffffffffffff || offset + 0x24 > size {
+        return Option::None
+    }
+    let length = data.word_at(4 + offset)
+    if length > 0xffffffffffffffff || offset + 0x24 + length > size {
+        return Option::None
+    }
+    let padded = (length + 31) / 32 * 32
+    let tail = ptr::alloc_bytes(32 + padded)
+    store_word(ptr: tail, value: length)
+    if padded > 0 {
+        store_word(ptr: ptr::offset_bytes(tail, padded), value: 0)
+    }
+    data.copy_to_memory(
+        dest: ptr::offset_bytes(tail, 32),
+        src_offset: offset + 0x24,
+        len: length,
+    )
+    Option::Some(
+        DynString::from_abi_tail(data: tail, len: length, size: 32 + padded),
+    )
+}
+
+/// The code of a Solidity `Panic(uint256)` revert, accepted like Solidity's
+/// `catch Panic(uint code)` clause: `data` is at least 36 bytes and starts
+/// with `0x4e487b71`; the code is the word at byte 4 and trailing bytes are
+/// ignored. Returns `None` otherwise.
+///
+/// Codes are listed as `std::evm::PANIC_*`.
+pub fn decode_panic<I: ByteInput>(_ data: I) -> Option<u256> {
+    if data.len() < 0x24 || data.word_at(0) >> 224 != PANIC_SELECTOR {
+        return Option::None
+    }
+    Option::Some(data.word_at(4))
+}
