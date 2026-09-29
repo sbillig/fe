@@ -1434,32 +1434,35 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(advance_bb));
         }
         let scope = self.loop_stack.pop().expect("for loop scope");
-        if !falls_through && !scope.has_reachable_continue {
-            // Every body path leaves the loop, so nothing reaches the advance block.
+        if falls_through || scope.has_reachable_continue {
+            // Both normal fallthrough and `continue` must advance the sequence.
+            self.switch_to(advance_bb);
+            let one = self.emit_expr(
+                usize_ty,
+                SExpr::Const(SConst::from_trusted_source(
+                    self.db,
+                    int_const(self.db, usize_ty, BigInt::from(1u8)),
+                )),
+            );
+            let next = self.emit_expr(
+                usize_ty,
+                SExpr::Binary {
+                    op: BinOp::Arith(ArithBinOp::Add),
+                    lhs: SOperand::synthetic(idx_local),
+                    rhs: SOperand::synthetic(one),
+                },
+            );
+            self.push_synthetic_stmt(SStmtKind::Assign {
+                dst: idx_local,
+                expr: SExpr::UseValue(SOperand::synthetic(next)),
+            });
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(cond_bb));
+        } else {
+            // Every body path leaves the loop, so nothing reaches the advance
+            // block. Close it like a dead `if`/`match` join rather than leaving
+            // it to read `idx_local` from a block unreachable from entry.
             self.set_synthetic_terminator(advance_bb, STerminatorKind::Goto(advance_bb));
         }
-        // Both normal fallthrough and `continue` must advance the sequence.
-        self.switch_to(advance_bb);
-        let one = self.emit_expr(
-            usize_ty,
-            SExpr::Const(SConst::from_trusted_source(
-                self.db,
-                int_const(self.db, usize_ty, BigInt::from(1u8)),
-            )),
-        );
-        let next = self.emit_expr(
-            usize_ty,
-            SExpr::Binary {
-                op: BinOp::Arith(ArithBinOp::Add),
-                lhs: SOperand::synthetic(idx_local),
-                rhs: SOperand::synthetic(one),
-            },
-        );
-        self.push_synthetic_stmt(SStmtKind::Assign {
-            dst: idx_local,
-            expr: SExpr::UseValue(SOperand::synthetic(next)),
-        });
-        self.set_synthetic_terminator(self.current, STerminatorKind::Goto(cond_bb));
         self.switch_to(exit_bb);
     }
 
