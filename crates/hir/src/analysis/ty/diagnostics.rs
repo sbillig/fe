@@ -157,11 +157,6 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
     },
 
-    ConstRequirementNotSatisfied {
-        primary: DynLazySpan<'db>,
-        predicate: DynLazySpan<'db>,
-        reason: String,
-    },
     InvalidConstTyExpr(DynLazySpan<'db>),
 
     ConstEvalUnsupported(DynLazySpan<'db>),
@@ -312,7 +307,6 @@ impl TyLowerDiag<'_> {
             Self::OwnParamCannotBeBorrow { .. } => 14,
             Self::InvalidMutParamPrefixWithoutOwnType { .. } => 31,
             Self::InvalidConstTyExpr(_) => 15,
-            Self::ConstRequirementNotSatisfied { .. } => 57,
             Self::ConstEvalUnsupported(_) => 23,
             Self::ConstEvalAssertionFailed { .. } => 36,
             Self::ConstEvalNonConstCall(_) => 24,
@@ -563,10 +557,12 @@ pub enum BodyDiag<'db> {
     WhereTypeBoundMissing(DynLazySpan<'db>),
     GenericConstPredicateUnsupported(DynLazySpan<'db>),
     RecursiveConstRequirement(DynLazySpan<'db>),
+    /// A use whose const requirement does not hold, reported by the
+    /// requirement checks after inference for calls and types alike.
     ConstRequirementNotSatisfied {
         primary: DynLazySpan<'db>,
         predicate: DynLazySpan<'db>,
-        reason: String,
+        reason: crate::analysis::ty::ty_check::RequirementFailure,
     },
     StaticAssertFailed {
         primary: DynLazySpan<'db>,

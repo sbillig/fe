@@ -3,7 +3,7 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/const_where/enum_use.fe
 ---
-error[3-0057]: const requirement is not satisfied
+error[8-0093]: const requirement is not satisfied
   ┌─ enum_use.fe:8:17
   │
 2 │ enum Choice<const N: usize> where N > 0 {
@@ -12,7 +12,7 @@ error[3-0057]: const requirement is not satisfied
 8 │     let _item = Choice<0>::Empty
   │                 ^^^^^^^^^^^^^^^^ condition evaluated to `false`
 
-error[3-0057]: const requirement is not satisfied
+error[8-0093]: const requirement is not satisfied
    ┌─ enum_use.fe:12:17
    │
  2 │ enum Choice<const N: usize> where N > 0 {

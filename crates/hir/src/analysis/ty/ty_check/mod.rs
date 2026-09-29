@@ -1,8 +1,7 @@
 mod callable;
 mod const_requirements;
-pub(crate) use const_requirements::{
-    EvaluationStop, RequirementFailure, check_declared_type_requirements,
-};
+pub(crate) use const_requirements::check_declared_type_requirements;
+pub use const_requirements::{EvaluationStop, RequirementFailure};
 mod contract;
 mod effect_env;
 pub(crate) mod env;

@@ -137,7 +137,7 @@ fn predicate_flags<'db>(db: &'db dyn HirAnalysisDb, mut typed: TypedBody<'db>) -
 /// Why a const requirement does not hold at a use. Discharge decides it, and
 /// the use's diagnostic renders it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub(crate) enum RequirementFailure {
+pub enum RequirementFailure {
     /// The condition evaluated to `false`.
     False,
     /// The requirement depends on itself.
@@ -160,7 +160,7 @@ pub(crate) enum RequirementFailure {
 
 /// Why compile-time evaluation of a condition stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub(crate) enum EvaluationStop {
+pub enum EvaluationStop {
     DivisionByZero,
     Overflow,
     StepLimit,
@@ -220,26 +220,15 @@ pub(super) struct RequirementCheck<'db> {
 }
 
 impl<'db> RequirementCheck<'db> {
-    fn unmet_call(
+    fn unmet(
         &mut self,
         primary: DynLazySpan<'db>,
         predicate: Body<'db>,
         failure: RequirementFailure,
     ) {
         self.recursive |= failure == RequirementFailure::Recursive;
-        self.diags.push(
-            BodyDiag::ConstRequirementNotSatisfied {
-                primary,
-                predicate: predicate.span().into(),
-                reason: failure.message().into(),
-            }
-            .into(),
-        );
-    }
-
-    fn unmet_type(&mut self, primary: DynLazySpan<'db>, unmet: TypeRequirementFailure<'db>) {
-        self.recursive |= unmet.failure == RequirementFailure::Recursive;
-        self.diags.push(type_requirement_diag(primary, unmet));
+        self.diags
+            .push(unmet_requirement_diag(primary, predicate, failure));
     }
 
     fn extend(&mut self, other: Self) {
@@ -248,15 +237,16 @@ impl<'db> RequirementCheck<'db> {
     }
 }
 
-fn type_requirement_diag<'db>(
+fn unmet_requirement_diag<'db>(
     primary: DynLazySpan<'db>,
-    unmet: TypeRequirementFailure<'db>,
+    predicate: Body<'db>,
+    failure: RequirementFailure,
 ) -> FuncBodyDiag<'db> {
-    TyDiagCollection::from(TyLowerDiag::ConstRequirementNotSatisfied {
+    BodyDiag::ConstRequirementNotSatisfied {
         primary,
-        predicate: unmet.predicate.span().into(),
-        reason: unmet.failure.message().into(),
-    })
+        predicate: predicate.span().into(),
+        reason: failure,
+    }
     .into()
 }
 
@@ -496,12 +486,12 @@ pub(super) fn check_body_requirements<'db>(
         if !matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)))
             && let Some(unmet) = check_type_requirements(db, ty, owner.scope(), &[])
         {
-            check.unmet_type(expr.span(body).into(), unmet);
+            check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
         }
         if let Some(headers) = const_ref_headers(db, typed, expr)
             && let Some(unmet) = check_entered_header(db, typed, expr, headers, owner.scope())
         {
-            check.unmet_type(expr.span(body).into(), unmet);
+            check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
         }
         if direct_callees.contains(&expr) && typed.callable_expr(expr).is_none() {
             continue;
@@ -531,7 +521,7 @@ pub(super) fn check_body_requirements<'db>(
                         &[],
                     )
                 {
-                    check.unmet_type(expr.span(body).into(), unmet);
+                    check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
                 }
                 continue;
             }
@@ -543,7 +533,7 @@ pub(super) fn check_body_requirements<'db>(
             callee_headers(db, func, args),
             owner.scope(),
         ) {
-            check.unmet_type(expr.span(body).into(), unmet);
+            check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
         }
         // Ground clauses are already mandatory declaration checks. Unsupported
         // associated/generic owner contexts are rejected at their declarations.
@@ -567,7 +557,7 @@ pub(super) fn check_body_requirements<'db>(
                 args.to_vec(),
                 caller,
             ) {
-                check.unmet_call(expr.span(body).into(), predicate, failure);
+                check.unmet(expr.span(body).into(), predicate, failure);
             }
         }
     }
@@ -1295,7 +1285,11 @@ pub(crate) fn check_declared_type_requirements<'db>(
                     check_type_requirements(self.db, ty, scope, &self.reported[nested..])
             {
                 self.reported.push(unmet.ty);
-                self.diags.push(type_requirement_diag(span.into(), unmet));
+                self.diags.push(unmet_requirement_diag(
+                    span.into(),
+                    unmet.predicate,
+                    unmet.failure,
+                ));
             }
             self.default_depth -= usize::from(in_default);
         }

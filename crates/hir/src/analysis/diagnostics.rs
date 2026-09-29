@@ -2371,14 +2371,6 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
-            Self::ConstRequirementNotSatisfied {
-                primary,
-                predicate,
-                reason,
-            } => {
-                const_requirement_diag(Severity::Error, primary, predicate, reason, error_code, db)
-            }
-
             Self::InvalidConstTyExpr(span) => primary_diag(
                 Severity::Error,
                 "the expression is not supported in a const type context",
@@ -3349,7 +3341,14 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary,
                 predicate,
                 reason,
-            } => const_requirement_diag(severity, primary, predicate, reason, error_code, db),
+            } => const_requirement_diag(
+                severity,
+                primary,
+                predicate,
+                reason.message(),
+                error_code,
+                db,
+            ),
             Self::RecursiveConstRequirement(span) => primary_diag(
                 severity,
                 "recursive const requirement",

@@ -3,7 +3,7 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/const_where/enum_type_predicates_and_constructor_boundary/unapplied_constructor.fe
 ---
-error[3-0057]: const requirement is not satisfied
+error[8-0093]: const requirement is not satisfied
   ┌─ unapplied_constructor.fe:7:20
   │
 6 │ enum Choice<T: Flag> where T::ALLOWED { Empty }

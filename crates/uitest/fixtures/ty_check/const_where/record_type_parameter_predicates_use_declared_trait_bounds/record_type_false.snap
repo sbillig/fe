@@ -3,7 +3,7 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/const_where/record_type_parameter_predicates_use_declared_trait_bounds/record_type_false.fe
 ---
-error[3-0057]: const requirement is not satisfied
+error[8-0093]: const requirement is not satisfied
   ┌─ record_type_false.fe:8:16
   │
 6 │ struct Bounded<T: Flag> where T::ALLOWED { value: u256 }

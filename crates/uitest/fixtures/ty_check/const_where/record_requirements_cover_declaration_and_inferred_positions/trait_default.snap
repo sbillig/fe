@@ -3,7 +3,7 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/const_where/record_requirements_cover_declaration_and_inferred_positions/trait_default.fe
 ---
-error[3-0057]: const requirement is not satisfied
+error[8-0093]: const requirement is not satisfied
   ┌─ trait_default.fe:2:25
   │
 1 │ struct Bounded<const N: usize> where N > 0 { value: u256 }

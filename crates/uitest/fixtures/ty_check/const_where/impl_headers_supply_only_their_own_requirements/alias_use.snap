@@ -3,7 +3,7 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/const_where/impl_headers_supply_only_their_own_requirements/alias_use.fe
 ---
-error[3-0057]: const requirement is not satisfied
+error[8-0093]: const requirement is not satisfied
   ┌─ alias_use.fe:5:17
   │
 2 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
@@ -12,7 +12,7 @@ error[3-0057]: const requirement is not satisfied
 5 │ fn read(_ item: Positive<0>) {}
   │                 ^^^^^^^^^^^ condition evaluated to `false`
 
-error[3-0057]: const requirement is not satisfied
+error[8-0093]: const requirement is not satisfied
   ┌─ alias_use.fe:6:36
   │
 2 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
