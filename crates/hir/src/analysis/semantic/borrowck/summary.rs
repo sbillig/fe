@@ -530,7 +530,10 @@ impl<'db> Borrowck<'db> {
                     self.instantiate_address_base(base, result, origin, single_result_port)?
                 } else {
                     match source.origin {
-                        ExternalOrigin::OpaqueMemory => source,
+                        // A conditional replacement's base is its whole family.
+                        ExternalOrigin::OpaqueMemory => {
+                            ExternalSource::opaque_memory(source.contract)
+                        }
                         ExternalOrigin::Provider {
                             provider,
                             target_ty,
@@ -2496,6 +2499,84 @@ impl<'db> Borrowck<'db> {
         SourceInstantiations::new(state, result, inputs).resolve(self, source, scope)
     }
 
+    /// A callee's conditional replacement, once for every pair of caller
+    /// target and written places that can still overlap.
+    fn conditional_region(
+        &self,
+        scope: &BinderScope,
+        source: ExternalSource<'db>,
+        clobber: Option<(RegionSet<'db>, RegionSet<'db>, AccessExtent<'db>)>,
+        path: RegionPath<IndexExpr<'db>>,
+    ) -> RegionSet<'db> {
+        if let Some((target, written, extent)) = clobber {
+            let mut clauses = Vec::new();
+            for target_clause in target.clauses() {
+                for written_clause in written.clauses() {
+                    let target_subst = target_clause
+                        .guard
+                        .scope()
+                        .open_existentials(target.scope(), scope);
+                    let written_subst = written_clause
+                        .guard
+                        .scope()
+                        .open_existentials(written.scope(), target_subst.destination());
+                    let target_subst = target_subst
+                        .then(
+                            &IndexSubst::new(
+                                target_subst.destination(),
+                                written_subst.destination(),
+                                [],
+                            )
+                            .expect("clobber witness scope"),
+                        )
+                        .expect("fresh clobber witnesses");
+                    let target_clause = substitute_clause(target_clause, &target_subst);
+                    let written_clause = substitute_clause(written_clause, &written_subst);
+                    let Some(guard) = target_clause.guard.and(&written_clause.guard) else {
+                        continue;
+                    };
+                    if matches!(
+                        AccessFootprint::typed(&RegionSet::new(
+                            guard.scope(),
+                            [target_clause.clone()]
+                        ))
+                        .overlap(
+                            self.db,
+                            AccessFootprint {
+                                region: &RegionSet::new(guard.scope(), [written_clause.clone()]),
+                                extent: extent.substitute(&written_subst)
+                            }
+                        ),
+                        OverlapResult::Disjoint
+                    ) {
+                        continue;
+                    }
+                    let mut alternative = source.clone();
+                    alternative.clobber = SourceExpr::from_place(&target_clause.payload)
+                        .zip(SourceExpr::from_place(&written_clause.payload))
+                        .map(|(target, written)| {
+                            Box::new(ClobberCondition::new(
+                                target,
+                                written,
+                                extent.substitute(&written_subst),
+                            ))
+                        });
+                    clauses.push(Guarded {
+                        guard,
+                        payload: SymbolicPlace {
+                            root: RegionRoot::External(alternative),
+                            path: path.clone(),
+                            views: Default::default(),
+                        },
+                    });
+                }
+            }
+            RegionSet::new(scope, clauses)
+        } else {
+            RegionSet::singleton(scope, RegionRoot::External(source), path)
+        }
+    }
+
     fn instantiate_source_uncached(
         &mut self,
         source: &SourceExpr<'db>,
@@ -2557,12 +2638,11 @@ impl<'db> Borrowck<'db> {
         }
         let (mut resolved, mut target_ty) = match &external.origin {
             ExternalOrigin::OpaqueMemory => {
-                let region = RegionSet::singleton(
-                    scope,
-                    RegionRoot::External(external.clone()),
-                    path.clone(),
-                )
-                .with_relative_views(self.db, &source.views, path.as_slice().len());
+                // The callee's condition is restated over caller places.
+                let family = ExternalSource::opaque_memory(external.contract);
+                let region = self
+                    .conditional_region(scope, family, clobber, path.clone())
+                    .with_relative_views(self.db, &source.views, path.as_slice().len());
                 return Ok(Resolution {
                     invalidated: if invalidated {
                         NativeValidity::from_region(&region)
@@ -2604,76 +2684,7 @@ impl<'db> Borrowck<'db> {
                     self.calls[&result].single_result_port,
                 )?;
                 let ty = source.contract.ty;
-                let region = if let Some((target, written, extent)) = clobber {
-                    let mut clauses = Vec::new();
-                    for target_clause in target.clauses() {
-                        for written_clause in written.clauses() {
-                            let target_subst = target_clause
-                                .guard
-                                .scope()
-                                .open_existentials(target.scope(), scope);
-                            let written_subst = written_clause
-                                .guard
-                                .scope()
-                                .open_existentials(written.scope(), target_subst.destination());
-                            let target_subst = target_subst
-                                .then(
-                                    &IndexSubst::new(
-                                        target_subst.destination(),
-                                        written_subst.destination(),
-                                        [],
-                                    )
-                                    .expect("clobber witness scope"),
-                                )
-                                .expect("fresh clobber witnesses");
-                            let target_clause = substitute_clause(target_clause, &target_subst);
-                            let written_clause = substitute_clause(written_clause, &written_subst);
-                            let Some(guard) = target_clause.guard.and(&written_clause.guard) else {
-                                continue;
-                            };
-                            if matches!(
-                                AccessFootprint::typed(&RegionSet::new(
-                                    guard.scope(),
-                                    [target_clause.clone()]
-                                ))
-                                .overlap(
-                                    self.db,
-                                    AccessFootprint {
-                                        region: &RegionSet::new(
-                                            guard.scope(),
-                                            [written_clause.clone()]
-                                        ),
-                                        extent: extent.substitute(&written_subst)
-                                    }
-                                ),
-                                OverlapResult::Disjoint
-                            ) {
-                                continue;
-                            }
-                            let mut alternative = source.clone();
-                            alternative.clobber = SourceExpr::from_place(&target_clause.payload)
-                                .zip(SourceExpr::from_place(&written_clause.payload))
-                                .map(|(target, written)| {
-                                    Box::new(ClobberCondition::new(
-                                        target,
-                                        written,
-                                        extent.substitute(&written_subst),
-                                    ))
-                                });
-                            clauses.push(Guarded {
-                                guard,
-                                payload: SymbolicPlace {
-                                    root: RegionRoot::External(alternative),
-                                    path: RegionPath::default(),
-                                    views: Default::default(),
-                                },
-                            });
-                        }
-                    }
-                    RegionSet::new(scope, clauses)
-                } else {
-                    RegionSet::singleton(scope, RegionRoot::External(source), RegionPath::default())
-                };
+                let region = self.conditional_region(scope, source, clobber, RegionPath::default());
                 (
                     Resolution {
                         invalidated: NativeValidity::default(),

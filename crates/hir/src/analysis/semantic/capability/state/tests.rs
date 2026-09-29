@@ -669,7 +669,7 @@ fn raw_overwrites_invalidate_exact_pointer_cells_and_remain_opaque() {
     assert!(targets.contains(&&root(&db, 1)));
     assert!(targets.iter().any(|root| matches!(root,
         RegionRoot::External(source) if matches!(source.origin,
-            ExternalOrigin::OpaqueHandle(_)))));
+            ExternalOrigin::OpaqueMemory))));
     let snapshot = state.clone();
     state
         .invalidate_memory(&mut values, AccessFootprint::typed(&destination), overwrite)
