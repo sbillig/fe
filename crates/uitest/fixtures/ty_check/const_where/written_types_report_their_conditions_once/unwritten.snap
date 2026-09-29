@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/written_types_report_their_conditions_once/unwritten.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ unwritten.fe:6:17
+  │
+3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+  │                                      ----- required by this predicate
+  ·
+6 │     let first = Bounded<0> { value: 1 }
+  │                 ^^^^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+  ┌─ unwritten.fe:7:18
+  │
+3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+  │                                      ----- required by this predicate
+  ·
+7 │     let second = Bounded<0> { value: 2 }
+  │                  ^^^^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`

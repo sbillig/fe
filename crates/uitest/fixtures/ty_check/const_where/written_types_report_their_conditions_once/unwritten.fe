@@ -1,0 +1,9 @@
+// A type that no written type carries is reported at each expression that
+// enters it.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+
+fn entered() -> u256 {
+    let first = Bounded<0> { value: 1 }
+    let second = Bounded<0> { value: 2 }
+    first.value + second.value
+}

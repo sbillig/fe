@@ -1,0 +1,13 @@
+// A type written in a body reports its unmet condition where it is written.
+// An expression whose type the annotation gives does not report it again.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+
+fn annotated() -> u256 {
+    let x: Bounded<0> = Bounded { value: 1 }
+    x.value
+}
+fn returned() -> Bounded<0> { Bounded { value: 1 } }
+fn nested() -> u256 {
+    let pair: (Bounded<0>, u256) = (Bounded { value: 1 }, 2)
+    pair.1
+}

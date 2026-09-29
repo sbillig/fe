@@ -13,15 +13,6 @@ error[8-0093]: const requirement is not satisfied
   │                       ^^^^^^^^ no matching const requirement in the caller after substitution
 
 error[8-0093]: const requirement is not satisfied
-  ┌─ other_conditions.fe:8:34
-  │
-4 │ struct Large<const N: usize> where N > 1 { value: u256 }
-  │                                    ----- required by this predicate
-  ·
-8 │     fn widen(self) -> Large<N> { Large { value: self.value } }
-  │                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no matching const requirement in the caller after substitution
-
-error[8-0093]: const requirement is not satisfied
   ┌─ other_conditions.fe:9:30
   │
 5 │ const fn large<const N: usize>() -> u256 where N > 1 { 1 }

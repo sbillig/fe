@@ -472,9 +472,11 @@ pub(super) fn check_body_requirements<'db>(
             _ => None,
         })
         .collect();
+    let written = written_type_applications(db, owner);
     // Requirements are checked where a type enters the body: an authored type
     // (checked by `check_declared_type_requirements`) or an instantiating
-    // expression. A pattern, a binding use, or a block or branch only carries a
+    // expression. An expression does not report an application that a
+    // written type carries, since that type reports it. A pattern, a binding use, or a block or branch only carries a
     // type that entered elsewhere, so checking it again repeats that report.
     // A function-typed expression is not checked for its type arguments: they
     // are written types, checked where they are written, or inferred from the
@@ -492,12 +494,13 @@ pub(super) fn check_body_requirements<'db>(
         }
         let ty = typed.expr_ty(db, expr);
         if !matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)))
-            && let Some(unmet) = check_type_requirements(db, ty, owner.scope(), &[])
+            && let Some(unmet) = check_type_requirements(db, ty, owner.scope(), &written)
         {
             check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
         }
         if let Some(headers) = const_ref_headers(db, typed, expr)
-            && let Some(unmet) = check_entered_header(db, typed, expr, headers, owner.scope())
+            && let Some(unmet) =
+                check_entered_header(db, typed, expr, headers, owner.scope(), &written)
         {
             check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
         }
@@ -526,7 +529,7 @@ pub(super) fn check_body_requirements<'db>(
                         db,
                         definition.ret_ty(db).instantiate(db, args),
                         owner.scope(),
-                        &[],
+                        &written,
                     )
                 {
                     check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
@@ -540,6 +543,7 @@ pub(super) fn check_body_requirements<'db>(
             expr,
             callee_headers(db, func, args),
             owner.scope(),
+            &written,
         ) {
             check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
         }
@@ -917,6 +921,7 @@ fn check_entered_header<'db>(
     expr: ExprId,
     headers: Vec<TyId<'db>>,
     scope: ScopeId<'db>,
+    written: &[TyId<'db>],
 ) -> Option<TypeRequirementFailure<'db>> {
     let body = typed.body()?;
     let is_function =
@@ -946,7 +951,7 @@ fn check_entered_header<'db>(
     headers
         .into_iter()
         .filter(|&header| !carried.iter().any(|&ty| ty_mentions(db, ty, header)))
-        .find_map(|header| check_type_requirements(db, header, scope, &[]))
+        .find_map(|header| check_type_requirements(db, header, scope, written))
 }
 
 /// Whether `needle` occurs in `ty`.
@@ -1165,6 +1170,82 @@ fn formation_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
+/// The assumptions a type written at `scope` is lowered with.
+fn assumptions_at<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> PredicateListId<'db> {
+    let mut enclosing = scope;
+    while matches!(enclosing.item(), ItemKind::Body(_)) {
+        let Some(parent) = enclosing.parent(db) else {
+            break;
+        };
+        enclosing = parent;
+    }
+    crate::semantic::constraints_for(db, enclosing.item())
+}
+
+/// The type applications in the types written in `owner`'s signature and
+/// body, lowered as `check_declared_type_requirements` lowers them. That check
+/// reports a written type's unmet requirement where the type is written, so
+/// an expression that carries the same application does not report it again.
+/// A `where` clause is left out: its conditions are checked in their own
+/// context.
+fn written_type_applications<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> Vec<TyId<'db>> {
+    use crate::hir_def::{TypeId, WhereClauseId};
+    use crate::visitor::{
+        Visitor, VisitorCtxt,
+        prelude::{LazyTySpan, LazyWhereClauseSpan},
+        walk_type,
+    };
+    struct Collector<'db> {
+        db: &'db dyn HirAnalysisDb,
+        applications: FxHashSet<TyId<'db>>,
+    }
+    impl<'db> Collector<'db> {
+        fn collect(&mut self, ty: TyId<'db>) {
+            if self.applications.insert(ty) {
+                for &arg in ty.decompose_ty_app(self.db).1 {
+                    self.collect(arg);
+                }
+            }
+        }
+    }
+    impl<'db> Visitor<'db> for Collector<'db> {
+        fn visit_where_clause(
+            &mut self,
+            _: &mut VisitorCtxt<'db, LazyWhereClauseSpan<'db>>,
+            _: WhereClauseId<'db>,
+        ) {
+        }
+
+        fn visit_ty(&mut self, ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>, hir_ty: TypeId<'db>) {
+            let scope = ctxt.scope();
+            let ty = lower_hir_ty(self.db, hir_ty, scope, assumptions_at(self.db, scope));
+            // The same types `check_declared_type_requirements` checks.
+            if !ty.has_invalid(self.db) && ctxt.span().is_some() {
+                self.collect(ty);
+            }
+            walk_type(self, ctxt, hir_ty);
+        }
+    }
+    let mut collector = Collector {
+        db,
+        applications: FxHashSet::default(),
+    };
+    let item = match owner {
+        BodyOwner::Func(func) => Some(ItemKind::Func(func)),
+        BodyOwner::Const(const_) => Some(ItemKind::Const(const_)),
+        _ => None,
+    };
+    if let Some(item) = item {
+        collector.visit_item(&mut VisitorCtxt::with_item(db, item), item);
+    } else if let Some(body) = owner.body(db) {
+        collector.visit_body(&mut VisitorCtxt::with_body(db, body), body);
+    }
+    collector.applications.into_iter().collect()
+}
+
 /// Check every authored type position, including unused defaults and aliases,
 /// and the anonymous constants written directly in types and trait
 /// references. Inferred expression types are checked separately after body
@@ -1187,19 +1268,6 @@ pub(crate) fn check_declared_type_requirements<'db>(
         /// `check_generic_default_bodies` owns the anonymous constants there.
         defaults: FxHashSet<crate::hir_def::TypeId<'db>>,
         default_depth: usize,
-    }
-    fn assumptions_at<'db>(
-        db: &'db dyn HirAnalysisDb,
-        scope: ScopeId<'db>,
-    ) -> PredicateListId<'db> {
-        let mut enclosing = scope;
-        while matches!(enclosing.item(), ItemKind::Body(_)) {
-            let Some(parent) = enclosing.parent(db) else {
-                break;
-            };
-            enclosing = parent;
-        }
-        crate::semantic::constraints_for(db, enclosing.item())
     }
     impl<'db> Checker<'db> {
         fn check_const_bodies(&mut self, lowered: &[TyId<'db>], bodies: &[Body<'db>]) {
