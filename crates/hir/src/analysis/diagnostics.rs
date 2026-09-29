@@ -162,6 +162,50 @@ fn format_type_mismatch_message<'db>(
     format!("expected `{expected_plain}`, but `{given_plain}` is given")
 }
 
+impl crate::analysis::ty::ty_check::RequirementFailure {
+    /// Why the requirement does not hold, as the use's label says it.
+    pub(crate) fn message(self) -> &'static str {
+        use crate::analysis::ty::ty_check::EvaluationStop;
+        match self {
+            Self::False => "condition evaluated to `false`",
+            Self::Recursive => "recursive const requirement cannot establish itself",
+            Self::Evaluation(EvaluationStop::DivisionByZero) => {
+                "constant evaluation encountered division by zero"
+            }
+            Self::Evaluation(EvaluationStop::Overflow) => "constant evaluation overflowed",
+            Self::Evaluation(EvaluationStop::StepLimit) => {
+                "constant evaluation exceeded its step limit"
+            }
+            Self::Evaluation(EvaluationStop::RecursionLimit) => {
+                "constant evaluation exceeded its recursion limit"
+            }
+            Self::Evaluation(EvaluationStop::RecursiveConst) => "recursive constant evaluation",
+            Self::NotEstablished => {
+                "condition could not be established; the predicate must be a well-formed, \
+                 evaluable bool"
+            }
+            Self::NotInstantiable => {
+                "the condition could not be instantiated with these generic arguments"
+            }
+            Self::NoMatchingPremise => {
+                "no matching const requirement in the caller after substitution"
+            }
+            Self::NotForwardable => {
+                "symbolic forwarding of this expression is not supported; concrete evaluation \
+                 is required"
+            }
+            Self::PartiallyAppliedRecord => {
+                "partially applied records with const requirements are not supported; supply \
+                 all arguments"
+            }
+            Self::PartiallyAppliedEnum => {
+                "partially applied enums with const requirements are not supported; supply all \
+                 arguments"
+            }
+        }
+    }
+}
+
 fn const_requirement_diag(
     severity: Severity,
     primary: &crate::span::DynLazySpan<'_>,

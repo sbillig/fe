@@ -1,6 +1,8 @@
 mod callable;
 mod const_requirements;
-pub(crate) use const_requirements::check_declared_type_requirements;
+pub(crate) use const_requirements::{
+    EvaluationStop, RequirementFailure, check_declared_type_requirements,
+};
 mod contract;
 mod effect_env;
 pub(crate) mod env;
@@ -505,11 +507,9 @@ pub(crate) fn check_where_const_predicates<'db>(
     }
 
     for &body in &predicates {
-        let expected = TyId::bool(db);
-        let body_owner = BodyOwner::AnonConstBody { body, expected };
-        let (body_diags, _) = const_requirements::check_predicate_formation(db, body);
-        if !body_diags.is_empty() && !static_assert_ignorable_type_diags(db, body_diags) {
-            diags.extend(body_diags.iter().cloned());
+        let formation = const_requirements::check_predicate_formation(db, body);
+        if !formation.is_well_formed() {
+            diags.extend(formation.diags.iter().cloned());
             continue;
         }
         if let Some(declaration) = generic_declaration
@@ -520,49 +520,70 @@ pub(crate) fn check_where_const_predicates<'db>(
         {
             continue;
         }
-        let outcome = eval_body_owner_const(db, body_owner, GenericSubst::none(db));
-        diags.extend(const_predicate_outcome_diags(db, body, body_owner, outcome));
+        let owner = BodyOwner::AnonConstBody {
+            body,
+            expected: TyId::bool(db),
+        };
+        let outcome = condition_outcome(db, owner, GenericSubst::none(db));
+        diags.extend(const_predicate_outcome_diag(db, body, outcome));
     }
     diags
 }
 
-/// Reports the CTFE outcome of a const predicate. The predicate holds only when
-/// it evaluates to `true`; a blocked or failed evaluation is an error.
-fn const_predicate_outcome_diags<'db>(
+/// What a boolean compile-time condition evaluated to. Only `True` holds: a
+/// blocked or failed evaluation never counts as a satisfied condition.
+pub(super) enum ConditionOutcome<'db> {
+    True,
+    False,
+    /// Evaluation finished with a value that is not a `bool`.
+    NotBool,
+    Blocked(BlockedInfo<'db>),
+    Failed(InvalidCause<'db>),
+}
+
+pub(super) fn condition_outcome<'db>(
     db: &'db dyn HirAnalysisDb,
-    predicate: Body<'db>,
     owner: BodyOwner<'db>,
-    outcome: EvalOutcome<'db, SemConstId<'db>>,
-) -> Vec<FuncBodyDiag<'db>> {
-    match outcome {
+    subst: GenericSubst<'db>,
+) -> ConditionOutcome<'db> {
+    match eval_body_owner_const(db, owner, subst) {
         EvalOutcome::Ready(value) => match static_assert_bool_value(db, value) {
-            Some(true) => Vec::new(),
-            Some(false) => {
-                vec![BodyDiag::WhereConstPredicateFailed(predicate.span().into()).into()]
-            }
-            None => vec![BodyDiag::ConstValueMustBeKnown(predicate.span().into()).into()],
+            Some(true) => ConditionOutcome::True,
+            Some(false) => ConditionOutcome::False,
+            None => ConditionOutcome::NotBool,
         },
-        EvalOutcome::Blocked(info) => {
-            let (primary, dependency) = blocked_const_detail(db, predicate, &info);
-            vec![
-                BodyDiag::ConstDependencyMustBeKnown {
-                    primary,
-                    dependency,
-                }
-                .into(),
-            ]
-        }
+        EvalOutcome::Blocked(info) => ConditionOutcome::Blocked(info),
         EvalOutcome::Failed(failure) => {
-            let ty = TyId::invalid(db, invalid_cause_from_eval_failure(db, owner, failure));
-            vec![
-                ty.emit_diag(db, predicate.span().into())
-                    .map(FuncBodyDiag::from)
-                    .unwrap_or_else(|| {
-                        BodyDiag::ConstValueMustBeKnown(predicate.span().into()).into()
-                    }),
-            ]
+            ConditionOutcome::Failed(invalid_cause_from_eval_failure(db, owner, failure))
         }
     }
+}
+
+/// Reports a const predicate's outcome at its declaration. The predicate
+/// holds only when it evaluates to `true`.
+fn const_predicate_outcome_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    predicate: Body<'db>,
+    outcome: ConditionOutcome<'db>,
+) -> Option<FuncBodyDiag<'db>> {
+    let span = || predicate.span().into();
+    Some(match outcome {
+        ConditionOutcome::True => return None,
+        ConditionOutcome::False => BodyDiag::WhereConstPredicateFailed(span()).into(),
+        ConditionOutcome::NotBool => BodyDiag::ConstValueMustBeKnown(span()).into(),
+        ConditionOutcome::Blocked(info) => {
+            let (primary, dependency) = blocked_const_detail(db, predicate, &info);
+            BodyDiag::ConstDependencyMustBeKnown {
+                primary,
+                dependency,
+            }
+            .into()
+        }
+        ConditionOutcome::Failed(cause) => TyId::invalid(db, cause)
+            .emit_diag(db, span())
+            .map(FuncBodyDiag::from)
+            .unwrap_or_else(|| BodyDiag::ConstValueMustBeKnown(span()).into()),
+    })
 }
 
 /// Whether a const predicate is a lone path that names a type, as in `where T`.
@@ -741,11 +762,7 @@ pub(super) fn check_body<'db>(
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
     let (mut diags, mut typed_body) = infer_body(db, owner).clone();
     if diags.is_empty() || static_assert_ignorable_type_diags(db, &diags) {
-        diags.extend(const_requirements::check_body_requirements(
-            db,
-            owner,
-            &typed_body,
-        ));
+        diags.extend(const_requirements::check_body_requirements(db, owner, &typed_body).diags);
     }
     typed_body.has_diagnostics = !diags.is_empty();
     (diags, typed_body)

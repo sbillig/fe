@@ -134,26 +134,165 @@ fn predicate_flags<'db>(db: &'db dyn HirAnalysisDb, mut typed: TypedBody<'db>) -
     collect_flags(db, typed)
 }
 
+/// Why a const requirement does not hold at a use. Discharge decides it, and
+/// the use's diagnostic renders it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub(crate) enum RequirementFailure {
+    /// The condition evaluated to `false`.
+    False,
+    /// The requirement depends on itself.
+    Recursive,
+    /// Compile-time evaluation of the condition stopped.
+    Evaluation(EvaluationStop),
+    /// The condition is ill-formed, or its evaluation gave no `bool`.
+    NotEstablished,
+    /// The condition could not be instantiated with the use's arguments.
+    NotInstantiable,
+    /// A generic use states no identical condition.
+    NoMatchingPremise,
+    /// A generic use cannot forward the condition's expression.
+    NotForwardable,
+    /// A record with conditions that is not fully applied.
+    PartiallyAppliedRecord,
+    /// An enum with conditions that is not fully applied.
+    PartiallyAppliedEnum,
+}
+
+/// Why compile-time evaluation of a condition stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub(crate) enum EvaluationStop {
+    DivisionByZero,
+    Overflow,
+    StepLimit,
+    RecursionLimit,
+    RecursiveConst,
+}
+
+impl RequirementFailure {
+    fn from_evaluation(cause: &InvalidCause<'_>) -> Self {
+        Self::Evaluation(match cause {
+            InvalidCause::ConstEvalDivisionByZero { .. } => EvaluationStop::DivisionByZero,
+            InvalidCause::ConstEvalArithmeticOverflow { .. } => EvaluationStop::Overflow,
+            InvalidCause::ConstEvalStepLimitExceeded { .. } => EvaluationStop::StepLimit,
+            InvalidCause::ConstEvalRecursionLimitExceeded { .. } => EvaluationStop::RecursionLimit,
+            InvalidCause::ConstEvalRecursiveConst { .. } => EvaluationStop::RecursiveConst,
+            _ => return Self::NotEstablished,
+        })
+    }
+}
+
+/// Whether a use's const requirement holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub(super) enum Discharge {
+    Holds,
+    Fails(RequirementFailure),
+}
+
+/// Whether a predicate can be discharged: it type checks as a `bool` const
+/// body and does not depend on itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub(super) enum FormationStatus {
+    WellFormed,
+    IllFormed,
+    Recursive,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Update)]
+pub(super) struct PredicateFormation<'db> {
+    /// The predicate's own diagnostics, reported at its declaration.
+    pub(super) diags: Vec<FuncBodyDiag<'db>>,
+    pub(super) typed: TypedBody<'db>,
+    pub(super) status: FormationStatus,
+}
+
+impl PredicateFormation<'_> {
+    pub(super) fn is_well_formed(&self) -> bool {
+        self.status == FormationStatus::WellFormed
+    }
+}
+
+/// A body's requirement check: its diagnostics, and whether a requirement it
+/// uses depends on itself, which makes a predicate's formation recursive.
+#[derive(Default)]
+pub(super) struct RequirementCheck<'db> {
+    pub(super) diags: Vec<FuncBodyDiag<'db>>,
+    recursive: bool,
+}
+
+impl<'db> RequirementCheck<'db> {
+    fn unmet_call(
+        &mut self,
+        primary: DynLazySpan<'db>,
+        predicate: Body<'db>,
+        failure: RequirementFailure,
+    ) {
+        self.recursive |= failure == RequirementFailure::Recursive;
+        self.diags.push(
+            BodyDiag::ConstRequirementNotSatisfied {
+                primary,
+                predicate: predicate.span().into(),
+                reason: failure.message().into(),
+            }
+            .into(),
+        );
+    }
+
+    fn unmet_type(&mut self, primary: DynLazySpan<'db>, unmet: TypeRequirementFailure<'db>) {
+        self.recursive |= unmet.failure == RequirementFailure::Recursive;
+        self.diags.push(type_requirement_diag(primary, unmet));
+    }
+
+    fn extend(&mut self, other: Self) {
+        self.recursive |= other.recursive;
+        self.diags.extend(other.diags);
+    }
+}
+
+fn type_requirement_diag<'db>(
+    primary: DynLazySpan<'db>,
+    unmet: TypeRequirementFailure<'db>,
+) -> FuncBodyDiag<'db> {
+    TyDiagCollection::from(TyLowerDiag::ConstRequirementNotSatisfied {
+        primary,
+        predicate: unmet.predicate.span().into(),
+        reason: unmet.failure.message().into(),
+    })
+    .into()
+}
+
 #[salsa::tracked(return_ref, cycle_initial=formation_cycle_initial, cycle_fn=formation_cycle_recover)]
 pub(super) fn check_predicate_formation<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
-) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+) -> PredicateFormation<'db> {
     let owner = BodyOwner::AnonConstBody {
         body,
         expected: TyId::bool(db),
     };
     let (mut diags, typed) = infer_body(db, owner).clone();
+    let mut recursive = false;
     if diags.is_empty() || static_assert_ignorable_type_diags(db, &diags) {
         diags.extend(
             crate::analysis::ty::const_check::check_const_body_expressions(db, body, &typed),
         );
-        diags.extend(check_body_requirements(db, owner, &typed));
+        let requirements = check_body_requirements(db, owner, &typed);
+        recursive = requirements.recursive;
+        diags.extend(requirements.diags);
     }
-    if has_recursive_requirement(&diags) {
+    // A recursive failure is absorbing, and is reported once, at this predicate.
+    let status = if recursive {
         diags = vec![BodyDiag::RecursiveConstRequirement(body.span().into()).into()];
+        FormationStatus::Recursive
+    } else if diags.is_empty() || static_assert_ignorable_type_diags(db, &diags) {
+        FormationStatus::WellFormed
+    } else {
+        FormationStatus::IllFormed
+    };
+    PredicateFormation {
+        diags,
+        typed,
+        status,
     }
-    (diags, typed)
 }
 
 pub(super) fn predicate_may_depend_on_params<'db>(
@@ -321,9 +460,10 @@ pub(super) fn check_body_requirements<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
     typed: &TypedBody<'db>,
-) -> Vec<FuncBodyDiag<'db>> {
+) -> RequirementCheck<'db> {
+    let mut check = RequirementCheck::default();
     let Some(body) = typed.body() else {
-        return Vec::new();
+        return check;
     };
     let caller = requirement_premise_owner(db, owner);
     let direct_callees: FxHashSet<_> = body
@@ -334,7 +474,6 @@ pub(super) fn check_body_requirements<'db>(
             _ => None,
         })
         .collect();
-    let mut diags = Vec::new();
     // Requirements are checked where a type enters the body: an authored type
     // (checked by `check_declared_type_requirements`) or an instantiating
     // expression. A pattern, a binding use, or a block or branch only carries a
@@ -355,15 +494,14 @@ pub(super) fn check_body_requirements<'db>(
         }
         let ty = typed.expr_ty(db, expr);
         if !matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)))
-            && let Some((_, diag)) =
-                check_type_requirements(db, ty, owner.scope(), expr.span(body).into(), &[])
+            && let Some(unmet) = check_type_requirements(db, ty, owner.scope(), &[])
         {
-            diags.push(diag.into());
+            check.unmet_type(expr.span(body).into(), unmet);
         }
         if let Some(headers) = const_ref_headers(db, typed, expr)
-            && let Some(diag) = check_entered_header(db, typed, expr, headers, owner.scope())
+            && let Some(unmet) = check_entered_header(db, typed, expr, headers, owner.scope())
         {
-            diags.push(diag.into());
+            check.unmet_type(expr.span(body).into(), unmet);
         }
         if direct_callees.contains(&expr) && typed.callable_expr(expr).is_none() {
             continue;
@@ -386,27 +524,26 @@ pub(super) fn check_body_requirements<'db>(
             CallableDef::VariantCtor(_) => {
                 if matches!(data.borrowed().to_opt(), Some(Expr::Path(..)))
                     && !direct_callees.contains(&expr)
-                    && let Some((_, diag)) = check_type_requirements(
+                    && let Some(unmet) = check_type_requirements(
                         db,
                         definition.ret_ty(db).instantiate(db, args),
                         owner.scope(),
-                        expr.span(body).into(),
                         &[],
                     )
                 {
-                    diags.push(diag.into());
+                    check.unmet_type(expr.span(body).into(), unmet);
                 }
                 continue;
             }
         };
-        if let Some(diag) = check_entered_header(
+        if let Some(unmet) = check_entered_header(
             db,
             typed,
             expr,
             callee_headers(db, func, args),
             owner.scope(),
         ) {
-            diags.push(diag.into());
+            check.unmet_type(expr.span(body).into(), unmet);
         }
         // Ground clauses are already mandatory declaration checks. Unsupported
         // associated/generic owner contexts are rejected at their declarations.
@@ -423,44 +560,21 @@ pub(super) fn check_body_requirements<'db>(
         }
         let caller = caller.filter(|_| args.iter().any(|ty| ty.has_param(db)));
         for &predicate in predicates {
-            let failures = discharge_requirement(
+            if let Discharge::Fails(failure) = discharge_requirement(
                 db,
                 WhereClauseOwner::Func(func),
                 predicate,
                 args.to_vec(),
                 caller,
-            );
-            if !failures.is_empty() {
-                diags.push(
-                    BodyDiag::ConstRequirementNotSatisfied {
-                        primary: expr.span(body).into(),
-                        predicate: predicate.span().into(),
-                        reason: requirement_reason(failures),
-                    }
-                    .into(),
-                );
-                // The diagnostic above already names the failure. The raw
-                // failures point at the callee's predicate, which is not at
-                // fault, so only a recursion marker is kept: predicate
-                // formation needs it to absorb a cycle.
-                diags.extend(
-                    failures
-                        .iter()
-                        .filter(|diag| {
-                            matches!(
-                                diag,
-                                FuncBodyDiag::Body(BodyDiag::RecursiveConstRequirement(_))
-                            )
-                        })
-                        .cloned(),
-                );
+            ) {
+                check.unmet_call(expr.span(body).into(), predicate, failure);
             }
         }
     }
     for (nested, expected) in expression_const_bodies(db, body, typed) {
-        diags.extend(anon_const_position_diags(db, nested, expected));
+        check.extend(anon_const_position_check(db, nested, expected));
     }
-    diags
+    check
 }
 
 /// What an anonymous constant checked against `expected` reports at its
@@ -470,11 +584,11 @@ pub(super) fn check_body_requirements<'db>(
 /// lower the type the constant is part of. So the constant's position owns
 /// them, and its owner calls this: `check_body_requirements` for expression
 /// positions and `check_declared_type_requirements` for types.
-fn anon_const_position_diags<'db>(
+fn anon_const_position_check<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
     expected: TyId<'db>,
-) -> Vec<FuncBodyDiag<'db>> {
+) -> RequirementCheck<'db> {
     use crate::analysis::ty::const_ty::{ConstBodyFailure, const_body_failure};
     let owner = BodyOwner::AnonConstBody { body, expected };
     let (diags, typed) = infer_body(db, owner);
@@ -484,20 +598,17 @@ fn anon_const_position_diags<'db>(
     // A lone path to a constant is read as that constant, not checked as a
     // body, so its failures are reported where the constant is.
     let position = body.scope().parent(db).unwrap_or(body.scope());
-    if crate::analysis::ty::ty_lower::const_body_names_a_constant(
+    let mut check = RequirementCheck::default();
+    if !crate::analysis::ty::ty_lower::const_body_names_a_constant(
         db,
         body,
         position,
         typed.assumptions(),
-    ) {
-        return Vec::new();
+    ) && let ConstBodyFailure::AtPosition(_) = const_body_failure(db, body, diags, typed)
+    {
+        check.diags = diags.clone();
     }
-    match const_body_failure(db, body, diags, typed) {
-        ConstBodyFailure::AtPosition(_) => diags.clone(),
-        ConstBodyFailure::None | ConstBodyFailure::AtType(_) | ConstBodyFailure::Elsewhere => {
-            Vec::new()
-        }
-    }
+    check
 }
 
 /// The anonymous constants written directly in `path`'s segments, such as
@@ -810,7 +921,7 @@ fn check_entered_header<'db>(
     expr: ExprId,
     headers: Vec<TyId<'db>>,
     scope: ScopeId<'db>,
-) -> Option<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+) -> Option<TypeRequirementFailure<'db>> {
     let body = typed.body()?;
     let is_function =
         |ty: TyId<'db>| matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)));
@@ -839,8 +950,7 @@ fn check_entered_header<'db>(
     headers
         .into_iter()
         .filter(|&header| !carried.iter().any(|&ty| ty_mentions(db, ty, header)))
-        .find_map(|header| check_type_requirements(db, header, scope, expr.span(body).into(), &[]))
-        .map(|(_, diag)| diag)
+        .find_map(|header| check_type_requirements(db, header, scope, &[]))
 }
 
 /// Whether `needle` occurs in `ty`.
@@ -853,22 +963,26 @@ fn ty_mentions<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, needle: TyId<'db>
             .any(|&arg| ty_mentions(db, arg, needle))
 }
 
-/// Returns the first unmet requirement in `ty`, with the type application
-/// that fails it. Failures of the applications in `reported` were already
-/// reported where those types entered, so the search continues past them.
+/// An unmet requirement of a type application.
+pub(super) struct TypeRequirementFailure<'db> {
+    /// The failing application.
+    ty: TyId<'db>,
+    predicate: Body<'db>,
+    failure: RequirementFailure,
+}
+
+/// Returns the first unmet requirement in `ty`. Failures of the
+/// applications in `reported` were already reported where those types
+/// entered, so the search continues past them.
 fn check_type_requirements<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
     scope: ScopeId<'db>,
-    span: crate::span::DynLazySpan<'db>,
     reported: &[TyId<'db>],
-) -> Option<(
-    TyId<'db>,
-    crate::analysis::ty::diagnostics::TyDiagCollection<'db>,
-)> {
+) -> Option<TypeRequirementFailure<'db>> {
     let (base, args) = ty.decompose_ty_app(db);
     for &arg in args {
-        if let Some(failure) = check_type_requirements(db, arg, scope, span.clone(), reported) {
+        if let Some(failure) = check_type_requirements(db, arg, scope, reported) {
             return Some(failure);
         }
     }
@@ -879,16 +993,16 @@ fn check_type_requirements<'db>(
         return None;
     };
     use crate::analysis::ty::adt_def::AdtRef;
-    let (declaration, generic_owner, kind) = match adt.adt_ref(db) {
+    let (declaration, generic_owner, partially_applied) = match adt.adt_ref(db) {
         AdtRef::Struct(record) => (
             WhereClauseOwner::Struct(record),
             GenericParamOwner::Struct(record),
-            "records",
+            RequirementFailure::PartiallyAppliedRecord,
         ),
         AdtRef::Enum(enum_) => (
             WhereClauseOwner::Enum(enum_),
             GenericParamOwner::Enum(enum_),
-            "enums",
+            RequirementFailure::PartiallyAppliedEnum,
         ),
     };
     let predicates = declaration.where_clause(db).const_predicates(db);
@@ -896,200 +1010,138 @@ fn check_type_requirements<'db>(
         return None;
     }
     if args.len() != collect_generic_params(db, generic_owner).params(db).len() {
-        return Some((
+        return Some(TypeRequirementFailure {
             ty,
-            crate::analysis::ty::diagnostics::TyLowerDiag::ConstRequirementNotSatisfied {
-                primary: span,
-                predicate: predicates[0].span().into(),
-                reason: format!(
-                    "partially applied {kind} with const requirements are not supported; \
-                     supply all arguments"
-                ),
-            }
-            .into(),
-        ));
+            predicate: predicates[0],
+            failure: partially_applied,
+        });
     }
     if args.iter().any(|arg| arg.has_var(db)) {
         return None;
     }
     let caller = premise_owner_in_scope(db, scope);
-    for &predicate in predicates {
-        let failures = discharge_requirement(db, declaration, predicate, args.to_vec(), caller);
-        if !failures.is_empty() {
-            return Some((
+    predicates.iter().find_map(|&predicate| {
+        match discharge_requirement(db, declaration, predicate, args.to_vec(), caller) {
+            Discharge::Holds => None,
+            Discharge::Fails(failure) => Some(TypeRequirementFailure {
                 ty,
-                crate::analysis::ty::diagnostics::TyLowerDiag::ConstRequirementNotSatisfied {
-                    primary: span,
-                    predicate: predicate.span().into(),
-                    reason: requirement_reason(failures),
-                }
-                .into(),
-            ));
+                predicate,
+                failure,
+            }),
         }
-    }
-    None
+    })
 }
 
-fn requirement_reason(diags: &[FuncBodyDiag<'_>]) -> String {
-    for diag in diags {
-        match diag {
-            FuncBodyDiag::Body(BodyDiag::RecursiveConstRequirement(_)) => {
-                return "recursive const requirement cannot establish itself".into();
-            }
-            FuncBodyDiag::Body(BodyDiag::WhereConstPredicateFailed(_)) => {
-                return "condition evaluated to `false`".into();
-            }
-            FuncBodyDiag::Body(BodyDiag::ConstRequirementNotSatisfied { reason, .. }) => {
-                return reason.clone();
-            }
-            FuncBodyDiag::Ty(TyDiagCollection::Ty(diag)) => {
-                let reason = match diag {
-                    TyLowerDiag::ConstEvalDivisionByZero(_) => {
-                        "constant evaluation encountered division by zero"
-                    }
-                    TyLowerDiag::ConstEvalArithmeticOverflow(_) => "constant evaluation overflowed",
-                    TyLowerDiag::ConstEvalStepLimitExceeded(_) => {
-                        "constant evaluation exceeded its step limit"
-                    }
-                    TyLowerDiag::ConstEvalRecursionLimitExceeded(_) => {
-                        "constant evaluation exceeded its recursion limit"
-                    }
-                    TyLowerDiag::ConstEvalRecursiveConst(_) => "recursive constant evaluation",
-                    _ => continue,
-                };
-                return reason.into();
-            }
-            _ => {}
-        }
-    }
-    "condition could not be established; the predicate must be a well-formed, evaluable bool".into()
-}
-
-#[salsa::tracked(return_ref, cycle_initial=requirement_cycle_initial, cycle_fn=requirement_cycle_recover)]
+#[salsa::tracked(cycle_initial=requirement_cycle_initial, cycle_fn=requirement_cycle_recover)]
 fn discharge_requirement<'db>(
     db: &'db dyn HirAnalysisDb,
     declaration: WhereClauseOwner<'db>,
     predicate: Body<'db>,
     args: Vec<TyId<'db>>,
     caller: Option<GenericParamOwner<'db>>,
-) -> Vec<FuncBodyDiag<'db>> {
-    let expected = TyId::bool(db);
-    let (diags, typed) = check_predicate_formation(db, predicate);
-    if has_recursive_requirement(diags) {
-        return vec![BodyDiag::RecursiveConstRequirement(predicate.span().into()).into()];
+) -> Discharge {
+    let formation = check_predicate_formation(db, predicate);
+    match formation.status {
+        FormationStatus::WellFormed => {}
+        FormationStatus::IllFormed => {
+            return Discharge::Fails(RequirementFailure::NotEstablished);
+        }
+        FormationStatus::Recursive => return Discharge::Fails(RequirementFailure::Recursive),
     }
-    if !diags.is_empty() && !static_assert_ignorable_type_diags(db, diags) {
-        return diags.clone();
-    }
+    let not_instantiable = Discharge::Fails(RequirementFailure::NotInstantiable);
     let args = match caller {
         Some(caller) => caller_args(db, caller, args),
         None => args,
     };
-    let unsubstitutable = || {
-        vec![
-            BodyDiag::ConstRequirementNotSatisfied {
-                primary: predicate.span().into(),
-                predicate: predicate.span().into(),
-                reason: "the condition could not be instantiated with these generic arguments"
-                    .into(),
-            }
-            .into(),
-        ]
-    };
     let Some(subst) = requirement_subst(db, ItemKind::from(declaration).scope(), &args) else {
-        return unsubstitutable();
+        return not_instantiable;
     };
-    let Ok(mut instantiated) = substitute_complete(db, typed.clone(), &subst) else {
-        return unsubstitutable();
+    let Ok(mut instantiated) = substitute_complete(db, formation.typed.clone(), &subst) else {
+        return not_instantiable;
     };
     // TypedBody deliberately preserves formal TypeConst paths for runtime ABI
     // selection. Substitute these references only in this dependency view.
     for reference in instantiated.value_path_refs.values_mut().flatten() {
         if let ValuePathRef::TypeConst(ty) = reference {
             let Ok(substituted) = substitute_complete(db, *ty, &subst) else {
-                return unsubstitutable();
+                return not_instantiable;
             };
             *ty = substituted;
         }
     }
     let symbolic = predicate_flags(db, instantiated).contains(TyFlags::HAS_PARAM);
     if symbolic {
-        let key = predicate_key(db, predicate, typed, predicate.expr(db), &subst);
+        let key = predicate_key(db, predicate, &formation.typed, predicate.expr(db), &subst);
         if let (Some(key), Some(caller)) = (&key, caller) {
             for (premise, premise_subst) in caller_premises(db, caller) {
-                let (diags, typed) = check_predicate_formation(db, premise);
-                if (!diags.is_empty() && !static_assert_ignorable_type_diags(db, diags))
-                    || predicate_key(db, premise, typed, premise.expr(db), &premise_subst).as_ref()
-                        != Some(key)
+                let premise_formation = check_predicate_formation(db, premise);
+                if premise_formation.is_well_formed()
+                    && predicate_key(
+                        db,
+                        premise,
+                        &premise_formation.typed,
+                        premise.expr(db),
+                        &premise_subst,
+                    )
+                    .as_ref()
+                        == Some(key)
                 {
-                    continue;
+                    return Discharge::Holds;
                 }
-                return Vec::new();
             }
         }
         // An unused type parameter does not make a ground predicate unknown.
         if predicate_may_depend_on_params(db, predicate) {
-            return vec![
-                BodyDiag::ConstRequirementNotSatisfied {
-                    primary: predicate.span().into(),
-                    predicate: predicate.span().into(),
-                    reason: if key.is_some() {
-                        "no matching const requirement in the caller after substitution".into()
-                    } else {
-                        "symbolic forwarding of this expression is not supported; \
-                         concrete evaluation is required"
-                            .into()
-                    },
-                }
-                .into(),
-            ];
+            return Discharge::Fails(if key.is_some() {
+                RequirementFailure::NoMatchingPremise
+            } else {
+                RequirementFailure::NotForwardable
+            });
         }
     }
     let owner = BodyOwner::AnonConstBody {
         body: predicate,
-        expected,
+        expected: TyId::bool(db),
     };
-    let outcome = eval_body_owner_const(db, owner, GenericSubst::for_body_owner(db, owner, args));
-    const_predicate_outcome_diags(db, predicate, owner, outcome)
+    match condition_outcome(db, owner, GenericSubst::for_body_owner(db, owner, args)) {
+        ConditionOutcome::True => Discharge::Holds,
+        ConditionOutcome::False => Discharge::Fails(RequirementFailure::False),
+        ConditionOutcome::NotBool | ConditionOutcome::Blocked(_) => {
+            Discharge::Fails(RequirementFailure::NotEstablished)
+        }
+        ConditionOutcome::Failed(cause) => {
+            Discharge::Fails(RequirementFailure::from_evaluation(&cause))
+        }
+    }
 }
 
+// A requirement reached again while it is being discharged depends on itself.
 fn requirement_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
     _declaration: WhereClauseOwner<'db>,
-    predicate: Body<'db>,
+    _predicate: Body<'db>,
     _args: Vec<TyId<'db>>,
     _caller: Option<GenericParamOwner<'db>>,
-) -> Vec<FuncBodyDiag<'db>> {
-    vec![BodyDiag::RecursiveConstRequirement(predicate.span().into()).into()]
+) -> Discharge {
+    Discharge::Fails(RequirementFailure::Recursive)
 }
 
 fn requirement_cycle_recover<'db>(
     _db: &'db dyn HirAnalysisDb,
-    _value: &[FuncBodyDiag<'db>],
+    _value: &Discharge,
     _count: u32,
     _declaration: WhereClauseOwner<'db>,
     _predicate: Body<'db>,
     _args: Vec<TyId<'db>>,
     _caller: Option<GenericParamOwner<'db>>,
-) -> salsa::CycleRecoveryAction<Vec<FuncBodyDiag<'db>>> {
+) -> salsa::CycleRecoveryAction<Discharge> {
     salsa::CycleRecoveryAction::Iterate
-}
-
-// A recursive failure is absorbing. Canonicalize it to this query's own
-// predicate instead of growing a diagnostic stack on each fixpoint iteration.
-fn has_recursive_requirement(diags: &[FuncBodyDiag<'_>]) -> bool {
-    diags.iter().any(|diag| {
-        matches!(
-            diag,
-            FuncBodyDiag::Body(BodyDiag::RecursiveConstRequirement(_))
-        )
-    })
 }
 
 fn formation_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
-) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+) -> PredicateFormation<'db> {
     let typed = infer_body(
         db,
         BodyOwner::AnonConstBody {
@@ -1099,17 +1151,18 @@ fn formation_cycle_initial<'db>(
     )
     .1
     .clone();
-    (
-        vec![BodyDiag::RecursiveConstRequirement(body.span().into()).into()],
+    PredicateFormation {
+        diags: vec![BodyDiag::RecursiveConstRequirement(body.span().into()).into()],
         typed,
-    )
+        status: FormationStatus::Recursive,
+    }
 }
 fn formation_cycle_recover<'db>(
     _db: &'db dyn HirAnalysisDb,
-    _value: &(Vec<FuncBodyDiag<'db>>, TypedBody<'db>),
+    _value: &PredicateFormation<'db>,
     _count: u32,
     _body: Body<'db>,
-) -> salsa::CycleRecoveryAction<(Vec<FuncBodyDiag<'db>>, TypedBody<'db>)> {
+) -> salsa::CycleRecoveryAction<PredicateFormation<'db>> {
     salsa::CycleRecoveryAction::Iterate
 }
 
@@ -1153,7 +1206,7 @@ pub(crate) fn check_declared_type_requirements<'db>(
         fn check_const_bodies(&mut self, lowered: &[TyId<'db>], bodies: &[Body<'db>]) {
             for (body, expected) in positioned_const_bodies(self.db, lowered, bodies) {
                 self.diags
-                    .extend(anon_const_position_diags(self.db, body, expected));
+                    .extend(anon_const_position_check(self.db, body, expected).diags);
             }
         }
     }
@@ -1238,16 +1291,11 @@ pub(crate) fn check_declared_type_requirements<'db>(
             walk_type(self, ctxt, hir_ty);
             if !ty.has_invalid(self.db)
                 && let Some(span) = span
-                && let Some((failing, diag)) = check_type_requirements(
-                    self.db,
-                    ty,
-                    scope,
-                    span.into(),
-                    &self.reported[nested..],
-                )
+                && let Some(unmet) =
+                    check_type_requirements(self.db, ty, scope, &self.reported[nested..])
             {
-                self.reported.push(failing);
-                self.diags.push(diag.into());
+                self.reported.push(unmet.ty);
+                self.diags.push(type_requirement_diag(span.into(), unmet));
             }
             self.default_depth -= usize::from(in_default);
         }
