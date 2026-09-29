@@ -83,7 +83,9 @@ pub struct ValueLimits {
     pub guard_indices: usize,
     pub guard_nodes: usize,
     pub exact_members: usize,
-    pub interned_nodes: usize,
+    /// How many interned values to keep, or `None` to keep none. Counting the nodes
+    /// an operation really builds needs the cache off, so no limit must mean no reuse.
+    pub interned_nodes: Option<usize>,
 }
 
 impl Default for ValueLimits {
@@ -93,7 +95,7 @@ impl Default for ValueLimits {
             guard_indices: 32,
             guard_nodes: 4096,
             exact_members: 64,
-            interned_nodes: 16_384,
+            interned_nodes: Some(16_384),
         }
     }
 }
@@ -1588,7 +1590,11 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                 .expect("clause alpha normalization"),
             payload: entry.payload.substitute(self.db, &subst),
         };
-        if self.normalized.len() >= self.limits.interned_nodes {
+        if self
+            .limits
+            .interned_nodes
+            .is_none_or(|limit| self.normalized.len() >= limit)
+        {
             self.normalized.clear();
         }
         self.normalized.insert(key, normal.clone());
@@ -1640,12 +1646,13 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         // equality. Live values keep their nodes alive independently of this cache, so
         // an entry nothing else holds is the only one worth dropping: clearing the
         // whole cache would just have equal values rebuilt as separate nodes.
-        if self.nodes.len() >= self.limits.interned_nodes {
+        let limit = self.limits.interned_nodes;
+        if limit.is_none_or(|limit| self.nodes.len() >= limit) {
             self.nodes
                 .retain(|_, value| Arc::strong_count(&value.0) > 1);
-            // A limit the live values alone exceed, including a zero limit asking for
-            // no cache at all, still has to give the entries up.
-            if self.nodes.len() >= self.limits.interned_nodes {
+            // A limit the live entries alone exceed, and no limit at all, still have
+            // to give the rest up.
+            if limit.is_none_or(|limit| self.nodes.len() >= limit) {
                 self.nodes.clear();
             }
             self.metrics.interner_evictions += 1;

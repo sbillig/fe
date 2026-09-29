@@ -885,7 +885,7 @@ fn sparse_arrays_match_concrete_execution_for_small_lengths_and_selector_valuati
             guard_indices: 0,
             guard_nodes: 4096,
             exact_members: 0,
-            interned_nodes: 256,
+            interned_nodes: Some(256),
         };
         let mut values = ValueInterner::new(&db, limits);
         let initial = leaf(&mut values, element, &scope(), 1, vec![]);
@@ -2863,7 +2863,7 @@ fn identity_substitution_reuses_nested_values_without_interning() {
     let mut values = ValueInterner::new(
         &db,
         ValueLimits {
-            interned_nodes: 0,
+            interned_nodes: None,
             ..ValueLimits::default()
         },
     );
@@ -3089,7 +3089,7 @@ fn substituted_projection_prunes_siblings_and_preserves_enum_and_index_domains()
     let mut values = ValueInterner::new(
         &db,
         ValueLimits {
-            interned_nodes: 0,
+            interned_nodes: None,
             ..ValueLimits::default()
         },
     );
@@ -3104,7 +3104,7 @@ fn substituted_projection_prunes_siblings_and_preserves_enum_and_index_domains()
     });
     let before = values.metrics().nodes_created;
     let full = values.substitute(&value, &subst);
-    assert!(values.metrics().nodes_created - before > 200);
+    let whole = values.metrics().nodes_created - before;
     for field in [FieldIndex(0), FieldIndex(31)] {
         for variant in [VariantIndex(0), VariantIndex(1)] {
             let paths = [
@@ -3140,9 +3140,13 @@ fn substituted_projection_prunes_siblings_and_preserves_enum_and_index_domains()
                 let before = values.metrics().nodes_created;
                 let selected = values.project_substituted(&value, &subst, &path, occurrence);
                 assert_eq!(selected, expected, "{path:?}");
+                let built = values.metrics().nodes_created - before;
+                assert!(built < 32, "unselected siblings were rebuilt");
+                // Relative to the whole substitution, so improving reuse everywhere
+                // cannot fail this, and shrinking the fixture cannot make it vacuous.
                 assert!(
-                    values.metrics().nodes_created - before < 32,
-                    "unselected siblings were rebuilt"
+                    built * 4 < whole,
+                    "projected {built} of the {whole} nodes a full substitution builds"
                 );
             }
         }
@@ -3962,5 +3966,40 @@ fn cached_region_restriction_matches_exactly_and_shares_graph_storage() {
         (allocations, excess),
         (distinct, 0),
         "{allocations} live graph allocations hold {excess} bytes beyond {distinct} distinct graphs"
+    );
+}
+
+#[test]
+fn an_interner_without_a_limit_keeps_no_values() {
+    // Counting the nodes an operation really builds needs the cache off, which two
+    // tests ask for with no limit. Reclaiming entries must not quietly keep any,
+    // or those counts silently measure reuse instead of construction.
+    let db = HirAnalysisTestDb::default();
+    let shape = leaf_shape(&db);
+    let mut uncached = ValueInterner::new(
+        &db,
+        ValueLimits {
+            interned_nodes: None,
+            ..ValueLimits::default()
+        },
+    );
+    let first = leaf(&mut uncached, shape, &scope(), 1, vec![runtime(0)]);
+    let built = uncached.metrics().nodes_created;
+    let second = leaf(&mut uncached, shape, &scope(), 1, vec![runtime(0)]);
+    assert_eq!(first, second, "values stay equal without the cache");
+    assert_eq!(
+        uncached.metrics().nodes_created,
+        built * 2,
+        "an interner without a limit built an equal value again"
+    );
+
+    let mut cached = ValueInterner::new(&db, ValueLimits::default());
+    leaf(&mut cached, shape, &scope(), 1, vec![runtime(0)]);
+    let once = cached.metrics().nodes_created;
+    leaf(&mut cached, shape, &scope(), 1, vec![runtime(0)]);
+    assert_eq!(
+        cached.metrics().nodes_created,
+        once,
+        "a limited interner reuses an equal value"
     );
 }
