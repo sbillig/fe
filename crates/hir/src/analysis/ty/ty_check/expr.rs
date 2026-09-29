@@ -1915,34 +1915,33 @@ impl<'db> TyChecker<'db> {
         required_name: Option<IdentId<'db>>,
         viable: SmallVec<[EffectEvidence<'db>; 2]>,
     ) -> EffectResolution<'db> {
-        match viable.as_slice() {
-            [only] => EffectResolution::Chosen(Box::new(only.clone())),
-            _ => {
-                let Some(required_name) = required_name else {
-                    return EffectResolution::Ambiguous;
-                };
-                let mut name_matches = viable.into_iter().filter(|evidence| {
-                    let provider = evidence_provider(evidence);
-                    match (provider.origin, provider.binding) {
-                        (
-                            EffectOrigin::Param {
-                                name: Some(name), ..
-                            },
-                            _,
-                        ) => name == required_name,
-                        (EffectOrigin::With { .. }, Some(binding)) => {
-                            binding.binding_name(&self.env) == required_name
-                        }
-                        _ => false,
+        if let [only] = viable.as_slice() {
+            EffectResolution::Chosen(Box::new(only.clone()))
+        } else {
+            let Some(required_name) = required_name else {
+                return EffectResolution::Ambiguous;
+            };
+            let mut name_matches = viable.into_iter().filter(|evidence| {
+                let provider = evidence_provider(evidence);
+                match (provider.origin, provider.binding) {
+                    (
+                        EffectOrigin::Param {
+                            name: Some(name), ..
+                        },
+                        _,
+                    ) => name == required_name,
+                    (EffectOrigin::With { .. }, Some(binding)) => {
+                        binding.binding_name(&self.env) == required_name
                     }
-                });
-                if let Some(best) = name_matches.next()
-                    && name_matches.next().is_none()
-                {
-                    EffectResolution::Chosen(Box::new(best))
-                } else {
-                    EffectResolution::Ambiguous
+                    _ => false,
                 }
+            });
+            if let Some(best) = name_matches.next()
+                && name_matches.next().is_none()
+            {
+                EffectResolution::Chosen(Box::new(best))
+            } else {
+                EffectResolution::Ambiguous
             }
         }
     }
@@ -3301,52 +3300,48 @@ impl<'db> TyChecker<'db> {
         let candidate = match candidate {
             Ok(candidate) => candidate,
             Err(err) => {
-                match err {
-                    MethodSelectionError::AmbiguousTraitMethod(ambiguous) => {
-                        // Defer resolution using return-type constraints
-                        let ret_ty = self.fresh_ty();
-                        let typed = ExprProp::new(ret_ty, true);
-                        self.env.type_expr(expr, typed.clone());
-                        // Still type-check argument expressions so they have types and can
-                        // participate in later constraint solving.
-                        for arg in args.iter() {
-                            self.check_expr_unknown(arg.expr);
-                        }
-                        let candidates = ambiguous
-                            .candidates
-                            .into_iter()
-                            .map(|candidate| {
-                                let inst = canonical_r_ty
-                                    .extract_solution(&mut self.table, candidate.cand.inst);
-                                let inst =
-                                    self.specialize_same_trait_method_inst(method_name, inst);
-                                super::env::PendingMethodCandidate {
-                                    inst,
-                                    method: candidate.cand.method,
-                                    needs_confirmation: candidate.needs_confirmation,
-                                }
-                            })
-                            .collect();
+                if let MethodSelectionError::AmbiguousTraitMethod(ambiguous) = err {
+                    // Defer resolution using return-type constraints
+                    let ret_ty = self.fresh_ty();
+                    let typed = ExprProp::new(ret_ty, true);
+                    self.env.type_expr(expr, typed.clone());
+                    // Still type-check argument expressions so they have types and can
+                    // participate in later constraint solving.
+                    for arg in args.iter() {
+                        self.check_expr_unknown(arg.expr);
+                    }
+                    let candidates = ambiguous
+                        .candidates
+                        .into_iter()
+                        .map(|candidate| {
+                            let inst = canonical_r_ty
+                                .extract_solution(&mut self.table, candidate.cand.inst);
+                            let inst = self.specialize_same_trait_method_inst(method_name, inst);
+                            super::env::PendingMethodCandidate {
+                                inst,
+                                method: candidate.cand.method,
+                                needs_confirmation: candidate.needs_confirmation,
+                            }
+                        })
+                        .collect();
 
-                        self.env.register_pending_method(super::env::PendingMethod {
-                            expr,
-                            recv_ty: selected_receiver_ty,
-                            method_name,
-                            candidates,
-                            span: call_span.method_name().into(),
-                        });
-                        return typed;
-                    }
-                    _ => {
-                        let diag = body_diag_from_method_selection_err(
-                            self.db,
-                            err,
-                            Spanned::new(selected_receiver_ty, receiver.span(self.body()).into()),
-                            Spanned::new(method_name, call_span.method_name().into()),
-                        );
-                        self.push_diag(diag);
-                        return ExprProp::invalid(self.db);
-                    }
+                    self.env.register_pending_method(super::env::PendingMethod {
+                        expr,
+                        recv_ty: selected_receiver_ty,
+                        method_name,
+                        candidates,
+                        span: call_span.method_name().into(),
+                    });
+                    return typed;
+                } else {
+                    let diag = body_diag_from_method_selection_err(
+                        self.db,
+                        err,
+                        Spanned::new(selected_receiver_ty, receiver.span(self.body()).into()),
+                        Spanned::new(method_name, call_span.method_name().into()),
+                    );
+                    self.push_diag(diag);
+                    return ExprProp::invalid(self.db);
                 }
             }
         };
@@ -4699,45 +4694,41 @@ impl<'db> TyChecker<'db> {
         self.env.enter_lexical_scope();
         self.check_cond(*cond);
 
-        match else_ {
-            Some(else_) => {
-                self.env.enter_scope(*then);
-                self.env.flush_pending_bindings();
-                let then_prop = if result_discarded {
-                    self.check_expr_with_discarded_result(*then, expected)
-                } else {
-                    self.check_expr(*then, expected)
-                };
-                self.env.leave_scope();
-                self.env.clear_pending_bindings();
-                self.env.leave_scope();
-                let else_prop = self.check_expr_in_new_scope(*else_, expected, result_discarded);
-                let borrow_provider = self.merge_concrete_borrow_providers(
-                    then.span(self.body()).into(),
-                    then_prop.borrow_provider,
-                    else_.span(self.body()).into(),
-                    else_prop.borrow_provider,
-                );
-                ExprProp {
-                    ty: else_prop.ty,
-                    is_mut: true,
-                    binding: None,
-                    borrow_provider,
-                    path_read_semantics: None,
-                }
+        if let Some(else_) = else_ {
+            self.env.enter_scope(*then);
+            self.env.flush_pending_bindings();
+            let then_prop = if result_discarded {
+                self.check_expr_with_discarded_result(*then, expected)
+            } else {
+                self.check_expr(*then, expected)
+            };
+            self.env.leave_scope();
+            self.env.clear_pending_bindings();
+            self.env.leave_scope();
+            let else_prop = self.check_expr_in_new_scope(*else_, expected, result_discarded);
+            let borrow_provider = self.merge_concrete_borrow_providers(
+                then.span(self.body()).into(),
+                then_prop.borrow_provider,
+                else_.span(self.body()).into(),
+                else_prop.borrow_provider,
+            );
+            ExprProp {
+                ty: else_prop.ty,
+                is_mut: true,
+                binding: None,
+                borrow_provider,
+                path_read_semantics: None,
             }
-
-            None => {
-                let if_ty = self.fresh_ty();
-                // If there is no else branch, the if expression itself typed as `()`
-                self.env.enter_scope(*then);
-                self.env.flush_pending_bindings();
-                self.check_expr_with_discarded_result(*then, if_ty);
-                self.env.leave_scope();
-                self.env.clear_pending_bindings();
-                self.env.leave_scope();
-                ExprProp::new(TyId::unit(self.db), true)
-            }
+        } else {
+            let if_ty = self.fresh_ty();
+            // If there is no else branch, the if expression itself typed as `()`
+            self.env.enter_scope(*then);
+            self.env.flush_pending_bindings();
+            self.check_expr_with_discarded_result(*then, if_ty);
+            self.env.leave_scope();
+            self.env.clear_pending_bindings();
+            self.env.leave_scope();
+            ExprProp::new(TyId::unit(self.db), true)
         }
     }
 
@@ -5661,9 +5652,8 @@ fn resolve_ident_expr<'db>(
         if matches!(resolved, ResolvedPathInBody::Invalid) {
             if current_idx == 0 {
                 break;
-            } else {
-                current_idx -= 1;
             }
+            current_idx -= 1;
         } else {
             return resolved;
         }

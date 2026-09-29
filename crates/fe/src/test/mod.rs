@@ -1305,24 +1305,22 @@ fn suite_worker_loop_parallel(channels: SuiteWorkerChannels, cfg: SuiteWorkerCon
                     }
                 }
                 recv(suite_rx) -> suite => {
-                    match suite {
-                        Ok(plan) => emit_parallel_suite_outcome(plan, &outcome_tx, &cfg),
-                        Err(_) => {
-                            drain_pending_single_jobs(&single_rx, &outcome_tx, cfg.shared.as_ref());
-                            break;
-                        }
+                    if let Ok(plan) = suite {
+                        emit_parallel_suite_outcome(plan, &outcome_tx, &cfg);
+                    } else {
+                        drain_pending_single_jobs(&single_rx, &outcome_tx, cfg.shared.as_ref());
+                        break;
                     }
                 }
             }
         } else {
             crossbeam_channel::select_biased! {
                 recv(suite_rx) -> suite => {
-                    match suite {
-                        Ok(plan) => emit_parallel_suite_outcome(plan, &outcome_tx, &cfg),
-                        Err(_) => {
-                            drain_pending_single_jobs(&single_rx, &outcome_tx, cfg.shared.as_ref());
-                            break;
-                        }
+                    if let Ok(plan) = suite {
+                        emit_parallel_suite_outcome(plan, &outcome_tx, &cfg);
+                    } else {
+                        drain_pending_single_jobs(&single_rx, &outcome_tx, cfg.shared.as_ref());
+                        break;
                     }
                 }
                 recv(single_rx) -> single => {
@@ -2513,29 +2511,23 @@ fn expand_workspace_test_paths(
             continue;
         }
 
-        let content = match std::fs::read_to_string(config_path.as_std_path()) {
-            Ok(content) => content,
-            Err(_) => {
-                if ingot.is_some() {
-                    return Err(format!(
-                        "`--ingot` requires a readable workspace config at `{config_path}`"
-                    ));
-                }
-                push_unique(input, None);
-                continue;
+        let Ok(content) = std::fs::read_to_string(config_path.as_std_path()) else {
+            if ingot.is_some() {
+                return Err(format!(
+                    "`--ingot` requires a readable workspace config at `{config_path}`"
+                ));
             }
+            push_unique(input, None);
+            continue;
         };
-        let config = match Config::parse(&content) {
-            Ok(config) => config,
-            Err(_) => {
-                if ingot.is_some() {
-                    return Err(format!(
-                        "`--ingot` requires a valid workspace config at `{config_path}`"
-                    ));
-                }
-                push_unique(input, None);
-                continue;
+        let Ok(config) = Config::parse(&content) else {
+            if ingot.is_some() {
+                return Err(format!(
+                    "`--ingot` requires a valid workspace config at `{config_path}`"
+                ));
             }
+            push_unique(input, None);
+            continue;
         };
         let Config::Workspace(workspace_config) = config else {
             if ingot.is_some() {

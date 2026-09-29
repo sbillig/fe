@@ -227,33 +227,32 @@ pub(crate) fn module_tree_impl<'db>(db: &'db dyn HirDb, ingot: Ingot<'db>) -> Mo
         Err(_) => {
             // No root file found - use first source file as fallback root
             // This handles non-conformant ingots (e.g., directories without src/lib.fe)
-            match source_files.first().map(|(_, file)| *file) {
-                Some(file) => file,
-                None => {
-                    tracing::warn!(
-                        "Ingot {:?} has no source files; returning empty module tree",
-                        ingot
-                    );
-                    let root = module_tree.push(ModuleTreeNode {
-                        top_mod: TopLevelMod::new(
-                            db,
-                            IdentId::new(db, "__empty__".to_string()),
-                            files
-                                .iter()
-                                .next()
-                                .map(|(_, f)| f)
-                                .expect("ingot should have at least one file"),
-                        ),
-                        parent: None,
-                        children: Vec::new(),
-                    });
-                    return ModuleTree {
-                        root,
-                        module_tree: PMap(module_tree),
-                        mod_map: IndexMap::default(),
-                        ingot,
-                    };
-                }
+            if let Some(file) = source_files.first().map(|(_, file)| *file) {
+                file
+            } else {
+                tracing::warn!(
+                    "Ingot {:?} has no source files; returning empty module tree",
+                    ingot
+                );
+                let root = module_tree.push(ModuleTreeNode {
+                    top_mod: TopLevelMod::new(
+                        db,
+                        IdentId::new(db, "__empty__".to_string()),
+                        files
+                            .iter()
+                            .next()
+                            .map(|(_, f)| f)
+                            .expect("ingot should have at least one file"),
+                    ),
+                    parent: None,
+                    children: Vec::new(),
+                });
+                return ModuleTree {
+                    root,
+                    module_tree: PMap(module_tree),
+                    mod_map: IndexMap::default(),
+                    ingot,
+                };
             }
         }
     };

@@ -2996,29 +2996,28 @@ impl<'db> SignatureValues<'_, 'db> {
                     scope.variables().collect(),
                 ))
             } else {
-                match OpaqueHandleContract::for_ty(
+                if let Ok(Some(contract)) = OpaqueHandleContract::for_ty(
                     db,
                     instance.key(db).impl_env(db).normalization_scope(db),
                     instance.assumptions(db),
                     semantics.representation_ty,
                 ) {
-                    Ok(Some(contract)) => Some(ExternalSource::opaque(
+                    Some(ExternalSource::opaque(
                         db,
                         OpaqueHandleRef {
                             contract,
                             occurrence,
                             arguments: scope.variables().collect(),
                         },
-                    )),
-                    Ok(None) | Err(_) => {
-                        failure.get_or_insert_with(|| {
-                            checker.internal_diag(
-                                SemOrigin::Body(checker.body.template_owner),
-                                "opaque result has an unresolved address contract".into(),
-                            )
-                        });
-                        None
-                    }
+                    ))
+                } else {
+                    failure.get_or_insert_with(|| {
+                        checker.internal_diag(
+                            SemOrigin::Body(checker.body.template_owner),
+                            "opaque result has an unresolved address contract".into(),
+                        )
+                    });
+                    None
                 }
             };
             if let Some(source) = source {

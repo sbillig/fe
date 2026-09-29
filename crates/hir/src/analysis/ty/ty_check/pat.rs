@@ -802,9 +802,10 @@ impl<'db> TyChecker<'db> {
                     });
                     TupleVariantResolution::Invalid
                 }
-                PathRes::EnumVariant(variant) => match variant.kind(self.db) {
-                    VariantKind::Tuple(elems) => TupleVariantResolution::Resolved(variant, elems),
-                    _ => {
+                PathRes::EnumVariant(variant) => {
+                    if let VariantKind::Tuple(elems) = variant.kind(self.db) {
+                        TupleVariantResolution::Resolved(variant, elems)
+                    } else {
                         self.push_diag(BodyDiag::tuple_variant_expected(
                             self.db,
                             pat.span(self.body()).into(),
@@ -812,7 +813,7 @@ impl<'db> TyChecker<'db> {
                         ));
                         TupleVariantResolution::Invalid
                     }
-                },
+                }
                 PathRes::Mod(scope) => {
                     self.push_diag(BodyDiag::NotValue {
                         primary: span.into(),

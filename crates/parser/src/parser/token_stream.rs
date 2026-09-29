@@ -53,9 +53,8 @@ impl<T: TokenStream> BackTrackableTokenStream<T> {
         if !self.has_parent() {
             if let Some(bt_buffer) = self.bt_buffer.pop_front() {
                 return Some(bt_buffer);
-            } else {
-                return self.stream.next();
             }
+            return self.stream.next();
         }
 
         if let Some(cursor) = self.bt_cursor {
@@ -63,9 +62,8 @@ impl<T: TokenStream> BackTrackableTokenStream<T> {
                 let token = self.bt_buffer.get(cursor).cloned();
                 self.bt_cursor = Some(cursor + 1);
                 return token;
-            } else {
-                self.bt_cursor = Some(cursor + 1);
             }
+            self.bt_cursor = Some(cursor + 1);
         }
 
         let token = self.stream.next()?;

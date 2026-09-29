@@ -491,35 +491,32 @@ impl GitResolver {
             })?
             .flatten();
 
-        match sparse_root {
-            Some(root) => {
-                remove_marker_if_exists(&full_marker).map_err(|source| {
-                    GitResolutionError::PrepareCheckoutDirectory {
-                        path: utf8_path_buf(&full_marker, &self.checkout_root),
-                        source,
-                    }
-                })?;
-                fs::write(&sparse_marker, root.as_bytes()).map_err(|source| {
-                    GitResolutionError::PrepareCheckoutDirectory {
-                        path: utf8_path_buf(&sparse_marker, &self.checkout_root),
-                        source,
-                    }
-                })?;
-            }
-            None => {
-                remove_marker_if_exists(&sparse_marker).map_err(|source| {
-                    GitResolutionError::PrepareCheckoutDirectory {
-                        path: utf8_path_buf(&sparse_marker, &self.checkout_root),
-                        source,
-                    }
-                })?;
-                fs::write(&full_marker, b"").map_err(|source| {
-                    GitResolutionError::PrepareCheckoutDirectory {
-                        path: utf8_path_buf(&full_marker, &self.checkout_root),
-                        source,
-                    }
-                })?;
-            }
+        if let Some(root) = sparse_root {
+            remove_marker_if_exists(&full_marker).map_err(|source| {
+                GitResolutionError::PrepareCheckoutDirectory {
+                    path: utf8_path_buf(&full_marker, &self.checkout_root),
+                    source,
+                }
+            })?;
+            fs::write(&sparse_marker, root.as_bytes()).map_err(|source| {
+                GitResolutionError::PrepareCheckoutDirectory {
+                    path: utf8_path_buf(&sparse_marker, &self.checkout_root),
+                    source,
+                }
+            })?;
+        } else {
+            remove_marker_if_exists(&sparse_marker).map_err(|source| {
+                GitResolutionError::PrepareCheckoutDirectory {
+                    path: utf8_path_buf(&sparse_marker, &self.checkout_root),
+                    source,
+                }
+            })?;
+            fs::write(&full_marker, b"").map_err(|source| {
+                GitResolutionError::PrepareCheckoutDirectory {
+                    path: utf8_path_buf(&full_marker, &self.checkout_root),
+                    source,
+                }
+            })?;
         }
 
         Ok(())

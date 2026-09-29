@@ -1680,23 +1680,19 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let callee_ref = self.module.func_ref(*callee)?;
                 let args = self.lower_call_args(*callee, args)?;
                 let ret = callee.interface_signature(self.module.db).ret;
-                match ret {
-                    Some(class) => {
-                        let ret_ty = self.module.ty_for_signature_class(*callee, &class)?;
-                        let value = self.fb.insert_inst(
-                            Call::new(self.module.inst_set(), callee_ref, args),
-                            ret_ty,
-                        );
-                        self.coerce_to_dst(value, dst)?
-                    }
-                    None => {
-                        self.fb.insert_inst_no_result(Call::new(
-                            self.module.inst_set(),
-                            callee_ref,
-                            args,
-                        ));
-                        zero_for_type(&mut self.fb, Type::Unit)
-                    }
+                if let Some(class) = ret {
+                    let ret_ty = self.module.ty_for_signature_class(*callee, &class)?;
+                    let value = self
+                        .fb
+                        .insert_inst(Call::new(self.module.inst_set(), callee_ref, args), ret_ty);
+                    self.coerce_to_dst(value, dst)?
+                } else {
+                    self.fb.insert_inst_no_result(Call::new(
+                        self.module.inst_set(),
+                        callee_ref,
+                        args,
+                    ));
+                    zero_for_type(&mut self.fb, Type::Unit)
                 }
             }
             RExpr::EnumMake {
