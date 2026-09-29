@@ -777,10 +777,14 @@ fn positioned_const_bodies<'db>(
 /// argument is checked there even when its value never reaches what the path
 /// names: an alias can drop it, and a qualifier such as `Holder<{ n }>` in
 /// `Holder<{ n }>::Out` may only select an impl. A segment that did not
-/// resolve, and an argument that its segment has no const parameter for, are
-/// reported by resolution and lowering. The explicit arguments of a callable
-/// are applied with the call, so its uses check them
-/// (`expression_const_bodies`).
+/// resolve is reported by resolution. A type, trait or callable segment's
+/// resolution holds its arguments, and an argument it has no parameter for
+/// is reported by lowering as an arity error. An enum variant or module
+/// segment has no generic parameters and its resolution holds no arguments,
+/// so arguments written on it, such as `{ n }` in `Choice::Empty<{ n }>`,
+/// are not found here. Resolution does not reject them either, and nothing
+/// evaluates them. The explicit arguments of a callable are applied with the
+/// call, so its uses check them (`expression_const_bodies`).
 fn segment_const_args<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
