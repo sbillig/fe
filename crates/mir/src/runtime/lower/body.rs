@@ -298,7 +298,7 @@ fn formal_runtime_layout_root_binding<'a, 'db>(
     value: SemConstId<'db>,
     bindings: &'a [LayoutEvidenceConstBinding<'db>],
 ) -> Option<&'a LayoutEvidenceConstBinding<'db>> {
-    let SemConstValue::Description(term) = value.value(db) else {
+    let &SemConstValue::Description(term) = value.value(db) else {
         return None;
     };
     if !matches!(term.data(db), ConstTyData::TyParam(_, _)) {
@@ -1941,13 +1941,13 @@ impl<'db> RmirEmitter<'db> {
         }
         if let RuntimeClass::RawAddr { .. } = target
             && let SemConstValue::Scalar { value, .. } = value.value(self.db)
-            && let Some(scalar) = const_scalar_for_class(&value, &word_scalar_class())
+            && let Some(scalar) = const_scalar_for_class(value, &word_scalar_class())
         {
             return self.lower_sem_const_scalar_with_class(bb, ty, target.clone(), scalar);
         }
         if let RuntimeClass::Scalar(class) = target
             && let SemConstValue::Scalar { value, .. } = value.value(self.db)
-            && let Some(scalar) = const_scalar_for_class(&value, class)
+            && let Some(scalar) = const_scalar_for_class(value, class)
         {
             return self.lower_sem_const_scalar(bb, ty, scalar);
         }
@@ -2044,7 +2044,7 @@ impl<'db> RmirEmitter<'db> {
             return self.lower_sem_const_scalar(bb, ty, scalar);
         }
         if let SemConstValue::Scalar { value, .. } = value.value(self.db)
-            && let Some(scalar) = const_scalar_for_class(&value, &word_scalar_class())
+            && let Some(scalar) = const_scalar_for_class(value, &word_scalar_class())
         {
             return self.lower_sem_const_scalar_with_class(
                 bb,
@@ -2084,7 +2084,7 @@ impl<'db> RmirEmitter<'db> {
             return None;
         };
         ty.is_core_dyn_string(self.db)
-            .then(|| self.lower_dyn_string_literal(bb, ty, &bytes))
+            .then(|| self.lower_dyn_string_literal(bb, ty, bytes))
     }
 
     fn try_lower_bytes_array_const_as_class(
@@ -2471,7 +2471,7 @@ impl<'db> RmirEmitter<'db> {
                     }
                 };
                 let dst = self.alloc_runtime_temp(ty, RuntimeCarrier::Value(dst_class));
-                self.lower_enum_values(bb, dst, layout, variant, &field_values);
+                self.lower_enum_values(bb, dst, layout, *variant, &field_values);
                 dst
             }
             SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Description(..) => {

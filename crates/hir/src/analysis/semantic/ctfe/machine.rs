@@ -522,19 +522,19 @@ impl<'db> CtfeConstValue<'db> {
             SemConstValue::Scalar {
                 value: SemConstScalar::Bool(value),
                 ..
-            } => CtfeConstKind::Bool(value),
+            } => CtfeConstKind::Bool(*value),
             SemConstValue::Scalar {
                 ty,
                 value: SemConstScalar::Int { value },
             } => CtfeConstKind::Int {
-                ty,
-                value: CtfeInt::from_bigint(db, ty, value),
+                ty: *ty,
+                value: CtfeInt::from_bigint(db, *ty, value.clone()),
             },
             SemConstValue::Scalar {
                 ty,
                 value: SemConstScalar::Bytes(bytes),
             } => CtfeConstKind::Bytes {
-                ty,
+                ty: *ty,
                 bytes: Rc::from(bytes.as_slice()),
             },
             SemConstValue::Tuple { .. }
@@ -555,24 +555,24 @@ impl<'db> CtfeConstValue<'db> {
             SemConstValue::Scalar {
                 value: SemConstScalar::Bool(value),
                 ..
-            } => CtfeConstKind::Bool(value),
+            } => CtfeConstKind::Bool(*value),
             SemConstValue::Scalar {
                 ty,
                 value: SemConstScalar::Int { value },
             } => CtfeConstKind::Int {
-                ty,
-                value: CtfeInt::from_bigint(db, ty, value),
+                ty: *ty,
+                value: CtfeInt::from_bigint(db, *ty, value.clone()),
             },
             SemConstValue::Scalar {
                 ty,
                 value: SemConstScalar::Bytes(bytes),
             } => CtfeConstKind::Bytes {
-                ty,
+                ty: *ty,
                 bytes: Rc::from(bytes.as_slice()),
             },
             SemConstValue::Description(..) => unreachable!("verified CTFE value is dependent"),
             SemConstValue::Tuple { ty, .. } => CtfeConstKind::Tuple {
-                ty,
+                ty: *ty,
                 elems: value
                     .aggregate_children(db)
                     .into_iter()
@@ -581,7 +581,7 @@ impl<'db> CtfeConstValue<'db> {
                     .into(),
             },
             SemConstValue::Struct { ty, .. } => CtfeConstKind::Struct {
-                ty,
+                ty: *ty,
                 fields: value
                     .aggregate_children(db)
                     .into_iter()
@@ -590,7 +590,7 @@ impl<'db> CtfeConstValue<'db> {
                     .into(),
             },
             SemConstValue::Array { ty, .. } => CtfeConstKind::Array {
-                ty,
+                ty: *ty,
                 elems: value
                     .aggregate_children(db)
                     .into_iter()
@@ -599,8 +599,8 @@ impl<'db> CtfeConstValue<'db> {
                     .into(),
             },
             SemConstValue::Enum { ty, variant, .. } => CtfeConstKind::Enum {
-                ty,
-                variant,
+                ty: *ty,
+                variant: *variant,
                 fields: value
                     .aggregate_children(db)
                     .into_iter()
@@ -856,7 +856,7 @@ pub(super) fn sem_const_dependency<'db>(
     value: SemConstId<'db>,
 ) -> Option<ConstDependency<'db>> {
     match value.value(db) {
-        SemConstValue::Description(term) => Some(ConstDependency::Value(TyId::const_ty(db, term))),
+        SemConstValue::Description(term) => Some(ConstDependency::Value(TyId::const_ty(db, *term))),
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => elems
             .iter()
             .copied()
@@ -1507,7 +1507,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 let term = instantiate_const_template(
                     self.db,
                     self.frames[frame_idx].body.owner,
-                    template,
+                    *template,
                 );
                 let value = sem_const_from_ty(self.db, TyId::const_ty(self.db, term))
                     .ok_or(CtfeError::InvalidBody { origin })?;
@@ -2105,7 +2105,11 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 else {
                     return Err(CtfeError::NotConstEvaluable { origin });
                 };
-                Ok(u256_from_bigint(&normalize_int_to_shape(value, 256, false)))
+                Ok(u256_from_bigint(&normalize_int_to_shape(
+                    value.clone(),
+                    256,
+                    false,
+                )))
             }
             _ => Err(CtfeError::NotConstEvaluable { origin }),
         }
@@ -2133,7 +2137,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 else {
                     return Err(CtfeError::NotConstEvaluable { origin });
                 };
-                value
+                value.clone()
             }
             _ => return Err(CtfeError::NotConstEvaluable { origin }),
         };
@@ -2510,7 +2514,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 SemConstValue::Scalar {
                     value: SemConstScalar::Bool(value),
                     ..
-                } => Ok(value),
+                } => Ok(*value),
                 _ => Err(CtfeError::InvalidOperation {
                     origin,
                     message: "expected bool".into(),
@@ -2562,7 +2566,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 SemConstValue::Scalar {
                     value: SemConstScalar::Int { value },
                     ..
-                } => Ok(value),
+                } => Ok(value.clone()),
                 _ => Err(CtfeError::InvalidOperation {
                     origin,
                     message: "expected int".into(),
@@ -2599,8 +2603,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 SemConstValue::Scalar {
                     ty,
                     value: SemConstScalar::Int { value },
-                } if int_ty_shape(self.db, ty) == Some((bits, signed)) => Ok(Some(
-                    u256_from_bigint(&normalize_int_to_shape(value, bits, false)),
+                } if int_ty_shape(self.db, *ty) == Some((bits, signed)) => Ok(Some(
+                    u256_from_bigint(&normalize_int_to_shape(value.clone(), bits, false)),
                 )),
                 SemConstValue::Scalar {
                     value: SemConstScalar::Int { .. },
@@ -3338,7 +3342,7 @@ mod tests {
         else {
             panic!("expected integer referent");
         };
-        assert_eq!(value, BigInt::from(7));
+        assert_eq!(*value, BigInt::from(7));
     }
 
     #[test]
@@ -3447,7 +3451,7 @@ mod tests {
         else {
             panic!("anchor root must remain an integer");
         };
-        assert_eq!(changed, BigInt::from(9));
+        assert_eq!(*changed, BigInt::from(9));
         drop(attempt);
 
         let mut retry = CtfeMachine::new(&db, CtfeConfig::default());
@@ -3471,7 +3475,7 @@ mod tests {
         else {
             panic!("retry root must remain an integer");
         };
-        assert_eq!(original, BigInt::from(7));
+        assert_eq!(*original, BigInt::from(7));
     }
 
     #[test]
@@ -3560,7 +3564,7 @@ mod tests {
             else {
                 panic!("expected numeric intrinsic result");
             };
-            assert_eq!(value, BigInt::from(expected), "{op:?}");
+            assert_eq!(*value, BigInt::from(expected), "{op:?}");
         }
     }
 }

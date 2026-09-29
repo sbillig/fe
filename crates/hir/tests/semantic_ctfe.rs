@@ -531,7 +531,7 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
             SemConstValue::Scalar {
                 value: SemConstScalar::Bytes(bytes),
                 ..
-            } => bytes,
+            } => bytes.clone(),
             SemConstValue::Array { elems, .. } => elems
                 .iter()
                 .map(|elem| match elem.value(db) {
@@ -587,7 +587,7 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
             SemConstValue::Scalar {
                 value: SemConstScalar::Bool(flag),
                 ..
-            } => flag,
+            } => *flag,
             other => panic!("expected bool scalar const, got {other:?}"),
         }
     }
@@ -678,7 +678,7 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
         SemConstValue::Scalar {
             value: SemConstScalar::Int { value },
             ..
-        } => assert_eq!(value, num_bigint::BigInt::from(0x01000000434f4f4cu64)),
+        } => assert_eq!(*value, num_bigint::BigInt::from(0x01000000434f4f4cu64)),
         other => panic!("expected int scalar const, got {other:?}"),
     }
 
@@ -731,7 +731,7 @@ const fn truncated_concat() -> [u8; 6] {
         SemConstValue::Scalar {
             value: SemConstScalar::Bytes(bytes),
             ..
-        } => assert_eq!(bytes, vec![65, 66, 67, 68, 69, 70]),
+        } => assert_eq!(*bytes, vec![65, 66, 67, 68, 69, 70]),
         SemConstValue::Array { elems, .. } => {
             let bytes = elems
                 .iter()

@@ -24,7 +24,7 @@ pub(super) fn layout_const_param_uses<'db>(
     fn collect<'db>(db: &'db dyn HirAnalysisDb, value: SemConstId<'db>, uses: &mut Vec<TyId<'db>>) {
         match value.value(db) {
             SemConstValue::Description(term) => {
-                let const_ty = TyId::const_ty(db, term);
+                let const_ty = TyId::const_ty(db, *term);
                 if matches!(term.data(db), ConstTyData::TyParam(_, _)) && !uses.contains(&const_ty)
                 {
                     uses.push(const_ty);
@@ -32,12 +32,12 @@ pub(super) fn layout_const_param_uses<'db>(
             }
             SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => {
                 for element in elems {
-                    collect(db, element, uses);
+                    collect(db, *element, uses);
                 }
             }
             SemConstValue::Struct { fields, .. } | SemConstValue::Enum { fields, .. } => {
                 for field in fields {
-                    collect(db, field, uses);
+                    collect(db, *field, uses);
                 }
             }
             SemConstValue::Unit | SemConstValue::Scalar { .. } => {}

@@ -948,7 +948,7 @@ fn force_immutable_description<'db>(
 ) -> EvalResult<'db, SemConstId<'db>> {
     let fields = match value.value(db) {
         SemConstValue::Description(term) => {
-            return force_const_term_operand(db, TyId::const_ty(db, term), cx, origin, None);
+            return force_const_term_operand(db, TyId::const_ty(db, *term), cx, origin, None);
         }
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => elems,
         SemConstValue::Struct { fields, .. } | SemConstValue::Enum { fields, .. } => fields,
@@ -969,10 +969,10 @@ fn force_immutable_description<'db>(
         .collect::<EvalResult<'db, Vec<_>>>()?
         .into_boxed_slice();
     Ok(match value.value(db) {
-        SemConstValue::Tuple { ty, .. } => tuple_const(db, ty, fields),
-        SemConstValue::Array { ty, .. } => array_const(db, ty, fields),
-        SemConstValue::Struct { ty, .. } => struct_const(db, ty, fields),
-        SemConstValue::Enum { ty, variant, .. } => enum_const(db, ty, variant, fields),
+        SemConstValue::Tuple { ty, .. } => tuple_const(db, *ty, fields),
+        SemConstValue::Array { ty, .. } => array_const(db, *ty, fields),
+        SemConstValue::Struct { ty, .. } => struct_const(db, *ty, fields),
+        SemConstValue::Enum { ty, variant, .. } => enum_const(db, *ty, *variant, fields),
         _ => unreachable!("only aggregates reach recursive description forcing"),
     })
 }
@@ -1112,14 +1112,14 @@ fn term_integer<'db>(
         }
         .into());
     };
-    let Some((bits, signed)) = int_ty_shape(db, ty) else {
+    let Some((bits, signed)) = int_ty_shape(db, *ty) else {
         return Err(CtfeError::InvalidOperation {
             origin,
             message: "integer constant term operand has no integer type".into(),
         }
         .into());
     };
-    Ok(normalize_int_to_shape(value, bits, signed))
+    Ok(normalize_int_to_shape(value.clone(), bits, signed))
 }
 
 fn term_operation_error<'db>(

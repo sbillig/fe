@@ -158,7 +158,7 @@ fn assert_integer_result(
     else {
         panic!("expected an integer scalar: {:?}", value.value(db));
     };
-    assert_eq!(value, BigInt::from(expected));
+    assert_eq!(*value, BigInt::from(expected));
 }
 
 fn assert_signed_integer_result(
@@ -176,7 +176,7 @@ fn assert_signed_integer_result(
     else {
         panic!("expected a signed integer scalar");
     };
-    assert_eq!(value, BigInt::from(expected));
+    assert_eq!(*value, BigInt::from(expected));
 }
 
 fn assert_bool_result(
@@ -191,7 +191,7 @@ fn assert_bool_result(
         SemConstValue::Scalar {
             value: SemConstScalar::Bool(actual),
             ..
-        } if actual == expected
+        } if *actual == expected
     ));
 }
 
@@ -2474,7 +2474,7 @@ const fn pair() -> (u8, u8) { (1, 2) }
             else {
                 panic!("projection or cast must produce an integer")
             };
-            assert_eq!(value, BigInt::from(7));
+            assert_eq!(*value, BigInt::from(7));
         }
         let ConstRepr::Term(retained) = specialized.repr() else {
             panic!("specialization retains a term before forcing")

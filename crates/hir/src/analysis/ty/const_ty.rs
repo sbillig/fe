@@ -844,17 +844,17 @@ fn trait_inst_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, inst: TraitInstId
 fn sem_const_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, value: SemConstId<'db>) -> bool {
     match value.value(db) {
         SemConstValue::Unit => true,
-        SemConstValue::Scalar { ty, .. } => ty_is_fully_ground(db, ty),
-        SemConstValue::Description(term) => const_ty_is_fully_ground(db, term),
+        SemConstValue::Scalar { ty, .. } => ty_is_fully_ground(db, *ty),
+        SemConstValue::Description(term) => const_ty_is_fully_ground(db, *term),
         SemConstValue::Tuple { ty, elems } | SemConstValue::Array { ty, elems } => {
-            ty_is_fully_ground(db, ty)
+            ty_is_fully_ground(db, *ty)
                 && elems
                     .iter()
                     .copied()
                     .all(|elem| sem_const_is_fully_ground(db, elem))
         }
         SemConstValue::Struct { ty, fields } | SemConstValue::Enum { ty, fields, .. } => {
-            ty_is_fully_ground(db, ty)
+            ty_is_fully_ground(db, *ty)
                 && fields
                     .iter()
                     .copied()
@@ -1296,13 +1296,13 @@ fn canonicalize_sem_const_for_mode<'db>(
     env: ConstCanonEnv<'db>,
     mode: ConstCanonMode,
 ) -> SemConstId<'db> {
-    if let SemConstValue::Description(term) = value.value(db) {
+    if let &SemConstValue::Description(term) = value.value(db) {
         let term = canonicalize_const_ty_for_mode(db, term, env, mode);
         return sem_const_from_ty(db, TyId::const_ty(db, term))
             .unwrap_or_else(|| SemConstId::new(db, SemConstValue::Description(term)));
     }
     let canonicalize = |ty| canonicalize_ty_for_mode(db, ty, env, mode);
-    let children = |children: Box<[SemConstId<'db>]>| {
+    let children = |children: &[SemConstId<'db>]| {
         children
             .iter()
             .copied()
@@ -1313,20 +1313,20 @@ fn canonicalize_sem_const_for_mode<'db>(
     let value = match value.value(db) {
         SemConstValue::Unit => SemConstValue::Unit,
         SemConstValue::Scalar { ty, value } => SemConstValue::Scalar {
-            ty: canonicalize(ty),
-            value,
+            ty: canonicalize(*ty),
+            value: value.clone(),
         },
         SemConstValue::Description(..) => unreachable!(),
         SemConstValue::Tuple { ty, elems } => SemConstValue::Tuple {
-            ty: canonicalize(ty),
+            ty: canonicalize(*ty),
             elems: children(elems),
         },
         SemConstValue::Struct { ty, fields } => SemConstValue::Struct {
-            ty: canonicalize(ty),
+            ty: canonicalize(*ty),
             fields: children(fields),
         },
         SemConstValue::Array { ty, elems } => SemConstValue::Array {
-            ty: canonicalize(ty),
+            ty: canonicalize(*ty),
             elems: children(elems),
         },
         SemConstValue::Enum {
@@ -1334,8 +1334,8 @@ fn canonicalize_sem_const_for_mode<'db>(
             variant,
             fields,
         } => SemConstValue::Enum {
-            ty: canonicalize(ty),
-            variant,
+            ty: canonicalize(*ty),
+            variant: *variant,
             fields: children(fields),
         },
     };
@@ -2328,7 +2328,7 @@ pub(crate) fn const_ty_from_sem_const<'db>(
     db: &'db dyn HirAnalysisDb,
     value: SemConstId<'db>,
 ) -> ConstTyId<'db> {
-    if let SemConstValue::Description(term) = value.value(db) {
+    if let &SemConstValue::Description(term) = value.value(db) {
         if crate::analysis::semantic::consts::verify_sem_const_description_shape(db, value).is_err()
         {
             return ConstTyId::invalid(db, InvalidCause::Other);
@@ -2784,7 +2784,7 @@ impl<'db> ConstTyId<'db> {
             SemConstValue::Scalar {
                 value: SemConstScalar::Int { value },
                 ..
-            } => Some(value),
+            } => Some(value.clone()),
             _ => None,
         }
     }

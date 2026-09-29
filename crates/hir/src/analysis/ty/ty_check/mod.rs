@@ -512,7 +512,7 @@ fn static_assert_bool_value<'db>(
     else {
         return None;
     };
-    Some(value)
+    Some(*value)
 }
 
 fn static_assert_ignorable_type_diags<'db>(
