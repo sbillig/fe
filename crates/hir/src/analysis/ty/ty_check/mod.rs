@@ -633,8 +633,7 @@ pub fn check_static_assert<'db>(
         expected,
     };
     let (body_diags, typed_body) = check_anon_const_body(db, condition, expected);
-    let ignorable_body_diags = static_assert_ignorable_type_diags(db, body_diags);
-    if !body_diags.is_empty() && !ignorable_body_diags {
+    if !diags_allow_evaluation(db, body_diags) {
         return body_diags.clone();
     }
 
@@ -689,18 +688,17 @@ fn static_assert_bool_value<'db>(
     Some(value)
 }
 
-fn static_assert_ignorable_type_diags<'db>(
-    db: &'db dyn HirAnalysisDb,
-    diags: &[FuncBodyDiag<'db>],
-) -> bool {
-    !diags.is_empty()
-        && diags.iter().all(|diag| {
-            matches!(
-                diag,
-                FuncBodyDiag::Body(BodyDiag::TypeAnnotationNeeded { ty, .. })
-                    if ty.is_integral_var(db)
-            )
-        })
+/// Whether a const body with these diagnostics can still be evaluated: it
+/// has none, or only integer literals whose type inference left open, which
+/// evaluation defaults.
+fn diags_allow_evaluation<'db>(db: &'db dyn HirAnalysisDb, diags: &[FuncBodyDiag<'db>]) -> bool {
+    diags.iter().all(|diag| {
+        matches!(
+            diag,
+            FuncBodyDiag::Body(BodyDiag::TypeAnnotationNeeded { ty, .. })
+                if ty.is_integral_var(db)
+        )
+    })
 }
 
 fn static_assert_comparison_values<'db>(
@@ -746,7 +744,7 @@ fn eval_static_assert_comparison_operand<'db>(
     }
     let owner = BodyOwner::AnonConstBody { body, expected };
     let body_diags = &check_anon_const_body(db, body, expected).0;
-    if !body_diags.is_empty() && !static_assert_ignorable_type_diags(db, body_diags) {
+    if !diags_allow_evaluation(db, body_diags) {
         return None;
     }
     eval_body_owner_const(db, owner, GenericSubst::none(db)).into_ready()
@@ -757,7 +755,7 @@ pub(super) fn check_body<'db>(
     owner: BodyOwner<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
     let (mut diags, mut typed_body) = infer_body(db, owner).clone();
-    if diags.is_empty() || static_assert_ignorable_type_diags(db, &diags) {
+    if diags_allow_evaluation(db, &diags) {
         diags.extend(const_requirements::check_body_requirements(db, owner, &typed_body).diags);
     }
     typed_body.has_diagnostics = !diags.is_empty();

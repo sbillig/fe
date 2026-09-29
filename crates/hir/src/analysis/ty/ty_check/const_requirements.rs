@@ -263,7 +263,7 @@ pub(super) fn check_predicate_formation<'db>(
         };
     }
     let mut recursive = false;
-    if diags.is_empty() || static_assert_ignorable_type_diags(db, &diags) {
+    if diags_allow_evaluation(db, &diags) {
         diags.extend(
             crate::analysis::ty::const_check::check_const_body_expressions(db, body, &typed),
         );
@@ -275,7 +275,7 @@ pub(super) fn check_predicate_formation<'db>(
     let status = if recursive {
         diags = vec![BodyDiag::RecursiveConstRequirement(body.span().into()).into()];
         FormationStatus::Recursive
-    } else if diags.is_empty() || static_assert_ignorable_type_diags(db, &diags) {
+    } else if diags_allow_evaluation(db, &diags) {
         FormationStatus::WellFormed
     } else {
         FormationStatus::IllFormed
@@ -584,7 +584,7 @@ fn anon_const_position_check<'db>(
     use crate::analysis::ty::const_ty::{ConstBodyFailure, const_body_failure};
     let owner = BodyOwner::AnonConstBody { body, expected };
     let (diags, typed) = infer_body(db, owner);
-    if diags.is_empty() || static_assert_ignorable_type_diags(db, diags) {
+    if diags_allow_evaluation(db, diags) {
         return check_body_requirements(db, owner, typed);
     }
     // A lone path to a constant is read as that constant, not checked as a
