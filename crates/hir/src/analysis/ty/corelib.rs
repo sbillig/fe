@@ -495,6 +495,7 @@ define_runtime_intrinsics! {
     AddMod => (Core, ["num", "addmod"], NO_MEMORY_ACCESSES, None),
     MulMod => (Core, ["num", "mulmod"], NO_MEMORY_ACCESSES, None),
     LeadingZeros => (Core, ["num", "leading_zeros"], NO_MEMORY_ACCESSES, None),
+    BlackBox => (Core, ["hint", "black_box"], NO_MEMORY_ACCESSES, None),
     Byte => (Std, ["evm", "ops", "byte"], NO_MEMORY_ACCESSES, None),
     SignExtend => (Std, ["evm", "ops", "signextend"], NO_MEMORY_ACCESSES, None),
     Address => (Std, ["evm", "ops", "address"], NO_MEMORY_ACCESSES, None),

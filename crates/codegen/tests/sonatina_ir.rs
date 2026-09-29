@@ -179,6 +179,65 @@ fn first_class_pointer_fixture_lowers_to_sonatina_ir(fixture: Fixture<&str>) {
     );
 }
 
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "black_box_keeps_measured_work_between_gas_reads.fe")]
+fn black_box_keeps_measured_work_between_gas_reads(fixture: Fixture<&str>) {
+    let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir_optimized(db, top_mod, OptLevel::O2, None)
+            .expect("optimized Sonatina IR should emit")
+    });
+
+    // Each recv arm reads the gas twice in one block; collect the instruction
+    // names between the two reads.
+    let measured: Vec<Vec<&str>> = ir
+        .split("\n\n")
+        .filter_map(|block| {
+            let insts: Vec<&str> = block
+                .lines()
+                .filter_map(|line| line.split(" = ").nth(1)?.split_whitespace().next())
+                .map(|inst| inst.trim_end_matches(';'))
+                .collect();
+            let first = insts.iter().position(|&inst| inst == "evm_gas")?;
+            let len = insts[first + 1..]
+                .iter()
+                .position(|&inst| inst == "evm_gas")?;
+            Some(insts[first + 1..first + 1 + len].to_vec())
+        })
+        .collect();
+    let [kept, discarded] = [true, false].map(|boxed| {
+        measured
+            .iter()
+            .find(|insts| insts.contains(&"black_box") == boxed)
+            .unwrap_or_else(|| panic!("missing measured arm (black_box: {boxed}):\n{ir}"))
+    });
+
+    assert!(
+        kept.iter()
+            .position(|&inst| inst == "xor")
+            .is_some_and(|work| {
+                kept[..work].contains(&"black_box") && kept[work..].contains(&"black_box")
+            }),
+        "the boxed input, the work and the boxed result must stay between the gas reads: \
+         {kept:?}\n{ir}"
+    );
+    assert!(
+        !discarded.contains(&"xor"),
+        "discarded pure work is expected to be removed: {discarded:?}\n{ir}"
+    );
+}
+
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "black_box_rejects_aggregate_argument.fe")]
+fn black_box_rejects_aggregate_argument(fixture: Fixture<&str>) {
+    let err = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod).expect_err("black_box only accepts scalars")
+    });
+    let message = err.to_string();
+    assert!(
+        message.contains("`core::hint::black_box` requires a scalar argument")
+            && message.contains("`Pair`"),
+        "unexpected error message:\n{message}"
+    );
+}
+
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "fixed_mem_buffer_exposes_constant_nonescaping_malloc_to_backend.fe")]
 fn fixed_mem_buffer_exposes_constant_nonescaping_malloc_to_backend(fixture: Fixture<&str>) {
     let ir = with_top_mod_for_source(&fixture, |db, top_mod| {

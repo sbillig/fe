@@ -1311,6 +1311,10 @@ pub enum RuntimeBuiltin<'db> {
     LeadingZeros {
         value: RValueId,
     },
+    /// Returns a scalar unchanged while hiding it from the optimizer.
+    BlackBox {
+        value: RValueId,
+    },
     Byte {
         pos: RValueId,
         value: RValueId,
