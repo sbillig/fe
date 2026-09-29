@@ -1,7 +1,7 @@
 // Tests for the revert/returndata helpers: `bubble_revert_or`,
 // `encode_error`, `revert_bytes`, `revert_empty`, `revert_selector`,
-// `is_error`, `decode_error_string`, `decode_panic` and the `ReturnData`
-// byte input.
+// `has_selector`, `is_error`, `decode_error_string`, `decode_panic` and the
+// `ReturnData` byte input.
 
 use core::abi::store_word
 use core::message::MsgVariant
@@ -14,7 +14,9 @@ use std::evm::{
     bubble_revert_or,
     decode_error_string,
     decode_panic,
+    copy_returndata,
     encode_error,
+    has_selector,
     is_error,
     revert_bytes,
     revert_empty,
@@ -289,6 +291,25 @@ fn test_is_error_static() {
 }
 
 #[test]
+fn test_has_selector() {
+    // The selector alone decides, whatever the length of the rest.
+    assert!(has_selector<Insufficient>(insufficient_data(68)))
+    assert!(has_selector<Insufficient>(insufficient_data(4)))
+    assert!(has_selector<Insufficient>(insufficient_data(67)))
+    assert!(has_selector<Insufficient>(insufficient_data(100)))
+    assert!(!is_error<Insufficient>(insufficient_data(4)))
+    assert!(!is_error<Insufficient>(insufficient_data(100)))
+    // Fewer than 4 bytes never match.
+    assert!(!has_selector<Insufficient>(insufficient_data(3)))
+    assert!(!has_selector<Insufficient>(ptr::MemSpan::empty()))
+    // Other selectors do not match.
+    assert!(!has_selector<Unauthorized>(insufficient_data(68)))
+    assert!(!has_selector<Insufficient>(panic_data(1, 68)))
+    let unauthorized = encode_error(Unauthorized {})
+    assert!(has_selector<Unauthorized>(unauthorized.span()))
+}
+
+#[test]
 fn test_is_error_dynamic() {
     let encoded = encode_error(
         WithData { code: 9, data: Bytes::from_word_prefix(word: 0xab << 248, len: 1) },
@@ -500,6 +521,16 @@ fn test_returndata_bounds() uses (evm: mut Evm) {
     let out = scratch(8)
     rd.copy_to_memory(dest: out, src_offset: 32, len: 8)
     assert!(evm.mload(out) == 0x2122232425262728 << 192)
+    // Zero-length copies at the end of a view, including an empty view
+    // rebased past the end, are no-ops rather than halting.
+    rd.copy_to_memory(dest: out, src_offset: 40, len: 0)
+    ReturnData::with_base(41).copy_to_memory(dest: out, src_offset: 0, len: 0)
+    ReturnData::with_base(41).copy_to_memory_unchecked(
+        dest: out,
+        src_offset: 0,
+        len: 0,
+    )
+    assert!(evm.mload(out) == 0x2122232425262728 << 192)
 }
 
 #[test(should_revert)]
@@ -525,4 +556,64 @@ fn test_returndata_decode_short_reverts() uses (evm: mut Evm) {
         ),
     )
     let _: (u256, u256, u256) = ReturnData::with_base(4).decode()
+}
+
+#[test]
+fn test_returndata_to_bytes() uses (evm: mut Evm) {
+    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+
+    // Unaligned data: the copy is exact and the padding is zero.
+    let buf = scratch(40)
+    put(
+        buf,
+        0,
+        0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20,
+    )
+    put(buf, 32, 0x2122232425262728 << 192)
+    assert!(
+        !raw_call_mock(
+            mock,
+            MockMsg::RevertWith { data: Bytes::from_payload(source: span(buf, 40)) },
+        ),
+    )
+    let bytes = ReturnData::new().to_bytes()
+    assert!(bytes.len() == 40)
+    assert!(bytes.encoded_size() == 96)
+    assert!(bytes.encoded_span().word_at(0) == 40)
+    assert!(
+        bytes.encoded_span().word_at(64) == 0x2122232425262728 << 192,
+    )
+    assert!(span_eq(bytes.payload_span(), span(buf, 40)))
+    assert!(
+        bytes == Bytes::from_payload(source: copy_returndata().span()),
+    )
+
+    // A rebased view copies from `base` on.
+    let tail = ReturnData::with_base(36).to_bytes()
+    assert!(tail.len() == 4 && tail.encoded_size() == 64)
+    assert!(tail.encoded_span().word_at(32) == 0x25262728 << 224)
+    let none = ReturnData::with_base(41).to_bytes()
+    assert!(none.len() == 0 && none.encoded_size() == 32)
+
+    // Word-aligned data needs no padding.
+    assert!(
+        !raw_call_mock(
+            mock,
+            MockMsg::FailInsufficient { available: 3, required: 4 },
+        ),
+    )
+    let aligned = ReturnData::with_base(4).to_bytes()
+    assert!(aligned.len() == 64 && aligned.encoded_size() == 96)
+    assert!(aligned.encoded_span().word_at(32) == 3)
+    assert!(aligned.encoded_span().word_at(64) == 4)
+    let whole = ReturnData::new().to_bytes()
+    assert!(
+        whole.len() == 68 && is_error<Insufficient>(whole.payload_span()),
+    )
+
+    // No returndata.
+    assert!(!raw_call_mock(mock, MockMsg::FailEmpty {}))
+    let empty = ReturnData::new().to_bytes()
+    assert!(empty.len() == 0 && empty.encoded_size() == 32)
+    assert!(empty.encoded_span().word_at(0) == 0)
 }

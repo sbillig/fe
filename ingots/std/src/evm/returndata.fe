@@ -1,4 +1,4 @@
-use core::abi::{AbiSize, ByteInput, Decode, DynString, store_word}
+use core::abi::{AbiSize, ByteInput, Bytes, Decode, DynString, store_word}
 use core::Copy
 use core::error::ErrorVariant
 use core::num::IntDowncast
@@ -44,6 +44,31 @@ impl ReturnData {
     /// rules as `decode_returndata`. Malformed data reverts without data.
     pub fn decode<T>(self) -> T where T: Decode<Sol> + AbiSize {
         decode_output_at(self, 0)
+    }
+
+    /// The bytes visible through this view, copied into a new ABI `Bytes`
+    /// with one `RETURNDATACOPY`, e.g. to keep a failed call's revert data
+    /// past later calls or pass it on as a `bytes` value.
+    ///
+    /// `Bytes::from_payload(copy_returndata().span())` builds the same value
+    /// but copies the data twice.
+    pub fn to_bytes(self) -> Bytes {
+        let len = self.len()
+        let padded = (len + 31) / 32 * 32
+        let data = ptr::alloc_bytes(32 + padded)
+        store_word(ptr: data, value: len)
+        if len != 0 {
+            if padded != len {
+                // The copy leaves the padding of the last word untouched.
+                store_word(ptr: ptr::offset_bytes(data, padded), value: 0)
+            }
+            returndatacopy(
+                dest: ptr::offset_bytes(data, 32),
+                offset: self.base,
+                len: len,
+            )
+        }
+        Bytes::from_abi_tail(data: data, len: len, size: 32 + padded)
     }
 }
 
@@ -105,12 +130,22 @@ impl ByteInput for ReturnData {
         if src_offset > input_len || len > input_len - src_offset {
             revert_empty()
         }
+        // `RETURNDATACOPY` halts when `base + src_offset` is past the buffer
+        // even for zero bytes, which a view rebased past the end allows.
+        if len == 0 {
+            return
+        }
         returndatacopy(dest: dest, offset: self.base + src_offset, len: len)
     }
 
     #[arithmetic(unchecked)]
     #[inline(always)]
     fn copy_to_memory_unchecked(self, dest: *u8, src_offset: u256, len: u256) {
+        // As in `copy_to_memory`: an empty range of a view rebased past the
+        // end is valid, but `RETURNDATACOPY` would halt on it.
+        if len == 0 {
+            return
+        }
         returndatacopy(dest: dest, offset: self.base + src_offset, len: len)
     }
 }
@@ -127,23 +162,36 @@ pub fn revert_selector<I: ByteInput>(_ data: I) -> Option<u32> {
     Option::Some((data.word_at(0) >> 224) as u32)
 }
 
+/// Whether `data` starts with the selector of the custom error `E`.
+///
+/// Only the selector is compared: unlike `is_error`, the length of the rest
+/// is not checked, so data that starts with `E`'s selector but is too short
+/// or too long to be an `E` still matches, like Solidity's
+/// `bytes4(reason) == E.selector`. Use `is_error` to also require the length
+/// of an encoded `E`.
+///
+/// `data` is typically `CallOutcome::returndata()`; for the live returndata
+/// buffer compare `revert_selector(ReturnData::new())` with `E`'s selector.
+pub fn has_selector<E>(_ data: MemSpan) -> bool where E: ErrorVariant<Sol> {
+    data.len() >= 4 && (data.word_at(0) >> 224) as u32 == <E as ErrorVariant<Sol>>::SELECTOR
+}
+
 /// Whether `data` has the shape of the custom error `E`: it starts with
 /// `E`'s selector, and the ABI payload after it is exactly `E`'s encoded
 /// size when `E` is static, or at least `E`'s head size when `E` has
 /// dynamic fields (whose tails are not validated).
 ///
 /// For a static `E` this is exactly "`data` is some `revert_error(E {..})`
-/// payload", without decoding field values. Use `revert_selector` to match
+/// payload", without decoding field values. Use `has_selector` to match
 /// on the selector alone.
 ///
 /// `data` is typically `CallOutcome::returndata()`; for the live returndata
 /// buffer use `revert_selector(ReturnData::new())` and `ReturnData::len`.
 pub fn is_error<E>(_ data: MemSpan) -> bool where E: ErrorVariant<Sol> {
-    let len = data.len()
-    if len < 4 || (data.word_at(0) >> 224) as u32 != <E as ErrorVariant<Sol>>::SELECTOR {
+    if !has_selector<E>(data) {
         return false
     }
-    let payload_len = len - 4
+    let payload_len = data.len() - 4
     if E::IS_DYNAMIC {
         payload_len >= E::HEAD_SIZE
     } else {
