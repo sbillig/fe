@@ -99,6 +99,26 @@ fn test_dirty_bool_can_be_replaced() {
     assert!(values.to_dyn_array().get(0))
 }
 
+#[test]
+fn test_tuple_elements_of_every_arity() {
+    let mut single: MemVec<(u256,)> = MemVec::zeroed(2)
+    single.set(index: 1, value: (7,))
+    assert!(single.to_dyn_array().get(1).0 == 7)
+
+    let mut nine: MemVec<(u8, u8, u8, u8, u8, u8, u8, u8, u256)> = MemVec::zeroed(2)
+    nine.set(index: 1, value: (1, 2, 3, 4, 5, 6, 7, 8, 9))
+    let array = nine.to_dyn_array()
+    assert!(array.encoded_size() == 32 + 2 * 9 * 32)
+    assert!(array.get(1).8 == 9)
+    assert!(array.get(0).8 == 0)
+
+    // Core decodes tuples up to arity 12.
+    let mut twelve: MemVec<(u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u256)> = MemVec::zeroed(1)
+    twelve.set(index: 0, value: (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12))
+    assert!(twelve.get(0).0 == 1)
+    assert!(twelve.to_dyn_array().get(0).11 == 12)
+}
+
 #[test(should_revert, panic = 0x32)]
 fn test_empty_memvec_get_panics() {
     let values: MemVec<u256> = MemVec::zeroed(0)
