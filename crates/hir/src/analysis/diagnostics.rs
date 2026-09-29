@@ -3341,14 +3341,24 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary,
                 predicate,
                 reason,
-            } => const_requirement_diag(
-                severity,
-                primary,
-                predicate,
-                reason.message(),
-                error_code,
-                db,
-            ),
+                inferred,
+            } => {
+                let mut diag = const_requirement_diag(
+                    severity,
+                    primary,
+                    predicate,
+                    reason.message(),
+                    error_code,
+                    db,
+                );
+                if let Some(ty) = inferred {
+                    diag.notes.push(format!(
+                        "the type `{}` is inferred here",
+                        ty.pretty_print(db)
+                    ));
+                }
+                diag
+            }
             Self::RecursiveConstRequirement(span) => primary_diag(
                 severity,
                 "recursive const requirement",

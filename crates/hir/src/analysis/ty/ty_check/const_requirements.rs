@@ -251,7 +251,19 @@ impl<'db> RequirementCheck<'db> {
     ) {
         self.recursive |= failure == RequirementFailure::Recursive;
         self.diags
-            .push(unmet_requirement_diag(primary, predicate, failure));
+            .push(unmet_requirement_diag(primary, predicate, failure, None));
+    }
+
+    /// Reports the unmet requirement of a type that only inference gives
+    /// at `primary`, naming the type.
+    fn unmet_inferred(&mut self, primary: DynLazySpan<'db>, unmet: &TypeRequirementFailure<'db>) {
+        self.recursive |= unmet.failure == RequirementFailure::Recursive;
+        self.diags.push(unmet_requirement_diag(
+            primary,
+            unmet.predicate,
+            unmet.failure,
+            Some(unmet.ty),
+        ));
     }
 
     /// Reports a type application's unmet requirement, and keeps the
@@ -276,11 +288,13 @@ fn unmet_requirement_diag<'db>(
     primary: DynLazySpan<'db>,
     predicate: Body<'db>,
     failure: RequirementFailure,
+    inferred: Option<TyId<'db>>,
 ) -> FuncBodyDiag<'db> {
     BodyDiag::ConstRequirementNotSatisfied {
         primary,
         predicate: predicate.span().into(),
         reason: failure,
+        inferred,
     }
     .into()
 }
@@ -702,7 +716,7 @@ pub(super) fn check_body_requirements<'db>(
     for (expr, ty) in inferred {
         while let Some(unmet) = check_type_requirements(db, ty, owner.scope(), &reported) {
             reported.insert(unmet.ty);
-            check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
+            check.unmet_inferred(expr.span(body).into(), &unmet);
         }
     }
     for (nested, expected) in expression_const_bodies(db, body, typed) {
@@ -1743,6 +1757,7 @@ fn written_type_check_query<'db>(
                         written.span.clone(),
                         unmet.predicate,
                         unmet.failure,
+                        None,
                     ));
                     unmet.ty
                 })

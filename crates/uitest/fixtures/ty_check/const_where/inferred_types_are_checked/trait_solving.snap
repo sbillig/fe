@@ -20,6 +20,8 @@ error[8-0093]: const requirement is not satisfied
    ·
 13 │ fn solved() -> usize { call(x: Holder<0> {}) }
    │                        ^^^^ condition evaluated to `false`
+   │
+   = the type `Bounded<0>` is inferred here
 
 error[8-0093]: const requirement is not satisfied
    ┌─ trait_solving.fe:15:13
@@ -29,6 +31,8 @@ error[8-0093]: const requirement is not satisfied
    ·
 15 │     let f = call
    │             ^^^^ condition evaluated to `false`
+   │
+   = the type `Bounded<0>` is inferred here
 
 error[8-0093]: const requirement is not satisfied
    ┌─ trait_solving.fe:21:24
@@ -38,3 +42,5 @@ error[8-0093]: const requirement is not satisfied
    ·
 21 │ fn method() -> usize { Holder<0> {}.method(x: Holder<0> {}) }
    │                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+   │
+   = the type `Bounded<0>` is inferred here

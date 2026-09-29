@@ -563,6 +563,9 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         predicate: DynLazySpan<'db>,
         reason: crate::analysis::ty::ty_check::RequirementFailure,
+        /// The failing type, when only inference gives it at `primary`, so
+        /// that nothing written there shows it.
+        inferred: Option<TyId<'db>>,
     },
     StaticAssertFailed {
         primary: DynLazySpan<'db>,

@@ -65,6 +65,8 @@ error[8-0093]: const requirement is not satisfied
    ·
 30 │     let _h = call(Holder<0> {})
    │              ^^^^ condition evaluated to `false`
+   │
+   = the type `Bounded<0>` is inferred here
 
 error[8-0093]: const requirement is not satisfied
    ┌─ trait_arguments.fe:44:10
