@@ -736,12 +736,8 @@ impl<'db> TyChecker<'db> {
                     .unwrap_or(ty)
             })
             .collect::<Vec<_>>();
-        let fields = self.check_tuple_like_pattern_elems(
-            elems,
-            &elem_tys,
-            rest_range.clone(),
-            Some(variant_ty),
-        );
+        let fields =
+            self.check_tuple_like_pattern_elems(elems, &elem_tys, rest_range, Some(variant_ty));
         if actual_elems.len() != expected_len {
             let diag = BodyDiag::MismatchedFieldCount {
                 primary: pat.span(self.body()).into(),

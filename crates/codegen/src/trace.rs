@@ -1974,7 +1974,7 @@ mod tests {
         )
         .unwrap();
         let mut validated_facts = vec![TraceFact::OriginNode(OriginNodeFact::new(
-            postopt.clone(),
+            postopt,
             OriginNodeKind::new(SONATINA_POSTOPT_INST_KIND),
         ))];
         validated_facts.extend(facts.clone());
@@ -2105,7 +2105,7 @@ mod tests {
             0,
             "iadd",
         ))];
-        let known = [actual_postopt.clone()]
+        let known = [actual_postopt]
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>();
         let observability = SectionObservability {

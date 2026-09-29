@@ -86,7 +86,7 @@ impl<'db> DocExtractor<'db> {
         // the ingot name so a nested `foo::lib` submodule is left alone.
         if matches!(doc_item.kind, DocItemKind::Module)
             && doc_item.name == "lib"
-            && let Some(cfg_name) = ingot.config(self.db).and_then(|c| c.metadata.name.clone())
+            && let Some(cfg_name) = ingot.config(self.db).and_then(|c| c.metadata.name)
             && doc_item.path == cfg_name.as_str()
         {
             doc_item.name = cfg_name.to_string();

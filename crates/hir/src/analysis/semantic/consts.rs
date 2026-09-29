@@ -656,8 +656,8 @@ fn reify_runtime_const_impl<'db>(
             };
             match value {
                 SemConstScalar::Bool(value) => bool_const(db, value),
-                SemConstScalar::Int { value } => int_const(db, ty, value.clone()),
-                SemConstScalar::Bytes(bytes) => bytes_const(db, ty, bytes.clone()),
+                SemConstScalar::Int { value } => int_const(db, ty, value),
+                SemConstScalar::Bytes(bytes) => bytes_const(db, ty, bytes),
             }
         }
         SemConstValue::Description(term) => {

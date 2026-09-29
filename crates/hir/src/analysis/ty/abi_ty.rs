@@ -325,7 +325,7 @@ fn array_len_to_string<'db>(
     match demand_concrete_array_length(db, ty, source) {
         Ok(Some(value)) => Ok(value.to_string()),
         Err(ConcreteArrayLengthError::Invalid(cause)) => Err(AbiTypeError::InvalidConst {
-            message: cause.pretty_print(db).to_string(),
+            message: cause.pretty_print(db),
             cause,
         }),
         Ok(None) | Err(ConcreteArrayLengthError::Mismatch) => {

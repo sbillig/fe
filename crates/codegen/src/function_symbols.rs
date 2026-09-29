@@ -367,14 +367,12 @@ fn readable_owner_context<'db>(db: &'db DriverDataBase, owner: BodyOwner<'db>) -
 fn readable_type_component<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> Option<String> {
     let base = ty.base_ty(db);
     match base.data(db) {
-        TyData::TyBase(TyBase::Adt(adt)) => adt
-            .adt_ref(db)
-            .name(db)
-            .map(|name| name.data(db).to_string()),
-        TyData::TyBase(TyBase::Contract(contract)) => contract
-            .name(db)
-            .to_opt()
-            .map(|name| name.data(db).to_string()),
+        TyData::TyBase(TyBase::Adt(adt)) => {
+            adt.adt_ref(db).name(db).map(|name| name.data(db).clone())
+        }
+        TyData::TyBase(TyBase::Contract(contract)) => {
+            contract.name(db).to_opt().map(|name| name.data(db).clone())
+        }
         TyData::TyBase(TyBase::Prim(_) | TyBase::Func(_))
         | TyData::TyParam(_)
         | TyData::QualifiedTy(_) => {

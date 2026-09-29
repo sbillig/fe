@@ -44,7 +44,7 @@ impl Workspace {
     }
 
     pub fn get(&self, db: &dyn InputDb, url: &Url) -> Option<File> {
-        self.files(db).get(url).cloned()
+        self.files(db).get(url).copied()
     }
 
     pub fn remove(&self, db: &mut dyn InputDb, url: &Url) -> Option<File> {

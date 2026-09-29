@@ -1677,7 +1677,7 @@ impl<'db> RuntimeProgramView<'db> for &'db dyn MirDb {
     }
 
     fn body(&self, id: RuntimeInstance<'db>) -> RuntimeBody<'db> {
-        id.body(*self).clone()
+        id.body(*self)
     }
 
     fn layout(&self, id: LayoutId<'db>) -> Layout<'db> {

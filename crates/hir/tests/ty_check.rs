@@ -1238,11 +1238,7 @@ fn collect_body_props<'db>(
         }
 
         let ty = typed_body.expr_ty(db, expr);
-        prop_formatter.push_prop(
-            body.top_mod(db),
-            span.into(),
-            ty.pretty_print(db).to_string(),
-        );
+        prop_formatter.push_prop(body.top_mod(db), span.into(), ty.pretty_print(db).clone());
     }
 
     for pat in body.pats(db).keys() {
@@ -1252,11 +1248,7 @@ fn collect_body_props<'db>(
         }
 
         let ty = typed_body.pat_ty(db, pat);
-        prop_formatter.push_prop(
-            body.top_mod(db),
-            span.into(),
-            ty.pretty_print(db).to_string(),
-        );
+        prop_formatter.push_prop(body.top_mod(db), span.into(), ty.pretty_print(db).clone());
     }
 }
 

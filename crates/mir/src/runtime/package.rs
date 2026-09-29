@@ -608,12 +608,7 @@ fn manual_contract_objects<'db>(
     let high_level_names = top_mod
         .all_contracts(db)
         .iter()
-        .filter_map(|contract| {
-            contract
-                .name(db)
-                .to_opt()
-                .map(|name| name.data(db).to_string())
-        })
+        .filter_map(|contract| contract.name(db).to_opt().map(|name| name.data(db).clone()))
         .collect::<FxHashSet<_>>();
     for contract_name in by_contract.keys() {
         if high_level_names.contains(contract_name) {
@@ -1134,7 +1129,7 @@ fn rewrite_object_embeds<'db>(
 ) -> RuntimeObject<'db> {
     let section_refs = code_region_map
         .iter()
-        .map(|(region, resolved)| (*region, resolved.source(db).clone()))
+        .map(|(region, resolved)| (*region, resolved.source(db)))
         .collect::<FxHashMap<_, _>>();
     let sections = object
         .sections(db)
@@ -1149,14 +1144,14 @@ fn rewrite_object_embeds<'db>(
                 &reachable,
                 &section_refs,
                 RuntimeSectionRef::Local {
-                    object: object.name(db).clone(),
+                    object: object.name(db),
                     section: section.name.clone(),
                 },
             );
             section
         })
         .collect();
-    make_runtime_object(db, object.name(db).clone(), sections)
+    make_runtime_object(db, object.name(db), sections)
 }
 
 fn resolve_code_regions<'db>(
@@ -1182,7 +1177,7 @@ fn resolve_code_regions<'db>(
         }
     }
 
-    resolved.sort_by_key(|region| region.symbol(db).clone());
+    resolved.sort_by_key(|region| region.symbol(db));
     resolved
 }
 
@@ -2652,7 +2647,7 @@ pub fn main() -> i32 {
             panic!("recv wrapper should be synthetic");
         };
         match synthetic.spec(db) {
-            RuntimeSyntheticSpec::ContractRecvAbi { plan } => plan.clone(),
+            RuntimeSyntheticSpec::ContractRecvAbi { plan } => plan,
             other => panic!("expected recv wrapper synthetic spec, got {other:?}"),
         }
     }
@@ -2886,7 +2881,7 @@ fn usize_layout_maps_lower() {
         let mut names = package
             .objects(db)
             .into_iter()
-            .map(|object| object.name(db).clone())
+            .map(|object| object.name(db))
             .collect::<Vec<_>>();
         names.sort();
         names
@@ -2896,7 +2891,7 @@ fn usize_layout_maps_lower() {
         let mut names = package
             .root_objects(db)
             .into_iter()
-            .map(|object| object.name(db).clone())
+            .map(|object| object.name(db))
             .collect::<Vec<_>>();
         names.sort();
         names

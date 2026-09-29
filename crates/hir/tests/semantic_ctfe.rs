@@ -313,7 +313,7 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
             SemConstValue::Scalar {
                 value: SemConstScalar::Bytes(bytes),
                 ..
-            } => bytes.clone(),
+            } => bytes,
             SemConstValue::Array { elems, .. } => elems
                 .iter()
                 .map(|elem| match elem.value(db) {
@@ -429,7 +429,7 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
                 SemConstValue::Scalar {
                     value: SemConstScalar::Int { value },
                     ..
-                } => Some(value.clone()),
+                } => Some(value),
                 _ => None,
             });
         let s_word = eval_func(&db, find_func(&db, top_mod, "s_word_in_eq_from_bytes"))
@@ -438,15 +438,15 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
                 SemConstValue::Scalar {
                     value: SemConstScalar::Int { value },
                     ..
-                } => Some(value.clone()),
+                } => Some(value),
                 _ => None,
             });
         let rhs_value_eq = eval_func(&db, find_func(&db, top_mod, "rhs_value_in_eq_from_bytes"))
             .into_ready()
-            .map(|value| value.value(&db).clone());
+            .map(|value| value.value(&db));
         let s_value_eq = eval_func(&db, find_func(&db, top_mod, "s_value_in_eq_from_bytes"))
             .into_ready()
-            .map(|value| value.value(&db).clone());
+            .map(|value| value.value(&db));
         panic!(
             "unexpected equality results: eq_from_bytes_matches_literal={eq_from_bytes} sem_const_eq(lit4)={sem_eq} sem_const_eq(lit8)={sem_eq_lit8}\nfrom_bytes_value={from_dbg}\nliteral_value_4={lit_dbg}\nliteral_value_8={:?}\ns_word_in_eq_from_bytes={s_word:?}\nrhs_word_in_eq_from_bytes={rhs_word:?}\ns_value_in_eq_from_bytes={s_value_eq:?}\nrhs_value_in_eq_from_bytes={rhs_value_eq:?}",
             literal_8_const.value(&db),

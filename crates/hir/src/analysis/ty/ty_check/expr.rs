@@ -2521,7 +2521,6 @@ impl<'db> TyChecker<'db> {
             assumptions,
         );
         crate::analysis::ty::trait_resolution::is_goal_query_satisfiable(self.db, solve_cx, &query)
-            .clone()
     }
 
     pub(super) fn commit_trait_goal_solution(

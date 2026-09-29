@@ -267,7 +267,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                     .functions(self.db)
                     .into_iter()
                     .find(|function| function.instance(self.db) == instance)
-                    .map(|function| function.symbol(self.db).clone())
+                    .map(|function| function.symbol(self.db))
             })
             .unwrap_or_else(|| format!("{:?}", instance.key(self.db)))
     }
@@ -525,7 +525,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         section: &mir::RuntimeSectionName,
     ) -> bool {
         self.explicit_code_region_sections
-            .contains(&(object.name(self.db).clone(), section.clone()))
+            .contains(&(object.name(self.db), section.clone()))
     }
 
     fn mark_explicit_code_region(&mut self, region: mir::RuntimeCodeRegion<'db>) {
@@ -790,7 +790,7 @@ fn assign_sonatina_function_symbols<'db>(
                             .to_string()
                     })
                 }),
-            fallback_symbol: function.symbol(db).clone(),
+            fallback_symbol: function.symbol(db),
             variant_suffix: String::new(),
             disambiguator: mir::runtime_instance_symbol_key(db, function.instance(db)),
         })
@@ -6463,7 +6463,7 @@ fn code_region_symbol<'db>(
         .find(|resolved| resolved.region(db) == region)
         .map_or_else(
             || format!("code_region_{}", stable_hash(&region)),
-            |resolved| resolved.symbol(db).clone(),
+            |resolved| resolved.symbol(db),
         )
 }
 
