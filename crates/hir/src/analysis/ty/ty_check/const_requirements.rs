@@ -1455,8 +1455,8 @@ fn written_types_query<'db>(
     use crate::span::types::LazyTySpan;
     use crate::visitor::{
         Visitor, VisitorCtxt,
-        prelude::{LazyBodySpan, LazyItemSpan, LazyTraitRefSpan},
-        walk_body, walk_item, walk_trait_ref, walk_type,
+        prelude::{LazyBodySpan, LazyExprSpan, LazyItemSpan, LazyTraitRefSpan},
+        walk_body, walk_expr, walk_item, walk_path, walk_trait_ref, walk_type,
     };
     struct Collector<'db> {
         db: &'db dyn HirAnalysisDb,
@@ -1531,8 +1531,52 @@ fn written_types_query<'db>(
             ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>,
             hir_ty: crate::hir_def::TypeId<'db>,
         ) {
-            let db = self.db;
             let scope = ctxt.scope();
+            let span = ctxt.span().map(Into::into);
+            self.written_type(hir_ty, scope, span, |this| walk_type(this, ctxt, hir_ty));
+        }
+
+        // A `with` key is a type written in the body, whose paths are
+        // resolved like any other written type's.
+        fn visit_expr(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, LazyExprSpan<'db>>,
+            expr: ExprId,
+            expr_data: &Expr<'db>,
+        ) {
+            if let Expr::With(bindings, _) = expr_data {
+                for (idx, binding) in bindings.iter().enumerate() {
+                    let Some(Partial::Present(key)) = binding.key_path else {
+                        continue;
+                    };
+                    let hir_ty =
+                        crate::hir_def::TypeId::new(self.db, TypeKind::Path(Partial::Present(key)));
+                    let span = LazyExprSpan::new(ctxt.body(), expr)
+                        .into_with_expr()
+                        .params()
+                        .param(idx)
+                        .path();
+                    let mut key_ctxt = VisitorCtxt::new(self.db, ctxt.scope(), span.clone());
+                    self.written_type(hir_ty, ctxt.scope(), Some(span.into()), |this| {
+                        walk_path(this, &mut key_ctxt, key)
+                    });
+                }
+            }
+            walk_expr(self, ctxt, expr);
+        }
+    }
+    impl<'db> Collector<'db> {
+        /// Lists a written type at `span`: the anonymous constants written in
+        /// it, then the types nested in it, which `walk_nested` visits, then
+        /// the type itself.
+        fn written_type(
+            &mut self,
+            hir_ty: crate::hir_def::TypeId<'db>,
+            scope: ScopeId<'db>,
+            span: Option<DynLazySpan<'db>>,
+            walk_nested: impl FnOnce(&mut Self),
+        ) {
+            let db = self.db;
             let assumptions = assumptions_at(db, scope);
             let (ty, resolutions) = lower_hir_ty_with_resolutions(
                 db,
@@ -1549,12 +1593,11 @@ fn written_types_query<'db>(
                     self.entries.push(WrittenEntry::ConstBodies(bodies));
                 }
             }
-            let span = ctxt.span();
             let nested_from = self.entries.len();
-            walk_type(self, ctxt, hir_ty);
+            walk_nested(self);
             if let Some(span) = span {
                 self.entries.push(WrittenEntry::Type(WrittenType {
-                    span: span.into(),
+                    span,
                     scope,
                     lowered: (!ty.has_invalid(db)).then_some(ty),
                     applications: resolutions

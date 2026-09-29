@@ -35,7 +35,8 @@ pub mod lazy_spans {
             LazyCallArgSpan, LazyCallExprSpan, LazyCastExprSpan, LazyExprSpan, LazyFieldExprSpan,
             LazyFieldListSpan, LazyFieldSpan, LazyLitExprSpan, LazyMatchArmListSpan,
             LazyMatchArmSpan, LazyMatchExprSpan, LazyMethodCallExprSpan, LazyPathExprSpan,
-            LazyRecordInitExprSpan, LazyUnExprSpan,
+            LazyRecordInitExprSpan, LazyUnExprSpan, LazyWithExprSpan, LazyWithParamListSpan,
+            LazyWithParamSpan,
         },
         item::{
             LazyBodySpan, LazyConstSpan, LazyContractRecvSpan, LazyContractSpan, LazyEnumSpan,
