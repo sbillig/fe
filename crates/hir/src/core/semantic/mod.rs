@@ -38,6 +38,7 @@ pub use reference::{
     FieldAccessView, HasReferences, MethodCallView, PathView, ReferenceView, Target, UsePathView,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::cell::OnceCell;
 pub use storage_layout::{
     AllocatedContractStorageLayout, AllocationUnitId, AssignedLayoutTy, AssignedRootValue,
     ConcreteRootOccurrence, ConcreteRootOccurrenceId, ContractFieldId, ContractLayoutEntry,
@@ -605,60 +606,101 @@ fn contract_effect_requirements_canonical<'db>(
         .collect()
 }
 
+/// A function's assumptions and input layout arguments, computed when a
+/// parameter first needs them. An implicit `self` receiver needs neither
+/// unless its type has layout holes.
+struct FuncParamCx<'db> {
+    func: Func<'db>,
+    assumptions: OnceCell<PredicateListId<'db>>,
+    layout_args: OnceCell<CallableInputLayoutArgs<'db>>,
+}
+
+impl<'db> FuncParamCx<'db> {
+    fn new(func: Func<'db>) -> Self {
+        Self {
+            func,
+            assumptions: OnceCell::new(),
+            layout_args: OnceCell::new(),
+        }
+    }
+
+    fn assumptions(&self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        *self.assumptions.get_or_init(|| self.func.assumptions(db))
+    }
+
+    fn layout_args(&self, db: &'db dyn HirAnalysisDb) -> &CallableInputLayoutArgs<'db> {
+        self.layout_args
+            .get_or_init(|| callable_input_layout_args(db, self.func))
+    }
+
+    fn arg_ty(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        param_idx: usize,
+        param: &FuncParam<'db>,
+    ) -> Binder<'db, TyId<'db>> {
+        let ty = elaborate_func_param_ty(db, self, param_idx, param, true);
+        debug_assert!(
+            !ty_contains_const_hole(db, ty) || ty.has_invalid(db),
+            "unelaborated layout hole remained in Func::arg_tys"
+        );
+        Binder::bind(self.func.into(), ty)
+    }
+}
+
 fn lower_self_fallback_param_ty<'db>(
     db: &'db dyn HirAnalysisDb,
-    func: Func<'db>,
+    cx: &FuncParamCx<'db>,
     hir_ty: TypeId<'db>,
-    assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
+    let func = cx.func;
     match hir_ty.data(db) {
         TypeKind::Path(path) if path.to_opt().is_some_and(|path| path.is_self_ty(db)) => func
             .expected_self_ty(db)
-            .unwrap_or_else(|| lower_hir_ty(db, hir_ty, func.scope(), assumptions)),
+            .unwrap_or_else(|| lower_hir_ty(db, hir_ty, func.scope(), cx.assumptions(db))),
         TypeKind::Mode(mode, inner) => {
             let Some(inner) = inner.to_opt() else {
                 return TyId::invalid(db, InvalidCause::ParseError);
             };
 
-            let inner = lower_self_fallback_param_ty(db, func, inner, assumptions);
+            let inner = lower_self_fallback_param_ty(db, cx, inner);
             match mode {
                 TypeMode::Mut => TyId::borrow_mut_of(db, inner),
                 TypeMode::Ref => TyId::borrow_ref_of(db, inner),
                 TypeMode::Own => inner,
             }
         }
-        _ => lower_hir_ty(db, hir_ty, func.scope(), assumptions),
+        _ => lower_hir_ty(db, hir_ty, func.scope(), cx.assumptions(db)),
     }
 }
 
 fn elaborate_func_param_ty<'db>(
     db: &'db dyn HirAnalysisDb,
-    func: Func<'db>,
-    assumptions: PredicateListId<'db>,
-    layout_args: &CallableInputLayoutArgs<'db>,
+    cx: &FuncParamCx<'db>,
     param_idx: usize,
     param: &FuncParam<'db>,
     apply_view: bool,
 ) -> TyId<'db> {
+    let func = cx.func;
     let mut ty = match (
         param.ty.to_opt(),
         param.is_self_param(db),
         param.self_ty_fallback,
     ) {
-        (Some(hir_ty), true, true) => lower_self_fallback_param_ty(db, func, hir_ty, assumptions),
+        (Some(hir_ty), true, true) => lower_self_fallback_param_ty(db, cx, hir_ty),
         (Some(hir_ty), true, false) => lower_callable_input_param_ty(
             db,
             func,
             CallableInputLayoutHoleOrigin::Receiver,
             hir_ty,
-            assumptions,
+            cx.assumptions(db),
         ),
         (Some(hir_ty), false, _) => lower_callable_input_param_ty(
             db,
             func,
             CallableInputLayoutHoleOrigin::ValueParam(param_idx),
             hir_ty,
-            assumptions,
+            cx.assumptions(db),
         ),
         (None, _, _) => TyId::invalid(db, InvalidCause::ParseError),
     };
@@ -666,13 +708,15 @@ fn elaborate_func_param_ty<'db>(
 
     if param.is_self_param(db)
         && had_layout_hole
-        && let Some(receiver_layout_args) =
-            layout_args.get(&CallableInputLayoutHoleOrigin::Receiver)
+        && let Some(receiver_layout_args) = cx
+            .layout_args(db)
+            .get(&CallableInputLayoutHoleOrigin::Receiver)
     {
         ty = substitute_layout_holes_by_placeholder(db, ty, receiver_layout_args);
     } else if had_layout_hole
-        && let Some(param_layout_args) =
-            layout_args.get(&CallableInputLayoutHoleOrigin::ValueParam(param_idx))
+        && let Some(param_layout_args) = cx
+            .layout_args(db)
+            .get(&CallableInputLayoutHoleOrigin::ValueParam(param_idx))
     {
         ty = substitute_layout_holes_by_placeholder(db, ty, param_layout_args);
     }
@@ -774,39 +818,32 @@ impl<'db> Func<'db> {
 
     /// Semantic argument types bound to identity parameters.
     pub fn arg_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<'db, TyId<'db>>> {
-        let assumptions = self.assumptions(db);
-        let layout_args = callable_input_layout_args(db, self);
+        let cx = FuncParamCx::new(self);
         match self.params_list(db).to_opt() {
             Some(params) => params
                 .data(db)
                 .iter()
                 .enumerate()
-                .map(|(param_idx, param)| {
-                    let ty = elaborate_func_param_ty(
-                        db,
-                        self,
-                        assumptions,
-                        &layout_args,
-                        param_idx,
-                        param,
-                        true,
-                    );
-                    debug_assert!(
-                        !ty_contains_const_hole(db, ty) || ty.has_invalid(db),
-                        "unelaborated layout hole remained in Func::arg_tys"
-                    );
-                    Binder::bind(self.into(), ty)
-                })
+                .map(|(param_idx, param)| cx.arg_ty(db, param_idx, param))
                 .collect(),
             None => Vec::new(),
         }
     }
 
+    /// Semantic type of argument `idx` bound to identity parameters, lowering
+    /// only that parameter.
+    pub fn arg_ty(self, db: &'db dyn HirAnalysisDb, idx: usize) -> Option<Binder<'db, TyId<'db>>> {
+        let param = self.params_list(db).to_opt()?.data(db).get(idx)?;
+        Some(FuncParamCx::new(self).arg_ty(db, idx, param))
+    }
+
     /// Semantic receiver type if this is a method (first argument), else None.
     pub fn receiver_ty(self, db: &'db dyn HirAnalysisDb) -> Option<Binder<'db, TyId<'db>>> {
-        self.is_method(db)
-            .then(|| self.arg_tys(db).into_iter().next())
-            .flatten()
+        if self.is_method(db) {
+            self.arg_ty(db, 0)
+        } else {
+            None
+        }
     }
 
     /// Expected `Self` type for this function when it is an associated method.
@@ -1090,6 +1127,17 @@ impl<'db> CallableDef<'db> {
         }
     }
 
+    /// Semantic type of argument `idx`, lowering only that argument.
+    pub fn arg_ty(self, db: &'db dyn HirAnalysisDb, idx: usize) -> Option<Binder<'db, TyId<'db>>> {
+        match self {
+            Self::Func(func) => func.arg_ty(db, idx),
+            Self::VariantCtor(var) => {
+                let adt = var.enum_.as_adt(db);
+                adt.fields(db)[var.idx as usize].iter_types(db).nth(idx)
+            }
+        }
+    }
+
     pub fn ret_ty(self, db: &'db dyn HirAnalysisDb) -> Binder<'db, TyId<'db>> {
         match self {
             Self::Func(func) => Binder::bind(func.into(), func.return_ty(db)),
@@ -1106,8 +1154,8 @@ impl<'db> CallableDef<'db> {
 
     pub fn receiver_ty(self, db: &'db dyn HirAnalysisDb) -> Option<Binder<'db, TyId<'db>>> {
         match self {
-            Self::Func(func) if func.is_method(db) => func.arg_tys(db).into_iter().next(),
-            _ => None,
+            Self::Func(func) => func.receiver_ty(db),
+            Self::VariantCtor(_) => None,
         }
     }
 }
@@ -1194,9 +1242,10 @@ impl<'db> FuncParamView<'db> {
     /// Semantic type of this parameter, bound to identity parameters.
     pub fn ty_binder(self, db: &'db dyn HirAnalysisDb) -> Binder<'db, TyId<'db>> {
         // Delegate to the function-level lowering to keep behavior consistent.
-        // Indexing is safe as long as `idx` was derived from the function's own
-        // parameter list.
-        self.func.arg_tys(db)[self.idx]
+        // `idx` was derived from the function's own parameter list.
+        self.func
+            .arg_ty(db, self.idx)
+            .expect("parameter of its own function")
     }
 
     /// Semantic type of this parameter (binder removed).
@@ -1293,8 +1342,7 @@ impl<'db> FuncParamView<'db> {
 
         let semantic_ty = self.ty(db);
         let ty = if semantic_ty.has_invalid(db) {
-            let layout_args = callable_input_layout_args(db, func);
-            elaborate_func_param_ty(db, func, assumptions, &layout_args, self.idx, param, false)
+            elaborate_func_param_ty(db, &FuncParamCx::new(func), self.idx, param, false)
         } else if self.mode(db) == crate::hir_def::params::FuncParamMode::View {
             semantic_ty.as_view(db).unwrap_or(semantic_ty)
         } else {

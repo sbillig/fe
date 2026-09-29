@@ -640,24 +640,34 @@ impl<'db> Borrowck<'db> {
             let mut incoming = vec![None; self.body.blocks.len()];
             incoming[self.body.entry.index()] = Some(self.inventory.entry.clone());
             let mut certificate_application_failed = false;
+            // Every sweep keeps its per-statement states. The sweep that finds
+            // the fixed point ran with unchanged facts, so its states are the
+            // published snapshots when each block ran from its converged state.
+            let mut before = vec![Vec::new(); self.body.blocks.len()];
+            let mut terminal = vec![None; self.body.blocks.len()];
             loop {
                 let previous_incoming = incoming.clone();
                 self.loan_facts_changed = false;
                 self.storage_facts_changed = false;
+                before.fill(Vec::new());
+                terminal.fill(None);
                 for &index in &order {
                     let Some(mut state) = incoming[index].clone() else {
                         continue;
                     };
                     state.extend_storage(&self.inventory.entry);
                     let block = self.body.blocks[index].clone();
+                    let mut snapshots = Vec::with_capacity(block.statements.len());
                     let mut returns = true;
                     for statement in &block.statements {
+                        snapshots.push(state.clone());
                         if self.statement_diverges(statement) {
                             returns = false;
                             break;
                         }
                         self.transfer(&mut state, statement)?;
                     }
+                    before[index] = snapshots;
                     if !returns {
                         continue;
                     }
@@ -725,6 +735,7 @@ impl<'db> Borrowck<'db> {
                             incoming[successor.block.index()] = Some(edge);
                         }
                     }
+                    terminal[index] = Some(state);
                 }
                 if self.storage_facts_changed {
                     self.prefix_certificates.clear();
@@ -747,22 +758,38 @@ impl<'db> Borrowck<'db> {
                 self.failed_prefix_certificates = true;
                 continue;
             }
-            for (index, entry) in incoming.into_iter().enumerate() {
-                let Some(mut state) = entry else { continue };
-                let statements = self.body.blocks[index].statements.clone();
-                let mut snapshots = Vec::with_capacity(statements.len());
-                let mut returns = true;
-                for statement in &statements {
-                    snapshots.push(state.clone());
-                    if self.statement_diverges(statement) {
-                        returns = false;
-                        break;
+            // A block joined again after this sweep visited it, such as a loop
+            // header reached through its latch, may have run from another
+            // representation of its converged state. Replay the blocks from
+            // their converged states then.
+            let settled =
+                incoming
+                    .iter()
+                    .zip(&before)
+                    .zip(&terminal)
+                    .all(|((entry, before), terminal)| {
+                        entry.is_none() || before.first().or(terminal.as_ref()) == entry.as_ref()
+                    });
+            if !settled {
+                for (index, entry) in incoming.into_iter().enumerate() {
+                    let Some(mut state) = entry else { continue };
+                    let statements = self.body.blocks[index].statements.clone();
+                    let mut snapshots = Vec::with_capacity(statements.len());
+                    let mut returns = true;
+                    for statement in &statements {
+                        snapshots.push(state.clone());
+                        if self.statement_diverges(statement) {
+                            returns = false;
+                            break;
+                        }
+                        self.transfer(&mut state, statement)?;
                     }
-                    self.transfer(&mut state, statement)?;
+                    before[index] = snapshots;
+                    terminal[index] = returns.then_some(state);
                 }
-                self.before[index] = snapshots;
-                self.terminal[index] = returns.then_some(state);
             }
+            self.before = before;
+            self.terminal = terminal;
             self.resolve_operations()?;
             let boundary_requirements = resolve_boundary_requirements(self);
             if !self.loan_facts_changed && !self.storage_facts_changed {

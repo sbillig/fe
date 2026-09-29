@@ -31,6 +31,7 @@ use crate::analysis::{
         visitor::{TyVisitable, TyVisitor},
     },
 };
+use crate::hir_def::scope_graph::ScopeId;
 
 /// Temporary bounded-term-size guard for non-regular recursive goals.
 ///
@@ -46,11 +47,48 @@ fn trait_inst_head<'db>(db: &'db dyn HirAnalysisDb, inst: TraitInstId<'db>) -> T
     TraitInstId::new(db, inst.def(db), inst.args(db).to_vec(), IndexMap::new())
 }
 
+/// Whether the impl `header` can match the normalized `goal`, checked before
+/// the header is instantiated and normalized.
+///
+/// Instantiation rebuilds types structurally, and normalization of a valid
+/// header never makes it invalid, so the header's base types and applications
+/// reach unification unchanged, where different ones never unify. Parameters,
+/// projections, consts, and error types are not compared.
+fn impl_header_may_match<'db>(
+    db: &'db dyn HirAnalysisDb,
+    header: ImplementorId<'db>,
+    goal: TraitInstId<'db>,
+) -> bool {
+    fn may_unify<'db>(db: &'db dyn HirAnalysisDb, header: TyId<'db>, goal: TyId<'db>) -> bool {
+        match (header.data(db), goal.data(db)) {
+            (TyData::TyApp(header_abs, header_arg), TyData::TyApp(goal_abs, goal_arg)) => {
+                may_unify(db, *header_abs, *goal_abs) && may_unify(db, *header_arg, *goal_arg)
+            }
+            (TyData::TyBase(_) | TyData::TyApp(..), TyData::TyBase(_) | TyData::TyApp(..)) => {
+                header == goal
+            }
+            _ => true,
+        }
+    }
+
+    let inst = header.trait_(db);
+    inst.args(db)
+        .iter()
+        .chain(inst.assoc_type_bindings(db).values())
+        .chain(header.types(db).values())
+        .any(|ty| ty.has_invalid(db))
+        || inst
+            .args(db)
+            .iter()
+            .zip(goal.args(db))
+            .all(|(&header, &goal)| may_unify(db, header, goal))
+}
+
 fn normalize_assoc_binding<'db>(
     db: &'db dyn HirAnalysisDb,
     table: &mut PersistentUnificationTable<'db>,
     ty: TyId<'db>,
-    scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    scope: ScopeId<'db>,
     assumptions: super::PredicateListId<'db>,
 ) -> TyId<'db> {
     let ty = ty.fold_with(db, table);
@@ -62,7 +100,7 @@ fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
     table: &mut PersistentUnificationTable<'db>,
     candidate: TraitInstId<'db>,
     goal: TraitInstId<'db>,
-    scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    scope: ScopeId<'db>,
     assumptions: super::PredicateListId<'db>,
 ) -> UnificationResult {
     table.unify(trait_inst_head(db, candidate), trait_inst_head(db, goal))?;
@@ -125,6 +163,7 @@ struct Branch<'db> {
 struct PreparedQuery<'db> {
     table: PersistentUnificationTable<'db>,
     query: TraitSolverQuery<'db>,
+    scope: ScopeId<'db>,
     normalized_goal: TraitInstId<'db>,
 }
 
@@ -206,6 +245,7 @@ impl<'db> TraitResolutionContext<'db> {
         let prepared = PreparedQuery {
             table,
             query,
+            scope,
             normalized_goal,
         };
         self.prepared_queries.insert(key, prepared.clone());
@@ -356,17 +396,16 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         let PreparedQuery {
             mut table,
             query,
+            scope,
             normalized_goal,
         } = self.prepare_query(*key);
 
         let selected_impl = match clause {
             Clause::Implementor(selected_impl) => {
+                if !impl_header_may_match(self.db, selected_impl, normalized_goal) {
+                    return Ok(Transition::Reject);
+                }
                 let candidate = table.instantiate_with_fresh_vars(selected_impl);
-                let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
-                    self.db,
-                    self.origin_ingot,
-                    query.goal,
-                );
                 let normalized_candidate = normalize_trait_inst_preserving_validity(
                     self.db,
                     candidate.trait_inst(self.db),
@@ -404,11 +443,6 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 let Some(&assumption) = query.assumptions.list(self.db).get(index) else {
                     return Ok(Transition::Reject);
                 };
-                let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
-                    self.db,
-                    self.origin_ingot,
-                    query.goal,
-                );
                 if unify_trait_inst_with_normalized_assoc_bindings(
                     self.db,
                     &mut table,

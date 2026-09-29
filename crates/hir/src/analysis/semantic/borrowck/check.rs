@@ -5,9 +5,11 @@ use crate::analysis::semantic::diagnostics::{
 use std::fmt;
 
 use super::{
+    callsite::solved_call_site_refinements,
     ir::{
         BorrowSummary, BorrowSummaryId, LocalBorrowCheck, PendingSemanticValidation,
-        SemanticBorrowAnalysis, SemanticBorrowCheckResult, SemanticBorrowSummaryResult,
+        ProvisionalBorrowAnalysis, SemanticBorrowAnalysis, SemanticBorrowCheckResult,
+        SemanticBorrowSummaryResult,
     },
     solver::{BorrowSummaryMode, Borrowck},
     summary::signature_summary,
@@ -64,33 +66,59 @@ fn semantic_borrow_analysis_query<'db>(
 }
 
 #[salsa::tracked(
-    cycle_fn=provisional_borrow_summary_cycle_recover,
-    cycle_initial=semantic_borrow_summary_cycle_initial
+    return_ref,
+    cycle_fn=provisional_borrow_analysis_cycle_recover,
+    cycle_initial=provisional_borrow_analysis_cycle_initial
 )]
-fn provisional_borrow_summary_query<'db>(
+pub(super) fn provisional_borrow_analysis_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> SemanticBorrowSummaryResult<'db> {
+) -> ProvisionalBorrowAnalysis<'db> {
+    let unsolved = |summary| ProvisionalBorrowAnalysis {
+        summary,
+        refinements: None,
+    };
     let body = match normalize_semantic_body_provisional(db, instance) {
         Ok(artifacts) => artifacts.body,
         Err(SemanticNormalizationFailure::Blocked(blocked)) => {
-            return blocked_signature_borrow_summary_result(db, instance, blocked);
+            return unsolved(blocked_signature_borrow_summary_result(
+                db, instance, blocked,
+            ));
         }
         Err(
             SemanticNormalizationFailure::Rejected(diag)
             | SemanticNormalizationFailure::InternalFailure(diag),
         ) => {
-            return SemanticBorrowSummaryResult::Err(SemanticDiagnosticId::new(db, diag));
+            return unsolved(SemanticBorrowSummaryResult::Err(SemanticDiagnosticId::new(
+                db, diag,
+            )));
         }
     };
     let mut borrowck =
         match Borrowck::new_with_body(db, instance, body, BorrowSummaryMode::Provisional) {
             Ok(borrowck) => borrowck,
             Err(diag) => {
-                return SemanticBorrowSummaryResult::Err(SemanticDiagnosticId::new(db, diag));
+                return unsolved(SemanticBorrowSummaryResult::Err(SemanticDiagnosticId::new(
+                    db, diag,
+                )));
             }
         };
-    cached_borrow_summary_result(db, borrowck.borrow_summary())
+    match borrowck.unsolved_borrow_summary() {
+        Ok(Some(computation)) => {
+            return unsolved(cached_borrow_summary_result(db, Ok(computation)));
+        }
+        Err(diag) => return unsolved(cached_borrow_summary_result(db, Err(diag))),
+        Ok(None) => {}
+    }
+    if let Err(diag) = borrowck.solve() {
+        return unsolved(cached_borrow_summary_result(db, Err(diag)));
+    }
+    // Call-site refinements read the solved states before the summary is built.
+    let refinements = solved_call_site_refinements(&borrowck);
+    ProvisionalBorrowAnalysis {
+        summary: cached_borrow_summary_result(db, borrowck.solved_borrow_summary()),
+        refinements: Some(refinements),
+    }
 }
 
 fn blocked_signature_borrow_summary_result<'db>(
@@ -213,7 +241,12 @@ pub(super) fn provisional_borrow_summary_voucher<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Result<BorrowSummaryVoucher<'db>, SemanticDiagnostic<'db>> {
-    summary_voucher(db, provisional_borrow_summary_query(db, instance))
+    summary_voucher(
+        db,
+        provisional_borrow_analysis_query(db, instance)
+            .summary
+            .clone(),
+    )
 }
 
 fn summary_voucher<'db>(
@@ -564,6 +597,35 @@ fn semantic_borrow_analysis_cycle_recover<'db>(
             salsa::CycleRecoveryAction::Fallback(SemanticBorrowAnalysis {
                 summary,
                 check: None,
+            })
+        }
+    }
+}
+
+fn provisional_borrow_analysis_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> ProvisionalBorrowAnalysis<'db> {
+    ProvisionalBorrowAnalysis {
+        summary: semantic_borrow_summary_cycle_initial(db, instance),
+        refinements: None,
+    }
+}
+
+fn provisional_borrow_analysis_cycle_recover<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: &ProvisionalBorrowAnalysis<'db>,
+    count: u32,
+    instance: SemanticInstance<'db>,
+) -> salsa::CycleRecoveryAction<ProvisionalBorrowAnalysis<'db>> {
+    match provisional_borrow_summary_cycle_recover(db, &value.summary, count, instance) {
+        salsa::CycleRecoveryAction::Iterate => salsa::CycleRecoveryAction::Iterate,
+        // A fallback summary is not a solved body; call-site finalization
+        // solves it itself.
+        salsa::CycleRecoveryAction::Fallback(summary) => {
+            salsa::CycleRecoveryAction::Fallback(ProvisionalBorrowAnalysis {
+                summary,
+                refinements: None,
             })
         }
     }

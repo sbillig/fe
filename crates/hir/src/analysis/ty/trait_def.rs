@@ -611,10 +611,10 @@ impl<'db> ResolvedMethodInstance<'db> {
             }
         }
         if let Some(checked_inputs) = checked_inputs
-            && checked_inputs.len() != body.arg_tys(db).len()
+            && checked_inputs.len() != body.params(db).count()
         {
             return Err(MethodArgMapError::CheckedInputArity {
-                expected: body.arg_tys(db).len(),
+                expected: body.params(db).count(),
                 given: checked_inputs.len(),
             });
         }

@@ -181,11 +181,29 @@ impl<'a, 'db> AccessFootprint<'a, 'db> {
 
 /// The source-language size_of contract supplies the linear-memory layout.
 /// Unknown types, overflow and unsupported projections retain uncertainty.
-fn semantic_size(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<u64> {
+///
+/// Overlap checks ask for the sizes of the same types for every pair of
+/// accessed places. An array length can evaluate `size_of` through CTFE, so a
+/// size may depend on itself; it is then unknown until the cycle converges.
+#[salsa::tracked(cycle_fn=semantic_size_cycle_recover, cycle_initial=semantic_size_cycle_initial)]
+fn semantic_size<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<u64> {
     if ty.has_param(db) {
         return None;
     }
     runtime_size_bytes(db, ty).ok().flatten()
+}
+
+fn semantic_size_cycle_initial<'db>(_db: &'db dyn HirAnalysisDb, _ty: TyId<'db>) -> Option<u64> {
+    None
+}
+
+fn semantic_size_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Option<u64>,
+    _count: u32,
+    _ty: TyId<'db>,
+) -> salsa::CycleRecoveryAction<Option<u64>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 struct LinearAddress<'db> {

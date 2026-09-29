@@ -24,4 +24,5 @@ pub use check::{
     collect_semantic_borrow_diagnostic_vouchers, semantic_borrow_summary,
 };
 pub use facts::*;
+pub(crate) use ir::CallSiteRefinements;
 pub use ir::*;
