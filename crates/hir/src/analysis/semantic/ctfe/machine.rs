@@ -892,6 +892,107 @@ enum CtfePathElem {
     Index(usize),
 }
 
+/// A value reached by projection, still borrowed from where it lives: a
+/// frame's value or an interned constant. Projecting copies nothing, not
+/// even the siblings of an interned child, so only a load pays for a value.
+#[derive(Clone, Copy)]
+enum CtfeProjected<'a, 'db> {
+    Local(&'a CtfeConstValue<'db>),
+    Interned(VerifiedConstValueId<'db>),
+    Byte(u8),
+}
+
+impl<'a, 'db> CtfeProjected<'a, 'db> {
+    fn project(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        elem: &CtfePathElem,
+        origin: SemOrigin<'db>,
+    ) -> Result<Self, CtfeError<'db>> {
+        let invalid = || CtfeError::InvalidOperation {
+            origin,
+            message: "invalid const projection".into(),
+        };
+        match self {
+            Self::Local(value) => {
+                let (children, idx) = match (&value.kind, elem) {
+                    (CtfeConstKind::Interned(value), _) => {
+                        return Self::Interned(*value).project(db, elem, origin);
+                    }
+                    (
+                        CtfeConstKind::Tuple { elems, .. }
+                        | CtfeConstKind::Struct { fields: elems, .. },
+                        CtfePathElem::Field(field),
+                    ) => (elems, field.0 as usize),
+                    (
+                        CtfeConstKind::Enum {
+                            variant: actual,
+                            fields,
+                            ..
+                        },
+                        CtfePathElem::VariantField { variant, field },
+                    ) if actual == variant => (fields, field.0 as usize),
+                    (CtfeConstKind::Array { elems, .. }, CtfePathElem::Index(index)) => {
+                        (elems, *index)
+                    }
+                    (CtfeConstKind::Bytes { bytes, .. }, CtfePathElem::Index(index)) => {
+                        return bytes
+                            .get(*index)
+                            .map(|byte| Self::Byte(*byte))
+                            .ok_or(CtfeError::OutOfBounds { origin });
+                    }
+                    _ => return Err(invalid()),
+                };
+                children
+                    .get(idx)
+                    .map(Self::Local)
+                    .ok_or(CtfeError::OutOfBounds { origin })
+            }
+            Self::Interned(value) => {
+                let idx = match (value.value().value(db), elem) {
+                    (
+                        SemConstValue::Tuple { .. } | SemConstValue::Struct { .. },
+                        CtfePathElem::Field(field),
+                    ) => field.0 as usize,
+                    (
+                        SemConstValue::Enum {
+                            variant: actual, ..
+                        },
+                        CtfePathElem::VariantField { variant, field },
+                    ) if actual == variant => field.0 as usize,
+                    (SemConstValue::Array { .. }, CtfePathElem::Index(index)) => *index,
+                    (
+                        SemConstValue::Scalar {
+                            value: SemConstScalar::Bytes(bytes),
+                            ..
+                        },
+                        CtfePathElem::Index(index),
+                    ) => {
+                        return bytes
+                            .get(*index)
+                            .map(|byte| Self::Byte(*byte))
+                            .ok_or(CtfeError::OutOfBounds { origin });
+                    }
+                    _ => return Err(invalid()),
+                };
+                value
+                    .aggregate_child(db, idx)
+                    .map(Self::Interned)
+                    .ok_or(CtfeError::OutOfBounds { origin })
+            }
+            Self::Byte(_) => Err(invalid()),
+        }
+    }
+
+    fn load(self, db: &'db dyn HirAnalysisDb) -> CtfeConstValue<'db> {
+        match self {
+            Self::Local(value) => value.clone(),
+            Self::Interned(value) => CtfeConstValue::concrete(db, value),
+            Self::Byte(byte) => CtfeConstValue::int(db, TyId::u8(db), byte.into()),
+        }
+    }
+}
+
 impl<'db, 'body> CtfeMachine<'db, 'body> {
     fn new(db: &'db dyn HirAnalysisDb, config: CtfeConfig) -> Self {
         Self {
@@ -1288,7 +1389,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     ..
                 } => {
                     let value = self.load_value(frame_idx, value, term_origin)?;
-                    let tag = self.load_enum_variant(value, term_origin)?;
+                    let tag = self.load_enum_variant(&value, term_origin)?;
                     self.frames[frame_idx].current = cases
                         .iter()
                         .find(|(variant, _)| *variant == tag)
@@ -1586,7 +1687,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             SExpr::Field { base, field } => {
                 let value = self.load_value(frame_idx, base, origin)?;
                 Ok(self
-                    .project_field(value, field, origin)
+                    .project_value(&value, CtfePathElem::Field(field), origin)
                     .map(CtfeValue::Value)?)
             }
             SExpr::Index { base, index } => {
@@ -1594,7 +1695,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 let index_value = self.load_value(frame_idx, index, origin)?;
                 let index = self.index_from_value(index_value, origin)?;
                 Ok(self
-                    .project_index(value, index, origin)
+                    .project_value(&value, CtfePathElem::Index(index), origin)
                     .map(CtfeValue::Value)?)
             }
             SExpr::Borrow {
@@ -1620,13 +1721,14 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     path: place.path.into_boxed_slice(),
                 };
                 // Forming a borrow checks its projections, as at runtime, even
-                // when the borrow is never read or written.
-                self.load_ref_value(&r#ref, origin)?;
+                // when the borrow is never read or written. The check copies
+                // nothing, so it costs no more than resolving the place did.
+                self.ref_target(&r#ref, origin)?;
                 Ok(CtfeValue::Ref(r#ref))
             }
             SExpr::GetEnumTag { value } => {
                 let value = self.load_value(frame_idx, value, origin)?;
-                let variant = self.load_enum_variant(value, origin)?;
+                let variant = self.load_enum_variant(&value, origin)?;
                 Ok(CtfeValue::Value(CtfeConstValue::int(
                     self.db,
                     result_ty,
@@ -1635,7 +1737,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             }
             SExpr::IsEnumVariant { value, variant } => {
                 let value = self.load_value(frame_idx, value, origin)?;
-                let actual = self.load_enum_variant(value, origin)?;
+                let actual = self.load_enum_variant(&value, origin)?;
                 Ok(CtfeValue::Value(CtfeConstValue::bool(actual == variant)))
             }
             SExpr::ExtractEnumField {
@@ -1645,7 +1747,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             } => {
                 let value = self.load_value(frame_idx, value, origin)?;
                 Ok(self
-                    .enum_extract(value, variant, field, origin)
+                    .enum_extract(&value, variant, field, origin)
                     .map(CtfeValue::Value)?)
             }
             SExpr::CodeRegionOffset { .. } | SExpr::CodeRegionLen { .. } => {
@@ -2392,13 +2494,27 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         r#ref: &CtfeRef,
         origin: SemOrigin<'db>,
     ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
-        let root = match self.frames[r#ref.frame].locals.get(r#ref.root.index()) {
-            Some(CtfeSlot::Init(CtfeValue::Value(value))) => value.clone(),
-            Some(CtfeSlot::Init(CtfeValue::Ref(_))) | Some(CtfeSlot::Uninit) | None => {
-                return Err(CtfeError::InvalidBorrow { origin });
-            }
+        Ok(self.ref_target(r#ref, origin)?.load(self.db))
+    }
+
+    /// Follows a reference's projections from its root, checking each one,
+    /// without copying the root, the target, or anything in between.
+    fn ref_target(
+        &self,
+        r#ref: &CtfeRef,
+        origin: SemOrigin<'db>,
+    ) -> Result<CtfeProjected<'_, 'db>, CtfeError<'db>> {
+        let Some(CtfeSlot::Init(CtfeValue::Value(root))) =
+            self.frames[r#ref.frame].locals.get(r#ref.root.index())
+        else {
+            return Err(CtfeError::InvalidBorrow { origin });
         };
-        self.project_value(root, &r#ref.path, origin)
+        r#ref
+            .path
+            .iter()
+            .try_fold(CtfeProjected::Local(root), |value, elem| {
+                value.project(self.db, elem, origin)
+            })
     }
 
     fn store_place(
@@ -2427,80 +2543,43 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         result
     }
 
-    fn project_field(
+    fn project_value(
         &self,
-        value: CtfeConstValue<'db>,
-        field: FieldIndex,
+        value: &CtfeConstValue<'db>,
+        elem: CtfePathElem,
         origin: SemOrigin<'db>,
     ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
-        self.project_value(value, &[CtfePathElem::Field(field)], origin)
-    }
-
-    fn project_index(
-        &self,
-        value: CtfeConstValue<'db>,
-        index: usize,
-        origin: SemOrigin<'db>,
-    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
-        let value = self.expand_interned(value);
-        let projected = match &value.kind {
-            CtfeConstKind::Bytes { bytes, .. } => {
-                let byte = *bytes.get(index).ok_or(CtfeError::OutOfBounds { origin })?;
-                CtfeConstValue::int(
-                    self.db,
-                    TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::U8))),
-                    byte.into(),
-                )
-            }
-            CtfeConstKind::Array { elems, .. } => elems
-                .get(index)
-                .cloned()
-                .ok_or(CtfeError::OutOfBounds { origin })?,
-            _ => {
-                return Err(CtfeError::InvalidOperation {
-                    origin,
-                    message: "invalid const projection".into(),
-                });
-            }
-        };
-        Ok(projected)
+        Ok(CtfeProjected::Local(value)
+            .project(self.db, &elem, origin)?
+            .load(self.db))
     }
 
     fn enum_extract(
         &self,
-        value: CtfeConstValue<'db>,
+        value: &CtfeConstValue<'db>,
         variant: VariantIndex,
         field: FieldIndex,
         origin: SemOrigin<'db>,
     ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
-        let value = self.expand_interned(value);
-        let CtfeConstKind::Enum {
-            variant: actual,
-            fields,
-            ..
-        } = &value.kind
-        else {
-            return Err(CtfeError::VariantMismatch { origin });
-        };
-        if *actual != variant {
+        if self.load_enum_variant(value, origin)? != variant {
             return Err(CtfeError::VariantMismatch { origin });
         }
-        fields
-            .get(field.0 as usize)
-            .cloned()
-            .ok_or(CtfeError::OutOfBounds { origin })
+        self.project_value(value, CtfePathElem::VariantField { variant, field }, origin)
     }
 
     fn load_enum_variant(
         &self,
-        value: CtfeConstValue<'db>,
+        value: &CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<VariantIndex, CtfeError<'db>> {
-        let value = self.expand_interned(value);
-        let CtfeConstKind::Enum { variant, .. } = value.kind else {
-            return Err(CtfeError::VariantMismatch { origin });
-        };
-        Ok(variant)
+        match &value.kind {
+            CtfeConstKind::Enum { variant, .. } => Ok(*variant),
+            CtfeConstKind::Interned(value) => match value.value().value(self.db) {
+                SemConstValue::Enum { variant, .. } => Ok(*variant),
+                _ => Err(CtfeError::VariantMismatch { origin }),
+            },
+            _ => Err(CtfeError::VariantMismatch { origin }),
+        }
     }
 
     fn expect_bool(
@@ -2964,49 +3043,6 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             CtfeConstValue::struct_(result_ty, fields)
         };
         CtfeValue::Value(value)
-    }
-
-    fn project_value(
-        &self,
-        value: CtfeConstValue<'db>,
-        path: &[CtfePathElem],
-        origin: SemOrigin<'db>,
-    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
-        let mut value = value;
-        for elem in path {
-            value = self.expand_interned(value);
-            let projected = match (&value.kind, elem) {
-                (CtfeConstKind::Tuple { elems, .. }, CtfePathElem::Field(field))
-                | (CtfeConstKind::Struct { fields: elems, .. }, CtfePathElem::Field(field)) => {
-                    elems
-                        .get(field.0 as usize)
-                        .cloned()
-                        .ok_or(CtfeError::OutOfBounds { origin })?
-                }
-                (
-                    CtfeConstKind::Enum {
-                        variant: actual,
-                        fields,
-                        ..
-                    },
-                    CtfePathElem::VariantField { variant, field },
-                ) if actual == variant => fields
-                    .get(field.0 as usize)
-                    .cloned()
-                    .ok_or(CtfeError::OutOfBounds { origin })?,
-                (_, CtfePathElem::Index(index)) => {
-                    self.project_index(value.clone(), *index, origin)?
-                }
-                _ => {
-                    return Err(CtfeError::InvalidOperation {
-                        origin,
-                        message: "invalid const projection".into(),
-                    });
-                }
-            };
-            value = projected;
-        }
-        Ok(value)
     }
 
     fn expand_interned(&self, value: CtfeConstValue<'db>) -> CtfeConstValue<'db> {

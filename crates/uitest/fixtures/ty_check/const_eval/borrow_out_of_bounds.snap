@@ -27,3 +27,9 @@ error[3-0050]: index out of bounds in const context
    │
 25 │     let a = ref values[idx]
    │             ^^^^^^^^^^^^^^^ index is outside the evaluated value
+
+error[3-0050]: index out of bounds in const context
+   ┌─ borrow_out_of_bounds.fe:40:13
+   │
+40 │     let a = ref values[idx].x
+   │             ^^^^^^^^^^^^^^^^^ index is outside the evaluated value
