@@ -10,7 +10,7 @@ use crate::analysis::name_resolution::{
 use crate::analysis::ty::canonical::Canonicalized;
 use crate::analysis::ty::{
     subst::substitute_complete,
-    ty_lower::{CompleteSubst, lower_type_alias},
+    ty_lower::{CompleteSubst, SubstError, lower_type_alias},
 };
 use crate::hir_def::{GenericArg, GenericArgListId, ItemKind, UnOp, scope_graph::ScopeId};
 
@@ -53,17 +53,18 @@ fn requirement_subst<'db>(
 
 // Arguments inferred in a method body can mention its impl's parameters as the
 // impl owns them. Rebase them onto the method's own formals, which is how the
-// caller's premises are instantiated, so both sides compare in one basis.
+// caller's premises are instantiated, so both sides compare in one basis. A
+// rebase that fails is an error, as an instantiation that fails is
+// (`requirement_subst`): comparing in two bases could match the wrong premise
+// or miss the right one.
 fn caller_args<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: GenericParamOwner<'db>,
     args: Vec<TyId<'db>>,
-) -> Vec<TyId<'db>> {
+) -> Result<Vec<TyId<'db>>, SubstError<'db>> {
     let identity = collect_generic_params(db, caller).params(db).to_vec();
-    CompleteSubst::for_owner(db, caller, identity)
-        .ok()
-        .and_then(|subst| substitute_complete(db, args.clone(), &subst).ok())
-        .unwrap_or(args)
+    let subst = CompleteSubst::for_owner(db, caller, identity)?;
+    substitute_complete(db, args, &subst)
 }
 
 fn predicate_key<'db>(
@@ -368,7 +369,7 @@ fn premise_owner_in_scope<'db>(
 fn caller_premises<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: GenericParamOwner<'db>,
-) -> Vec<(Body<'db>, CompleteSubst<'db>)> {
+) -> Result<Vec<(Body<'db>, CompleteSubst<'db>)>, SubstError<'db>> {
     let item = ItemKind::from(caller);
     let mut premises = Vec::new();
     let own = match caller {
@@ -404,10 +405,10 @@ fn caller_premises<'db>(
         }
         _ => Vec::new(),
     };
-    for ty in caller_args(db, caller, implied) {
+    for ty in caller_args(db, caller, implied)? {
         type_conditions(db, ty, &mut premises);
     }
-    premises
+    Ok(premises)
 }
 
 /// The conditions of each fully applied record or enum in `ty`, instantiated
@@ -1046,7 +1047,10 @@ fn discharge_requirement<'db>(
     }
     let not_instantiable = Discharge::Fails(RequirementFailure::NotInstantiable);
     let args = match caller {
-        Some(caller) => caller_args(db, caller, args),
+        Some(caller) => match caller_args(db, caller, args) {
+            Ok(args) => args,
+            Err(_) => return not_instantiable,
+        },
         None => args,
     };
     let Some(subst) = requirement_subst(db, ItemKind::from(declaration).scope(), &args) else {
@@ -1069,7 +1073,10 @@ fn discharge_requirement<'db>(
     if symbolic {
         let key = predicate_key(db, predicate, &formation.typed, predicate.expr(db), &subst);
         if let (Some(key), Some(caller)) = (&key, caller) {
-            for (premise, premise_subst) in caller_premises(db, caller) {
+            let Ok(premises) = caller_premises(db, caller) else {
+                return not_instantiable;
+            };
+            for (premise, premise_subst) in premises {
                 let premise_formation = check_predicate_formation(db, premise);
                 if premise_formation.is_well_formed()
                     && predicate_key(
