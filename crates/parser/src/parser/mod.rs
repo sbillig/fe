@@ -419,6 +419,8 @@ impl<S: TokenStream> Parser<S> {
     /// searches the whole enclosing scope stack for a token to stop at, so how
     /// far it consumes, and therefore the outcome, can depend on where the probe
     /// was run from. Those probes are re-run, as they were before this cache.
+    /// Detecting them takes both the error list and the dry run's own error
+    /// flag, because recovery raises only the latter while in dry run mode.
     ///
     /// Nesting is what makes caching worthwhile: each level of
     /// `Wrap<<T as Model>::Point>` probes the positions inside it, and every
@@ -433,11 +435,15 @@ impl<S: TokenStream> Parser<S> {
             return outcome;
         }
         let err_num = self.errors.len();
-        let (outcome, is_error_free) = self.dry_run(|parser| {
+        let (outcome, is_context_free) = self.dry_run(|parser| {
             let outcome = f(parser);
-            (outcome, parser.errors.len() == err_num)
+            // `recover` reports an error in dry run mode by raising the dry
+            // run's own flag instead of adding to `errors`, so the error list
+            // alone would call a recovered probe error free and cache it.
+            let recovered = parser.dry_run_states.last().is_some_and(|state| state.err);
+            (outcome, !recovered && parser.errors.len() == err_num)
         });
-        if is_error_free {
+        if is_context_free {
             self.probe_cache.insert(key, outcome);
         }
         outcome
