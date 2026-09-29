@@ -1545,15 +1545,12 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
     let check_ty = template_ty.unwrap_or(expected_ty);
     let const_ty = const_ty.with_ty(db, expected_ty);
 
-    let (diags, typed_body) = match const_def {
-        Some(const_def) => {
-            let result = check_const_body(db, *const_def);
-            (result.0.clone(), result.1.clone())
-        }
-        None => {
-            let result = check_anon_const_body(db, *body, check_ty);
-            (result.0.clone(), result.1.clone())
-        }
+    let (diags, typed_body) = if let Some(const_def) = const_def {
+        let result = check_const_body(db, *const_def);
+        (result.0.clone(), result.1.clone())
+    } else {
+        let result = check_anon_const_body(db, *body, check_ty);
+        (result.0.clone(), result.1.clone())
     };
 
     if let Some((expected, given)) = diags.iter().find_map(|diag| match diag {
@@ -1924,30 +1921,25 @@ pub(crate) fn evaluate_const_ty<'db>(
         return const_ty;
     }
 
-    let (body, const_ty_ty, template_ty, capture, const_def) = match const_ty.data(db) {
-        ConstTyData::UnEvaluated {
-            body,
-            ty,
-            template_ty,
-            capture,
-            const_def,
-            ..
-        } => (*body, *ty, *template_ty, capture.clone(), *const_def),
-        _ => {
-            let const_ty_ty = const_ty.ty(db);
-            return match check_const_ty(
-                db,
-                const_ty_ty,
-                expected_ty,
-                &mut UnificationTable::new(db),
-            ) {
-                Ok(_) => const_ty,
-                Err(cause) => {
-                    let ty = TyId::invalid(db, cause);
-                    return const_ty.swap_ty(db, ty);
-                }
-            };
-        }
+    let (body, const_ty_ty, template_ty, capture, const_def) = if let ConstTyData::UnEvaluated {
+        body,
+        ty,
+        template_ty,
+        capture,
+        const_def,
+        ..
+    } = const_ty.data(db)
+    {
+        (*body, *ty, *template_ty, capture.clone(), *const_def)
+    } else {
+        let const_ty_ty = const_ty.ty(db);
+        return match check_const_ty(db, const_ty_ty, expected_ty, &mut UnificationTable::new(db)) {
+            Ok(_) => const_ty,
+            Err(cause) => {
+                let ty = TyId::invalid(db, cause);
+                return const_ty.swap_ty(db, ty);
+            }
+        };
     };
 
     let expected_ty = expected_ty.or(const_ty_ty);

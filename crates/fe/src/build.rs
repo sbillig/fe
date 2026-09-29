@@ -546,20 +546,14 @@ fn build_file(
         return true;
     }
 
-    let canonical = match file_path.canonicalize_utf8() {
-        Ok(path) => path,
-        Err(_) => {
-            eprintln!("Error: Invalid file path: {file_path}");
-            return true;
-        }
+    let Ok(canonical) = file_path.canonicalize_utf8() else {
+        eprintln!("Error: Invalid file path: {file_path}");
+        return true;
     };
 
-    let url = match Url::from_file_path(canonical.as_std_path()) {
-        Ok(url) => url,
-        Err(_) => {
-            eprintln!("Error: Invalid file path: {file_path}");
-            return true;
-        }
+    let Ok(url) = Url::from_file_path(canonical.as_std_path()) else {
+        eprintln!("Error: Invalid file path: {file_path}");
+        return true;
     };
 
     let content = match fs::read_to_string(&canonical) {
@@ -640,12 +634,9 @@ fn build_directory(
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
-    let canonical = match dir_path.canonicalize_utf8() {
-        Ok(path) => path,
-        Err(_) => {
-            eprintln!("Error: Invalid or non-existent directory path: {dir_path}");
-            return true;
-        }
+    let Ok(canonical) = dir_path.canonicalize_utf8() else {
+        eprintln!("Error: Invalid or non-existent directory path: {dir_path}");
+        return true;
     };
 
     if !canonical.join("fe.toml").is_file() {
@@ -657,12 +648,9 @@ fn build_directory(
         return true;
     }
 
-    let url = match Url::from_directory_path(canonical.as_str()) {
-        Ok(url) => url,
-        Err(_) => {
-            eprintln!("Error: Invalid directory path: {dir_path}");
-            return true;
-        }
+    let Ok(url) = Url::from_directory_path(canonical.as_str()) else {
+        eprintln!("Error: Invalid directory path: {dir_path}");
+        return true;
     };
 
     if driver::init_ingot(db, &url) {

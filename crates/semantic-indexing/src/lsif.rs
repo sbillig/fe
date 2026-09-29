@@ -336,30 +336,27 @@ pub fn generate_lsif(
         for item in scope_graph.items_dfs(db) {
             let scope = ScopeId::from_item(item);
 
-            let name_span = match item.name_span() {
-                Some(ns) => ns,
-                None => {
-                    // Anonymous impls have no name span, so the normal
-                    // definition path and the sub-item loop below are skipped.
-                    // Their associated consts still need defs/refs/monikers, so
-                    // emit them here (the SCIP path does the same).
-                    if matches!(item, ItemKind::Impl(_)) {
-                        for child in SymbolView::from_item(item).children(db) {
-                            if matches!(child.scope(), ScopeId::ImplConst(..)) {
-                                emit_scope_lsif(
-                                    db,
-                                    &ctx,
-                                    &mut emitter,
-                                    &mut documents,
-                                    &doc_url,
-                                    doc_id,
-                                    child.scope(),
-                                )?;
-                            }
+            let Some(name_span) = item.name_span() else {
+                // Anonymous impls have no name span, so the normal
+                // definition path and the sub-item loop below are skipped.
+                // Their associated consts still need defs/refs/monikers, so
+                // emit them here (the SCIP path does the same).
+                if matches!(item, ItemKind::Impl(_)) {
+                    for child in SymbolView::from_item(item).children(db) {
+                        if matches!(child.scope(), ScopeId::ImplConst(..)) {
+                            emit_scope_lsif(
+                                db,
+                                &ctx,
+                                &mut emitter,
+                                &mut documents,
+                                &doc_url,
+                                doc_id,
+                                child.scope(),
+                            )?;
                         }
                     }
-                    continue;
                 }
+                continue;
             };
             let resolved_name_span = match name_span.resolve(db) {
                 Some(s) => s,

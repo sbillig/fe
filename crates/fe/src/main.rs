@@ -1107,20 +1107,14 @@ fn run_lsif(path: &Utf8PathBuf, output: Option<&Utf8PathBuf>) {
 
     let mut db = DriverDataBase::default();
 
-    let canonical_path = match path.canonicalize_utf8() {
-        Ok(p) => p,
-        Err(_) => {
-            eprintln!("Error: Invalid or non-existent directory path: {path}");
-            std::process::exit(1);
-        }
+    let Ok(canonical_path) = path.canonicalize_utf8() else {
+        eprintln!("Error: Invalid or non-existent directory path: {path}");
+        std::process::exit(1);
     };
 
-    let ingot_url = match url::Url::from_directory_path(canonical_path.as_str()) {
-        Ok(url) => url,
-        Err(_) => {
-            eprintln!("Error: Invalid directory path: {path}");
-            std::process::exit(1);
-        }
+    let Ok(ingot_url) = url::Url::from_directory_path(canonical_path.as_str()) else {
+        eprintln!("Error: Invalid directory path: {path}");
+        std::process::exit(1);
     };
 
     let had_init_diagnostics = driver::init_ingot(&mut db, &ingot_url);
@@ -1155,20 +1149,14 @@ fn run_scip(path: &Utf8PathBuf, output: &Utf8PathBuf) {
 
     let mut db = DriverDataBase::default();
 
-    let canonical_path = match path.canonicalize_utf8() {
-        Ok(p) => p,
-        Err(_) => {
-            eprintln!("Error: Invalid or non-existent directory path: {path}");
-            std::process::exit(1);
-        }
+    let Ok(canonical_path) = path.canonicalize_utf8() else {
+        eprintln!("Error: Invalid or non-existent directory path: {path}");
+        std::process::exit(1);
     };
 
-    let ingot_url = match url::Url::from_directory_path(canonical_path.as_str()) {
-        Ok(url) => url,
-        Err(_) => {
-            eprintln!("Error: Invalid directory path: {path}");
-            std::process::exit(1);
-        }
+    let Ok(ingot_url) = url::Url::from_directory_path(canonical_path.as_str()) else {
+        eprintln!("Error: Invalid directory path: {path}");
+        std::process::exit(1);
     };
 
     let had_init_diagnostics = driver::init_ingot(&mut db, &ingot_url);
@@ -1248,14 +1236,13 @@ fn run_fmt(path: Option<&Utf8PathBuf>, check: bool) {
         }
         None => {
             // Find project root and format all .fe files in src/
-            match driver::files::find_project_root() {
-                Some(root) => collect_fe_files(&root.join("src")),
-                None => {
-                    eprintln!(
-                        "Error: No fe.toml found. Run from a Fe project directory or specify a path."
-                    );
-                    std::process::exit(1);
-                }
+            if let Some(root) = driver::files::find_project_root() {
+                collect_fe_files(&root.join("src"))
+            } else {
+                eprintln!(
+                    "Error: No fe.toml found. Run from a Fe project directory or specify a path."
+                );
+                std::process::exit(1);
             }
         }
     };

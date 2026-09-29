@@ -250,12 +250,9 @@ fn check_ingot_url(
         .is_none()
     {
         // Check if the issue is a missing fe.toml file
-        let config_url = match ingot_url.join("fe.toml") {
-            Ok(url) => url,
-            Err(_) => {
-                eprintln!("Error: Invalid ingot directory path");
-                return true;
-            }
+        let Ok(config_url) = ingot_url.join("fe.toml") else {
+            eprintln!("Error: Invalid ingot directory path");
+            return true;
         };
 
         if db.workspace().get(db, &config_url).is_none() {
@@ -426,12 +423,9 @@ fn check_single_file(
             return true;
         }
     };
-    let file_url = match Url::from_file_path(&canonical) {
-        Ok(url) => url,
-        Err(_) => {
-            eprintln!("Error: Invalid file path: {file_path}");
-            return true;
-        }
+    let Ok(file_url) = Url::from_file_path(&canonical) else {
+        eprintln!("Error: Invalid file path: {file_path}");
+        return true;
     };
 
     // Read the file content

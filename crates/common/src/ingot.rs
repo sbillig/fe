@@ -296,21 +296,15 @@ impl Workspace {
     #[salsa::tracked]
     pub fn containing_ingot_config(self, db: &dyn InputDb, file: Url) -> Option<File> {
         tracing::debug!(target: "ingot_config", "containing_ingot_config called with file: {}", file);
-        let dir = match file.directory() {
-            Some(d) => d,
-            None => {
-                tracing::debug!(target: "ingot_config", "Could not get directory for: {}", file);
-                return None;
-            }
+        let Some(dir) = file.directory() else {
+            tracing::debug!(target: "ingot_config", "Could not get directory for: {}", file);
+            return None;
         };
         tracing::debug!(target: "ingot_config", "Search directory: {}", dir);
 
-        let config_url = match dir.join("fe.toml") {
-            Ok(url) => url,
-            Err(_) => {
-                tracing::debug!(target: "ingot_config", "Could not join 'fe.toml' to dir: {}", dir);
-                return None;
-            }
+        let Ok(config_url) = dir.join("fe.toml") else {
+            tracing::debug!(target: "ingot_config", "Could not join 'fe.toml' to dir: {}", dir);
+            return None;
         };
         tracing::debug!(target: "ingot_config", "Looking for config file at: {}", config_url);
 

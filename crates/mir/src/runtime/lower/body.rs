@@ -2720,25 +2720,21 @@ impl<'db> RmirEmitter<'db> {
             let value = self.lower_semantic_operand_for_class(bb, field, &stored);
             return (value, stored);
         }
-        let value = match boundary_spec_for_ty_in_env(
-            self.db,
-            self.env,
-            field_ty,
-            AddressSpaceKind::Memory,
-        ) {
-            Some(boundary) => self.lower_semantic_operand_for_boundary(bb, field, &boundary),
-            None => {
-                let class = self
-                    .top_level_class_for_ty(field_ty, AddressSpaceKind::Memory)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "non-zst constructor field should have a runtime class: owner={:?} field_ty={} stored={stored:#?}",
-                            self.semantic_body.owner().key(self.db).owner(self.db),
-                            field_ty.pretty_print(self.db),
-                        )
-                    });
-                self.lower_semantic_operand_for_class(bb, field, &class)
-            }
+        let value = if let Some(boundary) =
+            boundary_spec_for_ty_in_env(self.db, self.env, field_ty, AddressSpaceKind::Memory)
+        {
+            self.lower_semantic_operand_for_boundary(bb, field, &boundary)
+        } else {
+            let class = self
+                .top_level_class_for_ty(field_ty, AddressSpaceKind::Memory)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "non-zst constructor field should have a runtime class: owner={:?} field_ty={} stored={stored:#?}",
+                        self.semantic_body.owner().key(self.db).owner(self.db),
+                        field_ty.pretty_print(self.db),
+                    )
+                });
+            self.lower_semantic_operand_for_class(bb, field, &class)
         };
         let class = self.value_class(value).cloned().unwrap_or(stored);
         (value, class)
@@ -3261,64 +3257,61 @@ impl<'db> RmirEmitter<'db> {
             );
             return;
         }
-        match self.local_class(value.local) {
-            Some(RuntimeClass::Ref { .. }) => {
-                let enum_layout = self.enum_layout_for_local(value.local);
-                let tag_class = RuntimeClass::Scalar(ScalarClass {
-                    repr: match enum_layout.data(self.db) {
-                        crate::runtime::Layout::Enum(layout) => layout.tag.repr,
-                        _ => unreachable!(),
-                    },
-                    role: ScalarRole::EnumTag { enum_layout },
-                });
-                let tag = self.alloc_runtime_temp(
-                    self.locals[value.local.index()].semantic_ty,
-                    RuntimeCarrier::Value(tag_class),
-                );
-                self.lower_enum_tag(bb, tag, value);
-                let expected = self.alloc_runtime_temp(
-                    self.locals[value.local.index()].semantic_ty,
-                    RuntimeCarrier::Value(
-                        self.value_class(tag)
-                            .cloned()
-                            .expect("enum tag temp should have a class"),
+        if let Some(RuntimeClass::Ref { .. }) = self.local_class(value.local) {
+            let enum_layout = self.enum_layout_for_local(value.local);
+            let tag_class = RuntimeClass::Scalar(ScalarClass {
+                repr: match enum_layout.data(self.db) {
+                    crate::runtime::Layout::Enum(layout) => layout.tag.repr,
+                    _ => unreachable!(),
+                },
+                role: ScalarRole::EnumTag { enum_layout },
+            });
+            let tag = self.alloc_runtime_temp(
+                self.locals[value.local.index()].semantic_ty,
+                RuntimeCarrier::Value(tag_class),
+            );
+            self.lower_enum_tag(bb, tag, value);
+            let expected = self.alloc_runtime_temp(
+                self.locals[value.local.index()].semantic_ty,
+                RuntimeCarrier::Value(
+                    self.value_class(tag)
+                        .cloned()
+                        .expect("enum tag temp should have a class"),
+                ),
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: expected,
+                    expr: RExpr::ConstScalar(
+                        enum_tag_scalar(self.db, enum_layout, variant)
+                            .expect("enum variant should lower to a tag scalar"),
                     ),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: expected,
-                        expr: RExpr::ConstScalar(
-                            enum_tag_scalar(self.db, enum_layout, variant)
-                                .expect("enum variant should lower to a tag scalar"),
-                        ),
+                },
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst,
+                    expr: RExpr::Binary {
+                        op: hir::hir_def::BinOp::Comp(hir::hir_def::CompBinOp::Eq),
+                        lhs: tag,
+                        rhs: expected,
                     },
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::Binary {
-                            op: hir::hir_def::BinOp::Comp(hir::hir_def::CompBinOp::Eq),
-                            lhs: tag,
-                            rhs: expected,
-                        },
+                },
+            );
+        } else {
+            let variant = self.enum_variant_for_local(value.local, variant);
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst,
+                    expr: RExpr::EnumIsVariant {
+                        value: self.runtime_value(value.local),
+                        variant,
                     },
-                );
-            }
-            _ => {
-                let variant = self.enum_variant_for_local(value.local, variant);
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::EnumIsVariant {
-                            value: self.runtime_value(value.local),
-                            variant,
-                        },
-                    },
-                );
-            }
+                },
+            );
         }
     }
 

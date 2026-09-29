@@ -372,15 +372,14 @@ pub(crate) fn parse_arithmetic_field(
         });
         return None;
     };
-    match ArithmeticMode::parse(value) {
-        Some(mode) => Some(mode),
-        None => {
-            diagnostics.push(ConfigDiagnostic::InvalidArithmeticMode {
-                field,
-                value: value.into(),
-            });
-            None
-        }
+    if let Some(mode) = ArithmeticMode::parse(value) {
+        Some(mode)
+    } else {
+        diagnostics.push(ConfigDiagnostic::InvalidArithmeticMode {
+            field,
+            value: value.into(),
+        });
+        None
     }
 }
 
@@ -403,15 +402,14 @@ pub(crate) fn parse_dependency_arithmetic_field(
         });
         return None;
     };
-    match DependencyArithmeticMode::parse(value) {
-        Some(mode) => Some(mode),
-        None => {
-            diagnostics.push(ConfigDiagnostic::InvalidDependencyArithmeticMode {
-                field,
-                value: value.into(),
-            });
-            None
-        }
+    if let Some(mode) = DependencyArithmeticMode::parse(value) {
+        Some(mode)
+    } else {
+        diagnostics.push(ConfigDiagnostic::InvalidDependencyArithmeticMode {
+            field,
+            value: value.into(),
+        });
+        None
     }
 }
 

@@ -626,9 +626,8 @@ impl<S: TokenStream> Parser<S> {
                 let next = self.stream.next().unwrap();
                 self.next_trivias.push_back(next);
                 continue;
-            } else {
-                return self.stream.peek().cloned();
             }
+            return self.stream.peek().cloned();
         }
 
         None

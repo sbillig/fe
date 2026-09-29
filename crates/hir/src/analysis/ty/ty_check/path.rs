@@ -71,8 +71,8 @@ impl<'tc, 'db, 'a> RecordInitChecker<'tc, 'db, 'a> {
         label: Option<IdentId<'db>>,
         field_span: DynLazySpan<'db>,
     ) -> Result<TyId<'db>, FuncBodyDiag<'db>> {
-        let label = match label {
-            Some(label) => match self.already_given.entry(label) {
+        let label = if let Some(label) = label {
+            match self.already_given.entry(label) {
                 Entry::Occupied(first_use) => {
                     let diag = BodyDiag::DuplicatedRecordFieldBind {
                         primary: field_span.clone(),
@@ -88,17 +88,15 @@ impl<'tc, 'db, 'a> RecordInitChecker<'tc, 'db, 'a> {
                     entry.insert(field_span.clone());
                     label
                 }
-            },
-
-            None => {
-                let diag = BodyDiag::ExplicitLabelExpectedInRecord {
-                    primary: field_span,
-                    hint: self.data.initializer_hint(self.tc.db),
-                };
-
-                self.invalid_field_given = true;
-                return Err(diag.into());
             }
+        } else {
+            let diag = BodyDiag::ExplicitLabelExpectedInRecord {
+                primary: field_span,
+                hint: self.data.initializer_hint(self.tc.db),
+            };
+
+            self.invalid_field_given = true;
+            return Err(diag.into());
         };
 
         let Some(ty) = self.data.record_field_ty(self.tc.db, label) else {

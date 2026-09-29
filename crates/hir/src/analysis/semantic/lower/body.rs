@@ -1299,12 +1299,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
         }
 
-        match tail.data(self.db, self.body) {
-            Partial::Present(Stmt::Expr(expr)) => self.lower_expr(*expr),
-            _ => {
-                self.lower_stmt(*tail);
-                self.unit_value()
-            }
+        if let Partial::Present(Stmt::Expr(expr)) = tail.data(self.db, self.body) {
+            self.lower_expr(*expr)
+        } else {
+            self.lower_stmt(*tail);
+            self.unit_value()
         }
     }
 

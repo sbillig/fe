@@ -428,26 +428,20 @@ pub async fn handle_file_change(
         return Ok(());
     }
 
-    let path = match message.uri.to_file_path() {
-        Ok(p) => p,
-        Err(_) => {
-            error!("Failed to convert URI to path: {:?}", message.uri);
-            return Err(ResponseError::new(
-                ErrorCode::INVALID_PARAMS,
-                format!("Invalid file URI: {}", message.uri),
-            ));
-        }
+    let Ok(path) = message.uri.to_file_path() else {
+        error!("Failed to convert URI to path: {:?}", message.uri);
+        return Err(ResponseError::new(
+            ErrorCode::INVALID_PARAMS,
+            format!("Invalid file URI: {}", message.uri),
+        ));
     };
 
-    let path_str = match path.to_str() {
-        Some(p) => p,
-        None => {
-            error!("Path contains invalid UTF-8: {:?}", path);
-            return Err(ResponseError::new(
-                ErrorCode::INVALID_PARAMS,
-                "Path contains invalid UTF-8".to_string(),
-            ));
-        }
+    let Some(path_str) = path.to_str() else {
+        error!("Path contains invalid UTF-8: {:?}", path);
+        return Err(ResponseError::new(
+            ErrorCode::INVALID_PARAMS,
+            "Path contains invalid UTF-8".to_string(),
+        ));
     };
 
     // Check if this is a fe.toml file

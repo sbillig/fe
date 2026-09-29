@@ -125,21 +125,20 @@ impl<'db> PathId<'db> {
         to: IdentId<'db>,
         db: &'db dyn HirDb,
     ) -> PathId<'db> {
-        match self.parent(db) {
-            Some(parent) => parent.replace_root(from, to, db).push(db, self.kind(db)),
-            None => {
-                let kind = match self.kind(db) {
-                    PathKind::Ident {
-                        ident,
-                        generic_args,
-                    } if ident == from => PathKind::Ident {
-                        ident: Partial::Present(to),
-                        generic_args,
-                    },
-                    kind => kind,
-                };
-                PathId::new(db, kind, None)
-            }
+        if let Some(parent) = self.parent(db) {
+            parent.replace_root(from, to, db).push(db, self.kind(db))
+        } else {
+            let kind = match self.kind(db) {
+                PathKind::Ident {
+                    ident,
+                    generic_args,
+                } if ident == from => PathKind::Ident {
+                    ident: Partial::Present(to),
+                    generic_args,
+                },
+                kind => kind,
+            };
+            PathId::new(db, kind, None)
         }
     }
 

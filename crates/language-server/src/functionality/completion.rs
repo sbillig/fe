@@ -529,13 +529,12 @@ fn find_import_position_after_brace(full_file_text: &str, brace_offset: usize) -
                     line: line + 1,
                     character: 0,
                 };
-            } else {
-                // No newline after brace, insert right after brace
-                return Position {
-                    line,
-                    character: (brace_offset - last_newline_offset + 1) as u32,
-                };
             }
+            // No newline after brace, insert right after brace
+            return Position {
+                line,
+                character: (brace_offset - last_newline_offset + 1) as u32,
+            };
         }
         if ch == '\n' {
             line += 1;
