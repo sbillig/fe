@@ -1,7 +1,7 @@
 use crate::{ParseError, SyntaxKind, TextRange, TextSize};
 
 use super::{
-    Parser, define_scope,
+    Parser, ProbeKind, define_scope,
     expr::{is_lshift, is_lt_eq},
     param::{GenericArgListScope, TraitRefScope},
     token_stream::TokenStream,
@@ -45,7 +45,7 @@ impl super::Parse for PathSegmentScope {
                     // `Wrapped<<T as Trait>::Item>`. No shift operand continues
                     // with `>::`, so that prefix settles it, and a cast such as
                     // `value << bits as u256 >> 1` stays a shift.
-                    if parser.dry_run(|parser| {
+                    if parser.probe(ProbeKind::LShiftOpensGenericArgs, |parser| {
                         parser.bump();
                         parser.parses_without_error(QualifiedTypeScope::default())
                             && parser.current_kind() == Some(SyntaxKind::Colon2)
@@ -62,10 +62,15 @@ impl super::Parse for PathSegmentScope {
                 if (is_turbofish
                     || (parser.current_kind_same_line() == Some(SyntaxKind::Lt)
                         && !is_lt_eq(parser)))
-                    && parser.dry_run(|parser| {
-                        parser.bump_if(SyntaxKind::Colon2);
-                        parser.parses_without_error(GenericArgListScope::new(self.is_expr))
-                    })
+                    && parser.probe(
+                        ProbeKind::GenericArgList {
+                            is_expr: self.is_expr,
+                        },
+                        |parser| {
+                            parser.bump_if(SyntaxKind::Colon2);
+                            parser.parses_without_error(GenericArgListScope::new(self.is_expr))
+                        },
+                    )
                 {
                     if is_turbofish {
                         parser.bump_trivias();
@@ -77,7 +82,7 @@ impl super::Parse for PathSegmentScope {
                     }
                     parser
                         .parse(GenericArgListScope::new(self.is_expr))
-                        .expect("dry_run suggests this will succeed");
+                        .expect("the probe suggests this will succeed");
                 }
                 Ok(())
             }
@@ -128,15 +133,11 @@ impl super::Parse for QualifiedTypeScope {
 }
 
 pub(super) fn is_qualified_type<S: TokenStream>(parser: &mut Parser<S>) -> bool {
-    parser
-        .dry_run(|parser| {
-            if !parser.bump_if(SyntaxKind::Lt) {
-                return None;
-            }
-            parse_type(parser, None).ok()?;
-            (parser.current_kind() == Some(SyntaxKind::AsKw)).then_some(())
-        })
-        .is_some()
+    parser.probe(ProbeKind::QualifiedType, |parser| {
+        parser.bump_if(SyntaxKind::Lt)
+            && parse_type(parser, None).is_ok()
+            && parser.current_kind() == Some(SyntaxKind::AsKw)
+    })
 }
 
 pub(super) fn is_path_segment(kind: SyntaxKind) -> bool {

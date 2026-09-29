@@ -5,7 +5,7 @@ use unwrap_infallible::UnwrapInfallible;
 use crate::{ExpectedKind, ParseError, SyntaxKind};
 
 use super::{
-    ErrProof, Parser, Recovery, define_scope,
+    ErrProof, Parser, ProbeKind, Recovery, define_scope,
     expr::{parse_const_generic_expr, parse_expr},
     expr_atom::{BlockExprScope, LitExprScope},
     parse_list,
@@ -394,7 +394,7 @@ impl super::Parse for GenericArgScope {
             // Parse the type
             parse_type(parser, None)?;
         } else {
-            let is_const_call = parser.dry_run(|parser| {
+            let is_const_call = parser.probe(ProbeKind::ConstCall, |parser| {
                 parser
                     .parse(PathScope::default())
                     .is_ok_and(|()| parser.current_kind() == Some(SyntaxKind::LParen))

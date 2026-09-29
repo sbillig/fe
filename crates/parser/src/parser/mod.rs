@@ -1,4 +1,7 @@
-use std::{collections::VecDeque, convert::Infallible};
+use std::{
+    collections::{HashMap, VecDeque},
+    convert::Infallible,
+};
 
 pub(crate) use item::ItemListScope;
 use smallvec::SmallVec;
@@ -66,8 +69,26 @@ pub struct Parser<S: TokenStream> {
     dry_run_states: Vec<DryRunState<S>>,
     dry_run_next_trivias_pool: Vec<VecDeque<S::Token>>,
 
+    /// Outcomes of the speculative probes run so far, see [`Parser::probe`].
+    probe_cache: HashMap<(rowan::TextSize, bool, ProbeKind), bool>,
+
     /// Whether or not to recover from syntax errors automatically.
     recovery_mode: RecoveryMode,
+}
+
+/// A speculative parse used only to disambiguate what follows, identified so
+/// its outcome can be reused at the same position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ProbeKind {
+    /// `<Type as Trait>`, as opposed to a comparison or shift.
+    QualifiedType,
+    /// `<<` opening generic arguments whose first argument is a qualified
+    /// path, as opposed to a left shift.
+    LShiftOpensGenericArgs,
+    /// A path followed by `(`, i.e. a call in const generic argument position.
+    ConstCall,
+    /// A generic argument list, as opposed to a comparison.
+    GenericArgList { is_expr: bool },
 }
 
 impl<S: TokenStream> Parser<S> {
@@ -84,6 +105,7 @@ impl<S: TokenStream> Parser<S> {
             next_trivias: VecDeque::new(),
             dry_run_states: Vec::new(),
             dry_run_next_trivias_pool: Vec::new(),
+            probe_cache: HashMap::new(),
             recovery_mode,
         }
     }
@@ -382,6 +404,43 @@ impl<S: TokenStream> Parser<S> {
             TextRange::empty(self.end_of_prev_token),
         ));
         self.try_recover().map_err(|r| r.add_err_proof(proof))
+    }
+
+    /// Runs a disambiguation probe in dry run mode, reusing the outcome of an
+    /// identical probe already run at this position.
+    ///
+    /// `dry_run` reverts the stream, position, buffered trivia and errors, and
+    /// leaves the tree builder untouched, so a probe that records no error
+    /// depends only on the position it starts from and on whether newlines are
+    /// trivia there. The input never changes during a parse, so such an outcome
+    /// stays valid.
+    ///
+    /// An outcome reached through error recovery is *not* reused: `recover`
+    /// searches the whole enclosing scope stack for a token to stop at, so how
+    /// far it consumes, and therefore the outcome, can depend on where the probe
+    /// was run from. Those probes are re-run, as they were before this cache.
+    ///
+    /// Nesting is what makes caching worthwhile: each level of
+    /// `Wrap<<T as Model>::Point>` probes the positions inside it, and every
+    /// enclosing level probes them all again, so without this the same position
+    /// is re-parsed a multiple of times per level of depth.
+    pub(crate) fn probe<F>(&mut self, kind: ProbeKind, f: F) -> bool
+    where
+        F: FnOnce(&mut Self) -> bool,
+    {
+        let key = (self.current_pos, self.is_newline_trivia, kind);
+        if let Some(&outcome) = self.probe_cache.get(&key) {
+            return outcome;
+        }
+        let err_num = self.errors.len();
+        let (outcome, is_error_free) = self.dry_run(|parser| {
+            let outcome = f(parser);
+            (outcome, parser.errors.len() == err_num)
+        });
+        if is_error_free {
+            self.probe_cache.insert(key, outcome);
+        }
+        outcome
     }
 
     /// Runs the parser in the dry run mode.
