@@ -379,6 +379,33 @@ impl<'db> ClobberCondition<'db> {
         }
         target.source.erase_clobber_conditions();
         written.source.erase_clobber_conditions();
+        // A cell outside raw memory is separated from a raw-memory write by
+        // object identity alone; offsets into the written object and paths in
+        // the target cannot refute that overlap. Keeping them would add one
+        // condition per written field, offset and target cell to every
+        // replacement, although a caller can refute all of them only by
+        // telling the two objects apart. A caller that passes one object for
+        // both can no longer refute by field or offset.
+        let object = |place: &SourceExpr<'db>| {
+            let mut place = place.clone();
+            while place.source.dereferences.is_empty()
+                && !place.source.reachable
+                && let ExternalOrigin::Memory { base, .. } = &place.source.origin
+            {
+                place = (**base).clone();
+            }
+            place.path = RegionPath::default();
+            place.views = Default::default();
+            place
+        };
+        let (target_object, written_object) = (object(&target), object(&written));
+        if written_object.source.in_raw_memory() && !target_object.source.in_raw_memory() {
+            return Self {
+                target: target_object,
+                written: written_object,
+                extent: AccessExtent::Unknown,
+            };
+        }
         Self {
             target,
             written,
@@ -562,11 +589,14 @@ impl<'db> ExternalSource<'db> {
         mut offset: MemoryOffset<'db>,
     ) -> Self {
         if matches!(base.source.origin, ExternalOrigin::OpaqueMemory) {
-            return Self::opaque_memory(ReferentContract::new(
+            // An offset into a conditional replacement exists under its condition.
+            let mut source = Self::opaque_memory(ReferentContract::new(
                 db,
                 target_ty,
                 base.source.contract.address_space,
             ));
+            source.clobber = base.source.clobber;
+            return source;
         }
         if matches!(offset, MemoryOffset::Element(_, IndexExpr::Const(0))) {
             offset = MemoryOffset::Zero;
