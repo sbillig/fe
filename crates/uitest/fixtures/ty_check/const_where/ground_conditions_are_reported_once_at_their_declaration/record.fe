@@ -1,0 +1,8 @@
+// A condition without generic parameters is checked where it is declared.
+// Its failure is one error there, not another at each use.
+struct Never where false { value: u256 }
+struct Pair<const N: usize> where false, N > 0 { value: u256 }
+
+fn read(_ never: Never) -> u256 { 0 }
+fn make() -> Never { Never { value: 1 } }
+fn pair() -> u256 { Pair<1> { value: 1 }.value }

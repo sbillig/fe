@@ -285,6 +285,14 @@ pub(super) fn check_predicate_formation<'db>(
     }
 }
 
+/// Whether uses of a declaration check `predicate`. A ground predicate, one
+/// that mentions no generic parameter, is checked once where it is declared
+/// (`check_where_const_predicates`), whether or not anything uses the item,
+/// so a use does not report it again.
+fn checked_at_uses<'db>(db: &'db dyn HirAnalysisDb, predicate: Body<'db>) -> bool {
+    predicate_may_depend_on_params(db, predicate)
+}
+
 pub(super) fn predicate_may_depend_on_params<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
@@ -535,21 +543,19 @@ pub(super) fn check_body_requirements<'db>(
         ) {
             check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
         }
-        // Ground clauses are already mandatory declaration checks. Unsupported
-        // associated/generic owner contexts are rejected at their declarations.
+        // Unsupported associated or generic owner contexts are rejected at
+        // their declarations.
         let predicates = WhereClauseOwner::Func(func)
             .where_clause(db)
             .const_predicates(db);
-        if predicates.is_empty()
-            || !function_requirements_supported(db, func)
-            || collect_generic_params(db, func.into())
-                .params(db)
-                .is_empty()
-        {
+        if predicates.is_empty() || !function_requirements_supported(db, func) {
             continue;
         }
         let caller = caller.filter(|_| args.iter().any(|ty| ty.has_param(db)));
-        for &predicate in predicates {
+        for &predicate in predicates
+            .iter()
+            .filter(|&&predicate| checked_at_uses(db, predicate))
+        {
             if let Discharge::Fails(failure) = discharge_requirement(
                 db,
                 WhereClauseOwner::Func(func),
@@ -1010,16 +1016,19 @@ fn check_type_requirements<'db>(
         return None;
     }
     let caller = premise_owner_in_scope(db, scope);
-    predicates.iter().find_map(|&predicate| {
-        match discharge_requirement(db, declaration, predicate, args.to_vec(), caller) {
-            Discharge::Holds => None,
-            Discharge::Fails(failure) => Some(TypeRequirementFailure {
-                ty,
-                predicate,
-                failure,
-            }),
-        }
-    })
+    predicates
+        .iter()
+        .filter(|&&predicate| checked_at_uses(db, predicate))
+        .find_map(|&predicate| {
+            match discharge_requirement(db, declaration, predicate, args.to_vec(), caller) {
+                Discharge::Holds => None,
+                Discharge::Fails(failure) => Some(TypeRequirementFailure {
+                    ty,
+                    predicate,
+                    failure,
+                }),
+            }
+        })
 }
 
 #[salsa::tracked(cycle_initial=requirement_cycle_initial, cycle_fn=requirement_cycle_recover)]

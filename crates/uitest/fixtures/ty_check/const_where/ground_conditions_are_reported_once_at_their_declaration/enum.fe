@@ -1,0 +1,8 @@
+// A condition without generic parameters is checked where it is declared.
+// Its failure is one error there, not another at each use.
+enum Never where false { Value }
+enum Pair<const N: usize> where false, N > 0 { Value }
+
+fn read(_ never: Never) -> u256 { 0 }
+fn make() -> Never { Never::Value }
+fn pair() { let _ = Pair<1>::Value }

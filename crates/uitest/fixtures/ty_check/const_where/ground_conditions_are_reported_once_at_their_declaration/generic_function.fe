@@ -1,0 +1,10 @@
+// A condition without generic parameters is checked where it is declared.
+// Its failure is one error there, not another at each call, as for a
+// function without generic parameters.
+fn never<T>() -> u256 where false { 0 }
+fn never_const<const N: usize>() -> u256 where false, N > 0 { 0 }
+fn plain() -> u256 where false { 0 }
+
+fn caller() -> u256 {
+    never<u256>() + never<bool>() + never_const<1>() + plain() + plain()
+}
