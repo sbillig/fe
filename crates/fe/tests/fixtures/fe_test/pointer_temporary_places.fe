@@ -1,0 +1,47 @@
+struct Counter {
+    n: u256,
+}
+
+struct Cell {
+    counter: Counter,
+    counters: [Counter; 2],
+    next: *Cell,
+}
+
+fn new_cell() -> *Cell {
+    let cell = core::ptr::alloc<Cell>()
+    cell.counter = Counter { n: 0 }
+    cell.counters = [Counter { n: 0 }, Counter { n: 0 }]
+    cell.next = cell
+    cell
+}
+
+fn id(_ cell: *Cell) -> *Cell {
+    cell
+}
+
+fn incr() uses (counter: mut Counter) {
+    counter.n += 1
+}
+
+#[test]
+fn test_with_captures_temporary_pointer_places() {
+    let cell = new_cell()
+    let other = new_cell()
+    with ((*id(cell)).counter) {
+        incr()
+    }
+    let mut i: usize = 0
+    with (id(cell).counters[i]) {
+        i = 1
+        incr()
+    }
+    with (id(cell).next.counter) {
+        cell.next = other
+        incr()
+    }
+    assert(cell.counter.n == 2)
+    assert(cell.counters[0].n == 1)
+    assert(cell.counters[1].n == 0)
+    assert(other.counter.n == 0)
+}
