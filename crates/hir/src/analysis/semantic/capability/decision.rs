@@ -173,9 +173,15 @@ pub(super) enum Variable<V> {
 
 struct Builder<V, T> {
     nodes: Vec<Node<V, T>>,
-    interned: FxHashMap<Node<V, T>, usize>,
+    // Node positions by hash, chained through `next` for equal hashes. Keying this
+    // by the node itself stored every node twice, once here and once in `nodes`.
+    positions: FxHashMap<u64, Child>,
+    next: Vec<Child>,
     selections: FxHashMap<(V, usize, usize), usize>,
 }
+
+/// No node, so an empty chain link and an unvisited position.
+const NONE: Child = Child::MAX;
 
 impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
     fn new() -> Self {
@@ -185,7 +191,8 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
     fn with_capacity(nodes: usize) -> Self {
         Self {
             nodes: Vec::with_capacity(nodes),
-            interned: FxHashMap::with_capacity_and_hasher(nodes, Default::default()),
+            positions: FxHashMap::with_capacity_and_hasher(nodes, Default::default()),
+            next: Vec::with_capacity(nodes),
             selections: FxHashMap::default(),
         }
     }
@@ -193,12 +200,21 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
     fn intern(&mut self, node: Node<V, T>) -> usize {
         #[cfg(test)]
         INTERN_ATTEMPTS.set(INTERN_ATTEMPTS.get() + 1);
-        if let Some(id) = self.interned.get(&node) {
-            return *id;
+        let mut hasher = FxHasher::default();
+        node.hash(&mut hasher);
+        let hash = hasher.finish();
+        let mut position = self.positions.get(&hash).copied().unwrap_or(NONE);
+        while position != NONE {
+            if self.nodes[position as usize] == node {
+                return position as usize;
+            }
+            position = self.next[position as usize];
         }
         let id = self.nodes.len();
-        self.nodes.push(node.clone());
-        self.interned.insert(node, id);
+        // The chain link is whichever node held this hash before.
+        self.next
+            .push(self.positions.insert(hash, child(id)).unwrap_or(NONE));
+        self.nodes.push(node);
         id
     }
 
@@ -347,20 +363,15 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
 
     fn finish(self, root: usize) -> Decision<V, T> {
         let mut nodes = Vec::with_capacity(self.nodes.len());
-        let mut numbering =
-            FxHashMap::with_capacity_and_hasher(self.nodes.len(), Default::default());
+        // Canonical positions are dense, so index them rather than hashing them.
+        let mut numbering = vec![NONE; self.nodes.len()];
         self.visit(root, &mut nodes, &mut numbering);
         Decision::new(nodes.into())
     }
 
-    fn visit(
-        &self,
-        id: usize,
-        nodes: &mut Vec<Node<V, T>>,
-        numbering: &mut FxHashMap<usize, usize>,
-    ) -> usize {
-        if let Some(id) = numbering.get(&id) {
-            return *id;
+    fn visit(&self, id: usize, nodes: &mut Vec<Node<V, T>>, numbering: &mut [Child]) -> usize {
+        if numbering[id] != NONE {
+            return numbering[id] as usize;
         }
         let node = match &self.nodes[id] {
             Node::Leaf(value) => Node::Leaf(value.clone()),
@@ -376,7 +387,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
         };
         let canonical = nodes.len();
         nodes.push(node);
-        numbering.insert(id, canonical);
+        numbering[id] = child(canonical);
         canonical
     }
 }

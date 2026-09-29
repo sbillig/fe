@@ -107,7 +107,10 @@ pub struct ValueMetrics {
 
 pub struct ValueInterner<'db, P> {
     pub(super) db: &'db dyn HirAnalysisDb,
-    nodes: FxHashMap<StructuredValue<'db, P>, ValueId<'db, P>>,
+    // Interned values by hash. Keying this by the value stored every value twice,
+    // once here and once behind the handle it hands out; a hash collision only
+    // costs a missed reuse, which eviction already allows.
+    nodes: FxHashMap<u64, ValueId<'db, P>>,
     normalized: FxHashMap<(BinderScope, Guarded<'db, P>), Guarded<'db, P>>,
     guards: Rc<RefCell<GuardCache<'db>>>,
     limits: ValueLimits,
@@ -1613,7 +1616,8 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                 payload,
             })
             .collect();
-        if let Some(value) = self.nodes.get(&node) {
+        let hash = FxBuildHasher.hash_one(&node);
+        if let Some(value) = self.nodes.get(&hash).filter(|value| *value.0 == node) {
             return value.clone();
         }
         // An interned node was validated when it was first created.
@@ -1632,15 +1636,22 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     .expect("free payload binder");
             }
         }
-        // IDs have structural equality, so cache eviction never changes domain equality.
-        // Live values keep their nodes alive independently of the interning cache.
+        // IDs have structural equality, so dropping entries never changes domain
+        // equality. Live values keep their nodes alive independently of this cache, so
+        // an entry nothing else holds is the only one worth dropping: clearing the
+        // whole cache would just have equal values rebuilt as separate nodes.
         if self.nodes.len() >= self.limits.interned_nodes {
-            self.nodes.clear();
+            self.nodes
+                .retain(|_, value| Arc::strong_count(&value.0) > 1);
+            // A limit the live values alone exceed, including a zero limit asking for
+            // no cache at all, still has to give the entries up.
+            if self.nodes.len() >= self.limits.interned_nodes {
+                self.nodes.clear();
+            }
             self.metrics.interner_evictions += 1;
         }
-        let hash = FxBuildHasher.hash_one(&node);
-        let value = ValueId(Arc::new(node.clone()), hash);
-        self.nodes.insert(node, value.clone());
+        let value = ValueId(Arc::new(node), hash);
+        self.nodes.insert(hash, value.clone());
         self.metrics.nodes_created += 1;
         value
     }

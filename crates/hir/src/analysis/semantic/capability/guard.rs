@@ -609,7 +609,7 @@ impl ConstantLeaf for Condition<'_> {
 #[derive(Default)]
 pub struct GuardCache<'db> {
     conjunctions: FxHashMap<(Guard<'db>, Guard<'db>), Option<Guard<'db>>>,
-    disjunctions: FxHashMap<(Guard<'db>, Guard<'db>), Guard<'db>>,
+    disjunctions: FxHashMap<(Guard<'db>, Guard<'db>), Option<Guard<'db>>>,
     substitutions: FxHashMap<(Guard<'db>, IndexSubst<'db>), Option<Guard<'db>>>,
     canonical: CanonicalGuards<'db>,
     pending: usize,
@@ -642,10 +642,10 @@ impl<'db> GuardCache<'db> {
             rhs,
             &mut canonical,
             &mut self.pending,
-            Guard::or,
+            |lhs, rhs| Some(lhs.or(rhs)),
         );
         self.canonical = canonical;
-        result
+        result.expect("a union of satisfiable guards is satisfiable")
     }
 
     pub fn substitute(
@@ -675,51 +675,28 @@ impl<'db> GuardCache<'db> {
     /// fresh copy. Entries hold representatives, and a representative nothing else
     /// holds is dead storage, so sweep those instead of discarding the whole memo:
     /// clearing it would only make the same graphs be rebuilt again.
-    fn cached<K: Clone + Eq + Hash, R: Shareable<'db>>(
-        results: &mut FxHashMap<(Guard<'db>, K), R>,
+    fn cached<K: Clone + Eq + Hash>(
+        results: &mut FxHashMap<(Guard<'db>, K), Option<Guard<'db>>>,
         lhs: &Guard<'db>,
         rhs: &K,
         canonical: &mut CanonicalGuards<'db>,
         pending: &mut usize,
-        operation: impl FnOnce(&Guard<'db>, &K) -> R,
-    ) -> R {
+        operation: impl FnOnce(&Guard<'db>, &K) -> Option<Guard<'db>>,
+    ) -> Option<Guard<'db>> {
         let key = (lhs.clone(), rhs.clone());
         if let Some(result) = results.get(&key) {
             return result.clone();
         }
-        let result = operation(lhs, rhs).shared(canonical);
+        let result = operation(lhs, rhs).map(|guard| canonical.share(guard));
         *pending += 1;
         if *pending >= Self::SWEEP {
             *pending = 0;
-            results.retain(|_, result| !result.is_sole_owner());
+            // An entry nothing else holds is dead storage; an infeasible one owns
+            // nothing and costs only its key.
+            results.retain(|_, result| result.as_ref().is_some_and(Guard::is_sole_owner));
         }
         results.insert(key, result.clone());
         result
-    }
-}
-
-/// An operation result whose guards can be replaced by shared representatives.
-trait Shareable<'db>: Clone {
-    fn shared(self, canonical: &mut CanonicalGuards<'db>) -> Self;
-    fn is_sole_owner(&self) -> bool;
-}
-
-impl<'db> Shareable<'db> for Guard<'db> {
-    fn shared(self, canonical: &mut CanonicalGuards<'db>) -> Self {
-        canonical.share(self)
-    }
-    fn is_sole_owner(&self) -> bool {
-        Guard::is_sole_owner(self)
-    }
-}
-
-impl<'db> Shareable<'db> for Option<Guard<'db>> {
-    fn shared(self, canonical: &mut CanonicalGuards<'db>) -> Self {
-        self.map(|guard| canonical.share(guard))
-    }
-    fn is_sole_owner(&self) -> bool {
-        // An infeasible result owns nothing, so keeping it costs only its key.
-        self.as_ref().is_some_and(Guard::is_sole_owner)
     }
 }
 
