@@ -22,14 +22,14 @@ pub use self::path::RecordLike;
 use crate::analysis::name_resolution::ResolvedVariant;
 pub use crate::analysis::ty::ProviderAddressSpace;
 use crate::analysis::ty::corelib::resolve_lib_type_path;
-use crate::analysis::ty::fold::TyFoldable;
+use crate::analysis::ty::fold::{TyFoldable, TyFolder};
 use crate::analysis::ty::method_table::ProbedMethod;
 use crate::analysis::ty::provider::{ProviderKind, provider_semantics};
 use crate::analysis::ty::trait_lower::lower_impl_trait;
 use crate::analysis::ty::trait_resolution::constraint::{
-    PredicateSource, collect_func_decl_constraint_pairs,
+    PredicateSource, collect_func_decl_constraint_pairs, collect_func_decl_constraints,
 };
-use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty};
+use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty, walk_ty};
 use crate::hir_def::{CallableDef, ConstGenericArgValue, ImplTrait, Trait};
 use crate::{
     hir_def::{
@@ -462,6 +462,219 @@ fn diag_depends_on_param_instantiation<'db>(
         FuncBodyDiag::Body(BodyDiag::TypeAnnotationNeeded { .. }) => true,
         _ => false,
     }
+}
+
+/// The `constraint_idx`-th bound of `callable_def` as declared, in terms of
+/// the callable's own generic parameters.
+fn declared_call_bound<'db>(
+    db: &'db dyn HirAnalysisDb,
+    callable_def: CallableDef<'db>,
+    constraint_idx: usize,
+) -> Option<TraitInstId<'db>> {
+    collect_func_decl_constraints(db, callable_def, true)
+        .instantiate_identity()
+        .list(db)
+        .get(constraint_idx)
+        .copied()
+}
+
+/// If the failing goal's self type is a capability (a borrowed value) and
+/// owning that value would satisfy `primary`, returns the capability type.
+/// The failing goal is `unsat`, the unsatisfied sub-goal, or `primary` itself
+/// when there is none.
+///
+/// This is the only claim the explanation makes; it names no impl, since the
+/// impl proving the owned goal may differ from the one whose bound failed for
+/// the borrowed value (`impl<A: Mark> Foo for W<A>` next to `impl Foo for
+/// W<S>`). It must never be wrong:
+/// - The capability type occurs exactly once in `primary`'s self type, and
+///   nowhere else in `primary` except in positions that follow the value.
+///   That occurrence is the borrowed value; with further occurrences (two
+///   borrowed values, or a type written out in a bound) the failure cannot be
+///   pinned to one value.
+/// - `primary` holds with the value owned. The solver re-derives every
+///   sub-goal from its declared bounds (including `Self`-dependent defaults
+///   and explicit arguments such as `A: Rel<ref S>`).
+///
+/// A trait argument or associated type binding follows the value when
+/// `declared` (the call bound `primary` was instantiated from) writes it in
+/// terms of the bound's self type alone: exactly the self type (`X: Eq`, which
+/// is `X: Eq<X>`; `Out<Item = X>`), or, when the self type is a generic
+/// parameter `X`, a type mentioning no other parameter (`Rel<(X,)>`,
+/// `Out<Item = W<X>>`). Such a position is recomputed from its declared type
+/// with `X` bound to the owned value, after checking that binding `X` to the
+/// borrowed value reproduces the instantiated position.
+fn capability_only_unsat_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    primary: TraitInstId<'db>,
+    declared: Option<TraitInstId<'db>>,
+    unsat: Option<TraitInstId<'db>>,
+) -> Option<TyId<'db>> {
+    fn occurrences<'db>(
+        db: &'db dyn HirAnalysisDb,
+        target: TyId<'db>,
+        value: &impl TyVisitable<'db>,
+    ) -> usize {
+        struct CountTy<'db> {
+            db: &'db dyn HirAnalysisDb,
+            target: TyId<'db>,
+            count: usize,
+        }
+
+        impl<'db> TyVisitor<'db> for CountTy<'db> {
+            fn db(&self) -> &'db dyn HirAnalysisDb {
+                self.db
+            }
+
+            fn visit_ty(&mut self, ty: TyId<'db>) {
+                if ty == self.target {
+                    self.count += 1;
+                } else {
+                    walk_ty(self, ty);
+                }
+            }
+        }
+
+        let mut counter = CountTy {
+            db,
+            target,
+            count: 0,
+        };
+        value.visit_with(&mut counter);
+        counter.count
+    }
+
+    /// Whether `ty` mentions `param` and no other parameter, inference
+    /// variable or projection, so it is determined by `param` alone.
+    fn determined_by<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, param: TyId<'db>) -> bool {
+        use crate::analysis::ty::ty_def::{AssocTy, TyParam, TyVar};
+
+        struct Determined<'db> {
+            db: &'db dyn HirAnalysisDb,
+            param: TyId<'db>,
+            mentions: bool,
+            other: bool,
+        }
+
+        impl<'db> TyVisitor<'db> for Determined<'db> {
+            fn db(&self) -> &'db dyn HirAnalysisDb {
+                self.db
+            }
+
+            fn visit_ty(&mut self, ty: TyId<'db>) {
+                if ty == self.param {
+                    self.mentions = true;
+                } else if matches!(ty.data(self.db), TyData::QualifiedTy(_)) {
+                    self.other = true;
+                } else {
+                    walk_ty(self, ty);
+                }
+            }
+
+            fn visit_var(&mut self, _: &TyVar<'db>) {
+                self.other = true;
+            }
+
+            fn visit_param(&mut self, _: &TyParam<'db>) {
+                self.other = true;
+            }
+
+            fn visit_const_param(&mut self, _: &TyParam<'db>, _: TyId<'db>) {
+                self.other = true;
+            }
+
+            fn visit_assoc_ty(&mut self, _: &AssocTy<'db>) {
+                self.other = true;
+            }
+        }
+
+        let mut visitor = Determined {
+            db,
+            param,
+            mentions: false,
+            other: false,
+        };
+        ty.visit_with(&mut visitor);
+        visitor.mentions && !visitor.other
+    }
+
+    struct ReplaceTy<'db> {
+        from: TyId<'db>,
+        to: TyId<'db>,
+    }
+
+    impl<'db> TyFolder<'db> for ReplaceTy<'db> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            if ty == self.from {
+                self.to
+            } else {
+                ty.super_fold_with(db, self)
+            }
+        }
+    }
+
+    let replace = |ty: TyId<'db>, from: TyId<'db>, to: TyId<'db>| {
+        ty.fold_with(db, &mut ReplaceTy { from, to })
+    };
+    let holds = |goal| {
+        matches!(
+            is_goal_satisfiable(db, solve_cx, goal),
+            GoalSatisfiability::Satisfied(_)
+        )
+    };
+    let self_ty = unsat.unwrap_or(primary).self_ty(db);
+    let (_, inner) = self_ty.as_capability(db)?;
+
+    let primary_self = primary.self_ty(db);
+    if occurrences(db, self_ty, &primary_self) != 1 {
+        return None;
+    }
+    let owned_self = replace(primary_self, self_ty, inner);
+
+    let declared = declared.filter(|declared| {
+        declared.def(db) == primary.def(db) && declared.args(db).len() == primary.args(db).len()
+    });
+    let declared_self = declared.map(|declared| declared.self_ty(db));
+    // The owned form of a position declared as `declared_ty` and instantiated
+    // as `actual`, if it follows the value.
+    let follow = |declared_ty: TyId<'db>, actual: TyId<'db>| -> Option<TyId<'db>> {
+        let declared_self = declared_self?;
+        if declared_ty == declared_self {
+            return (actual == primary_self).then_some(owned_self);
+        }
+        if !matches!(declared_self.data(db), TyData::TyParam(_))
+            || !determined_by(db, declared_ty, declared_self)
+            || replace(declared_ty, declared_self, primary_self) != actual
+        {
+            return None;
+        }
+        Some(replace(declared_ty, declared_self, owned_self))
+    };
+
+    let mut elsewhere = 0;
+    let mut owned_args = primary.args(db).clone();
+    owned_args[0] = owned_self;
+    for (idx, arg) in owned_args.iter_mut().enumerate().skip(1) {
+        match declared.and_then(|declared| follow(declared.args(db)[idx], *arg)) {
+            Some(owned) => *arg = owned,
+            None => elsewhere += occurrences(db, self_ty, arg),
+        }
+    }
+    let mut owned_bindings = primary.assoc_type_bindings(db).clone();
+    for (name, ty) in owned_bindings.iter_mut() {
+        let declared_ty =
+            declared.and_then(|declared| declared.assoc_type_bindings(db).get(name).copied());
+        match declared_ty.and_then(|declared_ty| follow(declared_ty, *ty)) {
+            Some(owned) => *ty = owned,
+            None => elsewhere += occurrences(db, self_ty, ty),
+        }
+    }
+    if elsewhere != 0 {
+        return None;
+    }
+    let owned_primary = TraitInstId::new(db, primary.def(db), owned_args, owned_bindings);
+    holds(owned_primary).then_some(self_ty)
 }
 
 /// Ground predicates are declaration obligations. Ordinary generic functions
@@ -2072,12 +2285,23 @@ impl<'db> TyChecker<'db> {
                         env::TraitObligationOrigin::GenericConfirmation => None,
                     };
                     let unsat = subgoal.map(|goal| query.extract_subgoal(&mut self.table, goal));
+                    let declared = match obligation.origin {
+                        env::TraitObligationOrigin::CallConstraint {
+                            callable_def,
+                            constraint_idx,
+                            ..
+                        } => declared_call_bound(db, callable_def, constraint_idx),
+                        env::TraitObligationOrigin::GenericConfirmation => None,
+                    };
+                    let capability_hint =
+                        capability_only_unsat_ty(db, solve_cx, goal, declared, unsat);
                     self.push_diag(TyDiagCollection::from(
                         TraitConstraintDiag::TraitBoundNotSat {
                             span: obligation.span.clone(),
                             primary_goal: goal,
                             unsat_subgoal: unsat,
                             required_by,
+                            capability_hint,
                         },
                     ));
                     TraitObligationOutcome::Discharged

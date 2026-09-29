@@ -1108,6 +1108,11 @@ pub enum TraitConstraintDiag<'db> {
         primary_goal: TraitInstId<'db>,
         unsat_subgoal: Option<TraitInstId<'db>>,
         required_by: Option<CallConstraintDiagInfo<'db>>,
+        /// A capability type (the internal `View` capability of a default parameter,
+        /// or `ref`/`mut`) whose failing bound would hold
+        /// for its underlying type (`T`). Set when the bound is unsatisfied
+        /// only because the value is a view/borrow rather than owned.
+        capability_hint: Option<TyId<'db>>,
     },
 
     InfiniteBoundRecursion(DynLazySpan<'db>, String),

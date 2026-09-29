@@ -75,6 +75,42 @@ fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId
     }
 }
 
+/// Label and notes for a bound that is unsatisfied because a type in it is
+/// borrowed (the capability type `cap_ty`) and that would be satisfied if the
+/// type were owned. The borrowed type need not come from a passed value (it
+/// can be written in the bound or inferred from an expected type), so the
+/// label describes the type.
+///
+/// Default parameters (`x: T` without `own`) are borrowed read-only. That
+/// capability has no source syntax, so it is described in words rather than
+/// printed as a type. No impl is named, since the impl that applies to the
+/// owned value may differ from the one whose bound failed, and no edit is
+/// suggested, since the borrow may come from a projection or destructuring
+/// rather than from a binding the user can change to `own`.
+fn capability_bound_notes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    cap_ty: TyId<'db>,
+) -> Option<(String, Vec<String>)> {
+    use crate::analysis::ty::ty_def::CapabilityKind;
+
+    let (kind, inner) = cap_ty.as_capability(db)?;
+    let inner_str = inner.pretty_print(db);
+    let held = match kind {
+        CapabilityKind::View => "is only borrowed here".to_string(),
+        CapabilityKind::Ref => format!("is borrowed here as `ref {inner_str}`"),
+        CapabilityKind::Mut => format!("is borrowed here as `mut {inner_str}`"),
+    };
+    let label = format!("`{inner_str}` {held}; the bound would be satisfied if it were owned");
+    let mut notes = Vec::new();
+    if kind == CapabilityKind::View {
+        notes.push(
+            "note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`"
+                .to_string(),
+        );
+    }
+    Some((label, notes))
+}
+
 fn pretty_print_ty_app_for_mismatch<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     ty: TyId<'db>,
@@ -4961,6 +4997,7 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 primary_goal,
                 unsat_subgoal,
                 required_by,
+                capability_hint,
             } => {
                 let msg = format!(
                     "`{}` doesn't implement `{}`",
@@ -4973,19 +5010,27 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 // trait the reader cannot name (e.g. a private sealed marker in
                 // another module) is unactionable noise, so we keep just the
                 // primary goal in that case.
-                let unsat_subgoal = unsat_subgoal
-                    .filter(|unsat| {
-                        let Some(from_scope) = span.scope() else {
-                            return true;
-                        };
-                        is_scope_visible_from(db, unsat.def(db).scope(), from_scope)
-                    })
-                    .map(|unsat| {
-                        format!(
-                            "trait bound `{}` is not satisfied",
-                            unsat.pretty_print(db, true)
-                        )
-                    });
+                let visible_unsat = unsat_subgoal.filter(|unsat| {
+                    let Some(from_scope) = span.scope() else {
+                        return true;
+                    };
+                    is_scope_visible_from(db, unsat.def(db).scope(), from_scope)
+                });
+
+                // A bound that fails only because the value is borrowed gets
+                // an explanation instead of the generic sub-goal line, which
+                // would print the borrowed value's type as if it were owned
+                // (e.g. "`T: AsBytes` is not satisfied" although it is). It
+                // names no trait, so it needs no visibility filter.
+                let capability =
+                    capability_hint.and_then(|cap_ty| capability_bound_notes(db, cap_ty));
+
+                let unsat_subgoal = visible_unsat.map(|unsat| {
+                    format!(
+                        "trait bound `{}` is not satisfied",
+                        unsat.pretty_print(db, true)
+                    )
+                });
 
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -4993,7 +5038,11 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                     span: span.resolve(db),
                 }];
 
-                if let Some(subgoal) = unsat_subgoal {
+                let subgoal_label = match &capability {
+                    Some((label, _)) => Some(label.clone()),
+                    None => unsat_subgoal,
+                };
+                if let Some(subgoal) = subgoal_label {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
                         message: subgoal,
@@ -5009,11 +5058,13 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                     });
                 }
 
+                let notes = capability.map(|(_, notes)| notes).unwrap_or_default();
+
                 CompleteDiagnostic {
                     severity,
                     message: "trait bound is not satisfied".to_string(),
                     sub_diagnostics,
-                    notes: vec![],
+                    notes,
                     error_code,
                 }
             }
