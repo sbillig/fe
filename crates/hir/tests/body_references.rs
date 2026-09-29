@@ -35,8 +35,7 @@ fn body_references(fixture: Fixture<&str>) {
                             .path
                             .ident(&db)
                             .to_opt()
-                            .map(|id| id.data(&db).to_string())
-                            .unwrap_or_else(|| "<complex>".to_string());
+                            .map_or_else(|| "<complex>".to_string(), |id| id.data(&db).to_string());
 
                         // Try to resolve the target
                         let resolution = pv.target(&db);
@@ -46,7 +45,7 @@ fn body_references(fixture: Fixture<&str>) {
                             None => "unresolved".to_string(),
                         };
 
-                        let annotation = format!("{} -> {}", path_name, target_desc);
+                        let annotation = format!("{path_name} -> {target_desc}");
                         prop_formatter.push_prop(top_mod, pv.span(), annotation);
                     }
                     ReferenceView::FieldAccess(fv) => {

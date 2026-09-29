@@ -854,16 +854,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         self.expr_ty(expr),
                         instantiated,
                     )
-                    .map(|value| SConst::from_trusted_source(self.db, value))
-                    .unwrap_or_else(|| {
-                        // Only a value path naming a declaration parameter
-                        // retains formal identity for runtime ABI evidence.
-                        if matches!(template.data(self.db), ConstTyData::TyParam(..)) {
-                            SConst::Evidence(value)
-                        } else {
-                            SConst::from_trusted_source(self.db, instantiated)
-                        }
-                    });
+                    .map_or_else(
+                        || {
+                            // Only a value path naming a declaration parameter
+                            // retains formal identity for runtime ABI evidence.
+                            if matches!(template.data(self.db), ConstTyData::TyParam(..)) {
+                                SConst::Evidence(value)
+                            } else {
+                                SConst::from_trusted_source(self.db, instantiated)
+                            }
+                        },
+                        |value| SConst::from_trusted_source(self.db, value),
+                    );
                     self.emit_expr_with_origin(
                         SemOrigin::Expr(expr),
                         self.expr_ty(expr),
@@ -1053,9 +1055,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         region_arg: ExprId,
     ) -> SemanticCodeRegionTarget<'db> {
         self.typed_body
-            .expr_code_region_ref(self.db, region_arg)
-            .map(SemanticCodeRegionTarget::Resolved)
-            .unwrap_or_else(|| {
+            .expr_code_region_ref(self.db, region_arg).map_or_else(|| {
                 let ty = self.expr_ty(region_arg);
                 if ty.has_param(self.db) || ty.has_var(self.db) {
                     SemanticCodeRegionTarget::Deferred {
@@ -1066,7 +1066,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         "typed code-region intrinsic is missing instantiated code-region ref: call={call_expr:?} arg={region_arg:?} ty={ty:?}"
                     )
                 }
-            })
+            }, SemanticCodeRegionTarget::Resolved)
     }
 
     fn lower_callable_expr(
@@ -1300,12 +1300,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
         }
 
-        match tail.data(self.db, self.body) {
-            Partial::Present(Stmt::Expr(expr)) => self.lower_expr(*expr),
-            _ => {
-                self.lower_stmt(*tail);
-                self.unit_value()
-            }
+        if let Partial::Present(Stmt::Expr(expr)) = tail.data(self.db, self.body) {
+            self.lower_expr(*expr)
+        } else {
+            self.lower_stmt(*tail);
+            self.unit_value()
         }
     }
 

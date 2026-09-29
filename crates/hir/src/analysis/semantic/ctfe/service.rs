@@ -1119,7 +1119,7 @@ fn term_integer<'db>(
         }
         .into());
     };
-    Ok(normalize_int_to_shape(value.clone(), bits, signed))
+    Ok(normalize_int_to_shape(value, bits, signed))
 }
 
 fn term_operation_error<'db>(

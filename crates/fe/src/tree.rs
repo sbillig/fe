@@ -161,8 +161,7 @@ fn print_workspace_trees(
         let label = member
             .name
             .as_deref()
-            .map(|name| name.to_string())
-            .unwrap_or_else(|| member.url.to_string());
+            .map_or_else(|| member.url.to_string(), |name| name.to_string());
         println!("== {label} ==");
         let tree = DependencyTree::build(db, &member.url);
         print!("{}", tree.display_to(common::color::ColorTarget::Stdout));

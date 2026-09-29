@@ -120,14 +120,14 @@ fn collect_return_type_actions<'db>(
                 start: insert_pos,
                 end: insert_pos,
             },
-            new_text: format!(" -> {}", ret_ty_str),
+            new_text: format!(" -> {ret_ty_str}"),
         };
 
         let mut changes = HashMap::new();
         changes.insert(uri.clone(), vec![edit]);
 
         actions.push(CodeAction {
-            title: format!("Add return type: -> {}", ret_ty_str),
+            title: format!("Add return type: -> {ret_ty_str}"),
             kind: Some(CodeActionKind::QUICKFIX),
             diagnostics: None,
             edit: Some(WorkspaceEdit {

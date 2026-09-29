@@ -90,10 +90,7 @@ fn format_bin_expr_inner<'a>(
     let op = match bin.op() {
         Some(o) => o,
         None => {
-            return bin
-                .lhs()
-                .map(|e| e.to_doc(ctx))
-                .unwrap_or_else(|| alloc.nil());
+            return bin.lhs().map_or_else(|| alloc.nil(), |e| e.to_doc(ctx));
         }
     };
 
@@ -251,12 +248,10 @@ fn segment_to_doc<'a>(seg: &ChainSegment, ctx: &'a RewriteContext<'a>) -> Doc<'a
         } => {
             let generics_doc = generics
                 .as_ref()
-                .map(|g| g.to_doc(ctx))
-                .unwrap_or_else(|| alloc.nil());
+                .map_or_else(|| alloc.nil(), |g| g.to_doc(ctx));
             let args_doc = args
                 .as_ref()
-                .map(|a| a.to_doc(ctx))
-                .unwrap_or_else(|| alloc.text("()"));
+                .map_or_else(|| alloc.text("()"), |a| a.to_doc(ctx));
             alloc
                 .text(".")
                 .append(alloc.text(name.clone()))
@@ -555,8 +550,7 @@ impl ToDoc for ast::CallExpr {
 
         let args_doc = self
             .args()
-            .map(|args| args.to_doc(ctx))
-            .unwrap_or_else(|| alloc.text("()"));
+            .map_or_else(|| alloc.text("()"), |args| args.to_doc(ctx));
 
         callee.append(args_doc)
     }
@@ -593,8 +587,7 @@ impl ToDoc for ast::MacroCallExpr {
 
         let args_doc = self
             .args()
-            .map(|args| args.to_doc(ctx))
-            .unwrap_or_else(|| alloc.text("()"));
+            .map_or_else(|| alloc.text("()"), |args| args.to_doc(ctx));
 
         callee.append(alloc.text("!")).append(args_doc)
     }
@@ -730,8 +723,7 @@ impl ToDoc for ast::RecordInitExpr {
 
         let fields_doc = self
             .fields()
-            .map(|fields| fields.to_doc(ctx))
-            .unwrap_or_else(|| alloc.text("{}"));
+            .map_or_else(|| alloc.text("{}"), |fields| fields.to_doc(ctx));
 
         path.append(alloc.text(" ")).append(fields_doc)
     }
@@ -987,7 +979,7 @@ impl ToDoc for ast::IfExpr {
             self.syntax(),
             indent,
             |node| {
-                if let Some(expr) = ast::Expr::cast(node.clone()) {
+                if let Some(expr) = ast::Expr::cast(node) {
                     expr_count += 1;
                     let piece = TokenPiece::new(expr.to_doc(ctx));
                     return Some(if expr_count == 1 {
@@ -1266,8 +1258,7 @@ impl ToDoc for ast::WithExpr {
         if !has_comment_tokens(self.syntax()) {
             let params_doc = self
                 .params()
-                .map(|params| params.to_doc(ctx))
-                .unwrap_or_else(|| alloc.text("()"));
+                .map_or_else(|| alloc.text("()"), |params| params.to_doc(ctx));
 
             let body = match self.body() {
                 Some(b) => b.to_doc(ctx),

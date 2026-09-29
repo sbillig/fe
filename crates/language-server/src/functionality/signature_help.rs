@@ -242,8 +242,7 @@ fn build_signature_help<'db>(
     let func_name = func
         .name(db)
         .to_opt()
-        .map(|n| n.data(db).to_string())
-        .unwrap_or_else(|| "<anonymous>".to_string());
+        .map_or_else(|| "<anonymous>".to_string(), |n| n.data(db).to_string());
 
     // Build parameter info
     let mut params = Vec::new();
@@ -254,12 +253,12 @@ fn build_signature_help<'db>(
         let ty_str = ty.pretty_print(db);
 
         let (label, doc) = if param.is_self_param(db) {
-            ("self".to_string(), format!("self: {}", ty_str))
+            ("self".to_string(), format!("self: {ty_str}"))
         } else if let Some(name) = param.name(db) {
             let name_str = name.data(db);
             (
-                format!("{}: {}", name_str, ty_str),
-                format!("{}: {}", name_str, ty_str),
+                format!("{name_str}: {ty_str}"),
+                format!("{name_str}: {ty_str}"),
             )
         } else {
             (ty_str.to_string(), ty_str.to_string())
@@ -278,7 +277,7 @@ fn build_signature_help<'db>(
     let ret_str = if ret_ty_str == "()" || ret_ty_str.is_empty() {
         String::new()
     } else {
-        format!(" -> {}", ret_ty_str)
+        format!(" -> {ret_ty_str}")
     };
 
     // Build full signature label

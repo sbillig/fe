@@ -693,9 +693,8 @@ impl<S: TokenStream> Parser<S> {
                 let next = self.stream.next().unwrap();
                 self.next_trivias.push_back(next);
                 continue;
-            } else {
-                return self.stream.peek().cloned();
             }
+            return self.stream.peek().cloned();
         }
 
         None
@@ -878,10 +877,7 @@ impl Recoverable for ParseError {}
 impl Recoverable for Infallible {}
 impl<T> Recoverable for Recovery<T> {
     fn is_local_recovery<S: TokenStream>(&self, parser: &Parser<S>) -> bool {
-        self.0
-            .as_ref()
-            .map(|i| parser.is_current_scope(*i))
-            .unwrap_or(false)
+        self.0.as_ref().is_some_and(|i| parser.is_current_scope(*i))
     }
 }
 

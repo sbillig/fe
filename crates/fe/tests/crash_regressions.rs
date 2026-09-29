@@ -149,8 +149,7 @@ fn crash_regressions_do_not_panic() {
 
         if run.timed_out {
             failures.push(format!(
-                "`fe check` timed out after {:?} (elapsed {:?}) on {fixture:?}\n{combined}",
-                FE_CHECK_TIMEOUT, elapsed
+                "`fe check` timed out after {FE_CHECK_TIMEOUT:?} (elapsed {elapsed:?}) on {fixture:?}\n{combined}"
             ));
             continue;
         }

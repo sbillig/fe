@@ -81,8 +81,7 @@ impl<'db> SemConstId<'db> {
                     .as_enum(db)
                     .and_then(|enum_| enum_.variants(db).nth(variant.0 as usize))
                     .and_then(|variant| variant.name(db))
-                    .map(|name| name.data(db).to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string());
+                    .map_or_else(|| "<unknown>".to_string(), |name| name.data(db).to_string());
                 let fields = fields
                     .iter()
                     .map(|field| field.pretty_print(db))
@@ -400,7 +399,7 @@ pub fn sem_const_eq<'db>(
     }
 
     fn is_string_like<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
-        let ty = ty.as_capability(db).map(|(_, inner)| inner).unwrap_or(ty);
+        let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
         if ty.is_string(db) {
             return true;
         }
@@ -657,8 +656,8 @@ fn reify_runtime_const_impl<'db>(
             };
             match value {
                 SemConstScalar::Bool(value) => bool_const(db, value),
-                SemConstScalar::Int { value } => int_const(db, ty, value.clone()),
-                SemConstScalar::Bytes(bytes) => bytes_const(db, ty, bytes.clone()),
+                SemConstScalar::Int { value } => int_const(db, ty, value),
+                SemConstScalar::Bytes(bytes) => bytes_const(db, ty, bytes),
             }
         }
         SemConstValue::Description(term) => {

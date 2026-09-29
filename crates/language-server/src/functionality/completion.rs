@@ -47,15 +47,13 @@ pub async fn handle_completion(
         .context
         .as_ref()
         .and_then(|ctx| ctx.trigger_character.as_ref())
-        .map(|c| c == ".")
-        .unwrap_or(false);
+        .is_some_and(|c| c == ".");
 
     // Method 2: Check if character before cursor is a dot (handles manual completion invoke)
     let char_before_is_dot = cursor
         .checked_sub(1.into())
         .and_then(|pos| file_text.get(usize::from(pos)..usize::from(cursor)))
-        .map(|s| s == ".")
-        .unwrap_or(false);
+        .is_some_and(|s| s == ".");
 
     let is_member_access = trigger_is_dot || char_before_is_dot;
 
@@ -64,15 +62,13 @@ pub async fn handle_completion(
         .context
         .as_ref()
         .and_then(|ctx| ctx.trigger_character.as_ref())
-        .map(|c| c == ":")
-        .unwrap_or(false);
+        .is_some_and(|c| c == ":");
 
     // Check for "::" before cursor
     let is_path_completion = cursor
         .checked_sub(2.into())
         .and_then(|pos| file_text.get(usize::from(pos)..usize::from(cursor)))
-        .map(|s| s == "::")
-        .unwrap_or(false)
+        .is_some_and(|s| s == "::")
         || trigger_is_colon;
 
     if is_member_access {
@@ -402,7 +398,7 @@ fn build_auto_import_completion<'db>(
 
     // module_path is already the full import path (e.g., "utils::func_with_args")
     // Create the import text edit
-    let import_text = format!("use {}\n", module_path);
+    let import_text = format!("use {module_path}\n");
     let import_edit = TextEdit {
         range: Range {
             start: import_position,
@@ -414,15 +410,14 @@ fn build_auto_import_completion<'db>(
     // Extract just the module portion for display (everything before the last ::)
     let module_only = module_path
         .rsplit_once("::")
-        .map(|(m, _)| m)
-        .unwrap_or(module_path);
+        .map_or(module_path, |(m, _)| m);
 
     Some(CompletionItem {
         label: name_str,
         kind: Some(kind),
-        detail: Some(format!("use {} [{}]", module_path, detail)),
+        detail: Some(format!("use {module_path} [{detail}]")),
         label_details: Some(async_lsp::lsp_types::CompletionItemLabelDetails {
-            detail: Some(format!(" ({})", module_only)),
+            detail: Some(format!(" ({module_only})")),
             description: None,
         }),
         insert_text: Some(snippet),
@@ -445,10 +440,10 @@ fn build_func_snippet_and_detail<'db>(
         if param.is_self_param(db) {
             continue;
         }
-        let param_name = param
-            .name(db)
-            .map(|n| n.data(db).to_string())
-            .unwrap_or_else(|| format!("arg{}", param_names.len()));
+        let param_name = param.name(db).map_or_else(
+            || format!("arg{}", param_names.len()),
+            |n| n.data(db).to_string(),
+        );
         let param_ty = param.ty(db);
         param_details.push(format!("{}: {}", param_name, param_ty.pretty_print(db)));
         param_names.push(param_name);
@@ -460,13 +455,13 @@ fn build_func_snippet_and_detail<'db>(
         if ret_pretty == "()" {
             String::new()
         } else {
-            format!(" -> {}", ret_pretty)
+            format!(" -> {ret_pretty}")
         }
     };
     let detail = format!("fn {}({}){}", name_str, param_details.join(", "), ret_str);
 
     let snippet = if param_names.is_empty() {
-        format!("{}()$0", name_str)
+        format!("{name_str}()$0")
     } else {
         let tabstops: Vec<String> = param_names
             .iter()
@@ -534,13 +529,12 @@ fn find_import_position_after_brace(full_file_text: &str, brace_offset: usize) -
                     line: line + 1,
                     character: 0,
                 };
-            } else {
-                // No newline after brace, insert right after brace
-                return Position {
-                    line,
-                    character: (brace_offset - last_newline_offset + 1) as u32,
-                };
             }
+            // No newline after brace, insert right after brace
+            return Position {
+                line,
+                character: (brace_offset - last_newline_offset + 1) as u32,
+            };
         }
         if ch == '\n' {
             line += 1;
@@ -638,8 +632,7 @@ fn collect_path_completions<'db>(
     // Look for whitespace, operators, or other non-path characters
     let path_start = before_colons
         .rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != ':')
-        .map(|i| i + 1)
-        .unwrap_or(0);
+        .map_or(0, |i| i + 1);
 
     let full_path = before_colons[path_start..].trim();
     if full_path.is_empty() {
@@ -735,7 +728,7 @@ fn collect_path_completions<'db>(
             }
             ItemKind::Mod(_) | ItemKind::TopMod(_) => {
                 // Modules get :: suffix
-                (CompletionItemKind::MODULE, Some(format!("{}::", name_str)))
+                (CompletionItemKind::MODULE, Some(format!("{name_str}::")))
             }
             _ => continue,
         };
@@ -904,10 +897,10 @@ fn build_callable_completion<'db>(
             continue; // Skip self parameter in completion
         }
 
-        let param_name = param
-            .name(db)
-            .map(|n| n.data(db).to_string())
-            .unwrap_or_else(|| format!("arg{}", param_names.len()));
+        let param_name = param.name(db).map_or_else(
+            || format!("arg{}", param_names.len()),
+            |n| n.data(db).to_string(),
+        );
 
         let param_ty = param.ty(db);
         param_details.push(format!("{}: {}", param_name, param_ty.pretty_print(db)));
@@ -921,14 +914,14 @@ fn build_callable_completion<'db>(
         if ret_pretty == "()" {
             String::new()
         } else {
-            format!(" -> {}", ret_pretty)
+            format!(" -> {ret_pretty}")
         }
     };
     let detail = format!("fn {}({}){}", name_str, param_details.join(", "), ret_str);
 
     // Build snippet with tabstops: name(${1:param1}, ${2:param2})
     let snippet = if param_names.is_empty() {
-        format!("{}()$0", name_str)
+        format!("{name_str}()$0")
     } else {
         let tabstops: Vec<String> = param_names
             .iter()
@@ -1027,7 +1020,7 @@ fn collect_trait_methods_for_type<'db>(
                 if !trait_in_scope && let Some(trait_name) = trait_def.name(db).to_opt() {
                     let trait_name_str = trait_name.data(db);
                     if let Some(ref detail) = completion.detail {
-                        completion.detail = Some(format!("{} (use {})", detail, trait_name_str));
+                        completion.detail = Some(format!("{detail} (use {trait_name_str})"));
                     }
                 }
                 items.push(completion);
@@ -1224,7 +1217,7 @@ fn name_res_to_completion<'db>(
             Some(CompletionItem {
                 label: name.to_string(),
                 kind: Some(CompletionItemKind::MODULE),
-                insert_text: Some(format!("{}::", name)),
+                insert_text: Some(format!("{name}::")),
                 ..Default::default()
             })
         }
@@ -1591,8 +1584,7 @@ mod tests {
     fn format_completion_item(item: &CompletionItem) -> String {
         let kind_str = item
             .kind
-            .map(|k| format!("{:?}", k))
-            .unwrap_or_else(|| "?".to_string());
+            .map_or_else(|| "?".to_string(), |k| format!("{k:?}"));
 
         let mut result = format!("{} ({})", item.label, kind_str);
 
@@ -1603,7 +1595,7 @@ mod tests {
         }
 
         if let Some(ref detail) = item.detail {
-            result.push_str(&format!(" [{}]", detail));
+            result.push_str(&format!(" [{detail}]"));
         }
 
         // Show additional text edits (auto-imports)
@@ -1633,15 +1625,13 @@ mod tests {
         let is_member_access = cursor
             .checked_sub(1.into())
             .and_then(|pos| file_text.get(usize::from(pos)..usize::from(cursor)))
-            .map(|s| s == ".")
-            .unwrap_or(false);
+            .is_some_and(|s| s == ".");
 
         // Check if this is path completion (chars before cursor are '::')
         let is_path_completion = cursor
             .checked_sub(2.into())
             .and_then(|pos| file_text.get(usize::from(pos)..usize::from(cursor)))
-            .map(|s| s == "::")
-            .unwrap_or(false);
+            .is_some_and(|s| s == "::");
 
         if is_member_access {
             collect_member_completions(db, top_mod, cursor, &mut items);
@@ -1706,7 +1696,7 @@ mod tests {
             } else {
                 output.push_str("completions:\n");
                 for completion in &completions {
-                    output.push_str(&format!("  - {}\n", completion));
+                    output.push_str(&format!("  - {completion}\n"));
                 }
             }
             output.push('\n');

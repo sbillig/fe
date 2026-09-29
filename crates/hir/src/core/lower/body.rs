@@ -119,7 +119,7 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
         body_expr: ExprId,
         body_kind: BodyKind,
     ) -> Body<'db> {
-        let origin = ast.map(HirOrigin::raw).unwrap_or(HirOrigin::None);
+        let origin = ast.map_or(HirOrigin::None, HirOrigin::raw);
         let body = Body::new(
             self.f_ctxt.db(),
             self.id,

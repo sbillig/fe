@@ -579,9 +579,8 @@ pub fn check_contract_recv_blocks<'db>(
                 }
                 // Skip handler/selector conflict checks for duplicate msg blocks
                 continue;
-            } else {
-                seen_msg_blocks.insert(msg_mod, (path_span.clone(), msg_name));
             }
+            seen_msg_blocks.insert(msg_mod, (path_span.clone(), msg_name));
 
             // Check for selector and handler conflicts across all msg variants in this recv block
             for variant in msg_variants(db, msg_mod) {
@@ -754,16 +753,18 @@ pub(crate) fn eval_msg_variant_selector<'db>(
         },
         GenericSubst::none(db),
     ) {
-        EvalOutcome::Ready(value) => match value.value(db) {
-            SemConstValue::Scalar {
+        EvalOutcome::Ready(value) => {
+            if let SemConstValue::Scalar {
                 value: SemConstScalar::Int { value },
                 ..
-            } => value.to_u32(),
-            _ => {
+            } = value.value(db)
+            {
+                value.to_u32()
+            } else {
                 diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
                 None
             }
-        },
+        }
         EvalOutcome::Blocked(_) | EvalOutcome::Failed(_) => {
             diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
             None
@@ -874,7 +875,7 @@ pub fn check_contract_immutable_fields_initialized<'db>(
                 Err(_) => FxHashSet::default(),
             }
         } else {
-            required.clone()
+            required
         }
     } else {
         required

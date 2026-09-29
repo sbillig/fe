@@ -28,8 +28,7 @@ pub fn to_offset_from_position(position: Position, text: &str) -> parser::TextSi
         .unwrap_or_else(|| line_offsets.last().copied().unwrap_or(0));
     let line_end = line_offsets
         .get(line_index.saturating_add(1))
-        .map(|offset| offset.saturating_sub(1))
-        .unwrap_or(text.len());
+        .map_or(text.len(), |offset| offset.saturating_sub(1));
     let line_text = &text[line_start..line_end];
     let character_offset = utf16_column_to_byte_offset(line_text, position.character as usize);
 
@@ -146,16 +145,13 @@ pub fn diag_to_lsp(
     diag: CompleteDiagnostic,
 ) -> FxHashMap<async_lsp::lsp_types::Url, Vec<async_lsp::lsp_types::Diagnostic>> {
     let mut result = FxHashMap::default();
-    let primary_span = match diag.primary_span() {
-        Some(span) => span,
-        None => {
-            tracing::warn!(
-                "dropping diagnostic {:?} ({}): no primary span",
-                diag.error_code,
-                diag.message,
-            );
-            return result;
-        }
+    let Some(primary_span) = diag.primary_span() else {
+        tracing::warn!(
+            "dropping diagnostic {:?} ({}): no primary span",
+            diag.error_code,
+            diag.message,
+        );
+        return result;
     };
     let primary_location = match to_lsp_location_from_span(db, primary_span) {
         Ok(loc) => loc,

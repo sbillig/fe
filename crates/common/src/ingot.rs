@@ -248,7 +248,7 @@ impl<'db> Ingot<'db> {
                                         member.url.clone()
                                     }
                                 };
-                                Some((dependency.alias.clone(), url))
+                                Some((dependency.alias, url))
                             })
                             .collect()
                     }
@@ -296,21 +296,15 @@ impl Workspace {
     #[salsa::tracked]
     pub fn containing_ingot_config(self, db: &dyn InputDb, file: Url) -> Option<File> {
         tracing::debug!(target: "ingot_config", "containing_ingot_config called with file: {}", file);
-        let dir = match file.directory() {
-            Some(d) => d,
-            None => {
-                tracing::debug!(target: "ingot_config", "Could not get directory for: {}", file);
-                return None;
-            }
+        let Some(dir) = file.directory() else {
+            tracing::debug!(target: "ingot_config", "Could not get directory for: {}", file);
+            return None;
         };
         tracing::debug!(target: "ingot_config", "Search directory: {}", dir);
 
-        let config_url = match dir.join("fe.toml") {
-            Ok(url) => url,
-            Err(_) => {
-                tracing::debug!(target: "ingot_config", "Could not join 'fe.toml' to dir: {}", dir);
-                return None;
-            }
+        let Ok(config_url) = dir.join("fe.toml") else {
+            tracing::debug!(target: "ingot_config", "Could not join 'fe.toml' to dir: {}", dir);
+            return None;
         };
         tracing::debug!(target: "ingot_config", "Looking for config file at: {}", config_url);
 
@@ -367,7 +361,7 @@ impl Workspace {
                 .is_some_and(|dir| dir.as_str() == base_url.as_str());
 
             if is_under_src || is_at_root {
-                return Some(Ingot::new(db, base_url.clone(), None, kind));
+                return Some(Ingot::new(db, base_url, None, kind));
             }
 
             tracing::debug!(
@@ -477,7 +471,7 @@ mod tests {
 
         // Add all files to the index
         index
-            .set(&mut db, url_config.clone(), config)
+            .set(&mut db, url_config, config)
             .expect("Failed to set config file");
         index
             .set(&mut db, url_lib.clone(), lib)

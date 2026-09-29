@@ -7283,7 +7283,7 @@ impl Table {
             if value.ty.pretty_print(&db) == elem_ty {
                 assert!(
                     matches!(
-                        place.path.iter().cloned().collect::<Vec<_>>().as_slice(),
+                        place.path.iter().copied().collect::<Vec<_>>().as_slice(),
                         [
                             NDataProjection::Field(path_field),
                             NDataProjection::Index(NIndex::Value(_))
@@ -7296,7 +7296,7 @@ impl Table {
             }
             assert!(
                 !(value.ty.array_len(&db).is_some()
-                    && place.path.iter().cloned().collect::<Vec<_>>()
+                    && place.path.iter().copied().collect::<Vec<_>>()
                         == vec![NDataProjection::Field(
                             fe_hir::analysis::semantic::FieldIndex(field as u16)
                         )]),
@@ -7384,7 +7384,7 @@ impl Table {
             element_path
                 .0
                 .iter()
-                .cloned()
+                .copied()
                 .collect::<Vec<_>>()
                 .as_slice(),
             [NDataProjection::Index(NIndex::Value(_))]
@@ -7561,7 +7561,7 @@ fn erc20_has_role_self_ty_app_chain_is_acyclic() {
     let mut seen = rustc_hash::FxHashSet::default();
     let mut cursor = ty;
     loop {
-        assert!(seen.insert(cursor), "cyclic ty app chain at {:?}", cursor);
+        assert!(seen.insert(cursor), "cyclic ty app chain at {cursor:?}");
         match cursor.data(&db) {
             TyData::TyApp(lhs, _) => cursor = *lhs,
             _ => break,

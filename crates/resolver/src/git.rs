@@ -123,8 +123,7 @@ impl CheckoutCoverage {
             (Self::Full, _) | (_, Self::Full) => Self::Full,
             (Self::Sparse(current), Self::Sparse(requested)) => {
                 common_relative_root(current.as_path(), requested.as_path())
-                    .map(Self::Sparse)
-                    .unwrap_or(Self::Full)
+                    .map_or(Self::Full, Self::Sparse)
             }
         }
     }
@@ -304,10 +303,10 @@ impl GitResolver {
                 return Ok(CheckoutStatus::Existing);
             }
 
-            let target_coverage = current_coverage
-                .as_ref()
-                .map(|current| current.merge(&requested_coverage))
-                .unwrap_or_else(|| requested_coverage.clone());
+            let target_coverage = current_coverage.as_ref().map_or_else(
+                || requested_coverage.clone(),
+                |current| current.merge(&requested_coverage),
+            );
             let destination_is_initially_empty = false;
             self.checkout_revision(
                 &mut repo,
@@ -492,35 +491,32 @@ impl GitResolver {
             })?
             .flatten();
 
-        match sparse_root {
-            Some(root) => {
-                remove_marker_if_exists(&full_marker).map_err(|source| {
-                    GitResolutionError::PrepareCheckoutDirectory {
-                        path: utf8_path_buf(&full_marker, &self.checkout_root),
-                        source,
-                    }
-                })?;
-                fs::write(&sparse_marker, root.as_bytes()).map_err(|source| {
-                    GitResolutionError::PrepareCheckoutDirectory {
-                        path: utf8_path_buf(&sparse_marker, &self.checkout_root),
-                        source,
-                    }
-                })?;
-            }
-            None => {
-                remove_marker_if_exists(&sparse_marker).map_err(|source| {
-                    GitResolutionError::PrepareCheckoutDirectory {
-                        path: utf8_path_buf(&sparse_marker, &self.checkout_root),
-                        source,
-                    }
-                })?;
-                fs::write(&full_marker, b"").map_err(|source| {
-                    GitResolutionError::PrepareCheckoutDirectory {
-                        path: utf8_path_buf(&full_marker, &self.checkout_root),
-                        source,
-                    }
-                })?;
-            }
+        if let Some(root) = sparse_root {
+            remove_marker_if_exists(&full_marker).map_err(|source| {
+                GitResolutionError::PrepareCheckoutDirectory {
+                    path: utf8_path_buf(&full_marker, &self.checkout_root),
+                    source,
+                }
+            })?;
+            fs::write(&sparse_marker, root.as_bytes()).map_err(|source| {
+                GitResolutionError::PrepareCheckoutDirectory {
+                    path: utf8_path_buf(&sparse_marker, &self.checkout_root),
+                    source,
+                }
+            })?;
+        } else {
+            remove_marker_if_exists(&sparse_marker).map_err(|source| {
+                GitResolutionError::PrepareCheckoutDirectory {
+                    path: utf8_path_buf(&sparse_marker, &self.checkout_root),
+                    source,
+                }
+            })?;
+            fs::write(&full_marker, b"").map_err(|source| {
+                GitResolutionError::PrepareCheckoutDirectory {
+                    path: utf8_path_buf(&full_marker, &self.checkout_root),
+                    source,
+                }
+            })?;
         }
 
         Ok(())
@@ -659,16 +655,16 @@ impl fmt::Display for GitResolutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             GitResolutionError::PrepareCheckoutDirectory { path, source } => {
-                write!(f, "Failed to prepare checkout directory {}: {source}", path)
+                write!(f, "Failed to prepare checkout directory {path}: {source}")
             }
             GitResolutionError::CleanupCheckoutDirectory { path, source } => {
-                write!(f, "Failed to clean checkout directory {}: {source}", path)
+                write!(f, "Failed to clean checkout directory {path}: {source}")
             }
             GitResolutionError::CloneRepository { source, error } => {
                 write!(f, "Failed to clone repository {source}: {error}")
             }
             GitResolutionError::OpenRepository { path, error } => {
-                write!(f, "Failed to open existing checkout at {}: {error}", path)
+                write!(f, "Failed to open existing checkout at {path}: {error}")
             }
             GitResolutionError::InvalidRevision { rev, error } => write!(
                 f,
@@ -826,7 +822,7 @@ mod tests {
             .args(args)
             .status()
             .expect("git command");
-        assert!(status.success(), "git command failed: {:?}", args);
+        assert!(status.success(), "git command failed: {args:?}");
     }
 
     fn git_output(repo: &Utf8Path, args: &[&str]) -> String {
@@ -836,7 +832,7 @@ mod tests {
             .args(args)
             .output()
             .expect("git output");
-        assert!(output.status.success(), "git output failed: {:?}", args);
+        assert!(output.status.success(), "git output failed: {args:?}");
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 

@@ -40,8 +40,7 @@ pub fn create_report_staging_dir(base: &str) -> Result<Utf8PathBuf, String> {
     let pid = std::process::id();
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_nanos());
     let dir = base.join(format!("report-{pid}-{nanos}"));
     create_dir_all_utf8(&dir)?;
     Ok(dir)
@@ -87,8 +86,7 @@ pub fn copy_input_into_report(input: &Utf8PathBuf, inputs_dir: &Utf8PathBuf) -> 
     if input.is_file() {
         let name = input
             .file_name()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "input.fe".to_string());
+            .map_or_else(|| "input.fe".to_string(), |s| s.to_string());
         let dest = inputs_dir.join(name);
         std::fs::copy(input, &dest)
             .map_err(|err| format!("failed to copy `{input}` to `{dest}`: {err}"))?;

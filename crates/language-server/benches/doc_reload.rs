@@ -22,8 +22,7 @@ fn rss_mb() -> f64 {
                 .and_then(|l| l.split_whitespace().nth(1))
                 .and_then(|v| v.parse::<f64>().ok())
         })
-        .map(|kb| kb / 1024.0)
-        .unwrap_or(0.0)
+        .map_or(0.0, |kb| kb / 1024.0)
 }
 
 const SAMPLE_CODE: &str = r#"

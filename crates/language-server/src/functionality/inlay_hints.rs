@@ -14,7 +14,7 @@ pub async fn handle_inlay_hints(
     backend: &Backend,
     params: async_lsp::lsp_types::InlayHintParams,
 ) -> Result<Option<Vec<InlayHint>>, ResponseError> {
-    let url = backend.map_client_uri_to_internal(params.text_document.uri.clone());
+    let url = backend.map_client_uri_to_internal(params.text_document.uri);
 
     let file = backend
         .db
@@ -99,7 +99,7 @@ impl<'a, 'db> Visitor<'db> for InlayHintCollector<'a, 'db> {
                     // Position hint after the pattern
                     let hint = InlayHint {
                         position: range.end,
-                        label: InlayHintLabel::String(format!(": {}", ty_str)),
+                        label: InlayHintLabel::String(format!(": {ty_str}")),
                         kind: Some(InlayHintKind::TYPE),
                         text_edits: None,
                         tooltip: None,

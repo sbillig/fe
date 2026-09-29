@@ -71,7 +71,7 @@ fn lower_loop_unroll_hint<'db>(
     ctxt: &mut BodyCtxt<'_, 'db>,
     attrs: Option<ast::AttrList>,
 ) -> Option<bool> {
-    let lowered_attrs = AttrListId::lower_ast_opt(ctxt.f_ctxt, attrs.clone());
+    let lowered_attrs = AttrListId::lower_ast_opt(ctxt.f_ctxt, attrs);
     let db = ctxt.f_ctxt.db();
 
     lowered_attrs.parse_loop_unroll_attr(db).unwrap_or_default()

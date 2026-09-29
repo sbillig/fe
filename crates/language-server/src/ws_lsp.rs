@@ -82,7 +82,7 @@ async fn handle_ws_lsp_client(
             .layer(LifecycleLayer::default())
             .layer(CatchUnwindLayer::default())
             .layer(ConcurrencyLayer::default())
-            .layer(ClientProcessMonitorLayer::new(client.clone()))
+            .layer(ClientProcessMonitorLayer::new(client))
             .service(lsp_service)
     });
 

@@ -602,9 +602,8 @@ fn simplify_pattern<'db>(pat: Pattern<ConstructorKind<'db>>) -> Pattern<Construc
                 if matches!(alternative, Pattern::Wildcard) {
                     simplified.push(alternative);
                     break;
-                } else {
-                    simplified.push(alternative);
                 }
+                simplified.push(alternative);
             }
 
             if simplified.len() == 1 {

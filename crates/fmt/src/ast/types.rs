@@ -482,7 +482,7 @@ fn block_list_inner<'a>(
     let alloc = &ctx.alloc;
 
     if items.is_empty() {
-        return alloc.text(format!("{}{}", open, close));
+        return alloc.text(format!("{open}{close}"));
     }
 
     let sep = alloc.text(",").append(alloc.line());
@@ -542,18 +542,14 @@ impl ToDoc for ast::TypeGenericParam {
 
         let name = self
             .name()
-            .map(|n| alloc.text(ctx.token(&n)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
 
-        let bounds = self
-            .bounds()
-            .map(|b| b.to_doc(ctx))
-            .unwrap_or_else(|| alloc.nil());
+        let bounds = self.bounds().map_or_else(|| alloc.nil(), |b| b.to_doc(ctx));
 
-        let default = self
-            .default_ty()
-            .map(|ty| alloc.text(" = ").append(ty.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+        let default = self.default_ty().map_or_else(
+            || alloc.nil(),
+            |ty| alloc.text(" = ").append(ty.to_doc(ctx)),
+        );
 
         name.append(bounds).append(default)
     }
@@ -565,13 +561,11 @@ impl ToDoc for ast::ConstGenericParam {
 
         let name = self
             .name()
-            .map(|n| alloc.text(ctx.token(&n)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
 
         let ty = self
             .ty()
-            .map(|ty| alloc.text(": ").append(ty.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+            .map_or_else(|| alloc.nil(), |ty| alloc.text(": ").append(ty.to_doc(ctx)));
         let default = if let Some(hole) = self.default_hole() {
             alloc.text(" = ").append(alloc.text(ctx.token(&hole)))
         } else if let Some(expr) = self.default_expr() {
@@ -931,8 +925,7 @@ impl ToDoc for ast::PathSegment {
                     ast::PathSegmentKind::QualifiedType(q) => q.to_doc(ctx),
                     _ => self
                         .ident()
-                        .map(|ident| alloc.text(ctx.token(&ident)))
-                        .unwrap_or_else(|| alloc.nil()),
+                        .map_or_else(|| alloc.nil(), |ident| alloc.text(ctx.token(&ident))),
                 }
             } else {
                 alloc.nil()

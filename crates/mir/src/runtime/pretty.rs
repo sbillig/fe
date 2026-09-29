@@ -85,7 +85,7 @@ pub fn format_runtime_body<'db>(db: &'db dyn MirDb, body: &RuntimeBody<'db>) -> 
     }
     for (block_idx, block) in body.blocks.iter().enumerate() {
         let block_id = RBlockId::from_u32(block_idx as u32);
-        let _ = writeln!(out, "  bb{}:", block_idx);
+        let _ = writeln!(out, "  bb{block_idx}:");
         for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
             let _ = writeln!(out, "    [{}] {};", stmt_idx, format_stmt(db, stmt));
         }
@@ -145,7 +145,7 @@ pub fn format_runtime_package<'db>(db: &'db dyn MirDb, package: &RuntimePackage<
         let names = package
             .root_objects(db)
             .iter()
-            .map(|object| object.name(db).clone())
+            .map(|object| object.name(db))
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(out, "  root_objects: [{names}]");
@@ -215,7 +215,7 @@ fn write_section_summary<'db>(db: &'db dyn MirDb, out: &mut String, section: &Ru
         );
     }
     for const_region in &section.const_regions {
-        let _ = writeln!(out, "        const {:?}", const_region);
+        let _ = writeln!(out, "        const {const_region:?}");
     }
 }
 
@@ -805,8 +805,8 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
         RuntimeBuiltin::BlobBaseFee => "blobbasefee".to_string(),
         RuntimeBuiltin::Gas => "gas".to_string(),
         RuntimeBuiltin::CurrentCodeRegionLen => "current_code_region_len".to_string(),
-        RuntimeBuiltin::CodeRegionOffset { region } => format!("code_region_offset {:?}", region),
-        RuntimeBuiltin::CodeRegionLen { region } => format!("code_region_len {:?}", region),
+        RuntimeBuiltin::CodeRegionOffset { region } => format!("code_region_offset {region:?}"),
+        RuntimeBuiltin::CodeRegionLen { region } => format!("code_region_len {region:?}"),
         RuntimeBuiltin::Malloc { size } => format!("malloc {}", format_local_id(*size)),
         RuntimeBuiltin::NativePtrIsNull { ptr } => {
             format!("native_ptr_is_null {}", format_local_id(*ptr))

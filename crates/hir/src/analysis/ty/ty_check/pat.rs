@@ -479,8 +479,9 @@ impl<'db> TyChecker<'db> {
             Ok(PathRes::Const(const_def, ty)) => (
                 ty,
                 self.eval_const_pattern_literal(ConstRef::Const(const_def), expected)
-                    .map(|lit| self.literal_constructor_status(expected, lit))
-                    .unwrap_or(PatternAnalysisStatus::Unsupported),
+                    .map_or(PatternAnalysisStatus::Unsupported, |lit| {
+                        self.literal_constructor_status(expected, lit)
+                    }),
             ),
 
             Ok(PathRes::TraitConst(recv_ty, inst, name)) => {
@@ -534,8 +535,9 @@ impl<'db> TyChecker<'db> {
                     (
                         ty,
                         self.eval_const_pattern_literal(cref, expected)
-                            .map(|lit| self.literal_constructor_status(expected, lit))
-                            .unwrap_or(PatternAnalysisStatus::Unsupported),
+                            .map_or(PatternAnalysisStatus::Unsupported, |lit| {
+                                self.literal_constructor_status(expected, lit)
+                            }),
                     )
                 } else {
                     (
@@ -563,8 +565,9 @@ impl<'db> TyChecker<'db> {
                     (
                         ty,
                         self.eval_const_pattern_literal(cref, expected)
-                            .map(|lit| self.literal_constructor_status(expected, lit))
-                            .unwrap_or(PatternAnalysisStatus::Unsupported),
+                            .map_or(PatternAnalysisStatus::Unsupported, |lit| {
+                                self.literal_constructor_status(expected, lit)
+                            }),
                     )
                 } else {
                     (
@@ -733,12 +736,8 @@ impl<'db> TyChecker<'db> {
                     .unwrap_or(ty)
             })
             .collect::<Vec<_>>();
-        let fields = self.check_tuple_like_pattern_elems(
-            elems,
-            &elem_tys,
-            rest_range.clone(),
-            Some(variant_ty),
-        );
+        let fields =
+            self.check_tuple_like_pattern_elems(elems, &elem_tys, rest_range, Some(variant_ty));
         if actual_elems.len() != expected_len {
             let diag = BodyDiag::MismatchedFieldCount {
                 primary: pat.span(self.body()).into(),
@@ -799,9 +798,10 @@ impl<'db> TyChecker<'db> {
                     });
                     TupleVariantResolution::Invalid
                 }
-                PathRes::EnumVariant(variant) => match variant.kind(self.db) {
-                    VariantKind::Tuple(elems) => TupleVariantResolution::Resolved(variant, elems),
-                    _ => {
+                PathRes::EnumVariant(variant) => {
+                    if let VariantKind::Tuple(elems) = variant.kind(self.db) {
+                        TupleVariantResolution::Resolved(variant, elems)
+                    } else {
                         self.push_diag(BodyDiag::tuple_variant_expected(
                             self.db,
                             pat.span(self.body()).into(),
@@ -809,7 +809,7 @@ impl<'db> TyChecker<'db> {
                         ));
                         TupleVariantResolution::Invalid
                     }
-                },
+                }
                 PathRes::Mod(scope) => {
                     self.push_diag(BodyDiag::NotValue {
                         primary: span.into(),

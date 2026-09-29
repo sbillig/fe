@@ -1026,8 +1026,9 @@ impl<'db> FieldDefListId<'db> {
         ast: Option<ast::RecordFieldDefList>,
         field_kind: &'static str,
     ) -> Self {
-        ast.map(|ast| Self::lower_ast_with_context(ctxt, ast, field_kind))
-            .unwrap_or(Self::new(ctxt.db(), Vec::new()))
+        ast.map_or(Self::new(ctxt.db(), Vec::new()), |ast| {
+            Self::lower_ast_with_context(ctxt, ast, field_kind)
+        })
     }
 }
 
@@ -1058,8 +1059,9 @@ impl<'db> VariantDefListId<'db> {
     }
 
     fn lower_ast_opt(ctxt: &mut FileLowerCtxt<'db>, ast: Option<ast::VariantDefList>) -> Self {
-        ast.map(|ast| Self::lower_ast(ctxt, ast))
-            .unwrap_or(Self::new(ctxt.db(), Vec::new()))
+        ast.map_or(Self::new(ctxt.db(), Vec::new()), |ast| {
+            Self::lower_ast(ctxt, ast)
+        })
     }
 }
 

@@ -209,16 +209,15 @@ async fn handle_open_docs(
     backend: &mut Backend,
     arguments: &[Value],
 ) -> Result<Option<Value>, ResponseError> {
-    let base = match &backend.docs_url {
-        Some(url) => url.clone(),
-        None => {
-            let _ = backend.client.clone().show_message(ShowMessageParams {
-                typ: MessageType::INFO,
-                message: "Documentation server is not running. Start with `fe lsp` to enable."
-                    .to_string(),
-            });
-            return Ok(None);
-        }
+    let base = if let Some(url) = &backend.docs_url {
+        url.clone()
+    } else {
+        let _ = backend.client.clone().show_message(ShowMessageParams {
+            typ: MessageType::INFO,
+            message: "Documentation server is not running. Start with `fe lsp` to enable."
+                .to_string(),
+        });
+        return Ok(None);
     };
 
     let doc_path = arguments

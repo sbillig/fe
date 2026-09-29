@@ -633,7 +633,7 @@ fn build_suite_plans(
         let suite_key = if *seen == 1 {
             suite.clone()
         } else {
-            format!("{suite}-{}", seen)
+            format!("{suite}-{seen}")
         };
         plans.push(SuitePlan {
             index,
@@ -662,9 +662,7 @@ fn build_suite_plans(
 
 fn effective_jobs(requested: usize, suite_count: usize, grouped: bool) -> usize {
     let requested = if requested == 0 {
-        std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1)
+        std::thread::available_parallelism().map_or(1, |n| n.get())
     } else {
         requested
     };
@@ -1080,8 +1078,7 @@ fn suite_preparation_status(
             .and_then(|message| message.lines().next())
             .map(str::trim)
             .filter(|message| !message.is_empty())
-            .map(str::to_owned)
-            .unwrap_or_else(|| "suite preparation failed".to_string());
+            .map_or_else(|| "suite preparation failed".to_string(), str::to_owned);
         return (StreamStatusKind::Error, message);
     }
 
@@ -1140,7 +1137,7 @@ fn emit_parallel_suite_outcome(
     let (prepared, output) = prepare_suite_job(&plan, cfg.filter.as_deref(), cfg.shared.as_ref());
     if !output.is_empty() {
         let _ = outcome_tx.send(JobOutcome::Text {
-            suite_key: plan.suite_key.clone(),
+            suite_key: plan.suite_key,
             text: output,
         });
     }
@@ -1210,7 +1207,7 @@ fn emit_grouped_suite_outcome(
         finalize_suite_state(state, cfg.shared.as_ref(), cfg.filter.as_deref());
     if !output.is_empty() {
         let _ = outcome_tx.send(JobOutcome::Text {
-            suite_key: plan.suite_key.clone(),
+            suite_key: plan.suite_key,
             text: output,
         });
     }
@@ -1308,24 +1305,22 @@ fn suite_worker_loop_parallel(channels: SuiteWorkerChannels, cfg: SuiteWorkerCon
                     }
                 }
                 recv(suite_rx) -> suite => {
-                    match suite {
-                        Ok(plan) => emit_parallel_suite_outcome(plan, &outcome_tx, &cfg),
-                        Err(_) => {
-                            drain_pending_single_jobs(&single_rx, &outcome_tx, cfg.shared.as_ref());
-                            break;
-                        }
+                    if let Ok(plan) = suite {
+                        emit_parallel_suite_outcome(plan, &outcome_tx, &cfg);
+                    } else {
+                        drain_pending_single_jobs(&single_rx, &outcome_tx, cfg.shared.as_ref());
+                        break;
                     }
                 }
             }
         } else {
             crossbeam_channel::select_biased! {
                 recv(suite_rx) -> suite => {
-                    match suite {
-                        Ok(plan) => emit_parallel_suite_outcome(plan, &outcome_tx, &cfg),
-                        Err(_) => {
-                            drain_pending_single_jobs(&single_rx, &outcome_tx, cfg.shared.as_ref());
-                            break;
-                        }
+                    if let Ok(plan) = suite {
+                        emit_parallel_suite_outcome(plan, &outcome_tx, &cfg);
+                    } else {
+                        drain_pending_single_jobs(&single_rx, &outcome_tx, cfg.shared.as_ref());
+                        break;
                     }
                 }
                 recv(single_rx) -> single => {
@@ -2416,12 +2411,10 @@ fn maybe_write_suite_ir(
 fn suite_name_for_path(path: &Utf8PathBuf) -> String {
     let raw = if path.is_file() {
         path.file_stem()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "tests".to_string())
+            .map_or_else(|| "tests".to_string(), |s| s.to_string())
     } else {
         path.file_name()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "tests".to_string())
+            .map_or_else(|| "tests".to_string(), |s| s.to_string())
     };
     let sanitized = sanitize_filename(&raw);
     if sanitized.is_empty() {
@@ -2518,29 +2511,23 @@ fn expand_workspace_test_paths(
             continue;
         }
 
-        let content = match std::fs::read_to_string(config_path.as_std_path()) {
-            Ok(content) => content,
-            Err(_) => {
-                if ingot.is_some() {
-                    return Err(format!(
-                        "`--ingot` requires a readable workspace config at `{config_path}`"
-                    ));
-                }
-                push_unique(input, None);
-                continue;
+        let Ok(content) = std::fs::read_to_string(config_path.as_std_path()) else {
+            if ingot.is_some() {
+                return Err(format!(
+                    "`--ingot` requires a readable workspace config at `{config_path}`"
+                ));
             }
+            push_unique(input, None);
+            continue;
         };
-        let config = match Config::parse(&content) {
-            Ok(config) => config,
-            Err(_) => {
-                if ingot.is_some() {
-                    return Err(format!(
-                        "`--ingot` requires a valid workspace config at `{config_path}`"
-                    ));
-                }
-                push_unique(input, None);
-                continue;
+        let Ok(config) = Config::parse(&content) else {
+            if ingot.is_some() {
+                return Err(format!(
+                    "`--ingot` requires a valid workspace config at `{config_path}`"
+                ));
             }
+            push_unique(input, None);
+            continue;
         };
         let Config::Workspace(workspace_config) = config else {
             if ingot.is_some() {
@@ -2775,7 +2762,7 @@ fn write_report_manifest(
     for r in results.iter().filter(|r| !r.passed) {
         out.push_str(&format!("- {}\n", r.name));
         if let Some(msg) = &r.error_message {
-            out.push_str(&format!("  {}\n", msg));
+            out.push_str(&format!("  {msg}\n"));
         }
     }
     let _ = std::fs::write(staging.join("manifest.txt"), out);

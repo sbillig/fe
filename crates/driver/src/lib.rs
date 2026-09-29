@@ -112,8 +112,7 @@ pub fn discover_and_init(db: &mut DriverDataBase, root_url: &Url) -> DiscoveredP
     // Fallback: if root itself has fe.toml, init it directly
     let root_has_config = root_url
         .to_file_path()
-        .map(|p| p.join("fe.toml").is_file())
-        .unwrap_or(false);
+        .is_ok_and(|p| p.join("fe.toml").is_file());
     if root_has_config {
         init_ingot(db, root_url);
         result.ingot_urls.push(root_url.clone());
@@ -490,12 +489,10 @@ pub enum IngotInitDiagnostics {
 fn format_metadata(name: &Option<SmolStr>, version: &Option<Version>) -> String {
     let name = name
         .as_ref()
-        .map(ToString::to_string)
-        .unwrap_or_else(|| "<missing name>".to_string());
+        .map_or_else(|| "<missing name>".to_string(), ToString::to_string);
     let version = version
         .as_ref()
-        .map(ToString::to_string)
-        .unwrap_or_else(|| "<missing version>".to_string());
+        .map_or_else(|| "<missing version>".to_string(), ToString::to_string);
     format!("{name}@{version}")
 }
 

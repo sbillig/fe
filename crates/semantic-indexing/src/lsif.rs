@@ -85,7 +85,7 @@ impl<W: Write> LsifEmitter<W> {
                 obj[&k] = v;
             }
         }
-        writeln!(self.writer, "{}", obj)?;
+        writeln!(self.writer, "{obj}")?;
         Ok(id)
     }
 
@@ -98,7 +98,7 @@ impl<W: Write> LsifEmitter<W> {
             "outV": out_v,
             "inV": in_v,
         });
-        writeln!(self.writer, "{}", obj)?;
+        writeln!(self.writer, "{obj}")?;
         Ok(id)
     }
 
@@ -120,7 +120,7 @@ impl<W: Write> LsifEmitter<W> {
         if let Some(doc) = document {
             obj["document"] = serde_json::json!(doc);
         }
-        writeln!(self.writer, "{}", obj)?;
+        writeln!(self.writer, "{obj}")?;
         Ok(id)
     }
 
@@ -336,30 +336,27 @@ pub fn generate_lsif(
         for item in scope_graph.items_dfs(db) {
             let scope = ScopeId::from_item(item);
 
-            let name_span = match item.name_span() {
-                Some(ns) => ns,
-                None => {
-                    // Anonymous impls have no name span, so the normal
-                    // definition path and the sub-item loop below are skipped.
-                    // Their associated consts still need defs/refs/monikers, so
-                    // emit them here (the SCIP path does the same).
-                    if matches!(item, ItemKind::Impl(_)) {
-                        for child in SymbolView::from_item(item).children(db) {
-                            if matches!(child.scope(), ScopeId::ImplConst(..)) {
-                                emit_scope_lsif(
-                                    db,
-                                    &ctx,
-                                    &mut emitter,
-                                    &mut documents,
-                                    &doc_url,
-                                    doc_id,
-                                    child.scope(),
-                                )?;
-                            }
+            let Some(name_span) = item.name_span() else {
+                // Anonymous impls have no name span, so the normal
+                // definition path and the sub-item loop below are skipped.
+                // Their associated consts still need defs/refs/monikers, so
+                // emit them here (the SCIP path does the same).
+                if matches!(item, ItemKind::Impl(_)) {
+                    for child in SymbolView::from_item(item).children(db) {
+                        if matches!(child.scope(), ScopeId::ImplConst(..)) {
+                            emit_scope_lsif(
+                                db,
+                                &ctx,
+                                &mut emitter,
+                                &mut documents,
+                                &doc_url,
+                                doc_id,
+                                child.scope(),
+                            )?;
                         }
                     }
-                    continue;
                 }
+                continue;
             };
             let resolved_name_span = match name_span.resolve(db) {
                 Some(s) => s,
@@ -613,8 +610,7 @@ mod tests {
     fn generate_test_lsif(code: &str) -> String {
         let mut db = DriverDataBase::default();
         let url = url::Url::parse("file:///test.fe").unwrap();
-        db.workspace()
-            .touch(&mut db, url.clone(), Some(code.to_string()));
+        db.workspace().touch(&mut db, url, Some(code.to_string()));
 
         let ingot_url = url::Url::parse("file:///").unwrap();
         let mut output = Vec::new();

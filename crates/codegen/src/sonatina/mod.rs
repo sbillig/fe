@@ -1067,7 +1067,7 @@ fn filter_runtime_package_to_root_objects<'db>(
 ) -> RuntimePackage<'db> {
     let root_names = roots
         .iter()
-        .map(|object| object.name(db).clone())
+        .map(|object| object.name(db))
         .collect::<FxHashSet<_>>();
     let package_objects = package.objects(db);
     let section_set = reachable_sections(db, &package_objects, roots);
@@ -1082,8 +1082,7 @@ fn filter_runtime_package_to_root_objects<'db>(
                     section_set.contains(&runtime_section_key(db, object, &section.name))
                 })
                 .collect::<Vec<_>>();
-            (!sections.is_empty())
-                .then(|| mir::RuntimeObject::new(db, object.name(db).clone(), sections))
+            (!sections.is_empty()).then(|| mir::RuntimeObject::new(db, object.name(db), sections))
         })
         .collect::<Vec<_>>();
     let function_set = reachable_functions(db, &objects);
@@ -1241,7 +1240,7 @@ fn runtime_section_key<'db>(
     object: mir::RuntimeObject<'db>,
     section: &mir::RuntimeSectionName,
 ) -> (String, mir::RuntimeSectionName) {
-    (object.name(db).clone(), section.clone())
+    (object.name(db), section.clone())
 }
 
 fn section_ref_key(section_ref: mir::RuntimeSectionRef) -> (String, mir::RuntimeSectionName) {

@@ -113,8 +113,7 @@ fn pretty_print_const_fn_call<'db>(
         BodyOwner::Func(func) => func
             .name(db)
             .to_opt()
-            .map(|n| n.data(db).as_str())
-            .unwrap_or("<unknown>"),
+            .map_or("<unknown>", |n| n.data(db).as_str()),
         _ => "<constant>",
     };
     let generic_args = invocation

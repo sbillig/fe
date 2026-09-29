@@ -286,9 +286,10 @@ fn lower_opt_hir_ty_impl<'db>(
     assumptions: PredicateListId<'db>,
     minter: &LoweringContext<'db>,
 ) -> TyId<'db> {
-    ty.to_opt()
-        .map(|hir_ty| lower_hir_ty_impl(db, hir_ty, scope, assumptions, minter))
-        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
+    ty.to_opt().map_or_else(
+        || TyId::invalid(db, InvalidCause::ParseError),
+        |hir_ty| lower_hir_ty_impl(db, hir_ty, scope, assumptions, minter),
+    )
 }
 
 fn const_body_simple_path<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<PathId<'db>> {
@@ -580,8 +581,7 @@ fn lower_const_ty_ty<'db>(
 
     if !path
         .to_opt()
-        .map(|p| p.generic_args(db).is_empty(db))
-        .unwrap_or(true)
+        .is_none_or(|p| p.generic_args(db).is_empty(db))
     {
         return TyId::invalid(db, InvalidCause::InvalidConstParamTy);
     }
@@ -624,14 +624,15 @@ pub(crate) fn generic_param_owner_assumptions<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
 ) -> PredicateListId<'db> {
-    GenericParamOwner::from_item_opt(scope.item())
-        .map(|owner| match owner {
+    GenericParamOwner::from_item_opt(scope.item()).map_or_else(
+        || PredicateListId::empty_list(db),
+        |owner| match owner {
             GenericParamOwner::Func(func) => {
                 collect_func_decl_constraints(db, func.into(), true).instantiate_identity()
             }
             _ => collect_constraints(db, owner).instantiate_identity(),
-        })
-        .unwrap_or_else(|| PredicateListId::empty_list(db))
+        },
+    )
 }
 
 /// Collects the generic parameters of the given generic parameter owner.

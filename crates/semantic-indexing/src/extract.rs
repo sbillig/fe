@@ -86,7 +86,7 @@ impl<'db> DocExtractor<'db> {
         // the ingot name so a nested `foo::lib` submodule is left alone.
         if matches!(doc_item.kind, DocItemKind::Module)
             && doc_item.name == "lib"
-            && let Some(cfg_name) = ingot.config(self.db).and_then(|c| c.metadata.name.clone())
+            && let Some(cfg_name) = ingot.config(self.db).and_then(|c| c.metadata.name)
             && doc_item.path == cfg_name.as_str()
         {
             doc_item.name = cfg_name.to_string();
@@ -144,9 +144,9 @@ impl<'db> DocExtractor<'db> {
             let simple_type = extract_simple_name(&target_type);
             let simple_trait = extract_simple_name(&trait_name);
             let impl_path = if parent_path.is_empty() {
-                format!("{}::impl_{}", simple_type, simple_trait)
+                format!("{simple_type}::impl_{simple_trait}")
             } else {
-                format!("{}::{}::impl_{}", parent_path, simple_type, simple_trait)
+                format!("{parent_path}::{simple_type}::impl_{simple_trait}")
             };
 
             let (signature, signature_span) = self.get_signature_with_span(impl_trait.into());
@@ -156,7 +156,7 @@ impl<'db> DocExtractor<'db> {
                 target_type,
                 DocTraitImpl {
                     trait_name,
-                    impl_url: format!("{}/impl", impl_path),
+                    impl_url: format!("{impl_path}/impl"),
                     signature,
                     rich_signature: vec![],
                     signature_span,
@@ -189,14 +189,14 @@ impl<'db> DocExtractor<'db> {
             let impl_suffix = if *count == 0 {
                 "impl".to_string()
             } else {
-                format!("impl_{}", count)
+                format!("impl_{count}")
             };
             *count += 1;
 
             let impl_path = if parent_path.is_empty() {
-                format!("{}::{}", simple_type, impl_suffix)
+                format!("{simple_type}::{impl_suffix}")
             } else {
-                format!("{}::{}::{}", parent_path, simple_type, impl_suffix)
+                format!("{parent_path}::{simple_type}::{impl_suffix}")
             };
 
             let (signature, signature_span) = self.get_signature_with_span(impl_.into());
@@ -206,7 +206,7 @@ impl<'db> DocExtractor<'db> {
                 target_type,
                 DocTraitImpl {
                     trait_name: String::new(), // Empty = inherent impl
-                    impl_url: format!("{}/impl", impl_path),
+                    impl_url: format!("{impl_path}/impl"),
                     signature,
                     rich_signature: vec![],
                     signature_span,
@@ -244,10 +244,10 @@ impl<'db> DocExtractor<'db> {
         methods.extend(it.assoc_consts(self.db).filter_map(|assoc_const| {
             let name = assoc_const.name(self.db)?.data(self.db).to_string();
             let docs = assoc_const.docs(self.db).map(|s| DocContent::from_raw(&s));
-            let (signature, signature_span) = assoc_const
-                .signature_with_span(self.db)
-                .map(|sig_span| self.signature_span_data(sig_span))
-                .unwrap_or_else(|| (format!("const {name}"), None));
+            let (signature, signature_span) = assoc_const.signature_with_span(self.db).map_or_else(
+                || (format!("const {name}"), None),
+                |sig_span| self.signature_span_data(sig_span),
+            );
             Some(self.assoc_const_impl_method(name, signature, signature_span, docs))
         }));
 
@@ -428,8 +428,7 @@ impl<'db> DocExtractor<'db> {
             .find(". ")
             .or_else(|| trimmed.find(".\n"))
             .or_else(|| trimmed.find("\n\n"))
-            .map(|i| i + 1)
-            .unwrap_or(trimmed.len());
+            .map_or(trimmed.len(), |i| i + 1);
         let summary = trimmed.get(..end).unwrap_or(trimmed).trim();
         if summary.is_empty() {
             None
@@ -703,8 +702,7 @@ impl<'db> DocExtractor<'db> {
                 let header_end_abs = arm_lazy
                     .body()
                     .resolve(self.db)
-                    .map(|bs| usize::from(bs.range.start()))
-                    .unwrap_or(end);
+                    .map_or(end, |bs| usize::from(bs.range.start()));
                 let header_end_rel = header_end_abs.saturating_sub(start).min(slice.len());
                 let header = slice[..header_end_rel].trim_end().to_string();
 
@@ -713,19 +711,21 @@ impl<'db> DocExtractor<'db> {
                 let name = arm
                     .variant_path(self.db)
                     .and_then(|p| p.ident(self.db).to_opt())
-                    .map(|id| id.data(self.db).to_string())
-                    .unwrap_or_else(|| {
-                        if arm.is_fallback(self.db) {
-                            "_".to_string()
-                        } else {
-                            format!("arm{}_{}", recv_idx, arm_idx)
-                        }
-                    });
+                    .map_or_else(
+                        || {
+                            if arm.is_fallback(self.db) {
+                                "_".to_string()
+                            } else {
+                                format!("arm{recv_idx}_{arm_idx}")
+                            }
+                        },
+                        |id| id.data(self.db).to_string(),
+                    );
 
                 // Disambiguate duplicate arm names across multiple recv blocks
                 // (rare, but possible if the same msg type is handled twice).
                 let qualified_name = if let Some(ref msg) = msg_type_name {
-                    format!("{}::{}", msg, name)
+                    format!("{msg}::{name}")
                 } else {
                     name.clone()
                 };
@@ -800,7 +800,7 @@ impl<'db> DocExtractor<'db> {
                 let type_text = self
                     .get_field_type_text(field_view)
                     .unwrap_or_else(|| "?".to_string());
-                let signature = format!("{}: {}", name, type_text);
+                let signature = format!("{name}: {type_text}");
                 // Get visibility from the scope's data
                 let visibility = scope.data(self.db).vis;
 
@@ -831,7 +831,7 @@ impl<'db> DocExtractor<'db> {
                 let type_text = self
                     .get_field_type_text(field_view)
                     .unwrap_or_else(|| "?".to_string());
-                let signature = format!("{}: {}", name, type_text);
+                let signature = format!("{name}: {type_text}");
                 let visibility = scope.data(self.db).vis;
 
                 let signature_span = self.field_sig_span(field_view);
@@ -868,12 +868,12 @@ impl<'db> DocExtractor<'db> {
                             .filter_map(|i| self.get_tuple_elem_type_text(&enum_variant, i))
                             .collect();
                         if type_texts.is_empty() {
-                            format!("{}(...)", name)
+                            format!("{name}(...)")
                         } else {
                             format!("{}({})", name, type_texts.join(", "))
                         }
                     }
-                    VariantKind::Record(_) => format!("{} {{ ... }}", name),
+                    VariantKind::Record(_) => format!("{name} {{ ... }}"),
                 };
 
                 let signature_span = enum_variant
@@ -949,7 +949,7 @@ impl<'db> DocExtractor<'db> {
                     kind: DocChildKind::AssocType,
                     name: name_str.clone(),
                     docs,
-                    signature: format!("type {}", name_str),
+                    signature: format!("type {name_str}"),
                     rich_signature: vec![],
                     signature_span: None,
                     sig_scope: None,
@@ -1033,10 +1033,11 @@ impl<'db> DocExtractor<'db> {
             if let Some(name) = assoc_const.name(self.db) {
                 let name = name.data(self.db).to_string();
                 let docs = assoc_const.docs(self.db).map(|s| DocContent::from_raw(&s));
-                let (mut signature, signature_span) = assoc_const
-                    .signature_with_span(self.db)
-                    .map(|sig_span| self.signature_span_data(sig_span))
-                    .unwrap_or_else(|| (format!("const {name}"), None));
+                let (mut signature, signature_span) =
+                    assoc_const.signature_with_span(self.db).map_or_else(
+                        || (format!("const {name}"), None),
+                        |sig_span| self.signature_span_data(sig_span),
+                    );
                 if signature.is_empty() {
                     signature = format!("const {name}");
                 }
@@ -1070,14 +1071,12 @@ impl<'db> DocExtractor<'db> {
         let display_file = if let Some(ref root) = self.root_path {
             file_path
                 .strip_prefix(root)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| file_str.clone())
+                .map_or_else(|_| file_str.clone(), |p| p.to_string_lossy().to_string())
         } else {
             // Fallback: just use the filename
             file_path
                 .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| file_str.clone())
+                .map_or_else(|| file_str.clone(), |n| n.to_string_lossy().to_string())
         };
 
         // Convert byte offset to 1-based line number
@@ -1086,7 +1085,7 @@ impl<'db> DocExtractor<'db> {
         let line = prefix.chars().filter(|&c| c == '\n').count() as u32 + 1;
 
         // Calculate column (bytes from start of line)
-        let line_start = prefix.rfind('\n').map(|pos| pos + 1).unwrap_or(0);
+        let line_start = prefix.rfind('\n').map_or(0, |pos| pos + 1);
         let column = (byte_offset - line_start) as u32;
 
         Some(DocSourceLoc {
@@ -1186,8 +1185,10 @@ impl<'db> DocExtractor<'db> {
             ingot
                 .config(self.db)
                 .and_then(|c| c.metadata.name)
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| top_mod.name(self.db).data(self.db).to_string())
+                .map_or_else(
+                    || top_mod.name(self.db).data(self.db).to_string(),
+                    |s| s.to_string(),
+                )
         } else {
             top_mod.name(self.db).data(self.db).to_string()
         };
@@ -1258,8 +1259,7 @@ impl<'db> DocExtractor<'db> {
         let scope = item.scope();
         let name = item
             .name(self.db)
-            .map(|n| n.data(self.db).to_string())
-            .unwrap_or_else(|| "root".to_string());
+            .map_or_else(|| "root".to_string(), |n| n.data(self.db).to_string());
         let raw_path = scope.pretty_path(self.db).unwrap_or_else(|| name.clone());
         let path = self.qualify_path_with_ingot(&raw_path, ingot);
 
@@ -1312,8 +1312,7 @@ impl<'db> DocExtractor<'db> {
         let scope = item.scope();
         let name = item
             .name(self.db)
-            .map(|n| n.data(self.db).to_string())
-            .unwrap_or_else(|| "root".to_string());
+            .map_or_else(|| "root".to_string(), |n| n.data(self.db).to_string());
         let path = scope.pretty_path(self.db).unwrap_or_else(|| name.clone());
 
         let mut children = Vec::new();
@@ -1487,7 +1486,7 @@ mod tests {
             .file_stem()
             .unwrap()
             .to_string_lossy();
-        let dir = std::env::temp_dir().join(format!("fe_doc_static_{}", test_name));
+        let dir = std::env::temp_dir().join(format!("fe_doc_static_{test_name}"));
         let _ = std::fs::remove_dir_all(&dir);
 
         fe_web::static_site::StaticSiteGenerator::generate(&index, &dir)

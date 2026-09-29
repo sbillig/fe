@@ -186,7 +186,7 @@ pub fn generate_docs(
                 if let Some(info) = LspServerInfo::read_from_workspace(current)
                     && info.is_alive()
                 {
-                    return info.docs_url.clone();
+                    return info.docs_url;
                 }
                 current = current.parent()?;
             }
@@ -194,7 +194,7 @@ pub fn generate_docs(
 
         if let Some(docs_url) = &found {
             println!("Found running language server with documentation at:");
-            println!("  {}", docs_url);
+            println!("  {docs_url}");
             println!();
             println!("The language server keeps docs in sync with your code.");
             println!("Open the URL above in your browser.");
@@ -291,9 +291,10 @@ pub fn generate_docs(
 
     match action {
         Some(crate::DocAction::Static { self_contained }) => {
-            let output_dir = output
-                .map(|p| p.as_std_path().to_path_buf())
-                .unwrap_or_else(|| std::path::PathBuf::from("docs"));
+            let output_dir = output.map_or_else(
+                || std::path::PathBuf::from("docs"),
+                |p| p.as_std_path().to_path_buf(),
+            );
 
             let source_link_base = detect_source_link_base(path.as_std_path());
 
@@ -371,9 +372,10 @@ pub fn generate_docs(
             }
         }
         Some(crate::DocAction::Pages { base_url }) => {
-            let output_dir = output
-                .map(|p| p.as_std_path().to_path_buf())
-                .unwrap_or_else(|| std::path::PathBuf::from("docs"));
+            let output_dir = output.map_or_else(
+                || std::path::PathBuf::from("docs"),
+                |p| p.as_std_path().to_path_buf(),
+            );
             if let Err(e) = fe_web::starlight::generate(&index, &output_dir, base_url) {
                 eprintln!("Error generating markdown pages: {e}");
                 std::process::exit(1);
@@ -478,12 +480,9 @@ fn extract_workspace(
     let canonical_root = workspace_root
         .canonicalize_utf8()
         .unwrap_or_else(|_| workspace_root.clone());
-    let base_url = match Url::from_directory_path(canonical_root.as_str()) {
-        Ok(u) => u,
-        Err(_) => {
-            eprintln!("Error: Failed to build URL for workspace root: {canonical_root}");
-            return None;
-        }
+    let Ok(base_url) = Url::from_directory_path(canonical_root.as_str()) else {
+        eprintln!("Error: Failed to build URL for workspace root: {canonical_root}");
+        return None;
     };
 
     let expanded = match resolver::workspace::expand_workspace_members(
@@ -793,7 +792,7 @@ fn detect_source_link_base(working_dir: &std::path::Path) -> Option<String> {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())?;
 
-    Some(format!("{}/blob/{}", CANONICAL_REPO, commit))
+    Some(format!("{CANONICAL_REPO}/blob/{commit}"))
 }
 
 /// Top-level shape of `docs.json`. A struct (rather than a `serde_json::json!`

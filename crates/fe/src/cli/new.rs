@@ -58,9 +58,8 @@ fn create_workspace_layout(
     fs::create_dir_all(base)
         .map_err(|err| format!("Failed to create workspace directory {base}: {err}"))?;
 
-    let workspace_name = explicit_name
-        .map(ToString::to_string)
-        .unwrap_or_else(|| infer_workspace_name(base));
+    let workspace_name =
+        explicit_name.map_or_else(|| infer_workspace_name(base), ToString::to_string);
     let version = explicit_version.unwrap_or(DEFAULT_VERSION);
 
     let workspace_config = base.join("fe.toml");
@@ -99,9 +98,7 @@ fn create_ingot_layout(
     fs::create_dir_all(&src_dir)
         .map_err(|err| format!("Failed to create src directory {src_dir}: {err}"))?;
 
-    let name = explicit_name
-        .map(ToString::to_string)
-        .unwrap_or_else(|| infer_ingot_name(base));
+    let name = explicit_name.map_or_else(|| infer_ingot_name(base), ToString::to_string);
     let version = explicit_version.unwrap_or(DEFAULT_VERSION);
 
     let config_path = base.join("fe.toml");
@@ -209,9 +206,9 @@ fn test_counter() uses (evm: mut Evm) {
 
 fn write_if_absent(path: &Utf8PathBuf, content: impl AsRef<str>) -> Result<(), String> {
     if path.exists() {
-        return Err(format!("Refusing to overwrite existing {}", path));
+        return Err(format!("Refusing to overwrite existing {path}"));
     }
-    fs::write(path, content.as_ref()).map_err(|err| format!("Failed to write {}: {err}", path))?;
+    fs::write(path, content.as_ref()).map_err(|err| format!("Failed to write {path}: {err}"))?;
     Ok(())
 }
 
@@ -269,9 +266,9 @@ fn workspace_member_suggestion(
 ) -> Result<Option<String>, String> {
     let config_path = workspace_root.join("fe.toml");
     let config_str = fs::read_to_string(config_path.as_std_path())
-        .map_err(|err| format!("Failed to read {}: {err}", config_path))?;
+        .map_err(|err| format!("Failed to read {config_path}: {err}"))?;
     let config_file = Config::parse(&config_str)
-        .map_err(|err| format!("Failed to parse {}: {err}", config_path))?;
+        .map_err(|err| format!("Failed to parse {config_path}: {err}"))?;
     let workspace = match config_file {
         Config::Workspace(workspace_config) => workspace_config.workspace,
         Config::Ingot(_) => return Ok(None),
@@ -299,10 +296,10 @@ fn workspace_member_suggestion(
 
     let value: Value = config_str
         .parse()
-        .map_err(|err| format!("Failed to parse {}: {err}", config_path))?;
+        .map_err(|err| format!("Failed to parse {config_path}: {err}"))?;
     let root_table = value
         .as_table()
-        .ok_or_else(|| format!("{} is not a workspace config", config_path))?;
+        .ok_or_else(|| format!("{config_path} is not a workspace config"))?;
     let has_workspace_table = root_table
         .get("workspace")
         .and_then(|value| value.as_table())
@@ -332,10 +329,7 @@ fn workspace_member_suggestion(
             }
         }
         Some(_) => {
-            return Err(format!(
-                "members is not an array or table in {}",
-                config_path
-            ));
+            return Err(format!("members is not an array or table in {config_path}"));
         }
     };
 

@@ -1038,8 +1038,7 @@ impl RuntimeInstance {
                     let parent_in_constructor = self
                         .frame_stack
                         .last()
-                        .map(|frame| frame.in_constructor)
-                        .unwrap_or(false);
+                        .is_some_and(|frame| frame.in_constructor);
                     let child_kind = self
                         .pending_invocations
                         .iter_mut()
@@ -3126,7 +3125,7 @@ pub contract FixedDynamicArrayBoundary {{
             .expect("get() should succeed");
         let decoded = decode(&[ParamType::Bytes], &stored.return_data)
             .expect("get() should return ABI-encoded bytes");
-        assert_eq!(decoded, vec![Token::Bytes(payload.clone())]);
+        assert_eq!(decoded, vec![Token::Bytes(payload)]);
 
         instance
             .call_function("clear()", &[], ExecutionOptions::default())
@@ -3172,7 +3171,7 @@ pub contract FixedDynamicArrayBoundary {{
         let mut instance = harness
             .deploy_with_init()
             .expect("emit-then-text contract should deploy");
-        let call = encode_function_call("emitAndReturn(bytes)", &[Token::Bytes(payload.clone())])
+        let call = encode_function_call("emitAndReturn(bytes)", &[Token::Bytes(payload)])
             .expect("calldata should encode");
         let result = instance
             .call_raw_with_logs(&call, ExecutionOptions::default())

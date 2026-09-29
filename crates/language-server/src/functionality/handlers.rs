@@ -428,34 +428,27 @@ pub async fn handle_file_change(
         return Ok(());
     }
 
-    let path = match message.uri.to_file_path() {
-        Ok(p) => p,
-        Err(_) => {
-            error!("Failed to convert URI to path: {:?}", message.uri);
-            return Err(ResponseError::new(
-                ErrorCode::INVALID_PARAMS,
-                format!("Invalid file URI: {}", message.uri),
-            ));
-        }
+    let Ok(path) = message.uri.to_file_path() else {
+        error!("Failed to convert URI to path: {:?}", message.uri);
+        return Err(ResponseError::new(
+            ErrorCode::INVALID_PARAMS,
+            format!("Invalid file URI: {}", message.uri),
+        ));
     };
 
-    let path_str = match path.to_str() {
-        Some(p) => p,
-        None => {
-            error!("Path contains invalid UTF-8: {:?}", path);
-            return Err(ResponseError::new(
-                ErrorCode::INVALID_PARAMS,
-                "Path contains invalid UTF-8".to_string(),
-            ));
-        }
+    let Some(path_str) = path.to_str() else {
+        error!("Path contains invalid UTF-8: {:?}", path);
+        return Err(ResponseError::new(
+            ErrorCode::INVALID_PARAMS,
+            "Path contains invalid UTF-8".to_string(),
+        ));
     };
 
     // Check if this is a fe.toml file
     let is_fe_toml = path
         .file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name == "fe.toml")
-        .unwrap_or(false);
+        .is_some_and(|name| name == "fe.toml");
 
     match message.kind {
         ChangeKind::Open(contents) => {
@@ -464,7 +457,7 @@ pub async fn handle_file_change(
                 backend
                     .db
                     .workspace()
-                    .update(&mut backend.db, url.clone(), contents);
+                    .update(&mut backend.db, url, contents);
             }
         }
         ChangeKind::Create => {
@@ -477,7 +470,7 @@ pub async fn handle_file_change(
                 backend
                     .db
                     .workspace()
-                    .update(&mut backend.db, url.clone(), contents);
+                    .update(&mut backend.db, url, contents);
 
                 // If a fe.toml was created, discover and load all files in the new ingot
                 if is_fe_toml && let Some(ingot_dir) = path.parent() {
@@ -500,7 +493,7 @@ pub async fn handle_file_change(
                 backend
                     .db
                     .workspace()
-                    .update(&mut backend.db, url.clone(), contents);
+                    .update(&mut backend.db, url, contents);
 
                 // If fe.toml was modified, re-scan the ingot for any new files
                 if is_fe_toml && let Some(ingot_dir) = path.parent() {
@@ -644,10 +637,7 @@ pub async fn handle_files_need_diagnostics(
         .iter()
         .filter_map(|NeedsDiagnostics(url)| {
             let url = backend.map_client_uri_to_internal(url.clone());
-            backend
-                .db
-                .workspace()
-                .containing_ingot(&backend.db, url.clone())
+            backend.db.workspace().containing_ingot(&backend.db, url)
         })
         .collect();
 
@@ -831,7 +821,7 @@ pub async fn handle_formatting(
         return Ok(None);
     }
 
-    let url = backend.map_client_uri_to_internal(params.text_document.uri.clone());
+    let url = backend.map_client_uri_to_internal(params.text_document.uri);
 
     let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
         warn!("handle_formatting: file not found `{url}`");

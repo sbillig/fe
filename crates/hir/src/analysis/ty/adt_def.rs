@@ -349,15 +349,17 @@ fn instantiate_adt_field_shape_in_mode<'db>(
     adt.fields(db)
         .get(variant_idx)
         .filter(|variant| field_idx < variant.num_types() && explicit_args.len() <= domain.len(db))
-        .map(|variant| {
-            // Omitted trailing arguments keep their declaration formals.
-            let subst = CompleteSubst::with_prefix(db, domain, explicit_args);
-            variant
-                .ty_in_mode(db, field_idx, const_bodies)
-                .instantiate_subst(db, &subst)
-                .expect("ADT field uses its declaration domain")
-        })
-        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
+        .map_or_else(
+            || TyId::invalid(db, InvalidCause::Other),
+            |variant| {
+                // Omitted trailing arguments keep their declaration formals.
+                let subst = CompleteSubst::with_prefix(db, domain, explicit_args);
+                variant
+                    .ty_in_mode(db, field_idx, const_bodies)
+                    .instantiate_subst(db, &subst)
+                    .expect("ADT field uses its declaration domain")
+            },
+        )
 }
 
 pub(crate) fn instantiate_adt_field_layout<'db>(
@@ -375,9 +377,10 @@ pub(crate) fn instantiate_adt_field_layout<'db>(
         .fields(db)
         .get(variant_idx)
         .filter(|variant| field_idx < variant.num_types());
-    let template = field
-        .map(|field| field.ty(db, field_idx).instantiate_identity())
-        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
+    let template = field.map_or_else(
+        || TyId::invalid(db, InvalidCause::Other),
+        |field| field.ty(db, field_idx).instantiate_identity(),
+    );
     let template_root_uses =
         field.map_or_else(Vec::new, |field| field.layout_root_uses(db, field_idx));
     let domain = ParamDomainId::full(db, schema);

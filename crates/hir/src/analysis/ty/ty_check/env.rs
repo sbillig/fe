@@ -160,8 +160,9 @@ impl<'db> TyCheckEnv<'db> {
                 for (idx, view) in func.params(db).enumerate() {
                     let mut ty = *arg_tys
                         .get(idx)
-                        .map(|b| b.skip_binder())
-                        .unwrap_or(&TyId::invalid(db, InvalidCause::ParseError));
+                        .map_or(&TyId::invalid(db, InvalidCause::ParseError), |b| {
+                            b.skip_binder()
+                        });
 
                     if !ty.is_star_kind(db) {
                         ty = TyId::invalid(db, InvalidCause::Other);
@@ -1082,7 +1083,7 @@ pub(super) struct BlockEnv<'db> {
 
 impl<'db> BlockEnv<'db> {
     pub(super) fn lookup_var(&self, var: IdentId<'db>) -> Option<LocalBinding<'db>> {
-        self.vars.get(&var).cloned()
+        self.vars.get(&var).copied()
     }
 
     fn new(scope: ScopeId<'db>, idx: usize) -> Self {
@@ -1411,8 +1412,7 @@ impl<'db> LocalBinding<'db> {
                 };
                 path.ident(db)
                     .to_opt()
-                    .map(|ident| ident.data(db).to_string())
-                    .unwrap_or_else(|| "_".to_string())
+                    .map_or_else(|| "_".to_string(), |ident| ident.data(db).to_string())
             }
             Self::Param {
                 site: ParamSite::EffectField(effect_site),
@@ -1420,16 +1420,13 @@ impl<'db> LocalBinding<'db> {
                 ..
             } => effect_param_name(db, *effect_site, *idx)
                 .or_else(|| param_name(db, ParamSite::EffectField(*effect_site), *idx))
-                .map(|ident| ident.data(db).to_string())
-                .unwrap_or_else(|| format!("%param{idx}")),
+                .map_or_else(|| format!("%param{idx}"), |ident| ident.data(db).clone()),
             Self::Param { site, idx, .. } => param_name(db, *site, *idx)
-                .map(|ident| ident.data(db).to_string())
-                .unwrap_or_else(|| format!("%param{idx}")),
+                .map_or_else(|| format!("%param{idx}"), |ident| ident.data(db).clone()),
             Self::EffectParam {
                 binding_name, idx, ..
             } => Some(*binding_name)
-                .map(|ident| ident.data(db).to_string())
-                .unwrap_or_else(|| format!("%effect{idx}")),
+                .map_or_else(|| format!("%effect{idx}"), |ident| ident.data(db).clone()),
         }
     }
 }

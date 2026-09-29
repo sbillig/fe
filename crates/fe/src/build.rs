@@ -168,7 +168,7 @@ fn write_build_manifest(
     out.push_str(&format!("emit: {}\n", describe_emit_selection(emit)));
     out.push_str(&format!(
         "out_dir: {}\n",
-        out_dir.map(|p| p.as_str()).unwrap_or("<default>")
+        out_dir.map_or("<default>", |p| p.as_str())
     ));
     out.push_str(&format!(
         "status: {}\n",
@@ -546,20 +546,14 @@ fn build_file(
         return true;
     }
 
-    let canonical = match file_path.canonicalize_utf8() {
-        Ok(path) => path,
-        Err(_) => {
-            eprintln!("Error: Invalid file path: {file_path}");
-            return true;
-        }
+    let Ok(canonical) = file_path.canonicalize_utf8() else {
+        eprintln!("Error: Invalid file path: {file_path}");
+        return true;
     };
 
-    let url = match Url::from_file_path(canonical.as_std_path()) {
-        Ok(url) => url,
-        Err(_) => {
-            eprintln!("Error: Invalid file path: {file_path}");
-            return true;
-        }
+    let Ok(url) = Url::from_file_path(canonical.as_std_path()) else {
+        eprintln!("Error: Invalid file path: {file_path}");
+        return true;
     };
 
     let content = match fs::read_to_string(&canonical) {
@@ -596,21 +590,19 @@ fn build_file(
 
     let default_out_dir = canonical
         .parent()
-        .map(|parent| parent.join("out"))
-        .unwrap_or_else(|| Utf8PathBuf::from("out"));
+        .map_or_else(|| Utf8PathBuf::from("out"), |parent| parent.join("out"));
     let out_dir = out_dir.cloned().unwrap_or(default_out_dir);
-    let ir_file_stem = canonical
-        .file_stem()
-        .map(|stem| sanitize_name_with_default(stem, "module"))
-        .unwrap_or_else(|| "module".to_string());
+    let ir_file_stem = canonical.file_stem().map_or_else(
+        || "module".to_string(),
+        |stem| sanitize_name_with_default(stem, "module"),
+    );
     let report_dir = report_scope_dir(
         report,
         &format!(
             "file-{}",
             canonical
                 .file_stem()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "build".to_string())
+                .map_or_else(|| "build".to_string(), |s| s.to_string())
         ),
     );
     build_top_mod(
@@ -642,12 +634,9 @@ fn build_directory(
     out_dir: Option<&Utf8PathBuf>,
     report: Option<&BuildReportContext>,
 ) -> bool {
-    let canonical = match dir_path.canonicalize_utf8() {
-        Ok(path) => path,
-        Err(_) => {
-            eprintln!("Error: Invalid or non-existent directory path: {dir_path}");
-            return true;
-        }
+    let Ok(canonical) = dir_path.canonicalize_utf8() else {
+        eprintln!("Error: Invalid or non-existent directory path: {dir_path}");
+        return true;
     };
 
     if !canonical.join("fe.toml").is_file() {
@@ -659,12 +648,9 @@ fn build_directory(
         return true;
     }
 
-    let url = match Url::from_directory_path(canonical.as_str()) {
-        Ok(url) => url,
-        Err(_) => {
-            eprintln!("Error: Invalid directory path: {dir_path}");
-            return true;
-        }
+    let Ok(url) = Url::from_directory_path(canonical.as_str()) else {
+        eprintln!("Error: Invalid directory path: {dir_path}");
+        return true;
     };
 
     if driver::init_ingot(db, &url) {
@@ -675,12 +661,12 @@ fn build_directory(
         Ok(content) => match Config::parse(&content) {
             Ok(config) => config,
             Err(err) => {
-                eprintln!("Error: Failed to parse {}/fe.toml: {err}", canonical);
+                eprintln!("Error: Failed to parse {canonical}/fe.toml: {err}");
                 return true;
             }
         },
         Err(err) => {
-            eprintln!("Error: Failed to read {}/fe.toml: {err}", canonical);
+            eprintln!("Error: Failed to read {canonical}/fe.toml: {err}");
             return true;
         }
     };
@@ -702,8 +688,7 @@ fn build_directory(
                     "ingot-{}",
                     canonical
                         .file_name()
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| "build".to_string())
+                        .map_or_else(|| "build".to_string(), |s| s.to_string())
                 ),
             );
             build_ingot_url(
@@ -1176,9 +1161,10 @@ fn build_ingot_url(
         return BuildSummary { had_errors: true };
     }
 
-    let ir_file_stem = ir_file_stem
-        .map(|name| sanitize_name_with_default(name, "module"))
-        .unwrap_or_else(|| derive_ingot_ir_file_stem(db, ingot));
+    let ir_file_stem = ir_file_stem.map_or_else(
+        || derive_ingot_ir_file_stem(db, ingot),
+        |name| sanitize_name_with_default(name, "module"),
+    );
 
     #[cfg(feature = "cranelift")]
     if backend.is_native() {
@@ -1502,7 +1488,7 @@ fn collect_contract_names(
     let mut names: Vec<_> = package
         .root_objects(db)
         .iter()
-        .map(|object| object.name(db).clone())
+        .map(|object| object.name(db))
         .collect();
     names.sort();
     names.dedup();
@@ -1587,11 +1573,7 @@ fn collect_ingot_abi_artifact_names(
     let mut names = BTreeSet::new();
     for top_mod in ingot.all_modules(db) {
         for contract in top_mod.all_contracts(db) {
-            let Some(name) = contract
-                .name(db)
-                .to_opt()
-                .map(|name| name.data(db).to_string())
-            else {
+            let Some(name) = contract.name(db).to_opt().map(|name| name.data(db).clone()) else {
                 continue;
             };
             let Some(result) = crate::abi::generate_contract_abi(db, *top_mod, &name)? else {

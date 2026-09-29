@@ -472,9 +472,9 @@ fn emit_evm_bytecode_instruction_facts_with_observability(
     // The section is code followed by data/embeds; decoding past code_bytes
     // desynchronizes the sweep (a data byte in 0x60..0x7f swallows what
     // follows as PUSH immediates) and mints garbage instruction facts.
-    let code_len = observability
-        .map(|observability| (observability.code_bytes as usize).min(bytecode.len()))
-        .unwrap_or(bytecode.len());
+    let code_len = observability.map_or(bytecode.len(), |observability| {
+        (observability.code_bytes as usize).min(bytecode.len())
+    });
     let mut pc = 0;
     let mut index = 0;
     while pc < code_len {
@@ -768,8 +768,7 @@ pub fn emit_sonatina_trace_view_facts(
                 push_node(&mut facts, inst_key.clone());
                 let mnemonic = module
                     .trace_inst_kind(function_ref, inst)
-                    .map(|kind| kind.opcode.to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
+                    .map_or_else(|| "unknown".to_string(), |kind| kind.opcode.to_string());
                 facts.push(TraceFact::Instruction(InstructionFact::new(
                     inst_key.clone(),
                     function_key.clone(),
@@ -1974,7 +1973,7 @@ mod tests {
         )
         .unwrap();
         let mut validated_facts = vec![TraceFact::OriginNode(OriginNodeFact::new(
-            postopt.clone(),
+            postopt,
             OriginNodeKind::new(SONATINA_POSTOPT_INST_KIND),
         ))];
         validated_facts.extend(facts.clone());
@@ -2105,7 +2104,7 @@ mod tests {
             0,
             "iadd",
         ))];
-        let known = [actual_postopt.clone()]
+        let known = [actual_postopt]
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>();
         let observability = SectionObservability {

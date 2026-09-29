@@ -148,10 +148,8 @@ impl<'db> InstantiatedMethodSignature<'db> {
                 format!(
                     "{}{key} via {}",
                     if *is_mut { "mut " } else { "" },
-                    provider_ty.map_or_else(
-                        || "<none>".to_string(),
-                        |ty| ty.pretty_print(db).to_string()
-                    )
+                    provider_ty
+                        .map_or_else(|| "<none>".to_string(), |ty| ty.pretty_print(db).clone())
                 )
             })
             .collect::<Vec<_>>();

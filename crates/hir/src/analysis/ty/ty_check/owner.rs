@@ -47,18 +47,17 @@ impl<'db> EffectParamOwner<'db> {
         match self {
             EffectParamOwner::Func(func) => func.effects(db),
             EffectParamOwner::Contract(contract) => contract.effects(db),
-            EffectParamOwner::ContractInit { contract } => contract
-                .init(db)
-                .map(|init| init.effects(db))
-                .unwrap_or_else(|| EffectParamListId::new(db, Vec::new())),
+            EffectParamOwner::ContractInit { contract } => contract.init(db).map_or_else(
+                || EffectParamListId::new(db, Vec::new()),
+                |init| init.effects(db),
+            ),
             EffectParamOwner::ContractRecvArm {
                 contract,
                 recv_idx,
                 arm_idx,
             } => contract
                 .recv_arm(db, recv_idx as usize, arm_idx as usize)
-                .map(|arm| arm.effects)
-                .unwrap_or_else(|| EffectParamListId::new(db, Vec::new())),
+                .map_or_else(|| EffectParamListId::new(db, Vec::new()), |arm| arm.effects),
         }
     }
 
@@ -182,10 +181,10 @@ impl<'db> BodyOwner<'db> {
             BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {
                 EffectParamListId::new(db, Vec::new())
             }
-            BodyOwner::ContractInit { contract } => contract
-                .init(db)
-                .map(|init| init.effects(db))
-                .unwrap_or_else(|| EffectParamListId::new(db, Vec::new())),
+            BodyOwner::ContractInit { contract } => contract.init(db).map_or_else(
+                || EffectParamListId::new(db, Vec::new()),
+                |init| init.effects(db),
+            ),
             BodyOwner::ContractRecvArm {
                 contract,
                 recv_idx,
@@ -193,8 +192,7 @@ impl<'db> BodyOwner<'db> {
                 ..
             } => contract
                 .recv_arm(db, recv_idx as usize, arm_idx as usize)
-                .map(|arm| arm.effects)
-                .unwrap_or_else(|| EffectParamListId::new(db, Vec::new())),
+                .map_or_else(|| EffectParamListId::new(db, Vec::new()), |arm| arm.effects),
         }
     }
 
