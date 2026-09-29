@@ -1586,14 +1586,12 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                 .expect("clause alpha normalization"),
             payload: entry.payload.substitute(self.db, &subst),
         };
-        if self
-            .limits
-            .interned_nodes
-            .is_none_or(|limit| self.normalized.len() >= limit)
-        {
-            self.normalized.clear();
+        if let Some(limit) = self.limits.interned_nodes {
+            if self.normalized.len() >= limit {
+                self.normalized.clear();
+            }
+            self.normalized.insert(key, normal.clone());
         }
-        self.normalized.insert(key, normal.clone());
         normal
     }
 
@@ -1638,24 +1636,27 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     .expect("free payload binder");
             }
         }
-        // IDs have structural equality, so dropping entries never changes domain
-        // equality. Live values keep their nodes alive independently of this cache, so
-        // an entry nothing else holds is the only one worth dropping: clearing the
-        // whole cache would just have equal values rebuilt as separate nodes.
-        let limit = self.limits.interned_nodes;
-        if limit.is_none_or(|limit| self.nodes.len() >= limit) {
-            self.nodes
-                .retain(|_, value| Arc::strong_count(&value.0) > 1);
-            // A limit the live entries alone exceed, and no limit at all, still have
-            // to give the rest up.
-            if limit.is_none_or(|limit| self.nodes.len() >= limit) {
-                self.nodes.clear();
-            }
-            self.metrics.interner_evictions += 1;
-        }
         let value = ValueId(Arc::new(node), hash);
-        self.nodes.insert(hash, value.clone());
         self.metrics.nodes_created += 1;
+        // Without a limit nothing is kept, not even this value, so an equal value
+        // interned next is built again.
+        if let Some(limit) = self.limits.interned_nodes {
+            // IDs have structural equality, so dropping entries never changes domain
+            // equality. Live values keep their nodes alive independently of this cache,
+            // so an entry nothing else holds is the only one worth dropping: clearing
+            // the whole cache would just have equal values rebuilt as separate nodes.
+            if self.nodes.len() >= limit {
+                self.nodes
+                    .retain(|_, value| Arc::strong_count(&value.0) > 1);
+                // Live entries filling half the limit would bring the next sweep back
+                // within a few inserts, so give those up too.
+                if self.nodes.len() >= limit / 2 {
+                    self.nodes.clear();
+                }
+                self.metrics.interner_evictions += 1;
+            }
+            self.nodes.insert(hash, value.clone());
+        }
         value
     }
 }

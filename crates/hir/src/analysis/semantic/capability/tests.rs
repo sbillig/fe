@@ -3993,6 +3993,15 @@ fn an_interner_without_a_limit_keeps_no_values() {
         built * 2,
         "an interner without a limit built an equal value again"
     );
+    // Equal values interned back to back are both built too.
+    let built = uncached.metrics().nodes_created;
+    uncached.empty(shape, &scope());
+    uncached.empty(shape, &scope());
+    assert_eq!(
+        uncached.metrics().nodes_created,
+        built + 2,
+        "an interner without a limit reused the value it built last"
+    );
 
     let mut cached = ValueInterner::new(&db, ValueLimits::default());
     leaf(&mut cached, shape, &scope(), 1, vec![runtime(0)]);
