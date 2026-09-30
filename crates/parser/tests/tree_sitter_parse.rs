@@ -491,43 +491,74 @@ fn tree_sitter_matches_string_escape_policy() {
     }
 }
 
-/// A function's shape as a parser reads it: whether it has a body, and the
-/// kind of each of its `where` predicates, in order.
+/// An item with a `where` clause as a parser reads it: its kind, whether a
+/// function has a body, and the kind of each of its `where` predicates, in
+/// order.
 #[derive(Debug, PartialEq, Eq)]
-struct FunctionShape {
-    body: bool,
+struct ItemShape {
+    kind: &'static str,
+    /// Whether the item has a body, for functions only.
+    body: Option<bool>,
     predicates: Vec<&'static str>,
 }
 
-fn parser_function_shapes(source: &str) -> Vec<FunctionShape> {
+fn parser_item_shapes(source: &str) -> Vec<ItemShape> {
     use fe_parser::{SyntaxKind, SyntaxNode};
     let (green, _) = parse_source_file(source, RecoveryMode::NoRecover);
     SyntaxNode::new_root(green)
         .descendants()
-        .filter(|node| node.kind() == SyntaxKind::Func)
-        .map(|func| FunctionShape {
-            body: func
+        .filter_map(|item| {
+            let kind = match item.kind() {
+                SyntaxKind::Func => "function",
+                SyntaxKind::Struct => "struct",
+                SyntaxKind::Enum => "enum",
+                SyntaxKind::Impl => "impl",
+                SyntaxKind::ImplTrait => "impl trait",
+                SyntaxKind::Trait => "trait",
+                _ => return None,
+            };
+            // A function's `where` clause is part of its signature.
+            let clauses = item
                 .children()
-                .any(|child| child.kind() == SyntaxKind::BlockExpr),
-            predicates: func
-                .children()
-                .filter(|child| child.kind() == SyntaxKind::FuncSignature)
-                .flat_map(|signature| signature.children())
-                .filter(|child| child.kind() == SyntaxKind::WhereClause)
-                .flat_map(|clause| clause.children())
-                .filter_map(|predicate| match predicate.kind() {
-                    SyntaxKind::WherePredicate => Some("type bound"),
-                    SyntaxKind::WhereConstPredicate => Some("condition"),
-                    _ => None,
+                .flat_map(|child| {
+                    if child.kind() == SyntaxKind::FuncSignature {
+                        child.children().collect()
+                    } else {
+                        vec![child]
+                    }
                 })
-                .collect(),
+                .filter(|child| child.kind() == SyntaxKind::WhereClause);
+            Some(ItemShape {
+                kind,
+                body: (kind == "function").then(|| {
+                    item.children()
+                        .any(|child| child.kind() == SyntaxKind::BlockExpr)
+                }),
+                predicates: clauses
+                    .flat_map(|clause| clause.children())
+                    .filter_map(|predicate| match predicate.kind() {
+                        SyntaxKind::WherePredicate => Some("type bound"),
+                        SyntaxKind::WhereConstPredicate => Some("condition"),
+                        _ => None,
+                    })
+                    .collect(),
+            })
         })
         .collect()
 }
 
-fn tree_sitter_function_shapes(parser: &mut Parser, source: &str) -> Vec<FunctionShape> {
-    fn walk(node: tree_sitter::Node, shapes: &mut Vec<FunctionShape>) {
-        if node.kind() == "function_definition" {
+fn tree_sitter_item_shapes(parser: &mut Parser, source: &str) -> Vec<ItemShape> {
+    fn walk(node: tree_sitter::Node, shapes: &mut Vec<ItemShape>) {
+        let kind = match node.kind() {
+            "function_definition" => Some("function"),
+            "struct_definition" => Some("struct"),
+            "enum_definition" => Some("enum"),
+            "impl_block" => Some("impl"),
+            "impl_trait" => Some("impl trait"),
+            "trait_definition" => Some("trait"),
+            _ => None,
+        };
+        if let Some(kind) = kind {
             let mut cursor = node.walk();
             let predicates = node
                 .named_children(&mut cursor)
@@ -544,8 +575,9 @@ fn tree_sitter_function_shapes(parser: &mut Parser, source: &str) -> Vec<Functio
                         .collect::<Vec<_>>()
                 })
                 .collect();
-            shapes.push(FunctionShape {
-                body: node.child_by_field_name("body").is_some(),
+            shapes.push(ItemShape {
+                kind,
+                body: (kind == "function").then(|| node.child_by_field_name("body").is_some()),
                 predicates,
             });
         }
@@ -560,9 +592,20 @@ fn tree_sitter_function_shapes(parser: &mut Parser, source: &str) -> Vec<Functio
     shapes
 }
 
-/// The tree-sitter grammar and the compiler's parser read each function's
-/// `where` clause and body the same way: which block is the body and which
-/// is a braced condition, and where one predicate ends and the next starts.
+/// Files in the agreement corpus that the tree-sitter grammar cannot read for
+/// reasons unrelated to `where` clauses, as on master: a block in a generic
+/// parameter's default, and generic arguments on a pattern or record path.
+const TREE_SITTER_UNREADABLE: &[&str] = &[
+    "anonymous_constants_report_requirements_once_at_their_position/positions.fe",
+    "type_parameter_defaults_check_every_written_constant/dropped_by_an_alias.fe",
+    "types_written_before_a_path_separator_are_checked/expression_paths.fe",
+    "written_types_report_their_conditions_once/const_parameter_defaults.fe",
+];
+
+/// The tree-sitter grammar and the compiler's parser read the `where` clause
+/// of each function, struct, enum, impl and trait the same way, and each
+/// function's body: which block is the body and which is a braced
+/// condition, and where one predicate ends and the next starts.
 #[test]
 fn tree_sitter_agrees_on_where_clauses_and_function_bodies() {
     let mut parser = new_parser();
@@ -570,17 +613,33 @@ fn tree_sitter_agrees_on_where_clauses_and_function_bodies() {
     let dirs = [
         manifest.join("test_files/syntax_node/items"),
         manifest.join("../fmt/tests/fixtures"),
+        manifest.join("../uitest/fixtures/ty_check/const_where"),
         manifest.join("../../ingots/core/src"),
         manifest.join("../../ingots/std/src"),
     ];
     let mut disagreements = Vec::new();
+    // The item kinds seen with at least one predicate, so that no kind
+    // agrees only because neither parser found its `where` clause.
+    let mut compared = std::collections::BTreeSet::new();
     for dir in &dirs {
         for path in collect_fe_files(dir) {
+            if TREE_SITTER_UNREADABLE
+                .iter()
+                .any(|unreadable| path.ends_with(unreadable))
+            {
+                continue;
+            }
             let source = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
                 .replace("\r\n", "\n");
-            let expected = parser_function_shapes(&source);
-            let found = tree_sitter_function_shapes(&mut parser, &source);
+            let expected = parser_item_shapes(&source);
+            let found = tree_sitter_item_shapes(&mut parser, &source);
+            compared.extend(
+                expected
+                    .iter()
+                    .filter(|shape| !shape.predicates.is_empty())
+                    .map(|shape| shape.kind),
+            );
             if expected != found {
                 disagreements.push(format!(
                     "{}:\n  parser:      {expected:?}\n  tree-sitter: {found:?}",
@@ -590,4 +649,8 @@ fn tree_sitter_agrees_on_where_clauses_and_function_bodies() {
         }
     }
     assert!(disagreements.is_empty(), "{}", disagreements.join("\n"));
+    assert_eq!(
+        compared.into_iter().collect::<Vec<_>>(),
+        ["enum", "function", "impl", "impl trait", "struct", "trait"],
+    );
 }
