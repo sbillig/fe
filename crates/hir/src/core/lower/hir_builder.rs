@@ -1,6 +1,10 @@
+use std::rc::Rc;
+
 use common::ingot::IngotKind;
 use parser::ast;
 use parser::ast::prelude::AstNode;
+use parser::{SyntaxKind, SyntaxNode};
+use rustc_hash::FxHashSet;
 
 use crate::{
     HirDb,
@@ -51,6 +55,20 @@ where
     ctxt: &'ctxt mut FileLowerCtxt<'db>,
     roots: LibRoots<'db>,
     desugared: O,
+    reserved: Rc<FxHashSet<String>>,
+}
+
+/// `__fe_{name}`, or `__fe_{name}_{n}` for the first `n` that the desugared
+/// source does not mention. Generated code then cannot capture a name that a
+/// field type refers to, whichever namespace it is in.
+fn fresh_ident<'db>(db: &'db dyn HirDb, reserved: &FxHashSet<String>, name: &str) -> IdentId<'db> {
+    let mut ident = format!("__fe_{name}");
+    let mut suffix = 0;
+    while reserved.contains(&ident) {
+        suffix += 1;
+        ident = format!("__fe_{name}_{suffix}");
+    }
+    IdentId::new(db, ident)
 }
 
 struct FuncBodySpec<'db> {
@@ -66,12 +84,25 @@ impl<'ctxt, 'db, O> HirBuilder<'ctxt, 'db, O>
 where
     O: Clone + Into<DesugaredOrigin>,
 {
-    pub(super) fn new(ctxt: &'ctxt mut FileLowerCtxt<'db>, desugared: O) -> Self {
+    /// A builder for the items desugared from `source`, whose identifiers
+    /// generated names avoid.
+    pub(super) fn new(
+        ctxt: &'ctxt mut FileLowerCtxt<'db>,
+        desugared: O,
+        source: &SyntaxNode,
+    ) -> Self {
         let roots = LibRoots::for_ctxt(ctxt);
+        let reserved = source
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .filter(|token| token.kind() == SyntaxKind::Ident)
+            .map(|token| token.text().to_string())
+            .collect();
         Self {
             ctxt,
             roots,
             desugared,
+            reserved: Rc::new(reserved),
         }
     }
 
@@ -92,7 +123,7 @@ where
     }
 
     pub(super) fn generated_ident(&self, name: &str) -> IdentId<'db> {
-        IdentId::new(self.db(), format!("__fe_{name}"))
+        fresh_ident(self.db(), &self.reserved, name)
     }
 
     pub(super) fn roots(&self) -> LibRoots<'db> {
@@ -114,6 +145,7 @@ where
             ctxt: self.ctxt,
             roots: self.roots,
             desugared,
+            reserved: self.reserved.clone(),
         }
     }
 
@@ -498,6 +530,7 @@ where
                     this.ctxt,
                     this.roots,
                     this.desugared.clone(),
+                    this.reserved.clone(),
                     TrackedItemVariant::FuncBody,
                 );
                 build_body(&mut body_builder);
@@ -552,6 +585,7 @@ where
     body: BodyCtxt<'ctxt, 'db>,
     roots: LibRoots<'db>,
     desugared: O,
+    reserved: Rc<FxHashSet<String>>,
     stmts: Vec<StmtId>,
 }
 
@@ -571,6 +605,7 @@ where
         ctxt: &'ctxt mut FileLowerCtxt<'db>,
         roots: LibRoots<'db>,
         desugared: O,
+        reserved: Rc<FxHashSet<String>>,
         id: TrackedItemVariant<'db>,
     ) -> Self {
         let id = ctxt.joined_id(id);
@@ -578,12 +613,17 @@ where
             body: BodyCtxt::new(ctxt, id),
             roots,
             desugared,
+            reserved,
             stmts: Vec::new(),
         }
     }
 
     pub(super) fn db(&self) -> &'db dyn HirDb {
         self.body.f_ctxt.db()
+    }
+
+    pub(super) fn generated_ident(&self, name: &str) -> IdentId<'db> {
+        fresh_ident(self.db(), &self.reserved, name)
     }
 
     pub(super) fn roots(&self) -> LibRoots<'db> {
@@ -732,8 +772,8 @@ where
 
         let db = self.db();
         let self_expr = self.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
-        let tail_ident = IdentId::new(db, "__tail".to_string());
-        let head_pos_ident = IdentId::new(db, "__head_pos".to_string());
+        let tail_ident = self.generated_ident("tail");
+        let head_pos_ident = self.generated_ident("head_pos");
         let head_size = self.abi_size_assoc_expr(TypeId::fallback_self_ty(db), "HEAD_SIZE");
         let tail_pat = self.push_pat(Pat::Path(
             Partial::Present(PathId::from_ident(db, tail_ident)),
@@ -748,7 +788,7 @@ where
         self.emit_stmt(Stmt::Let(head_pos_pat, None, Some(zero)));
 
         for (index, (field, field_ty)) in fields.iter().copied().enumerate() {
-            let field_ident = IdentId::new(db, format!("__field_{index}"));
+            let field_ident = self.generated_ident(&format!("field_{index}"));
             let field_pat = self.push_pat(Pat::Path(
                 Partial::Present(PathId::from_ident(db, field_ident)),
                 false,

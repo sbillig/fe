@@ -67,7 +67,7 @@ pub(super) fn lower_error_struct<'db>(
     let error_desugared = ErrorDesugared {
         error_struct: parser::ast::AstPtr::new(&ast),
     };
-    let mut builder = HirBuilder::new(ctxt, error_desugared.clone());
+    let mut builder = HirBuilder::new(ctxt, error_desugared.clone(), ast.syntax());
 
     let struct_name_token = ast.name();
     let struct_name = struct_name_token.as_ref().map(|n| n.text().to_string());

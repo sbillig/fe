@@ -106,10 +106,10 @@ mod CounterMsg {
 
         #[inline(always)]
         fn encode(own self, _ ptr: *u8) {
-            let mut __tail = <Self as core::abi::AbiSize>::HEAD_SIZE
-            let mut __head_pos = 0
-            let __field_0 = self.val
-            core::abi::encode_field_at<std::abi::Sol, u64>(__field_0, ptr, head_pos: __head_pos, tail: __tail)
+            let mut __fe_tail = <Self as core::abi::AbiSize>::HEAD_SIZE
+            let mut __fe_head_pos = 0
+            let __fe_field_0 = self.val
+            core::abi::encode_field_at<std::abi::Sol, u64>(__fe_field_0, ptr, head_pos: __fe_head_pos, tail: __fe_tail)
         }
     }
 

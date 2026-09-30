@@ -53,7 +53,7 @@ pub(super) fn lower_event_struct<'db>(
     let event_desugared = EventDesugared {
         event_struct: parser::ast::AstPtr::new(&ast),
     };
-    let mut builder = HirBuilder::new(ctxt, event_desugared.clone());
+    let mut builder = HirBuilder::new(ctxt, event_desugared.clone(), ast.syntax());
 
     let struct_name_token = ast.name();
     let struct_name = struct_name_token.as_ref().map(|n| n.text().to_string());

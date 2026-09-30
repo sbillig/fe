@@ -1,5 +1,5 @@
 use num_bigint::BigUint;
-use parser::ast::{self, AttrListOwner as _};
+use parser::ast::{self, AttrListOwner as _, prelude::AstNode as _};
 use salsa::Accumulator as _;
 
 use super::{
@@ -58,7 +58,7 @@ pub(super) fn lower_msg_as_mod<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Msg
         focus: Default::default(),
     };
 
-    let mut builder = HirBuilder::new(ctxt, msg_desugared);
+    let mut builder = HirBuilder::new(ctxt, msg_desugared, ast.syntax());
     builder.desugared_mod(name, attributes, vis, |builder| {
         if let Some(variants) = ast.variants() {
             for (idx, variant) in variants.into_iter().enumerate() {

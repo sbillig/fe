@@ -84,7 +84,7 @@ pub(super) fn lower_abi_struct<'db>(
     let desugared = AbiStructDesugared {
         abi_struct: parser::ast::AstPtr::new(&ast),
     };
-    let mut builder = HirBuilder::new(ctxt, desugared);
+    let mut builder = HirBuilder::new(ctxt, desugared, ast.syntax());
 
     let attributes = lower_attrs_without_named(builder.ctxt(), ast.attr_list(), "abi");
     let vis = super::lower_visibility(&ast);
@@ -269,8 +269,8 @@ fn lower_abi_span_impl<'db>(
             modifiers,
             |body| {
                 let core = body.roots().core;
-                // let mut __end: u256 = checked_frame_end<Sol>(pos, Self::HEAD_SIZE, input_len)
-                let end_ident = IdentId::new(db, "__end".to_string());
+                // let mut end: u256 = checked_frame_end<Sol>(pos, Self::HEAD_SIZE, input_len)
+                let end_ident = body.generated_ident("end");
                 let callee = body.path_expr(
                     PathId::from_ident(db, core)
                         .push_str(db, "abi")
@@ -292,7 +292,7 @@ fn lower_abi_span_impl<'db>(
                 ));
                 body.emit_stmt(Stmt::Let(end_pat, Some(u256_ty), Some(frame_end)));
 
-                // __end = abi_record_field_end<Sol, F, I>(input, pos, head_pos, input_len, __end)
+                // end = abi_record_field_end<Sol, F, I>(input, pos, head_pos, input_len, end)
                 for (idx, (_, field_ty)) in field_specs.iter().copied().enumerate() {
                     let callee = body.path_expr(
                         PathId::from_ident(db, core)

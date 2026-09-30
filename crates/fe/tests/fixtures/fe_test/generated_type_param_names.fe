@@ -46,6 +46,56 @@ pub contract C {
     }
 }
 
+// Generated names avoid the identifiers of the source they are generated
+// from, including ones spelled like the generated names themselves.
+#[abi]
+pub struct __fe_D {
+    pub x: u256,
+}
+impl Copy for __fe_D {}
+
+type __fe_I = u256
+type __fe_L = u256
+const __fe_abi_struct_pos: usize = 2
+
+#[abi]
+pub struct Spelled {
+    pub d: __fe_D,
+    pub i: __fe_I,
+    pub values: [__fe_L; __fe_abi_struct_pos],
+}
+
+#[event]
+struct SpelledEvent {
+    d: __fe_D,
+    value: __fe_L,
+}
+
+msg Spelling {
+    #[selector = sol("sum((uint256),uint256)")]
+    Sum { d: __fe_D, i: __fe_I } -> u256,
+}
+
+pub contract SpellingC {
+    recv Spelling {
+        Sum { d, i } -> u256 {
+            d.x + i
+        }
+    }
+}
+
+#[test]
+fn fields_spelled_like_generated_names() uses (evm: mut Evm) {
+    let encoded = encode_abi_payload(Spelled { d: __fe_D { x: 1 }, i: 2, values: [3, 4] })
+    let decoded = <Spelled as Decode<Sol>>::decode_from_bounded(encoded.span(), 0, encoded.len())
+    assert(decoded.d.x == 1)
+    assert(decoded.i == 2)
+    assert(decoded.values[1] == 4)
+    let c = evm.create2<SpellingC>(value: 0, args: (), salt: 0)
+    let sum: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: Spelling::Sum { d: __fe_D { x: 5 }, i: 6 })
+    assert(sum == 11)
+}
+
 #[test]
 fn abi_struct_fields_named_like_generated_params() uses (mem: mut RawMem) {
     let encoded = encode_abi_payload(Both { d: D { x: 1 }, i: I { y: 2 }, l: 3 })
