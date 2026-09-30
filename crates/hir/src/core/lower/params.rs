@@ -53,23 +53,26 @@ impl<'db> FuncParamListId<'db> {
 
 impl<'db> WhereClauseId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::WhereClause) -> Self {
-        let predicates = ast
+        let mut const_idx = 0;
+        let predicates: Vec<_> = ast
             .iter()
-            .map(|pred| WherePredicate::lower_ast(ctxt, pred))
-            .collect::<Vec<_>>();
-        let const_predicates: Vec<_> = ast
-            .const_predicates()
-            .enumerate()
-            .map(|(idx, pred)| {
-                Body::lower_ast_with_variant(
-                    ctxt,
-                    pred.expr(),
-                    TrackedItemVariant::WhereConstPredicate(idx as u32),
-                    BodyKind::Anonymous,
-                )
+            .map(|pred| match pred.kind() {
+                ast::WherePredicateKind::Type(pred) => {
+                    WhereClausePredicate::Type(WherePredicate::lower_ast(ctxt, pred))
+                }
+                ast::WherePredicateKind::Const(pred) => {
+                    let body = Body::lower_ast_with_variant(
+                        ctxt,
+                        pred.expr(),
+                        TrackedItemVariant::WhereConstPredicate(const_idx),
+                        BodyKind::Anonymous,
+                    );
+                    const_idx += 1;
+                    WhereClausePredicate::Const(body)
+                }
             })
             .collect();
-        Self::new(ctxt.db(), predicates, const_predicates)
+        Self::new(ctxt.db(), predicates)
     }
 
     pub(super) fn lower_ast_opt(
@@ -77,7 +80,7 @@ impl<'db> WhereClauseId<'db> {
         ast: Option<ast::WhereClause>,
     ) -> Self {
         ast.map(|ast| Self::lower_ast(ctxt, ast))
-            .unwrap_or_else(|| Self::new(ctxt.db(), Vec::new(), Vec::new()))
+            .unwrap_or_else(|| Self::new(ctxt.db(), Vec::new()))
     }
 }
 

@@ -283,19 +283,41 @@ impl AssocTypeGenericArg {
 }
 
 ast_node! {
-    /// `where T: Trait`
+    /// `where T: Trait, N > 0`
     pub struct WhereClause,
     SK::WhereClause,
-    IntoIterator<Item=WherePredicate>,
+    IntoIterator<Item=WhereClausePredicate>,
 }
 impl WhereClause {
-    pub fn const_predicates(&self) -> impl Iterator<Item = WhereConstPredicate> {
-        support::children(self.syntax())
-    }
-
     pub fn where_kw(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::WhereKw)
     }
+}
+
+ast_node! {
+    /// A predicate of a `where` clause: a type bound or a const condition.
+    pub struct WhereClausePredicate,
+    SK::WherePredicate | SK::WhereConstPredicate,
+}
+impl WhereClausePredicate {
+    pub fn kind(&self) -> WherePredicateKind {
+        match self.syntax().kind() {
+            SK::WherePredicate => {
+                WherePredicateKind::Type(AstNode::cast(self.syntax().clone()).unwrap())
+            }
+            SK::WhereConstPredicate => {
+                WherePredicateKind::Const(AstNode::cast(self.syntax().clone()).unwrap())
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+pub enum WherePredicateKind {
+    /// `T: Trait`
+    Type(WherePredicate),
+    /// `N > 0`
+    Const(WhereConstPredicate),
 }
 
 ast_node! {
@@ -712,6 +734,9 @@ mod tests {
         let wc = parse_where_clause(source);
         let mut count = 0;
         for pred in wc {
+            let WherePredicateKind::Type(pred) = pred.kind() else {
+                panic!("expected a type bound");
+            };
             match count {
                 0 => {
                     assert!(matches!(pred.ty().unwrap().kind(), TypeKind::Path(_)));

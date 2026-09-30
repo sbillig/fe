@@ -498,7 +498,7 @@ fn collect_decl_constraint_pairs_impl<'db>(
     // the main traversal API for other callers.
     if let Some(w_owner) = owner.where_clause_owner() {
         let where_clause = w_owner.where_clause(db);
-        for (pred_idx, pred) in where_clause.data(db).iter().enumerate() {
+        for (pred_idx, pred) in where_clause.type_predicates(db) {
             let Some(hir_ty) = pred.ty.to_opt() else {
                 continue;
             };

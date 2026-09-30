@@ -18,7 +18,7 @@ use crate::{
         Partial, Pat, PatId, PathId, PathKind, StaticAssert, Stmt, StmtId, Struct, TopLevelMod,
         Trait, TraitRefId, TupleTypeId, TypeAlias, TypeBound, TypeId, TypeKind, Use, UseAlias,
         UsePathId, UsePathSegment, VariantDef, VariantDefListId, VariantKind, WhereClauseId,
-        WherePredicate,
+        WhereClausePredicate, WherePredicate,
         attr::{self, AttrArgValue},
         scope_graph::ScopeId,
     },
@@ -2124,14 +2124,16 @@ pub fn walk_where_clause<'db, V>(
 ) where
     V: Visitor<'db> + ?Sized,
 {
-    for (idx, predicate) in predicates.data(ctxt.db).iter().enumerate() {
-        ctxt.with_new_ctxt(
-            |span| span.predicate(idx),
-            |ctxt| visitor.visit_where_predicate(ctxt, predicate),
-        );
-    }
-    for &body in predicates.const_predicates(ctxt.db) {
-        visitor.visit_body(&mut VisitorCtxt::with_body(ctxt.db, body), body);
+    for (idx, predicate) in predicates.predicates(ctxt.db).iter().enumerate() {
+        match predicate {
+            WhereClausePredicate::Type(predicate) => ctxt.with_new_ctxt(
+                |span| span.predicate(idx),
+                |ctxt| visitor.visit_where_predicate(ctxt, predicate),
+            ),
+            WhereClausePredicate::Const(body) => {
+                visitor.visit_body(&mut VisitorCtxt::with_body(ctxt.db, *body), *body);
+            }
+        }
     }
 }
 

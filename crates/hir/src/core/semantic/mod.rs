@@ -3138,7 +3138,9 @@ pub struct WhereClauseView<'db> {
 #[derive(Clone, Copy, Debug)]
 pub struct WherePredicateView<'db> {
     pub clause: WhereClauseView<'db>,
+    /// The predicate's position among all the clause's predicates.
     pub idx: usize,
+    predicate: &'db WherePredicate<'db>,
 }
 
 impl<'db> WhereClauseOwner<'db> {
@@ -3156,8 +3158,13 @@ impl<'db> WhereClauseView<'db> {
         self,
         db: &'db dyn HirDb,
     ) -> impl Iterator<Item = WherePredicateView<'db>> + 'db {
-        let len = self.id.data(db).len();
-        (0..len).map(move |idx| WherePredicateView { clause: self, idx })
+        self.id
+            .type_predicates(db)
+            .map(move |(idx, predicate)| WherePredicateView {
+                clause: self,
+                idx,
+                predicate,
+            })
     }
 
     pub fn span(self) -> crate::span::params::LazyWhereClauseSpan<'db> {
@@ -3173,8 +3180,8 @@ impl<'db> WhereClauseView<'db> {
 }
 
 impl<'db> WherePredicateView<'db> {
-    pub(in crate::core) fn hir_pred(self, db: &'db dyn HirDb) -> &'db WherePredicate<'db> {
-        &self.clause.id.data(db)[self.idx]
+    pub(in crate::core) fn hir_pred(self, _db: &'db dyn HirDb) -> &'db WherePredicate<'db> {
+        self.predicate
     }
 
     fn owner_item(self) -> ItemKind<'db> {
@@ -3267,7 +3274,7 @@ impl<'db> WherePredicateView<'db> {
         subject: TyId<'db>,
     ) -> Vec<TyDiagCollection<'db>> {
         let mut out = Vec::new();
-        let hir = &self.clause.id.data(db)[self.idx];
+        let hir = self.predicate;
 
         for (i, bound) in hir.bounds.iter().enumerate() {
             match bound {
