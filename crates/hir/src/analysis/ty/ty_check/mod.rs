@@ -880,7 +880,7 @@ fn infer_body_cycle_initial<'db>(
     key: BodyInferenceKey<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
     let mut typed = TypedBody::empty(db);
-    typed.result_ty = TyId::invalid(db, InvalidCause::TypeLoweringCycle);
+    typed.tables_mut().result_ty = TyId::invalid(db, InvalidCause::TypeLoweringCycle);
     let span = key
         .owner(db)
         .body(db)
@@ -3484,7 +3484,7 @@ pub struct TypedBody<'db> {
 }
 
 // A private module keeps the shared tables type out of the crate's public
-// API while `TypedBody` can still deref to it.
+// API.
 mod typed_body_tables {
     use super::*;
 
@@ -3802,7 +3802,7 @@ impl<'db> TyVisitable<'db> for TypedBody<'db> {
     where
         V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
     {
-        self.assumptions.visit_with(visitor);
+        self.tables.assumptions.visit_with(visitor);
         self.visit_body_types(visitor);
     }
 }
@@ -3815,40 +3815,40 @@ impl<'db> TypedBody<'db> {
     where
         V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
     {
-        self.result_ty.visit_with(visitor);
-        for ty in self.pat_ty.values().flatten() {
+        self.tables.result_ty.visit_with(visitor);
+        for ty in self.tables.pat_ty.values().flatten() {
             ty.visit_with(visitor);
         }
-        for prop in self.expr_ty.values().flatten() {
+        for prop in self.tables.expr_ty.values().flatten() {
             prop.visit_with(visitor);
         }
-        for cref in self.const_refs.values().flatten() {
+        for cref in self.tables.const_refs.values().flatten() {
             cref.visit_with(visitor);
         }
-        for value_path in self.value_path_refs.values().flatten() {
+        for value_path in self.tables.value_path_refs.values().flatten() {
             value_path.visit_with(visitor);
         }
-        for lowering in self.semantic_expr_lowering.values().flatten() {
+        for lowering in self.tables.semantic_expr_lowering.values().flatten() {
             lowering.visit_with(visitor);
         }
-        for lowering in self.record_init_lowering.values().flatten() {
+        for lowering in self.tables.record_init_lowering.values().flatten() {
             lowering.visit_with(visitor);
         }
-        for args in self.call_effect_args.values().flatten() {
+        for args in self.tables.call_effect_args.values().flatten() {
             args.visit_with(visitor);
         }
-        self.param_bindings.visit_with(visitor);
-        for binding in self.pat_bindings.values().flatten() {
+        self.tables.param_bindings.visit_with(visitor);
+        for binding in self.tables.pat_bindings.values().flatten() {
             binding.visit_with(visitor);
         }
-        for place in self.expr_places.values() {
+        for place in self.tables.expr_places.values() {
             place.visit_with(visitor);
         }
-        self.pattern_store.visit_with(visitor);
-        for seq in self.for_loop_seq.values().flatten() {
+        self.tables.pattern_store.visit_with(visitor);
+        for seq in self.tables.for_loop_seq.values().flatten() {
             seq.visit_with(visitor);
         }
-        for (_, ty) in &self.path_applications {
+        for (_, ty) in &self.tables.path_applications {
             ty.visit_with(visitor);
         }
     }
@@ -3859,7 +3859,9 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
     where
         F: crate::analysis::ty::fold::TyFolder<'db>,
     {
-        let mut this = self;
+        // Folding writes every table, so take the tables, copying them if
+        // another `TypedBody` still shares them.
+        let mut this = Arc::unwrap_or_clone(self.tables);
         this.result_ty = this.result_ty.fold_with(db, folder);
         this.assumptions = this.assumptions.fold_with(db, folder);
         this.pat_ty
@@ -3898,7 +3900,7 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .values_mut()
             .flatten()
             .for_each(|binding| *binding = binding.fold_with(db, folder));
-        this.pattern_store = std::mem::take(&mut this.pattern_store).fold_with(db, folder);
+        this.pattern_store = this.pattern_store.fold_with(db, folder);
         this.for_loop_seq
             .values_mut()
             .flatten()
@@ -3909,22 +3911,7 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
         this.path_applications
             .iter_mut()
             .for_each(|(_, ty)| *ty = ty.fold_with(db, folder));
-        this
-    }
-}
-
-impl<'db> std::ops::Deref for TypedBody<'db> {
-    type Target = TypedBodyTables<'db>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.tables
-    }
-}
-
-// Mutation copies the tables only while they are still shared.
-impl<'db> std::ops::DerefMut for TypedBody<'db> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        Arc::make_mut(&mut self.tables)
+        this.into()
     }
 }
 
@@ -3949,19 +3936,32 @@ unsafe impl<'db> Update for TypedBody<'db> {
 }
 
 impl<'db> TypedBody<'db> {
+    /// The tables for writing, copied first if another `TypedBody` shares
+    /// them.
+    fn tables_mut(&mut self) -> &mut TypedBodyTables<'db> {
+        Arc::make_mut(&mut self.tables)
+    }
+
+    /// The constrained type applications that resolving the body's paths
+    /// passed through, each with the span of the expression or pattern whose
+    /// path it is.
+    pub(super) fn path_applications(&self) -> &[(DynLazySpan<'db>, TyId<'db>)] {
+        &self.tables.path_applications
+    }
+
     pub fn body(&self) -> Option<Body<'db>> {
-        self.body
+        self.tables.body
     }
 
     pub fn result_ty(&self) -> TyId<'db> {
-        self.result_ty
+        self.tables.result_ty
     }
 
     pub(crate) fn smir_lowering_issues(
         &self,
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<SmirLoweringIssue> {
-        let Some(body) = self.body else {
+        let Some(body) = self.tables.body else {
             return Vec::new();
         };
 
@@ -4115,7 +4115,7 @@ impl<'db> TypedBody<'db> {
     /// Pointer rvalues are evaluated once before lowering their target place.
     fn has_lowerable_place(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> bool {
         self.expr_place(expr).is_some()
-            || self.body.is_some_and(|body| {
+            || self.tables.body.is_some_and(|body| {
                 is_pointer_place_expr(db, body, expr, &mut |expr| self.expr_ty(db, expr))
             })
     }
@@ -4138,7 +4138,7 @@ impl<'db> TypedBody<'db> {
         db: &'db dyn HirAnalysisDb,
         expr: ExprId,
     ) -> bool {
-        let Some(body) = self.body else {
+        let Some(body) = self.tables.body else {
             return false;
         };
         let Partial::Present(expr_data) = expr.data(db, body) else {
@@ -4162,7 +4162,7 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn assumptions(&self) -> PredicateListId<'db> {
-        self.assumptions
+        self.tables.assumptions
     }
 
     pub fn expr_ty(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> TyId<'db> {
@@ -4170,7 +4170,8 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn expr_prop(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> ExprProp<'db> {
-        self.expr_ty
+        self.tables
+            .expr_ty
             .get(expr)
             .cloned()
             .flatten()
@@ -4178,20 +4179,20 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn is_implicit_move(&self, expr: ExprId) -> bool {
-        self.implicit_moves.contains(&expr)
+        self.tables.implicit_moves.contains(&expr)
     }
 
     /// All const references registered in this body, in arbitrary order.
     pub fn const_refs(&self) -> impl Iterator<Item = ConstRef<'db>> + '_ {
-        self.const_refs.values().flatten().copied()
+        self.tables.const_refs.values().flatten().copied()
     }
 
     pub fn expr_const_ref(&self, expr: ExprId) -> Option<ConstRef<'db>> {
-        self.const_refs[expr]
+        self.tables.const_refs[expr]
     }
 
     pub fn value_path_ref(&self, expr: ExprId) -> Option<ValuePathRef<'db>> {
-        self.value_path_refs[expr]
+        self.tables.value_path_refs[expr]
     }
 
     pub fn expr_code_region_ref(
@@ -4205,21 +4206,22 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn semantic_expr_lowering(&self, expr: ExprId) -> Option<&SemanticExprLowering<'db>> {
-        self.semantic_expr_lowering[expr].as_ref()
+        self.tables.semantic_expr_lowering[expr].as_ref()
     }
 
     pub fn record_init_lowering(&self, expr: ExprId) -> Option<RecordInitLowering<'db>> {
-        self.record_init_lowering[expr]
+        self.tables.record_init_lowering[expr]
     }
 
     pub fn resolved_field_index(&self, expr: ExprId) -> Option<u16> {
-        self.resolved_field_index[expr]
+        self.tables.resolved_field_index[expr]
     }
 
     // Final typed pattern/binding view. This can intentionally differ from
     // validated-pattern match types when destructuring borrowed carriers.
     pub fn pat_ty(&self, db: &'db dyn HirAnalysisDb, pat: PatId) -> TyId<'db> {
-        self.pat_ty
+        self.tables
+            .pat_ty
             .get(pat)
             .copied()
             .flatten()
@@ -4248,26 +4250,26 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn call_effect_args(&self, call_expr: ExprId) -> Option<&[ResolvedEffectArg<'db>]> {
-        self.call_effect_args[call_expr].as_deref()
+        self.tables.call_effect_args[call_expr].as_deref()
     }
 
     pub fn return_borrow_provider(&self) -> Option<ProviderAddressSpace> {
-        self.return_borrow_provider
+        self.tables.return_borrow_provider
     }
 
     /// Get the binding for a function parameter by index.
     pub fn param_binding(&self, idx: usize) -> Option<LocalBinding<'db>> {
-        self.param_bindings.get(idx).copied()
+        self.tables.param_bindings.get(idx).copied()
     }
 
     /// Get the binding for a local variable by its pattern.
     pub fn pat_binding(&self, pat: PatId) -> Option<LocalBinding<'db>> {
-        self.pat_bindings[pat]
+        self.tables.pat_bindings[pat]
     }
 
     /// Get how this local binding is captured by its source pattern destructuring.
     pub fn pat_binding_mode(&self, pat: PatId) -> Option<PatBindingMode> {
-        self.pat_binding_modes[pat]
+        self.tables.pat_binding_modes[pat]
     }
 
     pub fn binding_ty(&self, db: &'db dyn HirAnalysisDb, binding: LocalBinding<'db>) -> TyId<'db> {
@@ -4283,7 +4285,7 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn path_expr_read_semantics(&self, expr: ExprId) -> Option<PathReadSemantics> {
-        self.expr_ty[expr]
+        self.tables.expr_ty[expr]
             .as_ref()
             .and_then(|prop| prop.path_read_semantics)
     }
@@ -4296,11 +4298,11 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn pattern_store(&self) -> &PatternStore<'db> {
-        &self.pattern_store
+        &self.tables.pattern_store
     }
 
     pub fn pattern_status(&self, pat: PatId) -> PatternAnalysisStatus {
-        self.pattern_status[pat]
+        self.tables.pattern_status[pat]
     }
 
     pub fn pattern_root(&self, pat: PatId) -> Option<ValidatedPatId> {
@@ -4309,7 +4311,7 @@ impl<'db> TypedBody<'db> {
 
     /// Get the resolved Seq methods for a for-loop statement.
     pub fn for_loop_seq(&self, stmt: StmtId) -> Option<&ForLoopSeq<'db>> {
-        self.for_loop_seq[stmt].as_ref()
+        self.tables.for_loop_seq[stmt].as_ref()
     }
 
     pub fn binding_source(
@@ -4349,7 +4351,7 @@ impl<'db> TypedBody<'db> {
         pat: ValidatedPatId,
         binding_pat: PatId,
     ) -> Option<Vec<ReturnProjectionStep>> {
-        match self.pattern_store.node(pat).kind() {
+        match self.tables.pattern_store.node(pat).kind() {
             ValidatedPatKind::Wildcard { binding } => binding
                 .filter(|binding| binding.representative_pat == binding_pat)
                 .map(|_| Vec::new()),
@@ -5431,7 +5433,7 @@ impl<'db> TypedBody<'db> {
     ///
     /// This is used by the language server for goto-definition on local variables.
     pub fn expr_binding_def_span(&self, func: Func<'db>, expr: ExprId) -> Option<DynLazySpan<'db>> {
-        let body = self.body?;
+        let body = self.tables.body?;
         let binding = self.expr_binding(expr)?;
         Some(binding.def_span_with(body, func))
     }
@@ -5452,14 +5454,16 @@ impl<'db> TypedBody<'db> {
     ///
     /// Returns the identity of the binding (param index, pattern id, or effect param ident).
     pub fn expr_binding(&self, expr: ExprId) -> Option<LocalBinding<'db>> {
-        self.expr_ty[expr].as_ref().and_then(|prop| prop.binding)
+        self.tables.expr_ty[expr]
+            .as_ref()
+            .and_then(|prop| prop.binding)
     }
 
     /// Returns a place representation for `expr` if it denotes an assignable location.
     pub fn expr_place(&self, expr: ExprId) -> Option<&Place<'db>> {
-        self.expr_place[expr]
+        self.tables.expr_place[expr]
             .expand()
-            .and_then(|place_id| self.expr_places.get(place_id))
+            .and_then(|place_id| self.tables.expr_places.get(place_id))
     }
 
     /// Find all expressions that reference the same local binding as the given expression.
@@ -5469,11 +5473,15 @@ impl<'db> TypedBody<'db> {
     ///
     /// This is used by the language server for find-all-references and rename on local variables.
     pub fn local_references(&self, expr: ExprId) -> Vec<ExprId> {
-        let Some(binding) = self.expr_ty[expr].as_ref().and_then(|prop| prop.binding) else {
+        let Some(binding) = self.tables.expr_ty[expr]
+            .as_ref()
+            .and_then(|prop| prop.binding)
+        else {
             return vec![];
         };
 
-        self.expr_ty
+        self.tables
+            .expr_ty
             .iter()
             .filter_map(|(id, prop)| {
                 if prop.as_ref().and_then(|prop| prop.binding) == Some(binding) {
@@ -5490,7 +5498,8 @@ impl<'db> TypedBody<'db> {
     /// This is the general method for finding all references to any kind of binding
     /// (param, local, or effect param).
     pub fn references_by_binding(&self, binding: LocalBinding<'db>) -> Vec<ExprId> {
-        self.expr_ty
+        self.tables
+            .expr_ty
             .iter()
             .filter_map(|(id, prop)| {
                 if prop.as_ref().and_then(|prop| prop.binding) == Some(binding) {
@@ -5865,10 +5874,10 @@ impl<'db> TyCheckerFinalizer<'db> {
         let assumptions = checker.env.assumptions();
         checker.resolve_deferred();
         let mut body = checker.env.finish(&mut checker.table);
-        body.return_borrow_provider = checker
+        body.tables_mut().return_borrow_provider = checker
             .first_return_borrow_provider
             .map(|(_, provider)| provider);
-        let direct_call_callees = body.body.map_or_else(FxHashSet::default, |body_id| {
+        let direct_call_callees = body.body().map_or_else(FxHashSet::default, |body_id| {
             body_id
                 .exprs(checker.db)
                 .iter()
@@ -5896,7 +5905,7 @@ impl<'db> TyCheckerFinalizer<'db> {
     }
 
     fn check_unknown_types(&mut self) {
-        if let Some(body) = self.body.body {
+        if let Some(body) = self.body.body() {
             let mut ctxt = VisitorCtxt::with_body(self.db, body);
             self.visit_body(&mut ctxt, body);
         }
@@ -5936,7 +5945,7 @@ impl<'db> TyCheckerFinalizer<'db> {
             return;
         }
 
-        let solve_cx = TraitSolveCx::new(self.db, self.body.body.unwrap().scope());
+        let solve_cx = TraitSolveCx::new(self.db, self.body.body().unwrap().scope());
         if let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span) {
             self.diags.push(diag.into());
         }
@@ -6007,7 +6016,7 @@ fn target() -> u256 {
             })
             .expect("target call");
         assert!(incomplete.semantic_expr_lowering(call).is_some());
-        incomplete.semantic_expr_lowering[call] = None;
+        incomplete.tables_mut().semantic_expr_lowering[call] = None;
 
         assert_eq!(
             incomplete.smir_lowering_readiness(&db),
@@ -6064,8 +6073,9 @@ fn target(choice: Choice) -> u256 {
 
         for (invalid, unsupported) in [(0, 1), (1, 0)] {
             let mut mixed = checked.clone();
-            mixed.pattern_status[arms[invalid].pat] = PatternAnalysisStatus::Invalid;
-            mixed.pattern_status[arms[unsupported].pat] = PatternAnalysisStatus::Unsupported;
+            mixed.tables_mut().pattern_status[arms[invalid].pat] = PatternAnalysisStatus::Invalid;
+            mixed.tables_mut().pattern_status[arms[unsupported].pat] =
+                PatternAnalysisStatus::Unsupported;
             assert_eq!(
                 mixed.smir_lowering_readiness(&db),
                 SmirLoweringReadiness::IncompletePlan

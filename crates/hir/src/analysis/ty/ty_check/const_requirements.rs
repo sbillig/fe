@@ -581,7 +581,7 @@ pub(super) fn check_body_requirements<'db>(
     // The failing applications reported below.
     let mut entered = FxHashSet::default();
     let mut reported_paths = FxHashSet::default();
-    for (site, application) in &typed.path_applications {
+    for (site, application) in typed.path_applications() {
         if !reported_paths.insert((site, *application)) {
             continue;
         }
@@ -589,7 +589,7 @@ pub(super) fn check_body_requirements<'db>(
             check.unmet_type(site.clone(), unmet, &mut entered);
         }
     }
-    written.extend(typed.path_applications.iter().map(|&(_, ty)| ty));
+    written.extend(typed.path_applications().iter().map(|&(_, ty)| ty));
     // Whether `expr` only carries a type that entered elsewhere.
     let carries = |expr: ExprId| {
         typed.expr_binding(expr).is_some()
