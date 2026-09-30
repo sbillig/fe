@@ -244,11 +244,12 @@ pub(super) enum Discharge {
     Fails(RequirementFailure),
 }
 
-/// Whether a predicate can be discharged: it type checks as a `bool` const
-/// body and does not depend on itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub(super) enum FormationStatus {
-    WellFormed,
+/// Whether a predicate can be discharged.
+#[derive(Debug, Clone, PartialEq, Eq, Update)]
+pub(super) enum FormationStatus<'db> {
+    /// It type checks as a `bool` const body and does not depend on itself.
+    /// Discharge reads its typed body.
+    WellFormed(TypedBody<'db>),
     IllFormed,
     Recursive,
 }
@@ -257,13 +258,16 @@ pub(super) enum FormationStatus {
 pub(super) struct PredicateFormation<'db> {
     /// The predicate's own diagnostics, reported at its declaration.
     pub(super) diags: Vec<FuncBodyDiag<'db>>,
-    pub(super) typed: TypedBody<'db>,
-    pub(super) status: FormationStatus,
+    pub(super) status: FormationStatus<'db>,
 }
 
-impl PredicateFormation<'_> {
-    pub(super) fn is_well_formed(&self) -> bool {
-        self.status == FormationStatus::WellFormed
+impl<'db> PredicateFormation<'db> {
+    /// The typed body of a well-formed predicate.
+    pub(super) fn well_formed(&self) -> Option<&TypedBody<'db>> {
+        match &self.status {
+            FormationStatus::WellFormed(typed) => Some(typed),
+            FormationStatus::IllFormed | FormationStatus::Recursive => None,
+        }
     }
 }
 
@@ -344,7 +348,6 @@ pub(super) fn check_predicate_formation<'db>(
     if matches!(body.expr(db).data(db, body), Partial::Absent) {
         return PredicateFormation {
             diags,
-            typed,
             status: FormationStatus::IllFormed,
         };
     }
@@ -362,15 +365,11 @@ pub(super) fn check_predicate_formation<'db>(
         diags = vec![BodyDiag::RecursiveConstRequirement(body.span().into()).into()];
         FormationStatus::Recursive
     } else if diags_allow_evaluation(db, &diags) {
-        FormationStatus::WellFormed
+        FormationStatus::WellFormed(typed)
     } else {
         FormationStatus::IllFormed
     };
-    PredicateFormation {
-        diags,
-        typed,
-        status,
-    }
+    PredicateFormation { diags, status }
 }
 
 /// Whether uses of a declaration check `predicate`. A ground predicate, one
@@ -1363,14 +1362,13 @@ fn discharge_requirement<'db>(
     args: Vec<TyId<'db>>,
     caller: Option<GenericParamOwner<'db>>,
 ) -> Discharge {
-    let formation = check_predicate_formation(db, predicate);
-    match formation.status {
-        FormationStatus::WellFormed => {}
+    let typed = match &check_predicate_formation(db, predicate).status {
+        FormationStatus::WellFormed(typed) => typed,
         FormationStatus::IllFormed => {
             return Discharge::Fails(RequirementFailure::NotEstablished);
         }
         FormationStatus::Recursive => return Discharge::Fails(RequirementFailure::Recursive),
-    }
+    };
     let not_instantiable = Discharge::Fails(RequirementFailure::NotInstantiable);
     let args = match caller {
         Some(caller) => match caller_args(db, caller, args) {
@@ -1392,8 +1390,7 @@ fn discharge_requirement<'db>(
         symbolic |= arg.has_param(db);
     }
     if symbolic {
-        let Ok(key) = predicate_key(db, predicate, &formation.typed, predicate.expr(db), &subst)
-        else {
+        let Ok(key) = predicate_key(db, predicate, typed, predicate.expr(db), &subst) else {
             return not_instantiable;
         };
         if let (Some(key), Some(caller)) = (&key, caller) {
@@ -1401,17 +1398,13 @@ fn discharge_requirement<'db>(
                 return not_instantiable;
             };
             for (premise, premise_subst) in premises {
-                let premise_formation = check_predicate_formation(db, premise);
-                if !premise_formation.is_well_formed() {
+                let Some(premise_typed) = check_predicate_formation(db, premise).well_formed()
+                else {
                     continue;
-                }
-                let Ok(premise_key) = predicate_key(
-                    db,
-                    premise,
-                    &premise_formation.typed,
-                    premise.expr(db),
-                    &premise_subst,
-                ) else {
+                };
+                let Ok(premise_key) =
+                    predicate_key(db, premise, premise_typed, premise.expr(db), &premise_subst)
+                else {
                     return not_instantiable;
                 };
                 if premise_key.as_ref() == Some(key) {
@@ -1461,16 +1454,14 @@ fn requirement_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
+// A predicate reached again while its formation is checked depends on
+// itself.
 fn formation_cycle_initial<'db>(
-    db: &'db dyn HirAnalysisDb,
+    _db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
 ) -> PredicateFormation<'db> {
-    let typed = infer_body(db, BodyOwner::const_predicate(db, body))
-        .1
-        .clone();
     PredicateFormation {
         diags: vec![BodyDiag::RecursiveConstRequirement(body.span().into()).into()],
-        typed,
         status: FormationStatus::Recursive,
     }
 }

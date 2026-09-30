@@ -523,7 +523,7 @@ pub(crate) fn check_where_const_predicates<'db>(
 
     for &body in &predicates {
         let formation = const_requirements::check_predicate_formation(db, body);
-        if !formation.is_well_formed() {
+        if formation.well_formed().is_none() {
             diags.extend(formation.diags.iter().cloned());
             continue;
         }
