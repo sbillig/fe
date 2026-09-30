@@ -29,7 +29,9 @@ no body, every block that starts a predicate is a condition, and so is a block
 right after `where` in a trait function, whose body is optional.
 `where ({ ... })` also works. Deciding matches only the braces, so a syntax
 error inside a braced condition stays inside it. An unbalanced `{` leaves the
-block without a matching `}`, so it is read as the item's block.
+block without a matching `}`, so it is read as the item's block. Since a
+trailing `,` after a final braced condition decides which block is the body,
+`fe fmt` keeps it.
 
 ## Ground conditions
 

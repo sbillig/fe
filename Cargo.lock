@@ -2624,6 +2624,7 @@ dependencies = [
  "dir-test",
  "fe-common",
  "fe-driver",
+ "fe-fmt",
  "fe-hir",
  "fe-test-utils",
  "url",

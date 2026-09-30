@@ -15,3 +15,6 @@ driver.workspace = true
 test-utils.workspace = true
 common.workspace = true
 hir.workspace = true
+
+[dev-dependencies]
+fmt.workspace = true

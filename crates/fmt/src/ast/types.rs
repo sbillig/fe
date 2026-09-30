@@ -590,11 +590,42 @@ fn where_predicate_doc<'a>(
         .map(|expr| expr.to_doc(ctx))
 }
 
+/// Whether the clause ends with a braced condition and a `,`. That comma is
+/// kept: without it, the parser reads a block that nothing continues as the
+/// item's own block, so `fn f<T>() where T: Copy, { true },` in a trait
+/// would become a function with a default body.
+fn ends_with_braced_condition_and_comma(clause: &ast::WhereClause) -> bool {
+    let mut braced = false;
+    let mut comma = false;
+    for child in clause.syntax().children_with_tokens() {
+        match child {
+            NodeOrToken::Node(node) => {
+                if let Some(predicate) = ast::WhereConstPredicate::cast(node.clone()) {
+                    braced = predicate
+                        .expr()
+                        .is_some_and(|expr| matches!(expr.kind(), ast::ExprKind::Block(_)));
+                    comma = false;
+                } else if node.kind() == SyntaxKind::WherePredicate {
+                    braced = false;
+                    comma = false;
+                }
+            }
+            NodeOrToken::Token(token) => comma |= token.kind() == SyntaxKind::Comma,
+        }
+    }
+    braced && comma
+}
+
 impl ToDoc for ast::WhereClause {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
 
         let indent = ctx.config.clause_indent as isize;
+        let trailing_comma = if ends_with_braced_condition_and_comma(self) {
+            alloc.text(",")
+        } else {
+            alloc.nil()
+        };
 
         if !has_comment_tokens(self.syntax()) {
             let predicates: Vec<_> = self
@@ -607,7 +638,9 @@ impl ToDoc for ast::WhereClause {
             }
 
             let sep = alloc.text(",").append(alloc.line());
-            let inner = intersperse(alloc, predicates, sep).group();
+            let inner = intersperse(alloc, predicates, sep)
+                .append(trailing_comma)
+                .group();
 
             return alloc
                 .text("where")
@@ -673,10 +706,12 @@ impl ToDoc for ast::WhereClause {
                 }
             }
 
-            let doc = if entry.is_predicate && last_predicate_idx != Some(idx) {
+            let doc = if !entry.is_predicate {
+                entry.doc
+            } else if last_predicate_idx != Some(idx) {
                 entry.doc.append(alloc.text(","))
             } else {
-                entry.doc
+                entry.doc.append(trailing_comma.clone())
             };
             inner = inner.append(doc);
         }
