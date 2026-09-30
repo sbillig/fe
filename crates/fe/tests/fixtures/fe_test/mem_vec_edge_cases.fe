@@ -112,11 +112,11 @@ fn test_tuple_elements_of_every_arity() {
     assert!(array.get(1).8 == 9)
     assert!(array.get(0).8 == 0)
 
-    // Core decodes tuples up to arity 12.
-    let mut twelve: MemVec<(u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u256)> = MemVec::zeroed(1)
-    twelve.set(index: 0, value: (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12))
-    assert!(twelve.get(0).0 == 1)
-    assert!(twelve.to_dyn_array().get(0).11 == 12)
+    // 16 is the largest tuple arity.
+    let mut sixteen: MemVec<(u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u256)> = MemVec::zeroed(1)
+    sixteen.set(index: 0, value: (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16))
+    assert!(sixteen.get(0).0 == 1)
+    assert!(sixteen.to_dyn_array().get(0).15 == 16)
 }
 
 #[test(should_revert, panic = 0x32)]
