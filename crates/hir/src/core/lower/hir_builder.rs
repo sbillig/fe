@@ -201,13 +201,15 @@ where
         TraitRefId::new(db, Partial::Present(path))
     }
 
+    /// A generated generic parameter, named so that it cannot shadow a user
+    /// type spelled `name` in the generated signature or body.
     pub(super) fn type_param_with_trait_bound(
         &self,
         name: &str,
         bound: TraitRefId<'db>,
     ) -> (GenericParamListId<'db>, TypeId<'db>) {
         let db = self.db();
-        let ident = self.ident(name);
+        let ident = self.generated_ident(name);
         let params = GenericParamListId::new(
             db,
             vec![GenericParam::Type(TypeGenericParam {
