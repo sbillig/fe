@@ -51,7 +51,7 @@ use crate::{
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct Payload<'db> {
+pub(super) struct Payload<'db> {
     tag: u8,
     indices: Vec<IndexExpr<'db>>,
 }
@@ -74,11 +74,11 @@ impl<'db> IndexPayload<'db> for Payload<'db> {
     }
 }
 
-fn runtime<'db>(index: u32) -> IndexExpr<'db> {
+pub(super) fn runtime<'db>(index: u32) -> IndexExpr<'db> {
     IndexExpr::Runtime(NValueId::from_u32(index))
 }
 
-fn scope() -> BinderScope {
+pub(super) fn scope() -> BinderScope {
     BinderScope::default()
 }
 
@@ -371,7 +371,7 @@ fn typed_storage_matching_keeps_alpha_roles_and_rejects_distinct_offsets() {
     );
 }
 
-fn leaf_shape(db: &HirAnalysisTestDb) -> ShapeId<'_> {
+pub(super) fn leaf_shape(db: &HirAnalysisTestDb) -> ShapeId<'_> {
     let ty = TyId::u256(db);
     ShapeId::new(
         db,
@@ -416,7 +416,11 @@ fn physical_offsets_do_not_prove_disjoint_wide_accesses() {
     assert_ne!(region(1).overlap(&db, &region(2)), OverlapResult::Disjoint);
 }
 
-fn array_shape<'db>(db: &'db HirAnalysisTestDb, element: ShapeId<'db>, len: usize) -> ShapeId<'db> {
+pub(super) fn array_shape<'db>(
+    db: &'db HirAnalysisTestDb,
+    element: ShapeId<'db>,
+    len: usize,
+) -> ShapeId<'db> {
     ShapeId::new(
         db,
         CapabilityShape {
@@ -433,7 +437,7 @@ fn array_shape<'db>(db: &'db HirAnalysisTestDb, element: ShapeId<'db>, len: usiz
     )
 }
 
-fn leaf<'db>(
+pub(super) fn leaf<'db>(
     values: &mut ValueInterner<'db, Payload<'db>>,
     shape: ShapeId<'db>,
     scope: &BinderScope,

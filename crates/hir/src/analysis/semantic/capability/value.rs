@@ -1,6 +1,9 @@
 //! Shape-checked, hash-consed structural values shared by local state and summaries.
+#[cfg(test)]
+mod tests;
+
 use super::{
-    guard::{ChoiceKey, Guard, GuardCache, ValueOccurrence},
+    guard::{ChoiceKey, Guard, GuardCache, ValueOccurrence, WeakGuard},
     index::{BinderScope, IndexError, IndexExpr, IndexNamespace, IndexSubst},
     path::{Projection, StructuralPath},
     semantics::{CapabilityClass, CapabilitySemantics},
@@ -16,7 +19,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
     hash::{BuildHasher, Hash, Hasher},
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, Weak},
 };
 
 pub trait IndexPayload<'db>: Clone + Eq + Ord + Hash {
@@ -46,6 +49,52 @@ impl<P: Eq> Eq for ValueId<'_, P> {}
 impl<P> Hash for ValueId<'_, P> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u64(self.1);
+    }
+}
+
+// Memo keys use allocation identity: an equal but separately built value may miss
+// reuse, while a weak reference prevents its address from being reused underneath
+// a key. Neither keys nor results keep structural values or their guards alive.
+struct WeakValueId<'db, P>(Weak<StructuredValue<'db, P>>, u64);
+
+impl<P> PartialEq for WeakValueId<'_, P> {
+    fn eq(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl<P> Eq for WeakValueId<'_, P> {}
+
+impl<P> Hash for WeakValueId<'_, P> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.as_ptr().hash(state);
+    }
+}
+
+impl<'db, P> WeakValueId<'db, P> {
+    fn upgrade(&self) -> Option<ValueId<'db, P>> {
+        Some(ValueId(self.0.upgrade()?, self.1))
+    }
+
+    fn is_live(&self) -> bool {
+        self.0.strong_count() > 0
+    }
+}
+
+#[derive(PartialEq, Eq, Hash)]
+enum ValueOperation<'db, P> {
+    Join(WeakValueId<'db, P>, WeakValueId<'db, P>),
+    Guard(WeakValueId<'db, P>, WeakGuard<'db>),
+    Widen(WeakValueId<'db, P>, bool),
+}
+
+impl<P> ValueOperation<'_, P> {
+    fn is_live(&self) -> bool {
+        match self {
+            Self::Join(lhs, rhs) => lhs.is_live() && rhs.is_live(),
+            Self::Guard(value, guard) => value.is_live() && guard.is_live(),
+            Self::Widen(value, _) => value.is_live(),
+        }
     }
 }
 
@@ -105,6 +154,7 @@ pub struct ValueMetrics {
     pub nodes_created: usize,
     pub interner_evictions: usize,
     pub widened_nodes: usize,
+    pub operations_evaluated: usize,
 }
 
 pub struct ValueInterner<'db, P> {
@@ -114,17 +164,17 @@ pub struct ValueInterner<'db, P> {
     // costs a missed reuse, which eviction already allows.
     nodes: FxHashMap<u64, ValueId<'db, P>>,
     normalized: FxHashMap<(BinderScope, Guarded<'db, P>), Guarded<'db, P>>,
-    // Fixpoint sweeps join, widen, and constrain the same values on every
-    // sweep, and all three are pure.
-    joined: FxHashMap<(ValueId<'db, P>, ValueId<'db, P>), ValueId<'db, P>>,
-    widened: FxHashMap<ValueId<'db, P>, ValueId<'db, P>>,
-    guarded: FxHashMap<(ValueId<'db, P>, Guard<'db>), ValueId<'db, P>>,
+    operations: FxHashMap<ValueOperation<'db, P>, WeakValueId<'db, P>>,
     guards: Rc<RefCell<GuardCache<'db>>>,
     limits: ValueLimits,
     metrics: ValueMetrics,
 }
 
 impl<'db, P: IndexPayload<'db>> ValueId<'db, P> {
+    fn downgrade(&self) -> WeakValueId<'db, P> {
+        WeakValueId(Arc::downgrade(&self.0), self.1)
+    }
+
     pub fn direct(&self) -> &[Guarded<'db, P>] {
         &self.0.direct
     }
@@ -196,9 +246,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             db,
             nodes: FxHashMap::default(),
             normalized: FxHashMap::default(),
-            joined: FxHashMap::default(),
-            widened: FxHashMap::default(),
-            guarded: FxHashMap::default(),
+            operations: FxHashMap::default(),
             guards: Rc::default(),
             limits,
             metrics: ValueMetrics::default(),
@@ -216,6 +264,39 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
 
     pub fn metrics(&self) -> ValueMetrics {
         self.metrics
+    }
+
+    fn memoized(
+        &mut self,
+        operation: impl FnOnce() -> ValueOperation<'db, P>,
+        evaluate: impl FnOnce(&mut Self) -> ValueId<'db, P>,
+    ) -> ValueId<'db, P> {
+        let limit = self.limits.interned_nodes.filter(|limit| *limit > 0);
+        let operation = limit.map(|_| operation());
+        if let Some(operation) = &operation
+            && let Some(result) = self
+                .operations
+                .get(operation)
+                .and_then(WeakValueId::upgrade)
+        {
+            return result;
+        }
+        self.metrics.operations_evaluated += 1;
+        let result = evaluate(self);
+        if let Some(limit) = limit
+            && let Some(operation) = operation
+        {
+            if self.operations.len() >= limit {
+                self.operations
+                    .retain(|operation, result| operation.is_live() && result.is_live());
+                // Leave at least half the budget free so repeated sweeps amortize.
+                if self.operations.len() >= limit / 2 {
+                    self.operations.clear();
+                }
+            }
+            self.operations.insert(operation, result.downgrade());
+        }
+        result
     }
 
     pub fn empty(&mut self, shape: ShapeId<'db>, scope: &BinderScope) -> ValueId<'db, P> {
@@ -542,18 +623,10 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         if lhs == rhs {
             return lhs.clone();
         }
-        let key = (lhs.clone(), rhs.clone());
-        if let Some(joined) = self.joined.get(&key) {
-            return joined.clone();
-        }
-        let joined = self.join_nodes(lhs, rhs);
-        if let Some(limit) = self.limits.interned_nodes {
-            if self.joined.len() >= limit {
-                self.joined.clear();
-            }
-            self.joined.insert(key, joined.clone());
-        }
-        joined
+        self.memoized(
+            || ValueOperation::Join(lhs.downgrade(), rhs.downgrade()),
+            |this| this.join_nodes(lhs, rhs),
+        )
     }
 
     fn join_nodes(&mut self, lhs: &ValueId<'db, P>, rhs: &ValueId<'db, P>) -> ValueId<'db, P> {
@@ -622,18 +695,10 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         if value.is_empty() {
             return value.clone();
         }
-        let key = (value.clone(), guard.clone());
-        if let Some(guarded) = self.guarded.get(&key) {
-            return guarded.clone();
-        }
-        let guarded = self.guard_node(value, guard);
-        if let Some(limit) = self.limits.interned_nodes {
-            if self.guarded.len() >= limit {
-                self.guarded.clear();
-            }
-            self.guarded.insert(key, guarded.clone());
-        }
-        guarded
+        self.memoized(
+            || ValueOperation::Guard(value.downgrade(), guard.downgrade()),
+            |this| this.guard_node(value, guard),
+        )
     }
 
     fn guard_node(&mut self, value: &ValueId<'db, P>, guard: &Guard<'db>) -> ValueId<'db, P> {
@@ -1524,20 +1589,17 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
     /// Sound widening retains every payload, dropping guards and sparse partitions when
     /// limits are exceeded. It may introduce aliases, but cannot remove an existing one.
     pub fn widen(&mut self, value: &ValueId<'db, P>) -> ValueId<'db, P> {
-        if let Some(widened) = self.widened.get(value) {
-            return widened.clone();
-        }
-        let widened = self.widen_node(value, false);
-        if let Some(limit) = self.limits.interned_nodes {
-            if self.widened.len() >= limit {
-                self.widened.clear();
-            }
-            self.widened.insert(value.clone(), widened.clone());
-        }
-        widened
+        self.widen_node(value, false)
     }
 
     fn widen_node(&mut self, value: &ValueId<'db, P>, force: bool) -> ValueId<'db, P> {
+        self.memoized(
+            || ValueOperation::Widen(value.downgrade(), force),
+            |this| this.widen_structure(value, force),
+        )
+    }
+
+    fn widen_structure(&mut self, value: &ValueId<'db, P>, force: bool) -> ValueId<'db, P> {
         let weaken = force
             || value.0.direct.len() > self.limits.guarded_alternatives
             || value.0.direct.iter().any(|entry| {
