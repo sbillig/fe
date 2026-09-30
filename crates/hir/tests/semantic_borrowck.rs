@@ -11518,3 +11518,107 @@ fn loop_feedback_widens_growth_through_slots_holders_and_variants() {
         }
     }
 }
+
+#[test]
+fn loops_preserve_offsets_of_invariant_conditional_replacements() {
+    // `*slot` may be replaced by the write through `destination`; its
+    // condition is dischargeable by the caller. A loop that recomputes a
+    // fixed offset from it, or grows one, keeps that condition.
+    for body in [
+        "result = ptr::offset(pointer, 1)",
+        "result = ptr::cast<u8, u256>(ptr::offset_bytes(ptr::byte_ptr(pointer), 32))",
+        "result = ptr::offset(result, 1)",
+    ] {
+        for call in [
+            "work(slot, destination, n: 2)",
+            "forward(slot, destination, n: 2)",
+        ] {
+            for aliases in [false, true] {
+                let destination = if aliases {
+                    "ptr::byte_ptr(slot)"
+                } else {
+                    "ptr::alloc_bytes(32)"
+                };
+                let source = format!(
+                    r#"
+use core::ptr
+fn work(slot: **u256, destination: *u8, n: u256) -> *u256 {{
+    ptr::zero_bytes(destination, 32)
+    let pointer = *slot
+    let mut result = ptr::offset(pointer, 1)
+    let mut i: u256 = 0
+    while i < n {{
+        {body}
+        i += 1
+    }}
+    result
+}}
+fn forward(slot: **u256, destination: *u8, n: u256) -> *u256 {{
+    work(slot, destination, n)
+}}
+fn inspect() {{
+    let owner = ptr::alloc<[u256; 4]>()
+    let slot = ptr::alloc<*u256>()
+    *slot = ptr::cast<[u256; 4], u256>(owner)
+    let destination = {destination}
+    let other = ptr::alloc<u256>()
+    *other = 1
+    let held = mut *other
+    let pointer = {call}
+    *pointer = 3
+    held = 4
+}}
+"#
+                );
+                let diagnostics = checked_borrow_diags(&source);
+                assert_eq!(diagnostics.is_empty(), !aliases, "{source}\n{diagnostics}");
+                if aliases {
+                    assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn loops_bound_offsets_of_replacements_created_in_the_loop() {
+    // A replacement made on every iteration joins the opaque family at the
+    // back edge, so offsets of it cannot multiply alternatives.
+    for body in [
+        "result = ptr::offset(*slot, 1)",
+        "*slot = ptr::offset(*slot, 1)\n        result = *slot",
+    ] {
+        let source = format!(
+            r#"
+use core::ptr
+fn work(slot: **u256, destination: *u8, n: u256) -> *u256 {{
+    let mut result = *slot
+    let mut i: u256 = 0
+    while i < n {{
+        ptr::zero_bytes(destination, 32)
+        {body}
+        i += 1
+    }}
+    result
+}}
+fn inspect() {{
+    let owner = ptr::alloc<[u256; 4]>()
+    let slot = ptr::alloc<*u256>()
+    *slot = ptr::cast<[u256; 4], u256>(owner)
+    let destination = ptr::byte_ptr(slot)
+    let other = ptr::alloc<u256>()
+    *other = 1
+    let held = mut *other
+    let pointer = work(slot, destination, n: 2)
+    *pointer = 3
+    held = 4
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(
+            diagnostics.contains("borrow conflict"),
+            "{source}\n{diagnostics}"
+        );
+    }
+}

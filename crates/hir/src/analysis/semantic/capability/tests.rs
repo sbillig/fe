@@ -12,6 +12,7 @@ use super::{
     external::{
         ClobberCondition, ExternalOrigin, ExternalSource, FeedbackPlaces, FeedbackRepeats,
         FeedbackSlot, MemoryOffset, ReferentContract, feedback_clause_guard,
+        is_existential_renaming,
     },
     footprint::AccessExtent,
     guard::{ChoiceKey, Guard, GuardCache, ValueOccurrence},
@@ -3386,6 +3387,26 @@ fn feedback_matches_prior_places_by_referent_path() {
         );
         assert_eq!(widened.is_some(), grows);
     }
+}
+
+#[test]
+fn invariant_replacements_match_only_under_a_bijective_renaming() {
+    let (outer, x) = scope().bind(IndexNamespace::Existential);
+    let (_, y) = outer.bind(IndexNamespace::Existential);
+    let (outer, a) = scope().bind(IndexNamespace::Existential);
+    let (_, b) = outer.bind(IndexNamespace::Existential);
+    // A consistent renaming, also with repeated and fixed selectors.
+    assert!(is_existential_renaming(&[(x, b), (y, a), (x, b)]));
+    assert!(is_existential_renaming(&[
+        (x, x),
+        (IndexExpr::Const(1), IndexExpr::Const(1))
+    ]));
+    // One binder onto two, or two distinct binders collapsing onto one.
+    assert!(!is_existential_renaming(&[(x, a), (x, b)]));
+    assert!(!is_existential_renaming(&[(x, a), (y, a)]));
+    // Only existentials rename; other indices must agree exactly.
+    assert!(!is_existential_renaming(&[(x, IndexExpr::Const(0))]));
+    assert!(!is_existential_renaming(&[(runtime(1), runtime(2))]));
 }
 
 #[test]

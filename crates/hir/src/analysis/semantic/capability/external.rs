@@ -19,7 +19,7 @@ use super::{
     footprint::AccessExtent,
     guard::{Guard, ValueOccurrence},
     handle::{AddressOccurrence, HandleAddressSpace, OpaqueHandleRef},
-    index::{BinderScope, IndexExpr, IndexSubst},
+    index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     path::{RegionPath, aligned_index_pairs},
     region::{ProviderRegionId, RegionRoot},
     source::{InputSource, SourceExpr},
@@ -327,6 +327,26 @@ fn derived_from_prior<'db>(
         source = &base.source;
     }
     false
+}
+
+/// Whether aligned index pairs rename existential binders one-to-one and
+/// agree on every other index: each binder maps to one binder, and no two
+/// binders map to the same one.
+pub(super) fn is_existential_renaming<'db>(pairs: &[(IndexExpr<'db>, IndexExpr<'db>)]) -> bool {
+    let existential =
+        |index: &IndexExpr<'db>| index.bound_namespace() == Some(IndexNamespace::Existential);
+    let mut forward = FxHashMap::default();
+    let mut backward = FxHashMap::default();
+    pairs.iter().all(
+        |(left, right)| match (existential(left), existential(right)) {
+            (true, true) => {
+                *forward.entry(*left).or_insert(*right) == *right
+                    && *backward.entry(*right).or_insert(*left) == *left
+            }
+            (false, false) => left == right,
+            _ => false,
+        },
+    )
 }
 
 /// Align a current base with a prior place: the same storage expression up
@@ -646,6 +666,44 @@ impl<'db> ExternalSource<'db> {
         }
     }
 
+    /// Whether `self`, the replacement root of `offset`, was held before the
+    /// loop. The root itself must be one exactly. An offset embeds its root in
+    /// its own clause, which renumbers the root's clause-local witnesses, so
+    /// there a pure renaming of existential binders suffices.
+    fn is_invariant_replacement(&self, offset: &Self, invariant: &FxHashSet<Self>) -> bool {
+        if invariant.contains(self) {
+            return true;
+        }
+        if std::ptr::eq(self, offset) {
+            return false;
+        }
+        let mut pairs = Vec::new();
+        invariant.iter().any(|replacement| {
+            pairs.clear();
+            self.correspondence(replacement, &mut pairs).is_some()
+                && self
+                    .metadata_correspondence(replacement, &mut pairs)
+                    .is_some()
+                && is_existential_renaming(&pairs)
+        })
+    }
+
+    /// The conditional replacement an offset or cast of one is based on.
+    pub(super) fn replacement_root(&self) -> Option<&Self> {
+        let mut source = self;
+        loop {
+            if source.clobber.is_some() {
+                return Some(source);
+            }
+            match &source.origin {
+                ExternalOrigin::Memory { base, .. } if source.dereferences.is_empty() => {
+                    source = &base.source;
+                }
+                _ => return None,
+            }
+        }
+    }
+
     fn has_unknown_offset(&self) -> bool {
         matches!(&self.origin, ExternalOrigin::Memory { base, offset, .. }
             if *offset == MemoryOffset::Unknown || base.source.has_unknown_offset())
@@ -675,7 +733,14 @@ impl<'db> ExternalSource<'db> {
         {
             return None;
         }
-        if self.is_raw_memory_replacement() {
+        // A replacement created in the loop would add alternatives on every
+        // iteration. One held before the loop is invariant, and so is its
+        // condition; an offset of it is widened only if it grows.
+        if self.is_raw_memory_replacement()
+            && !self
+                .replacement_root()
+                .is_some_and(|root| root.is_invariant_replacement(self, invariant_replacements))
+        {
             return Some(Self::opaque_memory(self.contract));
         }
         let mut source = self;

@@ -431,12 +431,15 @@ impl<'db> BorrowState<'db> {
                     }
                     // Copying a pointer between holders does not introduce a
                     // new overwrite. Preserve conditions already in the state.
+                    // The replacement an offset of one is based on is held too.
                     invariant_replacements.extend(
                         slots
                             .values()
                             .flat_map(FeedbackPlaces::keys)
                             .map(|place| &place.source)
                             .filter(|source| source.is_raw_memory_replacement())
+                            .flat_map(|source| [Some(source), source.replacement_root()])
+                            .flatten()
                             .cloned(),
                     );
                     slots.into_iter().collect()
