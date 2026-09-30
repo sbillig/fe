@@ -1,0 +1,135 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/const_where_extern_braces.fe
+---
+Root@0..135
+  ItemList@0..134
+    Item@0..134
+      Extern@0..134
+        ExternKw@0..6 "extern"
+        WhiteSpace@6..7 " "
+        ExternItemList@7..134
+          LBrace@7..8 "{"
+          Newline@8..9 "\n"
+          WhiteSpace@9..13 "    "
+          Func@13..68
+            FnKw@13..15 "fn"
+            WhiteSpace@15..16 " "
+            FuncSignature@16..68
+              Ident@16..27 "after_comma"
+              GenericParamList@27..43
+                Lt@27..28 "<"
+                ConstGenericParam@28..42
+                  ConstKw@28..33 "const"
+                  WhiteSpace@33..34 " "
+                  Ident@34..35 "N"
+                  Colon@35..36 ":"
+                  WhiteSpace@36..37 " "
+                  PathType@37..42
+                    Path@37..42
+                      PathSegment@37..42
+                        Ident@37..42 "usize"
+                Gt@42..43 ">"
+              FuncParamList@43..45
+                LParen@43..44 "("
+                RParen@44..45 ")"
+              WhiteSpace@45..46 " "
+              WhereClause@46..68
+                WhereKw@46..51 "where"
+                WhiteSpace@51..52 " "
+                WhereConstPredicate@52..57
+                  BinExpr@52..57
+                    PathExpr@52..53
+                      Path@52..53
+                        PathSegment@52..53
+                          Ident@52..53 "N"
+                    WhiteSpace@53..54 " "
+                    Gt@54..55 ">"
+                    WhiteSpace@55..56 " "
+                    LitExpr@56..57
+                      Lit@56..57
+                        Int@56..57 "0"
+                Comma@57..58 ","
+                WhiteSpace@58..59 " "
+                WhereConstPredicate@59..68
+                  BlockExpr@59..68
+                    LBrace@59..60 "{"
+                    WhiteSpace@60..61 " "
+                    ExprStmt@61..66
+                      BinExpr@61..66
+                        PathExpr@61..62
+                          Path@61..62
+                            PathSegment@61..62
+                              Ident@61..62 "N"
+                        WhiteSpace@62..63 " "
+                        Lt@63..64 "<"
+                        WhiteSpace@64..65 " "
+                        LitExpr@65..66
+                          Lit@65..66
+                            Int@65..66 "8"
+                    WhiteSpace@66..67 " "
+                    RBrace@67..68 "}"
+          Newline@68..69 "\n"
+          WhiteSpace@69..73 "    "
+          Func@73..132
+            FnKw@73..75 "fn"
+            WhiteSpace@75..76 " "
+            FuncSignature@76..132
+              Ident@76..90 "trailing_comma"
+              GenericParamList@90..106
+                Lt@90..91 "<"
+                ConstGenericParam@91..105
+                  ConstKw@91..96 "const"
+                  WhiteSpace@96..97 " "
+                  Ident@97..98 "N"
+                  Colon@98..99 ":"
+                  WhiteSpace@99..100 " "
+                  PathType@100..105
+                    Path@100..105
+                      PathSegment@100..105
+                        Ident@100..105 "usize"
+                Gt@105..106 ">"
+              FuncParamList@106..108
+                LParen@106..107 "("
+                RParen@107..108 ")"
+              WhiteSpace@108..109 " "
+              WhereClause@109..132
+                WhereKw@109..114 "where"
+                WhiteSpace@114..115 " "
+                WhereConstPredicate@115..120
+                  BinExpr@115..120
+                    PathExpr@115..116
+                      Path@115..116
+                        PathSegment@115..116
+                          Ident@115..116 "N"
+                    WhiteSpace@116..117 " "
+                    Gt@117..118 ">"
+                    WhiteSpace@118..119 " "
+                    LitExpr@119..120
+                      Lit@119..120
+                        Int@119..120 "0"
+                Comma@120..121 ","
+                WhiteSpace@121..122 " "
+                WhereConstPredicate@122..131
+                  BlockExpr@122..131
+                    LBrace@122..123 "{"
+                    WhiteSpace@123..124 " "
+                    ExprStmt@124..129
+                      BinExpr@124..129
+                        PathExpr@124..125
+                          Path@124..125
+                            PathSegment@124..125
+                              Ident@124..125 "N"
+                        WhiteSpace@125..126 " "
+                        Lt@126..127 "<"
+                        WhiteSpace@127..128 " "
+                        LitExpr@128..129
+                          Lit@128..129
+                            Int@128..129 "8"
+                    WhiteSpace@129..130 " "
+                    RBrace@130..131 "}"
+                Comma@131..132 ","
+          Newline@132..133 "\n"
+          RBrace@133..134 "}"
+  Newline@134..135 "\n"

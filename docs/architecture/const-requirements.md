@@ -24,9 +24,10 @@ A `{` right after a completed predicate is always the item's body, field
 list or item list. A `{` right after `where` or after a `,` opens a braced
 condition when what follows the block continues the header: a `,`, another
 predicate, or the item's own `{`. So `where T: Copy { body }` and
-`where T: Copy, { body }` keep their meaning. In trait and extern function
-declarations, whose bodies are optional, a block right after `where` is always
-a condition. `where ({ ... })` also works.
+`where T: Copy, { body }` keep their meaning. In an extern function, which has
+no body, every block that starts a predicate is a condition, and so is a block
+right after `where` in a trait function, whose body is optional.
+`where ({ ... })` also works.
 
 ## Ground conditions
 

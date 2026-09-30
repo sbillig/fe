@@ -559,15 +559,15 @@ impl WhereClauseScope {
     /// or after a `,`, opens a braced condition rather than the item's own
     /// block.
     ///
-    /// Right after the `where` of a function whose block is optional or
-    /// absent, it always does: read as the function's body, it would leave
-    /// the clause empty. Otherwise it does when the block parses
+    /// Where no block can follow the clause, it always does. So it does
+    /// right after a trait function's `where`: read as the function's body,
+    /// it would leave the clause empty. Otherwise it does when the block parses
     /// and what follows it continues the clause: a `,`, another predicate,
     /// or the item's own `{`. So `where T: Copy, { body }` keeps its body.
     fn brace_opens_predicate<S: TokenStream>(&self, parser: &mut Parser<S>, first: bool) -> bool {
         match (self.item_block, first) {
-            (ItemBlock::Optional | ItemBlock::Absent, true) => true,
-            _ => parser.dry_run(|parser| {
+            (ItemBlock::Absent, _) | (ItemBlock::Optional, true) => true,
+            (ItemBlock::Required | ItemBlock::Optional, _) => parser.dry_run(|parser| {
                 parser.parses_without_error(BlockExprScope::default())
                     && parser.current_kind().is_some_and(|kind| {
                         matches!(kind, SyntaxKind::Comma | SyntaxKind::LBrace)

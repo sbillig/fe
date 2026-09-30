@@ -1,0 +1,4 @@
+extern {
+    fn after_comma<const N: usize>() where N > 0, { N < 8 }
+    fn trailing_comma<const N: usize>() where N > 0, { N < 8 },
+}
