@@ -1,0 +1,13 @@
+// A constant used in `where` conditions is referred to once per use, as in
+// an array length.
+const LIMIT: usize = 8
+
+struct Bounded<const N: usize> where N < LIMIT { value: u256 }
+
+enum Choice<const N: usize> where N < LIMIT { Empty }
+
+fn bounded<const N: usize>() -> u256 where N < LIMIT { 1 }
+
+struct Buffer { bytes: [u8; LIMIT] }
+
+type Bytes = [u8; LIMIT]
