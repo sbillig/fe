@@ -418,11 +418,49 @@ define_lazy_span_node!(
         (name, name),
     }
     @node {
-        (ty, ty, LazyTySpan),
         (bounds, bounds, LazyTypeBoundListSpan),
         (attributes, attr_list, LazyAttrListSpan),
     }
 );
+impl<'db> LazyTraitTypeSpan<'db> {
+    /// The associated type's definition or default, as in `type Out = u8`.
+    /// For the `type Return` that a `msg` variant generates, this is the
+    /// variant's written return type, which the definition is lowered from,
+    /// so the paths in it have their written spans.
+    pub fn ty(mut self) -> LazyTySpan<'db> {
+        fn f(origin: ResolvedOrigin, _: LazyArg) -> ResolvedOrigin {
+            origin
+                .map(|node| {
+                    ast::TraitTypeItem::cast(node)
+                        .and_then(|item| item.ty())
+                        .map(|ty| ty.syntax().clone().into())
+                })
+                .map_desugared(|root, desugared| match desugared {
+                    DesugaredOrigin::Msg(msg) => {
+                        let ret_ty = msg.variant_idx.and_then(|idx| {
+                            msg.msg
+                                .to_node(&root)
+                                .variants()?
+                                .into_iter()
+                                .nth(idx)?
+                                .ret_ty()
+                        });
+                        match ret_ty {
+                            Some(ty) => ResolvedOriginKind::Node(ty.syntax().clone()),
+                            None => ResolvedOriginKind::Desugared(root, DesugaredOrigin::Msg(msg)),
+                        }
+                    }
+                    other => ResolvedOriginKind::Desugared(root, other),
+                })
+        }
+
+        self.0.push(LazyTransitionFn {
+            f,
+            arg: LazyArg::None,
+        });
+        LazyTySpan(self.0)
+    }
+}
 
 define_lazy_span_node!(
     LazyTraitConstSpan,
