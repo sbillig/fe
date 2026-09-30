@@ -3,7 +3,7 @@
 //! Index conditions use reduced bit decisions over Fe's 256-bit `usize`, so equality,
 //! disequality, and bounds share one Boolean algebra. Enum decisions have index conditions
 //! as leaves. Neither graph enumerates array elements or depends on construction order.
-use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
+use rustc_hash::{FxHashMap, FxHasher};
 #[cfg(test)]
 use std::cell::Cell;
 use std::{
@@ -20,7 +20,7 @@ use std::{
 use super::decision::SubgraphCounter;
 
 use super::{
-    decision::{Decision, Variable},
+    decision::{Decision, Variable, WeakDecision},
     index::{BinderScope, IndexExpr, IndexSubst},
     path::{Projection, StructuralPath},
 };
@@ -141,13 +141,83 @@ enum SlotTarget {
 /// operations over different indices share one result. Guard algebra repeats
 /// the same few operations across fixpoint iterations and summaries.
 #[derive(Clone, PartialEq, Eq, Hash)]
-enum BitOperation {
-    And(BitDecision, BitDecision),
-    Or(BitDecision, BitDecision),
-    Not(BitDecision),
-    Restrict(BitDecision, BitDecision),
-    Substitute(BitDecision, Box<[SlotTarget]>),
-    Exists(BitDecision, Box<[u16]>),
+enum BitOperation<G = BitDecision> {
+    And(G, G),
+    Or(G, G),
+    Not(G),
+    Restrict(G, G),
+    Substitute(G, Box<[SlotTarget]>),
+    Exists(G, Box<[u16]>),
+}
+
+impl<G> BitOperation<G> {
+    fn map_graphs<H>(self, mut map: impl FnMut(G) -> H) -> BitOperation<H> {
+        match self {
+            Self::And(left, right) => BitOperation::And(map(left), map(right)),
+            Self::Or(left, right) => BitOperation::Or(map(left), map(right)),
+            Self::Not(graph) => BitOperation::Not(map(graph)),
+            Self::Restrict(source, care) => BitOperation::Restrict(map(source), map(care)),
+            Self::Substitute(graph, targets) => BitOperation::Substitute(map(graph), targets),
+            Self::Exists(graph, slots) => BitOperation::Exists(map(graph), slots),
+        }
+    }
+}
+
+type WeakBitDecision = WeakDecision<SlotBit, bool>;
+
+impl BitOperation<WeakBitDecision> {
+    fn is_live(&self) -> bool {
+        match self {
+            Self::And(left, right) | Self::Or(left, right) | Self::Restrict(left, right) => {
+                left.is_live() && right.is_live()
+            }
+            Self::Not(graph) | Self::Substitute(graph, _) | Self::Exists(graph, _) => {
+                graph.is_live()
+            }
+        }
+    }
+}
+
+/// Memoization owns only metadata. A dead result is a cache miss; a recorded
+/// infeasible result remains valid while its operand identities are live.
+struct BitCache<K> {
+    results: FxHashMap<K, Option<WeakBitDecision>>,
+    recorded: usize,
+    kept: usize,
+}
+
+impl<K> Default for BitCache<K> {
+    fn default() -> Self {
+        Self {
+            results: FxHashMap::default(),
+            recorded: 0,
+            kept: 0,
+        }
+    }
+}
+
+impl<K: Eq + Hash> BitCache<K> {
+    fn get(&self, key: &K) -> Option<Option<BitDecision>> {
+        match self.results.get(key)? {
+            Some(result) => result.upgrade().map(Some),
+            None => Some(None),
+        }
+    }
+
+    fn insert(&mut self, key: K, result: Option<&BitDecision>, live: impl Fn(&K) -> bool) {
+        self.results.insert(key, result.map(Decision::downgrade));
+        self.recorded += 1;
+        if self.recorded >= self.kept.max(4096) {
+            self.sweep(live);
+        }
+    }
+
+    fn sweep(&mut self, live: impl Fn(&K) -> bool) {
+        self.results
+            .retain(|key, result| live(key) && result.as_ref().is_none_or(WeakDecision::is_live));
+        self.kept = self.results.len();
+        self.recorded = 0;
+    }
 }
 
 thread_local! {
@@ -162,18 +232,19 @@ thread_local! {
     /// really are interchangeable.
     static SHARED_CHOICES: RefCell<SharedGraphs<SlotChoice, u32>> = RefCell::default();
     static CONSTANT_BITS: [BitDecision; 2] = [Decision::leaf(false), Decision::leaf(true)];
-    static BIT_OPERATIONS: RefCell<FxHashMap<BitOperation, Option<BitDecision>>> =
-        RefCell::default();
+    static BIT_OPERATIONS: RefCell<BitCache<BitOperation<WeakBitDecision>>> = RefCell::default();
 }
 
 impl BitOperation {
-    const LIMIT: usize = 4096;
-
     fn run(self) -> Option<BitDecision> {
-        if let Some(result) = BIT_OPERATIONS.with_borrow(|results| results.get(&self).cloned()) {
+        // Canonical live operands make weak pointer identity a structural cache key.
+        // Retaining weak handles prevents their addresses being reused by new graphs.
+        let operation = self.map_graphs(|graph| shared(&SHARED_BITS, graph));
+        let key = operation.clone().map_graphs(|graph| graph.downgrade());
+        if let Some(result) = BIT_OPERATIONS.with_borrow(|results| results.get(&key)) {
             return result;
         }
-        let result = match &self {
+        let result = match &operation {
             Self::And(lhs, rhs) => Some(lhs.apply(rhs, |left, right| *left && *right)),
             Self::Or(lhs, rhs) => Some(lhs.apply(rhs, |left, right| *left || *right)),
             Self::Not(decision) => Some(decision.map(|bit| Variable::Symbol(*bit), |value| !value)),
@@ -193,12 +264,8 @@ impl BitOperation {
             )),
         }
         .map(|decision| shared(&SHARED_BITS, decision));
-        BIT_OPERATIONS.with_borrow_mut(|results| {
-            if results.len() >= Self::LIMIT {
-                results.clear();
-            }
-            results.insert(self, result.clone());
-        });
+        BIT_OPERATIONS
+            .with_borrow_mut(|results| results.insert(key, result.as_ref(), BitOperation::is_live));
         result
     }
 }
@@ -217,14 +284,12 @@ enum BitShape {
 }
 
 thread_local! {
-    static BIT_SHAPES: RefCell<FxHashMap<BitShape, BitDecision>> = RefCell::default();
+    static BIT_SHAPES: RefCell<BitCache<BitShape>> = RefCell::default();
 }
 
 impl BitShape {
-    const LIMIT: usize = 4096;
-
     fn decision(self) -> BitDecision {
-        if let Some(decision) = BIT_SHAPES.with_borrow(|shapes| shapes.get(&self).cloned()) {
+        if let Some(decision) = BIT_SHAPES.with_borrow(|shapes| shapes.get(&self).flatten()) {
             return decision;
         }
         let decision = match self {
@@ -243,12 +308,7 @@ impl BitShape {
             ),
         };
         let decision = shared(&SHARED_BITS, decision);
-        BIT_SHAPES.with_borrow_mut(|shapes| {
-            if shapes.len() >= Self::LIMIT {
-                shapes.clear();
-            }
-            shapes.insert(self, decision.clone());
-        });
+        BIT_SHAPES.with_borrow_mut(|shapes| shapes.insert(self, Some(&decision), |_| true));
         decision
     }
 }
@@ -663,11 +723,10 @@ struct Condition<'db> {
     hash: u64,
 }
 
-/// Graphs shared by structure, and the nodes added since the last sweep and kept by
-/// it. Graphs range from one node to six figures, so their nodes, not their number,
-/// measure what the table retains.
+/// Canonical live graphs. Buckets resolve structural hash collisions by comparing
+/// complete graphs. Weak handles own only small descriptors, never node buffers.
 struct SharedGraphs<V, T> {
-    graphs: FxHashSet<Decision<V, T>>,
+    graphs: FxHashMap<u64, Vec<WeakDecision<V, T>>>,
     added: usize,
     kept: usize,
 }
@@ -675,71 +734,61 @@ struct SharedGraphs<V, T> {
 impl<V, T> Default for SharedGraphs<V, T> {
     fn default() -> Self {
         Self {
-            graphs: FxHashSet::default(),
+            graphs: FxHashMap::default(),
             added: 0,
             kept: 0,
         }
     }
 }
 
-/// The one graph denoting this structure, so equal decisions share their storage.
-/// A graph nothing else holds is dead weight. Sweeping those once the table has
-/// added as many nodes as the last sweep kept bounds the dead storage by the live
-/// storage, and amortizes each pass over the nodes it waited for.
+impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> SharedGraphs<V, T> {
+    fn intern(&mut self, decision: Decision<V, T>) -> Decision<V, T> {
+        let bucket = self.graphs.entry(decision.structural_hash()).or_default();
+        bucket.retain(WeakDecision::is_live);
+        for candidate in bucket.iter() {
+            if let Some(existing) = candidate.upgrade()
+                && existing == decision
+            {
+                return existing;
+            }
+        }
+        bucket.push(decision.downgrade());
+        self.added += 1;
+        // Only metadata survives unused graphs. Amortize sweeping it over entries,
+        // not node counts, and keep live entries instead of clearing hot graphs.
+        if self.added >= self.kept.max(4096) {
+            self.sweep();
+        }
+        decision
+    }
+
+    fn sweep(&mut self) {
+        self.kept = 0;
+        self.graphs.retain(|_, bucket| {
+            bucket.retain(WeakDecision::is_live);
+            self.kept += bucket.len();
+            !bucket.is_empty()
+        });
+        self.added = 0;
+    }
+}
+
 fn shared<V: Clone + Ord + Hash, T: Clone + Eq + Hash>(
     table: &'static LocalKey<RefCell<SharedGraphs<V, T>>>,
     decision: Decision<V, T>,
 ) -> Decision<V, T> {
-    table.with_borrow_mut(|shared| {
-        if let Some(existing) = shared.graphs.get(&decision) {
-            return existing.clone();
-        }
-        shared.added += decision.node_count();
-        if shared.added >= shared.kept.max(1 << 16) {
-            shared.graphs.retain(|graph| !graph.is_sole_owner());
-            shared.kept = shared.graphs.iter().map(Decision::node_count).sum();
-            shared.added = 0;
-        }
-        shared.graphs.insert(decision.clone());
-        decision
-    })
+    table.with_borrow_mut(|shared| shared.intern(decision))
 }
 
-/// Separate bit-operation/shape cache ownership from uses outside those caches.
-/// Choice graphs are counted outside their sharing table; guard-cache ownership
-/// is intentionally not classified here.
+/// Operation, shape, and sharing caches hold only weak descriptors. The constant
+/// roots are the only strong graph owners counted as caches here. Upgrading a
+/// sharing entry temporarily adds the one diagnostic owner subtracted below.
 #[cfg(feature = "borrowck-profile")]
 pub(super) fn profile_subgraphs() {
     let mut cached = FxHashMap::default();
-    let mut count = |graph: &BitDecision| {
-        *cached.entry(graph.allocation_owners().0).or_default() += 1;
-    };
-    BIT_OPERATIONS.with_borrow(|operations| {
-        for (operation, result) in operations {
-            match operation {
-                BitOperation::And(left, right)
-                | BitOperation::Or(left, right)
-                | BitOperation::Restrict(left, right) => {
-                    count(left);
-                    count(right);
-                }
-                BitOperation::Not(graph)
-                | BitOperation::Substitute(graph, _)
-                | BitOperation::Exists(graph, _) => count(graph),
-            }
-            if let Some(result) = result {
-                count(result);
-            }
-        }
-    });
-    BIT_SHAPES.with_borrow(|shapes| {
-        for graph in shapes.values() {
-            count(graph);
-        }
-    });
     CONSTANT_BITS.with(|graphs| {
         for graph in graphs {
-            count(graph);
+            *cached.entry(graph.allocation_owners().0).or_default() += 1;
         }
     });
     SHARED_BITS.with_borrow(|shared| profile_graph_table("bit", shared, &cached));
@@ -756,7 +805,12 @@ fn profile_graph_table<V: Clone + Ord + Hash, T: Clone + Eq + Hash>(
     let mut retained = SubgraphCounter::new();
     let mut external = (!cache_owners.is_empty()).then(SubgraphCounter::new);
     let (mut retained_nodes, mut external_nodes, mut table_only_nodes, mut largest) = (0, 0, 0, 0);
-    for graph in &shared.graphs {
+    for graph in shared
+        .graphs
+        .values()
+        .flatten()
+        .filter_map(WeakDecision::upgrade)
+    {
         let (id, owners) = graph.allocation_owners();
         let nodes = graph.node_count();
         largest = largest.max(nodes);
@@ -764,18 +818,18 @@ fn profile_graph_table<V: Clone + Ord + Hash, T: Clone + Eq + Hash>(
             table_only_nodes += nodes;
         } else {
             retained_nodes += nodes;
-            retained.record(graph);
+            retained.record(&graph);
             if owners > 1 + cache_owners.get(&id).copied().unwrap_or(0) {
                 external_nodes += nodes;
                 if let Some(counter) = &mut external {
-                    counter.record(graph);
+                    counter.record(&graph);
                 }
             }
         }
     }
     eprintln!(
         "SUBGRAPH_PROFILE kind={name} graphs={} node_size={} retained_nodes={retained_nodes} unique_nodes={} external_nodes={external_nodes} external_unique_nodes={} table_only_nodes={table_only_nodes} largest_nodes={largest}",
-        shared.graphs.len(),
+        shared.graphs.values().map(Vec::len).sum::<usize>(),
         Decision::<V, T>::node_size(),
         retained.unique_nodes(),
         external
@@ -1408,7 +1462,7 @@ pub struct Guard<'db> {
     scope: BinderScope,
     /// A guard's own allocation, so whether anything still holds the guard is a
     /// question about this handle. The decision graph inside is shared by every
-    /// condition of the same shape, and by the table sharing it, so it cannot say.
+    /// condition of the same shape, so its owner count cannot answer that question.
     condition: Arc<Condition<'db>>,
 }
 
@@ -1751,8 +1805,8 @@ mod tests {
     /// Sweep the shared choice graphs and count the ones something still holds.
     fn live_choice_graphs() -> usize {
         SHARED_CHOICES.with_borrow_mut(|shared| {
-            shared.graphs.retain(|graph| !graph.is_sole_owner());
-            shared.graphs.len()
+            shared.sweep();
+            shared.kept
         })
     }
 
@@ -1774,6 +1828,115 @@ mod tests {
             })
             .reduce(|left, right| left.or(&right))
             .unwrap()
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct Collision(u8);
+
+    impl Hash for Collision {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            0u8.hash(state);
+        }
+    }
+
+    #[test]
+    fn graph_interning_resolves_collisions_without_retaining_dead_buffers() {
+        let mut shared = SharedGraphs::<u8, Collision>::default();
+        let first = shared.intern(Decision::leaf(Collision(1)));
+        let second = shared.intern(Decision::leaf(Collision(2)));
+        assert_eq!(first.structural_hash(), second.structural_hash());
+        assert_ne!(first, second);
+        assert_eq!(
+            first.downgrade(),
+            shared.intern(Decision::leaf(Collision(1))).downgrade()
+        );
+        let expired = first.downgrade();
+        drop(first);
+        assert!(
+            expired.upgrade().is_none(),
+            "the interner retained an unused graph"
+        );
+        shared.sweep();
+        assert_eq!(shared.kept, 1);
+        assert_eq!(
+            second.downgrade(),
+            shared.intern(Decision::leaf(Collision(2))).downgrade()
+        );
+        let rebuilt = shared.intern(Decision::leaf(Collision(1)));
+        assert_ne!(expired, rebuilt.downgrade());
+        drop((second, rebuilt));
+        shared.sweep();
+        assert!(shared.graphs.is_empty());
+    }
+
+    #[test]
+    fn bit_memoization_reuses_live_graphs_and_releases_unused_operands_and_results() {
+        let source = BitShape::EqualConst(0x5a31).decision();
+        let result = BitOperation::Not(source.clone()).run().unwrap();
+        let (source_weak, result_weak) = (source.downgrade(), result.downgrade());
+        let key = BitOperation::Not(source_weak.clone());
+        BIT_OPERATIONS.with_borrow_mut(|cache| cache.sweep(BitOperation::is_live));
+        BIT_SHAPES.with_borrow_mut(|cache| cache.sweep(|_| true));
+        let before = intern_attempts();
+        assert_eq!(
+            BitShape::EqualConst(0x5a31).decision().downgrade(),
+            source_weak
+        );
+        assert_eq!(
+            BitOperation::Not(source.clone()).run().unwrap().downgrade(),
+            result_weak
+        );
+        assert_eq!(
+            intern_attempts(),
+            before,
+            "a live cache entry was recomputed"
+        );
+        // Drop the result while the key is still live: its expired weak result
+        // means a cache miss, not a cached infeasible restriction.
+        drop(result);
+        assert!(result_weak.upgrade().is_none());
+        assert!(
+            BIT_OPERATIONS
+                .with_borrow(|cache| cache.get(&key))
+                .is_none()
+        );
+        let rebuilt = BitOperation::Not(source.clone()).run().unwrap();
+        assert_ne!(rebuilt.downgrade(), result_weak);
+        let rebuilt_weak = rebuilt.downgrade();
+        drop((source, rebuilt));
+        assert!(
+            source_weak.upgrade().is_none(),
+            "operation or shape caches pinned an operand"
+        );
+        assert!(
+            rebuilt_weak.upgrade().is_none(),
+            "operation caches pinned a result"
+        );
+        BIT_OPERATIONS.with_borrow_mut(|cache| {
+            cache.sweep(BitOperation::is_live);
+            assert!(!cache.results.contains_key(&key));
+        });
+    }
+
+    #[test]
+    fn cached_infeasible_restrictions_follow_operand_lifetimes() {
+        let source = BitShape::EqualConst(0x5a32).decision();
+        let care = shared(&SHARED_BITS, Decision::leaf(false));
+        let key = BitOperation::Restrict(source.downgrade(), care.downgrade());
+        assert!(
+            BitOperation::Restrict(source.clone(), care.clone())
+                .run()
+                .is_none()
+        );
+        BIT_OPERATIONS.with_borrow_mut(|cache| {
+            cache.sweep(BitOperation::is_live);
+            assert_eq!(cache.get(&key), Some(None));
+        });
+        drop((source, care));
+        BIT_OPERATIONS.with_borrow_mut(|cache| {
+            cache.sweep(BitOperation::is_live);
+            assert!(!cache.results.contains_key(&key));
+        });
     }
 
     #[test]

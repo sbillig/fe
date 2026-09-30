@@ -9,7 +9,8 @@ use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::{
     cmp::Ordering,
     hash::{Hash, Hasher},
-    sync::Arc,
+    ops::Deref,
+    sync::{Arc, Weak},
 };
 
 #[cfg(test)]
@@ -82,10 +83,23 @@ fn child(index: usize) -> Child {
     Child::try_from(index).expect("a decision graph fits u32 nodes")
 }
 
+/// Keep weak interning metadata separate from the large backing buffer. An
+/// `Arc<[Node]>` would retain that entire allocation until its last weak owner
+/// disappeared; this small owner drops its boxed buffer with its last strong one.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct GraphNodes<V, T>(Box<[Node<V, T>]>);
+
+impl<V, T> Deref for GraphNodes<V, T> {
+    type Target = [Node<V, T>];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Decision<V, T> {
     // Postorder, low edge first. The last node is the root; no unreachable nodes remain.
-    nodes: Arc<[Node<V, T>]>,
+    nodes: Arc<GraphNodes<V, T>>,
     // Guards nest decisions and sit inside interned values, so hash each graph
     // once rather than on every enclosing hash.
     hash: u64,
@@ -132,7 +146,7 @@ impl<V: Clone + Eq + Hash, T: Clone + Eq + Hash> SubgraphCounter<V, T> {
 }
 
 impl<V: Hash, T: Hash> Decision<V, T> {
-    fn new(nodes: Arc<[Node<V, T>]>) -> Self {
+    fn new(nodes: Box<[Node<V, T>]>) -> Self {
         let mut hasher = FxHasher::default();
         nodes.hash(&mut hasher);
         let hash = hasher.finish();
@@ -154,7 +168,44 @@ impl<V: Hash, T: Hash> Decision<V, T> {
             size_of::<Node<V, T>>(),
             std::any::type_name::<Node<V, T>>(),
         ));
-        Self { hash, nodes }
+        Self {
+            hash,
+            nodes: Arc::new(GraphNodes(nodes)),
+        }
+    }
+}
+
+/// A stable, non-owning cache identity. Holding this handle prevents allocation
+/// address reuse, even after the node buffer has been reclaimed. Equality and
+/// hashing never change when its strong owners disappear.
+#[derive(Clone, Debug)]
+pub(super) struct WeakDecision<V, T> {
+    nodes: Weak<GraphNodes<V, T>>,
+    hash: u64,
+}
+
+impl<V, T> WeakDecision<V, T> {
+    pub(super) fn upgrade(&self) -> Option<Decision<V, T>> {
+        Some(Decision {
+            nodes: self.nodes.upgrade()?,
+            hash: self.hash,
+        })
+    }
+
+    pub(super) fn is_live(&self) -> bool {
+        self.nodes.strong_count() > 0
+    }
+}
+
+impl<V, T> PartialEq for WeakDecision<V, T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.nodes.ptr_eq(&other.nodes)
+    }
+}
+impl<V, T> Eq for WeakDecision<V, T> {}
+impl<V, T> Hash for WeakDecision<V, T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.nodes.as_ptr().hash(state);
     }
 }
 
@@ -212,6 +263,17 @@ impl<V: Ord, T: Ord> Ord for Decision<V, T> {
 }
 
 impl<V, T> Decision<V, T> {
+    pub(super) fn downgrade(&self) -> WeakDecision<V, T> {
+        WeakDecision {
+            nodes: Arc::downgrade(&self.nodes),
+            hash: self.hash,
+        }
+    }
+
+    pub(super) fn structural_hash(&self) -> u64 {
+        self.hash
+    }
+
     /// The derived node order, with variables and leaves compared by the caller,
     /// which a slot-indexed decision needs since its slots name its own tables.
     pub(super) fn cmp_by<W, U>(
@@ -599,7 +661,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         mut variable: impl FnMut(&V) -> Variable<W>,
         mut leaf: impl FnMut(&T) -> U,
     ) -> Decision<W, U> {
-        if let [Node::Leaf(value)] = &*self.nodes {
+        if let [Node::Leaf(value)] = &**self.nodes {
             return Decision::leaf(leaf(value));
         }
         #[cfg(feature = "borrowck-profile")]
@@ -761,17 +823,15 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
 
     #[cfg(feature = "borrowck-profile")]
     pub(super) fn allocation_owners(&self) -> (usize, usize) {
-        (self.nodes.as_ptr() as usize, Arc::strong_count(&self.nodes))
+        (
+            Arc::as_ptr(&self.nodes) as usize,
+            Arc::strong_count(&self.nodes),
+        )
     }
 
     #[cfg(feature = "borrowck-profile")]
     pub(super) fn node_size() -> usize {
         size_of::<Node<V, T>>()
-    }
-
-    /// No other decision holds this backing graph, so keeping it shares nothing.
-    pub(super) fn is_sole_owner(&self) -> bool {
-        Arc::strong_count(&self.nodes) == 1
     }
 
     pub(super) fn witness(&self, mut accepted: impl FnMut(&T) -> bool) -> Option<Vec<(V, bool)>> {
@@ -980,6 +1040,32 @@ mod tests {
     use std::array;
 
     use super::*;
+
+    #[test]
+    fn weak_graph_handles_keep_identity_without_owning_node_buffers() {
+        let before = live_graph_storage();
+        let graph = Decision::chain((0..4096).map(|variable| (variable, true)), true, false);
+        let weak = graph.downgrade();
+        let again = weak.upgrade().unwrap();
+        assert_eq!(graph, again);
+        assert_eq!(weak, again.downgrade());
+        let mut hasher = FxHasher::default();
+        weak.hash(&mut hasher);
+        let hash = hasher.finish();
+        drop((graph, again));
+        assert!(!weak.is_live());
+        assert!(weak.upgrade().is_none());
+        assert_eq!(live_graph_storage(), before);
+        let mut hasher = FxHasher::default();
+        weak.hash(&mut hasher);
+        assert_eq!(hasher.finish(), hash);
+        let rebuilt = Decision::chain((0..4096).map(|variable| (variable, true)), true, false);
+        assert_ne!(
+            weak,
+            rebuilt.downgrade(),
+            "expired cache identities cannot alias a new allocation"
+        );
+    }
 
     #[test]
     fn subgraph_accounting_counts_shared_suffixes_exactly() {
