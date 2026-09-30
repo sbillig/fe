@@ -1,0 +1,79 @@
+---
+source: crates/parser/tests/error_recovery.rs
+expression: node
+input_file: test_files/error_recovery/items/const_where_brace_syntax_error.fe
+---
+Root@0..59
+  ItemList@0..58
+    Item@0..58
+      Func@0..58
+        FnKw@0..2 "fn"
+        WhiteSpace@2..3 " "
+        FuncSignature@3..52
+          Ident@3..4 "f"
+          GenericParamList@4..20
+            Lt@4..5 "<"
+            ConstGenericParam@5..19
+              ConstKw@5..10 "const"
+              WhiteSpace@10..11 " "
+              Ident@11..12 "N"
+              Colon@12..13 ":"
+              WhiteSpace@13..14 " "
+              PathType@14..19
+                Path@14..19
+                  PathSegment@14..19
+                    Ident@14..19 "usize"
+            Gt@19..20 ">"
+          FuncParamList@20..22
+            LParen@20..21 "("
+            RParen@21..22 ")"
+          WhiteSpace@22..23 " "
+          Arrow@23..25 "->"
+          WhiteSpace@25..26 " "
+          PathType@26..31
+            Path@26..31
+              PathSegment@26..31
+                Ident@26..31 "usize"
+          WhiteSpace@31..32 " "
+          WhereClause@32..52
+            WhereKw@32..37 "where"
+            WhiteSpace@37..38 " "
+            WhereConstPredicate@38..43
+              BinExpr@38..43
+                PathExpr@38..39
+                  Path@38..39
+                    PathSegment@38..39
+                      Ident@38..39 "N"
+                WhiteSpace@39..40 " "
+                Gt@40..41 ">"
+                WhiteSpace@41..42 " "
+                LitExpr@42..43
+                  Lit@42..43
+                    Int@42..43 "0"
+            Comma@43..44 ","
+            WhiteSpace@44..45 " "
+            WhereConstPredicate@45..52
+              BlockExpr@45..52
+                LBrace@45..46 "{"
+                WhiteSpace@46..47 " "
+                ExprStmt@47..50
+                  BinExpr@47..50
+                    PathExpr@47..48
+                      Path@47..48
+                        PathSegment@47..48
+                          Ident@47..48 "N"
+                    WhiteSpace@48..49 " "
+                    Lt@49..50 "<"
+                WhiteSpace@50..51 " "
+                RBrace@51..52 "}"
+        WhiteSpace@52..53 " "
+        BlockExpr@53..58
+          LBrace@53..54 "{"
+          WhiteSpace@54..55 " "
+          ExprStmt@55..56
+            LitExpr@55..56
+              Lit@55..56
+                Int@55..56 "1"
+          WhiteSpace@56..57 " "
+          RBrace@57..58 "}"
+  Newline@58..59 "\n"

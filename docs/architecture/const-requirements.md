@@ -27,7 +27,9 @@ predicate, or the item's own `{`. So `where T: Copy { body }` and
 `where T: Copy, { body }` keep their meaning. In an extern function, which has
 no body, every block that starts a predicate is a condition, and so is a block
 right after `where` in a trait function, whose body is optional.
-`where ({ ... })` also works.
+`where ({ ... })` also works. Deciding matches only the braces, so a syntax
+error inside a braced condition stays inside it. An unbalanced `{` leaves the
+block without a matching `}`, so it is read as the item's block.
 
 ## Ground conditions
 

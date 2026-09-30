@@ -561,14 +561,16 @@ impl WhereClauseScope {
     ///
     /// Where no block can follow the clause, it always does. So it does
     /// right after a trait function's `where`: read as the function's body,
-    /// it would leave the clause empty. Otherwise it does when the block parses
-    /// and what follows it continues the clause: a `,`, another predicate,
-    /// or the item's own `{`. So `where T: Copy, { body }` keeps its body.
+    /// it would leave the clause empty. Otherwise it does when what follows
+    /// its matching `}` continues the clause: a `,`, another predicate, or
+    /// the item's own `{`. So `where T: Copy, { body }` keeps its body. Only
+    /// the braces are matched, the block is not parsed, so a syntax error
+    /// inside a braced condition does not turn it into the item's block.
     fn brace_opens_predicate<S: TokenStream>(&self, parser: &mut Parser<S>, first: bool) -> bool {
         match (self.item_block, first) {
             (ItemBlock::Absent, _) | (ItemBlock::Optional, true) => true,
             (ItemBlock::Required | ItemBlock::Optional, _) => parser.dry_run(|parser| {
-                parser.parses_without_error(BlockExprScope::default())
+                skip_braces(parser)
                     && parser.current_kind().is_some_and(|kind| {
                         matches!(kind, SyntaxKind::Comma | SyntaxKind::LBrace)
                             || starts_predicate(kind)
@@ -576,6 +578,24 @@ impl WhereClauseScope {
             }),
         }
     }
+}
+
+/// Bumps a `{` and every token up to its matching `}`. Returns `false` when
+/// the input ends first.
+fn skip_braces<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    let mut depth = 0usize;
+    while let Some(kind) = parser.current_kind() {
+        match kind {
+            SyntaxKind::LBrace => depth += 1,
+            SyntaxKind::RBrace => depth -= 1,
+            _ => {}
+        }
+        parser.bump();
+        if depth == 0 {
+            return true;
+        }
+    }
+    false
 }
 
 /// Whether a `where` predicate can start with `kind`: a type bound starts
