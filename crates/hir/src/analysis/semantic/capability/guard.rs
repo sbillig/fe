@@ -607,6 +607,38 @@ struct SlotChoice {
     slot: u16,
 }
 
+/// Dense table translation, shared by eager substitutions and borrowed operations.
+struct ChoiceRemap(Vec<(u16, u16)>);
+
+impl ChoiceRemap {
+    fn new(source: &[Arc<ChoiceKey<'_>>], target: &[Arc<ChoiceKey<'_>>]) -> Self {
+        let groups = choice_groups(target);
+        Self(
+            source
+                .iter()
+                .map(|key| {
+                    let slot = target
+                        .binary_search_by(|candidate| choice_order(candidate, key))
+                        .expect("every mapped choice is in the table");
+                    (
+                        groups[slot],
+                        u16::try_from(slot).expect("choice table fits a slot"),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    fn variable(&self, bit: &SlotChoice) -> SlotChoice {
+        let (group, slot) = self.0[usize::from(bit.slot)];
+        SlotChoice {
+            group,
+            slot,
+            bit: bit.bit,
+        }
+    }
+}
+
 /// Choice decisions name table slots rather than keys, so a decision carries no
 /// database lifetime and equal graphs can be shared process-wide.
 type ChoiceDecision = Decision<SlotChoice, u32>;
@@ -806,13 +838,11 @@ impl<'db> Condition<'db> {
         let decision = if read_choice.iter().all(|read| *read) && sorted {
             decision
         } else {
-            decision.map(
-                |bit| {
-                    Variable::Symbol(SlotChoice {
-                        group: groups[choice_slots[usize::from(bit.slot)].unwrap() as usize],
-                        bit: bit.bit,
-                        slot: u16::try_from(choice_slots[usize::from(bit.slot)].unwrap()).unwrap(),
-                    })
+            decision.relabel_ordered(
+                |bit| SlotChoice {
+                    group: groups[choice_slots[usize::from(bit.slot)].unwrap() as usize],
+                    bit: bit.bit,
+                    slot: u16::try_from(choice_slots[usize::from(bit.slot)].unwrap()).unwrap(),
                 },
                 |leaf| leaf_slots[*leaf as usize].unwrap(),
             )
@@ -838,16 +868,12 @@ impl<'db> Condition<'db> {
         }
     }
 
-    /// Express both decisions over one merged pair of tables.
-    fn aligned(
+    /// Union choice tables and translate their slots without copying either graph.
+    /// Sorted unions preserve strict variable order in each operand.
+    fn aligned_choices(
         &self,
         other: &Self,
-    ) -> (
-        Vec<Arc<ChoiceKey<'db>>>,
-        Vec<Leaf<'db>>,
-        ChoiceDecision,
-        ChoiceDecision,
-    ) {
+    ) -> (Vec<Arc<ChoiceKey<'db>>>, ChoiceRemap, ChoiceRemap) {
         let mut choices: Vec<_> = self
             .choices
             .iter()
@@ -856,24 +882,9 @@ impl<'db> Condition<'db> {
             .collect();
         choices.sort_by(|left, right| choice_order(left, right));
         choices.dedup_by(|left, right| choice_order(left, right).is_eq());
-        let mut leaves: Vec<_> = self
-            .leaves
-            .iter()
-            .chain(other.leaves.iter())
-            .cloned()
-            .collect();
-        leaves.sort();
-        leaves.dedup();
-        let relabel = |condition: &Self| {
-            if condition.choices.len() == choices.len() && condition.leaves.len() == leaves.len() {
-                return condition.decision.clone();
-            }
-            condition
-                .remap_decision(&condition.choices, &condition.leaves, &choices, &leaves)
-                .0
-        };
-        let (left, right) = (relabel(self), relabel(other));
-        (choices, leaves, left, right)
+        let left = ChoiceRemap::new(&self.choices, &choices);
+        let right = ChoiceRemap::new(&other.choices, &choices);
+        (choices, left, right)
     }
 
     /// Map each table slot once, rather than searching semantic keys at every node.
@@ -885,19 +896,7 @@ impl<'db> Condition<'db> {
         choices: &[Arc<ChoiceKey<'db>>],
         leaves: &[Leaf<'db>],
     ) -> (ChoiceDecision, bool) {
-        let groups = choice_groups(choices);
-        let choice_slots: Vec<_> = renamed
-            .iter()
-            .map(|key| {
-                let slot = choices
-                    .binary_search_by(|candidate| choice_order(candidate, key))
-                    .expect("every mapped choice is in the table");
-                (
-                    groups[slot],
-                    u16::try_from(slot).expect("choice table fits a slot"),
-                )
-            })
-            .collect();
+        let choice_slots = ChoiceRemap::new(renamed, choices);
         let leaf_slots: Vec<_> = mapped
             .iter()
             .map(|leaf| {
@@ -911,6 +910,7 @@ impl<'db> Condition<'db> {
             .collect();
         let original_groups = choice_groups(&self.choices);
         let unchanged = choice_slots
+            .0
             .iter()
             .enumerate()
             .all(|(slot, &(group, mapped))| {
@@ -924,14 +924,7 @@ impl<'db> Condition<'db> {
             return (self.decision.clone(), true);
         }
         let decision = self.decision.map(
-            |bit| {
-                let (group, slot) = choice_slots[usize::from(bit.slot)];
-                Variable::Symbol(SlotChoice {
-                    group,
-                    slot,
-                    bit: bit.bit,
-                })
-            },
+            |bit| Variable::Symbol(choice_slots.variable(bit)),
             |leaf| leaf_slots[*leaf as usize],
         );
         (decision, false)
@@ -947,12 +940,15 @@ impl<'db> Condition<'db> {
         other: &Self,
         join: impl Fn(&IndexCondition<'db>, &IndexCondition<'db>) -> IndexCondition<'db>,
     ) -> Self {
-        let (choices, leaves, left, right) = self.aligned(other);
+        let (choices, left, right) = self.aligned_choices(other);
         let results = RefCell::new(Vec::new());
-        let decision = left.apply(&right, |left, right| {
-            let joined = join(&leaves[*left as usize], &leaves[*right as usize]);
-            intern_leaf(&mut results.borrow_mut(), joined)
-        });
+        let decision = self.decision.ordered_view(|bit| left.variable(bit)).apply(
+            other.decision.ordered_view(|bit| right.variable(bit)),
+            |left, right| {
+                let joined = join(&self.leaves[*left as usize], &other.leaves[*right as usize]);
+                intern_leaf(&mut results.borrow_mut(), joined)
+            },
+        );
         Self::compact(choices, results.into_inner(), decision)
     }
 
@@ -1121,23 +1117,30 @@ impl<'db> Condition<'db> {
     /// Complete this decision outside the valuations `care` admits.
     /// Leaf pairs are restricted as the traversal reaches them, as in `joined`.
     fn restricted(&self, care: &Self) -> Option<Self> {
-        let (choices, leaves, decision, care) = self.aligned(care);
-        // Restriction reads this against the care decision's own leaves, so it names
-        // a slot in the merged table, not in the results. A table without `never`
-        // has no slot that could match, which no care leaf would have anyway.
-        let never = Arc::new(IndexCondition::never());
-        let empty = leaves
+        let (choices, source_slots, care_slots) = self.aligned_choices(care);
+        // The sentinel belongs to the care operand's original leaf table. Its slot
+        // need not mean `never` in the source or result. If absent, no leaf matches.
+        let never = constant_leaf(false);
+        let empty = care
+            .leaves
             .iter()
             .position(|leaf| *leaf == never)
             .map_or(u32::MAX, |slot| {
                 u32::try_from(slot).expect("leaf table fits")
             });
         let results = RefCell::new(Vec::new());
-        let decision = decision.restrict(&care, &empty, |value, care| {
-            leaves[*value as usize]
-                .restrict(&leaves[*care as usize])
-                .map(|restricted| intern_leaf(&mut results.borrow_mut(), restricted))
-        })?;
+        let decision = self
+            .decision
+            .ordered_view(|bit| source_slots.variable(bit))
+            .restrict(
+                care.decision.ordered_view(|bit| care_slots.variable(bit)),
+                &empty,
+                |value, feasible| {
+                    self.leaves[*value as usize]
+                        .restrict(&care.leaves[*feasible as usize])
+                        .map(|restricted| intern_leaf(&mut results.borrow_mut(), restricted))
+                },
+            )?;
         Some(Self::compact(choices, results.into_inner(), decision))
     }
 
@@ -1730,11 +1733,14 @@ mod tests {
         let left = selected(&scope, 0);
         let right = left.condition.or(&selected(&scope, 1).condition);
         let before = intern_attempts();
-        let (choices, leaves, aligned_left, aligned_right) = left.condition.aligned(&right);
-        assert_eq!(choices.as_slice(), &*right.choices);
-        assert_eq!(leaves.as_slice(), &*right.leaves);
+        let (aligned_left, unchanged) = left.condition.remap_decision(
+            &left.condition.choices,
+            &left.condition.leaves,
+            &right.choices,
+            &right.leaves,
+        );
+        assert!(unchanged);
         assert_eq!(aligned_left, left.condition.decision);
-        assert_eq!(aligned_right, right.decision);
         assert_eq!(
             intern_attempts(),
             before,
@@ -1771,6 +1777,102 @@ mod tests {
         let constant = source.map_leaves(|_| constant_leaf(true));
         assert!(constant.is_always());
         assert!(constant.choices.is_empty());
+    }
+
+    #[test]
+    fn joining_shifted_choice_tables_builds_only_the_result() {
+        let scope = BinderScope::default();
+        let left = selected(&scope, 1);
+        let right = selected(&scope, 0);
+        let expected = Condition::compact(
+            vec![
+                right.condition.choices[0].clone(),
+                left.condition.choices[0].clone(),
+            ],
+            vec![constant_leaf(false), constant_leaf(true)],
+            Decision::chain(
+                (0..2).flat_map(|slot| {
+                    (0..16).map(move |bit| {
+                        (
+                            SlotChoice {
+                                group: slot,
+                                slot,
+                                bit: Reverse(bit),
+                            },
+                            slot == 1 && bit == 0,
+                        )
+                    })
+                }),
+                1,
+                0,
+            ),
+        );
+        let before = intern_attempts();
+        let joined = left.condition.and(&right.condition);
+        let attempts = intern_attempts() - before;
+        assert_eq!(joined, expected);
+        assert!(
+            attempts <= expected.decision.node_count() + 2,
+            "{attempts} interning attempts rebuilt operands for {} result nodes",
+            expected.decision.node_count()
+        );
+    }
+
+    #[test]
+    fn borrowed_choice_operations_keep_operand_leaf_tables_separate() {
+        let key = |occurrence| {
+            Arc::new(ChoiceKey::new(
+                ValueOccurrence::Argument(occurrence),
+                StructuralPath::default(),
+            ))
+        };
+        let index = IndexExpr::Runtime(NValueId::from_u32(0));
+        let source = Condition::compact(
+            vec![key(1)],
+            vec![
+                Arc::new(IndexCondition::equal(index, IndexExpr::Const(0))),
+                constant_leaf(true),
+            ],
+            Decision::chain(
+                [(
+                    SlotChoice {
+                        group: 0,
+                        slot: 0,
+                        bit: Reverse(0),
+                    },
+                    true,
+                )],
+                1,
+                0,
+            ),
+        );
+        let care = Condition::choice_bits(&key(0), 1, |_| true);
+        let joined = source.and(&care);
+        let restricted = source.restricted(&care).unwrap();
+        let evaluate = |condition: &Condition<'static>, values: [bool; 2]| {
+            let result = condition.decision.map(
+                |bit| {
+                    let ValueOccurrence::Argument(argument) =
+                        condition.choices[usize::from(bit.slot)].occurrence
+                    else {
+                        unreachable!()
+                    };
+                    Variable::<SlotChoice>::Constant(values[argument as usize])
+                },
+                Clone::clone,
+            );
+            condition.leaves[*result.leaf_value().unwrap() as usize].clone()
+        };
+        for values in [[false, false], [false, true], [true, false], [true, true]] {
+            let expected = evaluate(&source, values).and(&evaluate(&care, values));
+            assert_eq!(*evaluate(&joined, values), expected);
+            assert_eq!(
+                evaluate(&restricted, values).and(&evaluate(&care, values)),
+                expected
+            );
+        }
+        // No `never` slot in this care table: its slot zero is feasible.
+        assert_eq!(source.restricted(&Condition::constant(true)), Some(source));
     }
 
     #[test]

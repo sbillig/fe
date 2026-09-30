@@ -345,9 +345,9 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
     /// for every conjunction and union, and the copies were never the result.
     fn apply_decisions(
         &mut self,
-        left: &Decision<V, T>,
+        left: &OrderedView<'_, V, T, impl Fn(&V) -> V>,
         lhs: usize,
-        right: &Decision<V, T>,
+        right: &OrderedView<'_, V, T, impl Fn(&V) -> V>,
         rhs: usize,
         join: &impl Fn(&T, &T) -> T,
         memo: &mut FxHashMap<(Child, Child), usize>,
@@ -357,15 +357,14 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
             return *result;
         }
         // Keep recursive frames small: only the split variable lives across calls.
-        let result = match (&left.nodes[lhs], &right.nodes[rhs]) {
+        let result = match (&left.decision.nodes[lhs], &right.decision.nodes[rhs]) {
             (Node::Leaf(left), Node::Leaf(right)) => self.intern(Node::Leaf(join(left, right))),
             _ => {
                 let variable = match (left.variable(lhs), right.variable(rhs)) {
                     (Some(left), Some(right)) => left.min(right),
                     (Some(variable), None) | (None, Some(variable)) => variable,
                     (None, None) => unreachable!("two leaves are joined directly"),
-                }
-                .clone();
+                };
                 let (left_low, left_high) = left.cofactors(lhs, &variable);
                 let (right_low, right_high) = right.cofactors(rhs, &variable);
                 let low = self.apply_decisions(left, left_low, right, right_low, join, memo);
@@ -476,23 +475,10 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         empty: &T,
         leaf: impl Fn(&T, &T) -> Option<T>,
     ) -> Option<Self> {
-        #[cfg(feature = "borrowck-profile")]
-        let operation = Operation::new(3, self.nodes.len() + care.nodes.len());
-        let mut builder = Builder::new();
-        let mut context = Restriction {
-            source: self,
-            care,
-            empty,
-            leaf: &leaf,
-            builder: &mut builder,
-            memo: FxHashMap::default(),
-        };
-        let root = context.visit(self.root(), care.root())?;
-        let result = builder.finish(root);
-        #[cfg(feature = "borrowck-profile")]
-        drop(operation);
-        Some(result)
+        self.ordered_view(Clone::clone)
+            .restrict(care.ordered_view(Clone::clone), empty, leaf)
     }
+
     pub(super) fn leaf(value: T) -> Self {
         Self::new(vec![Node::Leaf(value)].into())
     }
@@ -656,45 +642,51 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
     }
 
     pub(super) fn apply(&self, other: &Self, leaf: impl Fn(&T, &T) -> T) -> Self {
-        if let ([Node::Leaf(left)], [Node::Leaf(right)]) = (&*self.nodes, &*other.nodes) {
-            return Self::leaf(leaf(left, right));
+        self.ordered_view(Clone::clone)
+            .apply(other.ordered_view(Clone::clone), leaf)
+    }
+
+    /// Borrow a graph with a strictly order-preserving, injective variable map.
+    /// Each operand keeps its own leaf values and node positions; only variables
+    /// are translated, when a traversal reaches them. General substitutions that
+    /// merge or reorder variables must use `map` instead.
+    pub(super) fn ordered_view<F: Fn(&V) -> V>(&self, variable: F) -> OrderedView<'_, V, T, F> {
+        OrderedView {
+            decision: self,
+            variable,
         }
+    }
+
+    /// Relabel without changing topology or canonical node numbering. The variable
+    /// map must preserve strict order and the leaf map must be injective on the
+    /// graph's leaves, so no branches or leaves become equal after relabeling.
+    pub(super) fn relabel_ordered<W: Clone + Ord + Hash, U: Clone + Eq + Hash>(
+        &self,
+        mut variable: impl FnMut(&V) -> W,
+        mut leaf: impl FnMut(&T) -> U,
+    ) -> Decision<W, U> {
         #[cfg(feature = "borrowck-profile")]
-        let operation = Operation::new(1, self.nodes.len() + other.nodes.len());
-        let mut builder = Builder::with_capacity(self.nodes.len().max(other.nodes.len()));
-        let root = builder.apply_decisions(
-            self,
-            self.root(),
-            other,
-            other.root(),
-            &leaf,
-            &mut FxHashMap::with_capacity_and_hasher(
-                self.nodes.len() + other.nodes.len(),
-                Default::default(),
-            ),
+        let operation = Operation::new(0, self.nodes.len());
+        let result = Decision::new(
+            self.nodes
+                .iter()
+                .map(|node| match node {
+                    Node::Leaf(value) => Node::Leaf(leaf(value)),
+                    Node::Branch {
+                        variable: key,
+                        low,
+                        high,
+                    } => Node::Branch {
+                        variable: variable(key),
+                        low: *low,
+                        high: *high,
+                    },
+                })
+                .collect(),
         );
-        let result = builder.finish(root);
         #[cfg(feature = "borrowck-profile")]
         drop(operation);
         result
-    }
-
-    fn variable(&self, node: usize) -> Option<&V> {
-        match &self.nodes[node] {
-            Node::Leaf(_) => None,
-            Node::Branch { variable, .. } => Some(variable),
-        }
-    }
-
-    fn cofactors(&self, node: usize, split: &V) -> (usize, usize) {
-        match &self.nodes[node] {
-            Node::Branch {
-                variable,
-                low,
-                high,
-            } if variable == split => (*low as usize, *high as usize),
-            _ => (node, node),
-        }
     }
 
     fn root(&self) -> usize {
@@ -779,43 +771,122 @@ impl<V: Clone + Ord + Hash> Decision<V, bool> {
     }
 }
 
-struct Restriction<'a, V, T, F> {
-    source: &'a Decision<V, T>,
-    care: &'a Decision<V, T>,
-    empty: &'a T,
-    leaf: &'a F,
-    builder: &'a mut Builder<V, T>,
+/// An ordered translation of a borrowed decision, with its original leaf space.
+pub(super) struct OrderedView<'a, V, T, F> {
+    decision: &'a Decision<V, T>,
+    variable: F,
+}
+
+impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash, F: Fn(&V) -> V> OrderedView<'_, V, T, F> {
+    fn variable(&self, node: usize) -> Option<V> {
+        match &self.decision.nodes[node] {
+            Node::Leaf(_) => None,
+            Node::Branch { variable, .. } => Some((self.variable)(variable)),
+        }
+    }
+
+    fn cofactors(&self, node: usize, split: &V) -> (usize, usize) {
+        match &self.decision.nodes[node] {
+            Node::Branch {
+                variable,
+                low,
+                high,
+            } if (self.variable)(variable) == *split => (*low as usize, *high as usize),
+            _ => (node, node),
+        }
+    }
+
+    pub(super) fn apply(
+        self,
+        other: OrderedView<'_, V, T, impl Fn(&V) -> V>,
+        leaf: impl Fn(&T, &T) -> T,
+    ) -> Decision<V, T> {
+        let (left, right) = (self.decision, other.decision);
+        if let (Some(left), Some(right)) = (left.leaf_value(), right.leaf_value()) {
+            return Decision::leaf(leaf(left, right));
+        }
+        #[cfg(feature = "borrowck-profile")]
+        let operation = Operation::new(1, left.nodes.len() + right.nodes.len());
+        let mut builder = Builder::with_capacity(left.nodes.len().max(right.nodes.len()));
+        let root = builder.apply_decisions(
+            &self,
+            left.root(),
+            &other,
+            right.root(),
+            &leaf,
+            &mut FxHashMap::with_capacity_and_hasher(
+                left.nodes.len() + right.nodes.len(),
+                Default::default(),
+            ),
+        );
+        let result = builder.finish(root);
+        #[cfg(feature = "borrowck-profile")]
+        drop(operation);
+        result
+    }
+
+    pub(super) fn restrict(
+        self,
+        care: OrderedView<'_, V, T, impl Fn(&V) -> V>,
+        empty: &T,
+        leaf: impl Fn(&T, &T) -> Option<T>,
+    ) -> Option<Decision<V, T>> {
+        #[cfg(feature = "borrowck-profile")]
+        let operation = Operation::new(3, self.decision.nodes.len() + care.decision.nodes.len());
+        let (source_root, care_root) = (self.decision.root(), care.decision.root());
+        let mut context = Restriction {
+            source: self,
+            care,
+            empty: empty.clone(),
+            leaf,
+            builder: Builder::new(),
+            memo: FxHashMap::default(),
+        };
+        let root = context.visit(source_root, care_root)?;
+        let result = context.builder.finish(root);
+        #[cfg(feature = "borrowck-profile")]
+        drop(operation);
+        Some(result)
+    }
+}
+
+struct Restriction<'a, V, T, L, R, F> {
+    source: OrderedView<'a, V, T, L>,
+    care: OrderedView<'a, V, T, R>,
+    empty: T,
+    leaf: F,
+    builder: Builder<V, T>,
     memo: FxHashMap<(usize, usize), Option<usize>>,
 }
 
-impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash, F: Fn(&T, &T) -> Option<T>>
-    Restriction<'_, V, T, F>
+impl<V, T, L, R, F> Restriction<'_, V, T, L, R, F>
+where
+    V: Clone + Ord + Hash,
+    T: Clone + Eq + Hash,
+    L: Fn(&V) -> V,
+    R: Fn(&V) -> V,
+    F: Fn(&T, &T) -> Option<T>,
 {
     fn visit(&mut self, source: usize, care: usize) -> Option<usize> {
         if let Some(result) = self.memo.get(&(source, care)) {
             return *result;
         }
-        if matches!(&self.care.nodes[care], Node::Leaf(value) if value == self.empty) {
+        if matches!(&self.care.decision.nodes[care], Node::Leaf(value) if *value == self.empty) {
             return None;
         }
-        let result = match (&self.source.nodes[source], &self.care.nodes[care]) {
+        let result = match (
+            &self.source.decision.nodes[source],
+            &self.care.decision.nodes[care],
+        ) {
             (Node::Leaf(value), Node::Leaf(care)) => {
                 (self.leaf)(value, care).map(|value| self.builder.intern(Node::Leaf(value)))
             }
-            (value, care_value) => {
-                let variable = match (value, care_value) {
-                    (
-                        Node::Branch { variable: left, .. },
-                        Node::Branch {
-                            variable: right, ..
-                        },
-                    ) => left.min(right),
-                    (Node::Branch { variable, .. }, _) | (_, Node::Branch { variable, .. }) => {
-                        variable
-                    }
-                    _ => unreachable!(),
-                }
-                .clone();
+            _ => {
+                let variable = match (self.source.variable(source), self.care.variable(care)) {
+                    (Some(left), Some(right)) => left.min(right),
+                    (Some(variable), None) | (None, Some(variable)) => variable,
+                    (None, None) => unreachable!("two leaves are restricted directly"),
+                };
                 let (source_low, source_high) = self.source.cofactors(source, &variable);
                 let (care_low, care_high) = self.care.cofactors(care, &variable);
                 match (
@@ -837,6 +908,59 @@ mod tests {
     use std::array;
 
     use super::*;
+
+    #[test]
+    fn borrowed_operations_match_materialized_ordered_maps() {
+        let from_table = |table: [u8; 4]| {
+            let mut builder = Builder::new();
+            let leaves: Vec<_> = table
+                .into_iter()
+                .map(|value| builder.intern(Node::Leaf(value)))
+                .collect();
+            let low = builder.branch(1u8, leaves[0], leaves[1]);
+            let high = builder.branch(1, leaves[2], leaves[3]);
+            let root = builder.branch(0, low, high);
+            builder.finish(root)
+        };
+        let decisions: Vec<_> = (0u8..16)
+            .map(|bits| array::from_fn(|assignment| (bits >> assignment) & 1))
+            .chain([[2, 3, 5, 7]])
+            .map(from_table)
+            .collect();
+        for left in &decisions {
+            for right in &decisions {
+                for (left_slots, right_slots) in
+                    [([0, 2], [1, 2]), ([1, 3], [0, 3]), ([0, 1], [0, 1])]
+                {
+                    let left_map = |key: &u8| left_slots[usize::from(*key)];
+                    let right_map = |key: &u8| right_slots[usize::from(*key)];
+                    let eager_left = left.map(|key| Variable::Symbol(left_map(key)), Clone::clone);
+                    let eager_right =
+                        right.map(|key| Variable::Symbol(right_map(key)), Clone::clone);
+                    // Relabeling may permute leaves but must keep them distinct.
+                    assert_eq!(
+                        left.relabel_ordered(left_map, |leaf| 255 - leaf),
+                        eager_left.map(|key| Variable::Symbol(*key), |leaf| 255 - leaf)
+                    );
+                    let join = |left: &u8, right: &u8| left * 7 + right;
+                    assert_eq!(
+                        left.ordered_view(left_map)
+                            .apply(right.ordered_view(right_map), join),
+                        eager_left.apply(&eager_right, join)
+                    );
+                    let restrict = |left: &u8, right: &u8| (*right != 0).then_some(left ^ right);
+                    assert_eq!(
+                        left.ordered_view(left_map).restrict(
+                            right.ordered_view(right_map),
+                            &0,
+                            restrict
+                        ),
+                        eager_left.restrict(&eager_right, &0, restrict)
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn ordered_renaming_preserves_correlated_boolean_decisions() {
