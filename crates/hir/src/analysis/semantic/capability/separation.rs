@@ -141,11 +141,11 @@ impl<'db> Separation<'db> {
         }
     }
 
-    /// Canonicalize one clause under `owner`. Witnesses observed by no part of
-    /// the relation are projected from its guard. The rest are renamed in one
+    /// Canonicalize one clause under `owner`. Witnesses are renamed in one
     /// substitution across every part, the relation's own before those only
     /// the guard observes. Suspension conditions then move to the relation's
-    /// scope, so the relation alone, never the guard, determines the key.
+    /// scope, so the relation alone, never the guard, determines the key, and
+    /// the guard's own witnesses are projected or compacted.
     fn canonical(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -161,22 +161,16 @@ impl<'db> Separation<'db> {
             ..self
         };
         let observed: BTreeSet<_> = relation.indices().collect();
-        let guard = guard.project_witnesses(|index| {
-            owner.validate(index).is_err() && !observed.contains(&index)
-        });
         let used = guard.indices();
         let substitution = guard.scope().ranked_existentials(owner, |index| {
             let observed = observed.contains(&index);
             (observed || used.contains(&index)).then_some(!observed)
         });
         let relation = relation.rename(db, &substitution);
-        let guard = guard
-            .substitute(&substitution)
-            .expect("separation alpha normalization");
         let scope = relation.scope(owner);
         // Suspension conditions observe no witness beyond the relation's.
-        let narrow = guard
-            .scope()
+        let narrow = substitution
+            .destination()
             .canonical_existentials(&scope, std::iter::empty);
         let relation = Self {
             suspended: relation
@@ -195,7 +189,31 @@ impl<'db> Separation<'db> {
         for index in relation.indices() {
             scope.validate(index).expect("free separation binder");
         }
-        (relation, guard)
+        let guard = guard
+            .substitute(&substitution)
+            .expect("separation alpha normalization");
+        (relation, compact_guard(&scope, guard))
+    }
+}
+
+/// Project and compact the witnesses of a clause guard beyond `relation`, the
+/// relation's scope, which keeps the relation and its suspension conditions.
+/// Renaming re-canonicalizes the guard, which can pick another equality
+/// representative and expose a projectable witness, so this repeats until
+/// the guard is stable.
+fn compact_guard<'db>(relation: &BinderScope, mut guard: Guard<'db>) -> Guard<'db> {
+    loop {
+        let projected = guard.project_witnesses(|index| relation.validate(index).is_err());
+        let compact = projected
+            .scope()
+            .canonical_existentials(relation, || projected.indices());
+        let next = projected
+            .substitute(&compact)
+            .expect("witness compaction preserves the guard");
+        if next == guard {
+            return guard;
+        }
+        guard = next;
     }
 }
 
@@ -252,19 +270,9 @@ impl<'db> SeparationSet<'db> {
                     // disjunction, so merged guards may share them by position.
                     let wide = entry.get().scope().max(guard.scope()).clone();
                     let merged = entry.get().in_scope(&wide).or(&guard.in_scope(&wide));
-                    // The merge can leave such a witness unobservable. The
-                    // relation lies in its own scope, which compaction keeps.
-                    let relation = entry.key().scope(scope);
-                    let merged =
-                        merged.project_witnesses(|index| relation.validate(index).is_err());
-                    let compact = merged
-                        .scope()
-                        .canonical_existentials(&relation, || merged.indices());
-                    entry.insert(
-                        merged
-                            .substitute(&compact)
-                            .expect("witness compaction preserves the guard"),
-                    );
+                    // The merge can leave such a witness unobservable.
+                    let merged = compact_guard(&entry.key().scope(scope), merged);
+                    entry.insert(merged);
                 }
             }
         }
@@ -669,7 +677,7 @@ mod tests {
         };
         assert_eq!(clause.guard.scope(), &scope);
 
-        let merged = SeparationSet::new(&db, &owner, [some.clone(), none]);
+        let merged = SeparationSet::new(&db, &owner, [some.clone(), none.clone()]);
         aligned(&merged);
         let [clause] = merged.clauses() else {
             panic!("{merged:#?}");
@@ -708,7 +716,8 @@ mod tests {
         };
         assert_eq!(clause.guard.scope(), &scope);
         assert_eq!(merged.union(&db, &compacted), merged);
-        assert_eq!(joined.union(&db, &merged), merged);
+        let none = SeparationSet::new(&db, &owner, [none]);
+        assert_eq!(joined.union(&db, &none), merged);
     }
 
     #[test]
@@ -739,6 +748,81 @@ mod tests {
         let unconditional = clause(selector, Guard::always(&scope));
         let set = SeparationSet::new(&db, &owner, [conditional, unconditional.clone()]);
         assert_eq!(set.clauses(), [unconditional]);
+    }
+
+    #[test]
+    fn ranking_leaves_no_projectable_guard_witness() {
+        let db = HirAnalysisTestDb::default();
+        let owner = BinderScope::default();
+        // The guard's witness precedes the relation's, and an equality makes
+        // the relation's witness its representative once ranked first.
+        let (scope, hidden) = owner.bind(IndexNamespace::Existential);
+        let (scope, observed) = scope.bind(IndexNamespace::Existential);
+        let indexed = |index| {
+            ChoiceKey::new(
+                ValueOccurrence::SummaryChoice(0),
+                StructuralPath::new([Projection::Index(index)]),
+            )
+        };
+        let guard = Guard::always(&scope)
+            .with_equality(hidden, observed)
+            .and_then(|guard| guard.with_boolean(indexed(hidden), true))
+            .unwrap();
+        let (relation, witness) = owner.bind(IndexNamespace::Existential);
+        let condition = |scope: &BinderScope| {
+            Guard::always(scope)
+                .with_boolean(
+                    ChoiceKey::new(ValueOccurrence::SummaryChoice(1), StructuralPath::default()),
+                    true,
+                )
+                .unwrap()
+        };
+        for suspended in [
+            Vec::new(),
+            vec![Guarded {
+                guard: condition(&scope),
+                payload: RegionPath::default(),
+            }],
+        ] {
+            let original = Guarded {
+                guard: guard.clone(),
+                payload: separation(
+                    place(input(&db, 0), []),
+                    place(input(&db, 1), []),
+                    AccessExtent::Bytes(observed),
+                    suspended.clone(),
+                ),
+            };
+            let once = SeparationSet::new(&db, &owner, [original.clone()]);
+            assert_eq!(
+                SeparationSet::new(&db, &owner, once.clauses().iter().cloned()),
+                once
+            );
+            assert_eq!(once.union(&db, &SeparationSet::empty(&owner)), once);
+            assert_eq!(once.union(&db, &once), once);
+            assert_eq!(
+                SeparationSet::new(&db, &owner, [original.clone(), original]),
+                once
+            );
+            let [clause] = once.clauses() else {
+                panic!("{once:#?}");
+            };
+            assert_eq!(
+                clause.guard,
+                Guard::always(&relation)
+                    .with_boolean(indexed(witness), true)
+                    .unwrap()
+            );
+            assert_eq!(clause.payload.extent, AccessExtent::Bytes(witness));
+            let expected: Vec<_> = suspended
+                .iter()
+                .map(|slice| Guarded {
+                    guard: condition(&relation),
+                    payload: slice.payload.clone(),
+                })
+                .collect();
+            assert_eq!(*clause.payload.suspended, *expected);
+        }
     }
 
     #[test]
@@ -930,12 +1014,21 @@ mod tests {
         let db = HirAnalysisTestDb::default();
         let (owner, value) = BinderScope::default().bind(IndexNamespace::Value);
         let (scope, witness) = owner.bind(IndexNamespace::Existential);
+        let (scope, guarded) = scope.bind(IndexNamespace::Existential);
+        let choice = |index| {
+            ChoiceKey::new(
+                ValueOccurrence::SummaryChoice(0),
+                StructuralPath::new([Projection::Index(index)]),
+            )
+        };
+        let field = RegionPath::new([Projection::Field(FieldIndex(0))]);
         let set = SeparationSet::new(
             &db,
             &owner,
             [Guarded {
                 guard: Guard::always(&scope)
                     .with_disequality(witness, value)
+                    .and_then(|guard| guard.with_boolean(choice(guarded), true))
                     .unwrap(),
                 payload: separation(
                     place(
@@ -944,7 +1037,13 @@ mod tests {
                     ),
                     place(input(&db, 1), [Projection::Index(witness)]),
                     AccessExtent::Typed,
-                    [],
+                    // A suspension condition in a strict prefix of the clause.
+                    [Guarded {
+                        guard: Guard::always(&owner)
+                            .with_disequality(value, IndexExpr::Const(1))
+                            .unwrap(),
+                        payload: field.clone(),
+                    }],
                 ),
             }],
         );
@@ -955,12 +1054,14 @@ mod tests {
         let [clause] = substituted.clauses() else {
             panic!("{substituted:#?}");
         };
-        let (scope, fresh) = destination.bind(IndexNamespace::Existential);
+        let (relation, fresh) = destination.bind(IndexNamespace::Existential);
+        let (scope, guarded) = relation.bind(IndexNamespace::Existential);
         assert_ne!(fresh, occupied);
         assert_eq!(
             clause.guard,
             Guard::always(&scope)
                 .with_disequality(fresh, occupied)
+                .and_then(|guard| guard.with_boolean(choice(guarded), true))
                 .unwrap()
         );
         assert_eq!(
@@ -970,6 +1071,15 @@ mod tests {
         assert_eq!(
             clause.payload.access.path,
             RegionPath::new([Projection::Index(fresh)])
+        );
+        assert_eq!(
+            &*clause.payload.suspended,
+            &[Guarded {
+                guard: Guard::always(&relation)
+                    .with_disequality(occupied, IndexExpr::Const(1))
+                    .unwrap(),
+                payload: field,
+            }]
         );
     }
 
