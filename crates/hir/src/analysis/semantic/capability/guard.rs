@@ -882,7 +882,7 @@ impl<'db> Condition<'db> {
 
     fn constant(value: bool) -> Self {
         Self::new(
-            Arc::from(Vec::new()),
+            Arc::default(),
             Arc::from(vec![constant_leaf(value)]),
             Decision::leaf(0),
         )

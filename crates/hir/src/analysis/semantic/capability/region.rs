@@ -187,7 +187,7 @@ impl<'db> RegionSet<'db> {
     pub fn empty(scope: &BinderScope) -> Self {
         Self {
             scope: scope.clone(),
-            clauses: Arc::from(Vec::new()),
+            clauses: Arc::default(),
         }
     }
 
@@ -392,13 +392,14 @@ impl<'db> RegionSet<'db> {
     /// Canonicalize a collection of regions once, rather than repeatedly
     /// copying and normalizing an ever-growing prefix of alternatives.
     pub fn union_all(scope: &BinderScope, regions: impl IntoIterator<Item = Self>) -> Self {
-        Self::new(
-            scope,
-            regions.into_iter().flat_map(|region| {
-                assert_eq!(&region.scope, scope, "region scopes must match");
-                region.clauses.iter().cloned().collect::<Vec<_>>()
-            }),
-        )
+        // A clause iterator borrowing each region cannot outlive it, so the
+        // alternatives accumulate once here rather than a vector per region.
+        let mut clauses = Vec::new();
+        for region in regions {
+            assert_eq!(&region.scope, scope, "region scopes must match");
+            clauses.extend(region.clauses.iter().cloned());
+        }
+        Self::new(scope, clauses)
     }
 
     /// Replace clause guards with shared representatives. Sharing preserves guard
