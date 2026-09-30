@@ -78,7 +78,10 @@ module.exports = grammar({
   ],
 
   rules: {
-    source_file: $ => repeat(choice($._item, $._statement)),
+    // A statement at the top level is read as one only when nothing else
+    // reads its tokens, so a block after a function reads as the function's
+    // body or a braced `where` condition first.
+    source_file: $ => repeat(choice($._item, prec.dynamic(-1, $._statement))),
 
     // Statement terminator: either an explicit ';' or an automatic one
     // inserted by the external scanner at newline boundaries.
@@ -157,6 +160,13 @@ module.exports = grammar({
 
     // Function definition: fn name<T>(params) -> Type uses (...) where ... { body }
     function_definition: $ => prec.right(seq(
+      $._function_signature,
+      // A block that could be the body or a braced `where` condition after a
+      // `,` is the body, as the compiler's parser reads it.
+      optional(field('body', prec.dynamic(1, $.block))),
+    )),
+
+    _function_signature: $ => seq(
       optional($.attribute_list),
       optional($.visibility),
       optional('unsafe'),
@@ -168,8 +178,7 @@ module.exports = grammar({
       optional(seq('->', field('return_type', $._type))),
       optional($.uses_clause),
       optional($.where_clause),
-      optional(field('body', $.block)),
-    )),
+    ),
 
     parameter_list: $ => seq(
       '(',
@@ -487,7 +496,9 @@ module.exports = grammar({
       optional($.attribute_list),
       'extern',
       '{',
-      repeat($.function_definition),
+      // An extern function has no body, so a block in its `where` clause is
+      // always a condition.
+      repeat(alias($._function_signature, $.function_definition)),
       '}',
     ),
 

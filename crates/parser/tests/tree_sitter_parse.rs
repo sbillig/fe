@@ -490,3 +490,104 @@ fn tree_sitter_matches_string_escape_policy() {
         assert_eq!(errors.is_empty(), valid, "{source}: {errors:?}");
     }
 }
+
+/// A function's shape as a parser reads it: whether it has a body, and the
+/// kind of each of its `where` predicates, in order.
+#[derive(Debug, PartialEq, Eq)]
+struct FunctionShape {
+    body: bool,
+    predicates: Vec<&'static str>,
+}
+
+fn parser_function_shapes(source: &str) -> Vec<FunctionShape> {
+    use fe_parser::{SyntaxKind, SyntaxNode};
+    let (green, _) = parse_source_file(source, RecoveryMode::NoRecover);
+    SyntaxNode::new_root(green)
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::Func)
+        .map(|func| FunctionShape {
+            body: func
+                .children()
+                .any(|child| child.kind() == SyntaxKind::BlockExpr),
+            predicates: func
+                .children()
+                .filter(|child| child.kind() == SyntaxKind::FuncSignature)
+                .flat_map(|signature| signature.children())
+                .filter(|child| child.kind() == SyntaxKind::WhereClause)
+                .flat_map(|clause| clause.children())
+                .filter_map(|predicate| match predicate.kind() {
+                    SyntaxKind::WherePredicate => Some("type bound"),
+                    SyntaxKind::WhereConstPredicate => Some("condition"),
+                    _ => None,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn tree_sitter_function_shapes(parser: &mut Parser, source: &str) -> Vec<FunctionShape> {
+    fn walk(node: tree_sitter::Node, shapes: &mut Vec<FunctionShape>) {
+        if node.kind() == "function_definition" {
+            let mut cursor = node.walk();
+            let predicates = node
+                .named_children(&mut cursor)
+                .filter(|child| child.kind() == "where_clause")
+                .flat_map(|clause| {
+                    let mut cursor = clause.walk();
+                    clause
+                        .named_children(&mut cursor)
+                        .filter_map(|predicate| match predicate.kind() {
+                            "where_predicate" => Some("type bound"),
+                            "where_const_predicate" => Some("condition"),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            shapes.push(FunctionShape {
+                body: node.child_by_field_name("body").is_some(),
+                predicates,
+            });
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            walk(child, shapes);
+        }
+    }
+    let tree = parser.parse(source, None).expect("parser returned None");
+    let mut shapes = Vec::new();
+    walk(tree.root_node(), &mut shapes);
+    shapes
+}
+
+/// The tree-sitter grammar and the compiler's parser read each function's
+/// `where` clause and body the same way: which block is the body and which
+/// is a braced condition, and where one predicate ends and the next starts.
+#[test]
+fn tree_sitter_agrees_on_where_clauses_and_function_bodies() {
+    let mut parser = new_parser();
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dirs = [
+        manifest.join("test_files/syntax_node/items"),
+        manifest.join("../fmt/tests/fixtures"),
+        manifest.join("../../ingots/core/src"),
+        manifest.join("../../ingots/std/src"),
+    ];
+    let mut disagreements = Vec::new();
+    for dir in &dirs {
+        for path in collect_fe_files(dir) {
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+                .replace("\r\n", "\n");
+            let expected = parser_function_shapes(&source);
+            let found = tree_sitter_function_shapes(&mut parser, &source);
+            if expected != found {
+                disagreements.push(format!(
+                    "{}:\n  parser:      {expected:?}\n  tree-sitter: {found:?}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    assert!(disagreements.is_empty(), "{}", disagreements.join("\n"));
+}
