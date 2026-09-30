@@ -468,25 +468,24 @@ impl super::Parse for CallArgScope {
     }
 }
 
-/// How a `{` at the start of a `where` predicate is read. It may open a
-/// braced const predicate, as in `where { N > 0 }`, or the item's own body,
-/// field list or item list.
+/// Whether an item's own block can follow its `where` clause. This decides
+/// how a `{` that starts a predicate is read: as a braced condition, as in
+/// `where { N > 0 }`, or as the item's body, field list or item list (see
+/// [`WhereClauseScope::brace_opens_predicate`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum WhereBracePolicy {
-    /// The block is a predicate only when what follows it continues the
-    /// header: a `,`, another predicate, or the item's own `{`. Used where a
-    /// block must follow the clause (function definitions, struct, enum,
-    /// trait and impl headers).
+pub(crate) enum ItemBlock {
+    /// A block must follow: function definitions and struct, enum, trait
+    /// and impl headers.
     #[default]
-    Lookahead,
-    /// A block right after `where` is always a predicate. Used for function
-    /// declarations whose body is optional or absent (trait and extern
-    /// functions). After a `,` the lookahead rule applies.
-    AlwaysPredicate,
+    Required,
+    /// A block may follow: a trait function's default body.
+    Optional,
+    /// No block follows: an extern function.
+    Absent,
 }
 
 define_scope! {
-    pub(crate) WhereClauseScope { brace_policy: WhereBracePolicy },
+    pub(crate) WhereClauseScope { item_block: ItemBlock },
     WhereClause,
     (Newline)
 }
@@ -497,13 +496,12 @@ impl super::Parse for WhereClauseScope {
         parser.bump_expected(SyntaxKind::WhereKw);
 
         let mut pred_count = 0;
-        // A `{` can open a braced predicate only right after `where` or a
-        // `,`. After a completed predicate it is always the item's body.
-        let mut brace_policy = Some(self.brace_policy);
-
         loop {
             parser.set_newline_as_trivia(true);
             match parser.current_kind() {
+                Some(SyntaxKind::LBrace) if self.brace_opens_predicate(parser, pred_count == 0) => {
+                    parser.parse(WhereConstPredicateScope::default())?;
+                }
                 Some(kind) if starts_predicate(kind) => {
                     let type_bound = is_type_start(kind)
                         && parser.dry_run(|p| {
@@ -515,45 +513,37 @@ impl super::Parse for WhereClauseScope {
                     } else {
                         parser.parse(WhereConstPredicateScope::default())?;
                     }
-                    pred_count += 1;
-                }
-                Some(SyntaxKind::LBrace)
-                    if brace_policy
-                        .is_some_and(|policy| Self::takes_brace_as_predicate(policy, parser)) =>
-                {
-                    parser.parse(WhereConstPredicateScope::default())?;
-                    pred_count += 1;
                 }
                 _ => break,
             }
+            pred_count += 1;
 
-            let comma = parser.bump_if(SyntaxKind::Comma);
-            // After a `,`, a trailing comma followed by the body is still the
-            // body, so only a block that continues the header is a predicate.
-            brace_policy = comma.then_some(WhereBracePolicy::Lookahead);
-            if !comma && parser.current_kind().is_some_and(starts_predicate) {
-                parser.set_newline_as_trivia(false);
-                let newline = parser.current_kind() == Some(SyntaxKind::Newline);
-                parser.set_newline_as_trivia(true);
-
-                if newline {
-                    parser.add_error(ParseError::expected(
-                        &[SyntaxKind::Comma],
-                        None,
-                        parser.current_pos,
-                    ));
-                } else if parser.find(
-                    SyntaxKind::Comma,
-                    ExpectedKind::Separator {
-                        separator: SyntaxKind::Comma,
-                        element: SyntaxKind::WherePredicate,
-                    },
-                )? {
-                    parser.bump();
-                    brace_policy = Some(WhereBracePolicy::Lookahead);
-                } else {
-                    break;
-                }
+            if parser.bump_if(SyntaxKind::Comma) {
+                continue;
+            }
+            if !parser.current_kind().is_some_and(starts_predicate) {
+                break;
+            }
+            // Another predicate follows without a `,`.
+            parser.set_newline_as_trivia(false);
+            let newline = parser.current_kind() == Some(SyntaxKind::Newline);
+            parser.set_newline_as_trivia(true);
+            if newline {
+                parser.add_error(ParseError::expected(
+                    &[SyntaxKind::Comma],
+                    None,
+                    parser.current_pos,
+                ));
+            } else if parser.find(
+                SyntaxKind::Comma,
+                ExpectedKind::Separator {
+                    separator: SyntaxKind::Comma,
+                    element: SyntaxKind::WherePredicate,
+                },
+            )? {
+                parser.bump();
+            } else {
+                break;
             }
         }
 
@@ -565,22 +555,24 @@ impl super::Parse for WhereClauseScope {
 }
 
 impl WhereClauseScope {
-    /// Whether a `{` at the start of a predicate opens a braced predicate
-    /// (see [`WhereBracePolicy`]): one trial parse of the block, then one
-    /// token of lookahead.
-    fn takes_brace_as_predicate<S: TokenStream>(
-        policy: WhereBracePolicy,
-        parser: &mut Parser<S>,
-    ) -> bool {
-        match policy {
-            WhereBracePolicy::AlwaysPredicate => true,
-            WhereBracePolicy::Lookahead => parser.dry_run(|parser| {
-                if !parser.parses_without_error(BlockExprScope::default()) {
-                    return false;
-                }
-                parser.current_kind().is_some_and(|kind| {
-                    matches!(kind, SyntaxKind::Comma | SyntaxKind::LBrace) || starts_predicate(kind)
-                })
+    /// Whether a `{` that starts a predicate, right after `where` (`first`)
+    /// or after a `,`, opens a braced condition rather than the item's own
+    /// block.
+    ///
+    /// Right after the `where` of a function whose block is optional or
+    /// absent, it always does: read as the function's body, it would leave
+    /// the clause empty. Otherwise it does when the block parses
+    /// and what follows it continues the clause: a `,`, another predicate,
+    /// or the item's own `{`. So `where T: Copy, { body }` keeps its body.
+    fn brace_opens_predicate<S: TokenStream>(&self, parser: &mut Parser<S>, first: bool) -> bool {
+        match (self.item_block, first) {
+            (ItemBlock::Optional | ItemBlock::Absent, true) => true,
+            _ => parser.dry_run(|parser| {
+                parser.parses_without_error(BlockExprScope::default())
+                    && parser.current_kind().is_some_and(|kind| {
+                        matches!(kind, SyntaxKind::Comma | SyntaxKind::LBrace)
+                            || starts_predicate(kind)
+                    })
             }),
         }
     }
@@ -588,8 +580,8 @@ impl WhereClauseScope {
 
 /// Whether a `where` predicate can start with `kind`: a type bound starts
 /// with a type, and a const condition with an expression. A `{` is left out:
-/// whether it opens a condition or the item's body is decided by
-/// `WhereBracePolicy`.
+/// whether it opens a condition or the item's block is decided by
+/// [`WhereClauseScope::brace_opens_predicate`].
 fn starts_predicate(kind: SyntaxKind) -> bool {
     kind != SyntaxKind::LBrace && (is_type_start(kind) || is_expr_start(kind))
 }
@@ -618,11 +610,11 @@ impl super::Parse for WherePredicateScope {
 
 pub(crate) fn parse_where_clause_opt<S: TokenStream>(
     parser: &mut Parser<S>,
-    brace_policy: WhereBracePolicy,
+    item_block: ItemBlock,
 ) -> Result<(), Recovery<ErrProof>> {
     let newline_as_trivia = parser.set_newline_as_trivia(true);
     let r = if parser.current_kind() == Some(SyntaxKind::WhereKw) {
-        parser.parse(WhereClauseScope::new(brace_policy))
+        parser.parse(WhereClauseScope::new(item_block))
     } else {
         Ok(())
     };

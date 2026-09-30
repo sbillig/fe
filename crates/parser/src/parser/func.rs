@@ -1,7 +1,7 @@
 use super::{
     ErrProof, Parser, Recovery, define_scope,
     expr_atom::BlockExprScope,
-    param::{WhereBracePolicy, parse_generic_params_opt, parse_where_clause_opt},
+    param::{ItemBlock, parse_generic_params_opt, parse_where_clause_opt},
     parse_list,
     token_stream::TokenStream,
     type_::parse_type,
@@ -17,9 +17,7 @@ define_scope! {
 
 define_scope! {
     pub(crate) FuncSignatureScope {
-        allow_self: bool,
-        allow_body: bool,
-        where_brace_policy: WhereBracePolicy
+        fn_def_scope: FuncDefScope
     },
     SyntaxKind::FuncSignature
 }
@@ -33,6 +31,22 @@ pub(crate) enum FuncDefScope {
     Extern,
 }
 
+impl FuncDefScope {
+    /// Whether the function can take `self`.
+    fn allows_self(self) -> bool {
+        !matches!(self, Self::Normal)
+    }
+
+    /// Whether the function's body follows its signature.
+    fn body(self) -> ItemBlock {
+        match self {
+            Self::Normal | Self::Impl => ItemBlock::Required,
+            Self::TraitDef => ItemBlock::Optional,
+            Self::Extern => ItemBlock::Absent,
+        }
+    }
+}
+
 impl super::Parse for FuncScope {
     type Error = Recovery<ErrProof>;
 
@@ -40,12 +54,22 @@ impl super::Parse for FuncScope {
         parser.bump_if(SyntaxKind::ConstKw);
         parser.bump_expected(SyntaxKind::FnKw);
 
-        match self.fn_def_scope {
-            FuncDefScope::Normal => parse_normal_fn_def_impl(parser, false),
-            FuncDefScope::Impl => parse_normal_fn_def_impl(parser, true),
-            FuncDefScope::TraitDef => parse_trait_fn_def_impl(parser),
-            FuncDefScope::Extern => parse_extern_fn_def_impl(parser),
+        parser.parse(FuncSignatureScope::new(self.fn_def_scope))?;
+        match self.fn_def_scope.body() {
+            ItemBlock::Required => {
+                parser.set_scope_recovery_stack(&[SyntaxKind::LBrace]);
+                if parser.find_and_pop(SyntaxKind::LBrace, ExpectedKind::Body(SyntaxKind::Func))? {
+                    parser.parse(BlockExprScope::default())?;
+                }
+            }
+            ItemBlock::Optional => {
+                if parser.current_kind() == Some(SyntaxKind::LBrace) {
+                    parser.parse(BlockExprScope::default())?;
+                }
+            }
+            ItemBlock::Absent => {}
         }
+        Ok(())
     }
 }
 
@@ -71,7 +95,8 @@ impl super::Parse for FuncSignatureScope {
             SyntaxKind::Newline,
             SyntaxKind::RBrace,
         ];
-        if self.allow_body {
+        let body = self.fn_def_scope.body();
+        if body != ItemBlock::Absent {
             recovery_tokens.push(SyntaxKind::LBrace);
         }
         parser.set_scope_recovery_stack(&recovery_tokens);
@@ -87,7 +112,9 @@ impl super::Parse for FuncSignatureScope {
             SyntaxKind::LParen,
             ExpectedKind::Syntax(SyntaxKind::FuncParamList),
         )? {
-            parser.parse(super::param::FuncParamListScope::new(self.allow_self))?;
+            parser.parse(super::param::FuncParamListScope::new(
+                self.fn_def_scope.allows_self(),
+            ))?;
         }
 
         parser.expect_and_pop_recovery_stack()?;
@@ -99,57 +126,10 @@ impl super::Parse for FuncSignatureScope {
         parse_uses_clause_opt(parser)?;
 
         parser.expect_and_pop_recovery_stack()?;
-        parse_where_clause_opt(parser, self.where_brace_policy)?;
+        parse_where_clause_opt(parser, body)?;
 
         Ok(())
     }
-}
-
-fn parse_normal_fn_def_impl<S: TokenStream>(
-    parser: &mut Parser<S>,
-    allow_self: bool,
-) -> Result<(), Recovery<ErrProof>> {
-    parser.parse(FuncSignatureScope::new(
-        allow_self,
-        true,
-        WhereBracePolicy::Lookahead,
-    ))?;
-
-    parser.set_scope_recovery_stack(&[SyntaxKind::LBrace]);
-    if parser.find_and_pop(SyntaxKind::LBrace, ExpectedKind::Body(SyntaxKind::Func))? {
-        parser.parse(BlockExprScope::default())?;
-    }
-    Ok(())
-}
-
-fn parse_trait_fn_def_impl<S: TokenStream>(
-    parser: &mut Parser<S>,
-) -> Result<(), Recovery<ErrProof>> {
-    // The body of a trait function is optional, so a block right after
-    // `where` is a predicate. A default body may follow it.
-    parser.parse(FuncSignatureScope::new(
-        true,
-        true,
-        WhereBracePolicy::AlwaysPredicate,
-    ))?;
-
-    if parser.current_kind() == Some(SyntaxKind::LBrace) {
-        parser.parse(BlockExprScope::default())?;
-    }
-    Ok(())
-}
-
-fn parse_extern_fn_def_impl<S: TokenStream>(
-    parser: &mut Parser<S>,
-) -> Result<(), Recovery<ErrProof>> {
-    // Extern functions have no body, so a block after `where` is a predicate.
-    parser.parse(FuncSignatureScope::new(
-        true,
-        false,
-        WhereBracePolicy::AlwaysPredicate,
-    ))?;
-
-    Ok(())
 }
 
 /// Optionally parse a `uses` clause after the function parameter list and optional return type.
