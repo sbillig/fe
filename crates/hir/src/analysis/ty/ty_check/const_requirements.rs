@@ -547,141 +547,247 @@ fn first_condition<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<Bod
         })
 }
 
+/// Checks the requirements of the types and callees that enter a typed body.
+///
+/// Requirements are checked where a type enters the body: a written type
+/// (`written_type_check`), a path that passes through an application, or an
+/// instantiating expression. A path does not report an application that a
+/// written type carries, and an expression does not report one that either
+/// carries, since those report it. A pattern, a binding use, or a block or
+/// branch only carries a type that entered elsewhere, so checking it again
+/// repeats that report. A function-typed expression is not checked for its
+/// type arguments here: they are written types, checked where they are
+/// written, or inferred, and the check of inferred types at the end covers
+/// them. An item reached through a path checks the header types it
+/// instantiates that no checked value carries (`check_entered_header`).
 pub(super) fn check_body_requirements<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
     typed: &TypedBody<'db>,
 ) -> RequirementCheck<'db> {
-    let mut check = RequirementCheck::default();
     let Some(body) = typed.body() else {
-        return check;
+        return RequirementCheck::default();
     };
-    let caller = requirement_premise_owner(db, owner);
-    let direct_callees: FxHashSet<_> = body
-        .exprs(db)
-        .values()
-        .filter_map(|expr| match expr.borrowed().to_opt()? {
-            Expr::Call(callee, _) => Some(*callee),
-            _ => None,
-        })
-        .collect();
-    // Requirements are checked where a type enters the body: a written type
-    // (`written_type_check`), a path that passes through an application, or
-    // an instantiating expression. A path does not report an application
-    // that a written type carries, and an expression does not report one
-    // that either carries, since those report it. A pattern, a binding use,
-    // or a block or branch only carries a type that entered elsewhere, so
-    // checking it again repeats that report. A function-typed expression is
-    // not checked for its type arguments here: they are written types,
-    // checked where they are written, or inferred, and the check of inferred
-    // types at the end covers them. An item reached through a path checks
-    // the header types it instantiates that no checked value carries
-    // (`check_entered_header`).
-    let mut written = written_applications(db, owner);
-    // The failing applications reported below.
-    let mut entered = FxHashSet::default();
-    let mut reported_paths = FxHashSet::default();
-    for (site, application) in typed.path_applications() {
-        if !reported_paths.insert((site, *application)) {
-            continue;
-        }
-        if let Some(unmet) = check_path_application(db, *application, owner.scope(), &written) {
-            check.unmet_type(site.clone(), unmet, &mut entered);
+    let mut checker = BodyRequirements::new(db, owner, typed, body);
+    checker.check_path_applications();
+    let mut entered = Vec::new();
+    for (expr, data) in body.exprs(db).iter() {
+        if !checker.carries(expr) {
+            entered.push(checker.check_expr(expr, data));
         }
     }
-    written.extend(typed.path_applications().iter().map(|&(_, ty)| ty));
-    // Whether `expr` only carries a type that entered elsewhere.
-    let carries = |expr: ExprId| {
-        typed.expr_binding(expr).is_some()
+    let mut check = checker.check_inferred_types(&entered);
+    for (nested, expected) in expression_const_bodies(db, body, typed) {
+        check.extend(anon_const_position_check(db, nested, expected));
+    }
+    check
+}
+
+fn is_function_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)))
+}
+
+/// An expression that `check_body_requirements` checked, with its type.
+struct CheckedExpr<'db> {
+    expr: ExprId,
+    ty: TyId<'db>,
+    /// Whether a requirement of `ty` failed.
+    failed: bool,
+}
+
+/// The state of `check_body_requirements` for one body.
+struct BodyRequirements<'a, 'db> {
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    typed: &'a TypedBody<'db>,
+    body: Body<'db>,
+    /// The generic owner whose conditions discharge a use's requirements.
+    premise_owner: Option<GenericParamOwner<'db>>,
+    /// The callee expressions of the body's calls.
+    direct_callees: FxHashSet<ExprId>,
+    /// The applications that a written type or a path carries, which an
+    /// expression does not report again.
+    written: FxHashSet<TyId<'db>>,
+    /// The failing applications reported so far.
+    entered: FxHashSet<TyId<'db>>,
+    check: RequirementCheck<'db>,
+}
+
+impl<'a, 'db> BodyRequirements<'a, 'db> {
+    fn new(
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+        typed: &'a TypedBody<'db>,
+        body: Body<'db>,
+    ) -> Self {
+        let direct_callees = body
+            .exprs(db)
+            .values()
+            .filter_map(|expr| match expr.borrowed().to_opt()? {
+                Expr::Call(callee, _) => Some(*callee),
+                _ => None,
+            })
+            .collect();
+        Self {
+            db,
+            scope: owner.scope(),
+            typed,
+            body,
+            premise_owner: requirement_premise_owner(db, owner),
+            direct_callees,
+            written: written_applications(db, owner),
+            entered: FxHashSet::default(),
+            check: RequirementCheck::default(),
+        }
+    }
+
+    /// Whether `expr` only carries a type that entered elsewhere.
+    fn carries(&self, expr: ExprId) -> bool {
+        self.typed.expr_binding(expr).is_some()
             || matches!(
-                expr.data(db, body).borrowed().to_opt(),
+                expr.data(self.db, self.body).borrowed().to_opt(),
                 Some(Expr::Block(..) | Expr::If(..) | Expr::Match(..) | Expr::With(..))
             )
-    };
-    let is_function =
-        |ty: TyId<'db>| matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)));
-    // Whether `expr` is a path that names a function, as opposed to a
-    // binding use or another expression that holds a function value.
-    let names_function_value = |expr: ExprId| {
-        typed.expr_binding(expr).is_none()
+    }
+
+    /// Whether `expr` is a path that names a function, as opposed to a
+    /// binding use or another expression that holds a function value.
+    fn names_function_value(&self, expr: ExprId) -> bool {
+        self.typed.expr_binding(expr).is_none()
             && matches!(
-                expr.data(db, body).borrowed().to_opt(),
+                expr.data(self.db, self.body).borrowed().to_opt(),
                 Some(Expr::Path(..))
             )
-    };
-    // The expressions whose type failed here. The check of inferred types
-    // below looks at their types again, for failures after the first.
-    let mut failed = FxHashSet::default();
-    for (expr, data) in body.exprs(db).iter() {
-        if carries(expr) {
-            continue;
+    }
+
+    fn unmet_type_at(&mut self, expr: ExprId, unmet: TypeRequirementFailure<'db>) {
+        self.check
+            .unmet_type(expr.span(self.body).into(), unmet, &mut self.entered);
+    }
+
+    /// Checks the applications that the body's paths pass through, once per
+    /// site, and adds them to the written applications.
+    fn check_path_applications(&mut self) {
+        let mut reported_paths = FxHashSet::default();
+        for (site, application) in self.typed.path_applications() {
+            if !reported_paths.insert((site, *application)) {
+                continue;
+            }
+            if let Some(unmet) =
+                check_path_application(self.db, *application, self.scope, &self.written)
+            {
+                self.check
+                    .unmet_type(site.clone(), unmet, &mut self.entered);
+            }
         }
-        let ty = typed.expr_ty(db, expr);
-        if !is_function(ty)
-            && let Some(unmet) = check_type_requirements(db, ty, owner.scope(), &written)
+        self.written
+            .extend(self.typed.path_applications().iter().map(|&(_, ty)| ty));
+    }
+
+    /// Checks the type of an expression that does not only carry one, the
+    /// header types a constant reference enters, and a callee's
+    /// requirements.
+    fn check_expr(&mut self, expr: ExprId, data: &Partial<Expr<'db>>) -> CheckedExpr<'db> {
+        let ty = self.typed.expr_ty(self.db, expr);
+        let mut failed = false;
+        if !is_function_ty(self.db, ty)
+            && let Some(unmet) = check_type_requirements(self.db, ty, self.scope, &self.written)
         {
-            failed.insert(expr);
-            check.unmet_type(expr.span(body).into(), unmet, &mut entered);
+            failed = true;
+            self.unmet_type_at(expr, unmet);
         }
-        if let Some(headers) = const_ref_headers(db, typed, expr)
-            && let Some(unmet) =
-                check_entered_header(db, typed, expr, headers, owner.scope(), &written)
+        if let Some(headers) = const_ref_headers(self.db, self.typed, expr)
+            && let Some(unmet) = check_entered_header(
+                self.db,
+                self.typed,
+                expr,
+                headers,
+                self.scope,
+                &self.written,
+            )
         {
-            check.unmet_type(expr.span(body).into(), unmet, &mut entered);
+            self.unmet_type_at(expr, unmet);
         }
-        if direct_callees.contains(&expr) && typed.callable_expr(expr).is_none() {
-            continue;
+        self.check_callee(expr, data, ty);
+        CheckedExpr { expr, ty, failed }
+    }
+
+    /// Checks the requirements of the function or constructor that `expr`
+    /// calls or names as a value.
+    fn check_callee(&mut self, expr: ExprId, data: &Partial<Expr<'db>>, ty: TyId<'db>) {
+        let callable = self.typed.callable_expr(expr);
+        if callable.is_none() && self.direct_callees.contains(&expr) {
+            return;
         }
         // A function value enters the body where it is written, at a path
         // that names the function. A call through anything else, such as a
         // binding, block, branch or field, calls such a value, whose
         // requirements were checked there.
         if let Some(Expr::Call(callee, _)) = data.borrowed().to_opt()
-            && !names_function_value(*callee)
+            && !self.names_function_value(*callee)
         {
-            continue;
+            return;
         }
-        let (definition, args) = if let Some(callable) = typed.callable_expr(expr) {
-            (callable.callable_def(), callable.generic_args())
-        } else {
+        let (definition, args) = match callable {
+            Some(callable) => (callable.callable_def(), callable.generic_args()),
             // Any other expression with a function type, such as a field
             // read, carries a value written elsewhere.
-            if !names_function_value(expr) {
-                continue;
+            None if !self.names_function_value(expr) => return,
+            None => {
+                let (base, args) = ty.decompose_ty_app(self.db);
+                let TyData::TyBase(TyBase::Func(definition)) = base.data(self.db) else {
+                    return;
+                };
+                (*definition, args)
             }
-            let ty = typed.expr_ty(db, expr);
-            let (base, args) = ty.decompose_ty_app(db);
-            let TyData::TyBase(TyBase::Func(definition)) = base.data(db) else {
-                continue;
-            };
-            (*definition, args)
         };
-        let func = match definition {
-            CallableDef::Func(func) => func,
-            // A constructor used as a value enters its enum type here, since no
-            // call expression instantiates it. A called constructor's enum type
-            // enters at the call, which is checked above.
+        match definition {
+            CallableDef::Func(func) => {
+                self.check_callee_headers(expr, func, args);
+                self.discharge_callee_conditions(expr, func, args);
+            }
             CallableDef::VariantCtor(_) => {
-                if matches!(data.borrowed().to_opt(), Some(Expr::Path(..)))
-                    && !direct_callees.contains(&expr)
-                    && let Some(unmet) = check_type_requirements(
-                        db,
-                        definition.ret_ty(db).instantiate(db, args),
-                        owner.scope(),
-                        &written,
-                    )
-                {
-                    check.unmet_type(expr.span(body).into(), unmet, &mut entered);
-                }
-                continue;
+                self.check_constructor_value(expr, data, definition, args);
             }
-        };
-        match callee_headers(db, func, args) {
+        }
+    }
+
+    /// A constructor used as a value enters its enum type here, since no call
+    /// expression instantiates it. A called constructor's enum type enters at
+    /// the call, whose type is checked in `check_expr`.
+    fn check_constructor_value(
+        &mut self,
+        expr: ExprId,
+        data: &Partial<Expr<'db>>,
+        definition: CallableDef<'db>,
+        args: &[TyId<'db>],
+    ) {
+        if matches!(data.borrowed().to_opt(), Some(Expr::Path(..)))
+            && !self.direct_callees.contains(&expr)
+            && let Some(unmet) = check_type_requirements(
+                self.db,
+                definition.ret_ty(self.db).instantiate(self.db, args),
+                self.scope,
+                &self.written,
+            )
+        {
+            self.unmet_type_at(expr, unmet);
+        }
+    }
+
+    /// Checks the header types that a use of `func` instantiates.
+    fn check_callee_headers(&mut self, expr: ExprId, func: Func<'db>, args: &[TyId<'db>]) {
+        match callee_headers(self.db, func, args) {
             Ok(headers) => {
-                if let Some(unmet) =
-                    check_entered_header(db, typed, expr, headers, owner.scope(), &written)
-                {
-                    check.unmet_type(expr.span(body).into(), unmet, &mut entered);
+                if let Some(unmet) = check_entered_header(
+                    self.db,
+                    self.typed,
+                    expr,
+                    headers,
+                    self.scope,
+                    &self.written,
+                ) {
+                    self.unmet_type_at(expr, unmet);
                 }
             }
             // The instantiated headers are unknown, so a condition of a record
@@ -689,31 +795,41 @@ pub(super) fn check_body_requirements<'db>(
             // the use's arguments, fails as a condition that discharge cannot
             // instantiate does.
             Err(_) => {
-                if let Some(predicate) = declared_callee_headers(db, func)
+                if let Some(predicate) = declared_callee_headers(self.db, func)
                     .into_iter()
                     .chain(args.iter().copied())
-                    .find_map(|ty| first_condition(db, ty))
+                    .find_map(|ty| first_condition(self.db, ty))
                 {
-                    check.unmet(
-                        expr.span(body).into(),
+                    self.check.unmet(
+                        expr.span(self.body).into(),
                         predicate,
                         RequirementFailure::NotInstantiable,
                     );
                 }
             }
         }
-        // Conditions are supported on free functions and inherent methods.
-        // Other associated or generic owner contexts are rejected at their
-        // declarations. Inherent calls keep ordinary method resolution:
-        // requirements constrain the resolved call and do not take part in
-        // candidate selection.
+    }
+
+    /// Discharges the conditions of `func` for a use with `args`.
+    ///
+    /// Conditions are supported on free functions and inherent methods.
+    /// Other associated or generic owner contexts are rejected at their
+    /// declarations. Inherent calls keep ordinary method resolution:
+    /// requirements constrain the resolved call and do not take part in
+    /// candidate selection.
+    fn discharge_callee_conditions(&mut self, expr: ExprId, func: Func<'db>, args: &[TyId<'db>]) {
+        let db = self.db;
         let predicates = WhereClauseOwner::Func(func)
             .where_clause(db)
             .const_predicates(db);
         if predicates.is_empty() || !func.is_free_or_inherent(db) {
-            continue;
+            return;
         }
-        let caller = caller.filter(|_| args.iter().any(|ty| ty.has_param(db)));
+        // Only a use whose arguments mention the owner's parameters can be
+        // discharged by the owner's own conditions.
+        let premise_owner = self
+            .premise_owner
+            .filter(|_| args.iter().any(|ty| ty.has_param(db)));
         for &predicate in predicates
             .iter()
             .filter(|&&predicate| checked_at_uses(db, predicate))
@@ -723,67 +839,76 @@ pub(super) fn check_body_requirements<'db>(
                 WhereClauseOwner::Func(func),
                 predicate,
                 args.to_vec(),
-                caller,
+                premise_owner,
             ) {
-                check.unmet(expr.span(body).into(), predicate, failure);
+                self.check
+                    .unmet(expr.span(self.body).into(), predicate, failure);
             }
         }
     }
-    // Every type that inference gave an expression is checked too, whatever
-    // the position: the expression's own type, including a function value's
-    // generic arguments, and the generic arguments inferred for each call and
-    // method call. The checks above find the positions where a type enters;
-    // this one does not depend on listing them. It catches, for example,
-    // `U = Bounded<0>` inferred by trait solving for `call(Holder<0> {})` with
-    // `fn call<U, T: Tr<U>>(_ x: T)`, which no written type, path or
-    // expression type holds. An application reported above is not reported
-    // again, and any other is reported once, at the first expression that
-    // carries it. Patterns, binding uses, blocks and branches are left out:
-    // their types come from an expression here or from the signature, and a
-    // signature type reaches the body with its layout holes instantiated, so
-    // it would not match the written type that reported it.
-    // An expression type that the loop above found no failure in has none
-    // here either, since `reported` only adds to `written`, so only a
-    // function value's type and the types that failed there are looked at
-    // again. A failure in a function value's type or a call's generic
-    // arguments is in a type that inference supplied, so its error names the
-    // type. A further failure in an expression type that already failed is
-    // not: the expression's type gives it, as it gave the first.
-    let mut reported = written;
-    reported.extend(entered);
-    let inferred = body
-        .exprs(db)
-        .keys()
-        .filter(|&expr| !carries(expr))
-        .flat_map(|expr| {
-            let ty = typed.expr_ty(db, expr);
-            let own = if is_function(ty) {
+
+    /// Checks every type that inference gave an expression, whatever the
+    /// position: the expression's own type, including a function value's
+    /// generic arguments, and the generic arguments inferred for each call and
+    /// method call.
+    ///
+    /// The checks in `check_expr` find the positions where a type enters;
+    /// this one does not depend on listing them. It catches, for example,
+    /// `U = Bounded<0>` inferred by trait solving for `call(Holder<0> {})`
+    /// with `fn call<U, T: Tr<U>>(_ x: T)`, which no written type, path or
+    /// expression type holds. An application reported before is not reported
+    /// again, and any other is reported once, at the first expression that
+    /// carries it. Patterns, binding uses, blocks and branches are left out:
+    /// their types come from an expression here or from the signature, and a
+    /// signature type reaches the body with its layout holes instantiated, so
+    /// it would not match the written type that reported it.
+    ///
+    /// An expression type that `check_expr` found no failure in has none here
+    /// either, since `reported` only adds to `written`, so only a function
+    /// value's type and the types that failed there are looked at again. A
+    /// failure in a function value's type or a call's generic arguments is in
+    /// a type that inference supplied, so its error names the type. A further
+    /// failure in an expression type that already failed is not: the
+    /// expression's type gives it, as it gave the first.
+    fn check_inferred_types(self, exprs: &[CheckedExpr<'db>]) -> RequirementCheck<'db> {
+        let Self {
+            db,
+            scope,
+            typed,
+            body,
+            written,
+            entered,
+            mut check,
+            ..
+        } = self;
+        let mut reported = written;
+        reported.extend(entered);
+        for &CheckedExpr { expr, ty, failed } in exprs {
+            let own = if is_function_ty(db, ty) {
                 Some((ty, true))
             } else {
-                failed.contains(&expr).then_some((ty, false))
+                failed.then_some((ty, false))
             };
             let callable_args = typed
                 .callable_expr(expr)
-                .map(|callable| callable.generic_args().to_vec())
+                .map(|callable| callable.generic_args())
                 .unwrap_or_default();
-            own.into_iter()
-                .chain(callable_args.into_iter().map(|ty| (ty, true)))
-                .map(move |(ty, inferred)| (expr, ty, inferred))
-        });
-    for (expr, ty, inferred) in inferred {
-        while let Some(unmet) = check_type_requirements(db, ty, owner.scope(), &reported) {
-            reported.insert(unmet.ty);
-            if inferred {
-                check.unmet_inferred(expr.span(body).into(), &unmet);
-            } else {
-                check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
+            let types = own
+                .into_iter()
+                .chain(callable_args.iter().map(|&ty| (ty, true)));
+            for (ty, inferred) in types {
+                while let Some(unmet) = check_type_requirements(db, ty, scope, &reported) {
+                    reported.insert(unmet.ty);
+                    if inferred {
+                        check.unmet_inferred(expr.span(body).into(), &unmet);
+                    } else {
+                        check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
+                    }
+                }
             }
         }
+        check
     }
-    for (nested, expected) in expression_const_bodies(db, body, typed) {
-        check.extend(anon_const_position_check(db, nested, expected));
-    }
-    check
 }
 
 /// What an anonymous constant checked against `expected` reports at its
@@ -1238,8 +1363,6 @@ fn check_entered_header<'db>(
     written: &FxHashSet<TyId<'db>>,
 ) -> Option<TypeRequirementFailure<'db>> {
     let body = typed.body()?;
-    let is_function =
-        |ty: TyId<'db>| matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)));
     let mut carried = vec![expr];
     match expr.data(db, body).borrowed().to_opt() {
         Some(Expr::Call(callee, call_args)) => {
@@ -1259,7 +1382,7 @@ fn check_entered_header<'db>(
     let carried: Vec<_> = carried
         .into_iter()
         .map(|carrier| (carrier, typed.expr_ty(db, carrier)))
-        .filter(|&(carrier, ty)| carrier != expr || !is_function(ty))
+        .filter(|&(carrier, ty)| carrier != expr || !is_function_ty(db, ty))
         .map(|(_, ty)| ty)
         .collect();
     headers
