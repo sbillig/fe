@@ -573,6 +573,15 @@ pub(super) fn check_body_requirements<'db>(
     };
     let is_function =
         |ty: TyId<'db>| matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)));
+    // Whether `expr` is a path that names a function, as opposed to a
+    // binding use or another expression that holds a function value.
+    let names_function_value = |expr: ExprId| {
+        typed.expr_binding(expr).is_none()
+            && matches!(
+                expr.data(db, body).borrowed().to_opt(),
+                Some(Expr::Path(..))
+            )
+    };
     // The expressions whose type failed here. The check of inferred types
     // below looks at their types again, for failures after the first.
     let mut failed = FxHashSet::default();
@@ -596,16 +605,23 @@ pub(super) fn check_body_requirements<'db>(
         if direct_callees.contains(&expr) && typed.callable_expr(expr).is_none() {
             continue;
         }
-        // A call through a binding, block or branch calls a function value
-        // whose requirements were checked where the value is written.
+        // A function value enters the body where it is written, at a path
+        // that names the function. A call through anything else, such as a
+        // binding, block, branch or field, calls such a value, whose
+        // requirements were checked there.
         if let Some(Expr::Call(callee, _)) = data.borrowed().to_opt()
-            && carries(*callee)
+            && !names_function_value(*callee)
         {
             continue;
         }
         let (definition, args) = if let Some(callable) = typed.callable_expr(expr) {
             (callable.callable_def(), callable.generic_args())
         } else {
+            // Any other expression with a function type, such as a field
+            // read, carries a value written elsewhere.
+            if !names_function_value(expr) {
+                continue;
+            }
             let ty = typed.expr_ty(db, expr);
             let (base, args) = ty.decompose_ty_app(db);
             let TyData::TyBase(TyBase::Func(definition)) = base.data(db) else {
