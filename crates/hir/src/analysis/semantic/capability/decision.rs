@@ -17,6 +17,11 @@ thread_local! {
     static INTERN_ATTEMPTS: Cell<usize> = const { Cell::new(0) };
 }
 
+#[cfg(test)]
+pub(super) fn intern_attempts() -> usize {
+    INTERN_ATTEMPTS.get()
+}
+
 /// What identifies a completed graph for accounting: its canonical hash, node
 /// count, node size and node type. The type belongs here because graphs of
 /// different node types share sizes and can share a hash, and counting two of

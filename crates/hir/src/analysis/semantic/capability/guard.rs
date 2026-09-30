@@ -864,33 +864,77 @@ impl<'db> Condition<'db> {
             .collect();
         leaves.sort();
         leaves.dedup();
-        let groups = choice_groups(&choices);
         let relabel = |condition: &Self| {
             if condition.choices.len() == choices.len() && condition.leaves.len() == leaves.len() {
                 return condition.decision.clone();
             }
-            condition.decision.map(
-                |bit| {
-                    let slot = choices
-                        .binary_search_by(|candidate| {
-                            choice_order(candidate, &condition.choices[usize::from(bit.slot)])
-                        })
-                        .expect("a merged table holds every choice");
-                    Variable::Symbol(SlotChoice {
-                        group: groups[slot],
-                        bit: bit.bit,
-                        slot: u16::try_from(slot).expect("choice table fits a slot"),
-                    })
-                },
-                |leaf| {
-                    leaves
-                        .binary_search(&condition.leaves[*leaf as usize])
-                        .expect("a merged table holds every leaf") as u32
-                },
-            )
+            condition
+                .remap_decision(&condition.choices, &condition.leaves, &choices, &leaves)
+                .0
         };
         let (left, right) = (relabel(self), relabel(other));
         (choices, leaves, left, right)
+    }
+
+    /// Map each table slot once, rather than searching semantic keys at every node.
+    /// The flag records unchanged numbering, even when the table contents changed.
+    fn remap_decision(
+        &self,
+        renamed: &[Arc<ChoiceKey<'db>>],
+        mapped: &[Leaf<'db>],
+        choices: &[Arc<ChoiceKey<'db>>],
+        leaves: &[Leaf<'db>],
+    ) -> (ChoiceDecision, bool) {
+        let groups = choice_groups(choices);
+        let choice_slots: Vec<_> = renamed
+            .iter()
+            .map(|key| {
+                let slot = choices
+                    .binary_search_by(|candidate| choice_order(candidate, key))
+                    .expect("every mapped choice is in the table");
+                (
+                    groups[slot],
+                    u16::try_from(slot).expect("choice table fits a slot"),
+                )
+            })
+            .collect();
+        let leaf_slots: Vec<_> = mapped
+            .iter()
+            .map(|leaf| {
+                u32::try_from(
+                    leaves
+                        .binary_search(leaf)
+                        .expect("every mapped leaf is in the table"),
+                )
+                .expect("leaf table fits")
+            })
+            .collect();
+        let original_groups = choice_groups(&self.choices);
+        let unchanged = choice_slots
+            .iter()
+            .enumerate()
+            .all(|(slot, &(group, mapped))| {
+                usize::from(mapped) == slot && group == original_groups[slot]
+            })
+            && leaf_slots
+                .iter()
+                .enumerate()
+                .all(|(slot, &mapped)| mapped as usize == slot);
+        if unchanged {
+            return (self.decision.clone(), true);
+        }
+        let decision = self.decision.map(
+            |bit| {
+                let (group, slot) = choice_slots[usize::from(bit.slot)];
+                Variable::Symbol(SlotChoice {
+                    group,
+                    slot,
+                    bit: bit.bit,
+                })
+            },
+            |leaf| leaf_slots[*leaf as usize],
+        );
+        (decision, false)
     }
 
     /// Join two aligned decisions, joining leaves only as the traversal reaches them.
@@ -1035,34 +1079,18 @@ impl<'db> Condition<'db> {
         let mut choices = renamed.clone();
         choices.sort_by(|left, right| choice_order(left, right));
         choices.dedup_by(|left, right| choice_order(left, right).is_eq());
-        let groups = choice_groups(&choices);
         let mapped: Vec<Leaf<'db>> = self.leaves.iter().map(&mut leaf).collect();
         let mut leaves = mapped.clone();
         leaves.sort();
         leaves.dedup();
-        let decision = self.decision.map(
-            |bit| {
-                let slot = choices
-                    .binary_search_by(|candidate| {
-                        choice_order(candidate, &renamed[usize::from(bit.slot)])
-                    })
-                    .expect("every renamed choice is in the table");
-                Variable::Symbol(SlotChoice {
-                    group: groups[slot],
-                    bit: bit.bit,
-                    slot: u16::try_from(slot).expect("choice table fits a slot"),
-                })
-            },
-            |old| {
-                u32::try_from(
-                    leaves
-                        .binary_search(&mapped[*old as usize])
-                        .expect("every mapped leaf is in the table"),
-                )
-                .expect("leaf table fits")
-            },
-        );
-        Self::compact(choices, leaves, decision)
+        let (decision, unchanged) = self.remap_decision(&renamed, &mapped, &choices, &leaves);
+        if unchanged {
+            // Both target tables are the images of the old tables. Identity slot
+            // numbering means neither lost an entry, so they are already compact.
+            Self::new(choices.into(), leaves.into(), decision)
+        } else {
+            Self::compact(choices, leaves, decision)
+        }
     }
 
     /// Existentially quantify every key the predicate selects.
@@ -1620,6 +1648,7 @@ impl<'db> Guard<'db> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::decision::intern_attempts;
     use super::*;
 
     fn selected<'db>(scope: &BinderScope, occurrence: u16) -> Guard<'db> {
@@ -1660,6 +1689,88 @@ mod tests {
             })
             .reduce(|left, right| left.or(&right))
             .unwrap()
+    }
+
+    #[test]
+    fn table_renaming_reuses_unchanged_decision_numbering() {
+        let scope = BinderScope::default();
+        let left = selected(&scope, 0);
+        let right = selected(&scope, 1);
+        let source = left.condition.or(&right.condition);
+        let rename = |choice: &ChoiceKey<'static>| {
+            let ValueOccurrence::Value(value) = choice.occurrence else {
+                unreachable!()
+            };
+            ChoiceKey::new(
+                ValueOccurrence::Argument(value.as_u32()),
+                choice.path.clone(),
+            )
+        };
+        let expected =
+            Condition::choice_bits(&Arc::new(rename(&left.condition.choices[0])), 16, |_| false)
+                .or(&Condition::choice_bits(
+                    &Arc::new(rename(&right.condition.choices[0])),
+                    16,
+                    |bit| bit == 0,
+                ));
+        let before = intern_attempts();
+        let renamed = source.map_keys(rename);
+        assert_eq!(renamed, expected);
+        assert_ne!(renamed.choices, source.choices);
+        assert_eq!(
+            intern_attempts(),
+            before,
+            "unchanged slot numbering rebuilt the decision"
+        );
+    }
+
+    #[test]
+    fn alignment_reuses_graphs_when_only_unused_table_suffixes_are_added() {
+        let scope = BinderScope::default();
+        let left = selected(&scope, 0);
+        let right = left.condition.or(&selected(&scope, 1).condition);
+        let before = intern_attempts();
+        let (choices, leaves, aligned_left, aligned_right) = left.condition.aligned(&right);
+        assert_eq!(choices.as_slice(), &*right.choices);
+        assert_eq!(leaves.as_slice(), &*right.leaves);
+        assert_eq!(aligned_left, left.condition.decision);
+        assert_eq!(aligned_right, right.decision);
+        assert_eq!(
+            intern_attempts(),
+            before,
+            "adding unused table slots rebuilt the decision"
+        );
+    }
+
+    #[test]
+    fn table_remapping_preserves_reordered_merged_and_regrouped_choices() {
+        let choice = |occurrence, index| {
+            Arc::new(ChoiceKey::new(
+                ValueOccurrence::Argument(occurrence),
+                StructuralPath::new(vec![Projection::Index(IndexExpr::Const(index))]),
+            ))
+        };
+        let original = [choice(0, 0), choice(1, 1)];
+        let source = Condition::choice_bits(&original[0], 2, |_| false)
+            .and(&Condition::choice_bits(&original[1], 2, |bit| bit == 0));
+        for renamed in [
+            [choice(1, 0), choice(0, 1)],
+            [choice(0, 0), choice(0, 1)],
+            [choice(0, 0), choice(0, 0)],
+        ] {
+            let expected = Condition::choice_bits(&renamed[0], 2, |_| false)
+                .and(&Condition::choice_bits(&renamed[1], 2, |bit| bit == 0));
+            let mapped = source.map_keys(|key| {
+                let position = original.iter().position(|choice| **choice == *key).unwrap();
+                (*renamed[position]).clone()
+            });
+            assert_eq!(mapped, expected);
+        }
+        let complemented = source.map_leaves(|leaf| Arc::new(leaf.not()));
+        assert_eq!(complemented, Condition::constant(true).without(&source));
+        let constant = source.map_leaves(|_| constant_leaf(true));
+        assert!(constant.is_always());
+        assert!(constant.choices.is_empty());
     }
 
     #[test]
