@@ -1657,3 +1657,67 @@ const fn inherent() -> u8 { Marker<3>::OTHER.value }
         assert_eq!(value.to_usize(), Some(expected));
     }
 }
+
+/// A generic impl's constant is evaluated in a body whose local types are
+/// substituted but not normalized, like `(<u8 as Tr>::A, u16)`. CTFE must
+/// label the value with the normalized type, so that a concrete aggregate
+/// embedding it passes the child-type check.
+#[test]
+fn semantic_ctfe_normalizes_generic_impl_aggregate_types() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_ctfe.fe".into(),
+        r#"
+trait Tr {
+    type A
+    const V: Self::A
+}
+impl Tr for u8 {
+    type A = (u32, u8)
+    const V: (u32, u8) = (5, 6)
+}
+
+pub struct W<T> {}
+trait Tr2 {
+    type B
+    const P: Self::B
+}
+impl<T> Tr2 for W<T> where T: Tr {
+    type B = (T::A, u16)
+    const P: Self::B = (T::V, 1)
+}
+
+trait Tr3 {
+    type C
+    const Q: Self::C
+}
+impl Tr3 for u16 {
+    type C = (<W<u8> as Tr2>::B, bool)
+    const Q: Self::C = (<W<u8> as Tr2>::P, true)
+}
+
+const fn answer() -> u32 {
+    <u16 as Tr3>::Q.0.0.0
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    let func = find_func(&db, top_mod, "answer");
+    let value = match eval_body_owner_const(
+        &db,
+        BodyOwner::Func(func),
+        GenericSubst::for_owner(&db, func.into(), Vec::new()),
+    ) {
+        EvalOutcome::Ready(value) => value,
+        outcome => panic!("{outcome:?}"),
+    };
+    let SemConstValue::Scalar {
+        value: SemConstScalar::Int { value },
+        ..
+    } = value.value(&db)
+    else {
+        panic!("expected scalar");
+    };
+    assert_eq!(value.to_usize(), Some(5));
+}

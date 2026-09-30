@@ -218,13 +218,9 @@ fn verify_sem_const_children<'db>(
         let actual_ty = sem_const_ty(db, child);
         let actual_ty = actual_ty.as_view(db).unwrap_or(actual_ty);
         let expected_ty = expected_ty.as_view(db).unwrap_or(expected_ty);
-        // A child evaluated in a generic impl may keep an unnormalized
-        // projection in its type, e.g. `(Item::S, String<2>)` for
-        // `DynArray<Item>`, while the aggregate names the normalized type.
         if !expected_ty.has_param(db)
             && !expected_ty.has_var(db)
             && !expected_ty.has_projection(db)
-            && !actual_ty.has_projection(db)
             && !expected_ty.has_hole(db)
             && actual_ty != expected_ty
             && const_identity_ty(db, actual_ty) != const_identity_ty(db, expected_ty)
