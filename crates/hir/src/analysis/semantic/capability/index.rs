@@ -165,22 +165,38 @@ impl BinderScope {
         } else {
             used().into_iter().collect()
         };
-        let mut destination = parent.clone();
-        let entries = self
+        self.ranked_existentials(parent, |index| used.contains(&index).then_some(()))
+    }
+
+    /// Compact the clause-local binders that `rank` keeps, ordered by rank and
+    /// then by lexical level. Binders without a rank occur nowhere.
+    pub fn ranked_existentials<'db, R: Ord>(
+        &self,
+        parent: &Self,
+        rank: impl Fn(IndexExpr<'db>) -> Option<R>,
+    ) -> IndexSubst<'db> {
+        self.existential_extension_of(parent)
+            .expect("clause scope must extend its owner");
+        let mut kept = Vec::new();
+        let mut entries = Vec::new();
+        for index in self
             .variables()
             .filter(|index| parent.validate(*index).is_err())
-            .map(|index| {
-                let target = if used.contains(&index) {
-                    let (scope, target) = destination.bind(IndexNamespace::Existential);
-                    destination = scope;
-                    target
-                } else {
-                    // This variable occurs in neither the guard nor the payload.
-                    IndexExpr::Const(0)
-                };
-                (index, target)
-            })
-            .collect::<Vec<_>>();
+        {
+            match rank(index) {
+                Some(rank) => kept.push((rank, index)),
+                // This variable occurs in neither the guard nor the payload.
+                None => entries.push((index, IndexExpr::Const(0))),
+            }
+        }
+        // A stable sort keeps lexical order within a rank.
+        kept.sort_by(|(left, _), (right, _)| left.cmp(right));
+        let mut destination = parent.clone();
+        entries.extend(kept.into_iter().map(|(_, index)| {
+            let (scope, target) = destination.bind(IndexNamespace::Existential);
+            destination = scope;
+            (index, target)
+        }));
         IndexSubst::new(self, &destination, entries).expect("canonical clause binders")
     }
 

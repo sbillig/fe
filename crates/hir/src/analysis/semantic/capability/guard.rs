@@ -1763,27 +1763,32 @@ impl<'db> Guard<'db> {
     /// Eliminate clause-local witnesses that are observable only through scalar
     /// constraints. A witness indexing an enum choice remains observable: its
     /// quantification would require also quantifying that indexed choice.
+    /// Projection can make such a choice redundant, exposing its witness, so it
+    /// repeats until no hidden witness is projectable.
     pub fn project_witnesses(&self, hidden: impl Fn(IndexExpr<'db>) -> bool) -> Self {
-        let indexed: BTreeSet<_> = self
-            .condition
-            .keys()
-            .flat_map(|choice| choice.path.indices())
-            .collect();
-        let projected: BTreeSet<_> = self
-            .indices()
-            .into_iter()
-            .filter(|index| hidden(*index) && !indexed.contains(index))
-            .collect();
-        if projected.is_empty() {
-            return self.clone();
+        let mut guard = self.clone();
+        loop {
+            let indexed: BTreeSet<_> = guard
+                .condition
+                .keys()
+                .flat_map(|choice| choice.path.indices())
+                .collect();
+            let projected: BTreeSet<_> = guard
+                .indices()
+                .into_iter()
+                .filter(|index| hidden(*index) && !indexed.contains(index))
+                .collect();
+            if projected.is_empty() {
+                return guard;
+            }
+            guard = Self::canonical(
+                &guard.scope,
+                guard.condition.map_leaves(|condition| {
+                    Arc::new(condition.project(|index| projected.contains(&index)))
+                }),
+            )
+            .expect("existential projection preserves feasibility");
         }
-        Self::canonical(
-            &self.scope,
-            self.condition.map_leaves(|condition| {
-                Arc::new(condition.project(|index| projected.contains(&index)))
-            }),
-        )
-        .expect("existential projection preserves feasibility")
     }
 
     pub fn implies(&self, other: &Self) -> bool {

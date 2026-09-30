@@ -38,6 +38,7 @@ use crate::{
                 path::{Projection, RegionPath, StructuralPath},
                 region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace, substitute_clause},
                 semantics::{CapabilityClass, CapabilitySemantics},
+                separation::SeparationSet,
                 shape::{ShapeChildren, ShapeId},
                 source::{InputOrigin, SourceExpr},
                 state::{BorrowState, CapabilityValue, CapabilityValues},
@@ -88,6 +89,7 @@ impl<'db> BorrowSummary<'db> {
     /// local order through this injective renaming and subsequent call expansion.
     fn abstract_choices(
         mut self,
+        db: &'db dyn HirAnalysisDb,
         values: &mut SourceValues<'db>,
         choices: BTreeSet<ValueOccurrence>,
     ) -> Self {
@@ -98,12 +100,11 @@ impl<'db> BorrowSummary<'db> {
                 (occurrence, index.try_into().expect("summary choice count"))
             })
             .collect();
-        let map = |guard: &Guard<'db>| {
-            guard.map_occurrences(|occurrence| match occurrence {
-                ValueOccurrence::Argument(_) | ValueOccurrence::Summary => occurrence,
-                _ => ValueOccurrence::SummaryChoice(choices[&occurrence]),
-            })
+        let rename = |occurrence: ValueOccurrence| match occurrence {
+            ValueOccurrence::Argument(_) | ValueOccurrence::Summary => occurrence,
+            _ => ValueOccurrence::SummaryChoice(choices[&occurrence]),
         };
+        let map = |guard: &Guard<'db>| guard.map_occurrences(rename);
         for value in std::iter::once(&mut self.result)
             .chain(self.mutable_inputs.iter_mut().map(|input| &mut input.value))
             .chain(
@@ -148,6 +149,7 @@ impl<'db> BorrowSummary<'db> {
                 }),
             );
         }
+        self.loan_requirements = self.loan_requirements.map_occurrences(db, rename);
         self.accesses.sort();
         self.availability.incoming.sort();
         self
@@ -488,13 +490,30 @@ impl<'db> Borrowck<'db> {
                 ]);
             external.extend(
                 regions
-                    .flat_map(|region| region.clauses())
-                    .filter_map(|clause| {
-                        SourceExpr::from_place(&clause.payload).map(|source| {
+                    .flat_map(|region| {
+                        region
+                            .clauses()
+                            .iter()
+                            .map(|clause| (&clause.guard, &clause.payload))
+                    })
+                    .chain(
+                        summary
+                            .loan_requirements
+                            .clauses()
+                            .iter()
+                            .flat_map(|clause| {
+                                [
+                                    (&clause.guard, &clause.payload.protected),
+                                    (&clause.guard, &clause.payload.access),
+                                ]
+                            }),
+                    )
+                    .filter_map(|(guard, place)| {
+                        SourceExpr::from_place(place).map(|source| {
                             (
                                 source.source,
-                                clause.guard.scope().clone(),
-                                Some(clause.guard.clone()),
+                                guard.scope().clone(),
+                                Some(guard.clone()),
                                 PortUse::Other,
                             )
                         })
@@ -1193,6 +1212,7 @@ impl<'db> Borrowck<'db> {
                 &handles,
                 false,
             )?,
+            loan_requirements: SeparationSet::empty(&BinderScope::default()),
             accesses,
             availability,
             may_return,
@@ -1203,7 +1223,7 @@ impl<'db> Borrowck<'db> {
             scalar_inputs,
             requirements,
         };
-        let summary = summary.abstract_choices(&mut values, choices);
+        let summary = summary.abstract_choices(self.db, &mut values, choices);
         self.verify_summary(&summary)?;
         #[cfg(feature = "borrowck-profile")]
         drop(profile);
@@ -1900,6 +1920,7 @@ impl<'db> Borrowck<'db> {
                 }
             }
         }
+        self.verify_loan_requirements(&summary.loan_requirements)?;
         for region in summary
             .availability
             .incoming
@@ -1978,6 +1999,69 @@ impl<'db> Borrowck<'db> {
                     false,
                 )?;
                 self.verify_summary_guard(&leaf.guard, &leaf.payload)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Each relation is closed over its own witnesses: both endpoints are
+    /// caller-visible sources, its kinds can conflict, its extent uses no local
+    /// index, and every suspension slice projects its protected place.
+    fn verify_loan_requirements(
+        &self,
+        requirements: &SeparationSet<'db>,
+    ) -> Result<(), SemanticDiagnostic<'db>> {
+        let invalid = |message: &str| {
+            self.internal_diag(
+                SemOrigin::Body(self.body.template_owner),
+                format!("invalid separation requirement: {message}"),
+            )
+        };
+        if requirements.scope() != &BinderScope::default() {
+            return Err(invalid("it retains a lexical scope"));
+        }
+        for clause in requirements.clauses() {
+            let separation = &clause.payload;
+            let scope = clause.guard.scope();
+            if separation.protected_kind == BorrowKind::Ref
+                && separation.access_kind == BorrowKind::Ref
+            {
+                return Err(invalid("shared kinds cannot conflict"));
+            }
+            let endpoint = |place| {
+                let source = SourceExpr::from_place(place)
+                    .ok_or_else(|| invalid("it retains local storage"))?;
+                self.verify_source(&source, scope, None, false)?;
+                self.verify_summary_guard(&clause.guard, &source)?;
+                Ok::<_, SemanticDiagnostic<'db>>(source)
+            };
+            let protected = endpoint(&separation.protected)?;
+            endpoint(&separation.access)?;
+            let local = |index: IndexExpr<'db>| match index {
+                IndexExpr::FormalValue(param) => !self
+                    .summary_param_ty(param)
+                    .is_some_and(|ty| ty.as_view(self.db).unwrap_or(ty).is_integral(self.db)),
+                IndexExpr::Const(_) | IndexExpr::TypeConst(_) => false,
+                IndexExpr::Bound(_) => scope.validate(index).is_err(),
+                IndexExpr::Runtime(_) | IndexExpr::Iteration(_) => true,
+            };
+            if separation.extent.indices().any(local) {
+                return Err(invalid("its extent retains a local index"));
+            }
+            for slice in &separation.suspended {
+                if slice.guard.scope() != scope || slice.payload.indices().any(local) {
+                    return Err(invalid("a suspension slice is not in the clause scope"));
+                }
+                self.verify_summary_guard(&slice.guard, &protected)?;
+                let projected = SourceExpr {
+                    path: protected.path.concat(&slice.payload),
+                    ..protected.clone()
+                };
+                if projected.referent_ty(self.db, self.instance).is_none() {
+                    return Err(invalid(
+                        "a suspension slice does not project its protected place",
+                    ));
+                }
             }
         }
         Ok(())
@@ -3280,6 +3364,7 @@ pub(super) fn signature_summary<'db>(
     }
     let summary = BorrowSummary {
         native_requirements: RegionSet::empty(&BinderScope::default()),
+        loan_requirements: SeparationSet::empty(&BinderScope::default()),
         may_return: opaque && !instance.is_intrinsically_never_returning(db),
         result,
         scalar_result: None,
@@ -3302,9 +3387,15 @@ mod tests {
             semantic::{
                 VariantIndex,
                 capability::{
-                    DECISION_INTERN_ATTEMPTS, external::ProviderStorage, guard::ChoiceKey,
-                    handle::HandleAddressSpace, region::CANONICALIZED_REGION_CLAUSES,
-                    source::InputSource, test_roots,
+                    DECISION_INTERN_ATTEMPTS,
+                    external::ProviderStorage,
+                    guard::ChoiceKey,
+                    handle::HandleAddressSpace,
+                    region::CANONICALIZED_REGION_CLAUSES,
+                    repack::{ReferentRepackId, ReferentViews},
+                    separation::Separation,
+                    source::InputSource,
+                    test_roots,
                 },
                 identity_semantic_instance_key,
                 normalized::{NRootId, ReadMode},
@@ -3312,6 +3403,7 @@ mod tests {
             },
             ty::{
                 corelib::{resolve_core_trait, resolve_lib_func_path},
+                trait_resolution::PredicateListId,
                 ty_check::{BodyOwner, EffectArgLayoutView, EffectPassMode},
             },
         },
@@ -3470,6 +3562,242 @@ fn raw(_ ptr: *Outer) {}
                 "{name}: widened forged transport contract"
             );
         }
+    }
+
+    #[test]
+    fn loan_requirements_are_verified_as_closed_relations() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "separation_verification.fe".into(),
+            r#"
+struct Pair { left: u256, right: u256 }
+fn relate(_ held: mut Pair, _ other: mut Pair, _ count: u256) {}
+"#,
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "relate"))),
+        );
+        let checker = Borrowck::new(&db, instance).unwrap();
+        let referent = |param| {
+            checker
+                .inventory
+                .inputs
+                .iter()
+                .find(|target| {
+                    matches!(&target.source.origin, ExternalOrigin::Input(input)
+                        if input.param() == param && input.dereferences().is_empty())
+                        && target.source.dereferences().is_empty()
+                })
+                .expect("direct input referent")
+                .source
+                .clone()
+        };
+        let field = |index| Projection::Field(FieldIndex(index));
+        let scope = BinderScope::default();
+        let always = Guard::always(&scope);
+        let place = |root, path: Vec<_>| SymbolicPlace {
+            root,
+            path: RegionPath::new(path),
+            views: Default::default(),
+        };
+        let valid = Separation {
+            protected: place(RegionRoot::External(referent(0)), vec![]),
+            protected_kind: BorrowKind::Mut,
+            access: place(RegionRoot::External(referent(1)), vec![field(0)]),
+            access_kind: BorrowKind::Ref,
+            extent: AccessExtent::Typed,
+            suspended: Box::new([Guarded {
+                guard: always.clone(),
+                payload: RegionPath::new([field(1)]),
+            }]),
+        };
+        let requirements = |guard, separation| {
+            SeparationSet::new(
+                &db,
+                &scope,
+                [Guarded {
+                    guard,
+                    payload: separation,
+                }],
+            )
+        };
+        let slice = |guard| {
+            Box::new([Guarded {
+                guard,
+                payload: RegionPath::new([field(1)]),
+            }])
+        };
+        let (witnessed, witness) = scope.bind(IndexNamespace::Existential);
+        for (name, guard, separation) in [
+            ("valid", always.clone(), valid.clone()),
+            (
+                "integral formal extent",
+                always.clone(),
+                Separation {
+                    extent: AccessExtent::Bytes(IndexExpr::FormalValue(2)),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "clause-owned extent",
+                Guard::always(&witnessed)
+                    .with_disequality(witness, IndexExpr::Const(0))
+                    .unwrap(),
+                // Slice conditions live in the clause scope.
+                Separation {
+                    extent: AccessExtent::Bytes(witness),
+                    suspended: slice(Guard::always(&witnessed)),
+                    ..valid.clone()
+                },
+            ),
+        ] {
+            assert!(
+                checker
+                    .verify_loan_requirements(&requirements(guard, separation))
+                    .is_ok(),
+                "{name}"
+            );
+        }
+        let runtime = IndexExpr::Runtime(NValueId::from_u32(0));
+        let local_choice = ChoiceKey::new(
+            ValueOccurrence::Value(NValueId::from_u32(0)),
+            StructuralPath::default(),
+        );
+        let mut malformed = referent(1);
+        malformed.contract =
+            ReferentContract::new(&db, TyId::u256(&db), malformed.contract.address_space);
+        let mut views = ReferentViews::default();
+        views.append(
+            &db,
+            0,
+            ReferentRepackId::new(
+                &db,
+                TyId::u8(&db),
+                TyId::u256(&db),
+                module.scope(),
+                PredicateListId::empty_list(&db),
+            ),
+        );
+        for (name, guard, invalid) in [
+            (
+                "shared kinds",
+                always.clone(),
+                Separation {
+                    protected_kind: BorrowKind::Ref,
+                    ..valid.clone()
+                },
+            ),
+            (
+                "local endpoint",
+                always.clone(),
+                Separation {
+                    access: place(test_roots::local(&db, NRootId::from_u32(0)), vec![]),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "malformed endpoint contract",
+                always.clone(),
+                Separation {
+                    access: place(RegionRoot::External(malformed), vec![field(0)]),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "invalid endpoint view",
+                always.clone(),
+                Separation {
+                    protected: SymbolicPlace {
+                        views,
+                        ..valid.protected.clone()
+                    },
+                    ..valid.clone()
+                },
+            ),
+            (
+                "local extent",
+                always.clone(),
+                Separation {
+                    extent: AccessExtent::Bytes(runtime),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "nonintegral formal extent",
+                always.clone(),
+                Separation {
+                    extent: AccessExtent::Bytes(IndexExpr::FormalValue(0)),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "missing formal extent",
+                always.clone(),
+                Separation {
+                    extent: AccessExtent::Bytes(IndexExpr::FormalValue(9)),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "local guard occurrence",
+                always.with_boolean(local_choice, true).unwrap(),
+                valid.clone(),
+            ),
+            (
+                "local guard index",
+                always
+                    .with_disequality(runtime, IndexExpr::Const(1))
+                    .unwrap(),
+                valid.clone(),
+            ),
+            (
+                "nonintegral guard index",
+                always
+                    .with_disequality(IndexExpr::FormalValue(0), IndexExpr::Const(1))
+                    .unwrap(),
+                valid.clone(),
+            ),
+            (
+                "local slice condition",
+                always.clone(),
+                Separation {
+                    suspended: slice(
+                        always
+                            .with_disequality(runtime, IndexExpr::Const(1))
+                            .unwrap(),
+                    ),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "unprojected slice",
+                always.clone(),
+                Separation {
+                    suspended: Box::new([Guarded {
+                        guard: always.clone(),
+                        payload: RegionPath::new([field(7)]),
+                    }]),
+                    ..valid.clone()
+                },
+            ),
+        ] {
+            assert!(
+                checker
+                    .verify_loan_requirements(&requirements(guard, invalid))
+                    .is_err(),
+                "{name}"
+            );
+        }
+        let (lexical, _) = scope.bind(IndexNamespace::Value);
+        assert!(
+            checker
+                .verify_loan_requirements(&SeparationSet::empty(&lexical))
+                .is_err(),
+            "lexical scope"
+        );
     }
 
     #[test]

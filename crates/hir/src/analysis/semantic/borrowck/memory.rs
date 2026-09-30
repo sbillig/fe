@@ -25,6 +25,7 @@ use crate::analysis::{
             path::{Projection, RegionPath, StructuralPath},
             region::{RegionRoot, RegionSet},
             semantics::CapabilityClass,
+            separation::SeparationSet,
             source::{InputOrigin, SourceExpr},
             state::BorrowState,
             value::{Guarded, ValueInterner, ValueLimits},
@@ -405,6 +406,7 @@ impl<'db> Borrowck<'db> {
         }
         Ok(Some(BorrowSummary {
             native_requirements: RegionSet::empty(&scope),
+            loan_requirements: SeparationSet::empty(&scope),
             may_return: !self.instance.is_intrinsically_never_returning(self.db),
             result,
             scalar_result: None,

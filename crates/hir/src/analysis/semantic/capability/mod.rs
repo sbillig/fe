@@ -17,6 +17,7 @@ pub(crate) mod profile;
 pub mod region;
 pub mod repack;
 pub mod semantics;
+pub mod separation;
 pub mod shape;
 pub mod source;
 pub mod state;

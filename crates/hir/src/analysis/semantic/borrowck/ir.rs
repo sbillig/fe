@@ -10,6 +10,7 @@ use crate::analysis::{
             guard::Guard,
             index::BinderScope,
             region::RegionSet,
+            separation::SeparationSet,
             source::SourceExpr,
             value::ValueId,
         },
@@ -39,6 +40,9 @@ pub struct BorrowSummary<'db> {
     pub availability: AvailabilitySummary<'db>,
     /// Conditional overwrites that must be disjoint before a native capability is used.
     pub native_requirements: RegionSet<'db>,
+    /// Separation between accesses and borrows live across them that this body
+    /// could not prove. Callers establish it physically, never by authority.
+    pub loan_requirements: SeparationSet<'db>,
 }
 
 /// A normal-return ownership transformer, separate from unordered access history.
