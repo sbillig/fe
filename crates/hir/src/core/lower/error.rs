@@ -2,7 +2,7 @@ use parser::ast::{self, prelude::*};
 use salsa::Accumulator as _;
 
 use super::{
-    AbiFieldContext, AbiFieldDiagnostic, FileLowerCtxt,
+    AbiFieldContext, AbiFieldDiagnostic, AbiFieldDiagnosticKind, FileLowerCtxt,
     attr::{has_named_attr, lower_attrs_without_named, named_attr_specs},
     hir_builder::HirBuilder,
     msg::{create_head_size_assoc_const, create_is_dynamic_assoc_const, create_payload_size_func},
@@ -218,6 +218,7 @@ fn parse_error_fields<'db>(
 
         let TypeKind::Path(Partial::Present(path)) = ty.data(db) else {
             AbiFieldDiagnostic {
+                kind: AbiFieldDiagnosticKind::Unsupported,
                 context: AbiFieldContext::Error,
                 ty: ty.pretty_print(db),
                 file,

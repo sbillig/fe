@@ -2,7 +2,7 @@ use parser::ast::{self, prelude::*};
 use salsa::Accumulator as _;
 
 use super::{
-    AbiFieldContext, AbiFieldDiagnostic, FileLowerCtxt,
+    AbiFieldContext, AbiFieldDiagnostic, AbiFieldDiagnosticKind, FileLowerCtxt,
     attr::{
         AttrForm, AttrRule, AttrTarget, has_named_attr, lower_attrs_without_named,
         named_attr_specs, validate_attr_rules,
@@ -242,6 +242,7 @@ fn parse_event_fields<'db>(
         // supported as event fields.
         let TypeKind::Path(Partial::Present(_)) = ty.data(db) else {
             AbiFieldDiagnostic {
+                kind: AbiFieldDiagnosticKind::Unsupported,
                 context: AbiFieldContext::Event,
                 ty: ty.pretty_print(db),
                 file,

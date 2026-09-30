@@ -777,26 +777,45 @@ impl DiagnosticVoucher for crate::EventError {
 
 impl DiagnosticVoucher for crate::AbiFieldDiagnostic {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        use crate::AbiFieldContext;
+        use crate::{AbiFieldContext, AbiFieldDiagnosticKind};
 
         let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
-        let (diagnostic_pass, code, field_context) = match self.context {
-            AbiFieldContext::Event => (DiagnosticPass::EventLower, 7, "an event"),
-            AbiFieldContext::Error => (DiagnosticPass::ErrorLower, 4, "a custom error"),
+        let (diagnostic_pass, field_context) = match self.context {
+            AbiFieldContext::Event => (DiagnosticPass::EventLower, "an event"),
+            AbiFieldContext::Error => (DiagnosticPass::ErrorLower, "a custom error"),
+        };
+        let code = match (self.kind, self.context) {
+            (AbiFieldDiagnosticKind::Unsupported, AbiFieldContext::Event) => 7,
+            (AbiFieldDiagnosticKind::Unsupported, AbiFieldContext::Error) => 4,
+            (AbiFieldDiagnosticKind::MissingSolCompat, AbiFieldContext::Event) => 11,
+            (AbiFieldDiagnosticKind::MissingSolCompat, AbiFieldContext::Error) => 7,
+        };
+        let ty = &self.ty;
+        let (message, label, note) = match self.kind {
+            AbiFieldDiagnosticKind::Unsupported => (
+                "unsupported ABI field type",
+                format!("`{ty}` is not supported as {field_context} field"),
+                "tuples are not supported in event or custom error fields; use a struct type for grouped data"
+                    .to_string(),
+            ),
+            AbiFieldDiagnosticKind::MissingSolCompat => (
+                "ABI field type has no Solidity type name",
+                format!("`{ty}` does not implement `SolCompat`"),
+                format!(
+                    "the signature of {field_context} names the Solidity type of each field, which `std::abi::SolCompat` provides"
+                ),
+            ),
         };
 
         CompleteDiagnostic::new(
             Severity::Error,
-            "unsupported ABI field type".to_string(),
+            message.to_string(),
             vec![SubDiagnostic::new(
                 LabelStyle::Primary,
-                format!("`{}` is not supported as {field_context} field", self.ty),
+                label,
                 Some(primary_span),
             )],
-            vec![
-                "tuples are not supported in event or custom error fields; use a struct type for grouped data"
-                    .to_string(),
-            ],
+            vec![note],
             GlobalErrorCode::new(diagnostic_pass, code),
         )
     }
@@ -843,18 +862,28 @@ impl DiagnosticVoucher for crate::AbiStructDiagnostic {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         use crate::AbiStructDiagnosticKind;
 
-        let (code, message, label, note) = match self.kind {
+        let (code, message, label, note) = match &self.kind {
             AbiStructDiagnosticKind::GenericStruct => (
                 1,
                 "`#[abi]` structs must be non-generic",
-                "generics are not supported on `#[abi]` structs",
+                "generics are not supported on `#[abi]` structs".to_string(),
                 "remove generic parameters from the struct",
             ),
             AbiStructDiagnosticKind::AttrConflict => (
                 2,
                 "`#[abi]` cannot be combined with `#[event]` or `#[error]`",
-                "this struct already gets an ABI encoding from `#[event]` or `#[error]`",
+                "this struct already gets an ABI encoding from `#[event]` or `#[error]`"
+                    .to_string(),
                 "remove `#[abi]`",
+            ),
+            AbiStructDiagnosticKind::UnsupportedFieldType { ty, missing } => (
+                4,
+                "unsupported `#[abi]` struct field type",
+                format!(
+                    "`{ty}` does not implement `{}`",
+                    missing.iter().format("`, `")
+                ),
+                "`#[abi]` struct fields must implement `AbiSize`, `AbiSpan<Sol>`, `Encode<Sol>` and `Decode<Sol>`, as ABI types and other `#[abi]` structs do",
             ),
         };
 
@@ -863,7 +892,7 @@ impl DiagnosticVoucher for crate::AbiStructDiagnostic {
             message.to_string(),
             vec![SubDiagnostic::new(
                 LabelStyle::Primary,
-                label.to_string(),
+                label,
                 Some(Span::new(self.file, self.primary_range, SpanKind::Original)),
             )],
             vec![note.to_string()],

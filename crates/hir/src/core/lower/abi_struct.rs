@@ -31,11 +31,16 @@ pub struct AbiStructDiagnostic {
     pub primary_range: parser::TextRange,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AbiStructDiagnosticKind {
     GenericStruct,
     /// `#[abi]` together with `#[event]` or `#[error]`.
     AttrConflict,
+    /// A field whose type lacks traits the generated codec needs.
+    UnsupportedFieldType {
+        ty: String,
+        missing: Vec<&'static str>,
+    },
 }
 
 /// Returns true for a struct annotated with `#[abi]`.

@@ -1,5 +1,5 @@
 // `#[abi]` structs encode and decode like the Solidity tuple of their fields.
-use core::abi::{AbiDecoder, AbiSize, Decode, Encode, store_word}
+use core::abi::{AbiDecoder, AbiSize, AbiSpan, ByteInput, Decode, Encode, store_word}
 use core::ptr::{self, MemBuffer}
 use std::abi::{Bytes, DynArray, MemVec, Sol, StaticAbi, canonical_dyn_array, dyn_array_from, sol}
 use std::abi::sol::{Int24, Uint24}
@@ -81,6 +81,41 @@ impl Encode<Sol> for FakeStatic {
 }
 
 impl StaticAbi for FakeStatic {}
+
+// ABI-encodable, but without a Solidity type name.
+pub struct Word {
+    pub value: u256,
+}
+
+impl AbiSize for Word {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl AbiSpan<Sol> for Word {
+    fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        pos + 32
+    }
+}
+
+impl Decode<Sol> for Word {
+    fn decode_payload<D: AbiDecoder<Sol>>(_ d: mut D) -> Self {
+        Word { value: d.read_word() }
+    }
+}
+
+impl Encode<Sol> for Word {
+    fn encode(own self, _ ptr: *u8) {
+        store_word(ptr, value: self.value)
+    }
+}
+
+// Gets a codec; only `SolCompat` does not apply.
+#[abi]
+pub struct WordPair {
+    pub a: Word,
+    pub b: Word,
+}
 
 msg M {
     #[selector = sol("key((address,uint24,int24))")]
@@ -364,4 +399,13 @@ fn abi_struct_wide_tuple_fields_round_trip() uses (mem: mut RawMem) {
     let fives = <DynArray<(u8, u16, u32, u64, Bytes)> as Decode<Sol>>::decode_from(fives.span(), 0)
     assert(fives.get(0).4.byte_at(0) == 0xaa)
     assert(fives.get(1).3 == 8)
+}
+
+#[test]
+fn abi_struct_without_sol_compat_field_round_trips() uses (mem: mut RawMem) {
+    let encoded = encode_abi_payload(WordPair { a: Word { value: 1 }, b: Word { value: 2 } })
+    assert(encoded.len() == 64)
+    let decoded = <WordPair as Decode<Sol>>::decode_from_bounded(encoded.span(), 0, 64)
+    assert(decoded.a.value == 1)
+    assert(decoded.b.value == 2)
 }

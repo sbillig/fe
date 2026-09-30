@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/abi_field_without_sol_compat.fe
+---
+error[10-0011]: ABI field type has no Solidity type name
+   ┌─ abi_field_without_sol_compat.fe:41:14
+   │
+41 │     wrapper: Wrapper,
+   │              ^^^^^^^ `Wrapper` does not implement `SolCompat`
+   │
+   = the signature of an event names the Solidity type of each field, which `std::abi::SolCompat` provides
+
+error[10-0011]: ABI field type has no Solidity type name
+   ┌─ abi_field_without_sol_compat.fe:46:11
+   │
+46 │     word: Word,
+   │           ^^^^ `Word` does not implement `SolCompat`
+   │
+   = the signature of an event names the Solidity type of each field, which `std::abi::SolCompat` provides
+
+error[13-0007]: ABI field type has no Solidity type name
+   ┌─ abi_field_without_sol_compat.fe:51:14
+   │
+51 │     wrapper: Wrapper,
+   │              ^^^^^^^ `Wrapper` does not implement `SolCompat`
+   │
+   = the signature of a custom error names the Solidity type of each field, which `std::abi::SolCompat` provides

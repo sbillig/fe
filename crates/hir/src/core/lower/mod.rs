@@ -20,7 +20,7 @@ use crate::{
     },
     span::HirOrigin,
 };
-pub use abi_field::{AbiFieldContext, AbiFieldDiagnostic};
+pub use abi_field::{AbiFieldContext, AbiFieldDiagnostic, AbiFieldDiagnosticKind};
 pub use abi_struct::{AbiStructDiagnostic, AbiStructDiagnosticKind};
 pub use attr::{AttrMisuseError, AttrMisuseErrorKind};
 pub use error::{ErrorDiagnostic, ErrorDiagnosticKind};

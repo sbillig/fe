@@ -402,6 +402,172 @@ pub(crate) fn non_copy_array_abi_fields<'db>(
     fields
 }
 
+/// A field of an `#[abi]` struct whose type lacks ABI traits that the
+/// generated codec needs.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+pub(crate) struct UnsupportedAbiStructField<'db> {
+    pub(crate) ast_struct: parser::ast::AstPtr<parser::ast::Struct>,
+    pub(crate) field_idx: usize,
+    pub(crate) field_ty: TyId<'db>,
+    pub(crate) missing: Vec<&'static str>,
+}
+
+/// How the fields of the module's `#[abi]` structs meet the requirements of
+/// their generated impls.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, salsa::Update)]
+pub(crate) struct AbiStructFieldChecks<'db> {
+    /// Fields lacking a codec trait, each reported once at the field.
+    pub(crate) unsupported: Vec<UnsupportedAbiStructField<'db>>,
+    /// Structs whose generated impls go undiagnosed, because their fields or
+    /// their recursive type are reported instead.
+    pub(crate) reported_at_source: Vec<DesugaredOrigin>,
+    /// Structs with a field that has no Solidity type name. Their generated
+    /// `SolCompat` impl does not apply, which is only an error where a type
+    /// name is needed, such as for an event field.
+    pub(crate) without_sol_compat: Vec<DesugaredOrigin>,
+}
+
+#[salsa::tracked(return_ref)]
+pub(crate) fn abi_struct_field_checks<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+) -> AbiStructFieldChecks<'db> {
+    let mut checks = AbiStructFieldChecks::default();
+    let non_copy_fields = non_copy_array_abi_fields(db, top_mod);
+    for struct_ in top_mod.all_structs(db).iter().copied() {
+        let HirOrigin::Desugared(origin @ DesugaredOrigin::AbiStruct(abi_origin)) =
+            struct_.origin(db)
+        else {
+            continue;
+        };
+        let fields = struct_.hir_fields(db).data(db);
+        // Lowering generates no impls for these and reports why.
+        if GenericParamOwner::Struct(struct_)
+            .params(db)
+            .next()
+            .is_some()
+            || fields
+                .iter()
+                .any(|field| field.name.to_opt().is_none() || field.type_ref().to_opt().is_none())
+        {
+            continue;
+        }
+        if AdtRef::from(struct_)
+            .as_adt(db)
+            .recursive_cycle(db)
+            .is_some()
+        {
+            checks.reported_at_source.push(origin.clone());
+            continue;
+        }
+        let scope = struct_.scope();
+        let (
+            Some(sol_ty),
+            Some(abi_size),
+            Some(abi_span),
+            Some(encode),
+            Some(decode),
+            Some(sol_compat),
+        ) = (
+            corelib::resolve_lib_type_path(db, scope, "std::abi::Sol"),
+            corelib::resolve_core_trait(db, scope, &["abi", "AbiSize"]),
+            corelib::resolve_core_trait(db, scope, &["abi", "AbiSpan"]),
+            corelib::resolve_core_trait(db, scope, &["abi", "Encode"]),
+            corelib::resolve_core_trait(db, scope, &["abi", "Decode"]),
+            corelib::resolve_lib_trait_path(db, scope, "std::abi::SolCompat"),
+        )
+        else {
+            continue;
+        };
+        let solve_cx = TraitSolveCx::new(db, scope);
+        let unsat = |trait_, args| {
+            matches!(
+                is_goal_satisfiable(
+                    db,
+                    solve_cx,
+                    trait_def::TraitInstId::new_simple(db, trait_, args),
+                ),
+                GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation { .. }
+            )
+        };
+        let assumptions = crate::semantic::constraints_for(db, struct_.into());
+        let mut reported_at_source = false;
+        let mut sol_compatible = true;
+        for (field_idx, field) in fields.iter().enumerate() {
+            let Some(hir_ty) = field.type_ref().to_opt() else {
+                continue;
+            };
+            let field_ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+            // Invalid types and non-`Copy` fixed arrays are reported on their own.
+            if field_ty.has_invalid(db)
+                || non_copy_fields
+                    .iter()
+                    .any(|field| field.origin == *origin && field.field_idx == field_idx)
+            {
+                reported_at_source = true;
+                continue;
+            }
+            let missing: Vec<_> = [
+                ("AbiSize", abi_size, vec![field_ty]),
+                ("AbiSpan<Sol>", abi_span, vec![field_ty, sol_ty]),
+                ("Encode<Sol>", encode, vec![field_ty, sol_ty]),
+                ("Decode<Sol>", decode, vec![field_ty, sol_ty]),
+            ]
+            .into_iter()
+            .filter(|(_, trait_, args)| unsat(*trait_, args.clone()))
+            .map(|(name, ..)| name)
+            .collect();
+            if missing.is_empty() {
+                sol_compatible &= !unsat(sol_compat, vec![field_ty]);
+            } else {
+                reported_at_source = true;
+                checks.unsupported.push(UnsupportedAbiStructField {
+                    ast_struct: abi_origin.abi_struct.clone(),
+                    field_idx,
+                    field_ty,
+                    missing,
+                });
+            }
+        }
+        if reported_at_source {
+            checks.reported_at_source.push(origin.clone());
+        } else if !sol_compatible {
+            checks.without_sol_compat.push(origin.clone());
+        }
+    }
+    checks
+}
+
+/// Origins of generated ABI code whose failures are reported at the source
+/// struct instead: at its fields, or at its recursive type.
+fn generated_abi_reported_at_source<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+) -> FxHashSet<&'db DesugaredOrigin> {
+    non_copy_array_abi_fields(db, top_mod)
+        .iter()
+        .map(|field| &field.origin)
+        .chain(&abi_struct_field_checks(db, top_mod).reported_at_source)
+        .collect()
+}
+
+/// The generated `SolCompat` impl of an `#[abi]` struct with a field that has
+/// no Solidity type name does not apply, so it is not diagnosed.
+fn is_inapplicable_sol_compat_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+    impl_trait: crate::hir_def::ImplTrait<'db>,
+) -> bool {
+    matches!(
+        impl_trait.origin(db),
+        HirOrigin::Desugared(origin)
+            if abi_struct_field_checks(db, top_mod).without_sol_compat.contains(origin)
+    ) && trait_lower::lower_impl_trait(db, impl_trait).is_some_and(|implementor| {
+        corelib::resolve_lib_trait_path(db, impl_trait.scope(), "std::abi::SolCompat")
+            == Some(implementor.trait_def(db))
+    })
+}
+
 impl ModuleAnalysisPass for BodyAnalysisPass {
     fn run_on_module<'db>(
         &mut self,
@@ -411,13 +577,8 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         // Check function and const bodies; contract-specific analysis is handled separately.
         let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
         let indexed_dynamic_events = events_with_indexed_dynamic_fields(db, top_mod);
-        // Reported once at the field by the struct's lowering pass.
-        let non_copy_array_structs: FxHashSet<&DesugaredOrigin> =
-            non_copy_array_abi_fields(db, top_mod)
-                .iter()
-                .map(|field| &field.origin)
-                .collect();
-        let keep = |origin: &DesugaredOrigin| !non_copy_array_structs.contains(origin);
+        let reported_at_source = generated_abi_reported_at_source(db, top_mod);
+        let keep = |origin: &DesugaredOrigin| !reported_at_source.contains(origin);
         for func in top_mod
             .all_funcs(db)
             .iter()
@@ -472,7 +633,9 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                 .all_impl_traits(db)
                 .iter()
                 .filter(|impl_trait| match impl_trait.origin(db) {
-                    HirOrigin::Desugared(origin) => keep(origin),
+                    HirOrigin::Desugared(origin) => {
+                        keep(origin) && !is_inapplicable_sol_compat_impl(db, top_mod, **impl_trait)
+                    }
                     _ => true,
                 })
                 .flat_map(|impl_trait| ty_check::check_impl_trait_const_bodies(db, *impl_trait))
@@ -766,9 +929,18 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
+        let reported_at_source = generated_abi_reported_at_source(db, top_mod);
         top_mod
             .all_impl_traits(db)
             .iter()
+            // Generated ABI impl failures are diagnosed once at their source declarations.
+            .filter(|impl_trait| match impl_trait.origin(db) {
+                HirOrigin::Desugared(origin) => {
+                    !reported_at_source.contains(origin)
+                        && !is_inapplicable_sol_compat_impl(db, top_mod, **impl_trait)
+                }
+                _ => true,
+            })
             .flat_map(|impl_trait| impl_trait.diags(db))
             .map(|diag| diag.to_voucher())
             .collect()
