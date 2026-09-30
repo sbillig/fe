@@ -198,14 +198,7 @@ pub fn check_impl_trait_const_bodies<'db>(
     };
     let trait_hir = implementor.trait_def(db);
     let trait_args = implementor.trait_(db).args(db);
-    // `SolCompat::SOL_TYPE` spells a Solidity type name for signature
-    // hashing; it is only consumed by CTFE, so a generated one needs no
-    // runtime value.
-    let compile_time_only = trait_hir
-        .name(db)
-        .to_opt()
-        .is_some_and(|name| name.data(db) == "SolCompat");
-    let policy = if generated_origin.is_some() && !compile_time_only {
+    let policy = if generated_origin.is_some() {
         ConstUsePolicy::RequireValue
     } else {
         // Associated values may retain a contextual selection until use.

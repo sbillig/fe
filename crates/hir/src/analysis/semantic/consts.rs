@@ -646,6 +646,12 @@ fn reify_runtime_const_impl<'db>(
     value: SemConstId<'db>,
     expected_ty: TyId<'db>,
 ) -> Option<SemConstId<'db>> {
+    // An instance's expected type may still name a projection, such as a
+    // trait const typed `<Key as SolCompat>::S`; the value's shape is that of
+    // the normalized type.
+    let expected_ty = instance.map_or(expected_ty, |instance| {
+        instance.normalized_ty(db, expected_ty)
+    });
     let reified = match value.value(db) {
         SemConstValue::Unit => unit_const(db),
         SemConstValue::Scalar { ty, value } => {
