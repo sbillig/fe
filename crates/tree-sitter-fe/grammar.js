@@ -47,13 +47,11 @@ module.exports = grammar({
   ],
 
   conflicts: $ => [
+    [$._expression, $._condition_atom_no_let, $._path],
+    [$._expression, $._condition_atom_no_let, $._path, $.path_segment],
     [$.where_clause],
     [$.qualified_path_type, $.qualified_path_expression],
     [$.tuple_type, $.tuple_expression],
-    [$.where_const_predicate, $.path_segment],
-    [$.where_const_predicate, $._expression],
-    [$.where_const_predicate, $._expression, $._path],
-    [$.where_const_predicate, $._expression, $._path, $.path_segment],
     // Self type vs self path segment vs expression
     [$.self_type, $.path_segment],
     [$.self_type, $._expression, $.path_segment],
@@ -570,26 +568,9 @@ module.exports = grammar({
       $.type_bound_list,
     ),
 
-    where_const_predicate: $ => choice(
-      $.binary_expression,
-      $.unary_expression,
-      $.cast_expression,
-      $.call_expression,
-      $.macro_call_expression,
-      $.method_call_expression,
-      $.instantiation_expression,
-      $.field_expression,
-      $.index_expression,
-      prec.left($.identifier),
-      $.scoped_path,
-      $.qualified_path_expression,
-      $.paren_expression,
-      $.literal,
-      $.if_expression,
-      $.match_expression,
-      // A braced predicate, as in `where { N > 0 } { body }`.
-      $.block,
-    ),
+    // A const condition reads an expression the way an `if` condition does,
+    // without a record literal, whose `{` would be the item's.
+    where_const_predicate: $ => $._condition_no_let,
 
     // ==================== TYPES ====================
 
