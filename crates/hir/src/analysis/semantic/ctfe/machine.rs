@@ -1253,13 +1253,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             }
             owner
             @ (BodyOwner::Func(_) | BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. }) => {
-                let (diags, typed_body) = infer_body(self.db, owner);
-                if inference_met_lowering_cycle(diags)
-                    || matches!(
-                        typed_body.result_ty().invalid_cause(self.db),
-                        Some(InvalidCause::TypeLoweringCycle)
-                    )
-                {
+                if inference_met_lowering_cycle(self.db, infer_body(self.db, owner)) {
                     return Err(CtfeError::InvalidBody { origin });
                 }
                 instance

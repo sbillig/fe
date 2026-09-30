@@ -861,16 +861,23 @@ fn infer_body_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
-/// Whether inference met a type lowering cycle. Its typed body is then a
+/// Whether inference met a type lowering cycle, in the body or in the
+/// result type it checks the body against. Its typed body is then a
 /// provisional fixpoint value, which compile-time evaluation must not run:
 /// a value computed from it could make the cycle converge on a success.
-pub(crate) fn inference_met_lowering_cycle(diags: &[FuncBodyDiag<'_>]) -> bool {
+pub(crate) fn inference_met_lowering_cycle<'db>(
+    db: &'db dyn HirAnalysisDb,
+    (diags, typed_body): &(Vec<FuncBodyDiag<'db>>, TypedBody<'db>),
+) -> bool {
     diags.iter().any(|diag| {
         matches!(
             diag,
             FuncBodyDiag::Ty(TyDiagCollection::Ty(TyLowerDiag::TypeLoweringCycle(_)))
         )
-    })
+    }) || matches!(
+        typed_body.result_ty().invalid_cause(db),
+        Some(InvalidCause::TypeLoweringCycle)
+    )
 }
 
 /// Forces evaluation of a const item's value and reports failures
