@@ -1,0 +1,10 @@
+// Only a type that inference supplies, as a function value's type or a
+// call's generic argument, is named as inferred. The two failing types in
+// `mkp<0>()`'s type are given by its return type, so neither error says so.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+enum Choice<const N: usize> where N > 0 { Empty, Value(u256) }
+
+fn mkp<const A: usize>() -> (Bounded<A>, Choice<A>) where A > 0 {
+    (Bounded { value: 1 }, Choice::Empty)
+}
+fn both() { let _p = mkp<0>() }

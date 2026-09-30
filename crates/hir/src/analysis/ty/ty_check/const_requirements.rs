@@ -702,7 +702,10 @@ pub(super) fn check_body_requirements<'db>(
     // An expression type that the loop above found no failure in has none
     // here either, since `reported` only adds to `written`, so only a
     // function value's type and the types that failed there are looked at
-    // again.
+    // again. A failure in a function value's type or a call's generic
+    // arguments is in a type that inference supplied, so its error names the
+    // type. A further failure in an expression type that already failed is
+    // not: the expression's type gives it, as it gave the first.
     let mut reported = written;
     reported.extend(entered);
     let inferred = body
@@ -711,19 +714,27 @@ pub(super) fn check_body_requirements<'db>(
         .filter(|&expr| !carries(expr))
         .flat_map(|expr| {
             let ty = typed.expr_ty(db, expr);
-            let own = (is_function(ty) || failed.contains(&expr)).then_some(ty);
+            let own = if is_function(ty) {
+                Some((ty, true))
+            } else {
+                failed.contains(&expr).then_some((ty, false))
+            };
             let callable_args = typed
                 .callable_expr(expr)
                 .map(|callable| callable.generic_args().to_vec())
                 .unwrap_or_default();
             own.into_iter()
-                .chain(callable_args)
-                .map(move |ty| (expr, ty))
+                .chain(callable_args.into_iter().map(|ty| (ty, true)))
+                .map(move |(ty, inferred)| (expr, ty, inferred))
         });
-    for (expr, ty) in inferred {
+    for (expr, ty, inferred) in inferred {
         while let Some(unmet) = check_type_requirements(db, ty, owner.scope(), &reported) {
             reported.insert(unmet.ty);
-            check.unmet_inferred(expr.span(body).into(), &unmet);
+            if inferred {
+                check.unmet_inferred(expr.span(body).into(), &unmet);
+            } else {
+                check.unmet(expr.span(body).into(), unmet.predicate, unmet.failure);
+            }
         }
     }
     for (nested, expected) in expression_const_bodies(db, body, typed) {
