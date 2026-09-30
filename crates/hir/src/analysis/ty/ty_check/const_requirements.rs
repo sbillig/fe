@@ -151,10 +151,43 @@ fn predicate_key<'db>(
     }))
 }
 
-fn predicate_flags<'db>(db: &'db dyn HirAnalysisDb, mut typed: TypedBody<'db>) -> TyFlags {
-    // Ambient trait assumptions are not dependencies of the expression itself.
-    typed.assumptions = PredicateListId::empty_list(db);
-    collect_flags(db, typed)
+/// The generic parameters that a predicate's expression mentions, each
+/// once, as types. The ambient trait assumptions it is checked under are not
+/// dependencies of the expression, so their parameters are left out.
+#[salsa::tracked(return_ref)]
+fn predicate_params<'db>(db: &'db dyn HirAnalysisDb, predicate: Body<'db>) -> Vec<TyId<'db>> {
+    use crate::analysis::ty::visitor::walk_ty;
+    struct Params<'db> {
+        db: &'db dyn HirAnalysisDb,
+        found: Vec<TyId<'db>>,
+    }
+    impl<'db> TyVisitor<'db> for Params<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            let is_param = match ty.data(self.db) {
+                TyData::TyParam(_) => true,
+                TyData::ConstTy(const_ty) => {
+                    matches!(const_ty.data(self.db), ConstTyData::TyParam(..))
+                }
+                _ => false,
+            };
+            if is_param && !self.found.contains(&ty) {
+                self.found.push(ty);
+            }
+            walk_ty(self, ty);
+        }
+    }
+    let mut params = Params {
+        db,
+        found: Vec::new(),
+    };
+    infer_body(db, BodyOwner::const_predicate(db, predicate))
+        .1
+        .visit_body_types(&mut params);
+    params.found
 }
 
 /// Why a const requirement does not hold at a use. Discharge decides it, and
@@ -352,8 +385,7 @@ pub(super) fn predicate_may_depend_on_params<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
 ) -> bool {
-    let typed = &infer_body(db, BodyOwner::const_predicate(db, body)).1;
-    predicate_flags(db, typed.clone()).contains(TyFlags::HAS_PARAM)
+    !predicate_params(db, body).is_empty()
 }
 
 // Requirements scope over function signatures/bodies and ADT fields, but
@@ -1350,20 +1382,15 @@ fn discharge_requirement<'db>(
     let Ok(subst) = requirement_subst(db, declaration, &args) else {
         return not_instantiable;
     };
-    let Ok(mut instantiated) = substitute_complete(db, formation.typed.clone(), &subst) else {
-        return not_instantiable;
-    };
-    // TypedBody deliberately preserves formal TypeConst paths for runtime ABI
-    // selection. Substitute these references only in this dependency view.
-    for reference in instantiated.value_path_refs.values_mut().flatten() {
-        if let ValuePathRef::TypeConst(ty) = reference {
-            let Ok(substituted) = substitute_complete(db, *ty, &subst) else {
-                return not_instantiable;
-            };
-            *ty = substituted;
-        }
+    // The use leaves the predicate generic when an argument for one of the
+    // parameters it mentions still mentions a parameter.
+    let mut symbolic = false;
+    for &param in predicate_params(db, predicate) {
+        let Ok(arg) = substitute_complete(db, param, &subst) else {
+            return not_instantiable;
+        };
+        symbolic |= arg.has_param(db);
     }
-    let symbolic = predicate_flags(db, instantiated).contains(TyFlags::HAS_PARAM);
     if symbolic {
         let Ok(key) = predicate_key(db, predicate, &formation.typed, predicate.expr(db), &subst)
         else {
@@ -1392,14 +1419,11 @@ fn discharge_requirement<'db>(
                 }
             }
         }
-        // An unused type parameter does not make a ground predicate unknown.
-        if predicate_may_depend_on_params(db, predicate) {
-            return Discharge::Fails(if key.is_some() {
-                RequirementFailure::NoMatchingPremise
-            } else {
-                RequirementFailure::NotForwardable
-            });
-        }
+        return Discharge::Fails(if key.is_some() {
+            RequirementFailure::NoMatchingPremise
+        } else {
+            RequirementFailure::NotForwardable
+        });
     }
     let owner = BodyOwner::const_predicate(db, predicate);
     match condition_outcome(db, owner, GenericSubst::for_body_owner(db, owner, args)) {

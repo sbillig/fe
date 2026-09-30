@@ -3761,6 +3761,18 @@ impl<'db> TyVisitable<'db> for TypedBody<'db> {
         V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
     {
         self.assumptions.visit_with(visitor);
+        self.visit_body_types(visitor);
+    }
+}
+
+impl<'db> TypedBody<'db> {
+    /// Visits the types the body's expressions, patterns, bindings and
+    /// resolutions carry, but not the ambient assumptions the body was
+    /// checked under, which are not dependencies of the body itself.
+    pub(super) fn visit_body_types<V>(&self, visitor: &mut V)
+    where
+        V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
+    {
         self.result_ty.visit_with(visitor);
         for ty in self.pat_ty.values().flatten() {
             ty.visit_with(visitor);
