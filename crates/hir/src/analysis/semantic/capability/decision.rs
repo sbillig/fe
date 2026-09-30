@@ -91,6 +91,46 @@ pub(super) struct Decision<V, T> {
     hash: u64,
 }
 
+/// Exact diagnostic union of subgraphs across distinct completed arrays. Child
+/// IDs refer to this counter's table, so equality includes the entire subtree.
+#[cfg(any(test, feature = "borrowck-profile"))]
+pub(super) struct SubgraphCounter<V, T> {
+    nodes: FxHashMap<Node<V, T>, Child>,
+}
+
+#[cfg(any(test, feature = "borrowck-profile"))]
+impl<V: Clone + Eq + Hash, T: Clone + Eq + Hash> SubgraphCounter<V, T> {
+    pub(super) fn new() -> Self {
+        Self {
+            nodes: FxHashMap::default(),
+        }
+    }
+
+    pub(super) fn record(&mut self, graph: &Decision<V, T>) {
+        let mut mapped = Vec::with_capacity(graph.nodes.len());
+        for node in graph.nodes.iter() {
+            let node = match node {
+                Node::Leaf(value) => Node::Leaf(value.clone()),
+                Node::Branch {
+                    variable,
+                    low,
+                    high,
+                } => Node::Branch {
+                    variable: variable.clone(),
+                    low: mapped[*low as usize],
+                    high: mapped[*high as usize],
+                },
+            };
+            let next = child(self.nodes.len());
+            mapped.push(*self.nodes.entry(node).or_insert(next));
+        }
+    }
+
+    pub(super) fn unique_nodes(&self) -> usize {
+        self.nodes.len()
+    }
+}
+
 impl<V: Hash, T: Hash> Decision<V, T> {
     fn new(nodes: Arc<[Node<V, T>]>) -> Self {
         let mut hasher = FxHasher::default();
@@ -373,6 +413,12 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
             }
         };
         memo.insert(key, result);
+        #[cfg(feature = "borrowck-profile")]
+        if lhs == left.decision.root() && rhs == right.decision.root() {
+            profile::scratch(
+                self.scratch_bytes() + memo.capacity() * size_of::<((Child, Child), usize)>(),
+            );
+        }
         result
     }
 
@@ -409,10 +455,26 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
         result
     }
 
+    /// Container payload capacities; hash-table control bytes and allocator
+    /// overhead are excluded. This is allocation accounting, not resident memory.
+    #[cfg(feature = "borrowck-profile")]
+    fn scratch_bytes(&self) -> usize {
+        self.nodes.capacity() * size_of::<Node<V, T>>()
+            + self.next.capacity() * size_of::<Child>()
+            + self.positions.capacity() * size_of::<(u64, Child)>()
+            + self.selections.capacity() * size_of::<((V, usize, usize), usize)>()
+    }
+
     fn finish(self, root: usize) -> Decision<V, T> {
         let mut nodes = Vec::with_capacity(self.nodes.len());
         // Canonical positions are dense, so index them rather than hashing them.
         let mut numbering = vec![NONE; self.nodes.len()];
+        #[cfg(feature = "borrowck-profile")]
+        profile::scratch(
+            self.scratch_bytes()
+                + nodes.capacity() * size_of::<Node<V, T>>()
+                + numbering.capacity() * size_of::<Child>(),
+        );
         self.visit(root, &mut nodes, &mut numbering);
         Decision::new(nodes.into())
     }
@@ -697,6 +759,16 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         self.nodes.len()
     }
 
+    #[cfg(feature = "borrowck-profile")]
+    pub(super) fn allocation_owners(&self) -> (usize, usize) {
+        (self.nodes.as_ptr() as usize, Arc::strong_count(&self.nodes))
+    }
+
+    #[cfg(feature = "borrowck-profile")]
+    pub(super) fn node_size() -> usize {
+        size_of::<Node<V, T>>()
+    }
+
     /// No other decision holds this backing graph, so keeping it shares nothing.
     pub(super) fn is_sole_owner(&self) -> bool {
         Arc::strong_count(&self.nodes) == 1
@@ -908,6 +980,21 @@ mod tests {
     use std::array;
 
     use super::*;
+
+    #[test]
+    fn subgraph_accounting_counts_shared_suffixes_exactly() {
+        let left = Decision::chain([(0, true), (2, true)], true, false);
+        let right = Decision::chain([(1, true), (2, true)], true, false);
+        assert_eq!(left.node_count() + right.node_count(), 8);
+        let mut counter = SubgraphCounter::new();
+        counter.record(&left);
+        counter.record(&right);
+        assert_eq!(counter.unique_nodes(), 5);
+        counter.record(&left);
+        assert_eq!(counter.unique_nodes(), 5);
+        counter.record(&Decision::chain([(0, false), (2, true)], true, false));
+        assert_eq!(counter.unique_nodes(), 6);
+    }
 
     #[test]
     fn borrowed_operations_match_materialized_ordered_maps() {

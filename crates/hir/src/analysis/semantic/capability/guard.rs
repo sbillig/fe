@@ -16,6 +16,9 @@ use std::{
     thread::LocalKey,
 };
 
+#[cfg(feature = "borrowck-profile")]
+use super::decision::SubgraphCounter;
+
 use super::{
     decision::{Decision, Variable},
     index::{BinderScope, IndexExpr, IndexSubst},
@@ -700,6 +703,85 @@ fn shared<V: Clone + Ord + Hash, T: Clone + Eq + Hash>(
         shared.graphs.insert(decision.clone());
         decision
     })
+}
+
+/// Separate bit-operation/shape cache ownership from uses outside those caches.
+/// Choice graphs are counted outside their sharing table; guard-cache ownership
+/// is intentionally not classified here.
+#[cfg(feature = "borrowck-profile")]
+pub(super) fn profile_subgraphs() {
+    let mut cached = FxHashMap::default();
+    let mut count = |graph: &BitDecision| {
+        *cached.entry(graph.allocation_owners().0).or_default() += 1;
+    };
+    BIT_OPERATIONS.with_borrow(|operations| {
+        for (operation, result) in operations {
+            match operation {
+                BitOperation::And(left, right)
+                | BitOperation::Or(left, right)
+                | BitOperation::Restrict(left, right) => {
+                    count(left);
+                    count(right);
+                }
+                BitOperation::Not(graph)
+                | BitOperation::Substitute(graph, _)
+                | BitOperation::Exists(graph, _) => count(graph),
+            }
+            if let Some(result) = result {
+                count(result);
+            }
+        }
+    });
+    BIT_SHAPES.with_borrow(|shapes| {
+        for graph in shapes.values() {
+            count(graph);
+        }
+    });
+    CONSTANT_BITS.with(|graphs| {
+        for graph in graphs {
+            count(graph);
+        }
+    });
+    SHARED_BITS.with_borrow(|shared| profile_graph_table("bit", shared, &cached));
+    SHARED_CHOICES
+        .with_borrow(|shared| profile_graph_table("choice", shared, &FxHashMap::default()));
+}
+
+#[cfg(feature = "borrowck-profile")]
+fn profile_graph_table<V: Clone + Ord + Hash, T: Clone + Eq + Hash>(
+    name: &str,
+    shared: &SharedGraphs<V, T>,
+    cache_owners: &FxHashMap<usize, usize>,
+) {
+    let mut retained = SubgraphCounter::new();
+    let mut external = (!cache_owners.is_empty()).then(SubgraphCounter::new);
+    let (mut retained_nodes, mut external_nodes, mut table_only_nodes, mut largest) = (0, 0, 0, 0);
+    for graph in &shared.graphs {
+        let (id, owners) = graph.allocation_owners();
+        let nodes = graph.node_count();
+        largest = largest.max(nodes);
+        if owners == 1 {
+            table_only_nodes += nodes;
+        } else {
+            retained_nodes += nodes;
+            retained.record(graph);
+            if owners > 1 + cache_owners.get(&id).copied().unwrap_or(0) {
+                external_nodes += nodes;
+                if let Some(counter) = &mut external {
+                    counter.record(graph);
+                }
+            }
+        }
+    }
+    eprintln!(
+        "SUBGRAPH_PROFILE kind={name} graphs={} node_size={} retained_nodes={retained_nodes} unique_nodes={} external_nodes={external_nodes} external_unique_nodes={} table_only_nodes={table_only_nodes} largest_nodes={largest}",
+        shared.graphs.len(),
+        Decision::<V, T>::node_size(),
+        retained.unique_nodes(),
+        external
+            .as_ref()
+            .map_or(retained.unique_nodes(), SubgraphCounter::unique_nodes)
+    );
 }
 
 /// Choices order by occurrence, then by the shape of their path with indices

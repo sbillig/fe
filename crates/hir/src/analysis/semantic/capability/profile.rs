@@ -1,4 +1,5 @@
 //! Optional accounting for retained graphs, construction churn, and solver progress.
+use super::guard;
 use rustc_hash::FxHashMap;
 use std::{cell::RefCell, time::Instant};
 
@@ -20,6 +21,8 @@ struct Profile {
     live: [usize; 2],
     created: [usize; 2],
     completed: usize,
+    peak_graph_and_scratch_capacity: usize,
+    next_overlap_bytes: usize,
     large: FxHashMap<Fingerprint, usize>,
     scopes: Vec<Scope>,
     operation: &'static str,
@@ -35,6 +38,12 @@ impl Default for Profile {
             live: [0; 2],
             created: [0; 2],
             completed: 0,
+            peak_graph_and_scratch_capacity: 0,
+            next_overlap_bytes: if std::env::var_os("FE_BORROWCK_SUBGRAPHS").is_some() {
+                128 * 1024 * 1024
+            } else {
+                usize::MAX
+            },
             large: FxHashMap::default(),
             scopes: Vec::new(),
             operation: "none",
@@ -68,7 +77,7 @@ impl Profile {
             .unwrap_or(0);
         let scope = self.scopes.last();
         eprintln!(
-            "GRAPH_PROFILE event={event} seconds={:.3} scope={:?} phase={:?} sweep={} block={} statement={} operation={} choice_live_bytes={} bit_live_bytes={} choice_created_bytes={} bit_created_bytes={} completed={} large_unique={} largest_nodes={largest} duplicate_bytes={duplicate_bytes} unique_bytes={unique_bytes} operation_counts={:?} input_nodes={:?}",
+            "GRAPH_PROFILE event={event} seconds={:.3} scope={:?} phase={:?} sweep={} block={} statement={} operation={} choice_live_bytes={} bit_live_bytes={} choice_created_bytes={} bit_created_bytes={} completed={} large_unique={} largest_nodes={largest} duplicate_bytes={duplicate_bytes} unique_bytes={unique_bytes} operation_counts={:?} input_nodes={:?} peak_graph_and_scratch_capacity={}",
             self.started.elapsed().as_secs_f64(),
             scope.map(|s| &s.label),
             scope.map(|s| s.phase),
@@ -84,9 +93,18 @@ impl Profile {
             self.large.len(),
             self.operation_counts,
             self.input_nodes,
+            self.peak_graph_and_scratch_capacity,
         );
         self.reported = Instant::now();
     }
+}
+
+pub(crate) fn scratch(bytes: usize) {
+    PROFILE.with_borrow_mut(|p| {
+        p.peak_graph_and_scratch_capacity = p
+            .peak_graph_and_scratch_capacity
+            .max(p.live.iter().sum::<usize>() + bytes);
+    });
 }
 
 pub(crate) fn created(key: Fingerprint) {
@@ -165,21 +183,32 @@ impl ProfileScope {
 
 impl Drop for ProfileScope {
     fn drop(&mut self) {
-        let _ = PROFILE.try_with(|p| {
-            let mut p = p.borrow_mut();
-            let scope = p.scopes.last().expect("active scope");
-            if scope.started.elapsed().as_secs_f64() >= 0.1
-                || p.created.iter().sum::<usize>() - scope.created >= 32 * 1024 * 1024
-            {
-                eprintln!(
-                    "SOLVER_SCOPE seconds={:.3} scope={:?}",
-                    scope.started.elapsed().as_secs_f64(),
-                    scope.label
-                );
-                p.report("scope_exit");
-            }
-            p.scopes.pop();
-        });
+        let overlap = PROFILE
+            .try_with(|p| {
+                let mut p = p.borrow_mut();
+                let scope = p.scopes.last().expect("active scope");
+                if scope.started.elapsed().as_secs_f64() >= 0.1
+                    || p.created.iter().sum::<usize>() - scope.created >= 32 * 1024 * 1024
+                {
+                    eprintln!(
+                        "SOLVER_SCOPE seconds={:.3} scope={:?}",
+                        scope.started.elapsed().as_secs_f64(),
+                        scope.label
+                    );
+                    p.report("scope_exit");
+                }
+                let overlap = p.live.iter().sum::<usize>() >= p.next_overlap_bytes;
+                if overlap {
+                    p.report("subgraph_snapshot");
+                    p.next_overlap_bytes = p.next_overlap_bytes.saturating_mul(2);
+                }
+                p.scopes.pop();
+                overlap
+            })
+            .unwrap_or(false);
+        if overlap {
+            guard::profile_subgraphs();
+        }
     }
 }
 
