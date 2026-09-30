@@ -276,7 +276,7 @@ impl<'db> PredicateFormation<'db> {
 #[derive(Default)]
 pub(super) struct RequirementCheck<'db> {
     pub(super) diags: Vec<FuncBodyDiag<'db>>,
-    recursive: bool,
+    pub(super) recursive: bool,
 }
 
 impl<'db> RequirementCheck<'db> {
@@ -342,24 +342,20 @@ pub(super) fn check_predicate_formation<'db>(
     body: Body<'db>,
 ) -> PredicateFormation<'db> {
     let owner = BodyOwner::const_predicate(db, body);
-    let (mut diags, typed) = infer_body(db, owner).clone();
     // A condition the parser could not read has no expression to check or
     // evaluate. The parser reported it, at its position.
     if matches!(body.expr(db).data(db, body), Partial::Absent) {
         return PredicateFormation {
-            diags,
+            diags: infer_body(db, owner).0.clone(),
             status: FormationStatus::IllFormed,
         };
     }
-    let mut recursive = false;
-    if diags_allow_evaluation(db, &diags) {
-        diags.extend(
-            crate::analysis::ty::const_check::check_const_body_expressions(db, body, &typed),
-        );
-        let requirements = check_body_requirements(db, owner, &typed);
-        recursive = requirements.recursive;
-        diags.extend(requirements.diags);
-    }
+    // The condition is checked as every body is (`checked_body`).
+    let CheckedBody {
+        mut diags,
+        typed,
+        recursive,
+    } = checked_body(db, owner);
     // A recursive failure is absorbing, and is reported once, at this predicate.
     let status = if recursive {
         diags = vec![BodyDiag::RecursiveConstRequirement(body.span().into()).into()];

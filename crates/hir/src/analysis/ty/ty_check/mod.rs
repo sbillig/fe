@@ -772,11 +772,36 @@ pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
-    let (mut diags, typed_body) = infer_body(db, owner).clone();
+    let CheckedBody { diags, typed, .. } = checked_body(db, owner);
+    (diags, typed)
+}
+
+/// A body checked by the pipeline every kind of body takes: inference with
+/// its const-language checks (`infer_body`), then, when inference leaves the
+/// body evaluable, its requirement checks.
+pub(super) struct CheckedBody<'db> {
+    pub(super) diags: Vec<FuncBodyDiag<'db>>,
+    pub(super) typed: TypedBody<'db>,
+    /// Whether a requirement the body uses depends on itself.
+    pub(super) recursive: bool,
+}
+
+pub(super) fn checked_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> CheckedBody<'db> {
+    let (mut diags, typed) = infer_body(db, owner).clone();
+    let mut recursive = false;
     if diags_allow_evaluation(db, &diags) {
-        diags.extend(const_requirements::check_body_requirements(db, owner, &typed_body).diags);
+        let requirements = const_requirements::check_body_requirements(db, owner, &typed);
+        recursive = requirements.recursive;
+        diags.extend(requirements.diags);
     }
-    (diags, typed_body)
+    CheckedBody {
+        diags,
+        typed,
+        recursive,
+    }
 }
 
 /// Inference and const-language checking, without requirement discharge.
@@ -825,6 +850,23 @@ fn infer_body_query<'db>(
             func,
             &typed_body,
         ));
+    }
+    // A `where` condition is held to the const language as a const
+    // function's body is, once it type checks. This adds no edge that can
+    // close a query cycle: recognizing a condition reads only its item's
+    // lowered `where` clause, and the check reads each callee's declaration,
+    // effect requirements and trait method resolution, as it does for a
+    // const function above. None of those infers a condition: only
+    // requirement checking, declaration checks, borrow checking and layout
+    // evidence do, and type lowering and compile-time evaluation, which
+    // those reads can reach, never call them.
+    if let BodyOwner::AnonConstBody { body, .. } = owner
+        && owner.is_const_predicate(db)
+        && diags_allow_evaluation(db, &diags)
+    {
+        diags.extend(
+            crate::analysis::ty::const_check::check_const_body_expressions(db, body, &typed_body),
+        );
     }
 
     (diags, typed_body)
