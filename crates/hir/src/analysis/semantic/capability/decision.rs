@@ -1,6 +1,11 @@
 //! Reduced ordered decision graphs with canonical, allocation-independent node numbering.
 #[cfg(test)]
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
+#[cfg(any(test, feature = "borrowck-profile"))]
+use std::sync::{
+    Mutex, OnceLock,
+    atomic::{AtomicUsize, Ordering as AtomicOrdering},
+};
 
 #[cfg(feature = "borrowck-profile")]
 use super::profile::{self, Operation};
@@ -27,22 +32,91 @@ pub(super) fn intern_attempts() -> usize {
 /// count, node size and node type. The type belongs here because graphs of
 /// different node types share sizes and can share a hash, and counting two of
 /// them as copies of one structure reports duplication that does not exist.
-#[cfg(test)]
-type GraphFingerprint = (u64, usize, usize, &'static str);
+#[cfg(any(test, feature = "borrowck-profile"))]
+pub(super) type GraphFingerprint = (u64, usize, usize, &'static str);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "borrowck-profile"))]
+#[derive(Debug, Default)]
+pub(super) struct LiveGraphs {
+    pub(super) bytes: [usize; 2],
+    pub(super) copies: FxHashMap<GraphFingerprint, usize>,
+}
+
+#[cfg(any(test, feature = "borrowck-profile"))]
 thread_local! {
-    // Live backing allocations per completed graph, keyed by its canonical hash,
-    // node count and node size. Separate operations that complete an equal graph
-    // each allocate their own slice, so a structure can hold several copies.
-    static LIVE_GRAPHS: RefCell<FxHashMap<GraphFingerprint, usize>> = RefCell::default();
+    static LIVE_GRAPHS: Arc<Mutex<LiveGraphs>> = Arc::default();
+}
+
+#[cfg(any(test, feature = "borrowck-profile"))]
+pub(super) fn live_graphs() -> Arc<Mutex<LiveGraphs>> {
+    LIVE_GRAPHS.with(Arc::clone)
+}
+
+#[cfg(any(test, feature = "borrowck-profile"))]
+#[derive(Debug)]
+struct GraphAllocation {
+    key: GraphFingerprint,
+    owner: Arc<Mutex<LiveGraphs>>,
+}
+
+#[cfg(any(test, feature = "borrowck-profile"))]
+fn graph_allocations() -> &'static Mutex<FxHashMap<usize, GraphAllocation>> {
+    static ALLOCATIONS: OnceLock<Mutex<FxHashMap<usize, GraphAllocation>>> = OnceLock::new();
+    ALLOCATIONS.get_or_init(Mutex::default)
+}
+
+#[cfg(any(test, feature = "borrowck-profile"))]
+impl GraphAllocation {
+    fn record(key: GraphFingerprint) -> Option<usize> {
+        #[cfg(feature = "borrowck-profile")]
+        if !cfg!(test) && !profile::enabled() {
+            return None;
+        }
+        let owner = live_graphs();
+        {
+            let mut live = owner.lock().expect("graph accounting");
+            let (_, nodes, bytes, name) = key;
+            live.bytes[usize::from(name.contains("SlotChoice"))] += nodes * bytes;
+            if cfg!(test) || nodes >= 1024 {
+                *live.copies.entry(key).or_default() += 1;
+            }
+        }
+        // Graphs remain immutable map keys. Their diagnostic ownership record
+        // lives in this table and is released by the backing allocation.
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let id = NEXT
+            .fetch_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |id| {
+                id.checked_add(1)
+            })
+            .expect("graph allocation identifiers exhausted");
+        graph_allocations()
+            .lock()
+            .expect("allocation accounting")
+            .insert(id, Self { key, owner });
+        Some(id)
+    }
+
+    fn release(&self) {
+        let mut live = self.owner.lock().expect("graph accounting");
+        let (_, nodes, bytes, name) = self.key;
+        live.bytes[usize::from(name.contains("SlotChoice"))] -= nodes * bytes;
+        if cfg!(test) || nodes >= 1024 {
+            let copies = live.copies.get_mut(&self.key).expect("counted graph");
+            *copies -= 1;
+            if *copies == 0 {
+                live.copies.remove(&self.key);
+            }
+        }
+    }
 }
 
 /// Diagnostic: the structures with more than one live backing allocation, as
 /// (node count, node size, copies).
 #[cfg(test)]
 pub(super) fn duplicated_graphs() -> Vec<(usize, &'static str, usize)> {
-    LIVE_GRAPHS.with_borrow(|live| {
+    LIVE_GRAPHS.with(|owner| {
+        let stats = owner.lock().expect("graph accounting");
+        let live = &stats.copies;
         live.iter()
             .filter(|(_, copies)| **copies > 1)
             .map(|((_, nodes, _, name), copies)| (*nodes, *name, *copies))
@@ -54,7 +128,9 @@ pub(super) fn duplicated_graphs() -> Vec<(usize, &'static str, usize)> {
 /// bytes held beyond one copy of each structure.
 #[cfg(test)]
 pub(super) fn live_graph_storage() -> (usize, usize, usize) {
-    LIVE_GRAPHS.with_borrow(|live| {
+    LIVE_GRAPHS.with(|owner| {
+        let stats = owner.lock().expect("graph accounting");
+        let live = &stats.copies;
         (
             live.values().sum(),
             live.len(),
@@ -86,13 +162,33 @@ fn child(index: usize) -> Child {
 /// Keep weak interning metadata separate from the large backing buffer. An
 /// `Arc<[Node]>` would retain that entire allocation until its last weak owner
 /// disappeared; this small owner drops its boxed buffer with its last strong one.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct GraphNodes<V, T>(Box<[Node<V, T>]>);
+#[derive(Debug)]
+struct GraphNodes<V, T> {
+    nodes: Box<[Node<V, T>]>,
+    #[cfg(any(test, feature = "borrowck-profile"))]
+    accounting: Option<usize>,
+}
+
+// The allocation, not a handle's sampled strong count, owns its accounting.
+// Its final owner may be released concurrently or on a cleanup thread.
+#[cfg(any(test, feature = "borrowck-profile"))]
+impl<V, T> Drop for GraphNodes<V, T> {
+    fn drop(&mut self) {
+        if let Some(id) = self.accounting {
+            let accounting = graph_allocations()
+                .lock()
+                .expect("allocation accounting")
+                .remove(&id)
+                .expect("counted allocation");
+            accounting.release();
+        }
+    }
+}
 
 impl<V, T> Deref for GraphNodes<V, T> {
     type Target = [Node<V, T>];
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.nodes
     }
 }
 
@@ -150,17 +246,13 @@ impl<V: Hash, T: Hash> Decision<V, T> {
         let mut hasher = FxHasher::default();
         nodes.hash(&mut hasher);
         let hash = hasher.finish();
-        #[cfg(test)]
-        LIVE_GRAPHS.with_borrow_mut(|live| {
-            *live
-                .entry((
-                    hash,
-                    nodes.len(),
-                    size_of::<Node<V, T>>(),
-                    std::any::type_name::<Node<V, T>>(),
-                ))
-                .or_default() += 1;
-        });
+        #[cfg(any(test, feature = "borrowck-profile"))]
+        let accounting = GraphAllocation::record((
+            hash,
+            nodes.len(),
+            size_of::<Node<V, T>>(),
+            std::any::type_name::<Node<V, T>>(),
+        ));
         #[cfg(feature = "borrowck-profile")]
         profile::created((
             hash,
@@ -170,7 +262,11 @@ impl<V: Hash, T: Hash> Decision<V, T> {
         ));
         Self {
             hash,
-            nodes: Arc::new(GraphNodes(nodes)),
+            nodes: Arc::new(GraphNodes {
+                nodes,
+                #[cfg(any(test, feature = "borrowck-profile"))]
+                accounting,
+            }),
         }
     }
 }
@@ -209,38 +305,10 @@ impl<V, T> Hash for WeakDecision<V, T> {
     }
 }
 
-// Diagnostic accounting: the last owner of a backing slice releases its storage.
-#[cfg(any(test, feature = "borrowck-profile"))]
-impl<V, T> Drop for Decision<V, T> {
-    fn drop(&mut self) {
-        if Arc::strong_count(&self.nodes) > 1 {
-            return;
-        }
-        let key = (
-            self.hash,
-            self.nodes.len(),
-            size_of::<Node<V, T>>(),
-            std::any::type_name::<Node<V, T>>(),
-        );
-        #[cfg(feature = "borrowck-profile")]
-        profile::dropped(key);
-        // A thread may drop graphs after its own thread locals are destroyed.
-        #[cfg(test)]
-        let _ = LIVE_GRAPHS.try_with(|live| {
-            let mut live = live.borrow_mut();
-            let copies = live.get_mut(&key).expect("counted graph");
-            *copies -= 1;
-            if *copies == 0 {
-                live.remove(&key);
-            }
-        });
-    }
-}
-
 impl<V: PartialEq, T: PartialEq> PartialEq for Decision<V, T> {
     fn eq(&self, other: &Self) -> bool {
         self.hash == other.hash
-            && (Arc::ptr_eq(&self.nodes, &other.nodes) || self.nodes == other.nodes)
+            && (Arc::ptr_eq(&self.nodes, &other.nodes) || self.nodes.nodes == other.nodes.nodes)
     }
 }
 
@@ -257,7 +325,7 @@ impl<V: Ord, T: Ord> Ord for Decision<V, T> {
         if Arc::ptr_eq(&self.nodes, &other.nodes) {
             Ordering::Equal
         } else {
-            self.nodes.cmp(&other.nodes)
+            self.nodes.nodes.cmp(&other.nodes.nodes)
         }
     }
 }
@@ -1037,9 +1105,39 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::array;
+    use std::{array, sync::Barrier, thread};
 
     use super::*;
+
+    #[test]
+    fn graph_accounting_follows_allocations_across_threads_and_concurrent_drops() {
+        let before = live_graph_storage();
+        let graph = Decision::chain((0..2048).map(|variable| (variable, true)), true, false);
+        let weak = graph.downgrade();
+        thread::spawn(move || drop(graph)).join().unwrap();
+        assert!(!weak.is_live());
+        assert_eq!(live_graph_storage(), before);
+
+        let graph = Decision::chain((0..2048).map(|variable| (variable, true)), true, false);
+        let barrier = Barrier::new(3);
+        thread::scope(|scope| {
+            for graph in [graph.clone(), graph] {
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    drop(graph);
+                });
+            }
+            barrier.wait();
+        });
+        assert_eq!(live_graph_storage(), before);
+
+        // The creator's thread-local statistics may be destroyed first.
+        let graph = thread::spawn(|| Decision::leaf(true)).join().unwrap();
+        let graph: Decision<u32, bool> = graph;
+        drop(graph);
+        assert_eq!(live_graph_storage(), before);
+    }
 
     #[test]
     fn weak_graph_handles_keep_identity_without_owning_node_buffers() {

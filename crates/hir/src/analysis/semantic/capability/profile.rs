@@ -1,9 +1,19 @@
 //! Optional accounting for retained graphs, construction churn, and solver progress.
-use super::guard;
-use rustc_hash::FxHashMap;
-use std::{cell::RefCell, time::Instant};
+//! Enable output with `FE_BORROWCK_PROFILE=1` in a `borrowck-profile` build.
+use super::{
+    decision::{GraphFingerprint, LiveGraphs, live_graphs},
+    guard,
+};
+use std::{
+    cell::RefCell,
+    sync::{Arc, Mutex, OnceLock},
+    time::Instant,
+};
 
-type Fingerprint = (u64, usize, usize, &'static str);
+pub(super) fn enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("FE_BORROWCK_PROFILE").is_some())
+}
 
 struct Scope {
     label: String,
@@ -18,12 +28,11 @@ struct Scope {
 struct Profile {
     started: Instant,
     reported: Instant,
-    live: [usize; 2],
+    live: Arc<Mutex<LiveGraphs>>,
     created: [usize; 2],
     completed: usize,
     peak_graph_and_scratch_capacity: usize,
     next_overlap_bytes: usize,
-    large: FxHashMap<Fingerprint, usize>,
     scopes: Vec<Scope>,
     operation: &'static str,
     operation_counts: [usize; 4],
@@ -35,7 +44,7 @@ impl Default for Profile {
         Self {
             started: Instant::now(),
             reported: Instant::now(),
-            live: [0; 2],
+            live: live_graphs(),
             created: [0; 2],
             completed: 0,
             peak_graph_and_scratch_capacity: 0,
@@ -44,7 +53,6 @@ impl Default for Profile {
             } else {
                 usize::MAX
             },
-            large: FxHashMap::default(),
             scopes: Vec::new(),
             operation: "none",
             operation_counts: [0; 4],
@@ -59,20 +67,22 @@ thread_local! {
 
 impl Profile {
     fn report(&mut self, event: &str) {
-        let duplicate_bytes: usize = self
-            .large
+        let live = self.live.lock().expect("graph accounting");
+        let large = live
+            .copies
             .iter()
+            .filter(|((_, nodes, _, _), _)| *nodes >= 1024);
+        let duplicate_bytes: usize = large
+            .clone()
             .map(|((_, nodes, size, _), copies)| nodes * size * (copies - 1))
             .sum();
-        let unique_bytes: usize = self
-            .large
-            .keys()
-            .map(|(_, nodes, size, _)| nodes * size)
+        let unique_bytes: usize = large
+            .clone()
+            .map(|((_, nodes, size, _), _)| nodes * size)
             .sum();
-        let largest = self
-            .large
-            .keys()
-            .map(|(_, nodes, _, _)| *nodes)
+        let largest = large
+            .clone()
+            .map(|((_, nodes, _, _), _)| *nodes)
             .max()
             .unwrap_or(0);
         let scope = self.scopes.last();
@@ -85,12 +95,12 @@ impl Profile {
             scope.map_or(0, |s| s.block),
             scope.map_or(0, |s| s.statement),
             self.operation,
-            self.live[1],
-            self.live[0],
+            live.bytes[1],
+            live.bytes[0],
             self.created[1],
             self.created[0],
             self.completed,
-            self.large.len(),
+            large.count(),
             self.operation_counts,
             self.input_nodes,
             self.peak_graph_and_scratch_capacity,
@@ -100,40 +110,33 @@ impl Profile {
 }
 
 pub(crate) fn scratch(bytes: usize) {
+    if !enabled() {
+        return;
+    }
     PROFILE.with_borrow_mut(|p| {
-        p.peak_graph_and_scratch_capacity = p
-            .peak_graph_and_scratch_capacity
-            .max(p.live.iter().sum::<usize>() + bytes);
+        p.peak_graph_and_scratch_capacity = p.peak_graph_and_scratch_capacity.max(
+            p.live
+                .lock()
+                .expect("graph accounting")
+                .bytes
+                .iter()
+                .sum::<usize>()
+                + bytes,
+        );
     });
 }
 
-pub(crate) fn created(key: Fingerprint) {
+pub(crate) fn created(key: GraphFingerprint) {
+    if !enabled() {
+        return;
+    }
     PROFILE.with_borrow_mut(|p| {
         let (_, nodes, size, name) = key;
         let category = usize::from(name.contains("SlotChoice"));
-        p.live[category] += nodes * size;
         p.created[category] += nodes * size;
         p.completed += 1;
-        if nodes >= 1024 {
-            *p.large.entry(key).or_default() += 1;
-        }
         if p.completed.is_multiple_of(1024) && p.reported.elapsed().as_secs_f64() >= 1.0 {
             p.report("tick");
-        }
-    });
-}
-
-pub(crate) fn dropped(key: Fingerprint) {
-    let _ = PROFILE.try_with(|p| {
-        let mut p = p.borrow_mut();
-        let (_, nodes, size, name) = key;
-        p.live[usize::from(name.contains("SlotChoice"))] -= nodes * size;
-        if nodes >= 1024 {
-            let count = p.large.get_mut(&key).expect("counted graph");
-            *count -= 1;
-            if *count == 0 {
-                p.large.remove(&key);
-            }
         }
     });
 }
@@ -142,6 +145,9 @@ pub(crate) struct ProfileScope;
 
 impl ProfileScope {
     pub(crate) fn new(label: String) -> Self {
+        if !enabled() {
+            return Self;
+        }
         PROFILE.with_borrow_mut(|p| {
             p.scopes.push(Scope {
                 label,
@@ -157,6 +163,9 @@ impl ProfileScope {
     }
 
     pub(crate) fn point(&self, phase: &'static str, block: usize, statement: usize) {
+        if !enabled() {
+            return;
+        }
         PROFILE.with_borrow_mut(|p| {
             let scope = p.scopes.last_mut().expect("active scope");
             scope.phase = phase;
@@ -166,6 +175,9 @@ impl ProfileScope {
     }
 
     pub(crate) fn sweep(&self, loans: usize, generation: usize) {
+        if !enabled() {
+            return;
+        }
         PROFILE.with_borrow_mut(|p| {
             let scope = p.scopes.last_mut().expect("active scope");
             scope.sweep += 1;
@@ -183,6 +195,9 @@ impl ProfileScope {
 
 impl Drop for ProfileScope {
     fn drop(&mut self) {
+        if !enabled() {
+            return;
+        }
         let overlap = PROFILE
             .try_with(|p| {
                 let mut p = p.borrow_mut();
@@ -197,7 +212,14 @@ impl Drop for ProfileScope {
                     );
                     p.report("scope_exit");
                 }
-                let overlap = p.live.iter().sum::<usize>() >= p.next_overlap_bytes;
+                let overlap = p
+                    .live
+                    .lock()
+                    .expect("graph accounting")
+                    .bytes
+                    .iter()
+                    .sum::<usize>()
+                    >= p.next_overlap_bytes;
                 if overlap {
                     p.report("subgraph_snapshot");
                     p.next_overlap_bytes = p.next_overlap_bytes.saturating_mul(2);
@@ -216,6 +238,9 @@ pub(crate) struct Operation(&'static str);
 
 impl Operation {
     pub(crate) fn new(kind: usize, nodes: usize) -> Self {
+        if !enabled() {
+            return Self("none");
+        }
         PROFILE.with_borrow_mut(|p| {
             p.operation_counts[kind] += 1;
             p.input_nodes[kind] += nodes;
@@ -229,6 +254,9 @@ impl Operation {
 
 impl Drop for Operation {
     fn drop(&mut self) {
+        if !enabled() {
+            return;
+        }
         let _ = PROFILE.try_with(|p| p.borrow_mut().operation = self.0);
     }
 }
