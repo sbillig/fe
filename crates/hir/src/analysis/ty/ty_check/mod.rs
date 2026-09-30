@@ -772,11 +772,10 @@ pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
-    let (mut diags, mut typed_body) = infer_body(db, owner).clone();
+    let (mut diags, typed_body) = infer_body(db, owner).clone();
     if diags_allow_evaluation(db, &diags) {
         diags.extend(const_requirements::check_body_requirements(db, owner, &typed_body).diags);
     }
-    typed_body.has_diagnostics = !diags.is_empty();
     (diags, typed_body)
 }
 
@@ -816,7 +815,7 @@ fn infer_body_query<'db>(
     };
 
     checker.run();
-    let (mut diags, mut typed_body) = checker.finish();
+    let (mut diags, typed_body) = checker.finish();
     if let BodyOwner::Func(func) = owner
         && func.is_const(db)
         && !func.is_extern(db)
@@ -827,7 +826,6 @@ fn infer_body_query<'db>(
             &typed_body,
         ));
     }
-    typed_body.has_diagnostics = !diags.is_empty();
 
     (diags, typed_body)
 }
@@ -840,7 +838,6 @@ fn infer_body_cycle_initial<'db>(
     key: BodyInferenceKey<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
     let mut typed = TypedBody::empty(db);
-    typed.has_diagnostics = true;
     typed.result_ty = TyId::invalid(db, InvalidCause::TypeLoweringCycle);
     let span = key
         .owner(db)
@@ -3434,7 +3431,6 @@ pub(crate) enum SmirLoweringReadiness {
 /// template, so each body's tables are stored once rather than twice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedBody<'db> {
-    has_diagnostics: bool,
     tables: Arc<TypedBodyTables<'db>>,
 }
 
@@ -3874,7 +3870,6 @@ impl<'db> std::ops::DerefMut for TypedBody<'db> {
 impl<'db> From<TypedBodyTables<'db>> for TypedBody<'db> {
     fn from(tables: TypedBodyTables<'db>) -> Self {
         Self {
-            has_diagnostics: false,
             tables: Arc::new(tables),
         }
     }
