@@ -90,8 +90,10 @@ pub(crate) enum ProbeKind {
     LShiftOpensGenericArgs,
     /// A path followed by `(`, i.e. a call in const generic argument position.
     ConstCall,
-    /// A generic argument list, as opposed to a comparison.
-    GenericArgList { is_expr: bool },
+    /// A generic argument list, as opposed to a comparison. `expr_path`
+    /// marks a segment of an expression's path (see
+    /// `path::PathSegmentScope`).
+    GenericArgList { is_expr: bool, expr_path: bool },
 }
 
 impl<S: TokenStream> Parser<S> {

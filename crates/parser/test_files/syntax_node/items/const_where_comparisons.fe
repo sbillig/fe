@@ -1,0 +1,7 @@
+fn bounded<const N: usize, const M: usize>() where N < 8, M > 0 {}
+
+fn inclusive<const N: usize, const M: usize>() where N < 8, M >= 1 {}
+
+fn named<const N: usize, const M: usize>() where N < M, M > N {}
+
+fn called<const N: usize>() where fits<N, 8>() {}

@@ -1,0 +1,8 @@
+// Comparisons separated by `,` are separate conditions, not generic
+// arguments, and each one is checked on its own.
+fn bounded<const N: usize, const M: usize>() -> u256 where N < 8, M > 0 { 1 }
+fn inclusive<const N: usize, const M: usize>() -> u256 where N < 8, M >= 1 { 1 }
+
+fn callers() -> u256 {
+    bounded<1, 1>() + inclusive<1, 1>() + bounded<9, 1>() + bounded<1, 0>() + inclusive<1, 0>()
+}

@@ -1,0 +1,8 @@
+// A known limit: comparisons separated by `,` read as comparisons only when
+// the token after the `>` cannot continue an expression. Here `(0)` can, so
+// `N < 8, M > (0)` reads as the path `N<8, M>` called with `(0)`, as
+// `f(a < b, c > (d))` does in call arguments. Writing the condition in
+// parentheses, `(M > 0)`, avoids it.
+const fn limited<const N: usize, const M: usize>() -> usize where N < 8, M > (0) { N }
+
+const fn parenthesized<const N: usize, const M: usize>() -> usize where N < 8, (M > 0) { N }

@@ -1,0 +1,104 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/exprs/generic_arg_comparisons.fe
+---
+Root@0..47
+  CallExpr@0..15
+    PathExpr@0..1
+      Path@0..1
+        PathSegment@0..1
+          Ident@0..1 "f"
+    CallArgList@1..15
+      LParen@1..2 "("
+      CallArg@2..7
+        BinExpr@2..7
+          PathExpr@2..3
+            Path@2..3
+              PathSegment@2..3
+                Ident@2..3 "a"
+          WhiteSpace@3..4 " "
+          Lt@4..5 "<"
+          WhiteSpace@5..6 " "
+          PathExpr@6..7
+            Path@6..7
+              PathSegment@6..7
+                Ident@6..7 "b"
+      Comma@7..8 ","
+      WhiteSpace@8..9 " "
+      CallArg@9..14
+        BinExpr@9..14
+          PathExpr@9..10
+            Path@9..10
+              PathSegment@9..10
+                Ident@9..10 "c"
+          WhiteSpace@10..11 " "
+          Gt@11..12 ">"
+          WhiteSpace@12..13 " "
+          PathExpr@13..14
+            Path@13..14
+              PathSegment@13..14
+                Ident@13..14 "d"
+      RParen@14..15 ")"
+  Newline@15..16 "\n"
+  TupleExpr@16..30
+    LParen@16..17 "("
+    BinExpr@17..22
+      PathExpr@17..18
+        Path@17..18
+          PathSegment@17..18
+            Ident@17..18 "a"
+      WhiteSpace@18..19 " "
+      Lt@19..20 "<"
+      WhiteSpace@20..21 " "
+      PathExpr@21..22
+        Path@21..22
+          PathSegment@21..22
+            Ident@21..22 "b"
+    Comma@22..23 ","
+    WhiteSpace@23..24 " "
+    BinExpr@24..29
+      PathExpr@24..25
+        Path@24..25
+          PathSegment@24..25
+            Ident@24..25 "c"
+      WhiteSpace@25..26 " "
+      Gt@26..27 ">"
+      WhiteSpace@27..28 " "
+      LitExpr@28..29
+        Lit@28..29
+          Int@28..29 "0"
+    RParen@29..30 ")"
+  Newline@30..31 "\n"
+  TupleExpr@31..46
+    LParen@31..32 "("
+    BinExpr@32..37
+      PathExpr@32..33
+        Path@32..33
+          PathSegment@32..33
+            Ident@32..33 "a"
+      WhiteSpace@33..34 " "
+      Lt@34..35 "<"
+      WhiteSpace@35..36 " "
+      PathExpr@36..37
+        Path@36..37
+          PathSegment@36..37
+            Ident@36..37 "b"
+    Comma@37..38 ","
+    WhiteSpace@38..39 " "
+    BinExpr@39..45
+      PathExpr@39..40
+        Path@39..40
+          PathSegment@39..40
+            Ident@39..40 "c"
+      WhiteSpace@40..41 " "
+      GtEq@41..43
+        Gt@41..42 ">"
+        Eq@42..43 "="
+      WhiteSpace@43..44 " "
+      PathExpr@44..45
+        Path@44..45
+          PathSegment@44..45
+            Ident@44..45 "d"
+    RParen@45..46 ")"
+  Newline@46..47 "\n"

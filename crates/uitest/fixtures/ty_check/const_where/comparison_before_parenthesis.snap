@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/comparison_before_parenthesis.fe
+---
+error[8-0030]: value is expected
+  ┌─ comparison_before_parenthesis.fe:6:67
+  │
+6 │ const fn limited<const N: usize, const M: usize>() -> usize where N < 8, M > (0) { N }
+  │                                                                   ^^^^^^^^^^ `type` cannot be used as a value
