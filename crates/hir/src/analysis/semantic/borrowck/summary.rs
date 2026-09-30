@@ -632,7 +632,7 @@ impl<'db> Borrowck<'db> {
             || recursive_unresolved
         {
             if self.summary_mode == BorrowSummaryMode::Final && self.blocked.is_none() {
-                if let Some(diagnostic) = self.analyze_availability().diagnostic {
+                if let Some(diagnostic) = self.availability_diagnostic() {
                     return Err(diagnostic);
                 }
                 self.boundary_requirements
@@ -706,6 +706,9 @@ impl<'db> Borrowck<'db> {
 
     pub fn build_summary(&self) -> Result<BorrowSummary<'db>, SemanticDiagnostic<'db>> {
         let ownership = self.analyze_availability();
+        let _ = self
+            .availability_diagnostic
+            .set(ownership.diagnostic.clone());
         if self.summary_mode == BorrowSummaryMode::Final
             && self.blocked.is_none()
             && let Some(diagnostic) = ownership.diagnostic
@@ -1307,6 +1310,7 @@ impl<'db> Borrowck<'db> {
             Boundary::Retained
         };
         let mut failure = None;
+        let cache = self.inventory.values.guard_cache();
         let result =
             self.inventory
                 .values
@@ -1314,7 +1318,7 @@ impl<'db> Borrowck<'db> {
                     let region = entry
                         .payload
                         .region(self.db, &self.inventory.loans, entry.guard.scope())
-                        .with_guard(domain);
+                        .restricted(domain, |left, right| cache.borrow_mut().and(left, right));
                     if matches!(boundary, Boundary::Return)
                         && matches!(entry.payload, CapabilityRef::Invalidated { .. })
                         && !NativeValidity::from_region(&region).invalid
@@ -2262,8 +2266,9 @@ impl<'db> Borrowck<'db> {
         result: NValueId,
         inputs: CallInputs<'_, 'db>,
     ) -> Result<CapabilityValue<'db>, SemanticDiagnostic<'db>> {
-        let mut values = CapabilityValues::new(self.db, ValueLimits::default());
-        let sources = SourceValues::new(self.db, ValueLimits::default());
+        let cache = self.inventory.values.guard_cache();
+        let mut values = CapabilityValues::sharing(&self.inventory.values, ValueLimits::default());
+        let sources = SourceValues::sharing(&values, ValueLimits::default());
         let mut instantiations = SourceInstantiations::new(state, result, inputs);
         let mut error = None;
         let instantiated =
@@ -2289,7 +2294,9 @@ impl<'db> Borrowck<'db> {
                         .expect("native requirement scope");
                     requirements.substitute(self.db, &lift).with_guard(&guard)
                 } else {
-                    resolved.region.with_guard(&guard)
+                    resolved
+                        .region
+                        .restricted(&guard, |left, right| cache.borrow_mut().and(left, right))
                 };
                 if region.is_empty() {
                     return Vec::new();
@@ -2466,6 +2473,7 @@ impl<'db> Borrowck<'db> {
         result: NValueId,
         inputs: CallInputs<'_, 'db>,
     ) -> Result<RegionSet<'db>, SemanticDiagnostic<'db>> {
+        let cache = self.inventory.values.guard_cache();
         let mut instantiated = RegionSet::empty(region.scope());
         for clause in region.clauses() {
             let source = SourceExpr::from_place(&clause.payload).ok_or_else(|| {
@@ -2480,7 +2488,7 @@ impl<'db> Borrowck<'db> {
                 instantiated = instantiated.union(
                     &resolved
                         .region
-                        .with_guard(&guard)
+                        .restricted(&guard, |left, right| cache.borrow_mut().and(left, right))
                         .close_existentials(region.scope()),
                 );
             }
@@ -3062,7 +3070,8 @@ impl<'db> SignatureValues<'_, 'db> {
     ) -> Result<SourceValue<'db>, SemanticDiagnostic<'db>> {
         let valid = self.result(shape, scope)?;
         let checker = self.checker;
-        let mut contents = CapabilityValues::new(checker.db, ValueLimits::default());
+        let mut contents =
+            CapabilityValues::sharing(&checker.inventory.values, ValueLimits::default());
         let overwrite = OpaqueWrite {
             site: OpaqueWriteSite::Summary(self.choice),
             scope: checker
@@ -4354,17 +4363,18 @@ fn clobber(slot: *ref u256) {
                     "opaque native result vanished"
                 );
             } else {
-                let invalid = |summary: &BorrowSummary<'_>| {
+                // The interner is invariant over its database lifetime, so name it.
+                fn invalid<'db>(values: &SourceValues<'db>, summary: &BorrowSummary<'db>) -> bool {
                     summary.mutable_inputs.iter().any(|poststate| {
                         values
                             .leaves(&poststate.value, ValueOccurrence::Summary)
                             .iter()
                             .any(|leaf| leaf.payload.invalidated)
                     })
-                };
-                assert!(invalid(&concrete));
+                }
+                assert!(invalid(&values, &concrete));
                 assert!(
-                    invalid(&fallback),
+                    invalid(&values, &fallback),
                     "opaque native poststate restored entry validity"
                 );
             }

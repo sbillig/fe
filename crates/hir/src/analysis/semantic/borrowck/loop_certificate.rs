@@ -666,9 +666,9 @@ mod tests {
     }
 
     /// Every pointer in the value names a fresh allocation, never an unknown seed.
-    fn only_fresh_pointers(
-        checker: &Borrowck<'_>,
-        value: &CapabilityValue<'_>,
+    fn only_fresh_pointers<'db>(
+        checker: &Borrowck<'db>,
+        value: &CapabilityValue<'db>,
         at: NValueId,
     ) -> bool {
         let leaves = checker
