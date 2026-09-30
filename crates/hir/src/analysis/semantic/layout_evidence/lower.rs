@@ -17,10 +17,10 @@ use crate::analysis::{
         },
     },
     ty::{
-        CallableLayoutParamPort, CallableLayoutPort, LayoutBundleComponent,
-        LayoutBundleComponentId, LayoutBundleComponentKey, LayoutBundleComponentTransport,
-        LayoutBundleInterface, LayoutBundleSchema, LayoutBundleViewMapping, LayoutEvidencePath,
-        LayoutEvidencePathStep, LayoutPortKey,
+        CallableLayoutBundleSignature, CallableLayoutParamPort, CallableLayoutPort,
+        LayoutBundleComponent, LayoutBundleComponentId, LayoutBundleComponentKey,
+        LayoutBundleComponentTransport, LayoutBundleInterface, LayoutBundleSchema,
+        LayoutBundleViewMapping, LayoutEvidencePath, LayoutEvidencePathStep, LayoutPortKey,
         adt_def::instantiate_adt_field_shape,
         const_ty::CallableInputLayoutHoleOrigin,
         provider::{EffectHandleResolution, ProviderLayoutEvidence, resolve_effect_handle},
@@ -36,7 +36,7 @@ use super::{
     LayoutEvidenceCallArg, LayoutEvidenceComponentValue, LayoutEvidenceConstBinding,
     LayoutEvidenceConstant, LayoutEvidenceError, LayoutEvidenceExpr, LayoutEvidenceLocal,
     LayoutEvidenceLocalId, LayoutEvidenceOperand, LayoutEvidenceReturn, LayoutEvidenceStatement,
-    LayoutEvidenceTerminator, LayoutEvidenceValue, layout_const_param_uses,
+    LayoutEvidenceTerminator, LayoutEvidenceValue, LayoutSignaturePort, layout_const_param_uses,
     verify_layout_evidence_body,
 };
 
@@ -1998,6 +1998,8 @@ fn layout_evidence_body_query<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: SemanticInstance<'db>,
 ) -> Result<LayoutEvidenceBody<'db>, LayoutEvidenceError<'db>> {
+    let signature = owner.key(db).layout_bundle_signature(db);
+    validate_layout_bundle_signature(&signature)?;
     let artifacts =
         normalize_runtime_semantic_body(db, owner).map_err(layout_normalization_error)?;
     let normalized = artifacts.body;
@@ -2023,15 +2025,6 @@ fn layout_evidence_body_query<'db>(
             actual: source.locals.len(),
         });
     }
-    let signature = owner.key(db).layout_bundle_signature(db);
-    signature
-        .output
-        .validate()
-        .map_err(|error| LayoutEvidenceError::InvalidInterface { local: None, error })?;
-    signature
-        .output_witnesses
-        .validate()
-        .map_err(|error| LayoutEvidenceError::InvalidInterface { local: None, error })?;
     let mut builder = LayoutEvidenceBuilder {
         db,
         normalized: &normalized,
@@ -2075,7 +2068,7 @@ fn layout_evidence_body_query<'db>(
         interface
             .validate()
             .map_err(|error| LayoutEvidenceError::InvalidInterface {
-                local: Some(semantic_local),
+                local: semantic_local,
                 error,
             })?;
         let value = builder.alloc_value(semantic_local, interface, origin)?;
@@ -2194,6 +2187,31 @@ fn layout_evidence_body_query<'db>(
     verify_layout_evidence_body(db, &normalized, &layout_plan, source, &evidence)
         .map_err(LayoutEvidenceError::Verify)?;
     Ok(evidence)
+}
+
+/// Validates every interface of a callable's layout signature. The signature
+/// does not depend on a body, so callables without one are checked too.
+pub fn validate_layout_bundle_signature<'db>(
+    signature: &CallableLayoutBundleSignature<'db>,
+) -> Result<(), LayoutEvidenceError<'db>> {
+    for input in &signature.inputs {
+        input
+            .interface
+            .validate()
+            .map_err(|error| LayoutEvidenceError::InvalidSignature {
+                port: LayoutSignaturePort::Input(input.origin),
+                error,
+            })?;
+    }
+    for output in [&signature.output, &signature.output_witnesses] {
+        output
+            .validate()
+            .map_err(|error| LayoutEvidenceError::InvalidSignature {
+                port: LayoutSignaturePort::Output,
+                error,
+            })?;
+    }
+    Ok(())
 }
 
 fn layout_normalization_error<'db>(

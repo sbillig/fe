@@ -529,6 +529,15 @@ fn caller<const ROOT: u256>(value: Rooted<ROOT>) {
 fn empty(values: [Rooted; 0]) {}
 
 fn plain(values: [u256; 2]) {}
+
+trait Api {
+    fn declared(values: [Rooted; 2])
+    fn plain_declared(values: [u256; 2])
+}
+
+extern {
+    fn external() -> [Rooted<7>; 2]
+}
 "#,
     );
     let mut messages = collect_layout_evidence_diagnostic_vouchers(&db, top_mod)
@@ -540,8 +549,10 @@ fn plain(values: [u256; 2]) {}
         messages,
         [
             "array of layout-root values in `caller`",
+            "array of layout-root values in `declared`",
             "array of layout-root values in `empty`",
             "array of layout-root values in `explicit`",
+            "array of layout-root values in `external`",
             "array of layout-root values in `generic`",
             "array of layout-root values in `inferred`",
         ]

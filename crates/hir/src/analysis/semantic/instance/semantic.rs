@@ -131,7 +131,7 @@ pub fn semantic_layout_bundle_signature<'db>(
                         origin,
                         instance.binding_ty(db, binding),
                     );
-                    (!interface.schema.components.is_empty())
+                    (!interface.schema.is_empty())
                         .then_some(CallableLayoutBundleInput { origin, interface })
                 })
                 .collect();

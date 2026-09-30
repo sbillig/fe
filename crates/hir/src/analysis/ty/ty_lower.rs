@@ -2034,7 +2034,7 @@ pub fn callable_layout_bundle_signature<'db>(
                 .layout_bundle_interfaces_by_origin
                 .get(&origin)?
                 .clone();
-            (!interface.schema.components.is_empty())
+            (!interface.schema.is_empty())
                 .then_some(CallableLayoutBundleInput { origin, interface })
         })
         .collect::<Vec<_>>();
@@ -2283,7 +2283,7 @@ pub(crate) fn specialized_callable_layout_bundle_signature_with_normalizer<'db>(
                 bindings,
                 args,
             );
-            (!interface.schema.components.is_empty())
+            (!interface.schema.is_empty())
                 .then_some(CallableLayoutBundleInput { origin, interface })
         })
         .collect::<Vec<_>>();

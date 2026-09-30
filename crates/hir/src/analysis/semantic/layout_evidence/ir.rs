@@ -175,6 +175,13 @@ impl<'db> LayoutEvidenceBody<'db> {
     }
 }
 
+/// A position in a callable's layout signature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum LayoutSignaturePort {
+    Input(CallableInputLayoutHoleOrigin),
+    Output,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum LayoutEvidenceError<'db> {
     Blocked(BlockedSemanticBody<'db>),
@@ -190,7 +197,11 @@ pub enum LayoutEvidenceError<'db> {
         error: LayoutBundleSchemaError,
     },
     InvalidInterface {
-        local: Option<SLocalId>,
+        local: SLocalId,
+        error: LayoutBundleInterfaceError,
+    },
+    InvalidSignature {
+        port: LayoutSignaturePort,
         error: LayoutBundleInterfaceError,
     },
     DuplicateInput(CallableInputLayoutHoleOrigin),
@@ -248,6 +259,13 @@ impl<'db> LayoutEvidenceError<'db> {
                 ..
             }
             | Self::InvalidInterface {
+                error:
+                    LayoutBundleInterfaceError::Schema(LayoutBundleSchemaError::Unrepresentable(
+                        unrepresentable,
+                    )),
+                ..
+            }
+            | Self::InvalidSignature {
                 error:
                     LayoutBundleInterfaceError::Schema(LayoutBundleSchemaError::Unrepresentable(
                         unrepresentable,

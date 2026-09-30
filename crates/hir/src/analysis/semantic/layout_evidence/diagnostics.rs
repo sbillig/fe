@@ -24,7 +24,10 @@ use crate::{
     span::LazySpan,
 };
 
-use super::{LayoutEvidenceError, layout_evidence_body};
+use super::{
+    LayoutEvidenceError, LayoutSignaturePort, layout_evidence_body,
+    validate_layout_bundle_signature,
+};
 
 #[derive(Clone, Debug)]
 pub struct LayoutEvidenceDiagnostic<'db> {
@@ -109,16 +112,30 @@ fn collect_owner<'db>(
     seen: &mut FxHashSet<SemanticInstanceKey<'db>>,
     diagnostics: &mut Vec<Box<dyn DiagnosticVoucher + 'db>>,
 ) {
-    if owner.body(db).is_none() {
+    if owner.body(db).is_some() {
+        let key = identity_semantic_instance_key(db, owner);
+        collect_instance(
+            db,
+            get_or_build_semantic_instance(db, key),
+            seen,
+            diagnostics,
+        );
+        return;
+    }
+    // A callable without a body, such as a required trait method, is never
+    // lowered, but its signature must still be representable.
+    if !matches!(owner, BodyOwner::Func(_)) {
         return;
     }
     let key = identity_semantic_instance_key(db, owner);
-    collect_instance(
-        db,
-        get_or_build_semantic_instance(db, key),
-        seen,
-        diagnostics,
-    );
+    if seen.insert(key)
+        && let Err(error) = validate_layout_bundle_signature(&key.layout_bundle_signature(db))
+    {
+        diagnostics.push(Box::new(LayoutEvidenceDiagnostic {
+            instance: get_or_build_semantic_instance(db, key),
+            error,
+        }));
+    }
 }
 
 fn collect_instance<'db>(
@@ -246,12 +263,13 @@ impl LayoutEvidenceDiagnostic<'_> {
             | LayoutEvidenceError::MissingConstBinding { origin, .. } => {
                 span_for_origin_from_body(db, owner.body(db), *origin)
             }
+            LayoutEvidenceError::InvalidSignature { port, .. } => {
+                signature_port_span(db, owner, *port)
+            }
             LayoutEvidenceError::InvalidSchema {
                 local: Some(local), ..
             }
-            | LayoutEvidenceError::InvalidInterface {
-                local: Some(local), ..
-            }
+            | LayoutEvidenceError::InvalidInterface { local, .. }
             | LayoutEvidenceError::ShapeMismatch { dst: local, .. }
             | LayoutEvidenceError::MissingComponent { local, .. }
             | LayoutEvidenceError::MissingPort { local, .. }
@@ -267,7 +285,6 @@ impl LayoutEvidenceDiagnostic<'_> {
             | LayoutEvidenceError::TemplateLocalCountMismatch { .. }
             | LayoutEvidenceError::InvalidStatementIdentity(_)
             | LayoutEvidenceError::InvalidSchema { local: None, .. }
-            | LayoutEvidenceError::InvalidInterface { local: None, .. }
             | LayoutEvidenceError::DuplicateInput(_)
             | LayoutEvidenceError::InvalidPlace
             | LayoutEvidenceError::ProviderPlace
@@ -284,6 +301,31 @@ impl LayoutEvidenceDiagnostic<'_> {
                 })
                 .and_then(|body| body.span().resolve(db))
         })
+    }
+}
+
+/// The source of one signature port. Contract entry points fall back to their
+/// body span.
+fn signature_port_span(
+    db: &dyn SpannedHirAnalysisDb,
+    owner: BodyOwner<'_>,
+    port: LayoutSignaturePort,
+) -> Option<common::diagnostics::Span> {
+    let BodyOwner::Func(func) = owner else {
+        return None;
+    };
+    let span = func.span();
+    match port {
+        LayoutSignaturePort::Input(CallableInputLayoutHoleOrigin::Receiver) => {
+            span.params().param(0).resolve(db)
+        }
+        LayoutSignaturePort::Input(CallableInputLayoutHoleOrigin::ValueParam(idx)) => {
+            span.params().param(idx).ty().resolve(db)
+        }
+        LayoutSignaturePort::Input(CallableInputLayoutHoleOrigin::Effect(idx)) => {
+            span.effects().param_idx(idx).resolve(db)
+        }
+        LayoutSignaturePort::Output => span.ret_ty().resolve(db),
     }
 }
 

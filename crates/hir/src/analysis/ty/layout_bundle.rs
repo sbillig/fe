@@ -247,6 +247,12 @@ pub enum LayoutBundleSchemaError {
 }
 
 impl<'db> LayoutBundleSchema<'db> {
+    /// Whether the value carries no layout. An unrepresentable schema is never
+    /// empty: it records a value shape that cannot cross a callable boundary.
+    pub fn is_empty(&self) -> bool {
+        self.components.is_empty() && self.unrepresentable.is_none()
+    }
+
     pub fn validate(&self) -> Result<(), LayoutBundleSchemaError> {
         if let Some(unrepresentable) = &self.unrepresentable {
             return Err(LayoutBundleSchemaError::Unrepresentable(
