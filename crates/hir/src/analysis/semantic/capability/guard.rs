@@ -1218,8 +1218,13 @@ impl<'db> GuardCache<'db> {
     /// against a single owner would let the cache keep its own guards alive forever.
     /// A hot result stays with its operands, and an infeasible one costs only them.
     /// Clearing instead would only make the same graphs be rebuilt again.
+    ///
+    /// Liveness is decided for every condition before anything is removed, because
+    /// dropping a dead entry drops its references too. Reading a strong count during
+    /// the passes would let a dead entry's removal make an operand it shared with a
+    /// live entry look unheld, taking the live entry and its representative with it.
     fn sweep(&mut self) {
-        let mut held = FxHashMap::<*const Condition<'db>, usize>::default();
+        let mut held = FxHashMap::<*const Condition<'db>, (usize, usize)>::default();
         let pairs = self.conjunctions.iter().chain(&self.disjunctions);
         for guard in self
             .representatives
@@ -1231,11 +1236,12 @@ impl<'db> GuardCache<'db> {
                     .flat_map(|((guard, _), result)| iter::once(guard).chain(result)),
             )
         {
-            *held.entry(Arc::as_ptr(&guard.condition)).or_default() += 1;
+            held.entry(Arc::as_ptr(&guard.condition))
+                .or_insert((0, Arc::strong_count(&guard.condition)))
+                .0 += 1;
         }
-        let live = |guard: &Guard<'db>| {
-            Arc::strong_count(&guard.condition) > held[&Arc::as_ptr(&guard.condition)]
-        };
+        held.retain(|_, (cache, owners)| *owners > *cache);
+        let live = |guard: &Guard<'db>| held.contains_key(&Arc::as_ptr(&guard.condition));
         for results in [&mut self.conjunctions, &mut self.disjunctions] {
             results.retain(|(lhs, rhs), result| {
                 live(lhs) && live(rhs) && result.as_ref().is_none_or(live)
@@ -1642,6 +1648,34 @@ mod tests {
             RESTRICTIONS.get() - before,
             32,
             "a restriction evaluated unreachable leaf pairs"
+        );
+    }
+
+    #[test]
+    fn a_sweep_keeps_a_live_operation_sharing_a_dead_one_s_operand() {
+        let scope = BinderScope::default();
+        let mut cache = GuardCache::default();
+        let (left, right) = (selected(&scope, 0), selected(&scope, 1));
+        // A conjunction nothing outside the cache holds, over an operand that the
+        // live disjunction below shares. Removing it drops that operand's reference.
+        let dead = selected(&scope, 2);
+        cache.and(&left, &dead).unwrap();
+        drop(dead);
+        let hot = cache.or(&left, &right);
+        cache.sweep();
+        assert_eq!(
+            (
+                cache.conjunctions.len(),
+                cache.disjunctions.len(),
+                cache.representatives.len()
+            ),
+            (0, 1, 1),
+            "a sweep dropped a live operation sharing a dead one's operand"
+        );
+        let again = cache.or(&left, &right);
+        assert!(
+            Arc::ptr_eq(&again.condition, &hot.condition),
+            "a swept cache rebuilt a result the analysis still holds"
         );
     }
 
