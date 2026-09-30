@@ -74,81 +74,109 @@ fn caller_args<'db>(
 /// matching.
 fn predicate_key<'db>(
     db: &'db dyn HirAnalysisDb,
-    body: Body<'db>,
+    predicate: Body<'db>,
     typed: &TypedBody<'db>,
-    expr: ExprId,
     subst: &CompleteSubst<'db>,
 ) -> Result<Option<PredicateKey<'db>>, SubstError<'db>> {
-    let instantiate = |ty| substitute_complete(db, ty, subst);
-    let child = |expr| predicate_key(db, body, typed, expr, subst);
-    let Some(data) = expr.data(db, body).borrowed().to_opt() else {
-        return Ok(None);
-    };
-    let term = match data {
-        Expr::Lit(lit) => PredicateTerm::Literal(*lit),
-        Expr::Path(_) => {
-            if let Some(ValuePathRef::TypeConst(ty)) = typed.value_path_ref(expr) {
-                PredicateTerm::TypeConst(instantiate(ty)?)
-            } else {
-                // A reference's lookup scope is provenance, not its identity.
-                // Keep the resolved declaration and substituted receiver/goal.
-                match typed.expr_const_ref(expr) {
-                    None => return Ok(None),
-                    Some(ConstRef::Const(constant)) => PredicateTerm::Const(constant),
-                    Some(ConstRef::TraitConst(reference)) => PredicateTerm::TraitConst(
-                        substitute_complete(db, reference.inst(), subst)?,
-                        reference.name(),
-                    ),
-                    Some(ConstRef::InherentConst(reference)) => PredicateTerm::InherentConst(
-                        reference.impl_(),
-                        instantiate(reference.receiver_ty())?,
-                        reference.name(),
-                    ),
+    PredicateKeyBuilder {
+        db,
+        body: predicate,
+        typed,
+        subst,
+        arithmetic: BodyOwner::const_predicate(db, predicate).arithmetic_mode(db),
+    }
+    .key(predicate.expr(db))
+}
+
+/// What building a predicate's key needs at every node of its expression.
+struct PredicateKeyBuilder<'a, 'db> {
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    typed: &'a TypedBody<'db>,
+    subst: &'a CompleteSubst<'db>,
+    /// The predicate's arithmetic mode, which each node's key records.
+    arithmetic: crate::hir_def::attr::ArithmeticMode,
+}
+
+impl<'db> PredicateKeyBuilder<'_, 'db> {
+    fn instantiate<T>(&self, value: T) -> Result<T, SubstError<'db>>
+    where
+        T: TyFoldable<'db>,
+    {
+        substitute_complete(self.db, value, self.subst)
+    }
+
+    fn key(&self, expr: ExprId) -> Result<Option<PredicateKey<'db>>, SubstError<'db>> {
+        let (db, typed) = (self.db, self.typed);
+        let Some(data) = expr.data(db, self.body).borrowed().to_opt() else {
+            return Ok(None);
+        };
+        let callable = typed.callable_expr(expr);
+        let term = match data {
+            Expr::Lit(lit) => PredicateTerm::Literal(*lit),
+            Expr::Path(_) => {
+                if let Some(ValuePathRef::TypeConst(ty)) = typed.value_path_ref(expr) {
+                    PredicateTerm::TypeConst(self.instantiate(ty)?)
+                } else {
+                    // A reference's lookup scope is provenance, not its identity.
+                    // Keep the resolved declaration and substituted receiver/goal.
+                    match typed.expr_const_ref(expr) {
+                        None => return Ok(None),
+                        Some(ConstRef::Const(constant)) => PredicateTerm::Const(constant),
+                        Some(ConstRef::TraitConst(reference)) => PredicateTerm::TraitConst(
+                            self.instantiate(reference.inst())?,
+                            reference.name(),
+                        ),
+                        Some(ConstRef::InherentConst(reference)) => PredicateTerm::InherentConst(
+                            reference.impl_(),
+                            self.instantiate(reference.receiver_ty())?,
+                            reference.name(),
+                        ),
+                    }
                 }
             }
-        }
-        Expr::Bin(lhs, rhs, op) => {
-            let (Some(lhs), Some(rhs)) = (child(*lhs)?, child(*rhs)?) else {
-                return Ok(None);
-            };
-            PredicateTerm::Binary(*op, Box::new(lhs), Box::new(rhs))
-        }
-        Expr::Un(value, op) => {
-            let Some(value) = child(*value)? else {
-                return Ok(None);
-            };
-            PredicateTerm::Unary(*op, Box::new(value))
-        }
-        Expr::Cast(value, _) => {
-            let Some(value) = child(*value)? else {
-                return Ok(None);
-            };
-            PredicateTerm::Cast(Box::new(value))
-        }
-        Expr::Call(_, call_args) => {
-            if typed.callable_expr(expr).is_none() {
-                return Ok(None);
+            Expr::Bin(lhs, rhs, op) => {
+                let (Some(lhs), Some(rhs)) = (self.key(*lhs)?, self.key(*rhs)?) else {
+                    return Ok(None);
+                };
+                PredicateTerm::Binary(*op, Box::new(lhs), Box::new(rhs))
             }
-            let args = call_args
-                .iter()
-                .map(|arg| child(arg.expr))
-                .collect::<Result<Option<_>, _>>()?;
-            let Some(args) = args else {
-                return Ok(None);
-            };
-            PredicateTerm::Call(args)
-        }
-        _ => return Ok(None),
-    };
-    Ok(Some(PredicateKey {
-        ty: instantiate(typed.expr_ty(db, expr))?,
-        arithmetic: BodyOwner::const_predicate(db, body).arithmetic_mode(db),
-        operation: typed
-            .callable_expr(expr)
-            .map(|callable| substitute_complete(db, callable.clone(), subst))
-            .transpose()?,
-        term,
-    }))
+            Expr::Un(value, op) => {
+                let Some(value) = self.key(*value)? else {
+                    return Ok(None);
+                };
+                PredicateTerm::Unary(*op, Box::new(value))
+            }
+            Expr::Cast(value, _) => {
+                let Some(value) = self.key(*value)? else {
+                    return Ok(None);
+                };
+                PredicateTerm::Cast(Box::new(value))
+            }
+            Expr::Call(_, call_args) => {
+                if callable.is_none() {
+                    return Ok(None);
+                }
+                let args = call_args
+                    .iter()
+                    .map(|arg| self.key(arg.expr))
+                    .collect::<Result<Option<_>, _>>()?;
+                let Some(args) = args else {
+                    return Ok(None);
+                };
+                PredicateTerm::Call(args)
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(PredicateKey {
+            ty: self.instantiate(typed.expr_ty(db, expr))?,
+            arithmetic: self.arithmetic,
+            operation: callable
+                .map(|callable| self.instantiate(callable.clone()))
+                .transpose()?,
+            term,
+        }))
+    }
 }
 
 /// The generic parameters that a predicate's expression mentions, each
@@ -1509,7 +1537,7 @@ fn discharge_requirement<'db>(
         symbolic |= arg.has_param(db);
     }
     if symbolic {
-        let Ok(key) = predicate_key(db, predicate, typed, predicate.expr(db), &subst) else {
+        let Ok(key) = predicate_key(db, predicate, typed, &subst) else {
             return not_instantiable;
         };
         if let (Some(key), Some(caller)) = (&key, caller) {
@@ -1521,8 +1549,7 @@ fn discharge_requirement<'db>(
                 else {
                     continue;
                 };
-                let Ok(premise_key) =
-                    predicate_key(db, premise, premise_typed, premise.expr(db), &premise_subst)
+                let Ok(premise_key) = predicate_key(db, premise, premise_typed, &premise_subst)
                 else {
                     return not_instantiable;
                 };
