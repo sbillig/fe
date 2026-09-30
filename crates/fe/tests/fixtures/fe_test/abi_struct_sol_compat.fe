@@ -59,6 +59,22 @@ pub struct Tuples {
     pub unit: (),
 }
 
+// `usize` and `isize` are Solidity's `uint256` and `int256`.
+#[abi]
+pub struct Sizes {
+    pub n: usize,
+    pub d: isize,
+}
+
+#[event]
+struct SizesEvent {
+    sizes: Sizes,
+    #[indexed]
+    n: usize,
+    #[indexed]
+    d: isize,
+}
+
 // 16 elements is the largest tuple arity.
 type Wide16 = (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)
 const WIDE16_HASH: u256 = core::keccak(<Wide16 as SolCompat>::SOL_TYPE)
@@ -109,6 +125,8 @@ fn abi_struct_event_topics() {
     assert!(Pair::TOPIC0 == 0x44042ff68b2c73faef022cb89fb09f843af2259cea24f2ad474607b05d8abeaa)
     // keccak256("OrdersEvent(((uint8,address,uint256,uint256)[],((uint8,address,uint256,uint256),bytes)[],uint256,uint256,uint256,uint256,uint256,uint256,uint256))")
     assert!(OrdersEvent::TOPIC0 == 0x3639c754d04f0ebf08e07ee4b74dd225851aebde4feb904783436dc6c89f1288)
+    // keccak256("SizesEvent((uint256,int256),uint256,int256)")
+    assert!(SizesEvent::TOPIC0 == 0xe014529359c91f35cb164fb1ce79ce32a9d89a187e3c49c306a7cc23fe5792aa)
     // keccak256("TupleEvent(((uint256,address),(bool),(uint8,uint16,uint32,uint64),()))")
     assert!(TupleEvent::TOPIC0 == 0x487b51dd6cea96a1b2c470869e12c3901946f79127de534ac9a803b7906093fa)
     // keccak256("(uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8)")

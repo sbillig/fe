@@ -236,6 +236,10 @@ impl SolCompat for u256 {
     type S = String<7>
     const SOL_TYPE: Self::S = "uint256"
 }
+impl SolCompat for usize {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint256"
+}
 
 // Primitive signed integer implementations
 impl SolCompat for i8 {
@@ -259,6 +263,10 @@ impl SolCompat for i128 {
     const SOL_TYPE: Self::S = "int128"
 }
 impl SolCompat for i256 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int256"
+}
+impl SolCompat for isize {
     type S = String<6>
     const SOL_TYPE: Self::S = "int256"
 }
@@ -627,6 +635,9 @@ impl TopicValue for u128 {
 impl TopicValue for u256 {
     fn as_topic(self) -> u256 { self }
 }
+impl TopicValue for usize {
+    fn as_topic(self) -> u256 { self as u256 }
+}
 impl TopicValue for i8 {
     fn as_topic(self) -> u256 { self.downcast_unchecked() }
 }
@@ -643,6 +654,9 @@ impl TopicValue for i128 {
     fn as_topic(self) -> u256 { self.downcast_unchecked() }
 }
 impl TopicValue for i256 {
+    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+}
+impl TopicValue for isize {
     fn as_topic(self) -> u256 { self.downcast_unchecked() }
 }
 impl TopicValue for Address {

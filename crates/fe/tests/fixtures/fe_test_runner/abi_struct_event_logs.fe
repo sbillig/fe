@@ -30,6 +30,21 @@ struct Nest {
     nested: Nested,
 }
 
+#[abi]
+pub struct Sizes {
+    pub n: usize,
+    pub d: isize,
+}
+
+#[event]
+struct SizesEvent {
+    sizes: Sizes,
+    #[indexed]
+    n: usize,
+    #[indexed]
+    d: isize,
+}
+
 fn item(_ amount: u256) -> Item {
     Item { itemType: 2, token: Address { inner: 0xbeef }, identifier: 7, amount }
 }
@@ -42,4 +57,9 @@ fn test_abi_struct_array_event() uses (evm: mut Evm) {
 #[test]
 fn test_dynamic_abi_struct_event() uses (evm: mut Evm) {
     evm.emit(Nest { nested: Nested { item: item(3), data: Bytes::from_word_prefix(word: 0xab << 248, len: 1) } })
+}
+
+#[test]
+fn test_usize_isize_event() uses (evm: mut Evm) {
+    evm.emit(SizesEvent { sizes: Sizes { n: 1, d: -2 }, n: 3, d: -4 })
 }
