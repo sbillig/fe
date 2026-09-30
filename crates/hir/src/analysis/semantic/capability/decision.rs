@@ -2,6 +2,9 @@
 #[cfg(test)]
 use std::cell::{Cell, RefCell};
 
+#[cfg(feature = "borrowck-profile")]
+use super::profile::{self, Operation};
+
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::{
     cmp::Ordering,
@@ -99,12 +102,19 @@ impl<V: Hash, T: Hash> Decision<V, T> {
                 ))
                 .or_default() += 1;
         });
+        #[cfg(feature = "borrowck-profile")]
+        profile::created((
+            hash,
+            nodes.len(),
+            size_of::<Node<V, T>>(),
+            std::any::type_name::<Node<V, T>>(),
+        ));
         Self { hash, nodes }
     }
 }
 
-// Test accounting only: the last owner of a backing slice releases its storage.
-#[cfg(test)]
+// Diagnostic accounting: the last owner of a backing slice releases its storage.
+#[cfg(any(test, feature = "borrowck-profile"))]
 impl<V, T> Drop for Decision<V, T> {
     fn drop(&mut self) {
         if Arc::strong_count(&self.nodes) > 1 {
@@ -116,7 +126,10 @@ impl<V, T> Drop for Decision<V, T> {
             size_of::<Node<V, T>>(),
             std::any::type_name::<Node<V, T>>(),
         );
+        #[cfg(feature = "borrowck-profile")]
+        profile::dropped(key);
         // A thread may drop graphs after its own thread locals are destroyed.
+        #[cfg(test)]
         let _ = LIVE_GRAPHS.try_with(|live| {
             let mut live = live.borrow_mut();
             let copies = live.get_mut(&key).expect("counted graph");
@@ -458,6 +471,8 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         empty: &T,
         leaf: impl Fn(&T, &T) -> Option<T>,
     ) -> Option<Self> {
+        #[cfg(feature = "borrowck-profile")]
+        let operation = Operation::new(3, self.nodes.len() + care.nodes.len());
         let mut builder = Builder::new();
         let mut context = Restriction {
             source: self,
@@ -468,7 +483,10 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
             memo: FxHashMap::default(),
         };
         let root = context.visit(self.root(), care.root())?;
-        Some(builder.finish(root))
+        let result = builder.finish(root);
+        #[cfg(feature = "borrowck-profile")]
+        drop(operation);
+        Some(result)
     }
     pub(super) fn leaf(value: T) -> Self {
         Self::new(vec![Node::Leaf(value)].into())
@@ -531,6 +549,8 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         if let [Node::Leaf(value)] = &*self.nodes {
             return Decision::leaf(leaf(value));
         }
+        #[cfg(feature = "borrowck-profile")]
+        let operation = Operation::new(0, self.nodes.len());
         let mut builder = Builder::with_capacity(self.nodes.len());
         let mut mapped = Vec::with_capacity(self.nodes.len());
         for node in self.nodes.iter() {
@@ -566,7 +586,10 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
             };
             mapped.push(id);
         }
-        builder.finish(mapped[self.root()])
+        let result = builder.finish(mapped[self.root()]);
+        #[cfg(feature = "borrowck-profile")]
+        drop(operation);
+        result
     }
 
     /// Existentially quantify selected decisions using an associative,
@@ -590,6 +613,8 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         if !quantified.values().any(|selected| *selected) {
             return self.clone();
         }
+        #[cfg(feature = "borrowck-profile")]
+        let operation = Operation::new(2, self.nodes.len());
         let mut builder = Builder::with_capacity(self.nodes.len());
         let mut mapped = Vec::with_capacity(self.nodes.len());
         let mut memo = FxHashMap::default();
@@ -619,13 +644,18 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
             };
             mapped.push(result);
         }
-        builder.finish(mapped[self.root()])
+        let result = builder.finish(mapped[self.root()]);
+        #[cfg(feature = "borrowck-profile")]
+        drop(operation);
+        result
     }
 
     pub(super) fn apply(&self, other: &Self, leaf: impl Fn(&T, &T) -> T) -> Self {
         if let ([Node::Leaf(left)], [Node::Leaf(right)]) = (&*self.nodes, &*other.nodes) {
             return Self::leaf(leaf(left, right));
         }
+        #[cfg(feature = "borrowck-profile")]
+        let operation = Operation::new(1, self.nodes.len() + other.nodes.len());
         let mut builder = Builder::with_capacity(self.nodes.len().max(other.nodes.len()));
         let root = builder.apply_decisions(
             self,
@@ -638,7 +668,10 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
                 Default::default(),
             ),
         );
-        builder.finish(root)
+        let result = builder.finish(root);
+        #[cfg(feature = "borrowck-profile")]
+        drop(operation);
+        result
     }
 
     fn variable(&self, node: usize) -> Option<&V> {

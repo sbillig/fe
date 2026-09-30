@@ -705,6 +705,8 @@ impl<'db> Borrowck<'db> {
     }
 
     pub fn build_summary(&self) -> Result<BorrowSummary<'db>, SemanticDiagnostic<'db>> {
+        #[cfg(feature = "borrowck-profile")]
+        let profile = self.profile_scope("build_summary");
         let ownership = self.analyze_availability();
         let _ = self
             .availability_diagnostic
@@ -1199,6 +1201,8 @@ impl<'db> Borrowck<'db> {
         };
         let summary = summary.abstract_choices(&mut values, choices);
         self.verify_summary(&summary)?;
+        #[cfg(feature = "borrowck-profile")]
+        drop(profile);
         Ok(summary)
     }
 
