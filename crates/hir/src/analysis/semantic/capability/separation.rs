@@ -14,7 +14,7 @@ use crate::analysis::{HirAnalysisDb, ty::ty_def::BorrowKind};
 use super::{
     footprint::AccessExtent,
     guard::{Guard, ValueOccurrence},
-    index::{BinderScope, IndexExpr, IndexSubst},
+    index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     path::RegionPath,
     region::{RegionSet, SymbolicPlace},
     value::Guarded,
@@ -32,8 +32,9 @@ pub struct Separation<'db> {
     pub extent: AccessExtent<'db>,
     /// Projections of `protected`, relative to it, that the holder's own live
     /// reborrows definitely suspended. The mask is a union, kept as one slice
-    /// per path in path order. Guards are in the clause scope and are must
-    /// conditions, so no operation may widen them.
+    /// per path in path order. Guards are must conditions, so no operation may
+    /// widen them. Their scope is a prefix of the clause scope: canonically the
+    /// relation's own, the owner plus the witnesses the relation observes.
     pub suspended: Box<[Guarded<'db, RegionPath<IndexExpr<'db>>>]>,
 }
 
@@ -104,6 +105,18 @@ impl<'db> Separation<'db> {
             }))
     }
 
+    /// The owner plus the witnesses this relation observes. A canonical
+    /// relation observes exactly the leading witnesses of its clause.
+    fn scope(&self, owner: &BinderScope) -> BinderScope {
+        let witnesses: BTreeSet<_> = self
+            .indices()
+            .filter(|index| owner.validate(*index).is_err())
+            .collect();
+        witnesses.iter().fold(owner.clone(), |scope, _| {
+            scope.bind(IndexNamespace::Existential).0
+        })
+    }
+
     /// Rename every part with one substitution, preserving shared witnesses.
     fn rename(&self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
         let place = |place: &SymbolicPlace<'db>| SymbolicPlace {
@@ -121,7 +134,7 @@ impl<'db> Separation<'db> {
             // nothing. Substitution can reorder paths or identify them.
             suspended: canonical_mask(self.suspended.iter().filter_map(|slice| {
                 Some(Guarded {
-                    guard: slice.guard.substitute(subst)?,
+                    guard: slice.guard.in_scope(subst.source()).substitute(subst)?,
                     payload: slice.payload.substitute(subst),
                 })
             })),
@@ -131,7 +144,8 @@ impl<'db> Separation<'db> {
     /// Canonicalize one clause under `owner`. Witnesses observed by no part of
     /// the relation are projected from its guard. The rest are renamed in one
     /// substitution across every part, the relation's own before those only
-    /// the guard observes, so the relation alone determines its binders.
+    /// the guard observes. Suspension conditions then move to the relation's
+    /// scope, so the relation alone, never the guard, determines the key.
     fn canonical(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -140,7 +154,10 @@ impl<'db> Separation<'db> {
     ) -> (Self, Guard<'db>) {
         // Merging slices can drop a slice guard's last use of a witness.
         let relation = Self {
-            suspended: canonical_mask(self.suspended.into_vec()),
+            suspended: canonical_mask(self.suspended.iter().map(|slice| Guarded {
+                guard: slice.guard.in_scope(guard.scope()),
+                payload: slice.payload.clone(),
+            })),
             ..self
         };
         let observed: BTreeSet<_> = relation.indices().collect();
@@ -156,11 +173,27 @@ impl<'db> Separation<'db> {
         let guard = guard
             .substitute(&substitution)
             .expect("separation alpha normalization");
+        let scope = relation.scope(owner);
+        // Suspension conditions observe no witness beyond the relation's.
+        let narrow = guard
+            .scope()
+            .canonical_existentials(&scope, std::iter::empty);
+        let relation = Self {
+            suspended: relation
+                .suspended
+                .iter()
+                .map(|slice| Guarded {
+                    guard: slice
+                        .guard
+                        .substitute(&narrow)
+                        .expect("suspension conditions observe relation witnesses"),
+                    payload: slice.payload.clone(),
+                })
+                .collect(),
+            ..relation
+        };
         for index in relation.indices() {
-            guard
-                .scope()
-                .validate(index)
-                .expect("free separation binder");
+            scope.validate(index).expect("free separation binder");
         }
         (relation, guard)
     }
@@ -219,11 +252,19 @@ impl<'db> SeparationSet<'db> {
                     // disjunction, so merged guards may share them by position.
                     let wide = entry.get().scope().max(guard.scope()).clone();
                     let merged = entry.get().in_scope(&wide).or(&guard.in_scope(&wide));
-                    // The merge can leave such a witness unobserved. Removing it
-                    // keeps the relation's own binders, and so its key.
-                    let (relation, merged) = entry.key().clone().canonical(db, scope, &merged);
-                    debug_assert_eq!(&relation, entry.key());
-                    entry.insert(merged);
+                    // The merge can leave such a witness unobservable. The
+                    // relation lies in its own scope, which compaction keeps.
+                    let relation = entry.key().scope(scope);
+                    let merged =
+                        merged.project_witnesses(|index| relation.validate(index).is_err());
+                    let compact = merged
+                        .scope()
+                        .canonical_existentials(&relation, || merged.indices());
+                    entry.insert(
+                        merged
+                            .substitute(&compact)
+                            .expect("witness compaction preserves the guard"),
+                    );
                 }
             }
         }
@@ -248,6 +289,10 @@ impl<'db> SeparationSet<'db> {
         self.clauses.is_empty()
     }
 
+    /// Rebuilding and the empty union are exact. Grouping can change the
+    /// representation, never the meaning, of a relation whose guards keep two
+    /// or more witnesses only they observe, since merges share those by
+    /// position.
     pub fn union(&self, db: &'db dyn HirAnalysisDb, other: &Self) -> Self {
         assert_eq!(self.scope, other.scope, "separation scopes must match");
         Self::new(
@@ -571,6 +616,99 @@ mod tests {
         assert_eq!(merged.union(&db, &SeparationSet::empty(&owner)), merged);
         assert_eq!(merged.union(&db, &restricted), merged);
         assert_eq!(some.union(&db, &none.union(&db, &restricted)), merged);
+    }
+
+    #[test]
+    fn guard_merges_keep_suspension_conditions_in_the_relation_scope() {
+        let db = HirAnalysisTestDb::default();
+        let owner = BinderScope::default();
+        let (scope, witness) = owner.bind(IndexNamespace::Existential);
+        let choice =
+            |occurrence, path| ChoiceKey::new(ValueOccurrence::SummaryChoice(occurrence), path);
+        let indexed = choice(0, StructuralPath::new([Projection::Index(witness)]));
+        let suspension = choice(1, StructuralPath::default());
+        // The whole referent is suspended under a condition that does not
+        // observe the outer guard's witness.
+        let relation = |scope: &BinderScope, guard| {
+            let slice = Guard::always(scope)
+                .with_boolean(suspension.clone(), true)
+                .unwrap();
+            Guarded {
+                guard,
+                payload: separation(
+                    place(input(&db, 0), []),
+                    place(input(&db, 1), []),
+                    AccessExtent::Typed,
+                    [Guarded {
+                        guard: slice,
+                        payload: RegionPath::default(),
+                    }],
+                ),
+            }
+        };
+        let [some, none] = [true, false].map(|value| {
+            relation(
+                &scope,
+                Guard::always(&scope)
+                    .with_boolean(indexed.clone(), value)
+                    .unwrap(),
+            )
+        });
+        let aligned = |set: &SeparationSet<'_>| {
+            for clause in set.clauses() {
+                for slice in &clause.payload.suspended {
+                    assert_eq!(slice.guard.scope(), &clause.payload.scope(set.scope()));
+                }
+            }
+        };
+        // A relation is keyed apart from witnesses only its guard observes.
+        let conditional = SeparationSet::new(&db, &owner, [some.clone()]);
+        aligned(&conditional);
+        let [clause] = conditional.clauses() else {
+            panic!("{conditional:#?}");
+        };
+        assert_eq!(clause.guard.scope(), &scope);
+
+        let merged = SeparationSet::new(&db, &owner, [some.clone(), none]);
+        aligned(&merged);
+        let [clause] = merged.clauses() else {
+            panic!("{merged:#?}");
+        };
+        assert_eq!(clause.guard, Guard::always(&owner));
+        assert_eq!(
+            &*clause.payload.suspended,
+            &[Guarded {
+                guard: Guard::always(&owner)
+                    .with_boolean(suspension.clone(), true)
+                    .unwrap(),
+                payload: RegionPath::default(),
+            }]
+        );
+        assert_eq!(
+            SeparationSet::new(&db, &owner, merged.clauses().iter().cloned()),
+            merged
+        );
+        assert_eq!(merged.union(&db, &SeparationSet::empty(&owner)), merged);
+
+        // It merges with an already compacted relation.
+        let compacted = SeparationSet::new(
+            &db,
+            &owner,
+            [relation(
+                &owner,
+                Guard::always(&owner)
+                    .with_boolean(choice(2, StructuralPath::default()), true)
+                    .unwrap(),
+            )],
+        );
+        let joined = conditional.union(&db, &compacted);
+        aligned(&joined);
+        let [clause] = joined.clauses() else {
+            panic!("{joined:#?}");
+        };
+        assert_eq!(clause.guard.scope(), &scope);
+        assert_eq!(merged.union(&db, &compacted), merged);
+        assert_eq!(joined.union(&db, &merged), merged);
     }
 
     #[test]

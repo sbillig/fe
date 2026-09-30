@@ -2037,7 +2037,7 @@ impl<'db> Borrowck<'db> {
             };
             let protected = endpoint(&separation.protected)?;
             endpoint(&separation.access)?;
-            let local = |index: IndexExpr<'db>| match index {
+            let local = |scope: &BinderScope, index: IndexExpr<'db>| match index {
                 IndexExpr::FormalValue(param) => !self
                     .summary_param_ty(param)
                     .is_some_and(|ty| ty.as_view(self.db).unwrap_or(ty).is_integral(self.db)),
@@ -2045,11 +2045,15 @@ impl<'db> Borrowck<'db> {
                 IndexExpr::Bound(_) => scope.validate(index).is_err(),
                 IndexExpr::Runtime(_) | IndexExpr::Iteration(_) => true,
             };
-            if separation.extent.indices().any(local) {
+            if separation.extent.indices().any(|index| local(scope, index)) {
                 return Err(invalid("its extent retains a local index"));
             }
             for slice in &separation.suspended {
-                if slice.guard.scope() != scope || slice.payload.indices().any(local) {
+                // Suspension conditions lie in a prefix of the clause scope.
+                let prefix = slice.guard.scope();
+                if scope.existential_extension_of(prefix).is_none()
+                    || slice.payload.indices().any(|index| local(prefix, index))
+                {
                     return Err(invalid("a suspension slice is not in the clause scope"));
                 }
                 self.verify_summary_guard(&slice.guard, &protected)?;
@@ -3653,12 +3657,24 @@ fn relate(_ held: mut Pair, _ other: mut Pair, _ count: u256) {}
                     ..valid.clone()
                 },
             ),
+            (
+                "guard-only witness",
+                Guard::always(&witnessed)
+                    .with_boolean(
+                        ChoiceKey::new(
+                            ValueOccurrence::SummaryChoice(0),
+                            StructuralPath::new([Projection::Index(witness)]),
+                        ),
+                        true,
+                    )
+                    .unwrap(),
+                valid.clone(),
+            ),
         ] {
+            let requirements = requirements(guard, separation);
             assert!(
-                checker
-                    .verify_loan_requirements(&requirements(guard, separation))
-                    .is_ok(),
-                "{name}"
+                checker.verify_loan_requirements(&requirements).is_ok(),
+                "{name}: {requirements:#?}"
             );
         }
         let runtime = IndexExpr::Runtime(NValueId::from_u32(0));
