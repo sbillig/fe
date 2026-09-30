@@ -1,0 +1,45 @@
+// `#[abi]` struct event data encodes like Solidity's `abi.encode` of the
+// non-indexed fields.
+use std::abi::{Bytes, DynArray, dyn_array_from}
+use std::evm::{Address, Evm}
+
+#[abi]
+pub struct Item {
+    pub itemType: u8,
+    pub token: Address,
+    pub identifier: u256,
+    pub amount: u256,
+}
+impl Copy for Item {}
+
+#[abi]
+pub struct Nested {
+    pub item: Item,
+    pub data: Bytes,
+}
+
+#[event]
+struct Offered {
+    offer: DynArray<Item>,
+    #[indexed]
+    offerer: Address,
+}
+
+#[event]
+struct Nest {
+    nested: Nested,
+}
+
+fn item(_ amount: u256) -> Item {
+    Item { itemType: 2, token: Address { inner: 0xbeef }, identifier: 7, amount }
+}
+
+#[test]
+fn test_abi_struct_array_event() uses (evm: mut Evm) {
+    evm.emit(Offered { offer: dyn_array_from([item(1), item(2)]), offerer: Address { inner: 0xcafe } })
+}
+
+#[test]
+fn test_dynamic_abi_struct_event() uses (evm: mut Evm) {
+    evm.emit(Nest { nested: Nested { item: item(3), data: Bytes::from_word_prefix(word: 0xab << 248, len: 1) } })
+}

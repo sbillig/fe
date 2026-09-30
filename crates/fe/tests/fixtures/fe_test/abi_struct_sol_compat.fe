@@ -1,7 +1,7 @@
 // `#[abi]` structs implement `SolCompat` as the Solidity tuple of their
 // fields, so they can be event and error fields.
-use std::abi::{Bytes, Bytes32, DynArray, SolCompat, dyn_array_from}
-use std::evm::{Address, Evm, Log, revert_error}
+use std::abi::{Bytes, Bytes32, DynArray, SolCompat}
+use std::evm::{Address, Evm, revert_error}
 
 #[abi]
 pub struct Item {
@@ -106,19 +106,13 @@ fn abi_struct_event_topics() {
     // keccak256("UnitEvent(())")
     assert!(UnitEvent::TOPIC0 == 0x25a4581f37ebd5524e7bdf316e1ccf78504c2248f0360df41b558fd2d5608c82)
     // keccak256("Pair((uint8,address,uint256,uint256),((uint8,address,uint256,uint256),bytes)[])")
+    assert!(Pair::TOPIC0 == 0x44042ff68b2c73faef022cb89fb09f843af2259cea24f2ad474607b05d8abeaa)
     // keccak256("OrdersEvent(((uint8,address,uint256,uint256)[],((uint8,address,uint256,uint256),bytes)[],uint256,uint256,uint256,uint256,uint256,uint256,uint256))")
     assert!(OrdersEvent::TOPIC0 == 0x3639c754d04f0ebf08e07ee4b74dd225851aebde4feb904783436dc6c89f1288)
-    assert!(Pair::TOPIC0 == 0x44042ff68b2c73faef022cb89fb09f843af2259cea24f2ad474607b05d8abeaa)
     // keccak256("TupleEvent(((uint256,address),(bool),(uint8,uint16,uint32,uint64),()))")
     assert!(TupleEvent::TOPIC0 == 0x487b51dd6cea96a1b2c470869e12c3901946f79127de534ac9a803b7906093fa)
     // keccak256("(uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8)")
     assert!(WIDE16_HASH == 0x70a4f9110d5b6eb01facb4ce24ff6ea6e4b85af583214a673231757ecfbefeee)
-}
-
-#[test]
-fn abi_struct_event_emits() uses (log: mut Log) {
-    log.emit(Offered { offer: dyn_array_from([item(1), item(2)]), offerer: Address { inner: 0xcafe } })
-    log.emit(Nest { nested: Nested { item: item(3), data: Bytes::from_word_prefix(word: 0xab << 248, len: 1) } })
 }
 
 // BadItem((uint8,address,uint256,uint256))
