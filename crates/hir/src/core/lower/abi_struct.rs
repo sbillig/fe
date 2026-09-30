@@ -4,20 +4,20 @@ use salsa::Accumulator as _;
 use super::{
     FileLowerCtxt,
     attr::{has_named_attr, lower_attrs_without_named, named_attr_specs},
-    hir_builder::{BodyBuilder, DecodeInputBindings, HirBuilder},
+    hir_builder::{DecodeInputBindings, HirBuilder},
     msg::{
         build_decode_head_pos_expr, create_head_size_assoc_const, create_is_dynamic_assoc_const,
         create_payload_size_func,
     },
 };
 use crate::{
-    ErrorDiagnostic, ErrorDiagnosticKind,
+    ErrorDiagnostic, ErrorDiagnosticKind, HirDb,
     hir_def::{
         AssocConstDef, AttrListId, Body, BodyKind, Expr, ExprId, FieldDefListId, FuncModifiers,
-        FuncParam, FuncParamMode, FuncParamName, GenericArg, GenericArgListId, GenericParamListId,
-        IdentId, ImplTrait, LitKind, Partial, Pat, PathId, PathKind, Stmt, StringId, Struct,
-        TrackedItemVariant, TraitRefId, TupleTypeId, TypeBound, TypeGenericArg, TypeId, TypeKind,
-        Visibility, WhereClauseId, WherePredicate, expr::CallArg,
+        FuncParam, FuncParamMode, FuncParamName, GenericArgListId, GenericParamListId, IdentId,
+        ImplTrait, LitKind, Partial, Pat, PathId, PathKind, Stmt, StringId, Struct,
+        TrackedItemVariant, TraitRefId, TupleTypeId, TypeBound, TypeId, TypeKind, Visibility,
+        WhereClauseId, WherePredicate, expr::CallArg,
     },
     span::{AbiStructDesugared, HirOrigin},
 };
@@ -120,6 +120,22 @@ pub(super) fn lower_abi_struct<'db>(
 
 type FieldSpecs<'db> = [(IdentId<'db>, TypeId<'db>)];
 
+/// `where F0: Trait, F1: Trait, ...` over the field types.
+fn field_bounds<'db>(
+    db: &'db dyn HirDb,
+    field_specs: &FieldSpecs<'db>,
+    trait_ref: TraitRefId<'db>,
+) -> WhereClauseId<'db> {
+    let predicates: Vec<_> = field_specs
+        .iter()
+        .map(|(_, ty)| WherePredicate {
+            ty: Partial::Present(*ty),
+            bounds: vec![TypeBound::Trait(trait_ref)],
+        })
+        .collect();
+    WhereClauseId::new(db, predicates)
+}
+
 fn lower_abi_size_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, AbiStructDesugared>,
     self_ty: TypeId<'db>,
@@ -148,8 +164,9 @@ fn lower_abi_size_impl<'db>(
     );
 }
 
-/// `payload_end` checks the head frame and folds every field's end into the
-/// frame end, like the tuple impls in `core::abi`.
+/// `payload_end_with_input_len` checks the head frame and folds every
+/// field's end into the frame end, like the tuple impls in `core::abi`;
+/// `payload_end` bounds it by the whole input.
 fn lower_abi_span_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, AbiStructDesugared>,
     self_ty: TypeId<'db>,
@@ -158,6 +175,7 @@ fn lower_abi_span_impl<'db>(
     let trait_ref = builder.core_abi_trait_ref_sol("AbiSpan");
     let field_specs = field_specs.to_vec();
     builder.impl_trait(trait_ref, self_ty, |builder| {
+        let db = builder.db();
         let u256_ty = builder.ty_ident(builder.ident("u256"));
         let labeled = |name| FuncParam {
             mode: FuncParamMode::View,
@@ -170,129 +188,125 @@ fn lower_abi_span_impl<'db>(
             self_ty_fallback: false,
         };
         let input_ident = builder.generated_ident("abi_struct_input");
-        let base_ident = builder.ident("base");
-        let pos_ident = builder.ident("pos");
-        let input_len_ident = builder.ident("input_len");
+        let [base_ident, pos_ident, input_len_ident] =
+            ["base", "pos", "input_len"].map(|name| builder.ident(name));
+        let byte_input = builder.core_abi_trait_ref("ByteInput");
+        let modifiers = FuncModifiers::new(Visibility::Private, false, false, false);
 
-        for with_input_len in [false, true] {
-            let byte_input = builder.core_abi_trait_ref("ByteInput");
-            let (generic_params, input_ty) = builder.type_param_with_trait_bound("I", byte_input);
-            let mut params = vec![
-                builder.param_underscore_named(input_ident, input_ty),
-                labeled(base_ident),
-                labeled(pos_ident),
-            ];
-            if with_input_len {
-                params.push(labeled(input_len_ident));
-            }
-            let params = builder.params(params);
-            let name = if with_input_len {
-                "payload_end_with_input_len"
-            } else {
-                "payload_end"
-            };
-            let field_specs = field_specs.clone();
-            builder.func_generic_inline_always(
-                name,
-                generic_params,
-                params,
-                Some(u256_ty),
-                FuncModifiers::new(Visibility::Private, false, false, false),
-                |body| {
-                    if !with_input_len {
-                        body.bind_input_len(input_len_ident, input_ident);
-                    }
-                    emit_payload_end(
-                        body,
-                        &field_specs,
-                        input_ty,
-                        [input_ident, pos_ident, input_len_ident],
-                    );
-                },
-            );
-        }
-    });
-}
-
-fn emit_payload_end<'db>(
-    body: &mut BodyBuilder<'_, 'db, AbiStructDesugared>,
-    field_specs: &FieldSpecs<'db>,
-    input_ty: TypeId<'db>,
-    [input_ident, pos_ident, input_len_ident]: [IdentId<'db>; 3],
-) {
-    let db = body.db();
-    let core = body.roots().core;
-    let generic_args = |tys: Vec<TypeId<'db>>| {
-        GenericArgListId::given(
-            db,
-            tys.into_iter()
-                .map(|ty| {
-                    GenericArg::Type(TypeGenericArg {
-                        ty: Partial::Present(ty),
-                    })
-                })
-                .collect(),
-        )
-    };
-    let positional = |exprs: Vec<ExprId>| {
-        exprs
-            .into_iter()
-            .map(|expr| CallArg { label: None, expr })
-            .collect::<Vec<_>>()
-    };
-
-    // let mut __end: u256 = checked_frame_end<Sol>(pos, Self::HEAD_SIZE, input_len)
-    let end_ident = IdentId::new(db, "__end".to_string());
-    let callee = body.path_expr(
-        PathId::from_ident(db, core)
-            .push_str(db, "abi")
-            .push_str_args(db, "checked_frame_end", generic_args(vec![body.sol_ty()])),
-    );
-    let args = vec![
-        body.ident_expr(pos_ident),
-        body.abi_size_assoc_expr(TypeId::fallback_self_ty(db), "HEAD_SIZE"),
-        body.ident_expr(input_len_ident),
-    ];
-    let frame_end = body.call_expr_with_args(callee, positional(args));
-    let end_pat = body.push_pat(Pat::Path(
-        Partial::Present(PathId::from_ident(db, end_ident)),
-        true,
-    ));
-    let u256_ty = TypeId::new(
-        db,
-        TypeKind::Path(Partial::Present(PathId::from_ident(
-            db,
-            IdentId::new(db, "u256".to_string()),
-        ))),
-    );
-    body.emit_stmt(Stmt::Let(end_pat, Some(u256_ty), Some(frame_end)));
-
-    // __end = abi_record_field_end<Sol, F, I>(input, pos, head_pos, input_len, __end)
-    for (idx, (_, field_ty)) in field_specs.iter().copied().enumerate() {
-        let callee = body.path_expr(
-            PathId::from_ident(db, core)
-                .push_str(db, "abi")
-                .push_str_args(
-                    db,
-                    "abi_record_field_end",
-                    generic_args(vec![body.sol_ty(), field_ty, input_ty]),
-                ),
+        // Self::payload_end_with_input_len(input, base:, pos:, input_len: input.len())
+        let (generic_params, input_ty) = builder.type_param_with_trait_bound("I", byte_input);
+        let params = builder.params([
+            builder.param_underscore_named(input_ident, input_ty),
+            labeled(base_ident),
+            labeled(pos_ident),
+        ]);
+        builder.func_generic_inline_always(
+            "payload_end",
+            generic_params,
+            params,
+            Some(u256_ty),
+            modifiers,
+            |body| {
+                let callee = body.path_expr(
+                    PathId::from_ident(db, IdentId::make_self_ty(db))
+                        .push_str(db, "payload_end_with_input_len"),
+                );
+                let input = body.ident_expr(input_ident);
+                let input_len =
+                    body.method_call_expr(input, IdentId::new(db, "len".to_string()), vec![]);
+                let args = vec![
+                    CallArg {
+                        label: None,
+                        expr: body.ident_expr(input_ident),
+                    },
+                    CallArg {
+                        label: Some(base_ident),
+                        expr: body.ident_expr(base_ident),
+                    },
+                    CallArg {
+                        label: Some(pos_ident),
+                        expr: body.ident_expr(pos_ident),
+                    },
+                    CallArg {
+                        label: Some(input_len_ident),
+                        expr: input_len,
+                    },
+                ];
+                let call = body.call_expr_with_args(callee, args);
+                body.emit_return(Some(call));
+            },
         );
-        let args = vec![
-            body.ident_expr(input_ident),
-            body.ident_expr(pos_ident),
-            build_decode_head_pos_expr(body, pos_ident, &field_specs[..idx]),
-            body.ident_expr(input_len_ident),
-            body.ident_expr(end_ident),
-        ];
-        let call = body.call_expr_with_args(callee, positional(args));
-        let end_place = body.ident_expr(end_ident);
-        let assign = body.push_expr(Expr::Assign(end_place, call));
-        body.emit_expr_stmt(assign);
-    }
 
-    let end = body.ident_expr(end_ident);
-    body.emit_return(Some(end));
+        let (generic_params, input_ty) = builder.type_param_with_trait_bound("I", byte_input);
+        let params = builder.params([
+            builder.param_underscore_named(input_ident, input_ty),
+            labeled(base_ident),
+            labeled(pos_ident),
+            labeled(input_len_ident),
+        ]);
+        builder.func_generic_inline_always(
+            "payload_end_with_input_len",
+            generic_params,
+            params,
+            Some(u256_ty),
+            modifiers,
+            |body| {
+                let core = body.roots().core;
+                // let mut __end: u256 = checked_frame_end<Sol>(pos, Self::HEAD_SIZE, input_len)
+                let end_ident = IdentId::new(db, "__end".to_string());
+                let callee = body.path_expr(
+                    PathId::from_ident(db, core)
+                        .push_str(db, "abi")
+                        .push_str_args(
+                            db,
+                            "checked_frame_end",
+                            GenericArgListId::given_types(db, [body.sol_ty()]),
+                        ),
+                );
+                let args = vec![
+                    body.ident_expr(pos_ident),
+                    body.abi_size_assoc_expr(TypeId::fallback_self_ty(db), "HEAD_SIZE"),
+                    body.ident_expr(input_len_ident),
+                ];
+                let frame_end = body.call_expr(callee, args);
+                let end_pat = body.push_pat(Pat::Path(
+                    Partial::Present(PathId::from_ident(db, end_ident)),
+                    true,
+                ));
+                body.emit_stmt(Stmt::Let(end_pat, Some(u256_ty), Some(frame_end)));
+
+                // __end = abi_record_field_end<Sol, F, I>(input, pos, head_pos, input_len, __end)
+                for (idx, (_, field_ty)) in field_specs.iter().copied().enumerate() {
+                    let callee = body.path_expr(
+                        PathId::from_ident(db, core)
+                            .push_str(db, "abi")
+                            .push_str_args(
+                                db,
+                                "abi_record_field_end",
+                                GenericArgListId::given_types(
+                                    db,
+                                    [body.sol_ty(), field_ty, input_ty],
+                                ),
+                            ),
+                    );
+                    let args = vec![
+                        body.ident_expr(input_ident),
+                        body.ident_expr(pos_ident),
+                        build_decode_head_pos_expr(body, pos_ident, &field_specs[..idx]),
+                        body.ident_expr(input_len_ident),
+                        body.ident_expr(end_ident),
+                    ];
+                    let call = body.call_expr(callee, args);
+                    let end_place = body.ident_expr(end_ident);
+                    let assign = body.push_expr(Expr::Assign(end_place, call));
+                    body.emit_expr_stmt(assign);
+                }
+
+                let end = body.ident_expr(end_ident);
+                body.emit_return(Some(end));
+            },
+        );
+    });
 }
 
 /// `impl StaticAbi for S where F0: StaticAbi, ...`: the struct is static
@@ -303,31 +317,17 @@ fn lower_static_abi_impl<'db>(
     field_specs: &FieldSpecs<'db>,
 ) {
     let db = builder.db();
-    let std_root = builder.roots().std;
-    let static_abi = || {
-        TraitRefId::new(
-            db,
-            Partial::Present(
-                PathId::from_ident(db, std_root)
-                    .push_str(db, "abi")
-                    .push_str(db, "StaticAbi"),
-            ),
-        )
-    };
-    let predicates: Vec<_> = field_specs
-        .iter()
-        .map(|(_, ty)| WherePredicate {
-            ty: Partial::Present(*ty),
-            bounds: vec![TypeBound::Trait(static_abi())],
-        })
-        .collect();
-    let where_clause = WhereClauseId::new(db, predicates);
+    let static_abi = TraitRefId::new(
+        db,
+        Partial::Present(builder.path_from_root(builder.roots().std, &["abi", "StaticAbi"])),
+    );
+    let where_clause = field_bounds(db, field_specs, static_abi);
     let idx = builder.ctxt().next_impl_trait_idx();
     builder.with_item_scope(TrackedItemVariant::ImplTrait(idx), |builder, id| {
         ImplTrait::new(
             db,
             id,
-            Partial::Present(static_abi()),
+            Partial::Present(static_abi),
             Partial::Present(self_ty),
             builder.empty_attrs(),
             builder.empty_generic_params(),
@@ -405,74 +405,76 @@ fn lower_decode_impl<'db>(
         let input_ident = builder.generated_ident("abi_struct_input");
         let pos_ident = builder.generated_ident("abi_struct_pos");
         let input_len_ident = builder.generated_ident("abi_struct_input_len");
-        for prechecked in [true, false] {
-            let byte_input = builder.core_abi_trait_ref("ByteInput");
-            let (generic_params, input_ty) = builder.type_param_with_trait_bound("I", byte_input);
-            let params = builder.params([
-                builder.param_underscore_named(input_ident, input_ty),
-                builder.param_underscore_named(pos_ident, u256_ty),
-                builder.param_underscore_named(input_len_ident, u256_ty),
-            ]);
-            let name = if prechecked {
-                "decode_from_prechecked_head"
-            } else {
-                "decode_from_bounded"
-            };
-            builder.func_generic_inline_always(
-                name,
-                generic_params,
-                params,
-                Some(builder.self_ty()),
-                FuncModifiers::new(Visibility::Private, false, false, false),
-                |body| {
-                    if prechecked {
-                        let input = DecodeInputBindings {
-                            input_ident,
-                            input_ty,
-                            base_ident: pos_ident,
-                            input_len_ident,
-                        };
-                        for (idx, (name, ty)) in field_specs.iter().copied().enumerate() {
-                            let head_pos =
-                                build_decode_head_pos_expr(body, pos_ident, &field_specs[..idx]);
-                            body.decode_field_into(
-                                "decode_field_from_prechecked_head",
-                                name,
-                                ty,
-                                input,
-                                head_pos,
-                            );
-                        }
-                        body.return_record_self(&field_names);
-                    } else {
-                        // core::abi::decode_frame_from<Sol, Self, I>(input, pos, input_len)
-                        let db = body.db();
-                        let args = GenericArgListId::given(
+        let byte_input = builder.core_abi_trait_ref("ByteInput");
+        let modifiers = FuncModifiers::new(Visibility::Private, false, false, false);
+
+        let (generic_params, input_ty) = builder.type_param_with_trait_bound("I", byte_input);
+        let params = builder.params([
+            builder.param_underscore_named(input_ident, input_ty),
+            builder.param_underscore_named(pos_ident, u256_ty),
+            builder.param_underscore_named(input_len_ident, u256_ty),
+        ]);
+        builder.func_generic_inline_always(
+            "decode_from_prechecked_head",
+            generic_params,
+            params,
+            Some(builder.self_ty()),
+            modifiers,
+            |body| {
+                let input = DecodeInputBindings {
+                    input_ident,
+                    input_ty,
+                    base_ident: pos_ident,
+                    input_len_ident,
+                };
+                for (idx, (name, ty)) in field_specs.iter().copied().enumerate() {
+                    let head_pos = build_decode_head_pos_expr(body, pos_ident, &field_specs[..idx]);
+                    body.decode_field_into(
+                        "decode_field_from_prechecked_head",
+                        name,
+                        ty,
+                        input,
+                        head_pos,
+                    );
+                }
+                body.return_record_self(&field_names);
+            },
+        );
+
+        // core::abi::decode_frame_from<Sol, Self, I>(input, pos, input_len)
+        let (generic_params, input_ty) = builder.type_param_with_trait_bound("I", byte_input);
+        let params = builder.params([
+            builder.param_underscore_named(input_ident, input_ty),
+            builder.param_underscore_named(pos_ident, u256_ty),
+            builder.param_underscore_named(input_len_ident, u256_ty),
+        ]);
+        builder.func_generic_inline_always(
+            "decode_from_bounded",
+            generic_params,
+            params,
+            Some(builder.self_ty()),
+            modifiers,
+            |body| {
+                let db = body.db();
+                let callee = body.path_expr(
+                    PathId::from_ident(db, body.roots().core)
+                        .push_str(db, "abi")
+                        .push_str_args(
                             db,
-                            [body.sol_ty(), TypeId::fallback_self_ty(db), input_ty]
-                                .into_iter()
-                                .map(|ty| {
-                                    GenericArg::Type(TypeGenericArg {
-                                        ty: Partial::Present(ty),
-                                    })
-                                })
-                                .collect(),
-                        );
-                        let callee = body.path_expr(
-                            PathId::from_ident(db, body.roots().core)
-                                .push_str(db, "abi")
-                                .push_str_args(db, "decode_frame_from", args),
-                        );
-                        let args = [input_ident, pos_ident, input_len_ident]
-                            .into_iter()
-                            .map(|ident| body.ident_expr(ident))
-                            .collect();
-                        let call = body.call_expr(callee, args);
-                        body.emit_return(Some(call));
-                    }
-                },
-            );
-        }
+                            "decode_frame_from",
+                            GenericArgListId::given_types(
+                                db,
+                                [body.sol_ty(), TypeId::fallback_self_ty(db), input_ty],
+                            ),
+                        ),
+                );
+                let args = [input_ident, pos_ident, input_len_ident]
+                    .map(|ident| body.ident_expr(ident))
+                    .to_vec();
+                let call = body.call_expr(callee, args);
+                body.emit_return(Some(call));
+            },
+        );
     });
 }
 
@@ -490,21 +492,13 @@ fn lower_sol_compat_impl<'db>(
     field_specs: &FieldSpecs<'db>,
 ) {
     let db = builder.db();
-    let std_root = builder.roots().std;
-    let abi_item = |name: &str| {
-        PathId::from_ident(db, std_root)
-            .push_str(db, "abi")
-            .push_str(db, name)
-    };
-    let sol_compat = || TraitRefId::new(db, Partial::Present(abi_item("SolCompat")));
-    let predicates: Vec<_> = field_specs
-        .iter()
-        .map(|(_, ty)| WherePredicate {
-            ty: Partial::Present(*ty),
-            bounds: vec![TypeBound::Trait(sol_compat())],
-        })
-        .collect();
-    let where_clause = WhereClauseId::new(db, predicates);
+    let sol_compat = TraitRefId::new(
+        db,
+        Partial::Present(builder.path_from_root(builder.roots().std, &["abi", "SolCompat"])),
+    );
+    let where_clause = field_bounds(db, field_specs, sol_compat);
+    let punctuation_ty =
+        builder.ty_path(builder.path_from_root(builder.roots().std, &["abi", "SolPunctuation"]));
     let origin: HirOrigin<ast::Expr> = builder.origin();
     let idx = builder.ctxt().next_impl_trait_idx();
     builder.with_item_scope(TrackedItemVariant::ImplTrait(idx), |builder, id| {
@@ -514,10 +508,6 @@ fn lower_sol_compat_impl<'db>(
 
         // (type, value) of every fragment of the tuple type name.
         let mut elems: Vec<(TypeId<'db>, ExprId)> = Vec::new();
-        let punctuation_ty = TypeId::new(
-            db,
-            TypeKind::Path(Partial::Present(abi_item("SolPunctuation"))),
-        );
         let punctuation = |body_ctxt: &mut super::body::BodyCtxt<'_, 'db>, text: &str| {
             let lit = Expr::Lit(LitKind::String(StringId::new(db, text.to_string())));
             (punctuation_ty, body_ctxt.push_expr(lit, origin.clone()))
@@ -531,7 +521,7 @@ fn lower_sol_compat_impl<'db>(
                 db,
                 PathKind::QualifiedType {
                     type_: field_ty,
-                    trait_: sol_compat(),
+                    trait_: sol_compat,
                 },
                 None,
             );
@@ -622,7 +612,7 @@ fn lower_sol_compat_impl<'db>(
         ImplTrait::new(
             db,
             id,
-            Partial::Present(sol_compat()),
+            Partial::Present(sol_compat),
             Partial::Present(self_ty),
             builder.empty_attrs(),
             builder.empty_generic_params(),

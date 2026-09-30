@@ -887,20 +887,7 @@ where
         head_pos: ExprId,
     ) {
         let db = self.db();
-        let decode_args = GenericArgListId::given(
-            db,
-            vec![
-                GenericArg::Type(TypeGenericArg {
-                    ty: Partial::Present(self.sol_ty()),
-                }),
-                GenericArg::Type(TypeGenericArg {
-                    ty: Partial::Present(ty),
-                }),
-                GenericArg::Type(TypeGenericArg {
-                    ty: Partial::Present(input.input_ty),
-                }),
-            ],
-        );
+        let decode_args = GenericArgListId::given_types(db, [self.sol_ty(), ty, input.input_ty]);
         let decode_path = PathId::from_ident(db, self.roots.core)
             .push_str(db, "abi")
             .push_str_args(db, decode_fn, decode_args);

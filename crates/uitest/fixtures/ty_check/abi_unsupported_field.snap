@@ -61,34 +61,6 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ struct Wrapper {
   7 │ │     inner: Plain,
   8 │ │ }
-    │ ╰─^ `Plain` doesn't implement `AbiSpan<Sol>`
-    │
-    ┌─ src/abi.fe:483:14
-    │
-483 │     where T: AbiSpan<A> + AbiSize,
-    │              ---------- required by this bound on `abi_record_field_end`
-
-error[6-0003]: trait bound is not satisfied
-    ┌─ abi_unsupported_field.fe:5:1
-    │
-  5 │ ╭ #[abi]
-  6 │ │ struct Wrapper {
-  7 │ │     inner: Plain,
-  8 │ │ }
-    │ ╰─^ `Plain` doesn't implement `AbiSize`
-    │
-    ┌─ src/abi.fe:483:27
-    │
-483 │     where T: AbiSpan<A> + AbiSize,
-    │                           ------- required by this bound on `abi_record_field_end`
-
-error[6-0003]: trait bound is not satisfied
-    ┌─ abi_unsupported_field.fe:5:1
-    │
-  5 │ ╭ #[abi]
-  6 │ │ struct Wrapper {
-  7 │ │     inner: Plain,
-  8 │ │ }
     │ ╰─^ `Plain` doesn't implement `Encode<Sol>`
     │
     ┌─ src/abi.fe:399:14
