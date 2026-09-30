@@ -6,7 +6,7 @@ use crate::{ExpectedKind, ParseError, SyntaxKind};
 
 use super::{
     ErrProof, Parser, ProbeKind, Recovery, define_scope,
-    expr::{parse_const_generic_expr, parse_expr, parse_expr_no_struct},
+    expr::{is_expr_start, parse_const_generic_expr, parse_expr, parse_expr_no_struct},
     expr_atom::{BlockExprScope, LitExprScope},
     parse_list,
     path::PathScope,
@@ -504,7 +504,7 @@ impl super::Parse for WhereClauseScope {
         loop {
             parser.set_newline_as_trivia(true);
             match parser.current_kind() {
-                Some(kind) if is_type_start(kind) || is_const_predicate_start(kind) => {
+                Some(kind) if starts_predicate(kind) => {
                     let type_bound = is_type_start(kind)
                         && parser.dry_run(|p| {
                             parse_type(p, None).is_ok()
@@ -531,12 +531,7 @@ impl super::Parse for WhereClauseScope {
             // After a `,`, a trailing comma followed by the body is still the
             // body, so only a block that continues the header is a predicate.
             brace_policy = comma.then_some(WhereBracePolicy::Lookahead);
-            if !comma
-                && parser.current_kind().is_some()
-                && parser
-                    .current_kind()
-                    .is_some_and(|kind| is_type_start(kind) || is_const_predicate_start(kind))
-            {
+            if !comma && parser.current_kind().is_some_and(starts_predicate) {
                 parser.set_newline_as_trivia(false);
                 let newline = parser.current_kind() == Some(SyntaxKind::Newline);
                 parser.set_newline_as_trivia(true);
@@ -583,25 +578,20 @@ impl WhereClauseScope {
                 if !parser.parses_without_error(BlockExprScope::default()) {
                     return false;
                 }
-                match parser.current_kind() {
-                    Some(SyntaxKind::Comma | SyntaxKind::LBrace) => true,
-                    Some(kind) => is_type_start(kind) || is_const_predicate_start(kind),
-                    None => false,
-                }
+                parser.current_kind().is_some_and(|kind| {
+                    matches!(kind, SyntaxKind::Comma | SyntaxKind::LBrace) || starts_predicate(kind)
+                })
             }),
         }
     }
 }
 
-// Tokens that start an expression but never a type. A `{` is not listed:
-// whether it opens a predicate or the item's body is decided by
-// `WhereBracePolicy`.
-fn is_const_predicate_start(kind: SyntaxKind) -> bool {
-    use SyntaxKind::*;
-    matches!(
-        kind,
-        Not | Minus | Tilde | Plus | IfKw | MatchKw | Int | String | TrueKw | FalseKw
-    )
+/// Whether a `where` predicate can start with `kind`: a type bound starts
+/// with a type, and a const condition with an expression. A `{` is left out:
+/// whether it opens a condition or the item's body is decided by
+/// `WhereBracePolicy`.
+fn starts_predicate(kind: SyntaxKind) -> bool {
+    kind != SyntaxKind::LBrace && (is_type_start(kind) || is_expr_start(kind))
 }
 
 define_scope! { WhereConstPredicateScope, WhereConstPredicate }
@@ -619,17 +609,9 @@ impl super::Parse for WherePredicateScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        // The clause parses a type bound only after finding the `:`.
         parse_type(parser, None)?;
-
-        if parser.current_kind() == Some(SyntaxKind::Colon) {
-            parser.parse(TypeBoundListScope::default())?;
-        } else {
-            parser.add_error(ParseError::expected(
-                &[SyntaxKind::Colon],
-                Some(ExpectedKind::TypeSpecifier(SyntaxKind::WherePredicate)),
-                parser.end_of_prev_token,
-            ));
-        }
+        parser.parse(TypeBoundListScope::default())?;
         Ok(())
     }
 }
