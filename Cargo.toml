@@ -23,7 +23,7 @@ matchcov = "0.2.0"
 trace-facts = { path = "crates/trace-facts", package = "fe-trace-facts" }
 debug-export = { path = "crates/debug-export", package = "fe-debug-export" }
 trace-facts-macros = { path = "crates/trace-facts-macros", package = "fe-trace-facts-macros" }
-cranelift-entity = "0.130"
+cranelift-entity = "0.136.1"
 url = "2.5.4"
 camino = "1.1.9"
 typed-path = "0.12.3"
