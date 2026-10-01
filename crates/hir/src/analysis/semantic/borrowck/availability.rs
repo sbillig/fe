@@ -624,6 +624,9 @@ impl<'db> Borrowck<'db> {
             for call in &operation.calls {
                 analysis.native_validity |= call.invalidated.clone();
             }
+            for requirement in &operation.requirements {
+                analysis.native_validity |= requirement.access_invalidated.clone();
+            }
             if analysis.report_errors
                 && !self.call_validation_pending(block, index)
                 && (operation.native_validity.invalid

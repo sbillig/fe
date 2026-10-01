@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
 
+use salsa::Setter;
+
 use cranelift_entity::EntityRef;
 use fe_hir::test_db::{HirAnalysisTestDb, find_func, format_diagnostics};
 use fe_hir::{
@@ -9867,7 +9869,12 @@ pub contract Store {{
         );
         let diags = checked_trusted_borrow_diags(&source);
         if value == "Maybe::Empty" {
-            assert!(diags.is_empty(), "{diags}");
+            // Storage never holds a valid borrow, so the receiver's borrowed
+            // field is invalid; the empty store itself owes no storage rule.
+            assert!(
+                !diags.contains("cannot store") && diags.contains("cannot use a native borrow"),
+                "{diags}"
+            );
         } else {
             assert!(
                 diags.contains("cannot store") && !diags.contains("internal borrow"),
@@ -12427,23 +12434,19 @@ fn drive() {
             .unwrap()
             .loan_requirements;
         assert!(!requirements.is_empty(), "{first:?}");
-        // Interned identities differ between databases; compare the relations.
-        let relations: Vec<_> = requirements
-            .clauses()
-            .iter()
-            .map(|clause| {
-                let relation = &clause.payload;
-                (
-                    relation.protected_kind,
-                    relation.access_kind,
-                    relation.extent == AccessExtent::Typed,
-                    relation.suspended.len(),
-                    relation.protected.path.as_slice().len(),
-                    relation.access.path.as_slice().len(),
-                )
-            })
-            .collect();
-        observed.push((first, diagnostics, format!("{relations:?}")));
+        // Interned identities differ between databases; compare the complete
+        // relations with those identities erased.
+        let relations = format!("{requirements:?}");
+        let mut normalized = String::new();
+        let mut rest = relations.as_str();
+        while let Some(start) = rest.find("Id(") {
+            normalized.push_str(&rest[..start + 3]);
+            rest = &rest[start + 3..];
+            rest = &rest[rest.find(')').unwrap()..];
+        }
+        normalized.push_str(rest);
+        let relations = normalized;
+        observed.push((first, diagnostics, relations));
     }
     for (first, diagnostics, requirements) in &observed[1..] {
         assert_eq!(diagnostics, &observed[0].1, "{first:?}");
@@ -12452,20 +12455,31 @@ fn drive() {
 }
 
 #[test]
-fn storage_entries_hold_no_admissible_borrowed_capability() {
-    // Storing a borrowed capability in storage is rejected and raw bytes never
-    // form a valid one, so a stored borrow cannot be live across a forwarded
-    // receiver call. Requirements conditioned on one have no alternative.
-    for (name, body) in [
-        ("noop", "fn forward(mut self) { self.noop() }"),
-        ("store", "fn forward(mut self) { self.store(Maybe::Empty) }"),
-        ("count", "fn forward(mut self) { self.inc() }"),
-        ("peek", "fn forward(mut self) { let x: u256 = self.peek() }"),
+fn storage_never_holds_a_valid_borrow() {
+    // Storing a borrow in contract storage is rejected and raw bytes never
+    // form a valid one, so a stored borrow is invalid native contents: a
+    // receiver whose type contains one is rejected, unless it is first
+    // reinitialized, and no stored loan reaches a separation requirement.
+    for (name, body, reinitialize) in [
+        ("noop", "fn forward(mut self) { self.noop() }", false),
+        ("count", "fn forward(mut self) { self.inc() }", false),
         (
-            "direct",
-            "fn forward(mut self) { self.value = Maybe::Empty }",
+            "peek",
+            "fn forward(mut self) { let x: u256 = self.peek() }",
+            false,
         ),
+        (
+            "store",
+            "fn forward(mut self) { self.store(Maybe::Empty) }",
+            true,
+        ),
+        ("noop", "fn forward(mut self) { self.noop() }", true),
     ] {
+        let reset = if reinitialize {
+            "slot.value = Maybe::Empty"
+        } else {
+            ""
+        };
         let source = format!(
             r#"
 enum Maybe {{ Empty, Full(ref u256) }}
@@ -12481,12 +12495,46 @@ impl Holder {{
 }}
 pub contract Store {{
     mut slot: Holder
-    init() uses (mut slot) {{ slot.forward() }}
+    init() uses (mut slot) {{
+        {reset}
+        slot.forward()
+    }}
 }}
 "#
         );
         let diagnostics = checked_trusted_borrow_diags(&source);
-        assert!(diagnostics.is_empty(), "{name}: {diagnostics}");
+        assert_eq!(
+            diagnostics.contains("cannot use a native borrow"),
+            !reinitialize,
+            "{name} {reinitialize}: {diagnostics}"
+        );
+        assert!(
+            !diagnostics.contains("cannot prove"),
+            "{name} {reinitialize}: {diagnostics}"
+        );
+    }
+    // Raw pointer bytes read from storage still hold some address.
+    for space in ["StorPtr", "TStorPtr"] {
+        let diagnostics = checked_trusted_borrow_diags(&format!(
+            r#"
+use std::evm::{space}
+pub contract Cell {{
+    mut saved: {space}<*u256>
+    init() uses (saved) {{
+        let raw = saved
+        let mut local: u256 = 0
+        let native = mut local
+        *raw = 1
+        native = 2
+    }}
+}}
+"#
+        ));
+        assert!(
+            diagnostics.contains("borrow conflict in `fn Cell::__init__`")
+                && !diagnostics.contains("cannot use a native borrow"),
+            "{space}: {diagnostics}"
+        );
     }
     // A memory holder can hold a valid borrow; separation is then physical.
     assert!(
@@ -12581,5 +12629,148 @@ fn separation_requirements_past_the_limit_fail_absorbingly() {
     assert!(
         diagnostics.contains("borrow separation requirements exceed the analysis limits"),
         "{diagnostics}"
+    );
+}
+
+#[test]
+fn separation_requirements_hold_only_where_the_call_and_its_choices_apply() {
+    // A requirement applies only on the call's own path and only for the
+    // arguments that reach the callee's access.
+    let source = |callee_args: &str, flag: &str, branch: &str| {
+        format!(
+            r#"
+use core::ptr
+enum Pick {{ Left, Right }}
+fn foreign(value: mut u256, saved: *mut u256, touch: bool, pick: own Pick) {{
+    if touch {{
+        match pick {{
+            Pick::Left => {{
+                let other = *saved
+                other = 5
+            }}
+            Pick::Right => {{}}
+        }}
+    }}
+    value = 9
+}}
+fn branch(value: mut u256, saved: *mut u256, touch: bool, pick: own Pick) {{
+    if {branch} {{ foreign(value, saved, touch, pick) }}
+}}
+fn drive() {{
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    branch(value: native, saved, touch: {flag}, {callee_args})
+}}
+"#
+        )
+    };
+    for (pick, flag, branch, expected) in [
+        ("pick: Pick::Left", "true", "touch", &["drive"][..]),
+        ("pick: Pick::Right", "true", "touch", &[][..]),
+        ("pick: Pick::Left", "false", "touch", &[][..]),
+        ("pick: Pick::Left", "true", "!touch", &[][..]),
+    ] {
+        assert_eq!(
+            conflicting_functions(&source(pick, flag, branch)),
+            expected,
+            "{pick} {flag} {branch}"
+        );
+    }
+}
+
+#[test]
+fn separation_provenance_belongs_to_each_body_and_follows_edits() {
+    let source = |prefix: &str| {
+        format!(
+            r#"{prefix}use core::ptr
+fn first(value: mut u256, saved: *mut u256) {{
+    let other = *saved
+    other = 5
+    value = 9
+}}
+fn second(value: mut u256, saved: *mut u256) {{
+    let alias = *saved
+    alias = 6
+    value = 8
+}}
+fn aliased_first() {{
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    first(value: native, saved)
+}}
+fn aliased_second() {{
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    second(value: native, saved)
+}}
+"#
+        )
+    };
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("separation_provenance.fe".into(), &source(""));
+    // Each caller names the access in the body it called, although both
+    // bodies export the same relation.
+    for (prefix, shift) in [("", 0), ("\n\n", 2)] {
+        file.set_text(&mut db).to(source(prefix));
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let diagnostics = format_diagnostics(
+            &db,
+            &collect_semantic_borrow_diagnostic_vouchers(&db, module),
+        );
+        // Reborrowing the stored child is the access each body began with.
+        for (caller, access) in [
+            ("aliased_first", ("let other = *saved", 3)),
+            ("aliased_second", ("let alias = *saved", 8)),
+        ] {
+            let block = diagnostics
+                .split("error[")
+                .find(|block| block.contains(&format!("borrow conflict in `fn {caller}`")))
+                .unwrap_or_else(|| panic!("{caller}: {diagnostics}"));
+            let (text, line) = access;
+            // A span-only edit moves the label with the source.
+            let line = format!("{} │", line + shift);
+            assert!(
+                block
+                    .lines()
+                    .any(|row| row.trim_start().starts_with(&line) && row.contains(text)),
+                "{caller} {shift}: {block}"
+            );
+        }
+    }
+}
+
+#[test]
+fn separation_requirements_propagate_from_nonreturning_bodies() {
+    assert_eq!(
+        conflicting_functions(
+            r#"
+use core::ptr
+fn foreign(value: mut u256, saved: *mut u256) {
+    let other = *saved
+    other = 5
+    value = 9
+    while true {}
+}
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    foreign(value: native, saved)
+}
+"#
+        ),
+        ["drive"]
     );
 }

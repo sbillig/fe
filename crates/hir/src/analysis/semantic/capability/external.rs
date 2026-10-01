@@ -952,19 +952,15 @@ impl<'db> ExternalSource<'db> {
         }
     }
 
-    /// How deeply Memory bases and clobber dependencies nest in this route.
-    pub fn nesting(&self) -> usize {
+    /// How many sources this route contains, counting every Memory base and
+    /// clobber dependency.
+    pub fn route_size(&self) -> usize {
         1 + match &self.origin {
-            ExternalOrigin::Memory { base, .. } => base.source.nesting(),
+            ExternalOrigin::Memory { base, .. } => base.source.route_size(),
             _ => 0,
-        }
-        .max(self.clobber.as_ref().map_or(0, |clobber| {
-            clobber
-                .target
-                .source
-                .nesting()
-                .max(clobber.written.source.nesting())
-        }))
+        } + self.clobber.as_ref().map_or(0, |clobber| {
+            clobber.target.source.route_size() + clobber.written.source.route_size()
+        })
     }
 
     /// Whether any part of this route, including Memory bases and clobber

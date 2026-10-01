@@ -47,7 +47,7 @@ use crate::{
                 state::{BorrowState, CapabilityValue, CapabilityValues},
                 value::{Guarded, IndexPayload, ValueId, ValueInterner, ValueLimits},
             },
-            definite_assignment::literal_bool_cond,
+            definite_assignment::{literal_bool_cond, literal_enum_variant},
             get_or_build_semantic_instance, instantiated_effect_env,
             normalized::{
                 NEffectArg, NEffectArgValue, NExpr, NOperand, NStatement, NStatementKind,
@@ -701,6 +701,15 @@ impl<'db> Borrowck<'db> {
     pub(super) fn solved_borrow_summary(
         &mut self,
     ) -> Result<BorrowSummaryComputation<'db>, SemanticDiagnostic<'db>> {
+        // Requirements past a limit are incomplete; no fallback may hide that.
+        if let ConflictAnalysis {
+            exhausted: true,
+            diagnostic: Some(diagnostic),
+            ..
+        } = self.conflicts()
+        {
+            return Err(diagnostic.clone());
+        }
         let recursive_unresolved = !self.recursive_calls.is_empty()
             && (self.blocked.is_some() || !self.pending.callees.is_empty());
         let (summary, provenance) = if (!self.pending.callees.is_empty()
@@ -787,15 +796,18 @@ impl<'db> Borrowck<'db> {
     ) -> Result<(BorrowSummary<'db>, Vec<SeparationOrigin<'db>>), SemanticDiagnostic<'db>> {
         #[cfg(feature = "borrowck-profile")]
         let profile = self.profile_scope("build_summary");
-        // Requirements past a limit are incomplete; never export them.
-        if let ConflictAnalysis {
-            exhausted: true,
-            diagnostic: Some(diagnostic),
-            ..
-        } = self.conflicts()
-        {
-            return Err(diagnostic.clone());
-        }
+        // Provisional summaries supply provider facts needed for body admission
+        // and definite assignment. Boundary policy must not suppress those facts.
+        // A boundary violation is reported here; the local check reports its
+        // ownership diagnostic.
+        let pending = if self.summary_mode == BorrowSummaryMode::Final {
+            self.boundary_requirements
+                .as_ref()
+                .expect("solved boundary requirements")
+                .clone()?
+        } else {
+            Vec::new()
+        };
         let ownership = self.analyze_availability();
         let _ = self
             .availability_diagnostic
@@ -806,16 +818,6 @@ impl<'db> Borrowck<'db> {
         {
             return Err(diagnostic);
         }
-        // Provisional summaries supply provider facts needed for body admission
-        // and definite assignment. Boundary policy must not suppress those facts.
-        let pending = if self.summary_mode == BorrowSummaryMode::Final {
-            self.boundary_requirements
-                .as_ref()
-                .expect("solved boundary requirements")
-                .clone()?
-        } else {
-            Vec::new()
-        };
         let scope = BinderScope::default();
         let result_shape = self.shape(self.instance.normalized_result_ty(self.db))?;
         let mut values = SourceValues::new(self.db, ValueLimits::default());
@@ -1297,6 +1299,16 @@ impl<'db> Borrowck<'db> {
         };
         let (summary, provenance) =
             summary.abstract_choices(self.db, &mut values, choices, separations);
+        // Merging equal relations ORs their guards, so check the final clauses.
+        let requirements = &summary.loan_requirements;
+        if requirements.clauses().len() > SEPARATION_CLAUSE_LIMIT
+            || !requirements
+                .clauses()
+                .iter()
+                .all(|clause| within_limits(clause, requirements.scope()))
+        {
+            return Err(self.separation_limit_diag(SemOrigin::Body(self.body.template_owner)));
+        }
         self.verify_summary(&summary)?;
         #[cfg(feature = "borrowck-profile")]
         drop(profile);
@@ -2740,13 +2752,21 @@ impl<'db> Borrowck<'db> {
             })
             .and_then(|mut guard| {
                 for arg in inputs.args {
+                    let occurrence = ValueOccurrence::Value(self.forwarded_value(arg.value));
                     if let Some(value) = literal_bool_cond(self.db, &self.body, arg.value) {
-                        let occurrence = ValueOccurrence::Value(self.forwarded_value(arg.value));
                         guard = guard.with_boolean(
                             ChoiceKey::new(occurrence, StructuralPath::default()),
                             value,
                         )?;
                         guard = guard.forget_occurrences(|candidate| candidate == occurrence);
+                    } else if let Some(variant) =
+                        literal_enum_variant(self.db, &self.body, arg.value)
+                    {
+                        // Payload choices of the literal stay; only its variant is known.
+                        guard = guard.with_variant(
+                            ChoiceKey::new(occurrence, StructuralPath::default()),
+                            variant,
+                        )?;
                     }
                 }
                 Some(guard)
@@ -2905,17 +2925,26 @@ impl<'db> Borrowck<'db> {
                 AliasBasis::Physical => written.physical_pairs(self.db, target).is_empty(),
             }
         };
+        // A separation endpoint keeps its dependencies' native validity,
+        // including where a dependency resolves to no valid alternative.
+        let mut dependencies = NativeValidity::default();
         let clobber = if let Some(clobber) = &external.clobber {
             let target = instantiations.resolve(self, &clobber.target, scope)?;
             let written = instantiations.resolve(self, &clobber.written, scope)?;
-            if basis == AliasBasis::Physical
-                && target.region.clauses().len() * written.region.clauses().len()
+            if basis == AliasBasis::Physical {
+                if target.region.clauses().len() * written.region.clauses().len()
                     > SEPARATION_PAIR_LIMIT
-            {
-                return Err(self.separation_limit_diag(origin));
+                {
+                    return Err(self.separation_limit_diag(origin));
+                }
+                dependencies |= target.invalidated;
+                dependencies |= written.invalidated;
             }
             if disjoint(&target.region, &written.region, clobber.extent) {
-                return Ok(Resolution::empty(scope));
+                return Ok(Resolution {
+                    invalidated: dependencies,
+                    ..Resolution::empty(scope)
+                });
             }
             Some((target.region, written.region, clobber.extent))
         } else {
@@ -2939,12 +2968,11 @@ impl<'db> Borrowck<'db> {
                 let region = self
                     .conditional_region(scope, family, clobber, path.clone(), disjoint)
                     .with_relative_views(self.db, &source.views, path.as_slice().len());
+                if invalidated {
+                    dependencies |= NativeValidity::from_region(&region);
+                }
                 return Ok(Resolution {
-                    invalidated: if invalidated {
-                        NativeValidity::from_region(&region)
-                    } else {
-                        NativeValidity::default()
-                    },
+                    invalidated: dependencies,
                     region,
                     parents: Vec::new(),
                     traversed: Vec::new(),
@@ -3228,6 +3256,7 @@ impl<'db> Borrowck<'db> {
         if invalidated {
             resolved.invalidated |= NativeValidity::from_region(&resolved.region);
         }
+        resolved.invalidated |= dependencies;
         Ok(resolved)
     }
 }

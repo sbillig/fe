@@ -50,7 +50,9 @@ use crate::analysis::{
 /// share the instantiated clause guard's scope.
 #[derive(Clone)]
 pub(super) struct ResolvedSeparation<'db> {
-    pub invalidated: NativeValidity<'db>,
+    /// The access's native validity. An invalid protected referent holds no
+    /// valid loan to protect; any use of it has its own validity obligation.
+    pub access_invalidated: NativeValidity<'db>,
     pub guard: Guard<'db>,
     pub protected: RegionSet<'db>,
     pub protected_kind: BorrowKind,
@@ -167,7 +169,11 @@ impl<'db> Borrowck<'db> {
         let mut instantiations = SourceInstantiations::physical(state, result, inputs);
         let mut resolved = Vec::new();
         for (index, clause) in call.summary.loan_requirements.clauses().iter().enumerate() {
-            let Some(guard) = instantiations.guard(self, &clause.guard)? else {
+            // A requirement holds only where the call executes.
+            let Some(guard) = instantiations
+                .guard(self, &clause.guard)?
+                .and_then(|guard| guard.and(&state.guard().in_scope(guard.scope())))
+            else {
                 continue;
             };
             let relation = &clause.payload;
@@ -188,10 +194,8 @@ impl<'db> Borrowck<'db> {
                     });
                 }
             }
-            let mut invalidated = protected.invalidated;
-            invalidated |= access.invalidated;
             resolved.push(ResolvedSeparation {
-                invalidated,
+                access_invalidated: access.invalidated,
                 guard,
                 protected: protected.region,
                 protected_kind: relation.protected_kind,

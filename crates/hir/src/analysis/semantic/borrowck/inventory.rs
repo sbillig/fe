@@ -580,10 +580,21 @@ impl<'db> InputBuilder<'db> {
         let value = self
             .values
             .from_shape(shape, scope, |semantics, path, scope| {
-                // Storing a borrowed capability in Storage or Transient is
+                let contract = match transport.referent(db, semantics, cursor) {
+                    Ok(contract) => contract,
+                    Err(error) => {
+                        failure = Some(error);
+                        return Vec::new();
+                    }
+                };
+                // Storing a native capability in Storage or Transient is
                 // rejected, and raw bytes never form a valid one, so such a
-                // location holds no admissible capability on entry.
-                if semantics.storage == StorageClass::Borrowed
+                // location holds invalid native bytes on entry, never a loan.
+                // A raw pointer there still holds some address.
+                if matches!(
+                    semantics.class,
+                    CapabilityClass::Borrow(_) | CapabilityClass::View
+                ) && semantics.storage == StorageClass::Borrowed
                     && let InputOrigin::Referent(source) = &origin
                     && matches!(
                         source.contract.address_space,
@@ -592,15 +603,18 @@ impl<'db> InputBuilder<'db> {
                         )
                     )
                 {
-                    return Vec::new();
+                    return vec![Guarded {
+                        guard: Guard::always(scope),
+                        payload: CapabilityRef::Invalidated {
+                            class: semantics.class,
+                            region: RegionSet::singleton(
+                                scope,
+                                RegionRoot::External(ExternalSource::opaque_memory(contract)),
+                                RegionPath::default(),
+                            ),
+                        },
+                    }];
                 }
-                let contract = match transport.referent(db, semantics, cursor) {
-                    Ok(contract) => contract,
-                    Err(error) => {
-                        failure = Some(error);
-                        return Vec::new();
-                    }
-                };
                 let uncertain = matches!(
                     semantics.class,
                     CapabilityClass::Handle | CapabilityClass::Pointer
