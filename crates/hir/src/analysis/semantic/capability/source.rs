@@ -33,6 +33,11 @@ impl<'db> SourceExpr<'db> {
         }
     }
 
+    /// How many nodes this expression stores; see `ExternalSource::size`.
+    pub fn size(&self) -> usize {
+        self.source.size() + self.path.as_slice().len() + self.views.iter().count()
+    }
+
     pub fn referent_ty(
         &self,
         db: &'db dyn HirAnalysisDb,
@@ -178,6 +183,19 @@ impl<'db> InputSource<'db> {
             dereferences: dereferences.into(),
             reachable: false,
         }
+    }
+
+    /// Projection steps of the slot and of every dereference.
+    pub fn size(&self) -> usize {
+        let slot = match &self.origin {
+            InputOrigin::Slot { slot, .. } => slot.as_slice().len(),
+            InputOrigin::Place(_) => 0,
+        };
+        slot + self
+            .dereferences
+            .iter()
+            .map(|path| 1 + path.as_slice().len())
+            .sum::<usize>()
     }
 
     pub fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> + '_ {

@@ -50,9 +50,6 @@ use crate::analysis::{
 /// share the instantiated clause guard's scope.
 #[derive(Clone)]
 pub(super) struct ResolvedSeparation<'db> {
-    /// The access's native validity. An invalid protected referent holds no
-    /// valid loan to protect; any use of it has its own validity obligation.
-    pub access_invalidated: NativeValidity<'db>,
     pub guard: Guard<'db>,
     pub protected: RegionSet<'db>,
     pub protected_kind: BorrowKind,
@@ -156,17 +153,34 @@ impl<'db> Borrowck<'db> {
     }
 
     /// Resolve the callee's separation clauses without authority: a loan found
-    /// while resolving an endpoint is not the borrow the callee held.
+    /// while resolving an endpoint is not the borrow the callee held. The
+    /// validity of their accesses, including the callee's own, keeps the same
+    /// physical basis. An invalid protected referent holds no valid loan to
+    /// protect, and any use of it has its own validity obligation.
     pub fn call_loan_requirements(
         &mut self,
         state: &BorrowState<'db>,
         result: NValueId,
         inputs: CallInputs<'_, 'db>,
-    ) -> Result<Vec<ResolvedSeparation<'db>>, SemanticDiagnostic<'db>> {
+    ) -> Result<(Vec<ResolvedSeparation<'db>>, NativeValidity<'db>), SemanticDiagnostic<'db>> {
+        let mut validity = NativeValidity::default();
         let Some(call) = self.calls.get(&result).cloned() else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), validity));
         };
         let mut instantiations = SourceInstantiations::physical(state, result, inputs);
+        for clause in call.summary.separation_validity.clauses() {
+            let Some(guard) = instantiations
+                .guard(self, &clause.guard)?
+                .and_then(|guard| guard.and(&state.guard().in_scope(guard.scope())))
+            else {
+                continue;
+            };
+            let source =
+                SourceExpr::from_place(&clause.payload).expect("native validity summary source");
+            let resolved = instantiations.resolve(self, &source, guard.scope())?;
+            validity |= resolved.invalidated;
+            validity |= NativeValidity::from_region(&resolved.region.with_guard(&guard));
+        }
         let mut resolved = Vec::new();
         for (index, clause) in call.summary.loan_requirements.clauses().iter().enumerate() {
             // A requirement holds only where the call executes.
@@ -181,6 +195,7 @@ impl<'db> Borrowck<'db> {
             let protected =
                 instantiations.resolve(self, &source(&relation.protected), guard.scope())?;
             let access = instantiations.resolve(self, &source(&relation.access), guard.scope())?;
+            validity |= access.invalidated;
             let formal = self.formal_substitution(guard.scope(), guard.scope(), inputs);
             let mut suspended = Vec::new();
             for slice in &relation.suspended {
@@ -195,7 +210,6 @@ impl<'db> Borrowck<'db> {
                 }
             }
             resolved.push(ResolvedSeparation {
-                access_invalidated: access.invalidated,
                 guard,
                 protected: protected.region,
                 protected_kind: relation.protected_kind,
@@ -216,7 +230,7 @@ impl<'db> Borrowck<'db> {
                     }),
             });
         }
-        Ok(resolved)
+        Ok((resolved, validity))
     }
 
     pub fn body_memory_accesses(&self) -> Vec<MemoryAccess<'db>> {
@@ -491,6 +505,7 @@ impl<'db> Borrowck<'db> {
         Ok(Some(BorrowSummary {
             native_requirements: RegionSet::empty(&scope),
             loan_requirements: SeparationSet::empty(&scope),
+            separation_validity: RegionSet::empty(&scope),
             may_return: !self.instance.is_intrinsically_never_returning(self.db),
             result,
             scalar_result: None,

@@ -49,6 +49,8 @@ pub(super) struct ResolvedOperation<'db> {
     pub calls: Vec<ResolvedMemoryAccess<'db>>,
     /// The callee's separation clauses at this call.
     pub requirements: Vec<ResolvedSeparation<'db>>,
+    /// Native validity of the accesses those clauses relate.
+    pub separation_validity: NativeValidity<'db>,
     pub availability: Option<ResolvedAvailability<'db>>,
     pub births: Vec<AllocationBirth<'db>>,
     pub native_validity: NativeValidity<'db>,
@@ -204,7 +206,7 @@ impl<'db> Borrowck<'db> {
                         }
                     }
                 }
-                let (calls, requirements, availability, native_validity, births) =
+                let (calls, separations, availability, native_validity, births) =
                     if let NStatementKind::Define {
                         result,
                         expr:
@@ -232,7 +234,7 @@ impl<'db> Borrowck<'db> {
                     {
                         (
                             Vec::new(),
-                            Vec::new(),
+                            Default::default(),
                             None,
                             NativeValidity::default(),
                             self.literal_birth(*result, constant)
@@ -243,16 +245,18 @@ impl<'db> Borrowck<'db> {
                     } else {
                         (
                             Vec::new(),
-                            Vec::new(),
+                            Default::default(),
                             None,
                             NativeValidity::default(),
                             Vec::new(),
                         )
                     };
+                let (requirements, separation_validity) = separations;
                 operations.push(ResolvedOperation {
                     accesses,
                     calls,
                     requirements,
+                    separation_validity,
                     availability,
                     births,
                     native_validity,

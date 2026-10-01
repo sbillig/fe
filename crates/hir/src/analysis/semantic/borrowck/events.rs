@@ -722,6 +722,7 @@ impl<'db> Borrowck<'db> {
             diagnostic: analysis.diagnostic,
             exhausted: analysis.exhausted,
             deferred: analysis.deferred,
+            validity: analysis.validity,
         }
     }
 
@@ -791,10 +792,14 @@ impl<'db> Borrowck<'db> {
                     }
                 }
                 // Argument conflicts explain an aliased call more directly.
-                for requirement in operation.requirements.iter().filter(|_| !pending) {
-                    if requirement.access_invalidated.invalid {
-                        return analysis.report(self.invalidated_diag(origin));
-                    }
+                if pending {
+                    continue;
+                }
+                if operation.separation_validity.invalid {
+                    return analysis.report(self.invalidated_diag(origin));
+                }
+                analysis.validity |= operation.separation_validity.clone();
+                for requirement in &operation.requirements {
                     self.discharge(requirement, origin, analysis);
                     if analysis.diagnostic.is_some() {
                         return;
@@ -1285,6 +1290,9 @@ pub(super) struct ConflictAnalysis<'db> {
     /// Unresolved separation, in the default owner scope and body order. It
     /// is complete only without a diagnostic, which prevents validation.
     pub deferred: Vec<(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)>,
+    /// Native validity of the accesses callees' relations name, deferred to
+    /// callers on the same physical basis, complete under the same condition.
+    pub validity: NativeValidity<'db>,
 }
 
 #[derive(Default)]
@@ -1292,6 +1300,7 @@ pub(super) struct ConflictFacts<'db> {
     diagnostic: Option<SemanticDiagnostic<'db>>,
     exhausted: bool,
     deferred: Vec<(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)>,
+    validity: NativeValidity<'db>,
 }
 
 impl<'db> ConflictFacts<'db> {

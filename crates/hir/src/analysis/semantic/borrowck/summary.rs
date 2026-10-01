@@ -39,8 +39,8 @@ use crate::{
                 region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace, substitute_clause},
                 semantics::{CapabilityClass, CapabilitySemantics},
                 separation::{
-                    SEPARATION_CLAUSE_LIMIT, SEPARATION_PAIR_LIMIT, Separation, SeparationSet,
-                    within_limits,
+                    SEPARATION_CLAUSE_LIMIT, SEPARATION_PAIR_LIMIT, SEPARATION_SIZE_LIMIT,
+                    Separation, SeparationSet, within_limits,
                 },
                 shape::{ShapeChildren, ShapeId},
                 source::{InputOrigin, SourceExpr},
@@ -146,6 +146,7 @@ impl<'db> BorrowSummary<'db> {
                 &mut self.availability.reinitialized,
                 &mut self.availability.unavailable,
                 &mut self.native_requirements,
+                &mut self.separation_validity,
             ])
         {
             *region = RegionSet::new(
@@ -537,6 +538,7 @@ impl<'db> Borrowck<'db> {
                     &summary.availability.reinitialized,
                     &summary.availability.unavailable,
                     &summary.native_requirements,
+                    &summary.separation_validity,
                 ]);
             external.extend(
                 regions
@@ -581,6 +583,7 @@ impl<'db> Borrowck<'db> {
             let single_result_port = summary.result.shape().direct(self.db).is_some()
                 && summary.certified_ranges.is_empty()
                 && summary.native_requirements.is_empty()
+                && summary.separation_validity.is_empty()
                 && external.iter().all(|(source, _, _, port)| match port {
                     PortUse::Result => true,
                     PortUse::Copy => source.fresh_allocation().is_none_or(|handle| {
@@ -1287,6 +1290,13 @@ impl<'db> Borrowck<'db> {
                 false,
             )?,
             loan_requirements: SeparationSet::empty(&BinderScope::default()),
+            separation_validity: self.summarize_availability_region(
+                &self.conflicts().validity.requirements,
+                origin,
+                &mut choices,
+                &handles,
+                false,
+            )?,
             accesses,
             availability,
             may_return,
@@ -1301,11 +1311,17 @@ impl<'db> Borrowck<'db> {
             summary.abstract_choices(self.db, &mut values, choices, separations);
         // Merging equal relations ORs their guards, so check the final clauses.
         let requirements = &summary.loan_requirements;
+        let validity = summary.separation_validity.clauses();
         if requirements.clauses().len() > SEPARATION_CLAUSE_LIMIT
             || !requirements
                 .clauses()
                 .iter()
                 .all(|clause| within_limits(clause, requirements.scope()))
+            || validity.len() > SEPARATION_CLAUSE_LIMIT
+            || validity.iter().any(|clause| {
+                SourceExpr::from_place(&clause.payload)
+                    .is_some_and(|source| source.size() > SEPARATION_SIZE_LIMIT)
+            })
         {
             return Err(self.separation_limit_diag(SemOrigin::Body(self.body.template_owner)));
         }
@@ -2122,6 +2138,7 @@ impl<'db> Borrowck<'db> {
                 &summary.availability.reinitialized,
                 &summary.availability.unavailable,
                 &summary.native_requirements,
+                &summary.separation_validity,
             ])
         {
             if region.scope() != &BinderScope::default() {
@@ -3578,6 +3595,7 @@ pub(super) fn signature_summary<'db>(
     let summary = BorrowSummary {
         native_requirements: RegionSet::empty(&BinderScope::default()),
         loan_requirements: SeparationSet::empty(&BinderScope::default()),
+        separation_validity: RegionSet::empty(&BinderScope::default()),
         may_return: opaque && !instance.is_intrinsically_never_returning(db),
         result,
         scalar_result: None,
@@ -3606,6 +3624,7 @@ mod tests {
                     handle::HandleAddressSpace,
                     region::CANONICALIZED_REGION_CLAUSES,
                     repack::{ReferentRepackId, ReferentViews},
+                    separation::SEPARATION_GUARD_NODE_LIMIT,
                     source::InputSource,
                     test_roots,
                 },
@@ -5547,5 +5566,840 @@ fn clobber(slot: *ref u256) {
         let mut source = leaf.payload.clone();
         source.path = RegionPath::new([Projection::Index(unowned)]);
         assert!(!check(&source));
+    }
+
+    /// The first call in a solved body: its result, its arguments, and the
+    /// state before it.
+    fn first_call<'db>(checker: &Borrowck<'db>) -> (NValueId, Vec<NOperand>, BorrowState<'db>) {
+        checker
+            .body
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(block, data)| {
+                data.statements
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, statement)| match &statement.kind {
+                        NStatementKind::Define {
+                            result,
+                            expr: NExpr::Call { args, .. },
+                        } => Some((*result, args.to_vec(), checker.before[block][index].clone())),
+                        _ => None,
+                    })
+            })
+            .unwrap()
+    }
+
+    fn summary_input<'db>(db: &'db dyn HirAnalysisDb, param: u32) -> SourceExpr<'db> {
+        SourceExpr::whole(ExternalSource::input(
+            InputSource::slot(param, StructuralPath::default()),
+            ReferentContract::new(db, TyId::u256(db), HandleAddressSpace::Unspecified),
+            false,
+        ))
+    }
+
+    /// Arbitrary bytes at an unknown address, present only where `target` and
+    /// `written` overlap.
+    fn clobbered<'db>(
+        db: &'db dyn HirAnalysisDb,
+        target: SourceExpr<'db>,
+        written: SourceExpr<'db>,
+    ) -> SymbolicPlace<'db> {
+        let mut source = ExternalSource::unknown(
+            ReferentContract::new(
+                db,
+                TyId::u256(db),
+                HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+            ),
+            AddressOccurrence::Summary(0),
+            Box::new([]),
+            AddressProvenance::Raw,
+        );
+        source.clobber = Some(Box::new(ClobberCondition::new(
+            target,
+            written,
+            AccessExtent::Typed,
+        )));
+        SymbolicPlace {
+            root: RegionRoot::External(source),
+            path: RegionPath::default(),
+            views: Default::default(),
+        }
+    }
+
+    /// The caller parameters each alternative's clobber condition compares.
+    fn clobber_params(region: &RegionSet<'_>) -> BTreeSet<(Option<u32>, Option<u32>)> {
+        region
+            .clauses()
+            .iter()
+            .map(|clause| {
+                let RegionRoot::External(source) = &clause.payload.root else {
+                    panic!("clobbered alternative without a source");
+                };
+                let clobber = source.clobber.as_ref().expect("clobber condition");
+                (
+                    clobber.target.source.param(),
+                    clobber.written.source.param(),
+                )
+            })
+            .collect()
+    }
+
+    /// A value of `like`'s shape whose every leaf is `payload`.
+    fn uniform<'db>(
+        checker: &mut Borrowck<'db>,
+        like: &CapabilityValue<'db>,
+        payload: impl Fn(CapabilitySemantics<'db>) -> CapabilityRef<'db>,
+    ) -> CapabilityValue<'db> {
+        checker
+            .inventory
+            .values
+            .from_shape(like.shape(), like.scope(), |semantics, _, scope| {
+                vec![Guarded {
+                    guard: Guard::always(scope),
+                    payload: payload(semantics),
+                }]
+            })
+    }
+
+    #[test]
+    fn physical_resolution_keeps_clobbers_between_distinct_certain_inputs() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "physical_clobbers.fe".into(),
+            "fn leaf(_ a: ref u256, _ b: ref u256, _ c: *u256, _ flag: bool) {}\n\
+             fn wrapper(_ first: ref u256, _ second: ref u256, _ third: *u256, _ flag: bool) {\n    \
+                 leaf(first, second, third, flag)\n}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "wrapper"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        let (result, args, state) = first_call(&checker);
+        let scope = BinderScope::default();
+        let inputs = CallInputs {
+            args: &args,
+            effects: &[],
+            origin: SemOrigin::Body(checker.body.template_owner),
+        };
+        let input = |param| summary_input(&db, param);
+        let source = |place| SourceExpr::from_place(&place).unwrap();
+        let referents: Vec<_> = args
+            .iter()
+            .map(|arg| checker.resolve_capability(state.value(arg.value)).region)
+            .collect();
+
+        // Distinct certain inputs are separate only by the entry assumption:
+        // its first filter drops the alternative, the physical one keeps it.
+        let between = source(clobbered(&db, input(0), input(1)));
+        let mut assumed = SourceInstantiations::new(&state, result, inputs);
+        let mut physical = SourceInstantiations::physical(&state, result, inputs);
+        assert!(
+            assumed
+                .resolve(&mut checker, &between, &scope)
+                .unwrap()
+                .region
+                .is_empty()
+        );
+        let kept = physical.resolve(&mut checker, &between, &scope).unwrap();
+        assert_eq!(clobber_params(&kept.region), [(Some(0), Some(1))].into());
+        // Each session reuses only its own resolutions.
+        let evaluations = physical.evaluations;
+        assert!(
+            assumed
+                .resolve(&mut checker, &between, &scope)
+                .unwrap()
+                .region
+                .is_empty()
+        );
+        assert_eq!(
+            physical
+                .resolve(&mut checker, &between, &scope)
+                .unwrap()
+                .region,
+            kept.region
+        );
+        assert_eq!(physical.evaluations, evaluations);
+
+        // A pointer that may also hold the first input's address. The
+        // per-alternative filter keeps only its uncertain target under the
+        // assumption, and both physically.
+        let first = &referents[0];
+        let pointer = state.value(args[2].value).clone();
+        let alias = uniform(&mut checker, &pointer, |_| {
+            CapabilityRef::Address(first.clone())
+        });
+        let mut mixed = state.clone();
+        mixed.set_value(
+            args[2].value,
+            checker.inventory.values.join(&pointer, &alias),
+        );
+        let either = source(clobbered(&db, input(2), input(1)));
+        let assumed = SourceInstantiations::new(&mixed, result, inputs)
+            .resolve(&mut checker, &either, &scope)
+            .unwrap();
+        assert_eq!(clobber_params(&assumed.region), [(Some(2), Some(1))].into());
+        let kept = SourceInstantiations::physical(&mixed, result, inputs)
+            .resolve(&mut checker, &either, &scope)
+            .unwrap();
+        assert_eq!(
+            clobber_params(&kept.region),
+            [(Some(0), Some(1)), (Some(2), Some(1))].into()
+        );
+
+        // A dependency resolved through memory keeps its session's basis.
+        let mut redirected = state.clone();
+        redirected.set_value(args[2].value, alias.clone());
+        let element = SourceExpr::whole(ExternalSource::memory(
+            &db,
+            input(2),
+            TyId::u256(&db),
+            MemoryOffset::Element(TyId::u256(&db), IndexExpr::Const(1)),
+        ));
+        let through = source(clobbered(&db, element, input(1)));
+        assert!(
+            SourceInstantiations::new(&redirected, result, inputs)
+                .resolve(&mut checker, &through, &scope)
+                .unwrap()
+                .region
+                .is_empty()
+        );
+        assert_eq!(
+            clobber_params(
+                &SourceInstantiations::physical(&redirected, result, inputs)
+                    .resolve(&mut checker, &through, &scope)
+                    .unwrap()
+                    .region
+            ),
+            [(Some(0), Some(1))].into()
+        );
+
+        // A clobber whose dependencies resolve to 17 places each exceeds the
+        // pair limit before any comparison; the assumed basis compares no
+        // pairs and needs no limit.
+        let pointee = SourceExpr::from_place(&referents[2].clauses()[0].payload).unwrap();
+        let cells = (0..17).fold(pointer.clone(), |value, cell| {
+            let region = RegionSet::singleton(
+                &scope,
+                RegionRoot::External(ExternalSource::memory(
+                    &db,
+                    pointee.clone(),
+                    TyId::u256(&db),
+                    MemoryOffset::Element(TyId::u256(&db), IndexExpr::Const(cell + 1)),
+                )),
+                RegionPath::default(),
+            );
+            let cell = uniform(&mut checker, &pointer, |_| {
+                CapabilityRef::Address(region.clone())
+            });
+            checker.inventory.values.join(&value, &cell)
+        });
+        let mut wide = state.clone();
+        wide.set_value(args[2].value, cells);
+        let product = source(clobbered(&db, input(2), input(2)));
+        assert!(
+            SourceInstantiations::new(&wide, result, inputs)
+                .resolve(&mut checker, &product, &scope)
+                .is_ok()
+        );
+        let exhausted = SourceInstantiations::physical(&wide, result, inputs)
+            .resolve(&mut checker, &product, &scope)
+            .unwrap_err();
+        assert_eq!(
+            exhausted.primary.message,
+            "borrow separation requirements exceed the analysis limits"
+        );
+
+        // A requirement holds only where the call executes, even where the
+        // resolved endpoints do not carry that condition themselves.
+        let flag = |occurrence| ChoiceKey::new(occurrence, StructuralPath::default());
+        let relation = Separation {
+            protected: SymbolicPlace {
+                root: RegionRoot::External(input(0).source),
+                path: RegionPath::default(),
+                views: Default::default(),
+            },
+            protected_kind: BorrowKind::Ref,
+            access: SymbolicPlace {
+                root: RegionRoot::External(input(1).source),
+                path: RegionPath::default(),
+                views: Default::default(),
+            },
+            access_kind: BorrowKind::Mut,
+            extent: AccessExtent::Typed,
+            suspended: Box::new([]),
+        };
+        let touched = Guard::always(&scope)
+            .with_boolean(flag(ValueOccurrence::Argument(3)), true)
+            .unwrap();
+        checker
+            .calls
+            .get_mut(&result)
+            .unwrap()
+            .summary
+            .loan_requirements = SeparationSet::new(
+            &db,
+            &scope,
+            [Guarded {
+                guard: touched.clone(),
+                payload: relation,
+            }],
+        );
+        // Execute the call only where the requirement cannot hold, leaving
+        // the argument values unconstrained.
+        let instantiated = checker
+            .instantiate_guard(&touched, result, inputs)
+            .unwrap()
+            .unwrap();
+        let mut skipped = state.clone();
+        assert!(skipped.constrain(
+            &Guard::always(&scope).difference(&instantiated).unwrap(),
+            &mut checker.inventory.values,
+        ));
+        for arg in &args {
+            skipped.set_value(arg.value, state.value(arg.value).clone());
+        }
+        let (requirements, _) = checker
+            .call_loan_requirements(&state, result, inputs)
+            .unwrap();
+        assert_eq!(requirements.len(), 1);
+        let (requirements, _) = checker
+            .call_loan_requirements(&skipped, result, inputs)
+            .unwrap();
+        assert!(requirements.is_empty());
+        checker
+            .calls
+            .get_mut(&result)
+            .unwrap()
+            .summary
+            .loan_requirements = SeparationSet::empty(&scope);
+
+        // Dependencies keep their native validity, immediate or deferred,
+        // where nothing valid remains to compare.
+        let deferred = source(clobbered(
+            &db,
+            SourceExpr::from_place(&first.clauses()[0].payload).unwrap(),
+            SourceExpr::from_place(&referents[2].clauses()[0].payload).unwrap(),
+        ));
+        for (param, immediate) in [(0u32, true), (1, true), (0, false), (1, false)] {
+            let arg = args[param as usize].value;
+            let region = if immediate {
+                referents[param as usize].clone()
+            } else {
+                source_region(&deferred, &Guard::always(&scope))
+            };
+            let original = state.value(arg).clone();
+            let invalid = uniform(&mut checker, &original, |semantics| {
+                CapabilityRef::Invalidated {
+                    class: semantics.class,
+                    region: region.clone(),
+                }
+            });
+            let mut damaged = state.clone();
+            damaged.set_value(arg, invalid);
+            let resolved = SourceInstantiations::physical(&damaged, result, inputs)
+                .resolve(&mut checker, &between, &scope)
+                .unwrap();
+            assert!(resolved.region.is_empty());
+            assert_eq!(resolved.invalidated.invalid, immediate);
+            assert!(!resolved.invalidated.requirements.is_empty());
+
+            // The access's validity reaches the caller with the relation's.
+            // An invalid protected referent holds no loan to protect, and its
+            // use fails through its own validity contract.
+            let call = &mut checker.calls.get_mut(&result).unwrap().summary;
+            let place = |param| SymbolicPlace {
+                root: RegionRoot::External(input(param).source),
+                path: RegionPath::default(),
+                views: Default::default(),
+            };
+            let relation = |protected, access| Separation {
+                protected: place(protected),
+                protected_kind: BorrowKind::Ref,
+                access: place(access),
+                access_kind: BorrowKind::Mut,
+                extent: AccessExtent::Typed,
+                suspended: Box::new([]),
+            };
+            call.loan_requirements = SeparationSet::new(
+                &db,
+                &scope,
+                [Guarded {
+                    guard: Guard::always(&scope),
+                    payload: relation(param, 1 - param),
+                }],
+            );
+            call.native_requirements = RegionSet::empty(&scope);
+            let (requirements, validity) = checker
+                .call_loan_requirements(&damaged, result, inputs)
+                .unwrap();
+            assert!(requirements[0].protected.is_empty());
+            assert!(!requirements[0].access.is_empty());
+            assert!(!validity.invalid && validity.requirements.is_empty());
+            assert!(
+                !checker
+                    .call_native_validity(&damaged, result, inputs)
+                    .unwrap()
+                    .invalid
+            );
+            checker
+                .calls
+                .get_mut(&result)
+                .unwrap()
+                .summary
+                .native_requirements = RegionSet::new(
+                &scope,
+                [Guarded {
+                    guard: Guard::always(&scope),
+                    payload: place(param),
+                }],
+            );
+            let used = checker
+                .call_native_validity(&damaged, result, inputs)
+                .unwrap();
+            assert_eq!(used.invalid, immediate);
+            assert!(!used.requirements.is_empty());
+
+            let call = &mut checker.calls.get_mut(&result).unwrap().summary;
+            call.native_requirements = RegionSet::empty(&scope);
+            call.loan_requirements = SeparationSet::new(
+                &db,
+                &scope,
+                [Guarded {
+                    guard: Guard::always(&scope),
+                    payload: relation(1 - param, param),
+                }],
+            );
+            let (requirements, validity) = checker
+                .call_loan_requirements(&damaged, result, inputs)
+                .unwrap();
+            assert!(requirements[0].access.is_empty());
+            assert_eq!(validity.invalid, immediate);
+            assert!(!validity.requirements.is_empty());
+        }
+    }
+
+    #[test]
+    fn separation_validity_keeps_its_physical_basis_through_export() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "separation_validity_export.fe".into(),
+            "fn leaf(_ a: ref u256, _ b: ref u256) {}\n\
+             fn wrapper(_ first: ref u256, _ second: ref u256) { leaf(first, second) }\n\
+             fn alias(_ value: ref u256) { wrapper(value, value) }\n\
+             fn locals() {\n    let a: u256 = 1\n    let b: u256 = 2\n    wrapper(ref a, ref b)\n}\n\
+             fn inputs(_ x: ref u256, _ y: ref u256) { wrapper(x, y) }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let solved = |name| {
+            let instance = get_or_build_semantic_instance(
+                &db,
+                identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, name))),
+            );
+            let mut checker = Borrowck::new(&db, instance).unwrap();
+            checker.solve().unwrap();
+            checker
+        };
+        /// Give the wrapper's callee a relation from its first input to
+        /// `validity`, and that access's validity, then settle the analysis.
+        fn inject<'db>(
+            db: &'db dyn HirAnalysisDb,
+            checker: &mut Borrowck<'db>,
+            validity: SymbolicPlace<'db>,
+        ) {
+            let scope = BinderScope::default();
+            let (result, _, _) = first_call(checker);
+            let call = &mut checker.calls.get_mut(&result).unwrap().summary;
+            call.separation_validity = RegionSet::new(
+                &scope,
+                [Guarded {
+                    guard: Guard::always(&scope),
+                    payload: validity.clone(),
+                }],
+            );
+            call.loan_requirements = SeparationSet::new(
+                db,
+                &scope,
+                [Guarded {
+                    guard: Guard::always(&scope),
+                    payload: Separation {
+                        protected: SymbolicPlace {
+                            root: RegionRoot::External(summary_input(db, 0).source),
+                            path: RegionPath::default(),
+                            views: Default::default(),
+                        },
+                        protected_kind: BorrowKind::Ref,
+                        access: validity,
+                        access_kind: BorrowKind::Mut,
+                        extent: AccessExtent::Typed,
+                        suspended: Box::new([]),
+                    },
+                }],
+            );
+            checker.resolve_operations().unwrap();
+            checker.conflicts = Some(checker.analyze_conflicts());
+        }
+        let input = |param| summary_input(&db, param);
+
+        // An access whose validity fails at this call is diagnosed here.
+        let mut wrapper = solved("wrapper");
+        inject(&db, &mut wrapper, clobbered(&db, input(0), input(0)));
+        assert!(wrapper.conflicts().diagnostic.is_some());
+
+        // Over distinct certain inputs, the obligations are exported with the
+        // clobber condition intact.
+        let mut wrapper = solved("wrapper");
+        inject(&db, &mut wrapper, clobbered(&db, input(0), input(1)));
+        assert!(wrapper.conflicts().diagnostic.is_none());
+        let (summary, _) = wrapper.build_summary().unwrap();
+        assert_eq!(
+            clobber_params(&summary.separation_validity),
+            [(Some(0), Some(1))].into()
+        );
+        let [relation] = summary.loan_requirements.clauses() else {
+            panic!("one forwarded relation");
+        };
+        assert_eq!(
+            clobber_params(&RegionSet::new(
+                relation.guard.scope(),
+                [Guarded {
+                    guard: relation.guard.clone(),
+                    payload: relation.payload.access.clone(),
+                }]
+            )),
+            [(Some(0), Some(1))].into()
+        );
+
+        // A further caller refines them physically.
+        for name in ["alias", "locals", "inputs"] {
+            let mut caller = solved(name);
+            let (result, args, state) = first_call(&caller);
+            let call = &mut caller.calls.get_mut(&result).unwrap().summary;
+            call.separation_validity = summary.separation_validity.clone();
+            call.loan_requirements = summary.loan_requirements.clone();
+            let inputs = CallInputs {
+                args: &args,
+                effects: &[],
+                origin: SemOrigin::Body(caller.body.template_owner),
+            };
+            let (requirements, validity) = caller
+                .call_loan_requirements(&state, result, inputs)
+                .unwrap();
+            let [requirement] = &requirements[..] else {
+                panic!("{name}: one requirement");
+            };
+            match name {
+                "alias" => assert!(validity.invalid, "{name}"),
+                "locals" => {
+                    assert!(!validity.invalid && validity.requirements.is_empty());
+                    assert!(requirement.access.is_empty());
+                }
+                _ => {
+                    assert!(!validity.invalid && !validity.requirements.is_empty());
+                    assert_eq!(
+                        clobber_params(&requirement.access),
+                        [(Some(0), Some(1))].into()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn separation_export_names_unexposed_addresses_by_family_and_selector() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "separation_export.fe".into(),
+            "struct Pair { a: u256, b: u256 }\n\
+             fn holder(_ value: mut Pair, _ first: u256, _ second: u256, _ flag: bool) {}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "holder"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        let params: BTreeMap<_, _> = checker
+            .body
+            .values
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| match value.definition {
+                NValueDefinition::EntryParam { param } => Some((param, NValueId::new(index))),
+                _ => None,
+            })
+            .collect();
+        let scope = BinderScope::default();
+        let u256 = TyId::u256(&db);
+        // One allocation family, observed at two selectors that may be equal.
+        let family = AddressOccurrence::Value {
+            instance,
+            value: params[&0],
+            choice: 0,
+        };
+        let allocation = |selector: NValueId| {
+            ExternalSource::allocation(
+                &db,
+                OpaqueHandleRef {
+                    contract: OpaqueHandleContract {
+                        handle_ty: TyId::ptr_to(&db, u256),
+                        target_ty: u256,
+                        address_space: HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+                    },
+                    occurrence: family,
+                    arguments: Box::new([checker.index(selector)]),
+                },
+            )
+        };
+        let mut access = allocation(params[&1]);
+        access.clobber = Some(Box::new(ClobberCondition::new(
+            SourceExpr::whole(allocation(params[&1])),
+            SourceExpr::whole(allocation(params[&2])),
+            AccessExtent::Typed,
+        )));
+        // The clause and one slice observe a choice of a recursive call; the
+        // other slice observes a choice only it mentions.
+        let (recursive, other) = (params[&1], params[&2]);
+        checker.recursive_calls.insert(recursive);
+        let choice = |occurrence| ChoiceKey::new(occurrence, StructuralPath::default());
+        let call_choice = |result, choice| ValueOccurrence::CallChoice { result, choice };
+        let guard = Guard::always(&scope)
+            .with_boolean(choice(call_choice(recursive, 0)), true)
+            .and_then(|guard| guard.with_boolean(choice(ValueOccurrence::Value(params[&3])), true))
+            .unwrap();
+        let slice = |field, occurrence| Guarded {
+            guard: Guard::always(&scope)
+                .with_boolean(choice(occurrence), true)
+                .unwrap(),
+            payload: RegionPath::new([Projection::Field(FieldIndex(field))]),
+        };
+        let pair = ReferentContract::new(
+            &db,
+            checker.summary_param_ty(0).unwrap(),
+            HandleAddressSpace::Unspecified,
+        );
+        let clause = Guarded {
+            guard,
+            payload: Separation {
+                protected: SymbolicPlace {
+                    root: RegionRoot::External(ExternalSource::input(
+                        InputSource::slot(0, StructuralPath::default()),
+                        pair,
+                        false,
+                    )),
+                    path: RegionPath::default(),
+                    views: Default::default(),
+                },
+                protected_kind: BorrowKind::Mut,
+                access: SymbolicPlace {
+                    root: RegionRoot::External(access),
+                    path: RegionPath::default(),
+                    views: Default::default(),
+                },
+                access_kind: BorrowKind::Mut,
+                extent: AccessExtent::Typed,
+                suspended: Box::new([
+                    slice(0, call_choice(other, 1)),
+                    slice(1, call_choice(recursive, 1)),
+                ]),
+            },
+        };
+        let origin = SeparationOrigin {
+            owner: instance.key(&db).owner(&db),
+            template_owner: checker.body.template_owner,
+            borrow: SemOrigin::Body(checker.body.template_owner),
+            access: SemOrigin::Body(checker.body.template_owner),
+        };
+        /// Every handle the source mentions, in visit order.
+        fn handles<'db>(
+            source: &ExternalSource<'db>,
+        ) -> Vec<(AddressOccurrence<'db>, Vec<IndexExpr<'db>>)> {
+            let mut handles = Vec::new();
+            source
+                .clone()
+                .map_occurrences(&mut |occurrence, arguments| {
+                    handles.push((*occurrence, arguments.to_vec()));
+                });
+            handles
+        }
+        for exposed in [BTreeMap::new(), BTreeMap::from([(family, 5)])] {
+            let mut choices = BTreeSet::new();
+            let [(exported, _)] = &checker
+                .summarize_separations(&[(clause.clone(), origin)], &mut choices, &exposed)
+                .unwrap()[..]
+            else {
+                panic!("one exported relation");
+            };
+            let RegionRoot::External(access) = &exported.payload.access.root else {
+                panic!("external access");
+            };
+            let handles = handles(access);
+            assert_eq!(handles.len(), 3);
+            let number = if exposed.is_empty() { 0 } else { 5 };
+            assert!(
+                handles
+                    .iter()
+                    .all(|(occurrence, _)| *occurrence == AddressOccurrence::Summary(number))
+            );
+            // The written selector and the access's own are distinct names
+            // that may still denote one address.
+            let arguments: BTreeSet<_> = handles.iter().map(|(_, arguments)| arguments).collect();
+            assert_eq!(arguments.len(), 2);
+            if exposed.is_empty() {
+                let witnesses: Vec<_> = arguments.iter().map(|arguments| arguments[0]).collect();
+                assert!(arguments.iter().all(|arguments| arguments.len() == 1));
+                assert!(
+                    exported
+                        .guard
+                        .with_equality(witnesses[0], witnesses[1])
+                        .is_some()
+                );
+            } else {
+                assert_eq!(
+                    arguments,
+                    [
+                        vec![IndexExpr::FormalValue(1)],
+                        vec![IndexExpr::FormalValue(2)]
+                    ]
+                    .iter()
+                    .collect()
+                );
+            }
+            // The recursive choice is forgotten, and the slice it conditions
+            // is dropped; the other slice keeps its choice for renaming.
+            assert_eq!(
+                exported.guard.occurrences(),
+                [ValueOccurrence::Argument(3)].into()
+            );
+            let [suspended] = &*exported.payload.suspended else {
+                panic!("{exported:#?}");
+            };
+            assert_eq!(
+                suspended.payload,
+                RegionPath::new([Projection::Field(FieldIndex(0))])
+            );
+            assert_eq!(
+                suspended.guard.occurrences(),
+                [call_choice(other, 1)].into()
+            );
+            assert!(choices.contains(&call_choice(other, 1)));
+        }
+    }
+
+    #[test]
+    fn separation_limits_apply_to_merged_relations() {
+        // Two clauses of one relation each fit the guard limit; merging them
+        // ORs their guards past it, which only the final check sees.
+        let count = 44;
+        let params: Vec<_> = (0..count)
+            .map(|index| format!("_ x{index}: u256"))
+            .collect();
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "separation_merge.fe".into(),
+            &format!(
+                "fn holder(_ value: mut u256, _ saved: *u256, {}) {{}}",
+                params.join(", ")
+            ),
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "holder"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        let params: BTreeMap<_, _> = checker
+            .body
+            .values
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| match value.definition {
+                NValueDefinition::EntryParam { param } => Some((param, NValueId::new(index))),
+                _ => None,
+            })
+            .collect();
+        let scope = BinderScope::default();
+        let index = |position: usize| checker.index(params[&(position as u32 + 2)]);
+        // Equal neighbors, paired from the first or the second scalar.
+        let paired = |offset: usize| {
+            (offset..count - 1)
+                .step_by(2)
+                .try_fold(Guard::always(&scope), |guard, position| {
+                    guard.with_equality(index(position), index(position + 1))
+                })
+                .unwrap()
+        };
+        let (first, second) = (paired(0), paired(1));
+        assert!(first.node_count() <= SEPARATION_GUARD_NODE_LIMIT);
+        assert!(second.node_count() <= SEPARATION_GUARD_NODE_LIMIT);
+        assert!(first.or(&second).node_count() > SEPARATION_GUARD_NODE_LIMIT);
+        let referent = |param| {
+            checker
+                .resolve_capability(checker.inventory.entry.value(params[&param]))
+                .region
+                .clauses()[0]
+                .payload
+                .clone()
+        };
+        let relation = Separation {
+            protected: referent(0),
+            protected_kind: BorrowKind::Mut,
+            access: referent(1),
+            access_kind: BorrowKind::Mut,
+            extent: AccessExtent::Typed,
+            suspended: Box::new([]),
+        };
+        let origin = SeparationOrigin {
+            owner: instance.key(&db).owner(&db),
+            template_owner: checker.body.template_owner,
+            borrow: SemOrigin::Body(checker.body.template_owner),
+            access: SemOrigin::Body(checker.body.template_owner),
+        };
+        for (guards, merged) in [
+            (vec![first.clone()], false),
+            (vec![second.clone()], false),
+            (vec![first, second], true),
+        ] {
+            checker.conflicts = Some(ConflictAnalysis {
+                diagnostic: None,
+                exhausted: false,
+                deferred: guards
+                    .into_iter()
+                    .map(|guard| {
+                        (
+                            Guarded {
+                                guard,
+                                payload: relation.clone(),
+                            },
+                            origin,
+                        )
+                    })
+                    .collect(),
+                validity: NativeValidity::default(),
+            });
+            match checker.build_summary() {
+                Ok((summary, _)) => {
+                    assert!(!merged);
+                    assert_eq!(summary.loan_requirements.clauses().len(), 1);
+                }
+                Err(diagnostic) => {
+                    assert!(merged);
+                    assert_eq!(
+                        diagnostic.primary.message,
+                        "borrow separation requirements exceed the analysis limits"
+                    );
+                }
+            }
+        }
     }
 }

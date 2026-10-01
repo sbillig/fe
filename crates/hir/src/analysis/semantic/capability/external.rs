@@ -952,15 +952,32 @@ impl<'db> ExternalSource<'db> {
         }
     }
 
-    /// How many sources this route contains, counting every Memory base and
-    /// clobber dependency.
-    pub fn route_size(&self) -> usize {
-        1 + match &self.origin {
-            ExternalOrigin::Memory { base, .. } => base.source.route_size(),
-            _ => 0,
-        } + self.clobber.as_ref().map_or(0, |clobber| {
-            clobber.target.source.route_size() + clobber.written.source.route_size()
-        })
+    /// How many nodes this source stores: itself, its dereference steps and
+    /// index arguments, and every Memory base and clobber dependency with their
+    /// projection steps and conversion views.
+    pub fn size(&self) -> usize {
+        let origin = match &self.origin {
+            ExternalOrigin::Input(input) => input.size(),
+            ExternalOrigin::OpaqueHandle(handle) | ExternalOrigin::Allocation(handle) => {
+                handle.arguments.len()
+            }
+            ExternalOrigin::Unknown { arguments, .. } => arguments.len(),
+            ExternalOrigin::Memory { base, offset, .. } => {
+                base.size() + usize::from(*offset != MemoryOffset::Zero)
+            }
+            ExternalOrigin::Provider { .. }
+            | ExternalOrigin::Local(_)
+            | ExternalOrigin::OpaqueMemory => 0,
+        };
+        let clobber = self.clobber.as_ref().map_or(0, |clobber| {
+            clobber.target.size() + clobber.written.size() + clobber.extent.indices().count()
+        });
+        let dereferences = self
+            .dereferences
+            .iter()
+            .map(|path| 1 + path.as_slice().len())
+            .sum::<usize>();
+        1 + origin + clobber + dereferences
     }
 
     /// Whether any part of this route, including Memory bases and clobber

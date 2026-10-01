@@ -22,21 +22,25 @@ use super::{
 
 // Limits are well above the largest measured on the repository workspace and
 // the `fe_test` fixtures: 8 pairs per comparison, 26 relations per summary,
-// 1287 guard nodes and 6 witnesses per clause, and nesting depth 4.
+// 1287 guard nodes, 6 witnesses and 16 stored nodes per clause. A loop nest
+// three deep, with a child borrow live across a read through a stored
+// borrow, needs 7432 guard nodes and 7 witnesses.
 
 /// Most jointly opened pairs one comparison may materialize.
 pub const SEPARATION_PAIR_LIMIT: usize = 256;
 /// Most relations one summary may export.
 pub const SEPARATION_CLAUSE_LIMIT: usize = 1024;
-/// Most guard nodes in one clause, counting its suspension conditions.
-pub const SEPARATION_GUARD_NODE_LIMIT: usize = 4096;
+/// Most guard nodes in one clause, counting its suspension conditions. A
+/// bounded 256-bit index costs up to about a thousand nodes, so this admits as
+/// many bounded witnesses as a clause may own.
+pub const SEPARATION_GUARD_NODE_LIMIT: usize = 32768;
 /// Most witnesses one clause may own.
 pub const SEPARATION_WITNESS_LIMIT: u32 = 32;
-/// Most sources in one endpoint's route, counting Memory bases and clobbers.
-pub const SEPARATION_ROUTE_LIMIT: usize = 16;
-/// Most index occurrences in one relation: paths, handle arguments, the
-/// extent and its suspension.
-pub const SEPARATION_INDEX_LIMIT: usize = 256;
+/// Most nodes one relation may store apart from its guards: the sources of
+/// both endpoints with every Memory base and clobber dependency, their
+/// projection steps, conversion views and index arguments, the extent and
+/// the suspended paths.
+pub const SEPARATION_SIZE_LIMIT: usize = 256;
 
 /// On every valuation of its clause guard, the access footprint touches no part
 /// of `protected` outside the suspended projections.
@@ -164,18 +168,55 @@ impl<'db> Separation<'db> {
     /// the guard observes. Suspension conditions then move to the relation's
     /// scope, so the relation alone, never the guard, determines the key, and
     /// the guard's own witnesses are projected or compacted.
+    ///
+    /// A witness that no endpoint, extent, or suspended path names selects no
+    /// part of the relation. The clause applies on some value of it, and a
+    /// slice stays suspended only where it holds on every value the clause
+    /// admits, so eliminating it never weakens the obligation. A slice is read
+    /// only where the clause applies, so one that holds there is unconditional.
     fn canonical(
         self,
         db: &'db dyn HirAnalysisDb,
         owner: &BinderScope,
         guard: &Guard<'db>,
     ) -> (Self, Guard<'db>) {
+        let named: BTreeSet<_> = [&self.protected, &self.access]
+            .into_iter()
+            .flat_map(|place| place.root.indices().chain(place.path.indices()))
+            .chain(self.extent.indices())
+            .chain(
+                self.suspended
+                    .iter()
+                    .flat_map(|slice| slice.payload.indices()),
+            )
+            .collect();
+        let hidden =
+            |index: IndexExpr<'db>| owner.validate(index).is_err() && !named.contains(&index);
         // Merging slices can drop a slice guard's last use of a witness.
+        let mask = canonical_mask(self.suspended.iter().map(|slice| Guarded {
+            guard: slice.guard.in_scope(guard.scope()),
+            payload: slice.payload.clone(),
+        }));
         let relation = Self {
-            suspended: canonical_mask(self.suspended.iter().map(|slice| Guarded {
-                guard: slice.guard.in_scope(guard.scope()),
-                payload: slice.payload.clone(),
-            })),
+            suspended: mask
+                .iter()
+                .filter_map(|slice| {
+                    // Values the clause admits on which the slice fails. A slice
+                    // that holds wherever the clause does is unconditional.
+                    let guard = match guard.difference(&slice.guard) {
+                        None => Guard::always(guard.scope()),
+                        Some(_) if !slice.guard.indices().into_iter().any(hidden) => {
+                            slice.guard.clone()
+                        }
+                        Some(refuted) => Guard::always(guard.scope())
+                            .difference(&refuted.project_witnesses(hidden))?,
+                    };
+                    Some(Guarded {
+                        guard,
+                        payload: slice.payload.clone(),
+                    })
+                })
+                .collect(),
             ..self
         };
         let observed: BTreeSet<_> = relation.indices().collect();
@@ -261,19 +302,29 @@ pub fn within_limits<'db>(clause: &Guarded<'db, Separation<'db>>, owner: &Binder
             .iter()
             .map(|slice| slice.guard.node_count())
             .sum::<usize>();
+    let size = [&relation.protected, &relation.access]
+        .into_iter()
+        .map(|place| {
+            let root = match &place.root {
+                RegionRoot::External(source) => source.size(),
+                RegionRoot::Root { .. } | RegionRoot::Value(_) => 1,
+            };
+            root + place.path.as_slice().len() + place.views.iter().count()
+        })
+        .sum::<usize>()
+        + relation.extent.indices().count()
+        + relation
+            .suspended
+            .iter()
+            .map(|slice| 1 + slice.payload.as_slice().len())
+            .sum::<usize>();
     nodes <= SEPARATION_GUARD_NODE_LIMIT
+        && size <= SEPARATION_SIZE_LIMIT
         && clause
             .guard
             .scope()
             .existential_extension_of(owner)
             .is_some_and(|witnesses| witnesses <= SEPARATION_WITNESS_LIMIT)
-        && relation.indices().count() <= SEPARATION_INDEX_LIMIT
-        && [&relation.protected, &relation.access]
-            .into_iter()
-            .all(|place| {
-                !matches!(&place.root, RegionRoot::External(source)
-                if source.route_size() > SEPARATION_ROUTE_LIMIT)
-            })
 }
 
 /// Guarded separation clauses over one owner scope, one per relation. A
@@ -445,12 +496,13 @@ mod tests {
             semantic::{
                 FieldIndex, VariantIndex,
                 capability::{
+                    external::{ClobberCondition, ExternalSource, MemoryOffset},
                     guard::ChoiceKey,
                     index::IndexNamespace,
                     path::{Projection, StructuralPath},
                     region::RegionRoot,
                     repack::{ReferentRepackId, ReferentViews},
-                    source::InputSource,
+                    source::{InputSource, SourceExpr},
                     test_roots,
                 },
             },
@@ -997,35 +1049,6 @@ mod tests {
         let db = HirAnalysisTestDb::default();
         let owner = BinderScope::default();
         let field = |index| Projection::Field(FieldIndex(index));
-        // Only a suspension condition observes this witness.
-        let (scope, witness) = owner.bind(IndexNamespace::Existential);
-        let conditional = SeparationSet::new(
-            &db,
-            &owner,
-            [Guarded {
-                guard: Guard::always(&scope),
-                payload: separation(
-                    place(input(&db, 0), []),
-                    place(input(&db, 1), []),
-                    AccessExtent::Typed,
-                    [Guarded {
-                        guard: Guard::always(&scope)
-                            .with_disequality(witness, IndexExpr::Const(1))
-                            .unwrap(),
-                        payload: RegionPath::new([field(0)]),
-                    }],
-                ),
-            }],
-        );
-        let [clause] = conditional.clauses() else {
-            panic!("{conditional:#?}");
-        };
-        let [slice] = &*clause.payload.suspended else {
-            panic!("{conditional:#?}");
-        };
-        assert_eq!(clause.guard.scope(), &scope);
-        assert!(!Guard::always(&scope).implies(&slice.guard));
-
         // One witness shared by both endpoints, the extent and a slice, after
         // an unused binder and a witness only the guard observes.
         let (scope, _) = owner.bind(IndexNamespace::Existential);
@@ -1072,6 +1095,122 @@ mod tests {
                 payload: RegionPath::new([field(0)]),
             }]
         );
+    }
+
+    #[test]
+    fn witnesses_only_guards_observe_are_eliminated() {
+        let db = HirAnalysisTestDb::default();
+        let owner = BinderScope::default();
+        let field = |index| Projection::Field(FieldIndex(index));
+        let (scope, witness) = owner.bind(IndexNamespace::Existential);
+        fn canonical<'db>(
+            db: &'db HirAnalysisTestDb,
+            guard: Guard<'db>,
+            slice: Guard<'db>,
+        ) -> SeparationSet<'db> {
+            SeparationSet::new(
+                db,
+                &BinderScope::default(),
+                [Guarded {
+                    guard,
+                    payload: separation(
+                        place(input(db, 0), []),
+                        place(input(db, 1), []),
+                        AccessExtent::Typed,
+                        [Guarded {
+                            guard: slice,
+                            payload: RegionPath::new([Projection::Field(FieldIndex(0))]),
+                        }],
+                    ),
+                }],
+            )
+        }
+        let unequal = |scope: &BinderScope, index| {
+            Guard::always(scope)
+                .with_disequality(index, IndexExpr::Const(1))
+                .unwrap()
+        };
+        // The clause admits a value on which the slice fails, so no part of
+        // the protected place is certainly suspended.
+        let refuted = canonical(&db, Guard::always(&scope), unequal(&scope, witness));
+        let [clause] = refuted.clauses() else {
+            panic!("{refuted:#?}");
+        };
+        assert_eq!(clause.guard, Guard::always(&owner));
+        assert!(clause.payload.suspended.is_empty());
+
+        // On every value the clause admits, the slice holds.
+        let implied = canonical(&db, unequal(&scope, witness), unequal(&scope, witness));
+        let [clause] = implied.clauses() else {
+            panic!("{implied:#?}");
+        };
+        assert_eq!(clause.guard, Guard::always(&owner));
+        assert_eq!(
+            &*clause.payload.suspended,
+            &[Guarded {
+                guard: Guard::always(&owner),
+                payload: RegionPath::new([field(0)]),
+            }]
+        );
+
+        // A named index keeps its correlation with the eliminated witness:
+        // the slice holds where every admitted value of the witness agrees.
+        let (named_scope, named) = owner.bind(IndexNamespace::Existential);
+        let (scope, hidden) = named_scope.bind(IndexNamespace::Existential);
+        let correlated = SeparationSet::new(
+            &db,
+            &owner,
+            [Guarded {
+                guard: Guard::always(&scope)
+                    .with_equality(hidden, IndexExpr::Const(3))
+                    .unwrap(),
+                payload: separation(
+                    place(input(&db, 0), [Projection::Index(named)]),
+                    place(input(&db, 1), []),
+                    AccessExtent::Typed,
+                    [Guarded {
+                        guard: Guard::always(&scope).with_equality(hidden, named).unwrap(),
+                        payload: RegionPath::new([field(0)]),
+                    }],
+                ),
+            }],
+        );
+        let [clause] = correlated.clauses() else {
+            panic!("{correlated:#?}");
+        };
+        assert_eq!(clause.guard, Guard::always(&named_scope));
+        assert_eq!(
+            &*clause.payload.suspended,
+            &[Guarded {
+                guard: Guard::always(&named_scope)
+                    .with_equality(named, IndexExpr::Const(3))
+                    .unwrap(),
+                payload: RegionPath::new([field(0)]),
+            }]
+        );
+
+        // A witness indexing a choice cannot be quantified alone, so the
+        // relation keeps it.
+        let (scope, witness) = owner.bind(IndexNamespace::Existential);
+        let indexed = Guard::always(&scope)
+            .with_boolean(
+                ChoiceKey::new(
+                    ValueOccurrence::SummaryChoice(0),
+                    StructuralPath::new([Projection::Index(witness)]),
+                ),
+                true,
+            )
+            .unwrap();
+        let kept = canonical(&db, Guard::always(&scope), indexed.clone());
+        let [clause] = kept.clauses() else {
+            panic!("{kept:#?}");
+        };
+        assert_eq!(clause.guard.scope(), &scope);
+        assert_eq!(clause.payload.suspended[0].guard, indexed);
+        // Canonical sets are fixed points.
+        for set in [refuted, implied, correlated, kept] {
+            assert_eq!(SeparationSet::new(&db, &owner, set.clauses().to_vec()), set);
+        }
     }
 
     #[test]
@@ -1189,6 +1328,133 @@ mod tests {
         let renamed = original.map_occurrences(&db, swap);
         assert_eq!(renamed, set(1, 0));
         assert_eq!(renamed.map_occurrences(&db, swap), original);
+    }
+
+    #[test]
+    fn size_limit_counts_every_stored_projection_and_view() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("separation_size.fe".into(), "");
+        let (module, _) = db.top_mod(file);
+        let db = &db;
+        let owner = BinderScope::default();
+        let u256 = TyId::u256(db);
+        let fields = |count: usize| vec![Projection::Field(FieldIndex(0)); count];
+        let views = |count: usize| {
+            let mut views = ReferentViews::default();
+            for depth in 0..count {
+                let (from, to) = if depth % 2 == 0 {
+                    (u256, TyId::u8(db))
+                } else {
+                    (TyId::u8(db), u256)
+                };
+                views.append(
+                    db,
+                    depth,
+                    ReferentRepackId::new(
+                        db,
+                        from,
+                        to,
+                        module.scope(),
+                        PredicateListId::empty_list(db),
+                    ),
+                );
+            }
+            views
+        };
+        let accessed = |source| SymbolicPlace {
+            root: RegionRoot::External(source),
+            path: RegionPath::default(),
+            views: Default::default(),
+        };
+        let clobbered = |target, written| {
+            let mut source = test_roots::input(db, InputSource::place(1));
+            source.clobber = Some(Box::new(ClobberCondition::new(
+                target,
+                written,
+                AccessExtent::Typed,
+            )));
+            source
+        };
+        // Each relation stores `count` steps or views in one component.
+        let relation = |component: usize, count: usize| {
+            let input = |param| test_roots::input(db, InputSource::place(param));
+            let mut protected = accessed(input(0));
+            let mut access = accessed(input(1));
+            let mut suspended = Vec::new();
+            match component {
+                0 => protected.path = RegionPath::new(fields(count)),
+                1 => access.path = RegionPath::new(fields(count)),
+                2 => access.views = views(count),
+                3 => {
+                    access = accessed(test_roots::input(
+                        db,
+                        InputSource::slot(1, StructuralPath::new(fields(count))),
+                    ))
+                }
+                4 => {
+                    access = accessed(test_roots::input(
+                        db,
+                        InputSource::place(1).follow(RegionPath::new(fields(count))),
+                    ))
+                }
+                5 => {
+                    let base = SourceExpr {
+                        path: RegionPath::new(fields(count)),
+                        ..SourceExpr::whole(input(1))
+                    };
+                    access = accessed(ExternalSource::memory(
+                        db,
+                        base,
+                        u256,
+                        MemoryOffset::Element(u256, IndexExpr::Const(1)),
+                    ))
+                }
+                6 => {
+                    let base = SourceExpr {
+                        views: views(count),
+                        ..SourceExpr::whole(input(1))
+                    };
+                    access = accessed(ExternalSource::memory(
+                        db,
+                        base,
+                        u256,
+                        MemoryOffset::Element(u256, IndexExpr::Const(1)),
+                    ))
+                }
+                7 => {
+                    let target = SourceExpr {
+                        path: RegionPath::new(fields(count)),
+                        ..SourceExpr::whole(input(0))
+                    };
+                    access = accessed(clobbered(target, SourceExpr::whole(input(2))))
+                }
+                8 => {
+                    let written = SourceExpr {
+                        path: RegionPath::new(fields(count)),
+                        ..SourceExpr::whole(input(2))
+                    };
+                    access = accessed(clobbered(SourceExpr::whole(input(0)), written))
+                }
+                _ => suspended.push(Guarded {
+                    guard: Guard::always(&owner),
+                    payload: RegionPath::new(fields(count)),
+                }),
+            }
+            Guarded {
+                guard: Guard::always(&owner),
+                payload: separation(protected, access, AccessExtent::Typed, suspended),
+            }
+        };
+        for component in 0..10 {
+            assert!(
+                within_limits(&relation(component, 1), &owner),
+                "{component}"
+            );
+            assert!(
+                !within_limits(&relation(component, SEPARATION_SIZE_LIMIT), &owner),
+                "{component}"
+            );
+        }
     }
 
     #[test]
