@@ -17,7 +17,7 @@ use crate::{
         FuncParam, FuncParamMode, FuncParamName, GenericArgListId, GenericParamListId, IdentId,
         ImplTrait, LitKind, Partial, Pat, PathId, PathKind, Stmt, StringId, Struct,
         TrackedItemVariant, TraitRefId, TupleTypeId, TypeBound, TypeId, TypeKind, Visibility,
-        WhereClauseId, WherePredicate, expr::CallArg,
+        WhereClauseId, WhereClausePredicate, WherePredicate, expr::CallArg,
     },
     span::{AbiStructDesugared, HirOrigin},
 };
@@ -145,9 +145,11 @@ fn field_bounds<'db>(
 ) -> WhereClauseId<'db> {
     let predicates: Vec<_> = field_specs
         .iter()
-        .map(|(_, ty)| WherePredicate {
-            ty: Partial::Present(*ty),
-            bounds: vec![TypeBound::Trait(trait_ref)],
+        .map(|(_, ty)| {
+            WhereClausePredicate::Type(WherePredicate {
+                ty: Partial::Present(*ty),
+                bounds: vec![TypeBound::Trait(trait_ref)],
+            })
         })
         .collect();
     WhereClauseId::new(db, predicates)
