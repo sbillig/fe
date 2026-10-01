@@ -421,6 +421,12 @@ struct Builder<V, T> {
     selections: FxHashMap<(V, usize, usize), usize>,
 }
 
+struct ApplyBranch<V> {
+    variable: V,
+    low: (Child, Child),
+    high: (Child, Child),
+}
+
 /// No node, so an empty chain link and an unvisited position.
 const NONE: Child = Child::MAX;
 
@@ -544,34 +550,61 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
         join: &impl Fn(&T, &T) -> T,
         memo: &mut FxHashMap<(Child, Child), usize>,
     ) -> usize {
-        let key = (child(lhs), child(rhs));
-        if let Some(result) = memo.get(&key) {
-            return *result;
-        }
-        // Keep recursive frames small: only the split variable lives across calls.
-        let result = match (&left.decision.nodes[lhs], &right.decision.nodes[rhs]) {
-            (Node::Leaf(left), Node::Leaf(right)) => self.intern(Node::Leaf(join(left, right))),
-            _ => {
-                let variable = match (left.variable(lhs), right.variable(rhs)) {
-                    (Some(left), Some(right)) => left.min(right),
-                    (Some(variable), None) | (None, Some(variable)) => variable,
-                    (None, None) => unreachable!("two leaves are joined directly"),
-                };
-                let (left_low, left_high) = left.cofactors(lhs, &variable);
-                let (right_low, right_high) = right.cofactors(rhs, &variable);
-                let low = self.apply_decisions(left, left_low, right, right_low, join, memo);
-                let high = self.apply_decisions(left, left_high, right, right_high, join, memo);
-                self.branch(variable, low, high)
+        let root = (child(lhs), child(rhs));
+        // Expand low edges first, then join memoized children without native recursion.
+        let mut pending = vec![(root, None)];
+        while let Some((key, branch)) = pending.pop() {
+            if memo.contains_key(&key) {
+                continue;
             }
-        };
-        memo.insert(key, result);
+            let result = if let Some(ApplyBranch {
+                variable,
+                low,
+                high,
+            }) = branch
+            {
+                self.branch(variable, memo[&low], memo[&high])
+            } else {
+                let (lhs, rhs) = (key.0 as usize, key.1 as usize);
+                match (&left.decision.nodes[lhs], &right.decision.nodes[rhs]) {
+                    (Node::Leaf(left), Node::Leaf(right)) => {
+                        self.intern(Node::Leaf(join(left, right)))
+                    }
+                    _ => {
+                        let variable = match (left.variable(lhs), right.variable(rhs)) {
+                            (Some(left), Some(right)) => left.min(right),
+                            (Some(variable), None) | (None, Some(variable)) => variable,
+                            (None, None) => unreachable!("two leaves are joined directly"),
+                        };
+                        let (left_low, left_high) = left.cofactors(lhs, &variable);
+                        let (right_low, right_high) = right.cofactors(rhs, &variable);
+                        let low = (child(left_low), child(right_low));
+                        let high = (child(left_high), child(right_high));
+                        pending.push((
+                            key,
+                            Some(ApplyBranch {
+                                variable,
+                                low,
+                                high,
+                            }),
+                        ));
+                        pending.push((high, None));
+                        pending.push((low, None));
+                        continue;
+                    }
+                }
+            };
+            memo.insert(key, result);
+        }
         #[cfg(feature = "borrowck-profile")]
         if profile::enabled() && lhs == left.decision.root() && rhs == right.decision.root() {
             profile::scratch(
-                self.scratch_bytes() + memo.capacity() * size_of::<((Child, Child), usize)>(),
+                self.scratch_bytes()
+                    + memo.capacity() * size_of::<((Child, Child), usize)>()
+                    + pending.capacity() * size_of::<((Child, Child), Option<ApplyBranch<V>>)>(),
             );
         }
-        result
+        memo[&root]
     }
 
     // Substitution may reorder variables or identify two decisions. Rebuild by Shannon
@@ -621,38 +654,43 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
         let mut nodes = Vec::with_capacity(self.nodes.len());
         // Canonical positions are dense, so index them rather than hashing them.
         let mut numbering = vec![NONE; self.nodes.len()];
+        // Low-edge-first postorder preserves canonical numbering for shared subgraphs.
+        let mut pending = vec![(root, false)];
+        while let Some((id, expanded)) = pending.pop() {
+            if numbering[id] != NONE {
+                continue;
+            }
+            let node = match &self.nodes[id] {
+                Node::Leaf(value) => Node::Leaf(value.clone()),
+                Node::Branch { low, high, .. } if !expanded => {
+                    pending.push((id, true));
+                    pending.push((*high as usize, false));
+                    pending.push((*low as usize, false));
+                    continue;
+                }
+                Node::Branch {
+                    variable,
+                    low,
+                    high,
+                } => Node::Branch {
+                    variable: variable.clone(),
+                    low: numbering[*low as usize],
+                    high: numbering[*high as usize],
+                },
+            };
+            numbering[id] = child(nodes.len());
+            nodes.push(node);
+        }
         #[cfg(feature = "borrowck-profile")]
         if profile::enabled() {
             profile::scratch(
                 self.scratch_bytes()
                     + nodes.capacity() * size_of::<Node<V, T>>()
-                    + numbering.capacity() * size_of::<Child>(),
+                    + numbering.capacity() * size_of::<Child>()
+                    + pending.capacity() * size_of::<(usize, bool)>(),
             );
         }
-        self.visit(root, &mut nodes, &mut numbering);
         Decision::new(nodes.into())
-    }
-
-    fn visit(&self, id: usize, nodes: &mut Vec<Node<V, T>>, numbering: &mut [Child]) -> usize {
-        if numbering[id] != NONE {
-            return numbering[id] as usize;
-        }
-        let node = match &self.nodes[id] {
-            Node::Leaf(value) => Node::Leaf(value.clone()),
-            Node::Branch {
-                variable,
-                low,
-                high,
-            } => Node::Branch {
-                variable: variable.clone(),
-                low: child(self.visit(*low as usize, nodes, numbering)),
-                high: child(self.visit(*high as usize, nodes, numbering)),
-            },
-        };
-        let canonical = nodes.len();
-        nodes.push(node);
-        numbering[id] = child(canonical);
-        canonical
     }
 }
 
@@ -1135,6 +1173,45 @@ mod tests {
 
     thread_local! {
         static EXIT_GRAPH: RefCell<Option<Decision<u32, bool>>> = const { RefCell::new(None) };
+    }
+
+    #[test]
+    fn deep_join_and_completion_use_bounded_native_stack() {
+        thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                for expected in [false, true] {
+                    let left = Decision::chain(
+                        (0..8192_u32).map(|variable| (variable, expected)),
+                        true,
+                        false,
+                    );
+                    let right = Decision::chain([(8192, expected)], true, false);
+                    let joined = left.apply(&right, |left, right| *left && *right);
+                    assert_eq!(
+                        joined,
+                        Decision::chain(
+                            (0..=8192_u32).map(|variable| (variable, expected)),
+                            true,
+                            false,
+                        )
+                    );
+                }
+                let equal = Decision::equal_bits(
+                    (0..4096_u32)
+                        .rev()
+                        .map(|variable| (variable * 2, variable * 2 + 1)),
+                    true,
+                    false,
+                );
+                assert_eq!(
+                    equal.apply(&Decision::leaf(true), |left, right| *left && *right),
+                    equal
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     fn allocation_is_live(id: usize) -> bool {
