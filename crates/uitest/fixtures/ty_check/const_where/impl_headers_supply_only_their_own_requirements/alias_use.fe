@@ -1,0 +1,6 @@
+// A generic alias does not drop its target's condition.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+type Positive<const N: usize> = Bounded<N>
+
+fn read(_ item: Positive<0>) {}
+fn forward<const M: usize>(_ item: Positive<M>) {}

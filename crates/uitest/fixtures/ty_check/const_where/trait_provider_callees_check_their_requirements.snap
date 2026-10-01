@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/trait_provider_callees_check_their_requirements.fe
+---
+error[8-0093]: const requirement is not satisfied
+   ┌─ trait_provider_callees_check_their_requirements.fe:18:50
+   │
+13 │ const fn at<const N: usize>() -> u256 uses (table: Lookup) where N < 4 {
+   │                                                                  ----- required by this predicate
+   ·
+18 │     with (Lookup = Table { xs: [1, 2, 3, 4] }) { at<4>() }
+   │                                                  ^^^^^^^ condition evaluated to `false`

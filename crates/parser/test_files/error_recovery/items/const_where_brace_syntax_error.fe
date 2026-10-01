@@ -1,0 +1,1 @@
+fn f<const N: usize>() -> usize where N > 0, { N < } { 1 }

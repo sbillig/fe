@@ -1,0 +1,49 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/written_types_report_their_conditions_once/const_parameter_defaults.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ const_parameter_defaults.fe:7:14
+  │
+3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+  │                                      ----- required by this predicate
+  ·
+7 │     let _b: [Bounded<0>; 0] = []
+  │              ^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ const_parameter_defaults.fe:11:14
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+11 │     let _b: [Bounded<0>; 0] = []
+   │              ^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ const_parameter_defaults.fe:15:13
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+15 │     let _b: Bounded<0> = Bounded { value: 1 }
+   │             ^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ const_parameter_defaults.fe:20:14
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+20 │     let _b = Bounded<0> { value: 1 }
+   │              ^^^^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ const_parameter_defaults.fe:24:14
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+24 │     let _b: [Bounded<0>; 0] = []
+   │              ^^^^^^^^^^ condition evaluated to `false`

@@ -1,0 +1,20 @@
+// A function value's requirement is checked where the value is written. A
+// call through a binding, a block or a branch calls that value, so it does
+// not report the requirement again.
+const fn bounded<const N: usize>() -> u256 where N > 0 { 42 }
+fn id<const N: usize>(_ h: Holder<N>) -> u256 where N > 0 { 1 }
+struct Holder<const N: usize> {}
+
+fn binding() -> u256 {
+    let f = bounded<0>
+    f()
+}
+fn block() -> u256 { { bounded<0> }() }
+fn inferred_at_the_call() -> u256 {
+    let f = id
+    f(Holder<0> {})
+}
+fn allowed() -> u256 {
+    let f = bounded<1>
+    f()
+}

@@ -1,0 +1,58 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/types_written_before_a_path_separator_are_checked/expression_paths.fe
+---
+error[8-0093]: const requirement is not satisfied
+   ┌─ expression_paths.fe:12:21
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+12 │ fn call() -> u256 { Bounded<0>::Out::make() }
+   │                     ^^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ expression_paths.fe:13:24
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+13 │ fn record() { let _p = Bounded<0>::Out {} }
+   │                        ^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ expression_paths.fe:14:23
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+14 │ fn value() { let _f = Bounded<0>::Out::make }
+   │                       ^^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ expression_paths.fe:15:24
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+15 │ fn variant() -> Kind { Bounded<0>::Choice::A }
+   │                        ^^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ expression_paths.fe:18:9
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+18 │         Bounded<0>::Choice::A => 1
+   │         ^^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ expression_paths.fe:22:41
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+22 │ fn unstated<const M: usize>() -> u256 { Bounded<M>::Out::make() }
+   │                                         ^^^^^^^^^^^^^^^^^^^^^ no matching const requirement in the caller after substitution

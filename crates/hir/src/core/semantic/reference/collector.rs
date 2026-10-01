@@ -37,6 +37,11 @@ pub(super) struct ReferenceCollector<'db> {
     /// Tracks the current context when visiting paths inside a body.
     /// Set before walking expressions/patterns that contain paths.
     path_context: PathContext,
+    /// Whether nested bodies are skipped. An item's collector skips them:
+    /// every body, including a field type's array length and a `where`
+    /// condition, is an item of its own, whose references `body_references`
+    /// collects, so visiting it from the enclosing item would record each of
+    /// its references twice.
     skip_body: bool,
 }
 
@@ -203,7 +208,7 @@ pub fn func_signature_references<'db>(
 
 #[salsa::tracked(return_ref)]
 pub fn struct_references<'db>(db: &'db dyn HirDb, struct_: Struct<'db>) -> Vec<ReferenceView<'db>> {
-    let mut collector = ReferenceCollector::new(db, false);
+    let mut collector = ReferenceCollector::new(db, true);
     let mut ctxt = VisitorCtxt::with_struct(db, struct_);
     collector.visit_struct(&mut ctxt, struct_);
     collector.refs
@@ -211,7 +216,7 @@ pub fn struct_references<'db>(db: &'db dyn HirDb, struct_: Struct<'db>) -> Vec<R
 
 #[salsa::tracked(return_ref)]
 pub fn enum_references<'db>(db: &'db dyn HirDb, enum_: Enum<'db>) -> Vec<ReferenceView<'db>> {
-    let mut collector = ReferenceCollector::new(db, false);
+    let mut collector = ReferenceCollector::new(db, true);
     let mut ctxt = VisitorCtxt::with_enum(db, enum_);
     collector.visit_enum(&mut ctxt, enum_);
     collector.refs
@@ -222,7 +227,7 @@ pub fn type_alias_references<'db>(
     db: &'db dyn HirDb,
     type_alias: TypeAlias<'db>,
 ) -> Vec<ReferenceView<'db>> {
-    let mut collector = ReferenceCollector::new(db, false);
+    let mut collector = ReferenceCollector::new(db, true);
     let mut ctxt = VisitorCtxt::with_type_alias(db, type_alias);
     collector.visit_type_alias(&mut ctxt, type_alias);
     collector.refs

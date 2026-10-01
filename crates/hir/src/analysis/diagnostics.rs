@@ -162,6 +162,73 @@ fn format_type_mismatch_message<'db>(
     format!("expected `{expected_plain}`, but `{given_plain}` is given")
 }
 
+impl crate::analysis::ty::ty_check::RequirementFailure {
+    /// Why the requirement does not hold, as the use's label says it.
+    pub(crate) fn message(self) -> &'static str {
+        use crate::analysis::ty::ty_check::EvaluationStop;
+        match self {
+            Self::False => "condition evaluated to `false`",
+            Self::Recursive => "recursive const requirement cannot establish itself",
+            Self::Evaluation(EvaluationStop::DivisionByZero) => {
+                "constant evaluation encountered division by zero"
+            }
+            Self::Evaluation(EvaluationStop::Overflow) => "constant evaluation overflowed",
+            Self::Evaluation(EvaluationStop::StepLimit) => {
+                "constant evaluation exceeded its step limit"
+            }
+            Self::Evaluation(EvaluationStop::RecursionLimit) => {
+                "constant evaluation exceeded its recursion limit"
+            }
+            Self::Evaluation(EvaluationStop::RecursiveConst) => "recursive constant evaluation",
+            Self::NotEstablished => {
+                "condition could not be established; the predicate must be a well-formed, \
+                 evaluable bool"
+            }
+            Self::NotInstantiable => {
+                "the condition could not be instantiated with these generic arguments"
+            }
+            Self::NoMatchingPremise => {
+                "no matching const requirement in the caller after substitution"
+            }
+            Self::NotForwardable => {
+                "symbolic forwarding of this expression is not supported; concrete evaluation \
+                 is required"
+            }
+            Self::PartiallyAppliedRecord => {
+                "partially applied records with const requirements are not supported; supply \
+                 all arguments"
+            }
+            Self::PartiallyAppliedEnum => {
+                "partially applied enums with const requirements are not supported; supply all \
+                 arguments"
+            }
+        }
+    }
+}
+
+fn const_requirement_diag(
+    severity: Severity,
+    primary: &crate::span::DynLazySpan<'_>,
+    predicate: &crate::span::DynLazySpan<'_>,
+    reason: &str,
+    error_code: GlobalErrorCode,
+    db: &dyn SpannedHirAnalysisDb,
+) -> CompleteDiagnostic {
+    let mut diag = primary_diag(
+        severity,
+        "const requirement is not satisfied",
+        reason,
+        primary.resolve(db),
+        error_code,
+    );
+    diag.sub_diagnostics.push(SubDiagnostic::new(
+        LabelStyle::Secondary,
+        "required by this predicate".to_string(),
+        predicate.resolve(db),
+    ));
+    diag
+}
+
 /// A diagnostic whose only label is a primary one on `span`.
 fn primary_diag(
     severity: Severity,
@@ -3262,6 +3329,76 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary.resolve(db),
                 error_code,
             ),
+
+            Self::WhereConstPredicateFailed(span) => primary_diag(
+                severity,
+                "const where predicate failed",
+                "condition evaluated to `false`",
+                span.resolve(db),
+                error_code,
+            ),
+            Self::ConstRequirementNotSatisfied {
+                primary,
+                predicate,
+                reason,
+                inferred,
+            } => {
+                let mut diag = const_requirement_diag(
+                    severity,
+                    primary,
+                    predicate,
+                    reason.message(),
+                    error_code,
+                    db,
+                );
+                if let Some(ty) = inferred {
+                    diag.notes.push(format!(
+                        "the type `{}` is inferred here",
+                        ty.pretty_print(db)
+                    ));
+                }
+                diag
+            }
+            Self::RecursiveConstRequirement(span) => primary_diag(
+                severity,
+                "recursive const requirement",
+                "a requirement cannot establish itself",
+                span.resolve(db),
+                error_code,
+            ),
+            Self::GenericConstPredicateUnsupported(span) => {
+                let mut diag = primary_diag(
+                    severity,
+                    "const where predicates are not supported here yet",
+                    "not yet supported in traits, trait impls with generic parameters, \
+                     generic `impl` blocks, or items nested in generic items",
+                    span.resolve(db),
+                    error_code,
+                );
+                diag.notes.push(
+                    "const where predicates are supported on functions, structs, enums, and \
+                     inherent methods, including methods of generic `impl` blocks; inside an \
+                     `impl`, the conditions of the types in its header hold without restating \
+                     them"
+                        .to_string(),
+                );
+                diag
+            }
+            Self::WhereTypeBoundMissing(span) => {
+                let mut diag = primary_diag(
+                    severity,
+                    "missing type bound for `where` predicate",
+                    "expected `:` and a trait bound after this type",
+                    span.resolve(db),
+                    error_code,
+                );
+                diag.notes.push(
+                    "a `where` predicate without `:` is a const condition and must be \
+                     a `bool` value"
+                        .to_string(),
+                );
+                diag
+            }
 
             Self::ConstValueMustBeKnown(span) => primary_diag(
                 severity,

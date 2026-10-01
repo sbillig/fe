@@ -397,6 +397,20 @@ impl<'db> WhereClauseOwner<'db> {
     }
 }
 
+/// Every item with a `where` clause declares generic parameters.
+impl<'db> From<WhereClauseOwner<'db>> for GenericParamOwner<'db> {
+    fn from(owner: WhereClauseOwner<'db>) -> Self {
+        match owner {
+            WhereClauseOwner::Func(func) => Self::Func(func),
+            WhereClauseOwner::Struct(struct_) => Self::Struct(struct_),
+            WhereClauseOwner::Enum(enum_) => Self::Enum(enum_),
+            WhereClauseOwner::Impl(impl_) => Self::Impl(impl_),
+            WhereClauseOwner::Trait(trait_) => Self::Trait(trait_),
+            WhereClauseOwner::ImplTrait(impl_trait) => Self::ImplTrait(impl_trait),
+        }
+    }
+}
+
 #[salsa::tracked]
 #[derive(Debug)]
 pub struct TopLevelMod<'db> {
@@ -761,6 +775,13 @@ impl<'db> Func<'db> {
             item,
             ItemKind::Trait(_) | ItemKind::Impl(_) | ItemKind::ImplTrait(_)
         )
+    }
+
+    /// Whether the function is a free function or belongs to an inherent
+    /// `impl`, rather than to a trait or a trait impl.
+    pub fn is_free_or_inherent(self, db: &dyn HirDb) -> bool {
+        !self.is_associated_func(db)
+            || matches!(self.scope().parent_item(db), Some(ItemKind::Impl(_)))
     }
 
     pub fn param_label(self, db: &'db dyn HirDb, idx: usize) -> Option<IdentId<'db>> {
@@ -1702,6 +1723,7 @@ pub enum TrackedItemVariant<'db> {
     FuncBody,
     NamelessBody,
     StaticAssertCondition,
+    WhereConstPredicate(u32),
     StaticAssertComparisonLhs,
     StaticAssertComparisonRhs,
     Joined(Box<Self>, Box<Self>),

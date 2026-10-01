@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/ground_conditions_are_reported_once_at_their_declaration/generic_function.fe
+---
+error[8-0091]: const where predicate failed
+  ┌─ generic_function.fe:4:29
+  │
+4 │ fn never<T>() -> u256 where false { 0 }
+  │                             ^^^^^ condition evaluated to `false`
+
+error[8-0091]: const where predicate failed
+  ┌─ generic_function.fe:5:48
+  │
+5 │ fn never_const<const N: usize>() -> u256 where false, N > 0 { 0 }
+  │                                                ^^^^^ condition evaluated to `false`
+
+error[8-0091]: const where predicate failed
+  ┌─ generic_function.fe:6:26
+  │
+6 │ fn plain() -> u256 where false { 0 }
+  │                          ^^^^^ condition evaluated to `false`

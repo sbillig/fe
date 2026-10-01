@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/unparsable_condition_reports_only_the_parse_error.fe
+---
+error[1-0001]: expected expression
+  ┌─ unparsable_condition_reports_only_the_parse_error.fe:3:13
+  │
+3 │ fn f() where own {}
+  │             ^ expected expression
+
+error[1-0001]: unexpected syntax while parsing const `where` predicate
+  ┌─ unparsable_condition_reports_only_the_parse_error.fe:3:14
+  │
+3 │ fn f() where own {}
+  │              ^^^ unexpected

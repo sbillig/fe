@@ -19,15 +19,20 @@ impl super::Parse for PathScope {
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.set_newline_as_trivia(false);
-        parser.parse(PathSegmentScope::new(self.is_expr))?;
+        parser.parse(PathSegmentScope::new(self.is_expr, self.is_expr))?;
         while parser.bump_if(SyntaxKind::Colon2) {
-            parser.parse(PathSegmentScope::default())?;
+            parser.parse(PathSegmentScope::new(false, self.is_expr))?;
         }
         Ok(())
     }
 }
 
-define_scope! { PathSegmentScope { is_expr: bool }, PathSegment }
+define_scope! {
+    /// `is_expr` marks the first segment of an expression's path, and
+    /// `expr_path` every segment of it.
+    PathSegmentScope { is_expr: bool, expr_path: bool },
+    PathSegment
+}
 impl super::Parse for PathSegmentScope {
     type Error = ParseError;
 
@@ -56,10 +61,15 @@ impl super::Parse for PathSegmentScope {
                     && parser.probe(
                         ProbeKind::GenericArgList {
                             is_expr: self.is_expr,
+                            expr_path: self.expr_path,
                         },
                         |parser| {
                             parser.bump_if(SyntaxKind::Colon2);
                             parser.parses_without_error(GenericArgListScope::new(self.is_expr))
+                                && !(self.expr_path
+                                    && parser
+                                        .current_kind_same_line()
+                                        .is_some_and(cannot_follow_path_expr))
                         },
                     )
                 {
@@ -121,6 +131,37 @@ impl super::Parse for QualifiedTypeScope {
             ))
         }
     }
+}
+
+/// Whether `kind`, right after a `>` that would close an expression path's
+/// generic arguments, shows that the `<` and `>` are comparisons instead. It
+/// starts an operand and can never continue an expression after one, as the
+/// `0` in `N < 8, M > 0`, or it is the `=` of a `>=`, as in `N < 8, M >= 1`.
+/// So a `,` that separates call arguments, tuple elements or `where`
+/// predicates does not end up inside generic arguments. A token that can
+/// continue an expression, such as the `(` of `N < 8, M > (1)`, keeps the
+/// generic arguments, as in `f<8, M>(1)`.
+fn cannot_follow_path_expr(kind: SyntaxKind) -> bool {
+    use SyntaxKind::*;
+    matches!(
+        kind,
+        Ident
+            | SelfKw
+            | SelfTypeKw
+            | IngotKw
+            | SuperKw
+            | Int
+            | String
+            | TrueKw
+            | FalseKw
+            | IfKw
+            | MatchKw
+            | Not
+            | Tilde
+            | MutKw
+            | RefKw
+            | Eq
+    )
 }
 
 /// Whether the `<<` at the current position opens generic arguments whose first

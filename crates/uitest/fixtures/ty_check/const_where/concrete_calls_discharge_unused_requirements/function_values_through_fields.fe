@@ -1,0 +1,26 @@
+// A function value stored in a record or tuple field is checked where it is
+// written. Reading the field, or calling what it holds, does not report the
+// requirement again.
+fn id<const N: usize>(_ h: Holder<N>) -> u256 where N > 0 { 1 }
+const fn bounded<const N: usize>() -> u256 where N > 0 { 42 }
+struct Holder<const N: usize> {}
+struct W<F> { f: F }
+
+fn record_field() -> u256 {
+    let w = W { f: id }
+    let h = w.f
+    h(Holder<0> {})
+}
+fn record_field_called() -> u256 {
+    let w = W { f: bounded<0> }
+    (w.f)()
+}
+fn tuple_field() -> u256 {
+    let t = (id, true)
+    let f = t.0
+    f(Holder<0> {})
+}
+fn allowed() -> u256 {
+    let w = W { f: id }
+    (w.f)(Holder<1> {})
+}

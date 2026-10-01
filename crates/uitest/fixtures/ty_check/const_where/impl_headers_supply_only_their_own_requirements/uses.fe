@@ -1,0 +1,11 @@
+// Inside the impl, `N > 0` holds. Outside it, every use of the impl's items
+// still checks the header type it instantiates.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+impl<const N: usize> Bounded<N> {
+    fn make() -> u256 { 1 }
+    fn get(self) -> u256 { self.value }
+}
+
+fn qualified() -> u256 { Bounded<0>::make() }
+fn generic<const K: usize>() -> u256 { Bounded<K>::make() }
+fn received<const K: usize>(_ item: Bounded<K>) -> u256 { item.get() }

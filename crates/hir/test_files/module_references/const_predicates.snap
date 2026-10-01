@@ -1,0 +1,13 @@
+---
+source: crates/hir/tests/module_references.rs
+expression: output
+input_file: test_files/module_references/const_predicates.fe
+---
+5: `N` -> const_predicates::Bounded::N
+5: `LIMIT` -> const_predicates::LIMIT
+7: `N` -> const_predicates::Choice::N
+7: `LIMIT` -> const_predicates::LIMIT
+9: `N` -> const_predicates::bounded::N
+9: `LIMIT` -> const_predicates::LIMIT
+11: `LIMIT` -> const_predicates::LIMIT
+13: `LIMIT` -> const_predicates::LIMIT

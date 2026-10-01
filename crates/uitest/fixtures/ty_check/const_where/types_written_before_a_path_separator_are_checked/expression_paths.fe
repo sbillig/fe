@@ -1,0 +1,31 @@
+// A constrained type written before `::` in an expression or pattern path is
+// checked at every segment, not only where the path ends.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+trait Mk { type Out }
+struct Plain {}
+impl Plain { fn make() -> u256 { 1 } }
+enum Kind { A, B }
+trait Pick { type Choice }
+impl<T> Mk for T { type Out = Plain }
+impl<T> Pick for T { type Choice = Kind }
+
+fn call() -> u256 { Bounded<0>::Out::make() }
+fn record() { let _p = Bounded<0>::Out {} }
+fn value() { let _f = Bounded<0>::Out::make }
+fn variant() -> Kind { Bounded<0>::Choice::A }
+fn pattern(_ k: Kind) -> u256 {
+    match k {
+        Bounded<0>::Choice::A => 1
+        _ => 2
+    }
+}
+fn unstated<const M: usize>() -> u256 { Bounded<M>::Out::make() }
+
+fn stated<const M: usize>() -> u256 where M > 0 { Bounded<M>::Out::make() }
+fn allowed(_ k: Kind) -> u256 {
+    let _p = Bounded<1>::Out {}
+    match k {
+        Bounded<1>::Choice::A => Bounded<1>::Out::make()
+        _ => 2
+    }
+}

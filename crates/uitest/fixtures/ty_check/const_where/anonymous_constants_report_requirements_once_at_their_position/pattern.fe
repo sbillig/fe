@@ -1,0 +1,9 @@
+// A pattern's path can hold an anonymous constant too.
+const fn length<const N: usize>() -> usize where N > 0 { 1 }
+enum Choice<const N: usize> { Empty, Value(u256) }
+fn read(_ choice: Choice<1>) -> u256 {
+    match choice {
+        Choice<{ length<0>() }>::Value(value) => value
+        Choice::Empty => 0
+    }
+}

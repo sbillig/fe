@@ -1,0 +1,10 @@
+// `C`'s requirement is `probe<1>()`, whose body uses `C` in a type. Type
+// lowering evaluates `C` without checking its requirement, so evaluating the
+// requirement never re-enters it: `C` is 2, and the requirement holds. Every
+// query order gives the same result, and a false condition is rejected at `C`.
+const C: usize = sized<1>()
+const fn sized<const N: usize>() -> usize where probe<N>() { 2 }
+const fn probe<const N: usize>() -> bool {
+    let values: [u8; C] = [1, 2]
+    values[0] == 1
+}

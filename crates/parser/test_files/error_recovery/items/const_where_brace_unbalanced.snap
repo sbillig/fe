@@ -1,0 +1,105 @@
+---
+source: crates/parser/tests/error_recovery.rs
+expression: node
+input_file: test_files/error_recovery/items/const_where_brace_unbalanced.fe
+---
+Root@0..87
+  ItemList@0..86
+    Item@0..60
+      Func@0..60
+        FnKw@0..2 "fn"
+        WhiteSpace@2..3 " "
+        FuncSignature@3..44
+          Ident@3..4 "f"
+          GenericParamList@4..20
+            Lt@4..5 "<"
+            ConstGenericParam@5..19
+              ConstKw@5..10 "const"
+              WhiteSpace@10..11 " "
+              Ident@11..12 "N"
+              Colon@12..13 ":"
+              WhiteSpace@13..14 " "
+              PathType@14..19
+                Path@14..19
+                  PathSegment@14..19
+                    Ident@14..19 "usize"
+            Gt@19..20 ">"
+          FuncParamList@20..22
+            LParen@20..21 "("
+            RParen@21..22 ")"
+          WhiteSpace@22..23 " "
+          Arrow@23..25 "->"
+          WhiteSpace@25..26 " "
+          PathType@26..31
+            Path@26..31
+              PathSegment@26..31
+                Ident@26..31 "usize"
+          WhiteSpace@31..32 " "
+          WhereClause@32..44
+            WhereKw@32..37 "where"
+            WhiteSpace@37..38 " "
+            WhereConstPredicate@38..43
+              BinExpr@38..43
+                PathExpr@38..39
+                  Path@38..39
+                    PathSegment@38..39
+                      Ident@38..39 "N"
+                WhiteSpace@39..40 " "
+                Gt@40..41 ">"
+                WhiteSpace@41..42 " "
+                LitExpr@42..43
+                  Lit@42..43
+                    Int@42..43 "0"
+            Comma@43..44 ","
+        WhiteSpace@44..45 " "
+        BlockExpr@45..60
+          LBrace@45..46 "{"
+          WhiteSpace@46..47 " "
+          ExprStmt@47..54
+            BinExpr@47..54
+              PathExpr@47..48
+                Path@47..48
+                  PathSegment@47..48
+                    Ident@47..48 "N"
+              WhiteSpace@48..49 " "
+              Lt@49..50 "<"
+              WhiteSpace@50..51 " "
+              BlockExpr@51..54
+                LBrace@51..52 "{"
+                WhiteSpace@52..53 " "
+                RBrace@53..54 "}"
+          WhiteSpace@54..55 " "
+          Error@55..58
+            LBrace@55..56 "{"
+            WhiteSpace@56..57 " "
+            Int@57..58 "1"
+          WhiteSpace@58..59 " "
+          RBrace@59..60 "}"
+    Newline@60..61 "\n"
+    Item@61..86
+      Func@61..86
+        FnKw@61..63 "fn"
+        WhiteSpace@63..64 " "
+        FuncSignature@64..80
+          Ident@64..69 "after"
+          FuncParamList@69..71
+            LParen@69..70 "("
+            RParen@70..71 ")"
+          WhiteSpace@71..72 " "
+          Arrow@72..74 "->"
+          WhiteSpace@74..75 " "
+          PathType@75..80
+            Path@75..80
+              PathSegment@75..80
+                Ident@75..80 "usize"
+        WhiteSpace@80..81 " "
+        BlockExpr@81..86
+          LBrace@81..82 "{"
+          WhiteSpace@82..83 " "
+          ExprStmt@83..84
+            LitExpr@83..84
+              Lit@83..84
+                Int@83..84 "2"
+          WhiteSpace@84..85 " "
+          RBrace@85..86 "}"
+  Newline@86..87 "\n"

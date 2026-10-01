@@ -1,0 +1,31 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/inferred_types_are_checked/expression_types_are_not_inferred.fe
+---
+error[8-0093]: const requirement is not satisfied
+   ┌─ expression_types_are_not_inferred.fe:10:22
+   │
+ 4 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+10 │ fn both() { let _p = mkp<0>() }
+   │                      ^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ expression_types_are_not_inferred.fe:10:22
+   │
+ 7 │ fn mkp<const A: usize>() -> (Bounded<A>, Choice<A>) where A > 0 {
+   │                                                           ----- required by this predicate
+   ·
+10 │ fn both() { let _p = mkp<0>() }
+   │                      ^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ expression_types_are_not_inferred.fe:10:22
+   │
+ 5 │ enum Choice<const N: usize> where N > 0 { Empty, Value(u256) }
+   │                                   ----- required by this predicate
+   ·
+10 │ fn both() { let _p = mkp<0>() }
+   │                      ^^^^^^^^ condition evaluated to `false`

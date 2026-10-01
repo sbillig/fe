@@ -422,6 +422,9 @@ fn collect_top_mod_semantic_borrow_diagnostic_vouchers<'db>(
         .iter()
         .filter(|item| item.top_mod(db) == top_mod)
     {
+        for owner in BodyOwner::const_predicates_of(db, *item) {
+            collect_owner(db, owner, seen_owners, seen_diags, diags);
+        }
         match item {
             ItemKind::Func(func) => {
                 collect_owner(db, BodyOwner::Func(*func), seen_owners, seen_diags, diags)

@@ -1,0 +1,40 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/dropped_alias_arguments_in_paths.fe
+---
+error[8-0093]: const requirement is not satisfied
+   ┌─ dropped_alias_arguments_in_paths.fe:11:26
+   │
+ 7 │ const fn positive<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                    ----- required by this predicate
+   ·
+11 │ fn call() -> u8 { Drop<{ positive<0>() }>::make() }
+   │                          ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ dropped_alias_arguments_in_paths.fe:12:31
+   │
+ 7 │ const fn positive<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                    ----- required by this predicate
+   ·
+12 │ fn record() { let _p = Drop<{ positive<0>() }> {} }
+   │                               ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ dropped_alias_arguments_in_paths.fe:15:16
+   │
+ 7 │ const fn positive<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                    ----- required by this predicate
+   ·
+15 │         Drop<{ positive<0>() }> {} => 1
+   │                ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ dropped_alias_arguments_in_paths.fe:18:35
+   │
+ 7 │ const fn positive<const N: usize>() -> usize where N > 0 { 1 }
+   │                                                    ----- required by this predicate
+   ·
+18 │ fn other_target() -> u8 { Fixed<{ positive<0>() }>::make() }
+   │                                   ^^^^^^^^^^^^^ condition evaluated to `false`

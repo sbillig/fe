@@ -18,7 +18,7 @@ use super::effect_env as keyed_effect_env;
 use super::owner::BodyOwner;
 use super::{
     Callable, ConstIntrinsicKind, ConstRef, SemanticExprLowering, TyChecker, TypedBody,
-    ValuePathRef, stmt::ForLoopSeq,
+    TypedBodyTables, ValuePathRef, stmt::ForLoopSeq,
 };
 use crate::analysis::ty::pattern_ir::{
     PatternAnalysisStatus, PatternStore, ValidatedPat, ValidatedPatId,
@@ -93,6 +93,11 @@ pub(crate) struct TyCheckEnv<'db> {
 
     /// Resolved Seq trait methods for for-loops, keyed by the for statement.
     for_loop_seq: SecondaryMap<StmtId, Option<ForLoopSeq<'db>>>,
+
+    /// The constrained type applications that resolving the body's paths
+    /// passed through, each with the span of the expression or pattern whose
+    /// path it is.
+    path_applications: Vec<(DynLazySpan<'db>, TyId<'db>)>,
 }
 
 impl<'db> TyCheckEnv<'db> {
@@ -154,6 +159,7 @@ impl<'db> TyCheckEnv<'db> {
             pattern_status: SecondaryMap::with_default(PatternAnalysisStatus::Invalid),
             call_effect_args: SecondaryMap::new(),
             for_loop_seq: SecondaryMap::new(),
+            path_applications: Vec::new(),
         };
 
         env.enter_scope(body.expr(db));
@@ -441,6 +447,18 @@ impl<'db> TyCheckEnv<'db> {
         if self.value_path_refs[expr].replace(value_path).is_some() {
             panic!("value path ref is already registered for the given expr")
         }
+    }
+
+    pub(super) fn register_path_applications(
+        &mut self,
+        site: DynLazySpan<'db>,
+        applications: impl IntoIterator<Item = TyId<'db>>,
+    ) {
+        self.path_applications.extend(
+            applications
+                .into_iter()
+                .map(|application| (site.clone(), application)),
+        );
     }
 
     pub(super) fn register_for_loop_seq(&mut self, stmt: StmtId, seq: ForLoopSeq<'db>) {
@@ -888,6 +906,9 @@ impl<'db> TyCheckEnv<'db> {
             .values_mut()
             .flatten()
             .for_each(|seq| *seq = seq.clone().fold_with(self.db, &mut prober));
+        self.path_applications
+            .iter_mut()
+            .for_each(|(_, ty)| *ty = ty.fold_with(self.db, &mut prober));
         let mut expr_place = SecondaryMap::new();
         let mut expr_places: PrimaryMap<super::ExprPlaceId, Place<'db>> = PrimaryMap::new();
         for expr in self.body.exprs(self.db).keys() {
@@ -912,9 +933,8 @@ impl<'db> TyCheckEnv<'db> {
             |prop| prop.ty,
         );
 
-        TypedBody {
+        TypedBodyTables {
             body: Some(self.body),
-            has_diagnostics: false,
             result_ty,
             assumptions,
             pat_ty: self.pat_ty,
@@ -935,7 +955,9 @@ impl<'db> TyCheckEnv<'db> {
             for_loop_seq: self.for_loop_seq,
             expr_place,
             expr_places,
+            path_applications: self.path_applications,
         }
+        .into()
     }
 
     pub(super) fn expr_data(&self, expr: ExprId) -> &'db Partial<Expr<'db>> {

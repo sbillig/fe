@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/impl_headers_supply_only_their_own_requirements/other_conditions.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ other_conditions.fe:8:23
+  │
+4 │ struct Large<const N: usize> where N > 1 { value: u256 }
+  │                                    ----- required by this predicate
+  ·
+8 │     fn widen(self) -> Large<N> { Large { value: self.value } }
+  │                       ^^^^^^^^ no matching const requirement in the caller after substitution
+
+error[8-0093]: const requirement is not satisfied
+  ┌─ other_conditions.fe:9:30
+  │
+5 │ const fn large<const N: usize>() -> u256 where N > 1 { 1 }
+  │                                                ----- required by this predicate
+  ·
+9 │     fn check(self) -> u256 { large<N>() }
+  │                              ^^^^^^^^^^ no matching const requirement in the caller after substitution

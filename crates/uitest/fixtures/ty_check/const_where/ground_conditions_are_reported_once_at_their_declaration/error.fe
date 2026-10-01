@@ -1,0 +1,5 @@
+// The code an attribute generates for a record uses the record's type. A
+// failing condition without generic parameters is still one error, at the
+// condition.
+#[error]
+struct Never where false { value: u256 }

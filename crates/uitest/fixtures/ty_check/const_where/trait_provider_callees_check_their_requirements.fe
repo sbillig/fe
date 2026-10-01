@@ -1,0 +1,19 @@
+// The predicate is still checked when the callee takes a provider: `at<4>()`
+// violates `N < 4` and is rejected before any provider is used.
+trait Lookup {
+    const fn get(ref self, _ i: usize) -> u256
+}
+
+struct Table { xs: [u256; 4] }
+
+impl Lookup for Table {
+    const fn get(ref self, _ i: usize) -> u256 { self.xs[i] }
+}
+
+const fn at<const N: usize>() -> u256 uses (table: Lookup) where N < 4 {
+    table.get(N)
+}
+
+const fn out_of_range() -> u256 {
+    with (Lookup = Table { xs: [1, 2, 3, 4] }) { at<4>() }
+}

@@ -92,6 +92,43 @@ impl<'db> EffectParamOwner<'db> {
 }
 
 impl<'db> BodyOwner<'db> {
+    /// A `where` clause condition, checked as a `bool` constant.
+    pub fn const_predicate(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Self {
+        Self::AnonConstBody {
+            body,
+            expected: TyId::bool(db),
+        }
+    }
+
+    /// Whether this owner is a `where` clause condition.
+    pub fn is_const_predicate(self, db: &'db dyn HirAnalysisDb) -> bool {
+        let Self::AnonConstBody { body, expected } = self else {
+            return false;
+        };
+        expected == TyId::bool(db)
+            && body
+                .scope()
+                .parent_item(db)
+                .and_then(crate::hir_def::WhereClauseOwner::from_item_opt)
+                .is_some_and(|owner| owner.where_clause(db).const_predicates(db).contains(&body))
+    }
+
+    /// The `where` clause conditions `item` declares, as body owners.
+    pub fn const_predicates_of(
+        db: &'db dyn HirAnalysisDb,
+        item: ItemKind<'db>,
+    ) -> impl Iterator<Item = Self> + 'db {
+        crate::hir_def::WhereClauseOwner::from_item_opt(item)
+            .into_iter()
+            .flat_map(move |owner| {
+                owner
+                    .where_clause(db)
+                    .const_predicates(db)
+                    .iter()
+                    .map(move |&body| Self::const_predicate(db, body))
+            })
+    }
+
     pub fn arithmetic_mode(self, db: &'db dyn HirAnalysisDb) -> ArithmeticMode {
         if let Self::Func(func) = self {
             return func.arithmetic_mode(db);

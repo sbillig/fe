@@ -1,0 +1,19 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/const_where_trailing_comma.fe
+---
+trait Checked {
+    fn after_bound<T>() -> bool where T: Copy, { true },
+    fn defaulted<T>() -> bool where T: Copy, { true }, {
+        false
+    }
+}
+
+extern {
+    fn external<T>() where T: Copy, { true },
+}
+
+fn free<T>() -> bool where T: Copy, { true }, {
+    false
+}

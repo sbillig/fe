@@ -1,0 +1,8 @@
+// A header whose arguments make the condition false is rejected, including
+// when only part of the header is generic.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+struct Pair<const A: usize, const B: usize> where B > 0 { value: u256 }
+
+impl Bounded<0> {}
+
+impl<const M: usize> Pair<M, 0> {}

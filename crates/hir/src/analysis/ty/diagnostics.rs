@@ -553,6 +553,20 @@ pub enum BodyDiag<'db> {
         origin: String,
         reason: String,
     },
+    WhereConstPredicateFailed(DynLazySpan<'db>),
+    WhereTypeBoundMissing(DynLazySpan<'db>),
+    GenericConstPredicateUnsupported(DynLazySpan<'db>),
+    RecursiveConstRequirement(DynLazySpan<'db>),
+    /// A use whose const requirement does not hold, reported by the
+    /// requirement checks after inference for calls and types alike.
+    ConstRequirementNotSatisfied {
+        primary: DynLazySpan<'db>,
+        predicate: DynLazySpan<'db>,
+        reason: crate::analysis::ty::ty_check::RequirementFailure,
+        /// The failing type, when only inference gives it at `primary`, so
+        /// that nothing written there shows it.
+        inferred: Option<TyId<'db>>,
+    },
     StaticAssertFailed {
         primary: DynLazySpan<'db>,
         comparison: Option<StaticAssertComparisonValues>,
@@ -980,6 +994,11 @@ impl<'db> BodyDiag<'db> {
             Self::ConstValueMustBeKnown(..) => 64,
             Self::ConstDependencyMustBeKnown { .. } => 90,
             Self::ConstEvaluationFailed { .. } => 89,
+            Self::WhereConstPredicateFailed(..) => 91,
+            Self::GenericConstPredicateUnsupported(..) => 92,
+            Self::RecursiveConstRequirement(..) => 94,
+            Self::ConstRequirementNotSatisfied { .. } => 93,
+            Self::WhereTypeBoundMissing(..) => 95,
             Self::StaticAssertFailed { .. } => 81,
             Self::AccessedFieldNotFound { .. } => 15,
             Self::OpsTraitNotImplemented { .. } => 16,

@@ -1,0 +1,15 @@
+// A call whose impl arguments are inferred, so that no argument or result
+// carries the header type, checks the header type at the call.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+trait Count<const K: usize> { fn count(_ values: [u8; K]) -> usize }
+
+impl<const N: usize> Bounded<N> {
+    fn length(_ values: [u8; N]) -> usize { N }
+}
+impl<const N: usize> Count<N> for Bounded<N> {
+    fn count(_ values: [u8; N]) -> usize { N }
+}
+
+fn inherent() -> usize { Bounded::length([]) }
+fn through_trait() -> usize { Bounded::count([]) }
+fn allowed() -> usize { Bounded::length([1]) + Bounded::count([1]) }

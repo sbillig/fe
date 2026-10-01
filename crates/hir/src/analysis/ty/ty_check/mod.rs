@@ -1,4 +1,7 @@
 mod callable;
+mod const_requirements;
+pub(crate) use const_requirements::check_declared_type_requirements;
+pub use const_requirements::{EvaluationStop, RequirementFailure};
 mod contract;
 mod effect_env;
 pub(crate) mod env;
@@ -30,7 +33,7 @@ use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty};
 use crate::hir_def::{CallableDef, ConstGenericArgValue, ImplTrait, Trait};
 use crate::{
     hir_def::{
-        BinOp, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func,
+        BinOp, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
         GenericParamOwner, LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId,
         StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId,
         WhereClauseOwner,
@@ -53,6 +56,7 @@ pub(super) use expr::TraitOps;
 use num_traits::ToPrimitive;
 pub use owner::BodyOwner;
 pub use owner::EffectParamOwner;
+use std::sync::Arc;
 pub use stmt::ForLoopSeq;
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -70,7 +74,7 @@ use super::{
         TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key},
-    generic_defaults::{GenericDefault, generic_default},
+    generic_defaults::{GenericDefault, default_assumptions, generic_default},
     layout_holes::merge_equated_layout_holes,
     trait_def::{TraitInstId, resolve_trait_method_instance},
     trait_resolution::{
@@ -301,8 +305,10 @@ pub fn check_trait_const_default_bodies<'db>(
     diags
 }
 
-/// Checks const bodies in generic defaults at their declarations, including
-/// bodies nested in type defaults. A use may omit or override a default, so
+/// Checks const bodies in generic defaults at their declarations: a const
+/// parameter's default, and every anonymous constant written in a type
+/// parameter's default, including one that the lowered default does not hold
+/// (`written_type_const_args`). A use may omit or override a default, so
 /// applications cannot own these diagnostics.
 #[salsa::tracked(return_ref)]
 pub fn check_generic_default_bodies<'db>(
@@ -343,33 +349,6 @@ pub(crate) fn check_generic_default_body_types<'db>(
     owner: GenericParamOwner<'db>,
     param_idx: usize,
 ) -> Vec<DefaultConstBodyCheck<'db>> {
-    struct NestedConstBodies<'db> {
-        db: &'db dyn HirAnalysisDb,
-        seen: FxHashSet<(Body<'db>, TyId<'db>)>,
-        bodies: Vec<(Body<'db>, TyId<'db>)>,
-    }
-
-    impl<'db> TyVisitor<'db> for NestedConstBodies<'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-
-        fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
-            if let ConstTyData::UnEvaluated {
-                body,
-                template_ty,
-                ty,
-                ..
-            } = const_ty.data(self.db)
-                && let Some(expected) = template_ty.or(*ty)
-                && self.seen.insert((*body, expected))
-            {
-                self.bodies.push((*body, expected));
-            }
-            walk_const_ty(self, const_ty);
-        }
-    }
-
     let Ok(Some(default)) = generic_default(db, owner, param_idx) else {
         return Vec::new();
     };
@@ -378,14 +357,24 @@ pub(crate) fn check_generic_default_body_types<'db>(
             value: ConstGenericArgValue::Expr(Partial::Present(body)),
             expected,
         } => vec![(*body, expected.instantiate_identity())],
-        GenericDefault::Type(template) => {
-            let mut nested = NestedConstBodies {
-                db,
-                seen: FxHashSet::default(),
-                bodies: Vec::new(),
+        // The constants written in the default, not only those its lowering
+        // holds: an alias can drop one, and a qualifier can use one only to
+        // select an impl.
+        GenericDefault::Type(_) => {
+            let view = owner.param_view(db, param_idx);
+            let GenericParam::Type(param) = view.param else {
+                return Vec::new();
             };
-            template.instantiate_identity().visit_with(&mut nested);
-            nested.bodies
+            let Some(hir_ty) = param.default_ty else {
+                return Vec::new();
+            };
+            const_requirements::written_type_const_args(
+                db,
+                hir_ty,
+                view.span().into_type_param().default_ty(),
+                owner.scope(),
+                default_assumptions(db, owner),
+            )
         }
         GenericDefault::Const { .. } => Vec::new(),
     };
@@ -413,6 +402,50 @@ pub(crate) fn check_generic_default_body_types<'db>(
         .collect()
 }
 
+/// The anonymous constant bodies that `tys`, lowered with deferred const
+/// bodies, still hold, each with the type its position checks it against.
+pub(super) fn unevaluated_const_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    tys: &[TyId<'db>],
+) -> Vec<(Body<'db>, TyId<'db>)> {
+    struct NestedConstBodies<'db> {
+        db: &'db dyn HirAnalysisDb,
+        seen: FxHashSet<(Body<'db>, TyId<'db>)>,
+        bodies: Vec<(Body<'db>, TyId<'db>)>,
+    }
+
+    impl<'db> TyVisitor<'db> for NestedConstBodies<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
+            if let ConstTyData::UnEvaluated {
+                body,
+                template_ty,
+                ty,
+                ..
+            } = const_ty.data(self.db)
+                && let Some(expected) = template_ty.or(*ty)
+                && self.seen.insert((*body, expected))
+            {
+                self.bodies.push((*body, expected));
+            }
+            walk_const_ty(self, const_ty);
+        }
+    }
+
+    let mut nested = NestedConstBodies {
+        db,
+        seen: FxHashSet::default(),
+        bodies: Vec::new(),
+    };
+    for ty in tys {
+        ty.visit_with(&mut nested);
+    }
+    nested.bodies
+}
+
 /// Whether a default-body diagnostic could be an artifact of checking
 /// against a rigid generic param instead of a per-instantiation type.
 fn diag_depends_on_param_instantiation<'db>(
@@ -428,6 +461,184 @@ fn diag_depends_on_param_instantiation<'db>(
     }
 }
 
+/// Ground predicates are declaration obligations. Ordinary generic functions
+/// and ADTs retain parameter-dependent predicates for substitution at uses.
+/// A failed or unsupported evaluation must never count as a satisfied condition.
+pub(crate) fn check_where_const_predicates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: WhereClauseOwner<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let predicates = owner.where_clause(db).const_predicates(db);
+    if predicates.is_empty() {
+        return Vec::new();
+    }
+    // `where T` parses as a const predicate. When the lone path names a type,
+    // the author most likely left out the trait bound, so say that instead of
+    // reporting a type used as a value.
+    let (missing_bounds, predicates): (Vec<Body<'db>>, Vec<Body<'db>>) = predicates
+        .iter()
+        .partition(|body| predicate_names_a_type(db, **body));
+    let mut diags: Vec<FuncBodyDiag<'db>> = missing_bounds
+        .iter()
+        .map(|body| BodyDiag::WhereTypeBoundMissing(body.span().into()).into())
+        .collect();
+    if predicates.is_empty() {
+        return diags;
+    }
+    let generic_declaration = match owner {
+        WhereClauseOwner::Func(func) if func.is_free_or_inherent(db) => {
+            Some(GenericParamOwner::Func(func))
+        }
+        WhereClauseOwner::Struct(record) => Some(GenericParamOwner::Struct(record)),
+        WhereClauseOwner::Enum(enum_) => Some(GenericParamOwner::Enum(enum_)),
+        _ => None,
+    };
+    // Inherent method parameter lists include their impl's generic parameters.
+    // Requirement substitution reconciles their owners. Other generic contexts remain
+    // unsupported, including trait methods and nested generic declarations.
+    let inherited_impl = match owner {
+        WhereClauseOwner::Func(func) => func
+            .scope()
+            .parent_item(db)
+            .filter(|item| matches!(item, crate::hir_def::ItemKind::Impl(_))),
+        _ => None,
+    };
+    let mut item = Some(crate::hir_def::ItemKind::from(owner));
+    while let Some(current) = item {
+        if let Some(params) = GenericParamOwner::from_item_opt(current)
+            && !collect_generic_params(db, params).params(db).is_empty()
+            && generic_declaration
+                .is_none_or(|declaration| current != crate::hir_def::ItemKind::from(declaration))
+            && Some(current) != inherited_impl
+        {
+            diags.extend(
+                predicates.iter().map(|body| {
+                    BodyDiag::GenericConstPredicateUnsupported(body.span().into()).into()
+                }),
+            );
+            return diags;
+        }
+        item = current.scope().parent_item(db);
+    }
+
+    for &body in &predicates {
+        let formation = const_requirements::check_predicate_formation(db, body);
+        if formation.well_formed().is_none() {
+            diags.extend(formation.diags.iter().cloned());
+            continue;
+        }
+        if let Some(declaration) = generic_declaration
+            && !collect_generic_params(db, declaration)
+                .params(db)
+                .is_empty()
+            && const_requirements::predicate_may_depend_on_params(db, body)
+        {
+            continue;
+        }
+        let owner = BodyOwner::const_predicate(db, body);
+        let outcome = condition_outcome(db, owner, GenericSubst::none(db));
+        diags.extend(const_predicate_outcome_diag(db, body, outcome));
+    }
+    diags
+}
+
+/// What a boolean compile-time condition evaluated to. Only `True` holds: a
+/// blocked or failed evaluation never counts as a satisfied condition.
+pub(super) enum ConditionOutcome<'db> {
+    True,
+    False,
+    /// Evaluation finished with a value that is not a `bool`.
+    NotBool,
+    Blocked(BlockedInfo<'db>),
+    Failed(InvalidCause<'db>),
+}
+
+pub(super) fn condition_outcome<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    subst: GenericSubst<'db>,
+) -> ConditionOutcome<'db> {
+    match eval_body_owner_const(db, owner, subst) {
+        EvalOutcome::Ready(value) => match static_assert_bool_value(db, value) {
+            Some(true) => ConditionOutcome::True,
+            Some(false) => ConditionOutcome::False,
+            None => ConditionOutcome::NotBool,
+        },
+        EvalOutcome::Blocked(info) => ConditionOutcome::Blocked(info),
+        EvalOutcome::Failed(failure) => {
+            ConditionOutcome::Failed(invalid_cause_from_eval_failure(db, owner, failure))
+        }
+    }
+}
+
+/// The error of a condition whose evaluation was blocked on an unknown
+/// dependency.
+fn blocked_condition_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    condition: Body<'db>,
+    info: &BlockedInfo<'db>,
+) -> FuncBodyDiag<'db> {
+    let (primary, dependency) = blocked_const_detail(db, condition, info);
+    BodyDiag::ConstDependencyMustBeKnown {
+        primary,
+        dependency,
+    }
+    .into()
+}
+
+/// The error of a condition whose evaluation failed, when the failure has a
+/// rendered form.
+fn failed_condition_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    condition: Body<'db>,
+    cause: InvalidCause<'db>,
+) -> Option<FuncBodyDiag<'db>> {
+    TyId::invalid(db, cause)
+        .emit_diag(db, condition.span().into())
+        .map(FuncBodyDiag::from)
+}
+
+/// Reports a const predicate's outcome at its declaration. The predicate
+/// holds only when it evaluates to `true`, and any other outcome is an error.
+fn const_predicate_outcome_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    predicate: Body<'db>,
+    outcome: ConditionOutcome<'db>,
+) -> Option<FuncBodyDiag<'db>> {
+    let unknown = || BodyDiag::ConstValueMustBeKnown(predicate.span().into()).into();
+    Some(match outcome {
+        ConditionOutcome::True => return None,
+        ConditionOutcome::False => {
+            BodyDiag::WhereConstPredicateFailed(predicate.span().into()).into()
+        }
+        ConditionOutcome::NotBool => unknown(),
+        ConditionOutcome::Blocked(info) => blocked_condition_diag(db, predicate, &info),
+        ConditionOutcome::Failed(cause) => {
+            failed_condition_diag(db, predicate, cause).unwrap_or_else(unknown)
+        }
+    })
+}
+
+/// Whether a const predicate is a lone path that names a type, as in `where T`.
+/// A const generic parameter also resolves to a type, but it is a value here,
+/// matching how the type checker reads a path expression.
+fn predicate_names_a_type<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> bool {
+    let Partial::Present(Expr::Path(Partial::Present(path))) = body.expr(db).data(db, body) else {
+        return false;
+    };
+    let resolved = crate::analysis::name_resolution::resolve_path(
+        db,
+        *path,
+        body.scope(),
+        PredicateListId::empty_list(db),
+        true,
+    );
+    matches!(
+        resolved,
+        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) if ty.const_ty_ty(db).is_none()
+    )
+}
+
 #[salsa::tracked(return_ref)]
 pub fn check_static_assert<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -440,65 +651,45 @@ pub fn check_static_assert<'db>(
         expected,
     };
     let (body_diags, typed_body) = check_anon_const_body(db, condition, expected);
-    let ignorable_body_diags = static_assert_ignorable_type_diags(db, body_diags);
-    if !body_diags.is_empty() && !ignorable_body_diags {
+    if !diags_allow_evaluation(db, body_diags) {
         return body_diags.clone();
     }
 
-    match eval_body_owner_const(db, owner, GenericSubst::none(db)) {
-        EvalOutcome::Ready(value) => match static_assert_bool_value(db, value) {
-            Some(true) => {}
-            Some(false) => {
-                let mut diags = body_diags.clone();
-                let comparison = if body_diags.is_empty() {
-                    assert_.comparison(db).and_then(|comparison| {
-                        static_assert_comparison_values(db, condition, typed_body, comparison)
-                    })
-                } else {
-                    None
-                };
-                diags.push(
-                    BodyDiag::StaticAssertFailed {
-                        primary: condition.span().into(),
-                        comparison,
-                    }
-                    .into(),
-                );
-                return diags;
-            }
-            None => {
-                let cause = InvalidCause::ConstEvalInvariant {
-                    body: condition,
-                    expr: condition.expr(db),
-                    message: "static assertion CTFE returned a non-boolean value".into(),
-                };
-                let ty = TyId::invalid(db, cause);
-                return ty
-                    .emit_diag(db, condition.span().into())
-                    .into_iter()
-                    .map(Into::into)
-                    .collect();
-            }
-        },
-        EvalOutcome::Blocked(info) => {
-            let (primary, dependency) = blocked_const_detail(db, condition, &info);
-            return vec![
-                BodyDiag::ConstDependencyMustBeKnown {
-                    primary,
-                    dependency,
+    match condition_outcome(db, owner, GenericSubst::none(db)) {
+        ConditionOutcome::True => Vec::new(),
+        ConditionOutcome::False => {
+            let mut diags = body_diags.clone();
+            let comparison = if body_diags.is_empty() {
+                assert_.comparison(db).and_then(|comparison| {
+                    static_assert_comparison_values(db, condition, typed_body, comparison)
+                })
+            } else {
+                None
+            };
+            diags.push(
+                BodyDiag::StaticAssertFailed {
+                    primary: condition.span().into(),
+                    comparison,
                 }
                 .into(),
-            ];
+            );
+            diags
         }
-        EvalOutcome::Failed(failure) => {
-            let ty = TyId::invalid(db, invalid_cause_from_eval_failure(db, owner, failure));
-            if let Some(diag) = ty.emit_diag(db, condition.span().into()) {
-                return vec![diag.into()];
-            }
+        ConditionOutcome::NotBool => {
+            let cause = InvalidCause::ConstEvalInvariant {
+                body: condition,
+                expr: condition.expr(db),
+                message: "static assertion CTFE returned a non-boolean value".into(),
+            };
+            failed_condition_diag(db, condition, cause)
+                .into_iter()
+                .collect()
         }
+        ConditionOutcome::Blocked(info) => vec![blocked_condition_diag(db, condition, &info)],
+        ConditionOutcome::Failed(cause) => failed_condition_diag(db, condition, cause)
+            .into_iter()
+            .collect(),
     }
-
-    Vec::new()
 }
 
 fn static_assert_bool_value<'db>(
@@ -515,18 +706,17 @@ fn static_assert_bool_value<'db>(
     Some(value)
 }
 
-fn static_assert_ignorable_type_diags<'db>(
-    db: &'db dyn HirAnalysisDb,
-    diags: &[FuncBodyDiag<'db>],
-) -> bool {
-    !diags.is_empty()
-        && diags.iter().all(|diag| {
-            matches!(
-                diag,
-                FuncBodyDiag::Body(BodyDiag::TypeAnnotationNeeded { ty, .. })
-                    if ty.is_integral_var(db)
-            )
-        })
+/// Whether a const body with these diagnostics can still be evaluated: it
+/// has none, or only integer literals whose type inference left open, which
+/// evaluation defaults.
+fn diags_allow_evaluation<'db>(db: &'db dyn HirAnalysisDb, diags: &[FuncBodyDiag<'db>]) -> bool {
+    diags.iter().all(|diag| {
+        matches!(
+            diag,
+            FuncBodyDiag::Body(BodyDiag::TypeAnnotationNeeded { ty, .. })
+                if ty.is_integral_var(db)
+        )
+    })
 }
 
 fn static_assert_comparison_values<'db>(
@@ -572,7 +762,7 @@ fn eval_static_assert_comparison_operand<'db>(
     }
     let owner = BodyOwner::AnonConstBody { body, expected };
     let body_diags = &check_anon_const_body(db, body, expected).0;
-    if !body_diags.is_empty() && !static_assert_ignorable_type_diags(db, body_diags) {
+    if !diags_allow_evaluation(db, body_diags) {
         return None;
     }
     eval_body_owner_const(db, owner, GenericSubst::none(db)).into_ready()
@@ -582,6 +772,60 @@ pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    let CheckedBody { diags, typed, .. } = checked_body(db, owner);
+    (diags, typed)
+}
+
+/// A body checked by the pipeline every kind of body takes: inference with
+/// its const-language checks (`infer_body`), then, when inference leaves the
+/// body evaluable, its requirement checks.
+pub(super) struct CheckedBody<'db> {
+    pub(super) diags: Vec<FuncBodyDiag<'db>>,
+    pub(super) typed: TypedBody<'db>,
+    /// Whether a requirement the body uses depends on itself.
+    pub(super) recursive: bool,
+}
+
+pub(super) fn checked_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> CheckedBody<'db> {
+    let (mut diags, typed) = infer_body(db, owner).clone();
+    let mut recursive = false;
+    if diags_allow_evaluation(db, &diags) {
+        let requirements = const_requirements::check_body_requirements(db, owner, &typed);
+        recursive = requirements.recursive;
+        diags.extend(requirements.diags);
+    }
+    CheckedBody {
+        diags,
+        typed,
+        recursive,
+    }
+}
+
+/// Inference and const-language checking, without requirement discharge.
+/// CTFE consumes this completed template. It must not re-enter the enclosing
+/// discharge query by requesting a checked body while evaluating a predicate.
+/// Compiler diagnostics still use the checked body entry points above.
+pub(crate) fn infer_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> &'db (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    infer_body_query(db, BodyInferenceKey::new(db, owner))
+}
+
+#[salsa::interned]
+struct BodyInferenceKey<'db> {
+    owner: BodyOwner<'db>,
+}
+
+#[salsa::tracked(return_ref, cycle_initial=infer_body_cycle_initial, cycle_fn=infer_body_cycle_recover)]
+fn infer_body_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: BodyInferenceKey<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    let owner = key.owner(db);
     let Ok(mut checker) = TyChecker::new(db, owner) else {
         return (
             Vec::new(),
@@ -596,7 +840,7 @@ pub(super) fn check_body<'db>(
     };
 
     checker.run();
-    let (mut diags, mut typed_body) = checker.finish();
+    let (mut diags, typed_body) = checker.finish();
     if let BodyOwner::Func(func) = owner
         && func.is_const(db)
         && !func.is_extern(db)
@@ -607,9 +851,75 @@ pub(super) fn check_body<'db>(
             &typed_body,
         ));
     }
-    typed_body.has_diagnostics = !diags.is_empty();
+    // A `where` condition is held to the const language as a const
+    // function's body is, once it type checks. This adds no edge that can
+    // close a query cycle: recognizing a condition reads only its item's
+    // lowered `where` clause, and the check reads each callee's declaration,
+    // effect requirements and trait method resolution, as it does for a
+    // const function above. None of those infers a condition: only
+    // requirement checking, declaration checks, borrow checking and layout
+    // evidence do, and type lowering and compile-time evaluation, which
+    // those reads can reach, never call them.
+    if let BodyOwner::AnonConstBody { body, .. } = owner
+        && owner.is_const_predicate(db)
+        && diags_allow_evaluation(db, &diags)
+    {
+        diags.extend(
+            crate::analysis::ty::const_check::check_const_body_expressions(db, body, &typed_body),
+        );
+    }
 
     (diags, typed_body)
+}
+
+// A constant evaluated from a type expression can call the body currently
+// being inferred. Start that cycle with a failed template, never a
+// provisional successful value; existing query handlers may still iterate.
+fn infer_body_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: BodyInferenceKey<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    let mut typed = TypedBody::empty(db);
+    typed.tables_mut().result_ty = TyId::invalid(db, InvalidCause::TypeLoweringCycle);
+    let span = key
+        .owner(db)
+        .body(db)
+        .map(|body| body.span().into())
+        .unwrap_or_else(DynLazySpan::invalid);
+    (
+        vec![FuncBodyDiag::Ty(
+            TyLowerDiag::TypeLoweringCycle(span).into(),
+        )],
+        typed,
+    )
+}
+
+fn infer_body_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &(Vec<FuncBodyDiag<'db>>, TypedBody<'db>),
+    _count: u32,
+    _key: BodyInferenceKey<'db>,
+) -> salsa::CycleRecoveryAction<(Vec<FuncBodyDiag<'db>>, TypedBody<'db>)> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+/// Whether inference met a type lowering cycle, in the body or in the
+/// result type it checks the body against. Its typed body is then a
+/// provisional fixpoint value, which compile-time evaluation must not run:
+/// a value computed from it could make the cycle converge on a success.
+pub(crate) fn inference_met_lowering_cycle<'db>(
+    db: &'db dyn HirAnalysisDb,
+    (diags, typed_body): &(Vec<FuncBodyDiag<'db>>, TypedBody<'db>),
+) -> bool {
+    diags.iter().any(|diag| {
+        matches!(
+            diag,
+            FuncBodyDiag::Ty(TyDiagCollection::Ty(TyLowerDiag::TypeLoweringCycle(_)))
+        )
+    }) || matches!(
+        typed_body.result_ty().invalid_cause(db),
+        Some(InvalidCause::TypeLoweringCycle)
+    )
 }
 
 /// Forces evaluation of a const item's value and reports failures
@@ -916,9 +1226,8 @@ fn typed_body_for_bodyless_func<'db>(
             }
         })
         .collect();
-    TypedBody {
+    TypedBodyTables {
         body: None,
-        has_diagnostics: false,
         result_ty,
         assumptions,
         pat_ty: SecondaryMap::new(),
@@ -939,7 +1248,9 @@ fn typed_body_for_bodyless_func<'db>(
         for_loop_seq: SecondaryMap::new(),
         expr_place: SecondaryMap::new(),
         expr_places: PrimaryMap::new(),
+        path_applications: Vec::new(),
     }
+    .into()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2894,11 +3205,14 @@ impl<'db> TyChecker<'db> {
         path: PathId<'db>,
         resolve_tail_as_value: bool,
         span: LazyPathSpan<'db>,
+        site: DynLazySpan<'db>,
         minter: &LoweringContext<'db>,
     ) -> Result<PathRes<'db>, PathResError<'db>> {
         let scope = self.env.scope();
         let mut invisible = None;
-        let mut check_visibility = |path: PathId<'db>, reso: &PathRes<'db>| {
+        let mut applications = Vec::new();
+        let mut observe_segment = |path: PathId<'db>, reso: &PathRes<'db>| {
+            applications.extend(const_requirements::constrained_applications(self.db, reso));
             if invisible.is_some() {
                 return;
             }
@@ -2913,10 +3227,13 @@ impl<'db> TyChecker<'db> {
             scope,
             self.env.assumptions(),
             resolve_tail_as_value,
-            &mut check_visibility,
+            &mut observe_segment,
             minter,
         ) {
-            Ok(r) => Ok(r.map_over_ty(|ty| self.instantiate_to_term(ty))),
+            Ok(r) => {
+                self.env.register_path_applications(site, applications);
+                Ok(r.map_over_ty(|ty| self.instantiate_to_term(ty)))
+            }
             Err(err) => Err(err),
         };
 
@@ -3156,35 +3473,57 @@ pub(crate) enum SmirLoweringReadiness {
     IncompletePlan,
 }
 
+/// The result of type checking one body.
+///
+/// Cloning is cheap: the inferred tables are shared. The checked-body queries
+/// (`check_func_body` and friends) return a clone of the `infer_body`
+/// template, so each body's tables are stored once rather than twice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedBody<'db> {
-    body: Option<Body<'db>>,
-    has_diagnostics: bool,
-    result_ty: TyId<'db>,
-    assumptions: PredicateListId<'db>,
-    pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
-    expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
-    implicit_moves: FxHashSet<ExprId>,
-    const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
-    value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
-    semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
-    record_init_lowering: SecondaryMap<ExprId, Option<RecordInitLowering<'db>>>,
-    resolved_field_index: SecondaryMap<ExprId, Option<u16>>,
-    call_effect_args: SecondaryMap<ExprId, Option<Vec<ResolvedEffectArg<'db>>>>,
-    return_borrow_provider: Option<ProviderAddressSpace>,
-    /// Bindings for function parameters (indexed by param position)
-    param_bindings: Vec<LocalBinding<'db>>,
-    /// Bindings for local variables (keyed by the pattern that introduces them)
-    pat_bindings: SecondaryMap<PatId, Option<LocalBinding<'db>>>,
-    /// Binding capture mode for local variables (keyed by the pattern that introduces them)
-    pat_binding_modes: SecondaryMap<PatId, Option<PatBindingMode>>,
-    pattern_store: PatternStore<'db>,
-    pattern_status: SecondaryMap<PatId, PatternAnalysisStatus>,
-    /// Resolved Seq trait methods for for-loops
-    for_loop_seq: SecondaryMap<StmtId, Option<ForLoopSeq<'db>>>,
-    expr_place: SecondaryMap<ExprId, PackedOption<ExprPlaceId>>,
-    expr_places: PrimaryMap<ExprPlaceId, Place<'db>>,
+    tables: Arc<TypedBodyTables<'db>>,
 }
+
+// A private module keeps the shared tables type out of the crate's public
+// API.
+mod typed_body_tables {
+    use super::*;
+
+    /// Shared storage behind [`TypedBody`]; its fields are private to type checking.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct TypedBodyTables<'db> {
+        pub(super) body: Option<Body<'db>>,
+        pub(super) result_ty: TyId<'db>,
+        pub(super) assumptions: PredicateListId<'db>,
+        pub(super) pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
+        pub(super) expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
+        pub(super) implicit_moves: FxHashSet<ExprId>,
+        pub(super) const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
+        pub(super) value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
+        pub(super) semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
+        pub(super) record_init_lowering: SecondaryMap<ExprId, Option<RecordInitLowering<'db>>>,
+        pub(super) resolved_field_index: SecondaryMap<ExprId, Option<u16>>,
+        pub(super) call_effect_args: SecondaryMap<ExprId, Option<Vec<ResolvedEffectArg<'db>>>>,
+        pub(super) return_borrow_provider: Option<ProviderAddressSpace>,
+        /// Bindings for function parameters (indexed by param position)
+        pub(super) param_bindings: Vec<LocalBinding<'db>>,
+        /// Bindings for local variables (keyed by the pattern that introduces them)
+        pub(super) pat_bindings: SecondaryMap<PatId, Option<LocalBinding<'db>>>,
+        /// Binding capture mode for local variables (keyed by the pattern that introduces them)
+        pub(super) pat_binding_modes: SecondaryMap<PatId, Option<PatBindingMode>>,
+        pub(super) pattern_store: PatternStore<'db>,
+        pub(super) pattern_status: SecondaryMap<PatId, PatternAnalysisStatus>,
+        /// Resolved Seq trait methods for for-loops
+        pub(super) for_loop_seq: SecondaryMap<StmtId, Option<ForLoopSeq<'db>>>,
+        pub(super) expr_place: SecondaryMap<ExprId, PackedOption<ExprPlaceId>>,
+        pub(super) expr_places: PrimaryMap<ExprPlaceId, Place<'db>>,
+        /// The constrained type applications that resolving the body's paths
+        /// passed through, at every segment, each with the span of the
+        /// expression or pattern whose path it is. Const requirements check
+        /// them there (`check_body_requirements`).
+        pub(super) path_applications: Vec<(DynLazySpan<'db>, TyId<'db>)>,
+    }
+}
+use typed_body_tables::TypedBodyTables;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BindingSource {
@@ -3221,7 +3560,7 @@ pub enum ReturnProvenance {
     cycle_initial=func_return_provenance_cycle_initial
 )]
 fn func_return_provenance<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> ReturnProvenance {
-    let (diags, typed_body) = check_func_body(db, func);
+    let (diags, typed_body) = infer_body(db, BodyOwner::Func(func));
     if !diags.is_empty() {
         return ReturnProvenance::Unknown;
     }
@@ -3463,39 +3802,54 @@ impl<'db> TyVisitable<'db> for TypedBody<'db> {
     where
         V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
     {
-        self.assumptions.visit_with(visitor);
-        self.result_ty.visit_with(visitor);
-        for ty in self.pat_ty.values().flatten() {
+        self.tables.assumptions.visit_with(visitor);
+        self.visit_body_types(visitor);
+    }
+}
+
+impl<'db> TypedBody<'db> {
+    /// Visits the types the body's expressions, patterns, bindings and
+    /// resolutions carry, but not the ambient assumptions the body was
+    /// checked under, which are not dependencies of the body itself.
+    pub(super) fn visit_body_types<V>(&self, visitor: &mut V)
+    where
+        V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
+    {
+        self.tables.result_ty.visit_with(visitor);
+        for ty in self.tables.pat_ty.values().flatten() {
             ty.visit_with(visitor);
         }
-        for prop in self.expr_ty.values().flatten() {
+        for prop in self.tables.expr_ty.values().flatten() {
             prop.visit_with(visitor);
         }
-        for cref in self.const_refs.values().flatten() {
+        for cref in self.tables.const_refs.values().flatten() {
             cref.visit_with(visitor);
         }
-        for value_path in self.value_path_refs.values().flatten() {
+        for value_path in self.tables.value_path_refs.values().flatten() {
             value_path.visit_with(visitor);
         }
-        for lowering in self.semantic_expr_lowering.values().flatten() {
+        for lowering in self.tables.semantic_expr_lowering.values().flatten() {
             lowering.visit_with(visitor);
         }
-        for lowering in self.record_init_lowering.values().flatten() {
+        for lowering in self.tables.record_init_lowering.values().flatten() {
             lowering.visit_with(visitor);
         }
-        for args in self.call_effect_args.values().flatten() {
+        for args in self.tables.call_effect_args.values().flatten() {
             args.visit_with(visitor);
         }
-        self.param_bindings.visit_with(visitor);
-        for binding in self.pat_bindings.values().flatten() {
+        self.tables.param_bindings.visit_with(visitor);
+        for binding in self.tables.pat_bindings.values().flatten() {
             binding.visit_with(visitor);
         }
-        for place in self.expr_places.values() {
+        for place in self.tables.expr_places.values() {
             place.visit_with(visitor);
         }
-        self.pattern_store.visit_with(visitor);
-        for seq in self.for_loop_seq.values().flatten() {
+        self.tables.pattern_store.visit_with(visitor);
+        for seq in self.tables.for_loop_seq.values().flatten() {
             seq.visit_with(visitor);
+        }
+        for (_, ty) in &self.tables.path_applications {
+            ty.visit_with(visitor);
         }
     }
 }
@@ -3505,7 +3859,9 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
     where
         F: crate::analysis::ty::fold::TyFolder<'db>,
     {
-        let mut this = self;
+        // Folding writes every table, so take the tables, copying them if
+        // another `TypedBody` still shares them.
+        let mut this = Arc::unwrap_or_clone(self.tables);
         this.result_ty = this.result_ty.fold_with(db, folder);
         this.assumptions = this.assumptions.fold_with(db, folder);
         this.pat_ty
@@ -3552,7 +3908,18 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
         this.expr_places
             .values_mut()
             .for_each(|place| *place = place.clone().fold_with(db, folder));
-        this
+        this.path_applications
+            .iter_mut()
+            .for_each(|(_, ty)| *ty = ty.fold_with(db, folder));
+        this.into()
+    }
+}
+
+impl<'db> From<TypedBodyTables<'db>> for TypedBody<'db> {
+    fn from(tables: TypedBodyTables<'db>) -> Self {
+        Self {
+            tables: Arc::new(tables),
+        }
     }
 }
 
@@ -3569,19 +3936,32 @@ unsafe impl<'db> Update for TypedBody<'db> {
 }
 
 impl<'db> TypedBody<'db> {
+    /// The tables for writing, copied first if another `TypedBody` shares
+    /// them.
+    fn tables_mut(&mut self) -> &mut TypedBodyTables<'db> {
+        Arc::make_mut(&mut self.tables)
+    }
+
+    /// The constrained type applications that resolving the body's paths
+    /// passed through, each with the span of the expression or pattern whose
+    /// path it is.
+    pub(super) fn path_applications(&self) -> &[(DynLazySpan<'db>, TyId<'db>)] {
+        &self.tables.path_applications
+    }
+
     pub fn body(&self) -> Option<Body<'db>> {
-        self.body
+        self.tables.body
     }
 
     pub fn result_ty(&self) -> TyId<'db> {
-        self.result_ty
+        self.tables.result_ty
     }
 
     pub(crate) fn smir_lowering_issues(
         &self,
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<SmirLoweringIssue> {
-        let Some(body) = self.body else {
+        let Some(body) = self.tables.body else {
             return Vec::new();
         };
 
@@ -3735,7 +4115,7 @@ impl<'db> TypedBody<'db> {
     /// Pointer rvalues are evaluated once before lowering their target place.
     fn has_lowerable_place(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> bool {
         self.expr_place(expr).is_some()
-            || self.body.is_some_and(|body| {
+            || self.tables.body.is_some_and(|body| {
                 is_pointer_place_expr(db, body, expr, &mut |expr| self.expr_ty(db, expr))
             })
     }
@@ -3758,7 +4138,7 @@ impl<'db> TypedBody<'db> {
         db: &'db dyn HirAnalysisDb,
         expr: ExprId,
     ) -> bool {
-        let Some(body) = self.body else {
+        let Some(body) = self.tables.body else {
             return false;
         };
         let Partial::Present(expr_data) = expr.data(db, body) else {
@@ -3782,7 +4162,7 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn assumptions(&self) -> PredicateListId<'db> {
-        self.assumptions
+        self.tables.assumptions
     }
 
     pub fn expr_ty(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> TyId<'db> {
@@ -3790,7 +4170,8 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn expr_prop(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> ExprProp<'db> {
-        self.expr_ty
+        self.tables
+            .expr_ty
             .get(expr)
             .cloned()
             .flatten()
@@ -3798,20 +4179,20 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn is_implicit_move(&self, expr: ExprId) -> bool {
-        self.implicit_moves.contains(&expr)
+        self.tables.implicit_moves.contains(&expr)
     }
 
     /// All const references registered in this body, in arbitrary order.
     pub fn const_refs(&self) -> impl Iterator<Item = ConstRef<'db>> + '_ {
-        self.const_refs.values().flatten().copied()
+        self.tables.const_refs.values().flatten().copied()
     }
 
     pub fn expr_const_ref(&self, expr: ExprId) -> Option<ConstRef<'db>> {
-        self.const_refs[expr]
+        self.tables.const_refs[expr]
     }
 
     pub fn value_path_ref(&self, expr: ExprId) -> Option<ValuePathRef<'db>> {
-        self.value_path_refs[expr]
+        self.tables.value_path_refs[expr]
     }
 
     pub fn expr_code_region_ref(
@@ -3825,21 +4206,22 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn semantic_expr_lowering(&self, expr: ExprId) -> Option<&SemanticExprLowering<'db>> {
-        self.semantic_expr_lowering[expr].as_ref()
+        self.tables.semantic_expr_lowering[expr].as_ref()
     }
 
     pub fn record_init_lowering(&self, expr: ExprId) -> Option<RecordInitLowering<'db>> {
-        self.record_init_lowering[expr]
+        self.tables.record_init_lowering[expr]
     }
 
     pub fn resolved_field_index(&self, expr: ExprId) -> Option<u16> {
-        self.resolved_field_index[expr]
+        self.tables.resolved_field_index[expr]
     }
 
     // Final typed pattern/binding view. This can intentionally differ from
     // validated-pattern match types when destructuring borrowed carriers.
     pub fn pat_ty(&self, db: &'db dyn HirAnalysisDb, pat: PatId) -> TyId<'db> {
-        self.pat_ty
+        self.tables
+            .pat_ty
             .get(pat)
             .copied()
             .flatten()
@@ -3868,26 +4250,26 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn call_effect_args(&self, call_expr: ExprId) -> Option<&[ResolvedEffectArg<'db>]> {
-        self.call_effect_args[call_expr].as_deref()
+        self.tables.call_effect_args[call_expr].as_deref()
     }
 
     pub fn return_borrow_provider(&self) -> Option<ProviderAddressSpace> {
-        self.return_borrow_provider
+        self.tables.return_borrow_provider
     }
 
     /// Get the binding for a function parameter by index.
     pub fn param_binding(&self, idx: usize) -> Option<LocalBinding<'db>> {
-        self.param_bindings.get(idx).copied()
+        self.tables.param_bindings.get(idx).copied()
     }
 
     /// Get the binding for a local variable by its pattern.
     pub fn pat_binding(&self, pat: PatId) -> Option<LocalBinding<'db>> {
-        self.pat_bindings[pat]
+        self.tables.pat_bindings[pat]
     }
 
     /// Get how this local binding is captured by its source pattern destructuring.
     pub fn pat_binding_mode(&self, pat: PatId) -> Option<PatBindingMode> {
-        self.pat_binding_modes[pat]
+        self.tables.pat_binding_modes[pat]
     }
 
     pub fn binding_ty(&self, db: &'db dyn HirAnalysisDb, binding: LocalBinding<'db>) -> TyId<'db> {
@@ -3903,7 +4285,7 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn path_expr_read_semantics(&self, expr: ExprId) -> Option<PathReadSemantics> {
-        self.expr_ty[expr]
+        self.tables.expr_ty[expr]
             .as_ref()
             .and_then(|prop| prop.path_read_semantics)
     }
@@ -3916,11 +4298,11 @@ impl<'db> TypedBody<'db> {
     }
 
     pub fn pattern_store(&self) -> &PatternStore<'db> {
-        &self.pattern_store
+        &self.tables.pattern_store
     }
 
     pub fn pattern_status(&self, pat: PatId) -> PatternAnalysisStatus {
-        self.pattern_status[pat]
+        self.tables.pattern_status[pat]
     }
 
     pub fn pattern_root(&self, pat: PatId) -> Option<ValidatedPatId> {
@@ -3929,7 +4311,7 @@ impl<'db> TypedBody<'db> {
 
     /// Get the resolved Seq methods for a for-loop statement.
     pub fn for_loop_seq(&self, stmt: StmtId) -> Option<&ForLoopSeq<'db>> {
-        self.for_loop_seq[stmt].as_ref()
+        self.tables.for_loop_seq[stmt].as_ref()
     }
 
     pub fn binding_source(
@@ -3969,7 +4351,7 @@ impl<'db> TypedBody<'db> {
         pat: ValidatedPatId,
         binding_pat: PatId,
     ) -> Option<Vec<ReturnProjectionStep>> {
-        match self.pattern_store.node(pat).kind() {
+        match self.tables.pattern_store.node(pat).kind() {
             ValidatedPatKind::Wildcard { binding } => binding
                 .filter(|binding| binding.representative_pat == binding_pat)
                 .map(|_| Vec::new()),
@@ -4056,7 +4438,7 @@ impl<'db> TypedBody<'db> {
             return None;
         }
 
-        let (diags, typed_body) = check_func_body(db, func);
+        let (diags, typed_body) = infer_body(db, BodyOwner::Func(func));
         if !diags.is_empty() {
             seen.remove(&func);
             return None;
@@ -5051,7 +5433,7 @@ impl<'db> TypedBody<'db> {
     ///
     /// This is used by the language server for goto-definition on local variables.
     pub fn expr_binding_def_span(&self, func: Func<'db>, expr: ExprId) -> Option<DynLazySpan<'db>> {
-        let body = self.body?;
+        let body = self.tables.body?;
         let binding = self.expr_binding(expr)?;
         Some(binding.def_span_with(body, func))
     }
@@ -5072,14 +5454,16 @@ impl<'db> TypedBody<'db> {
     ///
     /// Returns the identity of the binding (param index, pattern id, or effect param ident).
     pub fn expr_binding(&self, expr: ExprId) -> Option<LocalBinding<'db>> {
-        self.expr_ty[expr].as_ref().and_then(|prop| prop.binding)
+        self.tables.expr_ty[expr]
+            .as_ref()
+            .and_then(|prop| prop.binding)
     }
 
     /// Returns a place representation for `expr` if it denotes an assignable location.
     pub fn expr_place(&self, expr: ExprId) -> Option<&Place<'db>> {
-        self.expr_place[expr]
+        self.tables.expr_place[expr]
             .expand()
-            .and_then(|place_id| self.expr_places.get(place_id))
+            .and_then(|place_id| self.tables.expr_places.get(place_id))
     }
 
     /// Find all expressions that reference the same local binding as the given expression.
@@ -5089,11 +5473,15 @@ impl<'db> TypedBody<'db> {
     ///
     /// This is used by the language server for find-all-references and rename on local variables.
     pub fn local_references(&self, expr: ExprId) -> Vec<ExprId> {
-        let Some(binding) = self.expr_ty[expr].as_ref().and_then(|prop| prop.binding) else {
+        let Some(binding) = self.tables.expr_ty[expr]
+            .as_ref()
+            .and_then(|prop| prop.binding)
+        else {
             return vec![];
         };
 
-        self.expr_ty
+        self.tables
+            .expr_ty
             .iter()
             .filter_map(|(id, prop)| {
                 if prop.as_ref().and_then(|prop| prop.binding) == Some(binding) {
@@ -5110,7 +5498,8 @@ impl<'db> TypedBody<'db> {
     /// This is the general method for finding all references to any kind of binding
     /// (param, local, or effect param).
     pub fn references_by_binding(&self, binding: LocalBinding<'db>) -> Vec<ExprId> {
-        self.expr_ty
+        self.tables
+            .expr_ty
             .iter()
             .filter_map(|(id, prop)| {
                 if prop.as_ref().and_then(|prop| prop.binding) == Some(binding) {
@@ -5123,9 +5512,8 @@ impl<'db> TypedBody<'db> {
     }
 
     fn empty(db: &'db dyn HirAnalysisDb) -> Self {
-        Self {
+        TypedBodyTables {
             body: None,
-            has_diagnostics: false,
             result_ty: TyId::unit(db),
             assumptions: PredicateListId::empty_list(db),
             pat_ty: SecondaryMap::new(),
@@ -5146,7 +5534,9 @@ impl<'db> TypedBody<'db> {
             for_loop_seq: SecondaryMap::new(),
             expr_place: SecondaryMap::new(),
             expr_places: PrimaryMap::new(),
+            path_applications: Vec::new(),
         }
+        .into()
     }
 }
 
@@ -5484,10 +5874,10 @@ impl<'db> TyCheckerFinalizer<'db> {
         let assumptions = checker.env.assumptions();
         checker.resolve_deferred();
         let mut body = checker.env.finish(&mut checker.table);
-        body.return_borrow_provider = checker
+        body.tables_mut().return_borrow_provider = checker
             .first_return_borrow_provider
             .map(|(_, provider)| provider);
-        let direct_call_callees = body.body.map_or_else(FxHashSet::default, |body_id| {
+        let direct_call_callees = body.body().map_or_else(FxHashSet::default, |body_id| {
             body_id
                 .exprs(checker.db)
                 .iter()
@@ -5515,7 +5905,7 @@ impl<'db> TyCheckerFinalizer<'db> {
     }
 
     fn check_unknown_types(&mut self) {
-        if let Some(body) = self.body.body {
+        if let Some(body) = self.body.body() {
             let mut ctxt = VisitorCtxt::with_body(self.db, body);
             self.visit_body(&mut ctxt, body);
         }
@@ -5555,7 +5945,7 @@ impl<'db> TyCheckerFinalizer<'db> {
             return;
         }
 
-        let solve_cx = TraitSolveCx::new(self.db, self.body.body.unwrap().scope());
+        let solve_cx = TraitSolveCx::new(self.db, self.body.body().unwrap().scope());
         if let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span) {
             self.diags.push(diag.into());
         }
@@ -5626,7 +6016,7 @@ fn target() -> u256 {
             })
             .expect("target call");
         assert!(incomplete.semantic_expr_lowering(call).is_some());
-        incomplete.semantic_expr_lowering[call] = None;
+        incomplete.tables_mut().semantic_expr_lowering[call] = None;
 
         assert_eq!(
             incomplete.smir_lowering_readiness(&db),
@@ -5683,8 +6073,9 @@ fn target(choice: Choice) -> u256 {
 
         for (invalid, unsupported) in [(0, 1), (1, 0)] {
             let mut mixed = checked.clone();
-            mixed.pattern_status[arms[invalid].pat] = PatternAnalysisStatus::Invalid;
-            mixed.pattern_status[arms[unsupported].pat] = PatternAnalysisStatus::Unsupported;
+            mixed.tables_mut().pattern_status[arms[invalid].pat] = PatternAnalysisStatus::Invalid;
+            mixed.tables_mut().pattern_status[arms[unsupported].pat] =
+                PatternAnalysisStatus::Unsupported;
             assert_eq!(
                 mixed.smir_lowering_readiness(&db),
                 SmirLoweringReadiness::IncompletePlan

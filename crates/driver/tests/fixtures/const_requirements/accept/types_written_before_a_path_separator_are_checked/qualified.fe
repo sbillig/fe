@@ -1,0 +1,17 @@
+// Items reached through a valid qualifier type are accepted, including a
+// generic qualifier whose condition the caller states.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+trait Helper {
+    const X: u256
+    const fn helper() -> u256
+}
+impl<T> Helper for T {
+    const X: u256 = 20
+    const fn helper() -> u256 { 1 }
+}
+
+const fn forward<const M: usize>() -> u256 where M > 0 { Bounded<M>::helper() + Bounded<M>::X }
+const fn answer() -> u256 {
+    let helper = Bounded<1>::helper
+    forward<2>() + Bounded<1>::X + helper()
+}

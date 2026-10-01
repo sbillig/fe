@@ -271,6 +271,11 @@ impl super::Parse for LetExprScope {
     }
 }
 
+/// Whether an expression can start with `kind`.
+pub(super) fn is_expr_start(kind: SyntaxKind) -> bool {
+    prefix_binding_power(kind).is_some() || is_expr_atom_head(kind)
+}
+
 /// Specifies how tightly a prefix unary operator binds to its operand.
 fn prefix_binding_power(kind: SyntaxKind) -> Option<u8> {
     use SyntaxKind::*;

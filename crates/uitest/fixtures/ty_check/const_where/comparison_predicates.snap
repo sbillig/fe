@@ -1,0 +1,31 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/comparison_predicates.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ comparison_predicates.fe:7:43
+  │
+3 │ fn bounded<const N: usize, const M: usize>() -> u256 where N < 8, M > 0 { 1 }
+  │                                                            ----- required by this predicate
+  ·
+7 │     bounded<1, 1>() + inclusive<1, 1>() + bounded<9, 1>() + bounded<1, 0>() + inclusive<1, 0>()
+  │                                           ^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+  ┌─ comparison_predicates.fe:7:61
+  │
+3 │ fn bounded<const N: usize, const M: usize>() -> u256 where N < 8, M > 0 { 1 }
+  │                                                                   ----- required by this predicate
+  ·
+7 │     bounded<1, 1>() + inclusive<1, 1>() + bounded<9, 1>() + bounded<1, 0>() + inclusive<1, 0>()
+  │                                                             ^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+  ┌─ comparison_predicates.fe:7:79
+  │
+4 │ fn inclusive<const N: usize, const M: usize>() -> u256 where N < 8, M >= 1 { 1 }
+  │                                                                     ------ required by this predicate
+  ·
+7 │     bounded<1, 1>() + inclusive<1, 1>() + bounded<9, 1>() + bounded<1, 0>() + inclusive<1, 0>()
+  │                                                                               ^^^^^^^^^^^^^^^^^ condition evaluated to `false`

@@ -1,0 +1,20 @@
+// A constant in a type or generic argument cannot read a runtime value. Each
+// position reports that once, at the value.
+const fn id<const N: usize>() -> usize { N }
+
+fn parameter(_ n: usize) -> usize {
+    let values: [u8; { n }] = [1, 2]
+    values[0] as usize
+}
+
+fn signature(_ n: usize) -> [u8; { n }] { [1] }
+
+fn local() -> usize {
+    let n: usize = 1
+    let values: [u8; { n }] = [1]
+    values[0] as usize
+}
+
+fn repeat(_ n: usize) -> [u8; 1] { [0; { n }] }
+
+fn argument(_ n: usize) -> usize { id<{ n }>() }

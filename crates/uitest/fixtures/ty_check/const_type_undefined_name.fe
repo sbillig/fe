@@ -1,0 +1,12 @@
+// An undefined name in a constant in a type or generic argument is
+// reported, not dropped with the constant's other diagnostics.
+const fn id<const N: usize>() -> usize { N }
+
+fn annotation() -> usize {
+    let values: [u8; { undefined_fn() }] = [1, 2]
+    values[0] as usize
+}
+
+fn signature() -> [u8; { undefined_value }] { [1] }
+
+fn argument() -> usize { id<{ undefined_value }>() }

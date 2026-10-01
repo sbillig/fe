@@ -1,0 +1,78 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/impl_headers_supply_only_their_own_requirements/trait_arguments.fe
+---
+error[8-0093]: const requirement is not satisfied
+   ┌─ trait_arguments.fe:18:25
+   │
+ 6 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+18 │ impl<const N: usize> Tr<Bounded<N>> for Holder<N> {
+   │                         ^^^^^^^^^^ no matching const requirement in the caller after substitution
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ trait_arguments.fe:19:22
+   │
+10 │ const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
+   │                                               ----- required by this predicate
+   ·
+19 │     const V: usize = dec<N>()
+   │                      ^^^^^^^^ no matching const requirement in the caller after substitution
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ trait_arguments.fe:20:25
+   │
+10 │ const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
+   │                                               ----- required by this predicate
+   ·
+20 │     type Out = Holder<{ dec<N>() }>
+   │                         ^^^^^^^^ no matching const requirement in the caller after substitution
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ trait_arguments.fe:21:28
+   │
+10 │ const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
+   │                                               ----- required by this predicate
+   ·
+21 │     fn go(self) -> usize { dec<N>() }
+   │                            ^^^^^^^^ no matching const requirement in the caller after substitution
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ trait_arguments.fe:23:26
+   │
+ 6 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+23 │ impl<const N: usize> Tag<Bounded<N>> for Plain {
+   │                          ^^^^^^^^^^ no matching const requirement in the caller after substitution
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ trait_arguments.fe:24:29
+   │
+10 │ const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
+   │                                               ----- required by this predicate
+   ·
+24 │     fn tag(self) -> usize { dec<N>() }
+   │                             ^^^^^^^^ no matching const requirement in the caller after substitution
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ trait_arguments.fe:30:14
+   │
+ 6 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+30 │     let _h = call(Holder<0> {})
+   │              ^^^^ condition evaluated to `false`
+   │
+   = the type `Bounded<0>` is inferred here
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ trait_arguments.fe:44:10
+   │
+ 6 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+44 │ impl Tag<Bounded<0>> for Holder<0> {
+   │          ^^^^^^^^^^ condition evaluated to `false`

@@ -1,0 +1,8 @@
+// A condition that fails the const-language check is not checked for its
+// requirements, as a const function's body is not: in `unused`, only the
+// non-const call is an error, while the same `positive<0>()` in `control`,
+// which passes the const-language check, fails its requirement.
+const fn positive<const N: usize>() -> bool where N > 0 { true }
+fn flag(_ n: usize) -> bool { n > 0 }
+fn unused<const N: usize>() where { flag(N) && positive<0>() } {}
+fn control<const N: usize>() where { N > 0 && positive<0>() } {}

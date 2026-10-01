@@ -358,14 +358,17 @@ impl KindBound {
 impl<'db> WhereClauseId<'db> {
     /// Pretty-prints a where clause.
     pub fn pretty_print(self, db: &'db dyn HirDb) -> String {
-        let predicates = self.data(db);
+        let predicates = self.predicates(db);
         if predicates.is_empty() {
             return String::new();
         }
 
         let preds = predicates
             .iter()
-            .map(|p| p.pretty_print(db))
+            .map(|predicate| match predicate {
+                WhereClausePredicate::Type(predicate) => predicate.pretty_print(db),
+                WhereClausePredicate::Const(body) => format!("({})", body.pretty_print(db)),
+            })
             .collect::<Vec<_>>()
             .join(", ");
         format!(" where {preds}")

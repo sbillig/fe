@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/ground_conditions_are_reported_once_at_their_declaration/event.fe
+---
+error[8-0091]: const where predicate failed
+  ┌─ event.fe:5:20
+  │
+5 │ struct Never where false { value: u256 }
+  │                    ^^^^^ condition evaluated to `false`

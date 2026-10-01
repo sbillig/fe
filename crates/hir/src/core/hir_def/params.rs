@@ -106,8 +106,56 @@ pub struct FuncParamListId<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct WhereClauseId<'db> {
+    /// The clause's predicates, in source order. A predicate's position
+    /// here is its index for the clause's spans.
     #[return_ref]
-    pub data: Vec<WherePredicate<'db>>,
+    pub predicates: Vec<WhereClausePredicate<'db>>,
+}
+
+impl<'db> WhereClauseId<'db> {
+    /// The type bound predicates, each with its position among all the
+    /// clause's predicates.
+    pub fn type_predicates(
+        self,
+        db: &'db dyn HirDb,
+    ) -> impl Iterator<Item = (usize, &'db WherePredicate<'db>)> + 'db {
+        self.predicates(db)
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, predicate)| match predicate {
+                WhereClausePredicate::Type(predicate) => Some((idx, predicate)),
+                WhereClausePredicate::Const(_) => None,
+            })
+    }
+
+    /// The const conditions, in source order.
+    pub fn const_predicates(self, db: &'db dyn HirDb) -> &'db [Body<'db>] {
+        where_clause_const_predicates(db, self)
+    }
+}
+
+#[salsa::tracked(return_ref)]
+fn where_clause_const_predicates<'db>(
+    db: &'db dyn HirDb,
+    clause: WhereClauseId<'db>,
+) -> Vec<Body<'db>> {
+    clause
+        .predicates(db)
+        .iter()
+        .filter_map(|predicate| match predicate {
+            WhereClausePredicate::Const(body) => Some(*body),
+            WhereClausePredicate::Type(_) => None,
+        })
+        .collect()
+}
+
+/// A predicate of a `where` clause.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum WhereClausePredicate<'db> {
+    /// A trait or kind bound on a type, `T: Trait`.
+    Type(WherePredicate<'db>),
+    /// A boolean const condition, `N > 0`.
+    Const(Body<'db>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From)]

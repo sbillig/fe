@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/parser.rs
+expression: diags
+input_file: fixtures/parser/const_where_brace_unbalanced.fe
+---
+error[1-0001]: unexpected syntax while parsing block
+  ┌─ const_where_brace_unbalanced.fe:5:56
+  │
+5 │ fn f<const N: usize>() -> usize where N > 0, { N < { } { 1 }
+  │                                                        ^^^ unexpected

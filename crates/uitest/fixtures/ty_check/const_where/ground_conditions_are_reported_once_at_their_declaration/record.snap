@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/ground_conditions_are_reported_once_at_their_declaration/record.fe
+---
+error[8-0091]: const where predicate failed
+  ┌─ record.fe:3:20
+  │
+3 │ struct Never where false { value: u256 }
+  │                    ^^^^^ condition evaluated to `false`
+
+error[8-0091]: const where predicate failed
+  ┌─ record.fe:4:35
+  │
+4 │ struct Pair<const N: usize> where false, N > 0 { value: u256 }
+  │                                   ^^^^^ condition evaluated to `false`

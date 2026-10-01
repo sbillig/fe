@@ -1,0 +1,7 @@
+// A block after a `where` clause is a braced condition only when the token
+// after its matching `}` continues the clause. An unbalanced `{` inside the
+// block leaves it without a match, so the block is the function's body, and
+// the item after the function still parses.
+fn f<const N: usize>() -> usize where N > 0, { N < { } { 1 }
+
+fn after() -> usize { 2 }

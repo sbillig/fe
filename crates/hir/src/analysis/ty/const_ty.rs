@@ -21,7 +21,7 @@ use super::{
         selected_assoc_const_body_template,
     },
     trait_resolution::{Selection, TraitSolveCx, constraint::collect_constraints},
-    ty_check::{BodyOwner, check_anon_const_body, check_const_body},
+    ty_check::{BodyOwner, infer_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_error::first_invalid_ty_cause,
     ty_lower::{
@@ -465,6 +465,12 @@ pub(crate) struct LoweringContext<'db> {
     const_bodies: ConstBodyLowering,
     source_params: Option<GenericParamOwner<'db>>,
     default_capture: Option<(GenericParamOwner<'db>, SourceParamIndex)>,
+    /// Every path segment this lowering resolved, in resolution order, when
+    /// the caller asked for them (`recording_resolutions`).
+    resolutions: Option<std::cell::RefCell<Vec<(PathId<'db>, PathRes<'db>)>>>,
+    /// Set while lowering resolves a path that an anonymous constant's body
+    /// writes (`without_recording`).
+    recording_paused: std::cell::Cell<bool>,
 }
 
 impl<'db> LoweringContext<'db> {
@@ -488,7 +494,41 @@ impl<'db> LoweringContext<'db> {
             const_bodies,
             source_params: None,
             default_capture: None,
+            resolutions: None,
+            recording_paused: std::cell::Cell::new(false),
         }
+    }
+
+    /// Makes this lowering keep every path segment it resolves, with the
+    /// resolution, for `into_resolutions`.
+    pub(crate) fn recording_resolutions(mut self) -> Self {
+        self.resolutions = Some(Default::default());
+        self
+    }
+
+    /// Called by path resolution for each segment it resolves.
+    pub(crate) fn record_resolution(&self, path: PathId<'db>, res: &PathRes<'db>) {
+        if let Some(resolutions) = &self.resolutions
+            && !self.recording_paused.get()
+        {
+            resolutions.borrow_mut().push((path, res.clone()));
+        }
+    }
+
+    /// Runs `resolve` without recording its resolutions. A path written in
+    /// an anonymous constant's body belongs to that body, whose inference
+    /// records it, so a type lowering that reads the constant does not.
+    pub(crate) fn without_recording<R>(&self, resolve: impl FnOnce() -> R) -> R {
+        let paused = self.recording_paused.replace(true);
+        let result = resolve();
+        self.recording_paused.set(paused);
+        result
+    }
+
+    pub(crate) fn into_resolutions(self) -> Vec<(PathId<'db>, PathRes<'db>)> {
+        self.resolutions
+            .map(std::cell::RefCell::into_inner)
+            .unwrap_or_default()
     }
 
     pub(crate) fn holes(&self) -> &HoleMinter<'db> {
@@ -1522,6 +1562,67 @@ pub(crate) fn retype_hole_const_ty<'db>(
     matches!(const_ty.data(db), ConstTyData::Hole(..)).then(|| const_ty.with_ty(db, expected_ty))
 }
 
+/// How type lowering reports a constant whose body failed inference.
+pub(crate) enum ConstBodyFailure<'db> {
+    /// Inference succeeded.
+    None,
+    /// The type's error, which renders where the type is written.
+    AtType(InvalidCause<'db>),
+    /// The type's error renders nothing, because the failure has no
+    /// type-level form. An anonymous constant's position then reports the
+    /// body's own diagnostics (`check_declared_type_requirements`,
+    /// `check_body_requirements`); a named constant's declaration reports
+    /// them in any case.
+    AtPosition(InvalidCause<'db>),
+    /// Another check owns the failure: a trait impl's conformance check
+    /// reports its mismatched constants.
+    Elsewhere,
+}
+
+pub(crate) fn const_body_failure<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    diags: &[FuncBodyDiag<'db>],
+    typed_body: &super::ty_check::TypedBody<'db>,
+) -> ConstBodyFailure<'db> {
+    if let Some((expected, given)) = diags.iter().find_map(|diag| match diag {
+        FuncBodyDiag::Body(BodyDiag::TypeMismatch {
+            expected, given, ..
+        }) => Some((*expected, *given)),
+        _ => None,
+    }) {
+        if matches!(body.scope().parent_item(db), Some(ItemKind::ImplTrait(_))) {
+            return ConstBodyFailure::Elsewhere;
+        }
+        return ConstBodyFailure::AtType(InvalidCause::ConstTyMismatch { expected, given });
+    }
+    if diags.is_empty() {
+        return ConstBodyFailure::None;
+    }
+    let cause = const_body_result_cause(db, body, typed_body);
+    // The parser reports a parse error.
+    if matches!(cause, InvalidCause::ParseError)
+        || super::ty_error::diag_from_invalid_cause(crate::span::DynLazySpan::invalid(), &cause)
+            .is_some()
+    {
+        ConstBodyFailure::AtType(cause)
+    } else {
+        ConstBodyFailure::AtPosition(cause)
+    }
+}
+
+fn const_body_result_cause<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    typed_body: &super::ty_check::TypedBody<'db>,
+) -> InvalidCause<'db> {
+    typed_body
+        .body()
+        .and_then(|body| typed_body.expr_ty(db, body.expr(db)).invalid_cause(db))
+        .or_else(|| typed_body.result_ty().invalid_cause(db))
+        .unwrap_or(InvalidCause::InvalidConstTyExpr { body })
+}
+
 pub(crate) fn validate_unevaluated_const_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     const_ty: ConstTyId<'db>,
@@ -1545,35 +1646,30 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
     let check_ty = template_ty.unwrap_or(expected_ty);
     let const_ty = const_ty.with_ty(db, expected_ty);
 
-    let (diags, typed_body) = if let Some(const_def) = const_def {
-        let result = check_const_body(db, *const_def);
-        (result.0.clone(), result.1.clone())
-    } else {
-        let result = check_anon_const_body(db, *body, check_ty);
-        (result.0.clone(), result.1.clone())
+    // Type lowering reads a body's inference, never its checked result.
+    // Checking discharges const requirements, which evaluates code that can
+    // lower this same type, so reading it here would close a query cycle.
+    // Requirements of a constant are reported by the constant's owner: a
+    // named constant's declaration, or the position of an anonymous one
+    // (`check_declared_type_requirements`, `check_body_requirements`).
+    let owner = match const_def {
+        Some(const_def) => BodyOwner::Const(*const_def),
+        None => BodyOwner::AnonConstBody {
+            body: *body,
+            expected: check_ty,
+        },
     };
-
-    if let Some((expected, given)) = diags.iter().find_map(|diag| match diag {
-        FuncBodyDiag::Body(BodyDiag::TypeMismatch {
-            expected, given, ..
-        }) => Some((*expected, *given)),
-        _ => None,
-    }) {
-        if matches!(body.scope().parent_item(db), Some(ItemKind::ImplTrait(_))) {
-            return Err(InvalidCause::Other);
-        }
-        return Err(InvalidCause::ConstTyMismatch { expected, given });
-    }
-
-    if !diags.is_empty() {
-        if let Some(cause) = typed_body
-            .body()
-            .and_then(|body| typed_body.expr_ty(db, body.expr(db)).invalid_cause(db))
-            .or_else(|| typed_body.result_ty().invalid_cause(db))
-        {
+    let (diags, typed_body) = infer_body(db, owner);
+    match const_body_failure(db, *body, diags, typed_body) {
+        ConstBodyFailure::None => {}
+        ConstBodyFailure::AtType(cause) | ConstBodyFailure::AtPosition(cause) => {
             return Err(cause);
         }
-        return Err(InvalidCause::InvalidConstTyExpr { body: *body });
+        ConstBodyFailure::Elsewhere => return Err(InvalidCause::Other),
+    }
+    // A named constant's checked body also rejects an invalid declared type.
+    if const_def.is_some_and(|const_def| const_def.ty(db).has_invalid(db)) {
+        return Err(const_body_result_cause(db, *body, typed_body));
     }
 
     if const_def.is_some() {
@@ -2429,7 +2525,7 @@ pub(crate) fn const_body_resolution_reenters<'db>(
     visited.insert(start_body);
     let mut frontier = vec![(start_body, start_expected, start_capture.clone())];
     while let Some((body, expected, capture)) = frontier.pop() {
-        let typed_body = &check_anon_const_body(db, body, expected).1;
+        let typed_body = &infer_body(db, BodyOwner::AnonConstBody { body, expected }).1;
         for cref in typed_body.const_refs() {
             let next = match cref {
                 ConstRef::Const(const_) => const_

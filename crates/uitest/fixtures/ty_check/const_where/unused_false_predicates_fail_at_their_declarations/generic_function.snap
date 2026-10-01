@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/unused_false_predicates_fail_at_their_declarations/generic_function.fe
+---
+error[8-0091]: const where predicate failed
+  ┌─ generic_function.fe:1:42
+  │
+1 │ fn never_runs_generic<T>() -> u256 where false { 0 }
+  │                                          ^^^^^ condition evaluated to `false`
+
+error[8-0091]: const where predicate failed
+  ┌─ generic_function.fe:2:53
+  │
+2 │ fn never_runs_const<const N: usize>() -> u256 where false { N as u256 }
+  │                                                     ^^^^^ condition evaluated to `false`

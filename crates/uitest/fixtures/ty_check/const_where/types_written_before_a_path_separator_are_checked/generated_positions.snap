@@ -1,0 +1,23 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/types_written_before_a_path_separator_are_checked/generated_positions.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ generated_positions.fe:9:5
+  │
+3 │ struct Positive<const N: usize> where N > 0 { value: u256 }
+  │                                       ----- required by this predicate
+  ·
+9 │     Get { x: Positive<0>::Out } -> u256,
+  │     ^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ generated_positions.fe:13:1
+   │
+ 3 │   struct Positive<const N: usize> where N > 0 { value: u256 }
+   │                                         ----- required by this predicate
+   ·
+13 │ ╭ #[event]
+14 │ │ struct Happened { x: Positive<0>::Out }
+   │ ╰───────────────────────────────────────^ condition evaluated to `false`

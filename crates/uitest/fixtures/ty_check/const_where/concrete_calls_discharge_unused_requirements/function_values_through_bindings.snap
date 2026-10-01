@@ -1,0 +1,31 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/concrete_calls_discharge_unused_requirements/function_values_through_bindings.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ function_values_through_bindings.fe:9:13
+  │
+4 │ const fn bounded<const N: usize>() -> u256 where N > 0 { 42 }
+  │                                                  ----- required by this predicate
+  ·
+9 │     let f = bounded<0>
+  │             ^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ function_values_through_bindings.fe:12:24
+   │
+ 4 │ const fn bounded<const N: usize>() -> u256 where N > 0 { 42 }
+   │                                                  ----- required by this predicate
+   ·
+12 │ fn block() -> u256 { { bounded<0> }() }
+   │                        ^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ function_values_through_bindings.fe:14:13
+   │
+ 5 │ fn id<const N: usize>(_ h: Holder<N>) -> u256 where N > 0 { 1 }
+   │                                                     ----- required by this predicate
+   ·
+14 │     let f = id
+   │             ^^ condition evaluated to `false`

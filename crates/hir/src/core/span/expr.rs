@@ -72,6 +72,10 @@ impl<'db> LazyExprSpan<'db> {
     pub fn into_assign_expr(self) -> LazyAssignExprSpan<'db> {
         LazyAssignExprSpan(self.0)
     }
+
+    pub fn into_with_expr(self) -> LazyWithExprSpan<'db> {
+        LazyWithExprSpan(self.0)
+    }
 }
 
 define_lazy_span_node! {
@@ -233,6 +237,30 @@ define_lazy_span_node!(
 );
 
 define_lazy_span_node!(LazyMatchArmSpan);
+
+define_lazy_span_node!(
+    LazyWithExprSpan,
+    ast::WithExpr,
+    @node {
+        (params, params, LazyWithParamListSpan),
+    }
+);
+
+define_lazy_span_node!(
+    LazyWithParamListSpan,
+    ast::WithParamList,
+    @idx {
+        (param, LazyWithParamSpan),
+    }
+);
+
+define_lazy_span_node!(
+    LazyWithParamSpan,
+    ast::WithParam,
+    @node {
+        (path, path, LazyPathSpan),
+    }
+);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Update)]
 pub(crate) struct ExprRoot<'db> {

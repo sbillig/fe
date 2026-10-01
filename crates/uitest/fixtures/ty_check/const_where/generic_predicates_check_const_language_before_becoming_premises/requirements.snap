@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/generic_predicates_check_const_language_before_becoming_premises/requirements.fe
+---
+error[8-0062]: non-const call in `const fn`
+  ┌─ requirements.fe:7:37
+  │
+6 │ fn flag(_ n: usize) -> bool { n > 0 }
+  │    ---- callee defined here
+7 │ fn unused<const N: usize>() where { flag(N) && positive<0>() } {}
+  │                                     ^^^^^^^ `flag` is not a `const fn`
+
+error[8-0093]: const requirement is not satisfied
+  ┌─ requirements.fe:8:47
+  │
+5 │ const fn positive<const N: usize>() -> bool where N > 0 { true }
+  │                                                   ----- required by this predicate
+  ·
+8 │ fn control<const N: usize>() where { N > 0 && positive<0>() } {}
+  │                                               ^^^^^^^^^^^^^ condition evaluated to `false`

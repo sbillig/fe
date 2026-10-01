@@ -578,20 +578,64 @@ impl ToDoc for ast::ConstGenericParam {
     }
 }
 
+fn where_predicate_doc<'a>(
+    predicate: ast::WhereClausePredicate,
+    ctx: &'a RewriteContext<'a>,
+) -> Doc<'a> {
+    match predicate.kind() {
+        ast::WherePredicateKind::Type(predicate) => predicate.to_doc(ctx),
+        ast::WherePredicateKind::Const(predicate) => match predicate.expr() {
+            Some(expr) => expr.to_doc(ctx),
+            None => ctx.alloc.nil(),
+        },
+    }
+}
+
+/// Whether the clause ends with a braced condition and a `,`. That comma is
+/// kept: without it, the parser reads a block that nothing continues as the
+/// item's own block, so `fn f<T>() where T: Copy, { true },` in a trait
+/// would become a function with a default body.
+fn ends_with_braced_condition_and_comma(clause: &ast::WhereClause) -> bool {
+    let Some(last) = clause.iter().last() else {
+        return false;
+    };
+    let braced = match last.kind() {
+        ast::WherePredicateKind::Const(predicate) => predicate
+            .expr()
+            .is_some_and(|expr| matches!(expr.kind(), ast::ExprKind::Block(_))),
+        ast::WherePredicateKind::Type(_) => false,
+    };
+    braced
+        && std::iter::successors(last.syntax().next_sibling_or_token(), |element| {
+            element.next_sibling_or_token()
+        })
+        .any(|element| element.kind() == SyntaxKind::Comma)
+}
+
 impl ToDoc for ast::WhereClause {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
 
         let indent = ctx.config.clause_indent as isize;
+        let trailing_comma = if ends_with_braced_condition_and_comma(self) {
+            alloc.text(",")
+        } else {
+            alloc.nil()
+        };
 
         if !has_comment_tokens(self.syntax()) {
-            let predicates: Vec<_> = self.into_iter().map(|pred| pred.to_doc(ctx)).collect();
+            let predicates: Vec<_> = self
+                .iter()
+                .map(|predicate| where_predicate_doc(predicate, ctx))
+                .collect();
             if predicates.is_empty() {
                 return alloc.nil();
             }
 
             let sep = alloc.text(",").append(alloc.line());
-            let inner = intersperse(alloc, predicates, sep).group();
+            let inner = intersperse(alloc, predicates, sep)
+                .append(trailing_comma)
+                .group();
 
             return alloc
                 .text("where")
@@ -611,11 +655,11 @@ impl ToDoc for ast::WhereClause {
         for child in self.syntax().children_with_tokens() {
             match child {
                 NodeOrToken::Node(node) => {
-                    let Some(pred) = ast::WherePredicate::cast(node) else {
+                    let Some(predicate) = ast::WhereClausePredicate::cast(node) else {
                         continue;
                     };
                     entries.push(Entry {
-                        doc: pred.to_doc(ctx),
+                        doc: where_predicate_doc(predicate, ctx),
                         blank_line_before: pending_newlines >= 2,
                         is_predicate: true,
                     });
@@ -657,10 +701,12 @@ impl ToDoc for ast::WhereClause {
                 }
             }
 
-            let doc = if entry.is_predicate && last_predicate_idx != Some(idx) {
+            let doc = if !entry.is_predicate {
+                entry.doc
+            } else if last_predicate_idx != Some(idx) {
                 entry.doc.append(alloc.text(","))
             } else {
-                entry.doc
+                entry.doc.append(trailing_comma.clone())
             };
             inner = inner.append(doc);
         }

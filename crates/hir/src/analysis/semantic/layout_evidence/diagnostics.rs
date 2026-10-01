@@ -56,6 +56,9 @@ pub fn collect_layout_evidence_diagnostic_vouchers<'db>(
         .iter()
         .filter(|item| item.top_mod(db) == top_mod)
     {
+        for owner in BodyOwner::const_predicates_of(db, *item) {
+            collect_owner(db, owner, &mut seen, &mut diagnostics);
+        }
         match item {
             ItemKind::Func(func) => {
                 collect_owner(db, BodyOwner::Func(*func), &mut seen, &mut diagnostics)

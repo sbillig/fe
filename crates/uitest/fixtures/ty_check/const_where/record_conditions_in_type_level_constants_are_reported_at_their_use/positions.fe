@@ -1,0 +1,21 @@
+// A record or enum condition that fails inside an anonymous constant of a
+// type is reported once, at the type that fails it, with its reason.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+enum Choice<const N: usize> where N > 0 { Empty }
+
+fn let_type() {
+    let _: [u8; {
+        let _ = Bounded<0> { value: 1 }
+        1
+    }] = [0]
+}
+fn signature(_ values: [u8; {
+    let _ = Choice<0>::Empty
+    1
+}]) {}
+struct Holder {
+    items: [u8; {
+        let _ = Bounded<0> { value: 1 }
+        1
+    }]
+}

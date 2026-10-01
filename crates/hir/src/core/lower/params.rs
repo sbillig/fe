@@ -1,7 +1,9 @@
 use parser::ast::{self};
 
 use super::FileLowerCtxt;
-use crate::core::hir_def::{Body, IdentId, Partial, TypeId, TypeKind, TypeMode, params::*};
+use crate::core::hir_def::{
+    Body, BodyKind, IdentId, Partial, TrackedItemVariant, TypeId, TypeKind, TypeMode, params::*,
+};
 
 impl<'db> GenericArgListId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::GenericArgList) -> Self {
@@ -51,10 +53,25 @@ impl<'db> FuncParamListId<'db> {
 
 impl<'db> WhereClauseId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::WhereClause) -> Self {
-        let predicates = ast
-            .into_iter()
-            .map(|pred| WherePredicate::lower_ast(ctxt, pred))
-            .collect::<Vec<_>>();
+        let mut const_idx = 0;
+        let predicates: Vec<_> = ast
+            .iter()
+            .map(|pred| match pred.kind() {
+                ast::WherePredicateKind::Type(pred) => {
+                    WhereClausePredicate::Type(WherePredicate::lower_ast(ctxt, pred))
+                }
+                ast::WherePredicateKind::Const(pred) => {
+                    let body = Body::lower_ast_with_variant(
+                        ctxt,
+                        pred.expr(),
+                        TrackedItemVariant::WhereConstPredicate(const_idx),
+                        BodyKind::Anonymous,
+                    );
+                    const_idx += 1;
+                    WhereClausePredicate::Const(body)
+                }
+            })
+            .collect();
         Self::new(ctxt.db(), predicates)
     }
 

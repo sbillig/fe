@@ -1,0 +1,31 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/written_types_report_their_conditions_once/let_annotation.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ let_annotation.fe:6:12
+  │
+3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+  │                                      ----- required by this predicate
+  ·
+6 │     let x: Bounded<0> = Bounded { value: 1 }
+  │            ^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+  ┌─ let_annotation.fe:9:18
+  │
+3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+  │                                      ----- required by this predicate
+  ·
+9 │ fn returned() -> Bounded<0> { Bounded { value: 1 } }
+  │                  ^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ let_annotation.fe:11:16
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+   │                                      ----- required by this predicate
+   ·
+11 │     let pair: (Bounded<0>, u256) = (Bounded { value: 1 }, 2)
+   │                ^^^^^^^^^^ condition evaluated to `false`

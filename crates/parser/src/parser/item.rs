@@ -6,7 +6,7 @@ use super::{
     expr_atom::BlockExprScope,
     func::FuncDefScope,
     param::{
-        FuncParamListScope, TraitRefScope, TypeBoundListScope, parse_generic_params_opt,
+        FuncParamListScope, ItemBlock, TraitRefScope, TypeBoundListScope, parse_generic_params_opt,
         parse_where_clause_opt,
     },
     parse_list,
@@ -630,7 +630,7 @@ impl super::Parse for EnumScope {
         parse_generic_params_opt(parser, false)?;
 
         parser.pop_recovery_stack();
-        parse_where_clause_opt(parser)?;
+        parse_where_clause_opt(parser, ItemBlock::Required)?;
 
         if parser.find_and_pop(SyntaxKind::LBrace, ExpectedKind::Body(SyntaxKind::Enum))? {
             parser.parse(VariantDefListScope::default())?;
@@ -696,7 +696,7 @@ impl super::Parse for TraitScope {
         }
 
         parser.expect_and_pop_recovery_stack()?;
-        parse_where_clause_opt(parser)?;
+        parse_where_clause_opt(parser, ItemBlock::Required)?;
 
         if parser.find(SyntaxKind::LBrace, ExpectedKind::Body(SyntaxKind::Trait))? {
             parser.parse(TraitItemListScope::default())?;
@@ -827,7 +827,7 @@ impl super::Parse for ImplScope {
         parse_type(parser, None)?;
 
         parser.expect_and_pop_recovery_stack()?;
-        parse_where_clause_opt(parser)?;
+        parse_where_clause_opt(parser, ItemBlock::Required)?;
 
         if parser.find_and_pop(
             SyntaxKind::LBrace,

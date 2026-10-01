@@ -1,0 +1,2 @@
+fn never_runs_generic<T>() -> u256 where false { 0 }
+fn never_runs_const<const N: usize>() -> u256 where false { N as u256 }

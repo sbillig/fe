@@ -1,0 +1,7 @@
+// A generic qualifier needs a matching condition in the caller.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+trait Helper { fn helper() -> u256 }
+impl<T> Helper for T { fn helper() -> u256 { 1 } }
+
+fn unstated<const M: usize>() -> u256 { Bounded<M>::helper() }
+fn stated<const M: usize>() -> u256 where M > 0 { Bounded<M>::helper() }

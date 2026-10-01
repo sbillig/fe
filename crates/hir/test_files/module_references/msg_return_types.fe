@@ -1,0 +1,13 @@
+// A msg variant's return type refers to its types where they are written,
+// not at the variant's name. The code generated for each variant refers to
+// the variant's struct and its own parameters at the variant's name, more
+// than once; renaming a variant is outside this fixture.
+struct Foo {}
+struct Pair<T> { value: T }
+
+msg Api {
+    #[selector = 1]
+    Alpha -> Foo,
+    #[selector = 2]
+    Beta -> Pair<Foo>,
+}

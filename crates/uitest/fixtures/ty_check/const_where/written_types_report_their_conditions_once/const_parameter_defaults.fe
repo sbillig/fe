@@ -1,0 +1,32 @@
+// Types written inside a const parameter's default are checked where they are
+// written, and an expression there does not report the same application again.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+struct Holder<const N: usize> {}
+
+struct Record<const K: usize = {
+    let _b: [Bounded<0>; 0] = []
+    1
+}> {}
+fn function<const K: usize = {
+    let _b: [Bounded<0>; 0] = []
+    1
+}>() {}
+struct Annotated<const K: usize = {
+    let _b: Bounded<0> = Bounded { value: 1 }
+    1
+}> {}
+fn use_annotated(_ a: Annotated) {}
+struct Expression<const K: usize = {
+    let _b = Bounded<0> { value: 1 }
+    1
+}> {}
+struct InType<T = Holder<{
+    let _b: [Bounded<0>; 0] = []
+    1
+}>> {}
+
+struct Allowed<const K: usize = {
+    let _b: Bounded<1> = Bounded { value: 1 }
+    1
+}> {}
+fn use_allowed(_ a: Allowed) {}

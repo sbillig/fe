@@ -18,7 +18,7 @@ use crate::{
         Partial, Pat, PatId, PathId, PathKind, StaticAssert, Stmt, StmtId, Struct, TopLevelMod,
         Trait, TraitRefId, TupleTypeId, TypeAlias, TypeBound, TypeId, TypeKind, Use, UseAlias,
         UsePathId, UsePathSegment, VariantDef, VariantDefListId, VariantKind, WhereClauseId,
-        WherePredicate,
+        WhereClausePredicate, WherePredicate,
         attr::{self, AttrArgValue},
         scope_graph::ScopeId,
     },
@@ -960,6 +960,24 @@ pub fn walk_trait<'db, V>(
         |ctxt| visitor.visit_where_clause(ctxt, trait_.where_clause(ctxt.db)),
     );
 
+    // Associated types are not ItemKind children. Visit their bounds and
+    // defaults so type validation and reference traversal see these uses.
+    for (idx, assoc) in trait_.types(ctxt.db).iter().enumerate() {
+        ctxt.with_new_scoped_ctxt(
+            ScopeId::TraitType(trait_, idx as u16),
+            |span| span.item_list().assoc_type(idx),
+            |ctxt| {
+                ctxt.with_new_ctxt(
+                    |span| span.bounds(),
+                    |ctxt| visitor.visit_type_bound_list(ctxt, &assoc.bounds),
+                );
+                if let Some(ty) = assoc.default {
+                    ctxt.with_new_ctxt(|span| span.ty(), |ctxt| visitor.visit_ty(ctxt, ty));
+                }
+            },
+        );
+    }
+
     for item in trait_.children_non_nested(ctxt.db) {
         visitor.visit_item(&mut VisitorCtxt::with_item(ctxt.db, item), item);
     }
@@ -1004,6 +1022,15 @@ pub fn walk_impl_trait<'db, V>(
         |span| span.where_clause(),
         |ctxt| visitor.visit_where_clause(ctxt, impl_trait.where_clause(ctxt.db)),
     );
+
+    for (idx, assoc) in impl_trait.types(ctxt.db).iter().enumerate() {
+        if let Some(ty) = assoc.type_ref.to_opt() {
+            ctxt.with_new_ctxt(
+                |span| span.associated_type(idx).ty(),
+                |ctxt| visitor.visit_ty(ctxt, ty),
+            );
+        }
+    }
 
     for item in impl_trait.children_non_nested(ctxt.db) {
         visitor.visit_item(&mut VisitorCtxt::with_item(ctxt.db, item), item);
@@ -2097,11 +2124,16 @@ pub fn walk_where_clause<'db, V>(
 ) where
     V: Visitor<'db> + ?Sized,
 {
-    for (idx, predicate) in predicates.data(ctxt.db).iter().enumerate() {
-        ctxt.with_new_ctxt(
-            |span| span.predicate(idx),
-            |ctxt| visitor.visit_where_predicate(ctxt, predicate),
-        );
+    for (idx, predicate) in predicates.predicates(ctxt.db).iter().enumerate() {
+        match predicate {
+            WhereClausePredicate::Type(predicate) => ctxt.with_new_ctxt(
+                |span| span.predicate(idx),
+                |ctxt| visitor.visit_where_predicate(ctxt, predicate),
+            ),
+            WhereClausePredicate::Const(body) => {
+                visitor.visit_body(&mut VisitorCtxt::with_body(ctxt.db, *body), *body);
+            }
+        }
     }
 }
 

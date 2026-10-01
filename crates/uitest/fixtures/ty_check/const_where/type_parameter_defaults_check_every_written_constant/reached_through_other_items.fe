@@ -1,0 +1,17 @@
+// A default's anonymous constant is reported at the default, also when the
+// defaulted type is only reached through a `with` key or a `static_assert`.
+struct Holder<const N: usize> {}
+struct Plain {}
+trait Mk { type Out }
+#[arithmetic(unchecked)]
+const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
+const MAX: usize = 115792089237316195423570985008687907853269984665640564039457584007913129639935
+impl Mk for Holder<MAX> { type Out = Plain }
+
+struct Keyed<T = Holder<{ dec<0>() }>::Out> { t: T }
+fn reads() -> u256 uses (k: Keyed) { 1 }
+fn g() -> u256 { with (Keyed = Keyed { t: Plain {} }) { reads() } }
+
+struct Asserted<T = Holder<{ dec<0>() }>::Out> { t: T }
+impl Asserted { const K: usize = 1 }
+static_assert(Asserted::K == 1)

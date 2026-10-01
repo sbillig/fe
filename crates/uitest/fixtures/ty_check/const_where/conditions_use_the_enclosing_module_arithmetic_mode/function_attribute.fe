@@ -1,0 +1,12 @@
+// A condition is evaluated in its module's arithmetic mode. A function's
+// own `#[arithmetic(unchecked)]` covers its body, not its `where` clause,
+// as for other anonymous constants in its signature.
+#[arithmetic(unchecked)]
+const fn wraps<const N: u8>() -> u256 where N + 1 > N { 1 }
+fn overflow() -> u256 { wraps<255>() }
+
+#[arithmetic(unchecked)]
+mod unchecked {
+    pub const fn wraps<const N: u8>() -> u256 where N + 1 < N { 1 }
+}
+fn wrapped() -> u256 { unchecked::wraps<255>() }

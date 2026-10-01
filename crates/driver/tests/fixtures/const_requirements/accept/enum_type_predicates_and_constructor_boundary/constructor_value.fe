@@ -1,0 +1,6 @@
+enum Choice<const N: usize> where N > 0 { Value(u256) }
+
+fn make() -> Choice<1> {
+    let constructor = Choice<1>::Value
+    constructor(5)
+}

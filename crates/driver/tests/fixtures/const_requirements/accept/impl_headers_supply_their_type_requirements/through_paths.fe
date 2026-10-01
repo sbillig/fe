@@ -1,0 +1,21 @@
+// A valid constrained type before `::` reaches its impls' items, which may
+// rely on the header's condition, in type paths, const arguments and
+// expression paths.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+struct Holder<const N: usize> {}
+trait Mk { type Out }
+trait Get { const V: usize }
+const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
+impl<const N: usize> Mk for Bounded<N> { type Out = Holder<{ dec<N>() }> }
+impl<const N: usize> Get for Bounded<N> { const V: usize = dec<N>() }
+impl<const N: usize> Holder<N> {
+    const fn get(self) -> usize { N }
+    const fn make() -> usize { N + 1 }
+}
+
+const fn read<const M: usize>(_ h: Bounded<M>::Out) -> usize where M > 0 { M }
+const fn answer() -> usize {
+    let out: Bounded<41>::Out = Holder {}
+    let named: Holder<Bounded<3>::V> = Holder {}
+    out.get() + named.get() - Bounded<2>::Out::make() + read<2>(Holder {})
+}

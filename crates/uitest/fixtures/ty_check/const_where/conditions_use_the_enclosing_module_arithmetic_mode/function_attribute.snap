@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/conditions_use_the_enclosing_module_arithmetic_mode/function_attribute.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ function_attribute.fe:6:25
+  │
+5 │ const fn wraps<const N: u8>() -> u256 where N + 1 > N { 1 }
+  │                                             --------- required by this predicate
+6 │ fn overflow() -> u256 { wraps<255>() }
+  │                         ^^^^^^^^^^^^ constant evaluation overflowed

@@ -1,0 +1,17 @@
+// A generic impl of a constrained enum may assume the enum's condition.
+enum Choice<const N: usize> where N > 0 {
+    Empty,
+    Value(u256),
+}
+const fn positive<const N: usize>() -> u256 where N > 0 { 1 }
+
+impl<const N: usize> Choice<N> {
+    const fn read(self) -> u256 {
+        match self {
+            Choice::Empty => 0,
+            Choice::Value(value) => value + positive<N>(),
+        }
+    }
+}
+
+const fn answer() -> u256 { Choice<1>::Value(41).read() }

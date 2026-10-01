@@ -1,0 +1,46 @@
+// An impl assumes the conditions of its self type, not those of its trait
+// arguments: trait solving can select the first impl for `Holder<0>` with the
+// trait argument `Bounded<0>`, which no written type holds. So `Bounded<N>`
+// in the header needs its condition, and the impl cannot state one. Uses of
+// the rejected impl, such as `Holder<0>::Out`, are not reported again.
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+struct Holder<const N: usize> {}
+struct Plain {}
+#[arithmetic(unchecked)]
+const fn dec<const N: usize>() -> usize where N > 0 { N - 1 }
+trait Tr<U> {
+    const V: usize
+    type Out
+    fn go(self) -> usize
+}
+trait Tag<T> { fn tag(self) -> usize }
+
+impl<const N: usize> Tr<Bounded<N>> for Holder<N> {
+    const V: usize = dec<N>()
+    type Out = Holder<{ dec<N>() }>
+    fn go(self) -> usize { dec<N>() }
+}
+impl<const N: usize> Tag<Bounded<N>> for Plain {
+    fn tag(self) -> usize { dec<N>() }
+}
+
+fn call<U, T: Tr<U>>(_ x: T) -> Holder<{ T::V }> { Holder {} }
+fn run<U, T: Tr<U>>(x: T) -> usize { x.go() }
+fn solved() -> usize {
+    let _h = call(Holder<0> {})
+    let f = run
+    f(x: Holder<0> {})
+}
+fn param(_ h: Holder<0>::Out) {}
+
+// The self type's condition holds in its impls, and a concrete trait argument
+// is checked where it is written.
+impl<const N: usize> Tag<Holder<N>> for Bounded<N> {
+    fn tag(self) -> usize { dec<N>() }
+}
+impl Tag<Bounded<1>> for Holder<1> {
+    fn tag(self) -> usize { dec<1>() }
+}
+impl Tag<Bounded<0>> for Holder<0> {
+    fn tag(self) -> usize { 0 }
+}

@@ -1,0 +1,13 @@
+---
+source: crates/hir/tests/pretty_print.rs
+expression: output
+input_file: test_files/pretty_print/where_clauses.fe
+---
+use core::prelude::*
+use std::prelude::*
+
+fn mixed<T, const N: usize>() where (N > 0), T: Copy, (N < 8) {}
+
+struct Bounded<const N: usize> where (N > 0) {
+    value: u256,
+}

@@ -1,0 +1,16 @@
+// Types written in positions that the compiler expands into generated items,
+// such as message variants and events, are checked where they are written.
+struct Positive<const N: usize> where N > 0 { value: u256 }
+trait Mk { type Out }
+impl<T> Mk for T { type Out = u256 }
+
+msg Api {
+    #[selector = 1]
+    Get { x: Positive<0>::Out } -> u256,
+    #[selector = 2]
+    Allowed { x: Positive<1>::Out } -> u256,
+}
+#[event]
+struct Happened { x: Positive<0>::Out }
+#[event]
+struct AllowedEvent { x: Positive<1>::Out }

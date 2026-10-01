@@ -1,0 +1,10 @@
+trait Checked {
+    fn after_bound<T>() -> bool where T: Copy, { true },
+    fn defaulted<T>() -> bool where T: Copy, { true }, { false }
+}
+
+extern {
+    fn external<T>() where T: Copy, { true },
+}
+
+fn free<T>() -> bool where T: Copy, { true }, { false }
