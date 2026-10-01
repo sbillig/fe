@@ -8,13 +8,14 @@ use std::{
 
 use super::{
     birth::AllocationBirth,
+    decision::{duplicated_graphs, live_graph_storage},
     external::{
         AddressProvenance, ClobberCondition, ExternalOrigin, ExternalSource, FeedbackPlaces,
         FeedbackRepeats, FeedbackSlot, MemoryOffset, ProviderStorage, ReferentContract,
         feedback_clause_guard, is_existential_renaming,
     },
     footprint::{AccessExtent, AccessFootprint},
-    guard::{ChoiceKey, Guard, ValueOccurrence},
+    guard::{ChoiceKey, Guard, GuardCache, ValueOccurrence},
     handle::{
         AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
         OpaqueWriteSite,
@@ -884,7 +885,7 @@ fn sparse_arrays_match_concrete_execution_for_small_lengths_and_selector_valuati
             guard_indices: 0,
             guard_nodes: 4096,
             exact_members: 0,
-            interned_nodes: 256,
+            interned_nodes: Some(256),
         };
         let mut values = ValueInterner::new(&db, limits);
         let initial = leaf(&mut values, element, &scope(), 1, vec![]);
@@ -2862,7 +2863,7 @@ fn identity_substitution_reuses_nested_values_without_interning() {
     let mut values = ValueInterner::new(
         &db,
         ValueLimits {
-            interned_nodes: 0,
+            interned_nodes: None,
             ..ValueLimits::default()
         },
     );
@@ -3088,7 +3089,7 @@ fn substituted_projection_prunes_siblings_and_preserves_enum_and_index_domains()
     let mut values = ValueInterner::new(
         &db,
         ValueLimits {
-            interned_nodes: 0,
+            interned_nodes: None,
             ..ValueLimits::default()
         },
     );
@@ -3103,7 +3104,7 @@ fn substituted_projection_prunes_siblings_and_preserves_enum_and_index_domains()
     });
     let before = values.metrics().nodes_created;
     let full = values.substitute(&value, &subst);
-    assert!(values.metrics().nodes_created - before > 200);
+    let whole = values.metrics().nodes_created - before;
     for field in [FieldIndex(0), FieldIndex(31)] {
         for variant in [VariantIndex(0), VariantIndex(1)] {
             let paths = [
@@ -3139,9 +3140,13 @@ fn substituted_projection_prunes_siblings_and_preserves_enum_and_index_domains()
                 let before = values.metrics().nodes_created;
                 let selected = values.project_substituted(&value, &subst, &path, occurrence);
                 assert_eq!(selected, expected, "{path:?}");
+                let built = values.metrics().nodes_created - before;
+                assert!(built < 32, "unselected siblings were rebuilt");
+                // Relative to the whole substitution, so improving reuse everywhere
+                // cannot fail this, and shrinking the fixture cannot make it vacuous.
                 assert!(
-                    values.metrics().nodes_created - before < 32,
-                    "unselected siblings were rebuilt"
+                    built * 4 < whole,
+                    "projected {built} of the {whole} nodes a full substitution builds"
                 );
             }
         }
@@ -3870,4 +3875,141 @@ fn raw_and_hashed_addresses_never_share_structural_identity() {
         assert_eq!(source.substitute(&db, &identity), *source);
         assert_eq!(source.address_base(&db).as_ref(), Some(source));
     }
+}
+
+#[test]
+fn repeated_cached_guard_operations_share_one_backing_allocation() {
+    let base = scope();
+    let word = |from: u32, to: u32| {
+        (from..to)
+            .try_fold(Guard::always(&base), |guard, index| {
+                guard.with_variant(
+                    ChoiceKey::new(
+                        ValueOccurrence::Value(NValueId::from_u32(index)),
+                        StructuralPath::default(),
+                    ),
+                    VariantIndex(1),
+                )
+            })
+            .unwrap()
+    };
+    let (left, right) = (word(0, 32), word(32, 64));
+    let mut cache = GuardCache::default();
+    // Exactness first: a cached result equals the operation's own result. The
+    // reference copy is deliberately unshared and drops with this statement.
+    let conjunction = cache.and(&left, &right).unwrap();
+    assert_eq!(conjunction, left.and(&right).unwrap());
+    let disjunction = cache.or(&left, &right);
+    assert_eq!(disjunction, left.or(&right));
+    // Repeating an operation must hand back the shared graph, not rebuild it.
+    let mut owners = Vec::new();
+    for _ in 0..16 {
+        owners.push(cache.and(&left, &right).unwrap());
+        owners.push(cache.or(&right, &left));
+    }
+    for owner in &owners {
+        assert!(*owner == conjunction || *owner == disjunction);
+    }
+    let (allocations, distinct, excess) = live_graph_storage();
+    assert_eq!(
+        (allocations, excess),
+        (distinct, 0),
+        "{allocations} live allocations hold {excess} bytes beyond {distinct} distinct: {:?}",
+        duplicated_graphs()
+    );
+}
+
+#[test]
+fn cached_region_restriction_matches_exactly_and_shares_graph_storage() {
+    let db = HirAnalysisTestDb::default();
+    let base = scope();
+    let root = test_roots::local(&db, NRootId::from_u32(0));
+    // Summary instantiation restricts many leaves by one guard on every sweep.
+    let restriction = (0..64)
+        .try_fold(Guard::always(&base), |guard, index| {
+            guard.with_variant(
+                ChoiceKey::new(
+                    ValueOccurrence::Value(NValueId::from_u32(index)),
+                    StructuralPath::default(),
+                ),
+                VariantIndex(1),
+            )
+        })
+        .unwrap();
+    let region = RegionSet::new(
+        &base,
+        (0..16u32).map(|index| Guarded {
+            guard: Guard::always(&base)
+                .with_variant(
+                    ChoiceKey::new(ValueOccurrence::Argument(index), StructuralPath::default()),
+                    VariantIndex(1),
+                )
+                .unwrap(),
+            payload: SymbolicPlace {
+                root: root.clone(),
+                path: RegionPath::new([Projection::Index(IndexExpr::Const(index as usize))]),
+                views: Default::default(),
+            },
+        }),
+    );
+    let mut cache = GuardCache::default();
+    let restricted = region.restricted(&restriction, |left, right| cache.and(left, right));
+    // Exactness against the uncached operation; its copy drops with this statement.
+    assert_eq!(restricted, region.with_guard(&restriction));
+    let repeated: Vec<_> = (0..16)
+        .map(|_| region.restricted(&restriction, |left, right| cache.and(left, right)))
+        .collect();
+    for actual in &repeated {
+        assert_eq!(*actual, restricted);
+    }
+    let (allocations, distinct, excess) = live_graph_storage();
+    assert_eq!(
+        (allocations, excess),
+        (distinct, 0),
+        "{allocations} live graph allocations hold {excess} bytes beyond {distinct} distinct graphs"
+    );
+}
+
+#[test]
+fn an_interner_without_a_limit_keeps_no_values() {
+    // Counting the nodes an operation really builds needs the cache off, which two
+    // tests ask for with no limit. Reclaiming entries must not quietly keep any,
+    // or those counts silently measure reuse instead of construction.
+    let db = HirAnalysisTestDb::default();
+    let shape = leaf_shape(&db);
+    let mut uncached = ValueInterner::new(
+        &db,
+        ValueLimits {
+            interned_nodes: None,
+            ..ValueLimits::default()
+        },
+    );
+    let first = leaf(&mut uncached, shape, &scope(), 1, vec![runtime(0)]);
+    let built = uncached.metrics().nodes_created;
+    let second = leaf(&mut uncached, shape, &scope(), 1, vec![runtime(0)]);
+    assert_eq!(first, second, "values stay equal without the cache");
+    assert_eq!(
+        uncached.metrics().nodes_created,
+        built * 2,
+        "an interner without a limit built an equal value again"
+    );
+    // Equal values interned back to back are both built too.
+    let built = uncached.metrics().nodes_created;
+    uncached.empty(shape, &scope());
+    uncached.empty(shape, &scope());
+    assert_eq!(
+        uncached.metrics().nodes_created,
+        built + 2,
+        "an interner without a limit reused the value it built last"
+    );
+
+    let mut cached = ValueInterner::new(&db, ValueLimits::default());
+    leaf(&mut cached, shape, &scope(), 1, vec![runtime(0)]);
+    let once = cached.metrics().nodes_created;
+    leaf(&mut cached, shape, &scope(), 1, vec![runtime(0)]);
+    assert_eq!(
+        cached.metrics().nodes_created,
+        once,
+        "a limited interner reuses an equal value"
+    );
 }

@@ -3,13 +3,17 @@
 //! Index conditions use reduced bit decisions over Fe's 256-bit `usize`, so equality,
 //! disequality, and bounds share one Boolean algebra. Enum decisions have index conditions
 //! as leaves. Neither graph enumerates array elements or depends on construction order.
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
+#[cfg(test)]
+use std::cell::Cell;
 use std::{
     cell::RefCell,
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet},
-    hash::Hash,
+    hash::{Hash, Hasher},
+    iter,
     sync::Arc,
+    thread::LocalKey,
 };
 
 use super::{
@@ -23,6 +27,11 @@ use crate::analysis::semantic::{
 };
 
 const INDEX_BITS: u16 = 256;
+
+#[cfg(test)]
+thread_local! {
+    static RESTRICTIONS: Cell<usize> = const { Cell::new(0) };
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ValueOccurrence {
@@ -138,16 +147,60 @@ enum BitOperation {
     Exists(BitDecision, Box<[u16]>),
 }
 
+/// Bound all storage owned by the memo, including operand graphs. Counting shared
+/// graphs more than once is conservative: the memo never retains more than this
+/// many nodes, even when no new operation arrives to trigger reclamation.
+#[derive(Default)]
+struct BitOperationCache {
+    results: FxHashMap<BitOperation, Option<BitDecision>>,
+    storage: usize,
+}
+
+impl BitOperationCache {
+    const LIMIT: usize = 1 << 16;
+
+    fn insert(&mut self, operation: BitOperation, result: Option<BitDecision>) {
+        let operands = match &operation {
+            BitOperation::And(left, right)
+            | BitOperation::Or(left, right)
+            | BitOperation::Restrict(left, right) => left.node_count() + right.node_count(),
+            BitOperation::Not(graph) => graph.node_count(),
+            BitOperation::Substitute(graph, targets) => graph.node_count() + targets.len(),
+            BitOperation::Exists(graph, slots) => graph.node_count() + slots.len(),
+        };
+        // Include a unit for each entry so even infeasible/tiny operations are bounded.
+        let storage = 1 + operands + result.as_ref().map_or(0, Decision::node_count);
+        if storage > Self::LIMIT {
+            return;
+        }
+        if self.storage + storage > Self::LIMIT {
+            self.results.clear();
+            self.storage = 0;
+        }
+        self.results.insert(operation, result);
+        self.storage += storage;
+    }
+}
+
 thread_local! {
-    static BIT_OPERATIONS: RefCell<FxHashMap<BitOperation, Option<BitDecision>>> =
-        RefCell::default();
+    /// One backing graph per distinct bit decision, for the same reason as
+    /// `SHARED_CHOICES`: an operation that reduces to a constant would otherwise
+    /// keep its own copy of a graph the constants already denote.
+    static SHARED_BITS: RefCell<SharedGraphs<SlotBit, bool>> = RefCell::default();
+    /// One backing graph per distinct choice decision. Separate operations that
+    /// complete an equal graph would otherwise each keep their own copy, and every
+    /// value, region and summary holding one would keep it alive. Slots name a
+    /// condition's own tables, so these carry no database lifetime and equal graphs
+    /// really are interchangeable.
+    static SHARED_CHOICES: RefCell<SharedGraphs<SlotChoice, u32>> = RefCell::default();
+    static CONSTANT_BITS: [BitDecision; 2] = [Decision::leaf(false), Decision::leaf(true)];
+    static BIT_OPERATIONS: RefCell<BitOperationCache> = RefCell::default();
 }
 
 impl BitOperation {
-    const LIMIT: usize = 4096;
-
     fn run(self) -> Option<BitDecision> {
-        if let Some(result) = BIT_OPERATIONS.with_borrow(|results| results.get(&self).cloned()) {
+        if let Some(result) = BIT_OPERATIONS.with_borrow(|cache| cache.results.get(&self).cloned())
+        {
             return result;
         }
         let result = match &self {
@@ -169,12 +222,7 @@ impl BitOperation {
                 |left, right| *left || *right,
             )),
         };
-        BIT_OPERATIONS.with_borrow_mut(|results| {
-            if results.len() >= Self::LIMIT {
-                results.clear();
-            }
-            results.insert(self, result.clone());
-        });
+        BIT_OPERATIONS.with_borrow_mut(|cache| cache.insert(self, result.clone()));
         result
     }
 }
@@ -192,11 +240,16 @@ impl Ord for IndexCondition<'_> {
         if self == other {
             return Ordering::Equal;
         }
-        self.decision.cmp_by(&other.decision, |left, right| {
-            left.bit.cmp(&right.bit).then_with(|| {
-                self.indices[usize::from(left.slot)].cmp(&other.indices[usize::from(right.slot)])
-            })
-        })
+        self.decision.cmp_by(
+            &other.decision,
+            |left, right| {
+                left.bit.cmp(&right.bit).then_with(|| {
+                    self.indices[usize::from(left.slot)]
+                        .cmp(&other.indices[usize::from(right.slot)])
+                })
+            },
+            bool::cmp,
+        )
     }
 }
 
@@ -210,7 +263,9 @@ impl<'db> IndexCondition<'db> {
     fn constant(value: bool) -> Self {
         Self {
             indices: Arc::new([]),
-            decision: Decision::leaf(value),
+            // Every guard leaf is one of these two, and a fresh leaf would be
+            // another backing graph denoting the same constant.
+            decision: CONSTANT_BITS.with(|bits| bits[usize::from(value)].clone()),
         }
     }
     fn always() -> Self {
@@ -233,7 +288,10 @@ impl<'db> IndexCondition<'db> {
             used[usize::from(bit.slot)] = true;
         }
         if used.iter().all(|used| *used) {
-            return Self { indices, decision };
+            return Self {
+                indices,
+                decision: shared(&SHARED_BITS, decision),
+            };
         }
         let mut next = 0;
         // An unread slot's target is never consulted.
@@ -254,7 +312,10 @@ impl<'db> IndexCondition<'db> {
                 .zip(&used)
                 .filter_map(|(index, used)| used.then_some(*index))
                 .collect(),
-            decision: BitOperation::Substitute(decision, targets).run().unwrap(),
+            decision: shared(
+                &SHARED_BITS,
+                BitOperation::Substitute(decision, targets).run().unwrap(),
+            ),
         }
     }
 
@@ -302,18 +363,24 @@ impl<'db> IndexCondition<'db> {
             (IndexExpr::Const(_), IndexExpr::Const(_)) => Self::never(),
             (IndexExpr::Const(value), index) => Self {
                 indices: Arc::new([index]),
-                decision: Decision::chain(
-                    (0..INDEX_BITS).map(|bit| (SlotBit::new(0, bit), constant_bit(value, bit))),
-                    true,
-                    false,
+                decision: shared(
+                    &SHARED_BITS,
+                    Decision::chain(
+                        (0..INDEX_BITS).map(|bit| (SlotBit::new(0, bit), constant_bit(value, bit))),
+                        true,
+                        false,
+                    ),
                 ),
             },
             (lhs, rhs) => Self {
                 indices: Arc::new([lhs, rhs]),
-                decision: Decision::equal_bits(
-                    (0..INDEX_BITS).map(|bit| (SlotBit::new(0, bit), SlotBit::new(1, bit))),
-                    true,
-                    false,
+                decision: shared(
+                    &SHARED_BITS,
+                    Decision::equal_bits(
+                        (0..INDEX_BITS).map(|bit| (SlotBit::new(0, bit), SlotBit::new(1, bit))),
+                        true,
+                        false,
+                    ),
                 ),
             },
         }
@@ -383,7 +450,10 @@ impl<'db> IndexCondition<'db> {
     fn not(&self) -> Self {
         Self {
             indices: self.indices.clone(),
-            decision: BitOperation::Not(self.decision.clone()).run().unwrap(),
+            decision: shared(
+                &SHARED_BITS,
+                BitOperation::Not(self.decision.clone()).run().unwrap(),
+            ),
         }
     }
     fn implies(&self, other: &Self) -> bool {
@@ -453,6 +523,8 @@ impl<'db> IndexCondition<'db> {
     }
 
     fn restrict(&self, care: &Self) -> Option<Self> {
+        #[cfg(test)]
+        RESTRICTIONS.set(RESTRICTIONS.get() + 1);
         let (indices, decision, care) = self.aligned(care);
         BitOperation::Restrict(decision, care)
             .run()
@@ -505,67 +577,612 @@ impl<'db> IndexCondition<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct ChoiceBit<'db> {
-    bit: Reverse<u16>,
-    choice: ChoiceKey<'db>,
+/// Leaves sit behind a handle: inlining an index condition in every node made a
+/// branch pay for a payload only the leaves carry.
+type Leaf<'db> = Arc<IndexCondition<'db>>;
+
+thread_local! {
+    static CONSTANT_LEAVES: [Leaf<'static>; 2] =
+        [Arc::new(IndexCondition::never()), Arc::new(IndexCondition::always())];
 }
 
-impl Ord for ChoiceBit<'_> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Interleaving unrelated enum words makes unions of tag tests exponential.
-        // Keep each independent occurrence/structural slot together. Within one
-        // slot, indexed selections may alias, so interleave their bits to keep
-        // the exact tag-equality relations in Guard::canonical compact as well.
-        self.choice
-            .occurrence
-            .cmp(&other.choice.occurrence)
-            .then_with(|| {
-                self.choice
-                    .path
-                    .as_slice()
-                    .iter()
-                    .map(|step| step.map_index(|_| ()))
-                    .cmp(
-                        other
-                            .choice
-                            .path
-                            .as_slice()
-                            .iter()
-                            .map(|step| step.map_index(|_| ())),
-                    )
-            })
-            .then_with(|| self.bit.cmp(&other.bit))
-            .then_with(|| self.choice.path.cmp(&other.choice.path))
+/// The two leaves every guard bottoms out in, shared rather than rebuilt.
+fn constant_leaf<'db>(value: bool) -> Leaf<'db> {
+    CONSTANT_LEAVES.with(|leaves| leaves[usize::from(value)].clone())
+}
+
+/// A choice bit in one slot of a condition's sorted choice table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct SlotChoice {
+    /// Independent occurrences and structural slots stay apart: interleaving them
+    /// makes unions of unrelated tag tests exponential.
+    group: u16,
+    /// Within one group, bits interleave, so indexed selections that may alias keep
+    /// exact tag equalities compact. This field order reproduces `ChoiceBit`'s.
+    bit: Reverse<u16>,
+    slot: u16,
+}
+
+/// Choice decisions name table slots rather than keys, so a decision carries no
+/// database lifetime and equal graphs can be shared process-wide.
+type ChoiceDecision = Decision<SlotChoice, u32>;
+
+/// A guard's decision over enum choices, with index conditions at its leaves.
+///
+/// The operations are named in terms of choice keys and leaves rather than the
+/// graph underneath, because that is the whole vocabulary guards need, and it is
+/// what lets the graph itself name only slots.
+#[derive(Clone, Debug)]
+struct Condition<'db> {
+    /// Sorted and distinct: exactly the choices the decision reads.
+    choices: Arc<[Arc<ChoiceKey<'db>>]>,
+    /// Sorted and distinct: exactly the leaves the decision reaches.
+    leaves: Arc<[Leaf<'db>]>,
+    decision: ChoiceDecision,
+    /// Conditions nest inside interned guards and key several maps, so hash the
+    /// tables once rather than on every enclosing hash.
+    hash: u64,
+}
+
+/// Graphs shared by structure, and the nodes added since the last sweep and kept by
+/// it. Graphs range from one node to six figures, so their nodes, not their number,
+/// measure what the table retains.
+struct SharedGraphs<V, T> {
+    graphs: FxHashSet<Decision<V, T>>,
+    added: usize,
+    kept: usize,
+}
+
+impl<V, T> Default for SharedGraphs<V, T> {
+    fn default() -> Self {
+        Self {
+            graphs: FxHashSet::default(),
+            added: 0,
+            kept: 0,
+        }
     }
 }
 
-impl PartialOrd for ChoiceBit<'_> {
+/// The one graph denoting this structure, so equal decisions share their storage.
+/// A graph nothing else holds is dead weight. Sweeping those once the table has
+/// added as many nodes as the last sweep kept bounds the dead storage by the live
+/// storage, and amortizes each pass over the nodes it waited for.
+fn shared<V: Clone + Ord + Hash, T: Clone + Eq + Hash>(
+    table: &'static LocalKey<RefCell<SharedGraphs<V, T>>>,
+    decision: Decision<V, T>,
+) -> Decision<V, T> {
+    table.with_borrow_mut(|shared| {
+        if let Some(existing) = shared.graphs.get(&decision) {
+            return existing.clone();
+        }
+        shared.added += decision.node_count();
+        if shared.added >= shared.kept.max(1 << 16) {
+            shared.graphs.retain(|graph| !graph.is_sole_owner());
+            shared.kept = shared.graphs.iter().map(Decision::node_count).sum();
+            shared.added = 0;
+        }
+        shared.graphs.insert(decision.clone());
+        decision
+    })
+}
+
+/// Choices order by occurrence, then by the shape of their path with indices
+/// erased, then by the path itself. Bits sort between the shape and the path,
+/// which is what `SlotChoice`'s field order expresses.
+fn choice_order(left: &ChoiceKey<'_>, right: &ChoiceKey<'_>) -> Ordering {
+    left.occurrence
+        .cmp(&right.occurrence)
+        .then_with(|| choice_shape(left).cmp(choice_shape(right)))
+        .then_with(|| left.path.cmp(&right.path))
+}
+
+fn choice_shape<'a>(key: &'a ChoiceKey<'_>) -> impl Iterator<Item = Projection<()>> + 'a {
+    key.path
+        .as_slice()
+        .iter()
+        .map(|step| step.map_index(|_| ()))
+}
+
+/// Group boundaries fall where the occurrence or the path shape changes.
+fn choice_groups(choices: &[Arc<ChoiceKey<'_>>]) -> Arc<[u16]> {
+    let mut groups = Vec::with_capacity(choices.len());
+    let mut group = 0u16;
+    for (position, choice) in choices.iter().enumerate() {
+        if position > 0 {
+            let previous = &choices[position - 1];
+            if previous.occurrence != choice.occurrence
+                || !choice_shape(previous).eq(choice_shape(choice))
+            {
+                group += 1;
+            }
+        }
+        groups.push(group);
+    }
+    groups.into()
+}
+
+impl PartialEq for Condition<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash
+            && self.decision == other.decision
+            && self.choices == other.choices
+            && self.leaves == other.leaves
+    }
+}
+
+impl Eq for Condition<'_> {}
+
+impl Hash for Condition<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
+}
+
+impl Ord for Condition<'_> {
+    /// Order as the decision over the choices and leaves themselves, since slots
+    /// name each condition's own tables.
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self == other {
+            return Ordering::Equal;
+        }
+        self.decision.cmp_by(
+            &other.decision,
+            |left, right| {
+                left.bit.cmp(&right.bit).then_with(|| {
+                    choice_order(
+                        &self.choices[usize::from(left.slot)],
+                        &other.choices[usize::from(right.slot)],
+                    )
+                })
+            },
+            |left, right| self.leaves[*left as usize].cmp(&other.leaves[*right as usize]),
+        )
+    }
+}
+
+impl PartialOrd for Condition<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-type Condition<'db> = Decision<ChoiceBit<'db>, IndexCondition<'db>>;
+impl<'db> Condition<'db> {
+    /// Build a condition over the tables a decision actually reads, dropping slots
+    /// and leaves it does not, so equal conditions have equal tables.
+    fn compact(
+        choices: Vec<Arc<ChoiceKey<'db>>>,
+        leaves: Vec<Leaf<'db>>,
+        decision: ChoiceDecision,
+    ) -> Self {
+        let mut read_choice = vec![false; choices.len()];
+        for bit in decision.variables() {
+            read_choice[usize::from(bit.slot)] = true;
+        }
+        let mut read_leaf = vec![false; leaves.len()];
+        for leaf in decision.leaves() {
+            read_leaf[*leaf as usize] = true;
+        }
+        let dense = |read: &[bool]| {
+            let mut next = 0u32;
+            read.iter()
+                .map(|read| {
+                    read.then(|| {
+                        next += 1;
+                        next - 1
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let choice_slots = dense(&read_choice);
+        let choices: Vec<_> = choices
+            .into_iter()
+            .zip(&read_choice)
+            .filter_map(|(choice, read)| read.then_some(choice))
+            .collect();
+        // Leaves arrive in whatever order an operation produced them, so sort them:
+        // equal conditions must have equal tables or they compare unequal, which
+        // would cost the very sharing the tables exist for.
+        let mut kept: Vec<_> = leaves
+            .iter()
+            .enumerate()
+            .zip(&read_leaf)
+            .filter_map(|((slot, leaf), read)| read.then_some((leaf.clone(), slot)))
+            .collect();
+        kept.sort_by(|(left, _), (right, _)| left.cmp(right));
+        let mut leaf_slots = vec![None; leaves.len()];
+        for (position, (_, slot)) in kept.iter().enumerate() {
+            leaf_slots[*slot] = Some(u32::try_from(position).expect("leaf table fits"));
+        }
+        let leaves: Vec<_> = kept.into_iter().map(|(leaf, _)| leaf).collect();
+        let groups = choice_groups(&choices);
+        let sorted = leaf_slots
+            .iter()
+            .enumerate()
+            .all(|(slot, mapped)| *mapped == Some(u32::try_from(slot).unwrap()));
+        let decision = if read_choice.iter().all(|read| *read) && sorted {
+            decision
+        } else {
+            decision.map(
+                |bit| {
+                    Variable::Symbol(SlotChoice {
+                        group: groups[choice_slots[usize::from(bit.slot)].unwrap() as usize],
+                        bit: bit.bit,
+                        slot: u16::try_from(choice_slots[usize::from(bit.slot)].unwrap()).unwrap(),
+                    })
+                },
+                |leaf| leaf_slots[*leaf as usize].unwrap(),
+            )
+        };
+        Self::new(choices.into(), leaves.into(), decision)
+    }
+
+    fn new(
+        choices: Arc<[Arc<ChoiceKey<'db>>]>,
+        leaves: Arc<[Leaf<'db>]>,
+        decision: ChoiceDecision,
+    ) -> Self {
+        let decision = shared(&SHARED_CHOICES, decision);
+        let mut hasher = FxHasher::default();
+        choices.hash(&mut hasher);
+        leaves.hash(&mut hasher);
+        decision.hash(&mut hasher);
+        Self {
+            choices,
+            leaves,
+            decision,
+            hash: hasher.finish(),
+        }
+    }
+
+    /// Express both decisions over one merged pair of tables.
+    fn aligned(
+        &self,
+        other: &Self,
+    ) -> (
+        Vec<Arc<ChoiceKey<'db>>>,
+        Vec<Leaf<'db>>,
+        ChoiceDecision,
+        ChoiceDecision,
+    ) {
+        let mut choices: Vec<_> = self
+            .choices
+            .iter()
+            .chain(other.choices.iter())
+            .cloned()
+            .collect();
+        choices.sort_by(|left, right| choice_order(left, right));
+        choices.dedup_by(|left, right| choice_order(left, right).is_eq());
+        let mut leaves: Vec<_> = self
+            .leaves
+            .iter()
+            .chain(other.leaves.iter())
+            .cloned()
+            .collect();
+        leaves.sort();
+        leaves.dedup();
+        let groups = choice_groups(&choices);
+        let relabel = |condition: &Self| {
+            if condition.choices.len() == choices.len() && condition.leaves.len() == leaves.len() {
+                return condition.decision.clone();
+            }
+            condition.decision.map(
+                |bit| {
+                    let slot = choices
+                        .binary_search_by(|candidate| {
+                            choice_order(candidate, &condition.choices[usize::from(bit.slot)])
+                        })
+                        .expect("a merged table holds every choice");
+                    Variable::Symbol(SlotChoice {
+                        group: groups[slot],
+                        bit: bit.bit,
+                        slot: u16::try_from(slot).expect("choice table fits a slot"),
+                    })
+                },
+                |leaf| {
+                    leaves
+                        .binary_search(&condition.leaves[*leaf as usize])
+                        .expect("a merged table holds every leaf") as u32
+                },
+            )
+        };
+        let (left, right) = (relabel(self), relabel(other));
+        (choices, leaves, left, right)
+    }
+
+    /// Join two aligned decisions, joining leaves only as the traversal reaches them.
+    /// A reduced graph holds each leaf once and the traversal memoizes node pairs,
+    /// so each reachable pair is joined once. Tabulating every pair of the merged
+    /// table instead also joined pairs no valuation reaches, including pairs from
+    /// the same side, which made sparse joins quadratic in their leaves.
+    fn joined(
+        &self,
+        other: &Self,
+        join: impl Fn(&IndexCondition<'db>, &IndexCondition<'db>) -> IndexCondition<'db>,
+    ) -> Self {
+        let (choices, leaves, left, right) = self.aligned(other);
+        let results = RefCell::new(Vec::new());
+        let decision = left.apply(&right, |left, right| {
+            let joined = join(&leaves[*left as usize], &leaves[*right as usize]);
+            intern_leaf(&mut results.borrow_mut(), joined)
+        });
+        Self::compact(choices, results.into_inner(), decision)
+    }
+
+    fn constant(value: bool) -> Self {
+        Self::new(
+            Arc::default(),
+            Arc::from(vec![constant_leaf(value)]),
+            Decision::leaf(0),
+        )
+    }
+
+    /// One choice's tag bits, accepting exactly the valuation `value` describes.
+    fn choice_bits(choice: &Arc<ChoiceKey<'db>>, bits: u16, value: impl Fn(u16) -> bool) -> Self {
+        let decision = Decision::chain(
+            (0..bits).map(|bit| {
+                (
+                    SlotChoice {
+                        group: 0,
+                        bit: Reverse(bit),
+                        slot: 0,
+                    },
+                    value(bit),
+                )
+            }),
+            1,
+            0,
+        );
+        Self::compact(
+            vec![choice.clone()],
+            vec![constant_leaf(false), constant_leaf(true)],
+            decision,
+        )
+    }
+
+    /// Two choices agree on every tag bit, or `mismatch` holds.
+    fn tag_equality(
+        left: &Arc<ChoiceKey<'db>>,
+        right: &Arc<ChoiceKey<'db>>,
+        mismatch: Leaf<'db>,
+    ) -> Self {
+        let mut choices = vec![left.clone(), right.clone()];
+        choices.sort_by(|left, right| choice_order(left, right));
+        choices.dedup_by(|left, right| choice_order(left, right).is_eq());
+        let groups = choice_groups(&choices);
+        let slot = |key: &Arc<ChoiceKey<'db>>| {
+            let slot = choices
+                .binary_search_by(|candidate| choice_order(candidate, key))
+                .expect("both choices are in the table");
+            SlotChoice {
+                group: groups[slot],
+                bit: Reverse(0),
+                slot: u16::try_from(slot).expect("choice table fits a slot"),
+            }
+        };
+        let (left_slot, right_slot) = (slot(left), slot(right));
+        let decision = Decision::equal_bits(
+            (0..u16::BITS as u16).map(|bit| {
+                (
+                    SlotChoice {
+                        bit: Reverse(bit),
+                        ..left_slot
+                    },
+                    SlotChoice {
+                        bit: Reverse(bit),
+                        ..right_slot
+                    },
+                )
+            }),
+            1,
+            0,
+        );
+        Self::compact(choices, vec![mismatch, constant_leaf(true)], decision)
+    }
+
+    fn leaf_value(&self) -> Option<&Leaf<'db>> {
+        self.decision
+            .leaf_value()
+            .map(|slot| &self.leaves[*slot as usize])
+    }
+
+    fn is_always(&self) -> bool {
+        self.leaf_value().is_some_and(|leaf| leaf.is_always())
+    }
+
+    fn is_never(&self) -> bool {
+        self.leaf_value().is_some_and(|leaf| leaf.is_never())
+    }
+
+    fn and(&self, other: &Self) -> Self {
+        self.joined(other, IndexCondition::and)
+    }
+
+    fn or(&self, other: &Self) -> Self {
+        self.joined(other, IndexCondition::or)
+    }
+
+    /// Everything this decision accepts that `other` rejects.
+    fn without(&self, other: &Self) -> Self {
+        self.joined(other, |left, right| left.and(&right.not()))
+    }
+
+    /// Rebuild the choice keys this decision reads.
+    fn map_keys(&self, rename: impl FnMut(&ChoiceKey<'db>) -> ChoiceKey<'db>) -> Self {
+        self.map_keys_and_leaves(rename, Clone::clone)
+    }
+
+    fn map_leaves(&self, leaf: impl FnMut(&Leaf<'db>) -> Leaf<'db>) -> Self {
+        self.map_keys_and_leaves(Clone::clone, leaf)
+    }
+
+    /// Rebuild keys and leaves together, as canonicalization does per alternative.
+    /// Either can reorder its table, so both are rebuilt and the decision is
+    /// expressed over the new order.
+    fn map_keys_and_leaves(
+        &self,
+        mut rename: impl FnMut(&ChoiceKey<'db>) -> ChoiceKey<'db>,
+        mut leaf: impl FnMut(&Leaf<'db>) -> Leaf<'db>,
+    ) -> Self {
+        let renamed: Vec<Arc<ChoiceKey<'db>>> = self
+            .choices
+            .iter()
+            .map(|choice| Arc::new(rename(choice)))
+            .collect();
+        let mut choices = renamed.clone();
+        choices.sort_by(|left, right| choice_order(left, right));
+        choices.dedup_by(|left, right| choice_order(left, right).is_eq());
+        let groups = choice_groups(&choices);
+        let mapped: Vec<Leaf<'db>> = self.leaves.iter().map(&mut leaf).collect();
+        let mut leaves = mapped.clone();
+        leaves.sort();
+        leaves.dedup();
+        let decision = self.decision.map(
+            |bit| {
+                let slot = choices
+                    .binary_search_by(|candidate| {
+                        choice_order(candidate, &renamed[usize::from(bit.slot)])
+                    })
+                    .expect("every renamed choice is in the table");
+                Variable::Symbol(SlotChoice {
+                    group: groups[slot],
+                    bit: bit.bit,
+                    slot: u16::try_from(slot).expect("choice table fits a slot"),
+                })
+            },
+            |old| {
+                u32::try_from(
+                    leaves
+                        .binary_search(&mapped[*old as usize])
+                        .expect("every mapped leaf is in the table"),
+                )
+                .expect("leaf table fits")
+            },
+        );
+        Self::compact(choices, leaves, decision)
+    }
+
+    /// Existentially quantify every key the predicate selects.
+    fn forget_keys(&self, mut selected: impl FnMut(&ChoiceKey<'db>) -> bool) -> Self {
+        // Quantification joins its own results, so unlike a pairwise apply its leaves
+        // must come from a table closed under the join. Grow one as it goes rather
+        // than tabulating a product the results would escape.
+        let leaves = RefCell::new(self.leaves.to_vec());
+        let joins = RefCell::new(FxHashMap::<(u32, u32), u32>::default());
+        let decision = self.decision.exists(
+            |bit| selected(&self.choices[usize::from(bit.slot)]),
+            |left, right| {
+                if let Some(slot) = joins.borrow().get(&(*left, *right)) {
+                    return *slot;
+                }
+                let joined = {
+                    let leaves = leaves.borrow();
+                    leaves[*left as usize].or(&leaves[*right as usize])
+                };
+                let slot = intern_leaf(&mut leaves.borrow_mut(), joined);
+                joins.borrow_mut().insert((*left, *right), slot);
+                slot
+            },
+        );
+        Self::compact(self.choices.to_vec(), leaves.into_inner(), decision)
+    }
+
+    /// Complete this decision outside the valuations `care` admits.
+    /// Leaf pairs are restricted as the traversal reaches them, as in `joined`.
+    fn restricted(&self, care: &Self) -> Option<Self> {
+        let (choices, leaves, decision, care) = self.aligned(care);
+        // Restriction reads this against the care decision's own leaves, so it names
+        // a slot in the merged table, not in the results. A table without `never`
+        // has no slot that could match, which no care leaf would have anyway.
+        let never = Arc::new(IndexCondition::never());
+        let empty = leaves
+            .iter()
+            .position(|leaf| *leaf == never)
+            .map_or(u32::MAX, |slot| {
+                u32::try_from(slot).expect("leaf table fits")
+            });
+        let results = RefCell::new(Vec::new());
+        let decision = decision.restrict(&care, &empty, |value, care| {
+            leaves[*value as usize]
+                .restrict(&leaves[*care as usize])
+                .map(|restricted| intern_leaf(&mut results.borrow_mut(), restricted))
+        })?;
+        Some(Self::compact(choices, results.into_inner(), decision))
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &ChoiceKey<'db>> {
+        self.choices.iter().map(|choice| &**choice)
+    }
+
+    /// The keys as shared handles, for rebuilding decisions over them.
+    fn key_handles(&self) -> impl Iterator<Item = &Arc<ChoiceKey<'db>>> {
+        self.choices.iter()
+    }
+
+    fn leaves(&self) -> impl Iterator<Item = &Leaf<'db>> {
+        self.leaves.iter()
+    }
+
+    fn node_count(&self) -> usize {
+        self.decision.node_count()
+            + self
+                .leaves
+                .iter()
+                .map(|leaf| leaf.node_count())
+                .sum::<usize>()
+    }
+}
+
+/// Place a leaf in a result table, reusing the slot of an equal one.
+fn intern_leaf<'db>(results: &mut Vec<Leaf<'db>>, leaf: IndexCondition<'db>) -> u32 {
+    let leaf = Arc::new(leaf);
+    let slot = results
+        .iter()
+        .position(|result| *result == leaf)
+        .unwrap_or_else(|| {
+            results.push(leaf);
+            results.len() - 1
+        });
+    u32::try_from(slot).expect("leaf table fits")
+}
+
+/// Results of one guard operation by its operands; `None` records an infeasible one.
+type Memo<'db, K> = FxHashMap<(Guard<'db>, K), Option<Guard<'db>>>;
 
 /// Fixpoint iteration rebuilds values from the same guards, so their unions and
 /// intersections repeat. Guards are immutable; a cached result is the result.
+///
+/// Separate operations that complete an equal guard would each allocate its tables,
+/// and interned values, regions and summaries would retain every copy, so the cache
+/// also keeps one representative per structure and hands that out instead.
 #[derive(Default)]
 pub struct GuardCache<'db> {
-    conjunctions: FxHashMap<(Guard<'db>, Guard<'db>), Option<Guard<'db>>>,
-    disjunctions: FxHashMap<(Guard<'db>, Guard<'db>), Guard<'db>>,
-    substitutions: FxHashMap<(Guard<'db>, IndexSubst<'db>), Option<Guard<'db>>>,
+    conjunctions: Memo<'db, Guard<'db>>,
+    disjunctions: Memo<'db, Guard<'db>>,
+    substitutions: Memo<'db, IndexSubst<'db>>,
+    /// Each representative keeps its own node count, so a sweep never rewalks graphs.
+    representatives: FxHashMap<Guard<'db>, usize>,
+    /// Storage recorded since the last sweep and kept by it: one for each operation,
+    /// and a representative's nodes.
+    recorded: usize,
+    kept: usize,
 }
 
 impl<'db> GuardCache<'db> {
-    const LIMIT: usize = 4096;
+    /// The least storage recorded between sweeps.
+    const SWEEP: usize = 4096;
 
     pub fn and(&mut self, lhs: &Guard<'db>, rhs: &Guard<'db>) -> Option<Guard<'db>> {
-        Self::cached(&mut self.conjunctions, lhs, rhs, Guard::and)
+        self.cached(|cache| &mut cache.conjunctions, lhs, rhs, Guard::and)
     }
 
     pub fn or(&mut self, lhs: &Guard<'db>, rhs: &Guard<'db>) -> Guard<'db> {
-        Self::cached(&mut self.disjunctions, lhs, rhs, Guard::or)
+        self.cached(
+            |cache| &mut cache.disjunctions,
+            lhs,
+            rhs,
+            |lhs, rhs| Some(lhs.or(rhs)),
+        )
+        .expect("a union of satisfiable guards is satisfiable")
     }
 
     pub fn substitute(
@@ -573,39 +1190,116 @@ impl<'db> GuardCache<'db> {
         guard: &Guard<'db>,
         subst: &IndexSubst<'db>,
     ) -> Option<Guard<'db>> {
-        Self::cached(&mut self.substitutions, guard, subst, Guard::substitute)
+        self.cached(
+            |cache| &mut cache.substitutions,
+            guard,
+            subst,
+            Guard::substitute,
+        )
     }
 
-    fn cached<K: Clone + Eq + Hash, R: Clone>(
-        results: &mut FxHashMap<(Guard<'db>, K), R>,
+    /// The representative of this guard's structure, which the guard becomes if
+    /// there is none yet.
+    pub fn share(&mut self, guard: Guard<'db>) -> Guard<'db> {
+        if let Some((shared, _)) = self.representatives.get_key_value(&guard) {
+            return shared.clone();
+        }
+        let nodes = guard.node_count();
+        self.representatives.insert(guard.clone(), nodes);
+        self.record(nodes);
+        guard
+    }
+
+    /// Recomputing an operation rebuilds a complete decision graph even when an equal
+    /// one is already live, so hand back the shared representative rather than the
+    /// fresh copy.
+    fn cached<K: Clone + Eq + Hash>(
+        &mut self,
+        results: fn(&mut Self) -> &mut Memo<'db, K>,
         lhs: &Guard<'db>,
         rhs: &K,
-        operation: impl FnOnce(&Guard<'db>, &K) -> R,
-    ) -> R {
+        operation: impl FnOnce(&Guard<'db>, &K) -> Option<Guard<'db>>,
+    ) -> Option<Guard<'db>> {
         let key = (lhs.clone(), rhs.clone());
-        if let Some(result) = results.get(&key) {
+        if let Some(result) = results(self).get(&key) {
             return result.clone();
         }
-        let result = operation(lhs, rhs);
-        if results.len() >= Self::LIMIT {
-            results.clear();
-        }
-        results.insert(key, result.clone());
+        let result = operation(lhs, rhs).map(|guard| self.share(guard));
+        results(self).insert(key, result.clone());
+        self.record(1);
         result
+    }
+
+    /// Sweep once the cache has recorded as much storage as the last sweep kept. That
+    /// bounds what the cache holds for nobody else by what it holds for the analysis,
+    /// and amortizes each pass over the records it waited for.
+    fn record(&mut self, storage: usize) {
+        self.recorded += storage;
+        if self.recorded >= self.kept.max(Self::SWEEP) {
+            self.sweep();
+        }
+    }
+
+    /// Keep exactly the entries and representatives whose guards something outside
+    /// the cache still holds. Entries and representatives hold one another, so each
+    /// guard's references from anywhere in the cache are counted first: comparing
+    /// against a single owner would let the cache keep its own guards alive forever.
+    /// A hot result stays with its operands, and an infeasible one costs only them.
+    /// Clearing instead would only make the same graphs be rebuilt again.
+    ///
+    /// Liveness is decided for every condition before anything is removed, because
+    /// dropping a dead entry drops its references too. Reading a strong count during
+    /// the passes would let a dead entry's removal make an operand it shared with a
+    /// live entry look unheld, taking the live entry and its representative with it.
+    fn sweep(&mut self) {
+        let mut held = FxHashMap::<*const Condition<'db>, (usize, usize)>::default();
+        let pairs = self.conjunctions.iter().chain(&self.disjunctions);
+        for guard in self
+            .representatives
+            .keys()
+            .chain(pairs.flat_map(|((lhs, rhs), result)| [lhs, rhs].into_iter().chain(result)))
+            .chain(
+                self.substitutions
+                    .iter()
+                    .flat_map(|((guard, _), result)| iter::once(guard).chain(result)),
+            )
+        {
+            held.entry(Arc::as_ptr(&guard.condition))
+                .or_insert((0, Arc::strong_count(&guard.condition)))
+                .0 += 1;
+        }
+        held.retain(|_, (cache, owners)| *owners > *cache);
+        let live = |guard: &Guard<'db>| held.contains_key(&Arc::as_ptr(&guard.condition));
+        for results in [&mut self.conjunctions, &mut self.disjunctions] {
+            results.retain(|(lhs, rhs), result| {
+                live(lhs) && live(rhs) && result.as_ref().is_none_or(live)
+            });
+        }
+        self.substitutions
+            .retain(|(guard, _), result| live(guard) && result.as_ref().is_none_or(live));
+        self.representatives.retain(|guard, _| live(guard));
+        self.kept = self.conjunctions.len()
+            + self.disjunctions.len()
+            + self.substitutions.len()
+            + self.representatives.values().sum::<usize>();
+        self.recorded = 0;
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Guard<'db> {
     scope: BinderScope,
-    condition: Condition<'db>,
+    /// A guard's own allocation, so whether anything still holds the guard is a
+    /// question about this handle. The decision graph inside is shared by every
+    /// condition of the same shape, and by the table sharing it, so it cannot say.
+    condition: Arc<Condition<'db>>,
 }
 
 impl<'db> Guard<'db> {
     pub fn always(scope: &BinderScope) -> Self {
         Self {
             scope: scope.clone(),
-            condition: Decision::leaf(IndexCondition::always()),
+            condition: Arc::new(Condition::constant(true)),
         }
     }
     pub fn scope(&self) -> &BinderScope {
@@ -614,31 +1308,25 @@ impl<'db> Guard<'db> {
 
     pub fn and(&self, other: &Self) -> Option<Self> {
         assert_eq!(self.scope, other.scope, "guard scopes must match");
-        if self == other || other.condition.is_leaf(&IndexCondition::always()) {
+        if self == other || other.condition.is_always() {
             return Some(self.clone());
         }
-        if self.condition.is_leaf(&IndexCondition::always()) {
+        if self.condition.is_always() {
             return Some(other.clone());
         }
-        Self::canonical(
-            &self.scope,
-            self.condition.apply(&other.condition, IndexCondition::and),
-        )
+        Self::canonical(&self.scope, self.condition.and(&other.condition))
     }
 
     pub fn or(&self, other: &Self) -> Self {
         assert_eq!(self.scope, other.scope, "guard scopes must match");
-        if self == other || self.condition.is_leaf(&IndexCondition::always()) {
+        if self == other || self.condition.is_always() {
             return self.clone();
         }
-        if other.condition.is_leaf(&IndexCondition::always()) {
+        if other.condition.is_always() {
             return other.clone();
         }
-        Self::canonical(
-            &self.scope,
-            self.condition.apply(&other.condition, IndexCondition::or),
-        )
-        .expect("a union of satisfiable guards is satisfiable")
+        Self::canonical(&self.scope, self.condition.or(&other.condition))
+            .expect("a union of satisfiable guards is satisfiable")
     }
 
     pub fn with_equality(&self, lhs: IndexExpr<'db>, rhs: IndexExpr<'db>) -> Option<Self> {
@@ -693,23 +1381,8 @@ impl<'db> Guard<'db> {
         for index in choice.path.indices() {
             self.scope.validate(index).expect("free choice binder");
         }
-        let condition = Decision::chain(
-            (0..bits).map(|bit| {
-                (
-                    ChoiceBit {
-                        choice: choice.clone(),
-                        bit: Reverse(bit),
-                    },
-                    value(bit),
-                )
-            }),
-            IndexCondition::always(),
-            IndexCondition::never(),
-        );
-        Self::canonical(
-            &self.scope,
-            self.condition.apply(&condition, IndexCondition::and),
-        )
+        let selected = Condition::choice_bits(&Arc::new(choice), bits, value);
+        Self::canonical(&self.scope, self.condition.and(&selected))
     }
 
     pub fn substitute(&self, subst: &IndexSubst<'db>) -> Option<Self> {
@@ -718,24 +1391,22 @@ impl<'db> Guard<'db> {
             subst.source(),
             "substitution source scope must match"
         );
-        // A substitution without entries only extends the scope; the decision
-        // graph and its variables are unchanged.
+        if subst.is_identity() {
+            return Some(self.clone());
+        }
+        // A scope extension preserves the shared graph and tables, but needs its
+        // own handle so another scope cannot keep this guard's cache entries live.
         if subst.preserves_indices() {
             return Some(Self {
                 scope: subst.destination().clone(),
-                condition: self.condition.clone(),
+                condition: Arc::new((*self.condition).clone()),
             });
         }
         Self::canonical(
             subst.destination(),
-            self.condition.map(
-                |bit| {
-                    Variable::Symbol(ChoiceBit {
-                        choice: bit.choice.map_indices(|index| subst.apply(*index)),
-                        bit: bit.bit,
-                    })
-                },
-                |condition| condition.substitute(subst),
+            self.condition.map_keys_and_leaves(
+                |choice| choice.map_indices(|index| subst.apply(*index)),
+                |condition| Arc::new(condition.substitute(subst)),
             ),
         )
     }
@@ -750,8 +1421,8 @@ impl<'db> Guard<'db> {
 
     pub fn occurrences(&self) -> BTreeSet<ValueOccurrence> {
         self.condition
-            .variables()
-            .map(|bit| bit.choice.occurrence)
+            .keys()
+            .map(|choice| choice.occurrence)
             .collect()
     }
 
@@ -761,8 +1432,8 @@ impl<'db> Guard<'db> {
     ) -> Option<Self> {
         let occurrences: BTreeSet<_> = self
             .condition
-            .variables()
-            .map(|bit| bit.choice.occurrence)
+            .keys()
+            .map(|choice| choice.occurrence)
             .collect();
         let mappings: BTreeMap<_, _> = occurrences
             .into_iter()
@@ -773,18 +1444,9 @@ impl<'db> Guard<'db> {
         }
         Self::canonical(
             &self.scope,
-            self.condition.map(
-                |bit| {
-                    Variable::Symbol(ChoiceBit {
-                        choice: ChoiceKey::new(
-                            mappings[&bit.choice.occurrence],
-                            bit.choice.path.clone(),
-                        ),
-                        bit: bit.bit,
-                    })
-                },
-                Clone::clone,
-            ),
+            self.condition.map_keys(|choice| {
+                ChoiceKey::new(mappings[&choice.occurrence], choice.path.clone())
+            }),
         )
     }
 
@@ -796,7 +1458,7 @@ impl<'db> Guard<'db> {
         Self::canonical(
             &self.scope,
             self.condition
-                .exists(|bit| repeated(bit.choice.occurrence), IndexCondition::or),
+                .forget_keys(|choice| repeated(choice.occurrence)),
         )
         .expect("existential quantification preserves feasibility")
     }
@@ -813,30 +1475,15 @@ impl<'db> Guard<'db> {
         }
         let condition = self
             .condition
-            .exists(
-                |bit| {
-                    bit.choice
-                        .path
-                        .indices()
-                        .any(|index| indices.contains(&index))
-                },
-                IndexCondition::or,
-            )
-            .map(
-                |bit| Variable::Symbol(bit.clone()),
-                |condition| condition.project(|index| indices.contains(&index)),
-            );
+            .forget_keys(|choice| choice.path.indices().any(|index| indices.contains(&index)))
+            .map_leaves(|condition| Arc::new(condition.project(|index| indices.contains(&index))));
         Self::canonical(&self.scope, condition)
             .expect("existential quantification preserves feasibility")
     }
 
     pub fn difference(&self, other: &Self) -> Option<Self> {
         assert_eq!(self.scope, other.scope, "guard scopes must match");
-        Self::canonical(
-            &self.scope,
-            self.condition
-                .apply(&other.condition, |left, right| left.and(&right.not())),
-        )
+        Self::canonical(&self.scope, self.condition.without(&other.condition))
     }
 
     /// Eliminate clause-local witnesses that are observable only through scalar
@@ -845,8 +1492,8 @@ impl<'db> Guard<'db> {
     pub fn project_witnesses(&self, hidden: impl Fn(IndexExpr<'db>) -> bool) -> Self {
         let indexed: BTreeSet<_> = self
             .condition
-            .variables()
-            .flat_map(|bit| bit.choice.path.indices())
+            .keys()
+            .flat_map(|choice| choice.path.indices())
             .collect();
         let projected: BTreeSet<_> = self
             .indices()
@@ -858,19 +1505,16 @@ impl<'db> Guard<'db> {
         }
         Self::canonical(
             &self.scope,
-            self.condition.map(
-                |bit| Variable::Symbol(bit.clone()),
-                |condition| condition.project(|index| projected.contains(&index)),
-            ),
+            self.condition.map_leaves(|condition| {
+                Arc::new(condition.project(|index| projected.contains(&index)))
+            }),
         )
         .expect("existential projection preserves feasibility")
     }
 
     pub fn implies(&self, other: &Self) -> bool {
         assert_eq!(self.scope, other.scope, "guard scopes must match");
-        self.condition
-            .apply(&other.condition, |left, right| left.and(&right.not()))
-            .is_leaf(&IndexCondition::never())
+        self.condition.without(&other.condition).is_never()
     }
 
     pub fn proves_equal(&self, lhs: IndexExpr<'db>, rhs: IndexExpr<'db>) -> bool {
@@ -886,30 +1530,23 @@ impl<'db> Guard<'db> {
         let mut indices: BTreeSet<_> = self
             .condition
             .leaves()
-            .flat_map(IndexCondition::indices)
+            .flat_map(|leaf| leaf.indices())
             .collect();
-        for bit in self.condition.variables() {
-            indices.extend(bit.choice.path.indices());
+        for choice in self.condition.keys() {
+            indices.extend(choice.path.indices());
         }
         indices
     }
 
     pub fn node_count(&self) -> usize {
         self.condition.node_count()
-            + self
-                .condition
-                .leaves()
-                .map(IndexCondition::node_count)
-                .sum::<usize>()
     }
 
     fn with_index_condition(&self, condition: &IndexCondition<'db>) -> Option<Self> {
         Self::canonical(
             &self.scope,
-            self.condition.map(
-                |bit| Variable::Symbol(bit.clone()),
-                |old| old.and(condition),
-            ),
+            self.condition
+                .map_leaves(|old| Arc::new(old.and(condition))),
         )
     }
 
@@ -917,25 +1554,25 @@ impl<'db> Guard<'db> {
     // Identifying choice bits rebuilds the ordered graph and rejects conflicting variants;
     // no map collection is allowed to overwrite a contradictory requirement.
     fn canonical(scope: &BinderScope, condition: Condition<'db>) -> Option<Self> {
-        if condition.is_leaf(&IndexCondition::never()) {
+        if condition.is_never() {
             return None;
         }
-        if condition.variables().all(|bit| {
-            bit.choice
+        if condition.keys().all(|choice| {
+            choice
                 .path
                 .indices()
                 .all(|index| matches!(index, IndexExpr::Const(_)))
         }) {
             return Some(Self {
                 scope: scope.clone(),
-                condition,
+                condition: Arc::new(condition),
             });
         }
         let choice_indices: BTreeSet<_> = condition
-            .variables()
-            .flat_map(|bit| bit.choice.path.indices())
+            .keys()
+            .flat_map(|choice| choice.path.indices())
             .collect();
-        let mut canonical = Decision::leaf(IndexCondition::never());
+        let mut canonical = Condition::constant(false);
         // Partition by distinct terminal conditions, not graph paths: shared suffixes
         // can represent exponentially many paths through a compact decision graph.
         for indices in condition.leaves().filter(|indices| !indices.is_never()) {
@@ -945,58 +1582,291 @@ impl<'db> Guard<'db> {
                 .chain(indices.indices())
                 .collect();
             let representatives = indices.representatives(&terms);
-            let alternative = condition.map(
-                |bit| {
-                    Variable::Symbol(ChoiceBit {
-                        choice: bit.choice.map_indices(|index| {
-                            representatives.get(index).copied().unwrap_or(*index)
-                        }),
-                        bit: bit.bit,
-                    })
+            let alternative = condition.map_keys_and_leaves(
+                |choice| {
+                    choice
+                        .map_indices(|index| representatives.get(index).copied().unwrap_or(*index))
                 },
                 |leaf| {
                     if leaf == indices {
                         leaf.clone()
                     } else {
-                        IndexCondition::never()
+                        constant_leaf(false)
                     }
                 },
             );
-            canonical = canonical.apply(&alternative, IndexCondition::or);
+            canonical = canonical.or(&alternative);
         }
         // Choice occurrences at equal indices must have equal tags. Complete the
         // graph outside these feasible valuations so equality partitions can reunite
         // without retaining a spurious dependence on an extra indexed choice.
-        let choices: BTreeSet<_> = canonical.variables().map(|bit| &bit.choice).collect();
-        let mut care = Decision::leaf(IndexCondition::always());
+        let choices: BTreeSet<_> = canonical.key_handles().collect();
+        let mut care = Condition::constant(true);
         for (position, left) in choices.iter().copied().enumerate() {
             for right in choices.iter().copied().skip(position + 1) {
                 if let Some(alias) = left.alias_condition(right) {
-                    let equality = Decision::equal_bits(
-                        (0..u16::BITS as u16).map(|bit| {
-                            (
-                                ChoiceBit {
-                                    bit: Reverse(bit),
-                                    choice: left.clone(),
-                                },
-                                ChoiceBit {
-                                    bit: Reverse(bit),
-                                    choice: right.clone(),
-                                },
-                            )
-                        }),
-                        IndexCondition::always(),
-                        alias.not(),
-                    );
-                    care = care.apply(&equality, IndexCondition::and);
+                    care = care.and(&Condition::tag_equality(left, right, Arc::new(alias.not())));
                 }
             }
         }
-        let canonical =
-            canonical.restrict(&care, &IndexCondition::never(), IndexCondition::restrict)?;
-        (!canonical.is_leaf(&IndexCondition::never())).then(|| Self {
+        let canonical = canonical.restricted(&care)?;
+        (!canonical.is_never()).then(|| Self {
             scope: scope.clone(),
-            condition: canonical,
+            condition: Arc::new(canonical),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::index::IndexNamespace;
+    use super::*;
+
+    fn selected<'db>(scope: &BinderScope, occurrence: u16) -> Guard<'db> {
+        Guard::always(scope)
+            .with_variant(
+                ChoiceKey::new(
+                    ValueOccurrence::Value(NValueId::from_u32(occurrence.into())),
+                    StructuralPath::default(),
+                ),
+                VariantIndex(occurrence),
+            )
+            .unwrap()
+    }
+
+    /// Sweep the shared choice graphs and count the ones something still holds.
+    fn live_choice_graphs() -> usize {
+        SHARED_CHOICES.with_borrow_mut(|shared| {
+            shared.graphs.retain(|graph| !graph.is_sole_owner());
+            shared.graphs.len()
+        })
+    }
+
+    /// Each side selects one of 32 index conditions by one enum choice, so only
+    /// matching alternatives meet: 33 reachable leaf pairs, against 65 * 65 in the
+    /// merged table.
+    fn alternatives<'db>(scope: &BinderScope, index: u32) -> Guard<'db> {
+        let choice = ChoiceKey::new(ValueOccurrence::Argument(0), StructuralPath::default());
+        (0..32)
+            .map(|variant| {
+                Guard::always(scope)
+                    .with_variant(choice.clone(), VariantIndex(variant))
+                    .unwrap()
+                    .with_equality(
+                        IndexExpr::Runtime(NValueId::from_u32(index)),
+                        IndexExpr::Const(variant.into()),
+                    )
+                    .unwrap()
+            })
+            .reduce(|left, right| left.or(&right))
+            .unwrap()
+    }
+
+    #[test]
+    fn joins_and_restrictions_evaluate_only_reachable_leaf_pairs() {
+        let scope = BinderScope::default();
+        let (left, right) = (alternatives(&scope, 0), alternatives(&scope, 1));
+        let joins = Cell::new(0);
+        let joined = left.condition.joined(&right.condition, |left, right| {
+            joins.set(joins.get() + 1);
+            left.and(right)
+        });
+        assert_eq!(joined, left.condition.and(&right.condition));
+        assert_eq!(joins.get(), 33, "a join evaluated unreachable leaf pairs");
+        // Restriction never evaluates a leaf the care decision excludes.
+        let before = RESTRICTIONS.get();
+        left.condition.restricted(&right.condition).unwrap();
+        assert_eq!(
+            RESTRICTIONS.get() - before,
+            32,
+            "a restriction evaluated unreachable leaf pairs"
+        );
+    }
+
+    #[test]
+    fn bit_operation_cache_bounds_operand_and_result_storage() {
+        for slot in 0..256 {
+            let source = Decision::chain(
+                (0..INDEX_BITS).map(|bit| (SlotBit::new(slot, bit), true)),
+                true,
+                false,
+            );
+            let operation = BitOperation::Not(source.clone());
+            let result = operation.clone().run().unwrap();
+            assert_eq!(
+                result,
+                source.map(|bit| Variable::Symbol(*bit), |value| !value)
+            );
+            BIT_OPERATIONS.with_borrow(|cache| {
+                let storage: usize = cache
+                    .results
+                    .iter()
+                    .map(|(operation, result)| {
+                        let BitOperation::Not(source) = operation else {
+                            panic!("only negations were cached");
+                        };
+                        1 + source.node_count() + result.as_ref().unwrap().node_count()
+                    })
+                    .sum();
+                assert_eq!(cache.storage, storage);
+                assert!(storage <= BitOperationCache::LIMIT);
+                assert_eq!(cache.results.get(&operation), Some(&Some(result)));
+            });
+        }
+        BIT_OPERATIONS.with_borrow(|cache| {
+            assert!(
+                cache.results.len() < 256,
+                "large operands never caused eviction"
+            );
+        });
+    }
+
+    #[test]
+    fn bit_operation_cache_skips_entries_exceeding_its_storage_budget() {
+        let mut cache = BitOperationCache::default();
+        let source = Decision::leaf(true);
+        let small = BitOperation::Not(source.clone());
+        cache.insert(small.clone(), Some(Decision::leaf(false)));
+        let storage = cache.storage;
+        let large = BitOperation::Substitute(
+            source.clone(),
+            vec![SlotTarget::Slot(0); BitOperationCache::LIMIT].into_boxed_slice(),
+        );
+        cache.insert(large, Some(source.clone()));
+        assert_eq!(cache.storage, storage);
+        assert_eq!(cache.results.len(), 1);
+        assert!(cache.results.contains_key(&small));
+        // Infeasible results still retain their operands and must charge for them.
+        cache.insert(BitOperation::Restrict(source.clone(), source), None);
+        assert_eq!(cache.storage, storage + 3);
+    }
+
+    #[test]
+    fn scope_extensions_do_not_keep_each_others_cache_entries_alive() {
+        let before = live_choice_graphs();
+        let scope = BinderScope::default();
+        let guard = selected(&scope, 0);
+        let mut cache = GuardCache::default();
+        let identity = IndexSubst::new(&scope, &scope, []).unwrap();
+        let unchanged = cache.substitute(&guard, &identity).unwrap();
+        assert!(Arc::ptr_eq(&unchanged.condition, &guard.condition));
+
+        let (mut destination, _) = scope.bind(IndexNamespace::Value);
+        let extension = IndexSubst::new(&scope, &destination, []).unwrap();
+        let hot = cache.substitute(&guard, &extension).unwrap();
+        assert_eq!(hot.scope(), &destination);
+        assert_eq!(hot.condition, guard.condition);
+        assert!(Arc::ptr_eq(
+            &hot.condition.choices,
+            &guard.condition.choices
+        ));
+        assert!(Arc::ptr_eq(&hot.condition.leaves, &guard.condition.leaves));
+        for _ in 0..64 {
+            (destination, _) = destination.bind(IndexNamespace::Value);
+            let subst = IndexSubst::new(&scope, &destination, []).unwrap();
+            cache.substitute(&guard, &subst).unwrap();
+        }
+        cache.sweep();
+        assert_eq!(
+            (cache.substitutions.len(), cache.representatives.len()),
+            (2, 2)
+        );
+        let again = cache.substitute(&guard, &extension).unwrap();
+        assert!(Arc::ptr_eq(&again.condition, &hot.condition));
+        assert_eq!(
+            live_choice_graphs(),
+            before + 1,
+            "scope extensions copied the graph"
+        );
+
+        drop((hot, again));
+        cache.sweep();
+        assert_eq!(
+            (cache.substitutions.len(), cache.representatives.len()),
+            (1, 1)
+        );
+        drop((guard, unchanged));
+        cache.sweep();
+        assert_eq!(
+            (cache.substitutions.len(), cache.representatives.len()),
+            (0, 0)
+        );
+        assert_eq!(live_choice_graphs(), before);
+    }
+
+    #[test]
+    fn a_sweep_keeps_a_live_operation_sharing_a_dead_one_s_operand() {
+        let scope = BinderScope::default();
+        let mut cache = GuardCache::default();
+        let (left, right) = (selected(&scope, 0), selected(&scope, 1));
+        // A conjunction nothing outside the cache holds, over an operand that the
+        // live disjunction below shares. Removing it drops that operand's reference.
+        let dead = selected(&scope, 2);
+        cache.and(&left, &dead).unwrap();
+        drop(dead);
+        let hot = cache.or(&left, &right);
+        cache.sweep();
+        assert_eq!(
+            (
+                cache.conjunctions.len(),
+                cache.disjunctions.len(),
+                cache.representatives.len()
+            ),
+            (0, 1, 1),
+            "a sweep dropped a live operation sharing a dead one's operand"
+        );
+        let again = cache.or(&left, &right);
+        assert!(
+            Arc::ptr_eq(&again.condition, &hot.condition),
+            "a swept cache rebuilt a result the analysis still holds"
+        );
+    }
+
+    #[test]
+    fn cache_sweeps_keep_exactly_the_guards_held_outside_the_cache() {
+        let scope = BinderScope::default();
+        let before = live_choice_graphs();
+        let mut cache = GuardCache::default();
+        let (left, right) = (selected(&scope, 0), selected(&scope, 1));
+        let hot = cache.and(&left, &right).unwrap();
+        // Operations whose operands and results only the cache holds afterwards.
+        for occurrence in 2..34 {
+            cache.or(
+                &selected(&scope, occurrence),
+                &selected(&scope, occurrence + 32),
+            );
+        }
+        cache.sweep();
+        assert_eq!(
+            (
+                cache.conjunctions.len(),
+                cache.disjunctions.len(),
+                cache.representatives.len()
+            ),
+            (1, 0, 1),
+            "a sweep kept dead entries or dropped the live one"
+        );
+        let again = cache.and(&left, &right).unwrap();
+        assert!(
+            Arc::ptr_eq(&again.condition, &hot.condition),
+            "a sweep dropped a result the analysis still holds"
+        );
+        // Once the analysis lets go, neither the cache nor the shared graph table
+        // keeps the other's guards alive.
+        drop((left, right, hot, again));
+        cache.sweep();
+        assert_eq!(
+            (
+                cache.conjunctions.len(),
+                cache.disjunctions.len(),
+                cache.representatives.len()
+            ),
+            (0, 0, 0)
+        );
+        assert_eq!(
+            live_choice_graphs(),
+            before,
+            "released guards pinned their graphs"
+        );
     }
 }

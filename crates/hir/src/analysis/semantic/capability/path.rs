@@ -4,6 +4,7 @@ use crate::analysis::{
     semantic::{FieldIndex, SemanticInstance, VariantIndex},
     ty::ty_def::TyId,
 };
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Projection<I> {
@@ -30,21 +31,24 @@ impl<I> Projection<I> {
 
 /// Slots within a semantic value. A path never implicitly dereferences a capability.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct StructuralPath<I>(Box<[Projection<I>]>);
+pub struct StructuralPath<I>(Arc<[Projection<I>]>);
 
 /// Projections into referent storage; distinct from structural capability slots.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RegionPath<I>(Box<[Projection<I>]>);
+pub struct RegionPath<I>(Arc<[Projection<I>]>);
 
 macro_rules! path_impl {
     ($path:ident) => {
         impl<I> Default for $path<I> {
+            /// `Arc::default()` is a shared static, where an empty `Vec` or iterator
+            /// allocates a reference-counted block. Every root value, region and
+            /// choice key has an empty path, so these outnumber the rest.
             fn default() -> Self {
-                Self(Box::new([]))
+                Self(Arc::default())
             }
         }
         impl<I> $path<I> {
-            pub fn new(steps: impl Into<Box<[Projection<I>]>>) -> Self {
+            pub fn new(steps: impl Into<Arc<[Projection<I>]>>) -> Self {
                 Self(steps.into())
             }
             pub fn as_slice(&self) -> &[Projection<I>] {
@@ -54,12 +58,21 @@ macro_rules! path_impl {
                 self.0.is_empty()
             }
             pub fn map_indices<J>(&self, mut map: impl FnMut(&I) -> J) -> $path<J> {
+                if self.is_empty() {
+                    return $path::default();
+                }
                 $path(self.0.iter().map(|step| step.map_index(&mut map)).collect())
             }
         }
         impl<I: Clone> $path<I> {
+            /// Concatenating onto or with nothing shares the other path rather than
+            /// copying it, which is most of the concatenations a projection makes.
             pub fn concat(&self, suffix: &Self) -> Self {
-                Self(self.0.iter().chain(suffix.0.iter()).cloned().collect())
+                match (self.is_empty(), suffix.is_empty()) {
+                    (true, _) => suffix.clone(),
+                    (_, true) => self.clone(),
+                    _ => Self(self.0.iter().chain(suffix.0.iter()).cloned().collect()),
+                }
             }
             pub fn appended(&self, step: Projection<I>) -> Self {
                 let mut steps = self.0.to_vec();
@@ -133,4 +146,44 @@ pub fn project_referent_ty<'db>(
         };
     }
     Some(ty)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every root value, region and choice key has an empty path, so an empty one
+    /// that allocates is paid for more often than every other path together.
+    #[test]
+    fn empty_paths_share_one_allocation() {
+        let empty = StructuralPath::<u32>::default();
+        let shared = empty.as_slice().as_ptr();
+        assert_eq!(
+            StructuralPath::<u32>::default().as_slice().as_ptr(),
+            shared,
+            "two empty paths hold separate allocations"
+        );
+        assert_eq!(
+            RegionPath::<u32>::default().as_slice().as_ptr(),
+            shared,
+            "region and structural empty paths hold separate allocations"
+        );
+        // Deriving nothing from nothing stays shared rather than reallocating.
+        assert_eq!(
+            empty.map_indices(|index| *index).as_slice().as_ptr(),
+            shared
+        );
+        assert_eq!(empty.concat(&empty).as_slice().as_ptr(), shared);
+        let step = StructuralPath::new(vec![Projection::Index(7u32)]);
+        assert_eq!(
+            empty.concat(&step).as_slice().as_ptr(),
+            step.as_slice().as_ptr(),
+            "concatenating onto nothing copied the suffix"
+        );
+        assert_eq!(
+            step.concat(&empty).as_slice().as_ptr(),
+            step.as_slice().as_ptr(),
+            "concatenating nothing copied the path"
+        );
+    }
 }

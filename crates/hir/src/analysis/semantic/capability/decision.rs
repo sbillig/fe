@@ -1,6 +1,6 @@
 //! Reduced ordered decision graphs with canonical, allocation-independent node numbering.
 #[cfg(test)]
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::{
@@ -14,14 +14,64 @@ thread_local! {
     static INTERN_ATTEMPTS: Cell<usize> = const { Cell::new(0) };
 }
 
+/// What identifies a completed graph for accounting: its canonical hash, node
+/// count, node size and node type. The type belongs here because graphs of
+/// different node types share sizes and can share a hash, and counting two of
+/// them as copies of one structure reports duplication that does not exist.
+#[cfg(test)]
+type GraphFingerprint = (u64, usize, usize, &'static str);
+
+#[cfg(test)]
+thread_local! {
+    // Live backing allocations per completed graph, keyed by its canonical hash,
+    // node count and node size. Separate operations that complete an equal graph
+    // each allocate their own slice, so a structure can hold several copies.
+    static LIVE_GRAPHS: RefCell<FxHashMap<GraphFingerprint, usize>> = RefCell::default();
+}
+
+/// Diagnostic: the structures with more than one live backing allocation, as
+/// (node count, node size, copies).
+#[cfg(test)]
+pub(super) fn duplicated_graphs() -> Vec<(usize, &'static str, usize)> {
+    LIVE_GRAPHS.with_borrow(|live| {
+        live.iter()
+            .filter(|(_, copies)| **copies > 1)
+            .map(|((_, nodes, _, name), copies)| (*nodes, *name, *copies))
+            .collect()
+    })
+}
+
+/// Live completed-graph storage: backing allocations, distinct structures, and the
+/// bytes held beyond one copy of each structure.
+#[cfg(test)]
+pub(super) fn live_graph_storage() -> (usize, usize, usize) {
+    LIVE_GRAPHS.with_borrow(|live| {
+        (
+            live.values().sum(),
+            live.len(),
+            live.iter()
+                .map(|((_, nodes, bytes, _), copies)| nodes * bytes * (copies - 1))
+                .sum(),
+        )
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Node<V, T> {
     Leaf(T),
     Branch {
         variable: V,
-        low: usize,
-        high: usize,
+        low: Child,
+        high: Child,
     },
+}
+
+/// A child position indexes its own graph's node list. Reduced graphs stay far
+/// below `u32::MAX` nodes, and a narrower child shrinks every branch.
+type Child = u32;
+
+fn child(index: usize) -> Child {
+    Child::try_from(index).expect("a decision graph fits u32 nodes")
 }
 
 #[derive(Clone, Debug)]
@@ -37,10 +87,44 @@ impl<V: Hash, T: Hash> Decision<V, T> {
     fn new(nodes: Arc<[Node<V, T>]>) -> Self {
         let mut hasher = FxHasher::default();
         nodes.hash(&mut hasher);
-        Self {
-            hash: hasher.finish(),
-            nodes,
+        let hash = hasher.finish();
+        #[cfg(test)]
+        LIVE_GRAPHS.with_borrow_mut(|live| {
+            *live
+                .entry((
+                    hash,
+                    nodes.len(),
+                    size_of::<Node<V, T>>(),
+                    std::any::type_name::<Node<V, T>>(),
+                ))
+                .or_default() += 1;
+        });
+        Self { hash, nodes }
+    }
+}
+
+// Test accounting only: the last owner of a backing slice releases its storage.
+#[cfg(test)]
+impl<V, T> Drop for Decision<V, T> {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.nodes) > 1 {
+            return;
         }
+        let key = (
+            self.hash,
+            self.nodes.len(),
+            size_of::<Node<V, T>>(),
+            std::any::type_name::<Node<V, T>>(),
+        );
+        // A thread may drop graphs after its own thread locals are destroyed.
+        let _ = LIVE_GRAPHS.try_with(|live| {
+            let mut live = live.borrow_mut();
+            let copies = live.get_mut(&key).expect("counted graph");
+            *copies -= 1;
+            if *copies == 0 {
+                live.remove(&key);
+            }
+        });
     }
 }
 
@@ -69,16 +153,18 @@ impl<V: Ord, T: Ord> Ord for Decision<V, T> {
     }
 }
 
-impl<V, T: Ord> Decision<V, T> {
-    /// The derived node order, with variables compared by `variable`.
-    pub(super) fn cmp_by<W>(
+impl<V, T> Decision<V, T> {
+    /// The derived node order, with variables and leaves compared by the caller,
+    /// which a slot-indexed decision needs since its slots name its own tables.
+    pub(super) fn cmp_by<W, U>(
         &self,
-        other: &Decision<W, T>,
+        other: &Decision<W, U>,
         mut variable: impl FnMut(&V, &W) -> Ordering,
+        mut leaf: impl FnMut(&T, &U) -> Ordering,
     ) -> Ordering {
         for (left, right) in self.nodes.iter().zip(other.nodes.iter()) {
             let ordering = match (left, right) {
-                (Node::Leaf(left), Node::Leaf(right)) => left.cmp(right),
+                (Node::Leaf(left), Node::Leaf(right)) => leaf(left, right),
                 (Node::Leaf(_), Node::Branch { .. }) => Ordering::Less,
                 (Node::Branch { .. }, Node::Leaf(_)) => Ordering::Greater,
                 (
@@ -118,9 +204,15 @@ pub(super) enum Variable<V> {
 
 struct Builder<V, T> {
     nodes: Vec<Node<V, T>>,
-    interned: FxHashMap<Node<V, T>, usize>,
+    // Node positions by hash, chained through `next` for equal hashes. Keying this
+    // by the node itself stored every node twice, once here and once in `nodes`.
+    positions: FxHashMap<u64, Child>,
+    next: Vec<Child>,
     selections: FxHashMap<(V, usize, usize), usize>,
 }
+
+/// No node, so an empty chain link and an unvisited position.
+const NONE: Child = Child::MAX;
 
 impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
     fn new() -> Self {
@@ -130,7 +222,8 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
     fn with_capacity(nodes: usize) -> Self {
         Self {
             nodes: Vec::with_capacity(nodes),
-            interned: FxHashMap::with_capacity_and_hasher(nodes, Default::default()),
+            positions: FxHashMap::with_capacity_and_hasher(nodes, Default::default()),
+            next: Vec::with_capacity(nodes),
             selections: FxHashMap::default(),
         }
     }
@@ -138,12 +231,21 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
     fn intern(&mut self, node: Node<V, T>) -> usize {
         #[cfg(test)]
         INTERN_ATTEMPTS.set(INTERN_ATTEMPTS.get() + 1);
-        if let Some(id) = self.interned.get(&node) {
-            return *id;
+        let mut hasher = FxHasher::default();
+        node.hash(&mut hasher);
+        let hash = hasher.finish();
+        let mut position = self.positions.get(&hash).copied().unwrap_or(NONE);
+        while position != NONE {
+            if self.nodes[position as usize] == node {
+                return position as usize;
+            }
+            position = self.next[position as usize];
         }
         let id = self.nodes.len();
-        self.nodes.push(node.clone());
-        self.interned.insert(node, id);
+        // The chain link is whichever node held this hash before.
+        self.next
+            .push(self.positions.insert(hash, child(id)).unwrap_or(NONE));
+        self.nodes.push(node);
         id
     }
 
@@ -153,8 +255,8 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
         } else {
             self.intern(Node::Branch {
                 variable,
-                low,
-                high,
+                low: child(low),
+                high: child(high),
             })
         }
     }
@@ -172,25 +274,9 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
                 variable,
                 low,
                 high,
-            } if variable == split => (*low, *high),
+            } if variable == split => (*low as usize, *high as usize),
             _ => (node, node),
         }
-    }
-
-    fn import(&mut self, decision: &Decision<V, T>) -> usize {
-        let mut mapped = Vec::with_capacity(decision.nodes.len());
-        for node in decision.nodes.iter() {
-            let id = match node {
-                Node::Leaf(value) => self.intern(Node::Leaf(value.clone())),
-                Node::Branch {
-                    variable,
-                    low,
-                    high,
-                } => self.branch(variable.clone(), mapped[*low], mapped[*high]),
-            };
-            mapped.push(id);
-        }
-        mapped[decision.root()]
     }
 
     /// An `idempotent` join is also commutative, as in quantification, so
@@ -236,6 +322,43 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
         result
     }
 
+    /// Apply over two finished graphs, reading them where they already live. Copying
+    /// both operands into the builder first doubled its nodes and its interning work
+    /// for every conjunction and union, and the copies were never the result.
+    fn apply_decisions(
+        &mut self,
+        left: &Decision<V, T>,
+        lhs: usize,
+        right: &Decision<V, T>,
+        rhs: usize,
+        join: &impl Fn(&T, &T) -> T,
+        memo: &mut FxHashMap<(Child, Child), usize>,
+    ) -> usize {
+        let key = (child(lhs), child(rhs));
+        if let Some(result) = memo.get(&key) {
+            return *result;
+        }
+        // Keep recursive frames small: only the split variable lives across calls.
+        let result = match (&left.nodes[lhs], &right.nodes[rhs]) {
+            (Node::Leaf(left), Node::Leaf(right)) => self.intern(Node::Leaf(join(left, right))),
+            _ => {
+                let variable = match (left.variable(lhs), right.variable(rhs)) {
+                    (Some(left), Some(right)) => left.min(right),
+                    (Some(variable), None) | (None, Some(variable)) => variable,
+                    (None, None) => unreachable!("two leaves are joined directly"),
+                }
+                .clone();
+                let (left_low, left_high) = left.cofactors(lhs, &variable);
+                let (right_low, right_high) = right.cofactors(rhs, &variable);
+                let low = self.apply_decisions(left, left_low, right, right_low, join, memo);
+                let high = self.apply_decisions(left, left_high, right, right_high, join, memo);
+                self.branch(variable, low, high)
+            }
+        };
+        memo.insert(key, result);
+        result
+    }
+
     // Substitution may reorder variables or identify two decisions. Rebuild by Shannon
     // expansion; directly relabeling an ordered graph would violate its invariant.
     fn select(&mut self, variable: V, low: usize, high: usize) -> usize {
@@ -271,20 +394,15 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
 
     fn finish(self, root: usize) -> Decision<V, T> {
         let mut nodes = Vec::with_capacity(self.nodes.len());
-        let mut numbering =
-            FxHashMap::with_capacity_and_hasher(self.nodes.len(), Default::default());
+        // Canonical positions are dense, so index them rather than hashing them.
+        let mut numbering = vec![NONE; self.nodes.len()];
         self.visit(root, &mut nodes, &mut numbering);
         Decision::new(nodes.into())
     }
 
-    fn visit(
-        &self,
-        id: usize,
-        nodes: &mut Vec<Node<V, T>>,
-        numbering: &mut FxHashMap<usize, usize>,
-    ) -> usize {
-        if let Some(id) = numbering.get(&id) {
-            return *id;
+    fn visit(&self, id: usize, nodes: &mut Vec<Node<V, T>>, numbering: &mut [Child]) -> usize {
+        if numbering[id] != NONE {
+            return numbering[id] as usize;
         }
         let node = match &self.nodes[id] {
             Node::Leaf(value) => Node::Leaf(value.clone()),
@@ -294,13 +412,13 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
                 high,
             } => Node::Branch {
                 variable: variable.clone(),
-                low: self.visit(*low, nodes, numbering),
-                high: self.visit(*high, nodes, numbering),
+                low: child(self.visit(*low as usize, nodes, numbering)),
+                high: child(self.visit(*high as usize, nodes, numbering)),
             },
         };
         let canonical = nodes.len();
         nodes.push(node);
-        numbering.insert(id, canonical);
+        numbering[id] = child(canonical);
         canonical
     }
 }
@@ -377,7 +495,15 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
     }
 
     pub(super) fn is_leaf(&self, expected: &T) -> bool {
-        matches!(&self.nodes[self.root()], Node::Leaf(actual) if actual == expected)
+        self.leaf_value() == Some(expected)
+    }
+
+    /// The whole graph's value, when it decides nothing.
+    pub(super) fn leaf_value(&self) -> Option<&T> {
+        match &self.nodes[self.root()] {
+            Node::Leaf(value) => Some(value),
+            Node::Branch { .. } => None,
+        }
     }
 
     pub(super) fn leaves(&self) -> impl Iterator<Item = &T> {
@@ -412,7 +538,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
                     low,
                     high,
                 } => {
-                    let (low, high) = (mapped[*low], mapped[*high]);
+                    let (low, high) = (mapped[*low as usize], mapped[*high as usize]);
                     match variable(key) {
                         Variable::Constant(value) => {
                             if value {
@@ -471,14 +597,22 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
                     variable,
                     low,
                     high,
-                } if quantified[variable] => {
-                    builder.apply(mapped[*low], mapped[*high], &join, true, &mut memo)
-                }
+                } if quantified[variable] => builder.apply(
+                    mapped[*low as usize],
+                    mapped[*high as usize],
+                    &join,
+                    true,
+                    &mut memo,
+                ),
                 Node::Branch {
                     variable,
                     low,
                     high,
-                } => builder.branch(variable.clone(), mapped[*low], mapped[*high]),
+                } => builder.branch(
+                    variable.clone(),
+                    mapped[*low as usize],
+                    mapped[*high as usize],
+                ),
             };
             mapped.push(result);
         }
@@ -486,11 +620,23 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
     }
 
     pub(super) fn apply(&self, other: &Self, leaf: impl Fn(&T, &T) -> T) -> Self {
-        let mut builder = Builder::with_capacity(self.nodes.len() + other.nodes.len());
-        let lhs = builder.import(self);
-        let rhs = builder.import(other);
-        let root = builder.apply(lhs, rhs, &leaf, false, &mut FxHashMap::default());
+        let mut builder = Builder::with_capacity(self.nodes.len().max(other.nodes.len()));
+        let root = builder.apply_decisions(
+            self,
+            self.root(),
+            other,
+            other.root(),
+            &leaf,
+            &mut FxHashMap::default(),
+        );
         builder.finish(root)
+    }
+
+    fn variable(&self, node: usize) -> Option<&V> {
+        match &self.nodes[node] {
+            Node::Leaf(_) => None,
+            Node::Branch { variable, .. } => Some(variable),
+        }
     }
 
     fn cofactors(&self, node: usize, split: &V) -> (usize, usize) {
@@ -499,7 +645,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
                 variable,
                 low,
                 high,
-            } if variable == split => (*low, *high),
+            } if variable == split => (*low as usize, *high as usize),
             _ => (node, node),
         }
     }
@@ -512,12 +658,19 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         self.nodes.len()
     }
 
+    /// No other decision holds this backing graph, so keeping it shares nothing.
+    pub(super) fn is_sole_owner(&self) -> bool {
+        Arc::strong_count(&self.nodes) == 1
+    }
+
     pub(super) fn witness(&self, mut accepted: impl FnMut(&T) -> bool) -> Option<Vec<(V, bool)>> {
         let mut possible = Vec::with_capacity(self.nodes.len());
         for node in self.nodes.iter() {
             possible.push(match node {
                 Node::Leaf(value) => accepted(value),
-                Node::Branch { low, high, .. } => possible[*low] || possible[*high],
+                Node::Branch { low, high, .. } => {
+                    possible[*low as usize] || possible[*high as usize]
+                }
             });
         }
         if !possible[self.root()] {
@@ -531,9 +684,9 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
             high,
         } = &self.nodes[node]
         {
-            let value = !possible[*low];
+            let value = !possible[*low as usize];
             path.push((variable.clone(), value));
-            node = if value { *high } else { *low };
+            node = if value { *high as usize } else { *low as usize };
         }
         Some(path)
     }

@@ -12,8 +12,10 @@ use crate::analysis::{
 };
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
     hash::{BuildHasher, Hash, Hasher},
+    rc::Rc,
     sync::Arc,
 };
 
@@ -81,7 +83,9 @@ pub struct ValueLimits {
     pub guard_indices: usize,
     pub guard_nodes: usize,
     pub exact_members: usize,
-    pub interned_nodes: usize,
+    /// How many interned values to keep, or `None` to keep none. Counting the nodes
+    /// an operation really builds needs the cache off, so no limit must mean no reuse.
+    pub interned_nodes: Option<usize>,
 }
 
 impl Default for ValueLimits {
@@ -91,7 +95,7 @@ impl Default for ValueLimits {
             guard_indices: 32,
             guard_nodes: 4096,
             exact_members: 64,
-            interned_nodes: 16_384,
+            interned_nodes: Some(16_384),
         }
     }
 }
@@ -105,9 +109,12 @@ pub struct ValueMetrics {
 
 pub struct ValueInterner<'db, P> {
     pub(super) db: &'db dyn HirAnalysisDb,
-    nodes: FxHashMap<StructuredValue<'db, P>, ValueId<'db, P>>,
+    // Interned values by hash. Keying this by the value stored every value twice,
+    // once here and once behind the handle it hands out; a hash collision only
+    // costs a missed reuse, which eviction already allows.
+    nodes: FxHashMap<u64, ValueId<'db, P>>,
     normalized: FxHashMap<(BinderScope, Guarded<'db, P>), Guarded<'db, P>>,
-    guards: GuardCache<'db>,
+    guards: Rc<RefCell<GuardCache<'db>>>,
     limits: ValueLimits,
     metrics: ValueMetrics,
 }
@@ -184,9 +191,18 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             db,
             nodes: FxHashMap::default(),
             normalized: FxHashMap::default(),
-            guards: GuardCache::default(),
+            guards: Rc::default(),
             limits,
             metrics: ValueMetrics::default(),
+        }
+    }
+
+    /// A temporary interner that keeps the analysis interner's guard sharing. Values
+    /// remapped through it stay backed by the same graphs as the originals.
+    pub fn sharing<Q>(other: &ValueInterner<'db, Q>, limits: ValueLimits) -> Self {
+        Self {
+            guards: other.guards.clone(),
+            ..Self::new(other.db, limits)
         }
     }
 
@@ -591,6 +607,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                 Some(Guarded {
                     guard: self
                         .guards
+                        .borrow_mut()
                         .and(&entry.guard, &guard.in_scope(entry.guard.scope()))?,
                     payload: entry.payload.clone(),
                 })
@@ -633,8 +650,13 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         })
     }
 
-    pub fn guards(&mut self) -> &mut GuardCache<'db> {
-        &mut self.guards
+    pub fn guards(&self) -> &RefCell<GuardCache<'db>> {
+        &self.guards
+    }
+
+    /// A handle to the shared cache, usable while this interner is itself borrowed.
+    pub fn guard_cache(&self) -> Rc<RefCell<GuardCache<'db>>> {
+        self.guards.clone()
     }
 
     pub fn substitute(
@@ -1332,9 +1354,13 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     .direct
                     .iter()
                     .flat_map(|entry| {
-                        destination
+                        // Release the cache before the callback: it may share this
+                        // cache through its own interner.
+                        let restricted = destination
                             .guards
-                            .and(&entry.guard, &domain.in_scope(entry.guard.scope()))
+                            .borrow_mut()
+                            .and(&entry.guard, &domain.in_scope(entry.guard.scope()));
+                        restricted
                             .map(|domain| map(semantics, path, entry, &domain))
                             .unwrap_or_default()
                     })
@@ -1560,10 +1586,12 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                 .expect("clause alpha normalization"),
             payload: entry.payload.substitute(self.db, &subst),
         };
-        if self.normalized.len() >= self.limits.interned_nodes {
-            self.normalized.clear();
+        if let Some(limit) = self.limits.interned_nodes {
+            if self.normalized.len() >= limit {
+                self.normalized.clear();
+            }
+            self.normalized.insert(key, normal.clone());
         }
-        self.normalized.insert(key, normal.clone());
         normal
     }
 
@@ -1576,16 +1604,20 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     vacant.insert(entry.guard);
                 }
                 Entry::Occupied(mut occupied) => {
-                    let guard = self.guards.or(occupied.get(), &entry.guard);
+                    let guard = self.guards.borrow_mut().or(occupied.get(), &entry.guard);
                     occupied.insert(guard);
                 }
             }
         }
         node.direct = canonical
             .into_iter()
-            .map(|((_, payload), guard)| Guarded { guard, payload })
+            .map(|((_, payload), guard)| Guarded {
+                guard: self.guards.borrow_mut().share(guard),
+                payload,
+            })
             .collect();
-        if let Some(value) = self.nodes.get(&node) {
+        let hash = FxBuildHasher.hash_one(&node);
+        if let Some(value) = self.nodes.get(&hash).filter(|value| *value.0 == node) {
             return value.clone();
         }
         // An interned node was validated when it was first created.
@@ -1604,16 +1636,27 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     .expect("free payload binder");
             }
         }
-        // IDs have structural equality, so cache eviction never changes domain equality.
-        // Live values keep their nodes alive independently of the interning cache.
-        if self.nodes.len() >= self.limits.interned_nodes {
-            self.nodes.clear();
-            self.metrics.interner_evictions += 1;
-        }
-        let hash = FxBuildHasher.hash_one(&node);
-        let value = ValueId(Arc::new(node.clone()), hash);
-        self.nodes.insert(node, value.clone());
+        let value = ValueId(Arc::new(node), hash);
         self.metrics.nodes_created += 1;
+        // Without a limit nothing is kept, not even this value, so an equal value
+        // interned next is built again.
+        if let Some(limit) = self.limits.interned_nodes {
+            // IDs have structural equality, so dropping entries never changes domain
+            // equality. Live values keep their nodes alive independently of this cache,
+            // so an entry nothing else holds is the only one worth dropping: clearing
+            // the whole cache would just have equal values rebuilt as separate nodes.
+            if self.nodes.len() >= limit {
+                self.nodes
+                    .retain(|_, value| Arc::strong_count(&value.0) > 1);
+                // Live entries filling half the limit would bring the next sweep back
+                // within a few inserts, so give those up too.
+                if self.nodes.len() >= limit / 2 {
+                    self.nodes.clear();
+                }
+                self.metrics.interner_evictions += 1;
+            }
+            self.nodes.insert(hash, value.clone());
+        }
         value
     }
 }

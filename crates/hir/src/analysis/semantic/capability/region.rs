@@ -2,6 +2,7 @@
 use rustc_hash::FxHashSet;
 #[cfg(test)]
 use std::cell::Cell;
+use std::sync::Arc;
 use std::{
     cmp::{Ordering, min},
     collections::{BTreeMap, BTreeSet},
@@ -149,7 +150,9 @@ pub struct SymbolicPlace<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RegionSet<'db> {
     scope: BinderScope,
-    clauses: Box<[Guarded<'db, SymbolicPlace<'db>>]>,
+    // Regions are cloned on every capability lookup, so share the clauses rather
+    // than copying them.
+    clauses: Arc<[Guarded<'db, SymbolicPlace<'db>>]>,
 }
 
 /// Proof that one typed store selects a unique destination under its guard.
@@ -184,7 +187,7 @@ impl<'db> RegionSet<'db> {
     pub fn empty(scope: &BinderScope) -> Self {
         Self {
             scope: scope.clone(),
-            clauses: Box::new([]),
+            clauses: Arc::default(),
         }
     }
 
@@ -389,21 +392,50 @@ impl<'db> RegionSet<'db> {
     /// Canonicalize a collection of regions once, rather than repeatedly
     /// copying and normalizing an ever-growing prefix of alternatives.
     pub fn union_all(scope: &BinderScope, regions: impl IntoIterator<Item = Self>) -> Self {
-        Self::new(
-            scope,
-            regions.into_iter().flat_map(|region| {
-                assert_eq!(&region.scope, scope, "region scopes must match");
-                region.clauses.into_vec()
-            }),
-        )
+        // A clause iterator borrowing each region cannot outlive it, so the
+        // alternatives accumulate once here rather than a vector per region.
+        let mut clauses = Vec::new();
+        for region in regions {
+            assert_eq!(&region.scope, scope, "region scopes must match");
+            clauses.extend(region.clauses.iter().cloned());
+        }
+        Self::new(scope, clauses)
+    }
+
+    /// Replace clause guards with shared representatives. Sharing preserves guard
+    /// equality and scope, so the canonical clause set is unchanged.
+    pub fn share_guards(&self, mut share: impl FnMut(Guard<'db>) -> Guard<'db>) -> Self {
+        Self {
+            scope: self.scope.clone(),
+            clauses: self
+                .clauses
+                .iter()
+                .map(|clause| Guarded {
+                    guard: share(clause.guard.clone()),
+                    payload: clause.payload.clone(),
+                })
+                .collect(),
+        }
     }
 
     pub fn with_guard(&self, guard: &Guard<'db>) -> Self {
+        self.restricted(guard, |left, right| left.and(right))
+    }
+
+    /// Restrict every clause, conjoining through the caller's guard operation. Summary
+    /// instantiation restricts many leaves by the same guard, and each conjunction
+    /// otherwise rebuilds a complete decision graph, so callers that hold the shared
+    /// guard cache pass it here.
+    pub fn restricted(
+        &self,
+        guard: &Guard<'db>,
+        mut and: impl FnMut(&Guard<'db>, &Guard<'db>) -> Option<Guard<'db>>,
+    ) -> Self {
         Self::new(
             &self.scope,
             self.clauses.iter().filter_map(|clause| {
                 Some(Guarded {
-                    guard: clause.guard.and(&guard.in_scope(clause.guard.scope()))?,
+                    guard: and(&clause.guard, &guard.in_scope(clause.guard.scope()))?,
                     payload: clause.payload.clone(),
                 })
             }),
@@ -527,8 +559,8 @@ impl<'db> RegionSet<'db> {
         assert_eq!(self.scope, other.scope, "region scopes must match");
         let mut clauses = Vec::new();
         let mut uncertain = false;
-        for left in &self.clauses {
-            for right in &other.clauses {
+        for left in self.clauses.iter() {
+            for right in other.clauses.iter() {
                 let (left, right, ..) = open_clause_pair(left, right, &self.scope);
                 // Distinct raw-handle occurrences can name overlapping bases.
                 // Their field paths cannot prove disjointness without base identity.
@@ -658,7 +690,7 @@ impl<'db> RegionSet<'db> {
             &self.scope,
             self.clauses.iter().filter_map(|moved| {
                 let mut remaining = Some(moved.guard.clone());
-                for write in &written.clauses {
+                for write in written.clauses.iter() {
                     if write.guard.scope() != &self.scope
                         || write.payload.path.as_slice().len() > moved.payload.path.as_slice().len()
                     {
