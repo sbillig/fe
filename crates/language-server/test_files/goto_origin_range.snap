@@ -10,6 +10,15 @@ note:
   │                  ^^^^^^^ -> goto_origin_range::AbiSize
 
 note: 
+  ┌─ goto_origin_range.fe:8:20
+  │
+8 │     type InitArgs: Encode<u256>
+  │                    ^^^^^^------
+  │                    │
+  │                    full segment (includes generics)
+  │                    -> goto_origin_range::Encode
+
+note: 
    ┌─ goto_origin_range.fe:28:14
    │
 28 │ fn create<C: Contract>() {

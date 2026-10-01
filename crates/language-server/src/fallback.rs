@@ -10,7 +10,7 @@ use tower::Service;
 use crate::lsp_actor::service::CanHandle;
 
 pub struct WithFallbackService<A, B> {
-    primary: A,
+    pub(crate) primary: A,
     fallback: B,
 }
 

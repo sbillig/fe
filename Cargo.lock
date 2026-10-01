@@ -1473,12 +1473,6 @@ dependencies = [
 
 [[package]]
 name = "cranelift-bitset"
-version = "0.126.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "006fe8776f6d81acb83571f52e7737a54c6dec1ba75e2b7b5a68af15451f88ee"
-
-[[package]]
-name = "cranelift-bitset"
 version = "0.135.2"
 source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
 dependencies = [
@@ -1542,15 +1536,6 @@ version = "0.135.2"
 source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
 dependencies = [
  "arbitrary",
-]
-
-[[package]]
-name = "cranelift-entity"
-version = "0.126.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcca10e8c33eac67a45be4e09d236e274697831ca6bf4c4a927f7570eb8436a8"
-dependencies = [
- "cranelift-bitset 0.126.2",
 ]
 
 [[package]]
@@ -1966,7 +1951,7 @@ checksum = "855423f2158bcc73798b3b9a666ec4204597a72370dc91dbdb8e7f9519de8cc3"
 [[package]]
 name = "dot2"
 version = "1.0.0"
-source = "git+https://github.com/sanpii/dot2.rs.git#5c4ffa7182d3e6c14b91b94bb9efaad1e218022b"
+source = "git+https://github.com/sanpii/dot2.rs.git#1b4e48757c01b34a54952e4c6a7c541290a92c3b"
 
 [[package]]
 name = "dunce"
@@ -2265,6 +2250,7 @@ dependencies = [
  "glob",
  "hex",
  "libc",
+ "mimalloc",
  "num-bigint",
  "petgraph",
  "protobuf",
@@ -3324,7 +3310,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39eb0623e15e4cb83c02ce6a959e48fadd1ae3b715b36b5acc01816e01388c82"
 dependencies = [
  "bstr",
- "hashbrown 0.16.1",
+ "hashbrown 0.15.5",
 ]
 
 [[package]]
@@ -4592,6 +4578,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
+name = "libmimalloc-sys"
+version = "0.1.49"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "libredox"
 version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4731,6 +4726,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "mimalloc"
+version = "0.1.52"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d4139bb28d14ad1facf21d5eb8825051b326e172d216b39f6d31df53cc97862"
+dependencies = [
+ "libmimalloc-sys",
 ]
 
 [[package]]
@@ -6768,11 +6772,11 @@ dependencies = [
 [[package]]
 name = "sonatina-codegen"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=b9009db7dcb5658f1080d8e1722cf1d171caaa34#b9009db7dcb5658f1080d8e1722cf1d171caaa34"
+source = "git+https://github.com/fe-lang/sonatina?rev=f8a9fe5ab832b718dbef57309c88c4290dd66232#f8a9fe5ab832b718dbef57309c88c4290dd66232"
 dependencies = [
  "bit-set",
  "cranelift-codegen",
- "cranelift-entity 0.126.2",
+ "cranelift-entity 0.136.1",
  "cranelift-frontend",
  "cranelift-module",
  "cranelift-native",
@@ -6794,11 +6798,11 @@ dependencies = [
 [[package]]
 name = "sonatina-ir"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=b9009db7dcb5658f1080d8e1722cf1d171caaa34#b9009db7dcb5658f1080d8e1722cf1d171caaa34"
+source = "git+https://github.com/fe-lang/sonatina?rev=f8a9fe5ab832b718dbef57309c88c4290dd66232#f8a9fe5ab832b718dbef57309c88c4290dd66232"
 dependencies = [
  "bit-set",
  "bitflags 2.11.0",
- "cranelift-entity 0.126.2",
+ "cranelift-entity 0.136.1",
  "crossbeam-utils",
  "dashmap",
  "dot2 1.0.0 (git+https://github.com/sanpii/dot2.rs.git)",
@@ -6818,7 +6822,7 @@ dependencies = [
 [[package]]
 name = "sonatina-macros"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=b9009db7dcb5658f1080d8e1722cf1d171caaa34#b9009db7dcb5658f1080d8e1722cf1d171caaa34"
+source = "git+https://github.com/fe-lang/sonatina?rev=f8a9fe5ab832b718dbef57309c88c4290dd66232#f8a9fe5ab832b718dbef57309c88c4290dd66232"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6828,11 +6832,11 @@ dependencies = [
 [[package]]
 name = "sonatina-parser"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=b9009db7dcb5658f1080d8e1722cf1d171caaa34#b9009db7dcb5658f1080d8e1722cf1d171caaa34"
+source = "git+https://github.com/fe-lang/sonatina?rev=f8a9fe5ab832b718dbef57309c88c4290dd66232#f8a9fe5ab832b718dbef57309c88c4290dd66232"
 dependencies = [
  "annotate-snippets",
  "bimap",
- "cranelift-entity 0.126.2",
+ "cranelift-entity 0.136.1",
  "derive_more 2.0.1",
  "either",
  "hex",
@@ -6849,7 +6853,7 @@ dependencies = [
 [[package]]
 name = "sonatina-triple"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=b9009db7dcb5658f1080d8e1722cf1d171caaa34#b9009db7dcb5658f1080d8e1722cf1d171caaa34"
+source = "git+https://github.com/fe-lang/sonatina?rev=f8a9fe5ab832b718dbef57309c88c4290dd66232#f8a9fe5ab832b718dbef57309c88c4290dd66232"
 dependencies = [
  "thiserror 2.0.18",
 ]
@@ -6857,9 +6861,9 @@ dependencies = [
 [[package]]
 name = "sonatina-verifier"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=b9009db7dcb5658f1080d8e1722cf1d171caaa34#b9009db7dcb5658f1080d8e1722cf1d171caaa34"
+source = "git+https://github.com/fe-lang/sonatina?rev=f8a9fe5ab832b718dbef57309c88c4290dd66232#f8a9fe5ab832b718dbef57309c88c4290dd66232"
 dependencies = [
- "cranelift-entity 0.126.2",
+ "cranelift-entity 0.136.1",
  "rayon",
  "rpds",
  "rustc-hash 2.1.1",

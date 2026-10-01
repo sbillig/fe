@@ -12,6 +12,8 @@ pub mod index;
 pub mod loan;
 pub mod opaque;
 pub mod path;
+#[cfg(feature = "borrowck-profile")]
+pub(crate) mod profile;
 pub mod region;
 pub mod repack;
 pub mod semantics;
@@ -22,6 +24,9 @@ pub mod value;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use decision::INTERN_ATTEMPTS as DECISION_INTERN_ATTEMPTS;
 
 #[cfg(test)]
 pub(crate) mod test_roots {

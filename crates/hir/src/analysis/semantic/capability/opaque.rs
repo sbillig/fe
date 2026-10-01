@@ -132,8 +132,8 @@ impl<'db> OpaqueWrite<'db> {
                             return None;
                         }
                         // A write through a conditional replacement keeps that
-                        // replacement's condition as its prerequisite, on the
-                        // overwrite handle that offsets and summaries restate.
+                        // replacement's condition as its prerequisite, which
+                        // offsets and summaries restate.
                         if !native
                             && raw_memory_cell
                             && matches!(&clause.payload.root,
@@ -142,7 +142,16 @@ impl<'db> OpaqueWrite<'db> {
                         {
                             return Some((guard, family.clone()));
                         }
-                        let mut alternative = source.clone();
+                        // Only the condition lets a caller refute a replaced
+                        // address. Overwrite occurrences may alias each other, so
+                        // a per-site identity separates nothing, but it multiplies
+                        // a cell's alternatives by every write site and summary
+                        // choice. Native capabilities keep their identity.
+                        let mut alternative = if native {
+                            source.clone()
+                        } else {
+                            family.clone()
+                        };
                         alternative.clobber = SourceExpr::from_place(&target)
                             .zip(SourceExpr::from_place(&clause.payload))
                             .map(|(target, written)| {

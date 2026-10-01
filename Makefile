@@ -29,7 +29,7 @@ test: treesitter-generate
 	# test (crates/parser/tests/tree_sitter_parse.rs), which parses every .fe
 	# fixture against the freshly generated grammar.
 	cargo nextest run --release --workspace --all-features --no-fail-fast \
-		--exclude fe-language-server --exclude fe-bench
+		--exclude fe-bench
 
 .PHONY: check-wasm
 check-wasm:

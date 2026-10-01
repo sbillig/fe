@@ -11,7 +11,7 @@ use super::{
     access::ResolvedAccess,
     ir::{AvailabilityRequirement, AvailabilitySummary},
     solver::Borrowck,
-    summary::CallInputs,
+    summary::{CallInputs, SourceInstantiations},
 };
 use crate::analysis::{
     semantic::{
@@ -201,6 +201,8 @@ impl<'db> Borrowck<'db> {
             unavailable: RegionSet::empty(&scope),
             consumed: Vec::new(),
         };
+        let cache = self.inventory.values.guard_cache();
+        let mut instantiations = SourceInstantiations::new(state, result, inputs);
         // Every source is substituted against the same pre-call snapshot. A
         // guaranteed callee destination can still be ambiguous in its caller.
         for (region, kind, definite, extent) in call
@@ -231,10 +233,10 @@ impl<'db> Borrowck<'db> {
                 ),
             ])
         {
-            let mut target_region = RegionSet::empty(&scope);
+            let mut target_clauses = Vec::new();
             let mut invalidated = NativeValidity::default();
             for clause in region.clauses() {
-                let Some(guard) = self.instantiate_guard(&clause.guard, result, inputs)? else {
+                let Some(guard) = instantiations.guard(self, &clause.guard)? else {
                     continue;
                 };
                 let source =
@@ -248,8 +250,7 @@ impl<'db> Borrowck<'db> {
                 {
                     continue;
                 }
-                let mut target =
-                    self.instantiate_source(state, &source, result, guard.scope(), inputs)?;
+                let mut target = instantiations.resolve(self, &source, guard.scope())?;
                 // A by-value effect provider can expose its representation as
                 // an input place. Its logical holder was already validated and
                 // transferred by the caller's operand access. Only addressable
@@ -287,7 +288,10 @@ impl<'db> Borrowck<'db> {
                             self.value_validity(&contents, ValueOccurrence::Value(result));
                     }
                 }
-                let target = target.region.with_guard(&guard).close_existentials(&scope);
+                let target = target
+                    .region
+                    .restricted(&guard, |left, right| cache.borrow_mut().and(left, right))
+                    .close_existentials(&scope);
                 if kind.is_none() && !definite {
                     let ty = source.referent_ty(self.db, call.instance).ok_or_else(|| {
                         self.internal_diag(
@@ -301,9 +305,10 @@ impl<'db> Borrowck<'db> {
                     }
                 }
                 if !definite || target.definite_write().is_some() {
-                    target_region = target_region.union(&target);
+                    target_clauses.extend(target.clauses().iter().cloned());
                 }
             }
+            let target_region = RegionSet::new(&scope, target_clauses);
             if let Some(kind) = kind {
                 resolved.incoming.push((
                     AvailabilityRequirement {
@@ -322,16 +327,35 @@ impl<'db> Borrowck<'db> {
         Ok(Some(resolved))
     }
 
+    /// The availability diagnostic of the published states, computed once.
+    pub(super) fn availability_diagnostic(&self) -> Option<SemanticDiagnostic<'db>> {
+        self.availability_diagnostic
+            .get_or_init(|| self.analyze_availability().diagnostic)
+            .clone()
+    }
+
     pub fn analyze_availability(&self) -> AvailabilityAnalysis<'db> {
+        #[cfg(feature = "borrowck-profile")]
+        let profile = self.profile_scope("availability");
         let mut entries = vec![None; self.body.blocks.len()];
         entries[self.body.entry.index()] = Some(AvailabilityState::new());
-        loop {
-            let mut changed = false;
+        // Revisit only blocks whose entry state changed: an unchanged block
+        // would rejoin the same edges into its successors.
+        let mut dirty = vec![false; self.body.blocks.len()];
+        dirty[self.body.entry.index()] = true;
+        while dirty.contains(&true) {
+            #[cfg(feature = "borrowck-profile")]
+            profile.sweep(self.inventory.loans.len(), self.source_generation);
             for (block_index, block) in self.body.blocks.iter().enumerate() {
+                if !std::mem::take(&mut dirty[block_index]) {
+                    continue;
+                }
                 let Some(mut state) = entries[block_index].clone() else {
                     continue;
                 };
                 for (index, _) in self.before[block_index].iter().enumerate() {
+                    #[cfg(feature = "borrowck-profile")]
+                    profile.point("evaluate", block_index, index);
                     self.evaluate_availability(&mut state, block_index, index, None);
                 }
                 let Some(terminal) = &self.terminal[block_index] else {
@@ -447,16 +471,15 @@ impl<'db> Borrowck<'db> {
                     let entry = &mut entries[successor.block.index()];
                     if let Some(previous) = entry {
                         let old = previous.clone();
+                        #[cfg(feature = "borrowck-profile")]
+                        profile.point("join", block_index, 0);
                         previous.join(edge);
-                        changed |= *previous != old;
+                        dirty[successor.block.index()] |= *previous != old;
                     } else {
                         *entry = Some(edge);
-                        changed = true;
+                        dirty[successor.block.index()] = true;
                     }
                 }
-            }
-            if !changed {
-                break;
             }
         }
         let mut analysis = AvailabilityAnalysis {
@@ -1084,33 +1107,53 @@ mod tests {
             &db,
             identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "pair"))),
         );
-        let mut body = normalize_semantic_body(&db, instance).unwrap().body;
-        let fields = body
-            .blocks
-            .iter_mut()
-            .flat_map(|block| &mut block.statements)
-            .find_map(|statement| {
-                if let NStatementKind::Define {
-                    expr: NExpr::AggregateMake { fields, .. },
-                    ..
-                } = &mut statement.kind
-                {
-                    (fields.len() == 2).then_some(fields)
-                } else {
-                    None
-                }
-            })
-            .unwrap();
-        fields[1].value = fields[0].value;
-        verify_normalized_body(&db, &body).unwrap();
+        let body = normalize_semantic_body(&db, instance).unwrap().body;
         let mut checker =
             Borrowck::new_with_body(&db, instance, body, BorrowSummaryMode::Final).unwrap();
         checker.solve().unwrap();
-        let diagnostic = checker.analyze_availability().diagnostic.unwrap();
+        assert!(checker.availability_diagnostic().is_none());
+        assert!(checker.availability_diagnostic().is_none());
+        let (block, index) =
+            checker
+                .body
+                .blocks
+                .iter()
+                .enumerate()
+                .find_map(|(block, body)| {
+                    body.statements.iter().position(|statement| matches!(
+                    &statement.kind,
+                    NStatementKind::Define { expr: NExpr::AggregateMake { fields, .. }, .. }
+                        if fields.len() == 2
+                )).map(|index| (block, index))
+                })
+                .unwrap();
+        let NStatementKind::Define {
+            expr: NExpr::AggregateMake { fields, .. },
+            ..
+        } = &mut checker.body.blocks[block].statements[index].kind
+        else {
+            unreachable!();
+        };
+        let original = fields[1].value;
+        fields[1].value = fields[0].value;
+        verify_normalized_body(&db, &checker.body).unwrap();
+        checker.solve().unwrap();
+        let diagnostic = checker.availability_diagnostic().unwrap();
         assert_eq!(diagnostic.kind, SemanticDiagnosticKind::MoveConflict);
         assert_eq!(diagnostic.secondaries.len(), 1);
         assert_ne!(diagnostic.primary.span, diagnostic.secondaries[0].span);
         assert!(checker.build_summary().is_err());
+        let NStatementKind::Define {
+            expr: NExpr::AggregateMake { fields, .. },
+            ..
+        } = &mut checker.body.blocks[block].statements[index].kind
+        else {
+            unreachable!();
+        };
+        fields[1].value = original;
+        checker.solve().unwrap();
+        assert!(checker.availability_diagnostic().is_none());
+        assert!(checker.build_summary().is_ok());
     }
 
     #[test]

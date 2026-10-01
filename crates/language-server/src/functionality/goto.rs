@@ -198,9 +198,13 @@ mod tests {
         },
         hir_def::{PathId, scope_graph::ScopeId},
         span::LazySpan,
-        visitor::{Visitor, VisitorCtxt, prelude::LazyPathSpan},
+        visitor::{
+            Visitor, VisitorCtxt,
+            prelude::{LazyPathSpan, LazyTopModSpan},
+            walk_top_mod,
+        },
     };
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, ops::Range, path::Path};
     use test_utils::{normalize::normalize_newlines, snap_test};
     use url::Url;
 
@@ -209,12 +213,33 @@ mod tests {
     use driver::DriverDataBase;
 
     /// Test infrastructure: collects all paths for cursor testing.
-    #[derive(Default)]
     struct PathSpanCollector<'db> {
+        top_mod: TopLevelMod<'db>,
         paths: Vec<(PathId<'db>, ScopeId<'db>, LazyPathSpan<'db>)>,
     }
 
+    impl<'db> PathSpanCollector<'db> {
+        fn new(top_mod: TopLevelMod<'db>) -> Self {
+            Self {
+                top_mod,
+                paths: Vec::new(),
+            }
+        }
+    }
+
     impl<'db, 'ast: 'db> Visitor<'ast> for PathSpanCollector<'db> {
+        fn visit_top_mod(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'ast, LazyTopModSpan<'ast>>,
+            top_mod: TopLevelMod<'ast>,
+        ) {
+            // The root module's children include other files in the ingot.
+            // Their offsets cannot be used as cursors in the file under test.
+            if top_mod == self.top_mod {
+                walk_top_mod(self, ctxt, top_mod);
+            }
+        }
+
         fn visit_path(
             &mut self,
             ctxt: &mut VisitorCtxt<'ast, LazyPathSpan<'ast>>,
@@ -266,7 +291,7 @@ mod tests {
         top_mod: TopLevelMod,
     ) -> Vec<parser::TextSize> {
         let mut visitor_ctxt = VisitorCtxt::with_top_mod(db, top_mod);
-        let mut path_collector = PathSpanCollector::default();
+        let mut path_collector = PathSpanCollector::new(top_mod);
         path_collector.visit_top_mod(&mut visitor_ctxt, top_mod);
 
         let mut cursors = Vec::new();
@@ -299,7 +324,7 @@ mod tests {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<GotoAnnotation> {
         let mut visitor_ctxt = VisitorCtxt::with_top_mod(db, top_mod);
-        let mut path_collector = PathSpanCollector::default();
+        let mut path_collector = PathSpanCollector::new(top_mod);
         path_collector.visit_top_mod(&mut visitor_ctxt, top_mod);
 
         let mut annotations = Vec::new();
@@ -357,12 +382,10 @@ mod tests {
 
         // Set up codespan files
         let mut files = SimpleFiles::new();
-        let filename = std::path::Path::new(fixture.path())
-            .file_name()
-            .map_or_else(
-                || fixture.path().to_string(),
-                |s| s.to_string_lossy().to_string(),
-            );
+        let filename = Path::new(fixture.path()).file_name().map_or_else(
+            || fixture.path().to_string(),
+            |s| s.to_string_lossy().to_string(),
+        );
         let normalized_fixture = normalize_newlines(fixture.content()).into_owned();
         let file_id = files.add(filename, normalized_fixture);
 
@@ -407,8 +430,7 @@ mod tests {
     )]
     fn test_goto_multiple_files(fixture: Fixture<&str>) {
         let cargo_manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let ingot_base_dir =
-            std::path::Path::new(&cargo_manifest_dir).join("test_files/single_ingot");
+        let ingot_base_dir = Path::new(&cargo_manifest_dir).join("test_files/single_ingot");
         let content = normalize_newlines(fixture.content()).into_owned();
 
         let mut db = DriverDataBase::default();
@@ -440,6 +462,40 @@ mod tests {
         let file_url = Url::from_file_path(fixture.path()).unwrap();
         let ingot = db.workspace().containing_ingot(&db, file_url);
         assert_eq!(ingot.unwrap().kind(&db), IngotKind::Local);
+    }
+
+    #[test]
+    fn test_goto_cursors_ignore_other_files() {
+        let ingot_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/single_ingot");
+        let mut db = DriverDataBase::default();
+        load_ingot_from_directory(&mut db, &ingot_dir);
+        let lib_url = Url::from_file_path(ingot_dir.join("src/lib.fe")).unwrap();
+        let foo_url = Url::from_file_path(ingot_dir.join("src/foo.fe")).unwrap();
+        let lib_text = normalize_newlines(include_str!("../../test_files/single_ingot/src/lib.fe"));
+        let foo_text = normalize_newlines(include_str!("../../test_files/single_ingot/src/foo.fe"));
+        db.workspace()
+            .update(&mut db, lib_url.clone(), lib_text.into_owned());
+
+        for newline in ["\n", "\r\n"] {
+            db.workspace()
+                .update(&mut db, foo_url.clone(), foo_text.replace('\n', newline));
+            let file = db.workspace().get(&db, &lib_url).unwrap();
+            let top_mod = map_file_to_mod(&db, file);
+            let mut ctxt = VisitorCtxt::with_top_mod(&db, top_mod);
+            let mut collector = PathSpanCollector::new(top_mod);
+            collector.visit_top_mod(&mut ctxt, top_mod);
+            assert!(!collector.paths.is_empty());
+            for (_, _, span) in collector.paths {
+                assert_eq!(span.resolve(&db).unwrap().file, file);
+            }
+
+            let annotations = collect_goto_annotations(&db, top_mod);
+            assert!(!annotations.is_empty());
+            for annotation in annotations {
+                let text = &file.text(&db)[Range::<usize>::from(annotation.ident_range)];
+                assert!(["Why", "y", "z", "who", "what", "how", "When"].contains(&text));
+            }
+        }
     }
 
     #[dir_test(
@@ -481,7 +537,7 @@ mod tests {
 
         for cursor in &cursors {
             let mut visitor_ctxt = VisitorCtxt::with_top_mod(&db, top_mod);
-            let mut path_collector = PathSpanCollector::default();
+            let mut path_collector = PathSpanCollector::new(top_mod);
             path_collector.visit_top_mod(&mut visitor_ctxt, top_mod);
 
             let full_paths = path_collector.paths;
@@ -515,6 +571,44 @@ mod tests {
                 .join("\n")
         );
         snap_test!(result, fixture.path());
+    }
+
+    #[test]
+    fn test_msg_definition_names_do_not_cover_body() {
+        let mut db = DriverDataBase::default();
+        let code = "msg TokenMsg { Mint { amount: u256 } -> bool, GetSupply -> u256 }";
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test_msg.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        for name in ["TokenMsg", "Mint", "GetSupply"] {
+            let cursor = Cursor::from(code.find(name).unwrap() as u32);
+            let resolution = goto_target_at_cursor(&db, top_mod, cursor);
+            let Some(Target::Scope(scope)) = resolution.first() else {
+                panic!("expected a definition target for {name}");
+            };
+            let span = scope.name_span(&db).unwrap().resolve(&db).unwrap();
+            assert_eq!(&code[Range::<usize>::from(span.range)], name);
+        }
+
+        for token in ["u256", "bool", "->", "{", "}"] {
+            for (offset, _) in code.match_indices(token) {
+                let cursor = Cursor::from(offset as u32);
+                assert!(
+                    top_mod.definition_at(&db, cursor).is_none(),
+                    "{token} at {offset} is not a definition name"
+                );
+                assert!(
+                    goto_target_at_cursor(&db, top_mod, cursor)
+                        .as_slice()
+                        .is_empty(),
+                    "{token} at {offset} must not navigate to a message definition"
+                );
+            }
+        }
     }
 
     /// Diagnostic test: traces the full semantic API chain for `C::static_method()`

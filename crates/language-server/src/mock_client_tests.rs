@@ -8,18 +8,44 @@ use async_lsp::lsp_types::notification::{LogMessage, PublishDiagnostics};
 use async_lsp::lsp_types::*;
 use async_lsp::server::LifecycleLayer;
 use async_lsp::{LanguageServer, MainLoop};
+use common::InputDb;
 use futures::AsyncReadExt;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::Notify;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use tower::ServiceBuilder;
 use tracing::instrument::WithSubscriber;
 
-use crate::server::setup;
+use crate::{
+    backend::Backend,
+    functionality::handlers::{self, FilesNeedDiagnostics, NeedsDiagnostics},
+    lsp_actor::LspActor,
+    server::setup,
+};
 
 const DUPLEX_BUF: usize = 64 << 10;
+const WAIT_TIMEOUT: Duration = Duration::from_secs(20);
+
+// Registered only in this test harness. A reply reads the actor's database,
+// so tests can wait for an edit to be applied before checking its features.
+enum DocumentTextRequest {}
+
+impl request::Request for DocumentTextRequest {
+    type Params = Url;
+    type Result = Option<String>;
+    const METHOD: &'static str = "experimental/fe_test_document_text";
+}
+
+enum DocumentDiagnosticsRequest {}
+
+impl request::Request for DocumentDiagnosticsRequest {
+    type Params = Url;
+    type Result = ();
+    const METHOD: &'static str = "experimental/fe_test_document_diagnostics";
+}
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -58,6 +84,7 @@ pub struct PublishedDiagnostics {
 pub struct MockLspClient {
     server: async_lsp::ServerSocket,
     diagnostics: Arc<Mutex<Vec<PublishedDiagnostics>>>,
+    diagnostics_changed: Arc<Notify>,
     log_messages: Arc<Mutex<Vec<LogMessageParams>>>,
     _srv_handle: tokio::task::JoinHandle<()>,
     _cli_handle: tokio::task::JoinHandle<()>,
@@ -70,7 +97,29 @@ impl MockLspClient {
     /// Spawn the real server and connect a mock client.
     pub async fn start() -> Self {
         let (server_main, server_client_socket) = MainLoop::new_server(|client| {
-            let lsp_service = setup(client, "test-actor".to_string());
+            let mut lsp_service = setup(client, "test-actor".to_string());
+            lsp_service.primary.handle_request::<DocumentTextRequest>(
+                |backend: &Backend, uri: Url| {
+                    let uri = backend.map_client_uri_to_internal(uri);
+                    let text = backend
+                        .db
+                        .workspace()
+                        .get(&backend.db, &uri)
+                        .map(|file| file.text(&backend.db).clone());
+                    async move { Ok(text) }
+                },
+            );
+            lsp_service
+                .primary
+                .handle_request::<DocumentDiagnosticsRequest>(
+                    async |backend: &Backend, uri: Url| {
+                        handlers::handle_files_need_diagnostics(
+                            backend,
+                            FilesNeedDiagnostics(vec![NeedsDiagnostics(uri)]),
+                        )
+                        .await
+                    },
+                );
             ServiceBuilder::new()
                 .layer(LifecycleLayer::default())
                 .layer(ConcurrencyLayer::default())
@@ -101,6 +150,8 @@ impl MockLspClient {
 
         let diagnostics: Arc<Mutex<Vec<PublishedDiagnostics>>> = Arc::new(Mutex::new(Vec::new()));
         let diag_collector = diagnostics.clone();
+        let diagnostics_changed = Arc::new(Notify::new());
+        let diag_notify = diagnostics_changed.clone();
 
         let log_messages: Arc<Mutex<Vec<LogMessageParams>>> = Arc::new(Mutex::new(Vec::new()));
         let log_collector = log_messages.clone();
@@ -115,6 +166,7 @@ impl MockLspClient {
                         uri: params.uri,
                         diagnostics: params.diagnostics,
                     });
+                    diag_notify.notify_one();
                     ControlFlow::Continue(())
                 })
                 // Capture server-side tracing output delivered via window/logMessage
@@ -135,6 +187,7 @@ impl MockLspClient {
         Self {
             server: server_socket,
             diagnostics,
+            diagnostics_changed,
             log_messages,
             _srv_handle: srv_handle,
             _cli_handle: cli_handle,
@@ -157,8 +210,6 @@ impl MockLspClient {
         self.server
             .initialized(InitializedParams {})
             .expect("initialized failed");
-        // Give the actor time to load ingot files
-        self.settle(500).await;
     }
 
     /// Open a text document.
@@ -257,9 +308,37 @@ impl MockLspClient {
         self.log_messages.lock().unwrap().clear();
     }
 
-    /// Wait for the server to settle (process queued events).
-    pub async fn settle(&self, ms: u64) {
-        tokio::time::sleep(Duration::from_millis(ms)).await;
+    /// Wait until the actor has applied the expected document contents.
+    pub async fn wait_for_text(&mut self, uri: &Url, expected: &str) {
+        tokio::time::timeout(WAIT_TIMEOUT, async {
+            loop {
+                let text = self
+                    .server
+                    .request::<DocumentTextRequest>(uri.clone())
+                    .await
+                    .expect("document text request failed");
+                if text.as_deref() == Some(expected) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("timed out waiting for document contents");
+    }
+
+    /// Wait for and analyze this edit before continuing. This preserves malformed
+    /// intermediate-state coverage even when edits finish before the batch timer.
+    pub async fn analyze(&mut self, uri: &Url, expected: &str) {
+        self.wait_for_text(uri, expected).await;
+        tokio::time::timeout(
+            WAIT_TIMEOUT,
+            self.server
+                .request::<DocumentDiagnosticsRequest>(uri.clone()),
+        )
+        .await
+        .expect("diagnostics timed out")
+        .expect("diagnostics failed");
     }
 
     /// Request goto definition.
@@ -337,14 +416,12 @@ impl MockLspClient {
             .await
     }
 
-    /// Replay a sequence of edits with settle time between each.
+    /// Replay a sequence of edits, waiting for each to reach the actor.
     /// Each entry is the full file content at that point in time.
-    pub async fn replay_edits(&mut self, uri: &Url, edits: &[&str], settle_ms: u64) {
+    pub async fn replay_edits(&mut self, uri: &Url, edits: &[&str]) {
         for (i, text) in edits.iter().enumerate() {
             self.did_change(uri, i as i32 + 2, text);
-            if settle_ms > 0 {
-                self.settle(settle_ms).await;
-            }
+            self.analyze(uri, text).await;
         }
     }
 
@@ -355,24 +432,34 @@ impl MockLspClient {
         }
     }
 
-    /// Poll until a diagnostic with the given code appears for the URI, or give up.
+    /// Wait for a matching publish notification, including already collected ones.
+    pub async fn wait_for_diagnostics(
+        &self,
+        matches: impl Fn(&PublishedDiagnostics) -> bool,
+    ) -> bool {
+        tokio::time::timeout(WAIT_TIMEOUT, async {
+            loop {
+                let notified = self.diagnostics_changed.notified();
+                if self.diagnostics.lock().unwrap().iter().any(&matches) {
+                    break;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .is_ok()
+    }
+
+    /// Wait until a diagnostic with the given code appears for the URI, or give up.
     pub async fn wait_for_diagnostic_code(&self, uri: &Url, code: &str) -> bool {
-        for _ in 0..20 {
-            self.settle(500).await;
-            let found = self
-                .diagnostics()
-                .iter()
-                .filter(|d| &d.uri == uri)
-                .flat_map(|d| &d.diagnostics)
-                .any(|d| match &d.code {
+        self.wait_for_diagnostics(|published| {
+            &published.uri == uri
+                && published.diagnostics.iter().any(|d| match &d.code {
                     Some(NumberOrString::String(s)) => s == code,
                     _ => false,
-                });
-            if found {
-                return true;
-            }
-        }
-        false
+                })
+        })
+        .await
     }
 
     /// Return all diagnostics for a specific URI from the latest publish.
@@ -407,7 +494,7 @@ async fn mock_lsp_scenarios() {
 
     let uri = lib_url();
     client.did_open(&uri, "");
-    client.settle(500).await;
+    client.wait_for_text(&uri, "").await;
 
     scenario_survives_malformed_edits_and_formats(&mut client, &uri).await;
     scenario_self_to_mut_self_keystrokes(&mut client, &uri).await;
@@ -429,7 +516,7 @@ async fn mock_lsp_scenarios() {
 async fn scenario_survives_malformed_edits_and_formats(client: &mut MockLspClient, uri: &Url) {
     let valid = "struct Foo { x: u256 }";
     client.did_change(uri, 100, valid);
-    client.settle(500).await;
+    client.analyze(uri, valid).await;
 
     // Burst of malformed edits — no settling between them
     client.replay_edits_burst(
@@ -445,12 +532,12 @@ async fn scenario_survives_malformed_edits_and_formats(client: &mut MockLspClien
         ],
     );
 
-    client.settle(1000).await;
+    client.analyze(uri, "struct S<T, const N:").await;
 
     // Restore valid text and verify formatting still works
     client.clear_diagnostics();
     client.did_change(uri, 110, valid);
-    client.settle(500).await;
+    client.analyze(uri, valid).await;
 
     let result = client.format(uri).await;
     assert!(
@@ -468,16 +555,14 @@ async fn scenario_self_to_mut_self_keystrokes(client: &mut MockLspClient, uri: &
     };
 
     client.did_change(uri, 200, &template("self"));
-    client.settle(500).await;
+    client.analyze(uri, &template("self")).await;
 
     let edits: Vec<String> = ["mself", "muself", "mutself", "mut self"]
         .iter()
         .map(|s| template(s))
         .collect();
     let edit_refs: Vec<&str> = edits.iter().map(|s| s.as_str()).collect();
-    client.replay_edits(uri, &edit_refs, 100).await;
-
-    client.settle(1000).await;
+    client.replay_edits(uri, &edit_refs).await;
 
     let result = client.format(uri).await;
     assert!(result.is_ok(), "server should survive keystroke sequence");
@@ -487,13 +572,13 @@ async fn scenario_self_to_mut_self_keystrokes(client: &mut MockLspClient, uri: &
 async fn scenario_features_work_after_malformed_edits(client: &mut MockLspClient, uri: &Url) {
     let code = "struct Foo {\n    x: u256\n}\nfn bar() -> Foo {\n    return Foo(x: 1)\n}";
     client.did_change(uri, 300, code);
-    client.settle(500).await;
+    client.analyze(uri, code).await;
 
     // Break it, then fix it
     client.replay_edits_burst(uri, &["}{}{", ""]);
-    client.settle(500).await;
+    client.analyze(uri, "").await;
     client.did_change(uri, 310, code);
-    client.settle(500).await;
+    client.analyze(uri, code).await;
 
     // Hover on "Foo" in the return type (line 3, char 13)
     let hover_result = client.hover(uri, 3, 13).await;
@@ -531,7 +616,7 @@ async fn scenario_format_during_malformed_intermediate_states(
     };
 
     client.did_change(uri, 400, &template("self"));
-    client.settle(500).await;
+    client.analyze(uri, &template("self")).await;
 
     // Simulate typing while formatting is triggered at each step
     let intermediates = ["mself", "muself", "mutself", "mut self"];
@@ -564,7 +649,7 @@ async fn scenario_format_during_malformed_intermediate_states(
 /// Format races with diagnostics computation (format-on-save scenario).
 async fn scenario_format_concurrent_with_diagnostics(client: &mut MockLspClient, uri: &Url) {
     client.did_change(uri, 500, "struct Foo { x: u256 }");
-    client.settle(500).await;
+    client.analyze(uri, "struct Foo { x: u256 }").await;
 
     // Send broken edits and IMMEDIATELY format without settling —
     // diagnostics are still being computed when format arrives
@@ -593,7 +678,7 @@ async fn scenario_format_during_generic_struct_keystroke_sequence(
     uri: &Url,
 ) {
     client.did_change(uri, 600, "");
-    client.settle(500).await;
+    client.analyze(uri, "").await;
 
     let steps = [
         "s",
@@ -732,7 +817,7 @@ async fn scenario_errors_reported_after_panic_recovery(client: &mut MockLspClien
     // Trigger a diagnostics run; the handler will hit the panic and the outer
     // catch_unwind in handle_files_need_diagnostics must absorb it.
     client.did_change(uri, 900, "struct TriggerDiag {}");
-    client.settle(500).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Verify the latch was actually consumed by this server and not stolen
     // by a concurrent test. If this fires, the test is racy.
@@ -787,7 +872,12 @@ async fn scenario_unhandled_notifications_do_not_warn(client: &mut MockLspClient
         .server
         .notify::<UnhandledTestNotification>(serde_json::Value::Null)
         .expect("notify failed");
-    client.settle(200).await;
+    // A round trip through the same stream ensures the notification was handled.
+    client
+        .server
+        .request::<DocumentTextRequest>(lib_url())
+        .await
+        .expect("barrier request failed");
 
     let warns = client.log_messages_of_type(MessageType::WARNING);
     let offending: Vec<&LogMessageParams> = warns
@@ -806,18 +896,14 @@ async fn scenario_unhandled_notifications_do_not_warn(client: &mut MockLspClient
 
 /// Verify diagnostics are published via the async pipeline.
 async fn scenario_diagnostics_published_for_broken_code(client: &mut MockLspClient) {
-    // The fixture's foo.fe produces diagnostics. Wait for them to arrive
-    // through the full pipeline: actor -> event batching -> publish.
+    // Explicitly trigger diagnostics instead of relying on a previous scenario's
+    // pending batch. Wait through the full actor -> batching -> publish pipeline.
+    let uri = Url::from_file_path(fixture_path().join("src/foo.fe")).unwrap();
     client.clear_diagnostics();
-    let mut found = false;
-    for _ in 0..40 {
-        client.settle(500).await;
-        let diags = client.diagnostics();
-        if diags.iter().any(|d| !d.diagnostics.is_empty()) {
-            found = true;
-            break;
-        }
-    }
+    client.did_open(&uri, include_str!("../test_files/single_ingot/src/foo.fe"));
+    let found = client
+        .wait_for_diagnostics(|d| d.uri == uri && !d.diagnostics.is_empty())
+        .await;
     assert!(
         found,
         "should receive non-empty diagnostics from the fixture ingot"
@@ -848,19 +934,12 @@ fn hover_text(hover: &Hover) -> String {
     }
 }
 
-async fn hover_eventually(
-    client: &mut MockLspClient,
-    uri: &Url,
-    line: u32,
-    character: u32,
-) -> Hover {
-    for _ in 0..20 {
-        if let Ok(Some(hover)) = client.hover(uri, line, character).await {
-            return hover;
-        }
-        client.settle(200).await;
-    }
-    panic!("expected hover result at {line}:{character}");
+async fn hover_at(client: &mut MockLspClient, uri: &Url, line: u32, character: u32) -> Hover {
+    client
+        .hover(uri, line, character)
+        .await
+        .expect("hover failed")
+        .unwrap_or_else(|| panic!("expected hover result at {line}:{character}"))
 }
 
 #[tokio::test]
@@ -870,7 +949,7 @@ async fn mock_lsp_hover_shows_contract_field_layout_info() {
 
     let uri = lib_url();
     client.did_open(&uri, "");
-    client.settle(500).await;
+    client.wait_for_text(&uri, "").await;
 
     let code = r#"msg M {
   #[selector = 0x01]
@@ -889,9 +968,9 @@ pub contract C {
 }
 "#;
     client.did_change(&uri, 700, code);
-    client.settle(1000).await;
+    client.wait_for_text(&uri, code).await;
 
-    let field_hover = hover_eventually(&mut client, &uri, 9, 39).await;
+    let field_hover = hover_at(&mut client, &uri, 9, 39).await;
     let field_text = hover_text(&field_hover);
     assert!(
         field_text.contains("### Field Layout")
@@ -900,7 +979,7 @@ pub contract C {
         "expected field hover to include layout info, got:\n{field_text}"
     );
 
-    let alias_hover = hover_eventually(&mut client, &uri, 10, 7).await;
+    let alias_hover = hover_at(&mut client, &uri, 10, 7).await;
     let alias_text = hover_text(&alias_hover);
     assert!(
         alias_text.contains("### Field Layout")
@@ -918,7 +997,7 @@ async fn mock_lsp_hover_labels_contract_layout_sources() {
 
     let uri = lib_url();
     client.did_open(&uri, "");
-    client.settle(500).await;
+    client.wait_for_text(&uri, "").await;
 
     let code = r#"use std::evm::StorageMap
 
@@ -934,9 +1013,9 @@ pub contract Counter {
 }
 "#;
     client.did_change(&uri, 701, code);
-    client.settle(1000).await;
+    client.wait_for_text(&uri, code).await;
 
-    let store_hover = hover_eventually(&mut client, &uri, 8, 7).await;
+    let store_hover = hover_at(&mut client, &uri, 8, 7).await;
     let store_text = hover_text(&store_hover);
     assert!(
         store_text.contains("### Field Layout")
@@ -947,7 +1026,7 @@ pub contract Counter {
         "expected source-labeled field layout, got:\n{store_text}"
     );
 
-    let baz_hover = hover_eventually(&mut client, &uri, 10, 7).await;
+    let baz_hover = hover_at(&mut client, &uri, 10, 7).await;
     let baz_text = hover_text(&baz_hover);
     assert!(
         baz_text.contains("- `0`: `baz.SALT` (explicit parameter, `u256`)")
@@ -957,7 +1036,7 @@ pub contract Counter {
         "the explicit SALT must not be confused with the allocator cursor:\n{baz_text}"
     );
 
-    let contract_hover = hover_eventually(&mut client, &uri, 7, 14).await;
+    let contract_hover = hover_at(&mut client, &uri, 7, 14).await;
     let contract_text = hover_text(&contract_hover);
     for line in [
         "- `0`: `baz.SALT` (explicit parameter, `u256`)",
@@ -987,7 +1066,7 @@ async fn mock_lsp_hover_groups_contract_layout_by_address_space() {
 
     let uri = lib_url();
     client.did_open(&uri, "");
-    client.settle(500).await;
+    client.wait_for_text(&uri, "").await;
 
     let code = r#"use std::evm::TStorPtr
 
@@ -998,9 +1077,9 @@ pub contract Spaces {
 }
 "#;
     client.did_change(&uri, 702, code);
-    client.settle(1000).await;
+    client.wait_for_text(&uri, code).await;
 
-    let hover = hover_eventually(&mut client, &uri, 2, 14).await;
+    let hover = hover_at(&mut client, &uri, 2, 14).await;
     let text = hover_text(&hover);
     for section in [
         "#### Storage",
@@ -1025,7 +1104,7 @@ async fn mock_lsp_hover_shows_layout_families_and_transactional_failures() {
 
     let uri = lib_url();
     client.did_open(&uri, "");
-    client.settle(500).await;
+    client.wait_for_text(&uri, "").await;
 
     let family_code = r#"use std::evm::StorageMap
 
@@ -1034,8 +1113,8 @@ pub contract C {
 }
 "#;
     client.did_change(&uri, 710, family_code);
-    client.settle(1000).await;
-    let family_hover = hover_eventually(&mut client, &uri, 3, 7).await;
+    client.wait_for_text(&uri, family_code).await;
+    let family_hover = hover_at(&mut client, &uri, 3, 7).await;
     let family_text = hover_text(&family_hover);
     assert!(
         family_text.contains("- `0 + i0` (i0: 0..3): `maps[i0].SALT` ")
@@ -1052,14 +1131,14 @@ pub contract C {
 }
 "#;
     client.did_change(&uri, 711, invalid_code);
-    client.settle(1000).await;
-    let good_hover = hover_eventually(&mut client, &uri, 4, 7).await;
+    client.wait_for_text(&uri, invalid_code).await;
+    let good_hover = hover_at(&mut client, &uri, 4, 7).await;
     let good_text = hover_text(&good_hover);
     assert!(
         good_text.contains("Unavailable because another contract field"),
         "expected transactional allocation status, got:\n{good_text}"
     );
-    let bad_hover = hover_eventually(&mut client, &uri, 5, 7).await;
+    let bad_hover = hover_at(&mut client, &uri, 5, 7).await;
     let bad_text = hover_text(&bad_hover);
     assert!(
         bad_text.contains("Invalid:") && bad_text.contains("not a `u256` or `usize`"),
@@ -1144,7 +1223,7 @@ fn bar() -> () {
     let z: who::what::how::When
 }"#;
     client.did_open(&uri, lib_content);
-    client.settle(500).await;
+    client.wait_for_text(&uri, lib_content).await;
 
     // Fire a burst modeled on the Zed log: definition + hover + references
     // across several cursor positions. Each position hits a `Why`
