@@ -263,10 +263,10 @@ Only the `storage_map` word helpers call the hashed builtins. The `pub(ingot)`
 visibility trusts all of `std`, so this call-site restriction is an audited
 invariant.
 
-One limitation remains. Inside a receiver method, a live borrow of an input
-place such as `self.total_supply` still conflicts with the method's own map
-access. The input may be any storage place, and a local reborrow of an input is
-checked conservatively against unresolved accesses.
+Inside a receiver method, a live reborrow of an input place such as
+`self.total_supply` exports its separation from the method's map accesses.
+A concrete caller can establish this for a compiler-allocated contract field.
+An arbitrary storage pointer still cannot establish the required separation.
 
 ## Entry contents, allocation birth, and opaque overwrites
 
@@ -409,6 +409,8 @@ encode an execution order.
 - Incoming ownership requirements and normal-return availability effects.
 - Native-validity obligations for conditional raw overwrites.
 - Boundary requirements for transport, retention, and writable storage.
+- Separation requirements that callers must establish, with the native validity
+  of the accesses they relate.
 - Whether a normal return is possible.
 
 All components participate in equality and interning. Summary construction runs
@@ -526,6 +528,99 @@ Every cyclic region has a repeated-value set, including an empty set when the
 verified normalized cycle defines no values. Such cycles still participate in
 feedback and no-normal-return analysis.
 
+Recursive memory effects forget choices private to repeated calls. Their
+receiver authority uses universal projection under the original access
+execution domain: it must hold on every hidden execution that can reach the
+access. Possible authority cannot become guaranteed authority. Access-local
+witnesses are projected before comparing that domain with an authorizer's
+independent witness scope.
+
+### Separation requirements
+
+An input loan protects memory that the caller lends. Inside the body, an access
+can usually not be proved separate from it: the caller decides which places its
+inputs and pointers name. The body therefore reports only a definite overlap
+and exports the rest as `BorrowSummary::loan_requirements`. Each clause relates:
+- a protected borrow live across an access;
+- the access, with its extent;
+- the parts of the protected place that a live child borrow certainly
+  suspended;
+- the guard under which they must not overlap.
+
+All four share one witness scope. Two independently quantified regions would
+pair alternatives that never occurred together.
+
+Ordinary call effects may use an unconditional callee separation requirement to
+exclude an opaque overwrite: the requirement must protect the clobbered cell
+(or a containing place), cover the written footprint, and have no suspended slices. A matching
+source and extent is covered; an unknown extent also covers writes through
+offsets of that source. This does not establish loan authority. Resolving the callee's
+requirements and native-validity obligations still uses the physical basis and
+retains the overwrite until the caller independently proves it impossible.
+Effect and proof resolutions have separate caches.
+
+A reborrow descended from an input loan still names caller-supplied memory, so
+its unresolved separation is also exported. Creating `mut input` or `ref input`
+does not make the referent concrete. An input ancestor permits deferral only;
+it never discharges a separation requirement or authorizes an aliasing access.
+Definite overlap and non-representable endpoints remain conflicts.
+
+Requirements come from local accesses, from call effects, and from accesses of
+arguments and effect arguments. A caller resolves both endpoints of each callee
+clause at the call, on a physical basis. Distinct inputs may alias unless
+something separates them:
+- their layout or contracts;
+- distinct objects, or disjoint paths within one object;
+- a fresh allocation against incoming memory;
+- a hashed slot against an allocated field.
+
+The distinct-input assumption that ordinary resolution uses never applies
+here. Authority never discharges a requirement: a loan found while resolving an
+endpoint is not the borrow the callee held.
+
+At the call:
+- A definite overlap outside the suspended parts is a conflict.
+- A possible overlap is forwarded when a caller can still refine one of its
+  endpoints, and rejected otherwise.
+- The call's execution guard and the callee's choices, instantiated from the
+  arguments, restrict every clause.
+
+Diagnostics name the borrow and access where a requirement began. That
+provenance travels beside the summary and never enters its equality.
+
+`separation_validity` holds the native validity of the related accesses. An
+access whose stored borrow may have been overwritten has no valid region left,
+so its relation disappears while its validity remains. Callers resolve these
+obligations on the same physical basis. A protected referent with invalid
+contents holds no loan to protect; any use of it has its own validity
+obligation.
+
+Clauses are normalized as a whole. Witnesses that the relation itself names
+come first. A witness that only guards observe is eliminated: the clause keeps
+it existentially, and a suspended part stays suspended only where it holds on
+every value the clause admits. Equal relations merge their guards.
+Callee-private choices are also projected from these pre-call obligations: the
+access may execute on any admitted private choice, while a suspended slice must
+remain suspended on every admitted choice. Argument and result choices retain
+their boundary identities. Slices outside the access's projected guard are
+irrelevant and are removed.
+
+Limits bound the representation:
+- pairs per comparison;
+- relations per summary;
+- guard nodes and witnesses per clause;
+- stored nodes per clause.
+
+Stored nodes are the sources, projection steps, conversion views and index
+arguments of both endpoints and their dependencies. Exceeding a limit is a
+deterministic analysis failure; it never truncates the requirements. Summary limits
+apply after witness projection and merging equal relations. Repeated body
+accesses and intermediate guards are not additional exported requirements.
+
+A borrow stored in contract storage or transient storage is invalid native
+contents, because storing one there is rejected. A method on a storage struct
+whose type contains a borrow must reinitialize that field before using it.
+
 ### Boolean and scalar predicates
 
 Boolean branch edges carry complementary guards keyed by the actual normalized
@@ -602,21 +697,25 @@ unsigned bound only after a corresponding fill certificate is established.
 ### Recursive fresh results
 
 Recursive forwarding of an input preserves that input's may-alias identity. For a
-call returning one direct capability, fresh alternatives share one call-result
-port: the returned object of that call evaluation. The port is keyed by the
-caller's semantic instance and call-result value, and the enclosing loop
-generation distinguishes actual evaluations. Other exported components may name
-fresh storage only as a stored copy of the result or as invalid contents of fresh
-storage; certified ranges and native requirements disable the port. An
-allocation whose summary arguments are family or existential binders can name
-several objects in one evaluation, so a stored copy of such a family member is
-not identified with the result. Equal abstract values alone never merge objects.
+call with one direct capability result, fresh alternatives share one output
+port: the returned object of that call evaluation. A call without a capability
+result can instead use one fixed capability slot in a directly named input as
+its sole fresh output. Dynamic destinations, multiple fresh slots, and fresh
+objects exported through other summary components disable this extension.
+The port is keyed by the caller's semantic instance and call-result value, and
+the enclosing loop generation distinguishes actual evaluations. Other exported
+components may name fresh storage only as a proven stored copy or invalid
+contents of fresh storage; certified ranges and native requirements disable the
+port. A family can supply the one output object, but its abstract value does not
+identify a second observable family member with it. Stored copies with family or
+existential allocation arguments therefore disable the port. Equal abstract
+values alone never merge objects.
 
 Convergence: each function in a recursive component has finitely many allocation
 and call sites. Fresh alternatives that reach the result reuse their call site's
 port instead of adding a summary choice per recursion depth, and the internal
-recursive choices are projected only from the result's may-sources, stored copies
-of the result, and invalid fresh contents. The source identities reachable in a
+recursive choices are projected from input may-sources, fresh output ports,
+stored copies of the result, and invalid fresh contents. The source identities reachable in a
 component summary are therefore drawn from a finite set, and the guards over them
 join monotonically. Growth outside this representation, such as a poststate that
 exports a distinct fresh object, still reaches the bounded convergence
@@ -642,6 +741,8 @@ normal-return facts, and subsequent iterations compose them. Private opaque
 addresses used only in availability effects are quantified within their clauses,
 which avoids growing call-depth identities or accidentally relating independent
 effects. Such private identities do not establish definite initialization in callers.
+Recursive choices in reinitialization guards are projected universally under the
+normal-return execution domain: a possible write never becomes a definite one.
 Opaque signature contracts conservatively consume exposed non-Copy raw pointees
 and supply no restoration guarantee. Trusted byte-memory intrinsics describe byte
 accesses; a byte write is not an ownership-consuming load.
@@ -754,7 +855,7 @@ improvements with empty snapshots. Source comments identify each case.
 | Zero or byte-copy a native-reference slot, then load it | Raw bytes do not establish a valid native reference, nor does returning an uninitialized slot from a loop. Typed reference stores and copies are accepted. | [Native slot initialization](../../crates/uitest/fixtures/semantic_borrowck/native_slot_initialization.fe) |
 | Move one cell, then write through a pointer selecting that cell or another | The write cannot definitely restore the moved cell. An exact destination is accepted. | [Ambiguous reinitialization](../../crates/uitest/fixtures/semantic_borrowck/ambiguous_reinitialization.fe) |
 | Keep a storage borrow live across an external call | CALL conflicts with shared and mutable state loans; STATICCALL conflicts with mutable state loans. Ending the loan before the call and reborrowing afterward is accepted. | [External call state borrows](../../crates/uitest/fixtures/semantic_borrowck/external_call_state_borrows.fe) |
-| Call a `mut self` method that uses a `StorageMap` field on a contract-field struct | Accepted from init and recv arms, through `uses` helpers, for nested fields and array elements, and while a sibling field of the contract field is borrowed. Raw slot accesses, packed arrays, pointer-bound providers, and a live input-field borrow inside the method still conflict. | [Accepted](../../crates/uitest/fixtures/semantic_borrowck/storage_map_field_methods.fe), [rejected](../../crates/uitest/fixtures/semantic_borrowck/storage_map_field_methods_rejected.fe) |
+| Call a `mut self` method that uses a `StorageMap` field on a contract-field struct | Accepted from init and recv arms, through `uses` helpers, for nested fields and array elements, and while a sibling field of the contract field is borrowed. A live input-field reborrow exports separation for the concrete caller to prove. Raw slot accesses, packed arrays, and pointer-bound providers still conflict. | [Accepted](../../crates/uitest/fixtures/semantic_borrowck/storage_map_field_methods.fe), [rejected](../../crates/uitest/fixtures/semantic_borrowck/storage_map_field_methods_rejected.fe) |
 | Select an allocating factory with a boolean inside a loop, then consume the joined result | Complementary branch guards preserve the selected fresh allocation and accept the move. Moving it twice still conflicts. | [Boolean factory loop](../../crates/uitest/fixtures/semantic_borrowck/boolean_factory_loop.fe) |
 | Recursively return one freshly allocated object | Direct and mutual fresh returns converge through a single-object result port; forwarding an existing pointer retains its alias identity. A stored older object from the same loop allocation is not the result, and unsupported poststate growth still fails closed. | [Recursive fresh return](../../crates/uitest/fixtures/semantic_borrowck/recursive_fresh_return.fe) |
 | Store one typed heap cell, then read `children[index]` | A constant or symbolic store is recovered by a symbolic read when the caller's index matches; an unwritten member keeps unknown contents that may alias the mutable cursor. | [Typed heap cells](../../crates/uitest/fixtures/semantic_borrowck/typed_heap_cells.fe) |

@@ -1707,6 +1707,21 @@ impl<'db> Guard<'db> {
         .expect("existential quantification preserves feasibility")
     }
 
+    /// Keep this condition only where it holds for every hidden choice admitted
+    /// by `domain`. The result is restricted to executions the projected domain
+    /// admits; existential projection of permission would grant extra authority.
+    pub fn forget_occurrences_universally(
+        &self,
+        domain: &Self,
+        hidden: impl Fn(ValueOccurrence) -> bool,
+    ) -> Option<Self> {
+        let projected = domain.forget_occurrences(&hidden);
+        match domain.difference(self) {
+            Some(refuted) => projected.difference(&refuted.forget_occurrences(hidden)),
+            None => Some(projected),
+        }
+    }
+
     /// Forget old scalar selectors without identifying them with a new execution.
     pub fn forget_indices(&self, mut repeated: impl FnMut(IndexExpr<'db>) -> bool) -> Self {
         let indices: BTreeSet<_> = self
@@ -1733,27 +1748,32 @@ impl<'db> Guard<'db> {
     /// Eliminate clause-local witnesses that are observable only through scalar
     /// constraints. A witness indexing an enum choice remains observable: its
     /// quantification would require also quantifying that indexed choice.
+    /// Projection can make such a choice redundant, exposing its witness, so it
+    /// repeats until no hidden witness is projectable.
     pub fn project_witnesses(&self, hidden: impl Fn(IndexExpr<'db>) -> bool) -> Self {
-        let indexed: BTreeSet<_> = self
-            .condition
-            .keys()
-            .flat_map(|choice| choice.path.indices())
-            .collect();
-        let projected: BTreeSet<_> = self
-            .indices()
-            .into_iter()
-            .filter(|index| hidden(*index) && !indexed.contains(index))
-            .collect();
-        if projected.is_empty() {
-            return self.clone();
+        let mut guard = self.clone();
+        loop {
+            let indexed: BTreeSet<_> = guard
+                .condition
+                .keys()
+                .flat_map(|choice| choice.path.indices())
+                .collect();
+            let projected: BTreeSet<_> = guard
+                .indices()
+                .into_iter()
+                .filter(|index| hidden(*index) && !indexed.contains(index))
+                .collect();
+            if projected.is_empty() {
+                return guard;
+            }
+            guard = Self::canonical(
+                &guard.scope,
+                guard.condition.map_leaves(|condition| {
+                    Arc::new(condition.project(|index| projected.contains(&index)))
+                }),
+            )
+            .expect("existential projection preserves feasibility");
         }
-        Self::canonical(
-            &self.scope,
-            self.condition.map_leaves(|condition| {
-                Arc::new(condition.project(|index| projected.contains(&index)))
-            }),
-        )
-        .expect("existential projection preserves feasibility")
     }
 
     pub fn implies(&self, other: &Self) -> bool {
@@ -1915,6 +1935,42 @@ mod tests {
     impl Hash for Collision {
         fn hash<H: Hasher>(&self, state: &mut H) {
             0u8.hash(state);
+        }
+    }
+
+    #[test]
+    fn universal_choice_projection_preserves_only_guaranteed_permission() {
+        let scope = BinderScope::default();
+        let outer = ChoiceKey::new(ValueOccurrence::Argument(0), StructuralPath::default());
+        let permission = ChoiceKey::new(ValueOccurrence::Argument(1), StructuralPath::default());
+        let hidden = ChoiceKey::new(ValueOccurrence::SummaryChoice(0), StructuralPath::default());
+        let admitted = Guard::always(&scope).with_boolean(outer, true).unwrap();
+        let authorized = Guard::always(&scope)
+            .with_boolean(permission, true)
+            .unwrap();
+        for branch in [None, Some(false), Some(true)] {
+            let domain = branch.map_or_else(
+                || admitted.clone(),
+                |value| admitted.with_boolean(hidden.clone(), value).unwrap(),
+            );
+            for required in [None, Some(false), Some(true)] {
+                let condition = required.map_or_else(
+                    || authorized.clone(),
+                    |value| authorized.with_boolean(hidden.clone(), value).unwrap(),
+                );
+                let projected = condition.forget_occurrences_universally(&domain, |choice| {
+                    matches!(choice, ValueOccurrence::SummaryChoice(_))
+                });
+                let expected = if required.is_none() || branch == required {
+                    admitted.and(&authorized)
+                } else {
+                    None
+                };
+                assert_eq!(
+                    projected, expected,
+                    "domain {branch:?}, permission {required:?}"
+                );
+            }
         }
     }
 

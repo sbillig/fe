@@ -1060,3 +1060,192 @@ pub fn main() -> i32 {
         assert!(result.status.success(), "O{level}: {result:?}");
     }
 }
+
+#[test]
+fn native_input_reborrows_preserve_independent_buffer_and_scalar_updates() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("forwarded_buffers.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::ByteBuffer
+struct Frame { data: ByteBuffer, value: u256 }
+fn mixed(_ buffer: mut ByteBuffer, _ value: mut u256) {
+    value += 1
+    core::assert(buffer.try_resize(33))
+    let scalar: u256 = value
+    buffer.set_byte(index: 32, value: scalar.downcast_unchecked())
+    buffer.copy_within(dest: 0, source: 32, len: 1)
+    value += buffer.byte_at(0) as u256
+}
+fn forward(_ buffer: mut ByteBuffer, _ value: mut u256) {
+    mixed(mut buffer, mut value)
+}
+fn run(_ frame: mut Frame) { forward(mut frame.data, mut frame.value) }
+pub fn main() -> i32 {
+    let mut frame = Frame { data: ByteBuffer::new(), value: 20 }
+    run(mut frame)
+    core::assert(frame.value == 42 && frame.data.byte_at(32) == 21)
+    run(mut frame)
+    core::assert(frame.value == 86 && frame.data.byte_at(0) == 43)
+    frame.data.release()
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("forwarded_buffers"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_callee_separation_preserves_fresh_buffer_callers() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("independent_frames.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::ByteBuffer
+struct Journal { bytes: ByteBuffer }
+struct Frame { data: Journal, value: u256 }
+impl Frame {
+    fn new() -> Self { Self { data: Journal { bytes: ByteBuffer::new() }, value: 0 } }
+    fn run(mut self, state: mut Frame) {
+        self.data.bytes.clear()
+        self.value = 1
+        core::assert(self.data.bytes.try_resize(32))
+        core::assert(state.data.bytes.try_resize(32))
+        self.data.bytes.set_byte(index: 0, value: 2)
+        let mut i: u64 = 0
+        while i < 32 {
+            state.data.bytes.set_byte(index: i, value: 3)
+            i += 1
+        }
+        state.value += 1
+    }
+    fn release(own self) { self.data.bytes.release() }
+}
+fn execute(state: mut Frame) -> Frame {
+    let mut vm = Frame::new()
+    vm.run(state)
+    vm
+}
+fn finish(state: mut Frame) {
+    let mut vm = Frame::new()
+    vm.run(state)
+    vm.release()
+}
+pub fn main() -> i32 {
+    let mut state = Frame::new()
+    let vm = execute(state: mut state)
+    core::assert(vm.value == 1 && state.value == 1)
+    core::assert(vm.data.bytes.byte_at(0) == 2 && state.data.bytes.byte_at(31) == 3)
+    vm.release()
+    finish(state: mut state)
+    core::assert(state.value == 2 && state.data.bytes.byte_at(31) == 3)
+    state.release()
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("independent_frames"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_recursive_receiver_authority_converges() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("recursive_buffers.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::ByteBuffer
+fn write_at_depth(_ buffer: mut ByteBuffer, depth: usize, value: u8) {
+    if depth == 0 {
+        buffer.set_byte(index: 31, value)
+    } else {
+        write_at_depth(mut buffer, depth: depth - 1, value)
+    }
+}
+pub fn main() -> i32 {
+    let mut buffer = ByteBuffer::new()
+    core::assert(buffer.try_resize(32))
+    write_at_depth(mut buffer, depth: 0, value: 19)
+    core::assert(buffer.byte_at(31) == 19)
+    write_at_depth(mut buffer, depth: 32, value: 42)
+    core::assert(buffer.byte_at(31) == 42)
+    buffer.release()
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("recursive_buffers"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_recursive_buffer_poststates_converge() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("recursive_poststates.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::ByteBuffer
+fn grow(_ buffer: mut ByteBuffer, depth: usize, length: u64, value: u8) {
+    if depth == 0 {
+        let mut size: u64 = 1
+        while size <= length {
+            core::assert(buffer.try_resize(size))
+            buffer.set_byte(index: size - 1, value)
+            size += 1
+        }
+    } else { grow(mut buffer, depth: depth - 1, length, value) }
+}
+fn clear(_ buffer: mut ByteBuffer, depth: usize) {
+    if depth == 0 { buffer.clear() }
+    else { clear(mut buffer, depth: depth - 1) }
+}
+pub fn main() -> i32 {
+    let mut buffer = ByteBuffer::new()
+    grow(mut buffer, depth: 32, length: 32, value: 19)
+    core::assert(buffer.len() == 32 && buffer.byte_at(31) == 19)
+    clear(mut buffer, depth: 32)
+    core::assert(buffer.len() == 0)
+    grow(mut buffer, depth: 16, length: 513, value: 42)
+    core::assert(buffer.len() == 513)
+    for index in 0..513 { core::assert(buffer.byte_at(index.downcast_unchecked()) == 42) }
+    buffer.release()
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("recursive_poststates"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
