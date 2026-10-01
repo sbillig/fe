@@ -3515,9 +3515,10 @@ fn test_cli_test_workspace_root_is_workspace_aware() {
         output.contains("running `fe test` for 2 inputs"),
         "expected workspace member expansion, got:\n{output}"
     );
-    assert!(
-        output.contains("No tests found in"),
-        "expected no-tests warning, got:\n{output}"
+    assert_eq!(
+        output.matches("No tests found in").count(),
+        2,
+        "expected a no-tests warning for each workspace member, got:\n{output}"
     );
     assert!(
         !output.contains("Failed to emit test"),
@@ -3530,13 +3531,28 @@ fn test_cli_test_workspace_root_is_workspace_aware() {
 }
 
 #[test]
-fn test_cli_test_fe_repo_root() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|path| path.parent())
-        .expect("fe repo root");
-    let (output, exit_code) = run_fe_main_in_dir(&["test"], root);
-    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+fn test_cli_test_workspace_preserves_builtin_authority() {
+    let root = workspace_fixture("test_workspace_builtin_authority");
+    let (output, exit_code) = run_fe_main_in_dir(&["test"], &root);
+    assert_eq!(exit_code, 0, "fe test lost workspace authority:\n{output}");
+    assert!(output.contains("No tests found in"), "{output}");
+
+    // The integer-backed handle requires workspace authority. The same source
+    // must be rejected when its ingot is tested outside that workspace.
+    let isolated = tempdir().expect("tempdir");
+    fs::create_dir(isolated.path().join("src")).expect("create src dir");
+    for file in ["fe.toml", "src/lib.fe"] {
+        fs::copy(root.join("std").join(file), isolated.path().join(file)).expect("copy std ingot");
+    }
+    let (output, exit_code) = run_fe_main_in_dir(&["test"], isolated.path());
+    assert_ne!(
+        exit_code, 0,
+        "expected an untrusted handle error:\n{output}"
+    );
+    assert!(
+        output.contains("integer-backed handles are reserved for compiler-provided libraries"),
+        "expected an untrusted handle error:\n{output}"
+    );
 }
 
 #[test]
