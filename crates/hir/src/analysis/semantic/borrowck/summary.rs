@@ -39,8 +39,8 @@ use crate::{
                 region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace, substitute_clause},
                 semantics::{CapabilityClass, CapabilitySemantics},
                 separation::{
-                    SEPARATION_CLAUSE_LIMIT, SEPARATION_PAIR_LIMIT, SEPARATION_SIZE_LIMIT,
-                    Separation, SeparationSet, within_limits,
+                    SEPARATION_CLAUSE_LIMIT, SEPARATION_PAIR_LIMIT, Separation, SeparationSet,
+                    validity_within_limits, within_limits,
                 },
                 shape::{ShapeChildren, ShapeId},
                 source::{InputOrigin, SourceExpr},
@@ -1311,17 +1311,17 @@ impl<'db> Borrowck<'db> {
             summary.abstract_choices(self.db, &mut values, choices, separations);
         // Merging equal relations ORs their guards, so check the final clauses.
         let requirements = &summary.loan_requirements;
-        let validity = summary.separation_validity.clauses();
+        let validity = &summary.separation_validity;
         if requirements.clauses().len() > SEPARATION_CLAUSE_LIMIT
             || !requirements
                 .clauses()
                 .iter()
                 .all(|clause| within_limits(clause, requirements.scope()))
-            || validity.len() > SEPARATION_CLAUSE_LIMIT
-            || validity.iter().any(|clause| {
-                SourceExpr::from_place(&clause.payload)
-                    .is_some_and(|source| source.size() > SEPARATION_SIZE_LIMIT)
-            })
+            || validity.clauses().len() > SEPARATION_CLAUSE_LIMIT
+            || !validity
+                .clauses()
+                .iter()
+                .all(|clause| validity_within_limits(clause, validity.scope()))
         {
             return Err(self.separation_limit_diag(SemOrigin::Body(self.body.template_owner)));
         }
@@ -3624,7 +3624,7 @@ mod tests {
                     handle::HandleAddressSpace,
                     region::CANONICALIZED_REGION_CLAUSES,
                     repack::{ReferentRepackId, ReferentViews},
-                    separation::SEPARATION_GUARD_NODE_LIMIT,
+                    separation::{SEPARATION_GUARD_NODE_LIMIT, SEPARATION_WITNESS_LIMIT},
                     source::InputSource,
                     test_roots,
                 },
@@ -5568,9 +5568,8 @@ fn clobber(slot: *ref u256) {
         assert!(!check(&source));
     }
 
-    /// The first call in a solved body: its result, its arguments, and the
-    /// state before it.
-    fn first_call<'db>(checker: &Borrowck<'db>) -> (NValueId, Vec<NOperand>, BorrowState<'db>) {
+    /// The first call in a solved body: its position, result and arguments.
+    fn first_call(checker: &Borrowck<'_>) -> ((usize, usize), NValueId, Vec<NOperand>) {
         checker
             .body
             .blocks
@@ -5584,7 +5583,7 @@ fn clobber(slot: *ref u256) {
                         NStatementKind::Define {
                             result,
                             expr: NExpr::Call { args, .. },
-                        } => Some((*result, args.to_vec(), checker.before[block][index].clone())),
+                        } => Some(((block, index), *result, args.to_vec())),
                         _ => None,
                     })
             })
@@ -5680,7 +5679,8 @@ fn clobber(slot: *ref u256) {
         );
         let mut checker = Borrowck::new(&db, instance).unwrap();
         checker.solve().unwrap();
-        let (result, args, state) = first_call(&checker);
+        let ((block, index), result, args) = first_call(&checker);
+        let state = checker.before[block][index].clone();
         let scope = BinderScope::default();
         let inputs = CallInputs {
             args: &args,
@@ -6014,7 +6014,7 @@ fn clobber(slot: *ref u256) {
             validity: SymbolicPlace<'db>,
         ) {
             let scope = BinderScope::default();
-            let (result, _, _) = first_call(checker);
+            let (_, result, _) = first_call(checker);
             let call = &mut checker.calls.get_mut(&result).unwrap().summary;
             call.separation_validity = RegionSet::new(
                 &scope,
@@ -6046,11 +6046,72 @@ fn clobber(slot: *ref u256) {
             checker.conflicts = Some(checker.analyze_conflicts());
         }
         let input = |param| summary_input(&db, param);
+        let place = |param| SymbolicPlace {
+            root: RegionRoot::External(input(param).source),
+            path: RegionPath::default(),
+            views: Default::default(),
+        };
 
         // An access whose validity fails at this call is diagnosed here.
         let mut wrapper = solved("wrapper");
         inject(&db, &mut wrapper, clobbered(&db, input(0), input(0)));
         assert!(wrapper.conflicts().diagnostic.is_some());
+
+        // An access through a borrow that is invalid where the wrapper's
+        // inputs overlap leaves no relation; its validity is exported alone.
+        let mut wrapper = solved("wrapper");
+        let ((block, index), result, args) = first_call(&wrapper);
+        let state = wrapper.before[block][index].clone();
+        let [first, second] = [0, 1].map(|arg| {
+            let region = wrapper
+                .resolve_capability(state.value(args[arg].value))
+                .region;
+            SourceExpr::from_place(&region.clauses()[0].payload).unwrap()
+        });
+        let mut overwritten = ExternalSource::unknown(
+            first.source.contract,
+            AddressOccurrence::Value {
+                instance: wrapper.instance,
+                value: result,
+                choice: 0,
+            },
+            Box::new([]),
+            AddressProvenance::Raw,
+        );
+        overwritten.clobber = Some(Box::new(ClobberCondition::new(
+            first,
+            second,
+            AccessExtent::Typed,
+        )));
+        let damaged = RegionSet::singleton(
+            &BinderScope::default(),
+            RegionRoot::External(overwritten),
+            RegionPath::default(),
+        );
+        let original = state.value(args[1].value).clone();
+        let invalid = uniform(&mut wrapper, &original, |semantics| {
+            CapabilityRef::Invalidated {
+                class: semantics.class,
+                region: damaged.clone(),
+            }
+        });
+        wrapper.before[block][index].set_value(args[1].value, invalid);
+        inject(&db, &mut wrapper, place(1));
+        wrapper
+            .calls
+            .get_mut(&result)
+            .unwrap()
+            .summary
+            .separation_validity = RegionSet::empty(&BinderScope::default());
+        wrapper.resolve_operations().unwrap();
+        wrapper.conflicts = Some(wrapper.analyze_conflicts());
+        assert!(wrapper.conflicts().diagnostic.is_none());
+        let (summary, _) = wrapper.build_summary().unwrap();
+        assert!(summary.loan_requirements.is_empty());
+        assert_eq!(
+            clobber_params(&summary.separation_validity),
+            [(Some(0), Some(1))].into()
+        );
 
         // Over distinct certain inputs, the obligations are exported with the
         // clobber condition intact.
@@ -6079,7 +6140,8 @@ fn clobber(slot: *ref u256) {
         // A further caller refines them physically.
         for name in ["alias", "locals", "inputs"] {
             let mut caller = solved(name);
-            let (result, args, state) = first_call(&caller);
+            let ((block, index), result, args) = first_call(&caller);
+            let state = caller.before[block][index].clone();
             let call = &mut caller.calls.get_mut(&result).unwrap().summary;
             call.separation_validity = summary.separation_validity.clone();
             call.loan_requirements = summary.loan_requirements.clone();
@@ -6296,8 +6358,9 @@ fn clobber(slot: *ref u256) {
 
     #[test]
     fn separation_limits_apply_to_merged_relations() {
-        // Two clauses of one relation each fit the guard limit; merging them
-        // ORs their guards past it, which only the final check sees.
+        // Two clauses of one relation, or of one access's validity, each fit
+        // the guard limit; merging them ORs their guards past it, which only
+        // the final check sees.
         let count = 44;
         let params: Vec<_> = (0..count)
             .map(|index| format!("_ x{index}: u256"))
@@ -6370,30 +6433,126 @@ fn clobber(slot: *ref u256) {
             (vec![second.clone()], false),
             (vec![first, second], true),
         ] {
+            // Either relation clauses, or the validity of an access with no
+            // relation left.
+            for validity in [false, true] {
+                checker.conflicts = Some(ConflictAnalysis {
+                    diagnostic: None,
+                    exhausted: false,
+                    deferred: guards
+                        .iter()
+                        .filter(|_| !validity)
+                        .map(|guard| {
+                            let clause = Guarded {
+                                guard: guard.clone(),
+                                payload: relation.clone(),
+                            };
+                            (clause, origin)
+                        })
+                        .collect(),
+                    validity: NativeValidity {
+                        invalid: false,
+                        requirements: RegionSet::new(
+                            &scope,
+                            guards.iter().filter(|_| validity).map(|guard| Guarded {
+                                guard: guard.clone(),
+                                payload: relation.access.clone(),
+                            }),
+                        ),
+                    },
+                });
+                match checker.build_summary() {
+                    Ok((summary, _)) => {
+                        assert!(!merged);
+                        let exported = if validity {
+                            summary.separation_validity.clauses().len()
+                        } else {
+                            summary.loan_requirements.clauses().len()
+                        };
+                        assert_eq!(exported, 1);
+                    }
+                    Err(diagnostic) => {
+                        assert!(merged);
+                        assert_eq!(
+                            diagnostic.primary.message,
+                            "borrow separation requirements exceed the analysis limits"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn separation_validity_limits_bound_retained_witnesses() {
+        // The validity of an access with no relation left keeps every witness
+        // its place names; past the witness limit it fails like a relation.
+        let depth = SEPARATION_WITNESS_LIMIT as usize + 1;
+        let ty = (0..depth).fold("u256".to_string(), |ty, _| format!("[{ty}; 2]"));
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "separation_witnesses.fe".into(),
+            &format!("fn holder(_ cells: *{ty}) {{}}"),
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "holder"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        let param = checker
+            .body
+            .values
+            .iter()
+            .position(|value| matches!(value.definition, NValueDefinition::EntryParam { .. }))
+            .unwrap();
+        let cells = checker
+            .resolve_capability(checker.inventory.entry.value(NValueId::new(param)))
+            .region
+            .clauses()[0]
+            .payload
+            .clone();
+        let owner = BinderScope::default();
+        for witnesses in [depth - 1, depth] {
+            let (scope, selectors) =
+                (0..witnesses).fold((owner.clone(), Vec::new()), |(scope, mut selectors), _| {
+                    let (scope, selector) = scope.bind(IndexNamespace::Existential);
+                    selectors.push(Projection::Index(selector));
+                    (scope, selectors)
+                });
             checker.conflicts = Some(ConflictAnalysis {
                 diagnostic: None,
                 exhausted: false,
-                deferred: guards
-                    .into_iter()
-                    .map(|guard| {
-                        (
-                            Guarded {
-                                guard,
-                                payload: relation.clone(),
+                deferred: Vec::new(),
+                validity: NativeValidity {
+                    invalid: false,
+                    requirements: RegionSet::new(
+                        &owner,
+                        [Guarded {
+                            guard: Guard::always(&scope),
+                            payload: SymbolicPlace {
+                                path: RegionPath::new(selectors),
+                                ..cells.clone()
                             },
-                            origin,
-                        )
-                    })
-                    .collect(),
-                validity: NativeValidity::default(),
+                        }],
+                    ),
+                },
             });
             match checker.build_summary() {
                 Ok((summary, _)) => {
-                    assert!(!merged);
-                    assert_eq!(summary.loan_requirements.clauses().len(), 1);
+                    assert!(witnesses <= SEPARATION_WITNESS_LIMIT as usize);
+                    let [clause] = summary.separation_validity.clauses() else {
+                        panic!("one validity requirement");
+                    };
+                    assert_eq!(
+                        clause.guard.scope().existential_extension_of(&owner),
+                        Some(witnesses as u32)
+                    );
                 }
                 Err(diagnostic) => {
-                    assert!(merged);
+                    assert!(witnesses > SEPARATION_WITNESS_LIMIT as usize);
                     assert_eq!(
                         diagnostic.primary.message,
                         "borrow separation requirements exceed the analysis limits"

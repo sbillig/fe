@@ -302,26 +302,40 @@ pub fn within_limits<'db>(clause: &Guarded<'db, Separation<'db>>, owner: &Binder
             .iter()
             .map(|slice| slice.guard.node_count())
             .sum::<usize>();
-    let size = [&relation.protected, &relation.access]
-        .into_iter()
-        .map(|place| {
-            let root = match &place.root {
-                RegionRoot::External(source) => source.size(),
-                RegionRoot::Root { .. } | RegionRoot::Value(_) => 1,
-            };
-            root + place.path.as_slice().len() + place.views.iter().count()
-        })
-        .sum::<usize>()
+    let size = place_size(&relation.protected)
+        + place_size(&relation.access)
         + relation.extent.indices().count()
         + relation
             .suspended
             .iter()
             .map(|slice| 1 + slice.payload.as_slice().len())
             .sum::<usize>();
+    size <= SEPARATION_SIZE_LIMIT && guard_within_limits(&clause.guard, nodes, owner)
+}
+
+/// Whether the native validity of a related access, a clause over `owner`,
+/// fits the same limits as the relation.
+pub fn validity_within_limits<'db>(
+    clause: &Guarded<'db, SymbolicPlace<'db>>,
+    owner: &BinderScope,
+) -> bool {
+    place_size(&clause.payload) <= SEPARATION_SIZE_LIMIT
+        && guard_within_limits(&clause.guard, clause.guard.node_count(), owner)
+}
+
+/// How many nodes a place stores; see `ExternalSource::size`.
+fn place_size(place: &SymbolicPlace<'_>) -> usize {
+    let root = match &place.root {
+        RegionRoot::External(source) => source.size(),
+        RegionRoot::Root { .. } | RegionRoot::Value(_) => 1,
+    };
+    root + place.path.as_slice().len() + place.views.iter().count()
+}
+
+/// Whether `nodes` guard nodes fit, with at most the witness limit beyond `owner`.
+fn guard_within_limits(guard: &Guard<'_>, nodes: usize, owner: &BinderScope) -> bool {
     nodes <= SEPARATION_GUARD_NODE_LIMIT
-        && size <= SEPARATION_SIZE_LIMIT
-        && clause
-            .guard
+        && guard
             .scope()
             .existential_extension_of(owner)
             .is_some_and(|witnesses| witnesses <= SEPARATION_WITNESS_LIMIT)
