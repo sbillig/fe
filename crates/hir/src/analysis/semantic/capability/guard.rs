@@ -147,6 +147,41 @@ enum BitOperation {
     Exists(BitDecision, Box<[u16]>),
 }
 
+/// Bound all storage owned by the memo, including operand graphs. Counting shared
+/// graphs more than once is conservative: the memo never retains more than this
+/// many nodes, even when no new operation arrives to trigger reclamation.
+#[derive(Default)]
+struct BitOperationCache {
+    results: FxHashMap<BitOperation, Option<BitDecision>>,
+    storage: usize,
+}
+
+impl BitOperationCache {
+    const LIMIT: usize = 1 << 16;
+
+    fn insert(&mut self, operation: BitOperation, result: Option<BitDecision>) {
+        let operands = match &operation {
+            BitOperation::And(left, right)
+            | BitOperation::Or(left, right)
+            | BitOperation::Restrict(left, right) => left.node_count() + right.node_count(),
+            BitOperation::Not(graph) => graph.node_count(),
+            BitOperation::Substitute(graph, targets) => graph.node_count() + targets.len(),
+            BitOperation::Exists(graph, slots) => graph.node_count() + slots.len(),
+        };
+        // Include a unit for each entry so even infeasible/tiny operations are bounded.
+        let storage = 1 + operands + result.as_ref().map_or(0, Decision::node_count);
+        if storage > Self::LIMIT {
+            return;
+        }
+        if self.storage + storage > Self::LIMIT {
+            self.results.clear();
+            self.storage = 0;
+        }
+        self.results.insert(operation, result);
+        self.storage += storage;
+    }
+}
+
 thread_local! {
     /// One backing graph per distinct bit decision, for the same reason as
     /// `SHARED_CHOICES`: an operation that reduces to a constant would otherwise
@@ -159,15 +194,13 @@ thread_local! {
     /// really are interchangeable.
     static SHARED_CHOICES: RefCell<SharedGraphs<SlotChoice, u32>> = RefCell::default();
     static CONSTANT_BITS: [BitDecision; 2] = [Decision::leaf(false), Decision::leaf(true)];
-    static BIT_OPERATIONS: RefCell<FxHashMap<BitOperation, Option<BitDecision>>> =
-        RefCell::default();
+    static BIT_OPERATIONS: RefCell<BitOperationCache> = RefCell::default();
 }
 
 impl BitOperation {
-    const LIMIT: usize = 4096;
-
     fn run(self) -> Option<BitDecision> {
-        if let Some(result) = BIT_OPERATIONS.with_borrow(|results| results.get(&self).cloned()) {
+        if let Some(result) = BIT_OPERATIONS.with_borrow(|cache| cache.results.get(&self).cloned())
+        {
             return result;
         }
         let result = match &self {
@@ -189,12 +222,7 @@ impl BitOperation {
                 |left, right| *left || *right,
             )),
         };
-        BIT_OPERATIONS.with_borrow_mut(|results| {
-            if results.len() >= Self::LIMIT {
-                results.clear();
-            }
-            results.insert(self, result.clone());
-        });
+        BIT_OPERATIONS.with_borrow_mut(|cache| cache.insert(self, result.clone()));
         result
     }
 }
@@ -1363,12 +1391,15 @@ impl<'db> Guard<'db> {
             subst.source(),
             "substitution source scope must match"
         );
-        // A substitution without entries only extends the scope; the decision
-        // graph and its variables are unchanged.
+        if subst.is_identity() {
+            return Some(self.clone());
+        }
+        // A scope extension preserves the shared graph and tables, but needs its
+        // own handle so another scope cannot keep this guard's cache entries live.
         if subst.preserves_indices() {
             return Some(Self {
                 scope: subst.destination().clone(),
-                condition: self.condition.clone(),
+                condition: Arc::new((*self.condition).clone()),
             });
         }
         Self::canonical(
@@ -1588,6 +1619,7 @@ impl<'db> Guard<'db> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::index::IndexNamespace;
     use super::*;
 
     fn selected<'db>(scope: &BinderScope, occurrence: u16) -> Guard<'db> {
@@ -1649,6 +1681,117 @@ mod tests {
             32,
             "a restriction evaluated unreachable leaf pairs"
         );
+    }
+
+    #[test]
+    fn bit_operation_cache_bounds_operand_and_result_storage() {
+        for slot in 0..256 {
+            let source = Decision::chain(
+                (0..INDEX_BITS).map(|bit| (SlotBit::new(slot, bit), true)),
+                true,
+                false,
+            );
+            let operation = BitOperation::Not(source.clone());
+            let result = operation.clone().run().unwrap();
+            assert_eq!(
+                result,
+                source.map(|bit| Variable::Symbol(*bit), |value| !value)
+            );
+            BIT_OPERATIONS.with_borrow(|cache| {
+                let storage: usize = cache
+                    .results
+                    .iter()
+                    .map(|(operation, result)| {
+                        let BitOperation::Not(source) = operation else {
+                            panic!("only negations were cached");
+                        };
+                        1 + source.node_count() + result.as_ref().unwrap().node_count()
+                    })
+                    .sum();
+                assert_eq!(cache.storage, storage);
+                assert!(storage <= BitOperationCache::LIMIT);
+                assert_eq!(cache.results.get(&operation), Some(&Some(result)));
+            });
+        }
+        BIT_OPERATIONS.with_borrow(|cache| {
+            assert!(
+                cache.results.len() < 256,
+                "large operands never caused eviction"
+            );
+        });
+    }
+
+    #[test]
+    fn bit_operation_cache_skips_entries_exceeding_its_storage_budget() {
+        let mut cache = BitOperationCache::default();
+        let source = Decision::leaf(true);
+        let small = BitOperation::Not(source.clone());
+        cache.insert(small.clone(), Some(Decision::leaf(false)));
+        let storage = cache.storage;
+        let large = BitOperation::Substitute(
+            source.clone(),
+            vec![SlotTarget::Slot(0); BitOperationCache::LIMIT].into_boxed_slice(),
+        );
+        cache.insert(large, Some(source.clone()));
+        assert_eq!(cache.storage, storage);
+        assert_eq!(cache.results.len(), 1);
+        assert!(cache.results.contains_key(&small));
+        // Infeasible results still retain their operands and must charge for them.
+        cache.insert(BitOperation::Restrict(source.clone(), source), None);
+        assert_eq!(cache.storage, storage + 3);
+    }
+
+    #[test]
+    fn scope_extensions_do_not_keep_each_others_cache_entries_alive() {
+        let before = live_choice_graphs();
+        let scope = BinderScope::default();
+        let guard = selected(&scope, 0);
+        let mut cache = GuardCache::default();
+        let identity = IndexSubst::new(&scope, &scope, []).unwrap();
+        let unchanged = cache.substitute(&guard, &identity).unwrap();
+        assert!(Arc::ptr_eq(&unchanged.condition, &guard.condition));
+
+        let (mut destination, _) = scope.bind(IndexNamespace::Value);
+        let extension = IndexSubst::new(&scope, &destination, []).unwrap();
+        let hot = cache.substitute(&guard, &extension).unwrap();
+        assert_eq!(hot.scope(), &destination);
+        assert_eq!(hot.condition, guard.condition);
+        assert!(Arc::ptr_eq(
+            &hot.condition.choices,
+            &guard.condition.choices
+        ));
+        assert!(Arc::ptr_eq(&hot.condition.leaves, &guard.condition.leaves));
+        for _ in 0..64 {
+            (destination, _) = destination.bind(IndexNamespace::Value);
+            let subst = IndexSubst::new(&scope, &destination, []).unwrap();
+            cache.substitute(&guard, &subst).unwrap();
+        }
+        cache.sweep();
+        assert_eq!(
+            (cache.substitutions.len(), cache.representatives.len()),
+            (2, 2)
+        );
+        let again = cache.substitute(&guard, &extension).unwrap();
+        assert!(Arc::ptr_eq(&again.condition, &hot.condition));
+        assert_eq!(
+            live_choice_graphs(),
+            before + 1,
+            "scope extensions copied the graph"
+        );
+
+        drop((hot, again));
+        cache.sweep();
+        assert_eq!(
+            (cache.substitutions.len(), cache.representatives.len()),
+            (1, 1)
+        );
+        drop((guard, unchanged));
+        cache.sweep();
+        assert_eq!(
+            (cache.substitutions.len(), cache.representatives.len()),
+            (0, 0)
+        );
+        assert_eq!(live_choice_graphs(), before);
     }
 
     #[test]
