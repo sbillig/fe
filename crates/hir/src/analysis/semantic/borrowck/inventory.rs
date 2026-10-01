@@ -22,7 +22,7 @@ use crate::{
                 opaque::OpaqueWrite,
                 path::{RegionPath, StructuralPath},
                 region::{ProviderRegionId, RegionRoot, RegionSet},
-                semantics::CapabilityClass,
+                semantics::{CapabilityClass, StorageClass},
                 shape::{ShapeError, ShapeId},
                 source::InputSource,
                 state::{BorrowState, CapabilityValue, CapabilityValues},
@@ -36,6 +36,7 @@ use crate::{
             },
         },
         ty::{
+            ProviderAddressSpace,
             corelib::{is_std_evm_effect_method, is_std_evm_effect_trait},
             ty_check::BodyOwner,
             ty_def::{BorrowKind, TyId},
@@ -577,6 +578,20 @@ impl<'db> InputBuilder<'db> {
         let value = self
             .values
             .from_shape(shape, scope, |semantics, path, scope| {
+                // Storing a borrowed capability in Storage or Transient is
+                // rejected, and raw bytes never form a valid one, so such a
+                // location holds no admissible capability on entry.
+                if semantics.storage == StorageClass::Borrowed
+                    && let InputOrigin::Referent(source) = &origin
+                    && matches!(
+                        source.contract.address_space,
+                        HandleAddressSpace::Known(
+                            ProviderAddressSpace::Storage | ProviderAddressSpace::Transient
+                        )
+                    )
+                {
+                    return Vec::new();
+                }
                 let contract = match transport.referent(db, semantics, cursor) {
                     Ok(contract) => contract,
                     Err(error) => {

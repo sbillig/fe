@@ -15,7 +15,7 @@ use crate::analysis::{
             value::ValueId,
         },
     },
-    ty::{corelib::MemoryAccessKind, ty_def::TyId},
+    ty::{corelib::MemoryAccessKind, ty_check::BodyOwner, ty_def::TyId},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -43,6 +43,17 @@ pub struct BorrowSummary<'db> {
     /// Separation between accesses and borrows live across them that this body
     /// could not prove. Callers establish it physically, never by authority.
     pub loan_requirements: SeparationSet<'db>,
+}
+
+/// Where a separation requirement arose: a borrow a body held and the access it
+/// could not separate from it. Diagnostics resolve both spans from the owning
+/// body, so this never enters a summary's semantic equality.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub struct SeparationOrigin<'db> {
+    pub owner: BodyOwner<'db>,
+    pub template_owner: BodyOwner<'db>,
+    pub borrow: SemOrigin<'db>,
+    pub access: SemOrigin<'db>,
 }
 
 /// A normal-return ownership transformer, separate from unordered access history.
@@ -181,6 +192,8 @@ pub(crate) enum CallSiteRefinements<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct SemanticBorrowAnalysis<'db> {
     pub summary: SemanticBorrowSummaryResult<'db>,
+    /// Origins of the summary's loan requirements, in clause order.
+    pub provenance: Vec<SeparationOrigin<'db>>,
     /// `None` when the summary did not come from solving the body, e.g. for
     /// intrinsic contracts; the borrow check then solves the body itself.
     pub check: Option<LocalBorrowCheck<'db>>,

@@ -22,8 +22,8 @@ use crate::{
             capability::{
                 birth::AllocationBirth,
                 external::{
-                    AddressProvenance, ClobberCondition, ExternalOrigin, ExternalSource,
-                    MemoryOffset, ReferentContract,
+                    AddressProvenance, AliasBasis, ClobberCondition, ExternalOrigin,
+                    ExternalSource, MemoryOffset, ReferentContract,
                 },
                 footprint::{AccessExtent, AccessFootprint},
                 guard::{ChoiceKey, Guard, ValueOccurrence},
@@ -37,7 +37,10 @@ use crate::{
                 path::{Projection, RegionPath, StructuralPath},
                 region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace, substitute_clause},
                 semantics::{CapabilityClass, CapabilitySemantics},
-                separation::SeparationSet,
+                separation::{
+                    SEPARATION_CLAUSE_LIMIT, SEPARATION_PAIR_LIMIT, Separation, SeparationSet,
+                    within_limits,
+                },
                 shape::{ShapeChildren, ShapeId},
                 source::{InputOrigin, SourceExpr},
                 state::{BorrowState, CapabilityValue, CapabilityValues},
@@ -68,10 +71,11 @@ use super::{
         BorrowSummaryComputation, BorrowSummaryVoucher, provisional_borrow_summary_voucher,
         semantic_borrow_summary_voucher,
     },
+    events::ConflictAnalysis,
     ir::{
         AvailabilityRequirement, AvailabilitySummary, BorrowSummary, BoundaryRequirement,
         CertifiedRangePoststate, InputPoststate, MemoryAccess, PendingSemanticValidation,
-        ScalarInputPoststate,
+        ScalarInputPoststate, SeparationOrigin,
     },
     solver::{BorrowSummaryMode, Borrowck, Resolution},
     transport::{TransportRoute, referent_contract},
@@ -86,12 +90,15 @@ impl<'db> BorrowSummary<'db> {
     /// numbers on first encounter separates related observations when poststates
     /// and access requirements encounter them in different orders. Preserve the
     /// local order through this injective renaming and subsequent call expansion.
+    /// Loan requirements arrive separately with their origins, and leave as the
+    /// summary component with origins in clause order.
     fn abstract_choices(
         mut self,
         db: &'db dyn HirAnalysisDb,
         values: &mut SourceValues<'db>,
         choices: BTreeSet<ValueOccurrence>,
-    ) -> Self {
+        separations: Vec<(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)>,
+    ) -> (Self, Vec<SeparationOrigin<'db>>) {
         let choices: BTreeMap<_, _> = choices
             .into_iter()
             .enumerate()
@@ -148,10 +155,27 @@ impl<'db> BorrowSummary<'db> {
                 }),
             );
         }
-        self.loan_requirements = self.loan_requirements.map_occurrences(db, rename);
+        // Equal relations merge; the first origin in body order names each.
+        let scope = BinderScope::default();
+        let mut origins = BTreeMap::new();
+        let mut clauses = Vec::new();
+        for (clause, origin) in separations {
+            let renamed = SeparationSet::new(db, &scope, [clause]).map_occurrences(db, rename);
+            for clause in renamed.clauses() {
+                origins.entry(clause.payload.clone()).or_insert(origin);
+                clauses.push(clause.clone());
+            }
+        }
+        self.loan_requirements = SeparationSet::new(db, &scope, clauses);
+        let provenance = self
+            .loan_requirements
+            .clauses()
+            .iter()
+            .map(|clause| origins[&clause.payload])
+            .collect();
         self.accesses.sort();
         self.availability.incoming.sort();
-        self
+        (self, provenance)
     }
 }
 
@@ -212,6 +236,9 @@ pub(super) struct SourceInstantiations<'a, 'db> {
     state: &'a BorrowState<'db>,
     result: NValueId,
     inputs: CallInputs<'a, 'db>,
+    /// Separation that may drop a clobber-conditioned alternative. Resolutions
+    /// are cached per session, so a basis never reuses another's results.
+    basis: AliasBasis,
     generation: Option<usize>,
     resolved: BTreeMap<BinderScope, FxHashMap<SourceExpr<'db>, Resolution<'db>>>,
     guards: FxHashMap<Guard<'db>, Option<Guard<'db>>>,
@@ -225,10 +252,30 @@ impl<'a, 'db> SourceInstantiations<'a, 'db> {
         result: NValueId,
         inputs: CallInputs<'a, 'db>,
     ) -> Self {
+        Self::with_basis(state, result, inputs, AliasBasis::Assumed)
+    }
+
+    /// Resolution of separation endpoints, which may use only physical
+    /// separation to drop an alternative.
+    pub(super) fn physical(
+        state: &'a BorrowState<'db>,
+        result: NValueId,
+        inputs: CallInputs<'a, 'db>,
+    ) -> Self {
+        Self::with_basis(state, result, inputs, AliasBasis::Physical)
+    }
+
+    fn with_basis(
+        state: &'a BorrowState<'db>,
+        result: NValueId,
+        inputs: CallInputs<'a, 'db>,
+        basis: AliasBasis,
+    ) -> Self {
         Self {
             state,
             result,
             inputs,
+            basis,
             generation: None,
             resolved: BTreeMap::new(),
             guards: FxHashMap::default(),
@@ -287,6 +334,8 @@ impl<'a, 'db> SourceInstantiations<'a, 'db> {
 pub(super) struct CallSummary<'db> {
     pub instance: SemanticInstance<'db>,
     pub summary: BorrowSummary<'db>,
+    /// Origins of the summary's loan requirements, when the callee has them.
+    pub provenance: Vec<SeparationOrigin<'db>>,
     pub pending: bool,
     updates: Vec<CapabilityValue<'db>>,
     births: Vec<AllocationBirth<'db>>,
@@ -367,6 +416,7 @@ impl<'db> Borrowck<'db> {
                     pending: PendingSemanticValidation {
                         callees: [callee.key].into(),
                     },
+                    provenance: Vec::new(),
                 }
             } else {
                 match self.summary_mode {
@@ -580,6 +630,7 @@ impl<'db> Borrowck<'db> {
                 CallSummary {
                     instance,
                     summary,
+                    provenance: voucher.provenance,
                     pending,
                     updates,
                     births,
@@ -619,6 +670,7 @@ impl<'db> Borrowck<'db> {
                 summary: Some(summary),
                 blocked: None,
                 pending: Default::default(),
+                provenance: Vec::new(),
             }));
         }
         if self
@@ -634,6 +686,7 @@ impl<'db> Borrowck<'db> {
                 pending: PendingSemanticValidation {
                     callees: [self.instance.key(self.db)].into(),
                 },
+                provenance: Vec::new(),
             }));
         }
         Ok(None)
@@ -645,7 +698,7 @@ impl<'db> Borrowck<'db> {
     ) -> Result<BorrowSummaryComputation<'db>, SemanticDiagnostic<'db>> {
         let recursive_unresolved = !self.recursive_calls.is_empty()
             && (self.blocked.is_some() || !self.pending.callees.is_empty());
-        let summary = if (!self.pending.callees.is_empty()
+        let (summary, provenance) = if (!self.pending.callees.is_empty()
             && can_specialize(self.db, self.instance))
             || recursive_unresolved
         {
@@ -664,7 +717,7 @@ impl<'db> Borrowck<'db> {
             // its Pending or Blocked status until those callees are resolved.
             // Independent final returning paths were checked above when the
             // component was pending rather than blocked.
-            signature_summary(self.db, self.instance, true)?
+            (signature_summary(self.db, self.instance, true)?, Vec::new())
         } else {
             self.build_summary()?
         };
@@ -672,6 +725,7 @@ impl<'db> Borrowck<'db> {
             summary: Some(summary),
             blocked: self.blocked.clone(),
             pending: self.pending.clone(),
+            provenance,
         })
     }
 
@@ -722,7 +776,19 @@ impl<'db> Borrowck<'db> {
         Ok(())
     }
 
-    pub fn build_summary(&self) -> Result<BorrowSummary<'db>, SemanticDiagnostic<'db>> {
+    /// The summary of the solved body, with its loan requirements' origins.
+    pub fn build_summary(
+        &self,
+    ) -> Result<(BorrowSummary<'db>, Vec<SeparationOrigin<'db>>), SemanticDiagnostic<'db>> {
+        // Requirements past a limit are incomplete; never export them.
+        if let ConflictAnalysis {
+            exhausted: true,
+            diagnostic: Some(diagnostic),
+            ..
+        } = self.conflicts()
+        {
+            return Err(diagnostic.clone());
+        }
         let ownership = self.analyze_availability();
         if self.summary_mode == BorrowSummaryMode::Final
             && self.blocked.is_none()
@@ -1194,6 +1260,12 @@ impl<'db> Borrowck<'db> {
         }
         let scalar_result =
             scalar_result.filter(|guard: &Guard<'db>| !Guard::always(guard.scope()).implies(guard));
+        let mut separations =
+            self.summarize_separations(&self.conflicts().deferred, &mut choices, &handles)?;
+        // Equal relations take the first origin: prefer one forwarded from a
+        // callee, which names the borrow and access where the relation began.
+        let owner = self.instance.key(self.db).owner(self.db);
+        separations.sort_by_key(|(_, origin)| origin.owner == owner);
         let summary = BorrowSummary {
             native_requirements: self.summarize_availability_region(
                 &ownership.native_validity.requirements,
@@ -1213,9 +1285,104 @@ impl<'db> Borrowck<'db> {
             scalar_inputs,
             requirements,
         };
-        let summary = summary.abstract_choices(self.db, &mut values, choices);
+        let (summary, provenance) =
+            summary.abstract_choices(self.db, &mut values, choices, separations);
         self.verify_summary(&summary)?;
-        Ok(summary)
+        Ok((summary, provenance))
+    }
+
+    /// Export the separation callers owe. Each relation is abstracted as a
+    /// whole, so its endpoints, extent and slices keep their shared selectors
+    /// and address identities. There is no fresh-effect elision of an endpoint.
+    fn summarize_separations(
+        &self,
+        requirements: &[(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)],
+        choices: &mut BTreeSet<ValueOccurrence>,
+        exposed: &BTreeMap<AddressOccurrence<'db>, u32>,
+    ) -> Result<Vec<(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)>, SemanticDiagnostic<'db>>
+    {
+        let limit = || self.separation_limit_diag(SemOrigin::Body(self.body.template_owner));
+        if requirements.len() > SEPARATION_CLAUSE_LIMIT {
+            return Err(limit());
+        }
+        let mut clauses = Vec::new();
+        for (clause, origin) in requirements {
+            let subst = self.abstract_local_indices(
+                clause.guard.scope(),
+                clause
+                    .guard
+                    .indices()
+                    .into_iter()
+                    .chain(clause.payload.indices()),
+            );
+            let Some(guard) = clause.guard.substitute(&subst) else {
+                continue;
+            };
+            let mut relation = clause.payload.substitute(self.db, &subst);
+            // An address used only by this relation is named by its family and
+            // an independent witness per distinct argument list, so recursion
+            // cannot grow its arguments, and equal arguments stay shared.
+            let mut handles = exposed.clone();
+            let mut witnesses = BTreeMap::new();
+            let mut scope = guard.scope().clone();
+            for place in [&mut relation.protected, &mut relation.access] {
+                let RegionRoot::External(source) = &mut place.root else {
+                    unreachable!("representable separation endpoint")
+                };
+                source.map_occurrences(&mut |occurrence, arguments| {
+                    if !exposed.contains_key(occurrence) {
+                        let witness = *witnesses
+                            .entry((*occurrence, arguments.clone()))
+                            .or_insert_with(|| {
+                                let (nested, witness) = scope.bind(IndexNamespace::Existential);
+                                scope = nested;
+                                witness
+                            });
+                        *arguments = Box::new([witness]);
+                    }
+                    let next = handles.len().try_into().expect("summary handle count");
+                    *occurrence =
+                        AddressOccurrence::Summary(*handles.entry(*occurrence).or_insert(next));
+                });
+            }
+            // Forgetting a recursive choice widens the possible conflict. A
+            // suspension that depended on one is dropped, never widened.
+            let Some(guard) = guard
+                .in_scope(&scope)
+                .forget_occurrences(|occurrence| self.recursive_call_choice(occurrence))
+                .map_occurrences(|occurrence| self.summary_occurrence(occurrence, choices))
+            else {
+                continue;
+            };
+            relation.suspended = relation
+                .suspended
+                .iter()
+                .filter(|slice| {
+                    !slice
+                        .guard
+                        .occurrences()
+                        .into_iter()
+                        .any(|occurrence| self.recursive_call_choice(occurrence))
+                })
+                .filter_map(|slice| {
+                    Some(Guarded {
+                        guard: slice.guard.map_occurrences(|occurrence| {
+                            self.summary_occurrence(occurrence, choices)
+                        })?,
+                        payload: slice.payload.clone(),
+                    })
+                })
+                .collect();
+            let clause = Guarded {
+                guard,
+                payload: relation,
+            };
+            if !within_limits(&clause, &BinderScope::default()) {
+                return Err(limit());
+            }
+            clauses.push((clause, *origin));
+        }
+        Ok(clauses)
     }
 
     fn summarize_availability_region(
@@ -1421,62 +1588,75 @@ impl<'db> Borrowck<'db> {
             let next = handles.len().try_into().expect("summary handle count");
             *occurrence = AddressOccurrence::Summary(*handles.entry(*occurrence).or_insert(next));
         });
-        let mut scope = guard.scope().clone();
-        let mut substitutions = BTreeMap::new();
-        for index in guard.indices().into_iter().chain(payload.indices()) {
-            if matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_)) {
-                substitutions.entry(index).or_insert_with(|| {
-                    match match index {
-                        IndexExpr::Runtime(value) => self.index(value),
-                        index => index,
-                    } {
-                        IndexExpr::Runtime(actual) => {
-                            match self.body.values[actual.index()].definition {
-                                NValueDefinition::EntryParam { param } => {
-                                    IndexExpr::FormalValue(param)
-                                }
-                                NValueDefinition::BlockParam { .. }
-                                | NValueDefinition::Statement { .. } => {
-                                    let (nested, witness) = scope.bind(IndexNamespace::Existential);
-                                    scope = nested;
-                                    witness
-                                }
-                            }
-                        }
-                        IndexExpr::Iteration(_) => {
-                            let (nested, witness) = scope.bind(IndexNamespace::Existential);
-                            scope = nested;
-                            witness
-                        }
-                        index => index,
-                    }
-                });
-            }
-        }
-        let subst = IndexSubst::new(guard.scope(), &scope, substitutions)
-            .expect("summary local index abstraction");
+        let subst = self.abstract_local_indices(
+            guard.scope(),
+            guard.indices().into_iter().chain(payload.indices()),
+        );
         let guard = guard.substitute(&subst).and_then(|guard| {
-            guard.map_occurrences(|occurrence| {
-                if let ValueOccurrence::Value(value) = occurrence
-                    && let NValueDefinition::EntryParam { param } =
-                        self.body.values[value.index()].definition
-                {
-                    return ValueOccurrence::Argument(param);
-                }
-                if matches!(
-                    occurrence,
-                    ValueOccurrence::Argument(_) | ValueOccurrence::Summary
-                ) {
-                    return occurrence;
-                }
-                choices.insert(occurrence);
-                occurrence
-            })
+            guard.map_occurrences(|occurrence| self.summary_occurrence(occurrence, choices))
         })?;
         Some(Guarded {
             guard,
             payload: payload.substitute(self.db, &subst),
         })
+    }
+
+    /// Abstract indices local to this body: an entry parameter becomes a
+    /// formal value, and each other runtime value or loop iteration a fresh
+    /// witness of `scope`.
+    fn abstract_local_indices(
+        &self,
+        scope: &BinderScope,
+        indices: impl IntoIterator<Item = IndexExpr<'db>>,
+    ) -> IndexSubst<'db> {
+        let mut destination = scope.clone();
+        let mut substitutions = BTreeMap::new();
+        for index in indices {
+            if matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_)) {
+                substitutions.entry(index).or_insert_with(|| {
+                    let actual = match index {
+                        IndexExpr::Runtime(value) => self.index(value),
+                        index => index,
+                    };
+                    if let IndexExpr::Runtime(actual) = actual
+                        && let NValueDefinition::EntryParam { param } =
+                            self.body.values[actual.index()].definition
+                    {
+                        return IndexExpr::FormalValue(param);
+                    }
+                    if !matches!(actual, IndexExpr::Runtime(_) | IndexExpr::Iteration(_)) {
+                        return actual;
+                    }
+                    let (nested, witness) = destination.bind(IndexNamespace::Existential);
+                    destination = nested;
+                    witness
+                });
+            }
+        }
+        IndexSubst::new(scope, &destination, substitutions)
+            .expect("summary local index abstraction")
+    }
+
+    /// Name a guard occurrence at the summary boundary. Entry parameters are
+    /// arguments; other choices are collected for summary-wide renaming.
+    fn summary_occurrence(
+        &self,
+        occurrence: ValueOccurrence,
+        choices: &mut BTreeSet<ValueOccurrence>,
+    ) -> ValueOccurrence {
+        if let ValueOccurrence::Value(value) = occurrence
+            && let NValueDefinition::EntryParam { param } =
+                self.body.values[value.index()].definition
+        {
+            return ValueOccurrence::Argument(param);
+        }
+        if !matches!(
+            occurrence,
+            ValueOccurrence::Argument(_) | ValueOccurrence::Summary
+        ) {
+            choices.insert(occurrence);
+        }
+        occurrence
     }
 
     pub(super) fn summary_param_ty(&self, param: u32) -> Option<TyId<'db>> {
@@ -2124,17 +2304,7 @@ impl<'db> Borrowck<'db> {
             let Some(guard) = self.instantiate_guard(&template.guard, result, inputs)? else {
                 continue;
             };
-            let subst = IndexSubst::new(
-                template.guard.scope(),
-                guard.scope(),
-                inputs.args.iter().enumerate().map(|(param, arg)| {
-                    (
-                        IndexExpr::FormalValue(param.try_into().expect("parameter count")),
-                        self.index(arg.value),
-                    )
-                }),
-            )
-            .expect("birth scalar substitution");
+            let subst = self.formal_substitution(template.guard.scope(), guard.scope(), inputs);
             let source = ExternalSource::allocation(self.db, template.allocation.clone())
                 .substitute(self.db, &subst);
             let source = self.instantiate_address_base(
@@ -2498,6 +2668,26 @@ impl<'db> Borrowck<'db> {
         }
     }
 
+    /// Replace formal scalar parameters with this call's actual arguments.
+    pub(super) fn formal_substitution(
+        &self,
+        source: &BinderScope,
+        destination: &BinderScope,
+        inputs: CallInputs<'_, 'db>,
+    ) -> IndexSubst<'db> {
+        IndexSubst::new(
+            source,
+            destination,
+            inputs.args.iter().enumerate().map(|(param, arg)| {
+                (
+                    IndexExpr::FormalValue(param.try_into().expect("parameter count")),
+                    self.index(arg.value),
+                )
+            }),
+        )
+        .expect("call scalar substitution")
+    }
+
     pub(super) fn instantiate_guard(
         &self,
         guard: &Guard<'db>,
@@ -2506,17 +2696,7 @@ impl<'db> Borrowck<'db> {
     ) -> Result<Option<Guard<'db>>, SemanticDiagnostic<'db>> {
         #[cfg(test)]
         GUARD_INSTANTIATIONS.set(GUARD_INSTANTIATIONS.get() + 1);
-        let subst = IndexSubst::new(
-            guard.scope(),
-            guard.scope(),
-            inputs.args.iter().enumerate().map(|(param, arg)| {
-                (
-                    IndexExpr::FormalValue(param.try_into().expect("parameter count")),
-                    self.index(arg.value),
-                )
-            }),
-        )
-        .expect("call guard substitution");
+        let subst = self.formal_substitution(guard.scope(), guard.scope(), inputs);
         let mut invalid = false;
         let guard = guard
             .substitute(&subst)
@@ -2623,34 +2803,30 @@ impl<'db> Borrowck<'db> {
             effects,
             origin,
         } = inputs;
-        let subst = IndexSubst::new(
-            scope,
-            scope,
-            args.iter().enumerate().map(|(param, arg)| {
-                (
-                    IndexExpr::FormalValue(param.try_into().expect("parameter count")),
-                    self.index(arg.value),
-                )
-            }),
-        )
-        .expect("summary destination scalar substitution");
+        let subst = self.formal_substitution(scope, scope, inputs);
         let source = source.substitute(self.db, &subst);
         let invalidated = source.invalidated;
         let path = &source.path;
         let external = &source.source;
+        let basis = instantiations.basis;
+        // A clobber applies only where its target and written span overlap.
+        let disjoint = |target: &RegionSet<'db>, written: &RegionSet<'db>, extent| {
+            let written = AccessFootprint {
+                region: written,
+                extent,
+            };
+            match basis {
+                AliasBasis::Assumed => matches!(
+                    AccessFootprint::typed(target).overlap(self.db, written),
+                    OverlapResult::Disjoint
+                ),
+                AliasBasis::Physical => written.physical_pairs(self.db, target).is_empty(),
+            }
+        };
         let clobber = if let Some(clobber) = &external.clobber {
             let target = instantiations.resolve(self, &clobber.target, scope)?;
             let written = instantiations.resolve(self, &clobber.written, scope)?;
-            if matches!(
-                AccessFootprint::typed(&target.region).overlap(
-                    self.db,
-                    AccessFootprint {
-                        region: &written.region,
-                        extent: clobber.extent
-                    }
-                ),
-                OverlapResult::Disjoint
-            ) {
+            if disjoint(&target.region, &written.region, clobber.extent) {
                 return Ok(Resolution::empty(scope));
             }
             Some((target.region, written.region, clobber.extent))
@@ -2739,27 +2915,21 @@ impl<'db> Borrowck<'db> {
                                     .expect("clobber witness scope"),
                                 )
                                 .expect("fresh clobber witnesses");
+                            if basis == AliasBasis::Physical
+                                && target.clauses().len() * written.clauses().len()
+                                    > SEPARATION_PAIR_LIMIT
+                            {
+                                return Err(self.separation_limit_diag(origin));
+                            }
                             let target_clause = substitute_clause(target_clause, &target_subst);
                             let written_clause = substitute_clause(written_clause, &written_subst);
                             let Some(guard) = target_clause.guard.and(&written_clause.guard) else {
                                 continue;
                             };
-                            if matches!(
-                                AccessFootprint::typed(&RegionSet::new(
-                                    guard.scope(),
-                                    [target_clause.clone()]
-                                ))
-                                .overlap(
-                                    self.db,
-                                    AccessFootprint {
-                                        region: &RegionSet::new(
-                                            guard.scope(),
-                                            [written_clause.clone()]
-                                        ),
-                                        extent: extent.substitute(&written_subst)
-                                    }
-                                ),
-                                OverlapResult::Disjoint
+                            if disjoint(
+                                &RegionSet::new(guard.scope(), [target_clause.clone()]),
+                                &RegionSet::new(guard.scope(), [written_clause.clone()]),
+                                extent.substitute(&written_subst),
                             ) {
                                 continue;
                             }
@@ -3376,7 +3546,6 @@ mod tests {
                     handle::HandleAddressSpace,
                     region::CANONICALIZED_REGION_CLAUSES,
                     repack::{ReferentRepackId, ReferentViews},
-                    separation::Separation,
                     source::InputSource,
                     test_roots,
                 },
@@ -4111,6 +4280,7 @@ pub contract C {
                 CallSummary {
                     instance,
                     summary,
+                    provenance: Vec::new(),
                     pending: false,
                     updates: Vec::new(),
                     births: Vec::new(),
@@ -4654,7 +4824,7 @@ fn absent() -> Maybe { Maybe::None }
                 }
             };
             checker.solve().unwrap();
-            let concrete = checker.build_summary().unwrap();
+            let (concrete, _) = checker.build_summary().unwrap();
             let fallback = signature_summary(&db, instance, true).unwrap();
             assert_eq!(
                 fallback,
@@ -4801,7 +4971,7 @@ fn clobber(slot: *ref u256) {
             );
             let mut checker = Borrowck::new(&db, instance).unwrap();
             checker.solve().unwrap();
-            let concrete = checker.build_summary().unwrap();
+            let (concrete, _) = checker.build_summary().unwrap();
             let fallback = signature_summary(&db, instance, true).unwrap();
             if name == "lend" {
                 assert!(
@@ -4881,7 +5051,7 @@ fn clobber(slot: *ref u256) {
         );
         let mut checker = Borrowck::new(&db, instance).unwrap();
         checker.solve().unwrap();
-        let summary = checker.build_summary().unwrap();
+        let (summary, _) = checker.build_summary().unwrap();
         let values = SourceValues::new(&db, ValueLimits::default());
         let leaf = values
             .leaves(&summary.result, ValueOccurrence::Summary)
