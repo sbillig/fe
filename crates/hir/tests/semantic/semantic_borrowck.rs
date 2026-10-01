@@ -284,7 +284,7 @@ fn bad<T: Operation>(flag: bool, fallback: ref u256) -> ref u256 {
 #[test]
 fn owned_effect_provider_representation_is_transferred_before_callee_requirements() {
     let diagnostics = checked_borrow_diags(include_str!(
-        "../../fe/tests/fixtures/fe_test/zero_sized_capability_provider.fe"
+        "../../../fe/tests/fixtures/fe_test/zero_sized_capability_provider.fe"
     ));
     assert!(diagnostics.is_empty(), "{diagnostics}");
 }
@@ -2695,7 +2695,7 @@ fn inspect(pointer: *Pair) {{
 #[test]
 fn packed_encoding_fixture_does_not_report_semantic_borrow_errors() {
     let diagnostics = checked_borrow_diags(include_str!(
-        "../../fe/tests/fixtures/fe_test/packed_encoding.fe"
+        "../../../fe/tests/fixtures/fe_test/packed_encoding.fe"
     ));
     assert!(diagnostics.is_empty(), "{diagnostics}");
 }
@@ -5472,7 +5472,7 @@ impl Holder {
 #[test]
 fn contract_field_mut_borrow_matrix_fixture_borrowchecks() {
     for_each_fixture_instance(
-        include_str!("../../fe/tests/fixtures/fe_test/contract_field_mut_borrow_matrix.fe"),
+        include_str!("../../../fe/tests/fixtures/fe_test/contract_field_mut_borrow_matrix.fe"),
         |db, instance| {
             let raw = instance.body(db);
             let artifacts = normalize_raw_body(db, instance, raw, instance.assumptions(db))
@@ -5608,7 +5608,7 @@ fn choose(flag: bool) {
 fn returned_storage_borrow_effect_args_are_finalized_in_normalized_body() {
     let mut saw_storage_add_effect = false;
     for_each_fixture_instance(
-        include_str!("../../fe/tests/fixtures/fe_test/contract_field_mut_borrow_matrix.fe"),
+        include_str!("../../../fe/tests/fixtures/fe_test/contract_field_mut_borrow_matrix.fe"),
         |db, instance| {
             let normalized = normalize_semantic_body(db, instance).expect("normalized body");
             for stmt in normalized
@@ -6423,7 +6423,7 @@ fn ok() uses (mem: mut RawMem) {
 #[test]
 fn transitive_effect_summaries_use_callee_relative_binding_indices() {
     assert_no_borrow_conflict(include_str!(
-        "../../fe/tests/fixtures/fe_test/address_call_method.fe"
+        "../../../fe/tests/fixtures/fe_test/address_call_method.fe"
     ));
 }
 
@@ -6648,7 +6648,7 @@ fn bad<E>(_ cond: bool, _ left: mut E, _ right: mut E)
 #[test]
 fn invalid_typed_bodies_do_not_crash_semantic_borrow_analysis() {
     assert_no_borrow_conflict(include_str!(
-        "../../uitest/fixtures/ty_check/event_unsupported_field_type.fe"
+        "../../../uitest/fixtures/ty_check/event_unsupported_field_type.fe"
     ));
 }
 
@@ -6677,7 +6677,9 @@ fn caller(p: *u256) {
 
 #[test]
 fn code_region_fixture_does_not_report_move_conflict() {
-    let diags = borrow_diags(include_str!("../../codegen/tests/fixtures/code_region.fe"));
+    let diags = borrow_diags(include_str!(
+        "../../../codegen/tests/fixtures/code_region.fe"
+    ));
     assert!(!diags.contains("move conflict"), "{diags:?}");
     assert!(
         !diags.contains("internal borrow checking error"),
@@ -6688,7 +6690,7 @@ fn code_region_fixture_does_not_report_move_conflict() {
 #[test]
 fn create_contract_fixture_does_not_report_top_level_semantic_borrow_errors() {
     let diags = borrow_diags(include_str!(
-        "../../codegen/tests/fixtures/create_contract.fe"
+        "../../../codegen/tests/fixtures/create_contract.fe"
     ));
     assert!(!diags.contains("borrow conflict"), "{diags:?}");
     assert!(!diags.contains("move conflict"), "{diags:?}");
@@ -7008,7 +7010,7 @@ fn read(pair: own Pair) {
 #[test]
 fn effect_handle_field_deref_fixture_does_not_report_semantic_borrow_errors() {
     let diags = borrow_diags(include_str!(
-        "../../codegen/tests/fixtures/effect_handle_field_deref.fe"
+        "../../../codegen/tests/fixtures/effect_handle_field_deref.fe"
     ));
     assert!(!diags.contains("borrow conflict"), "{diags:?}");
     assert!(!diags.contains("move conflict"), "{diags:?}");
@@ -7589,7 +7591,7 @@ impl Table {
 #[test]
 fn zero_sized_aggregate_fixture_instances_normalize_and_borrowcheck() {
     for_each_fixture_instance(
-        include_str!("../../codegen/tests/fixtures/zero_sized_aggregates.fe"),
+        include_str!("../../../codegen/tests/fixtures/zero_sized_aggregates.fe"),
         |db, instance| {
             let raw = instance.body(db);
             let artifacts = normalize_raw_body(db, instance, raw, instance.assumptions(db))
@@ -7628,7 +7630,7 @@ fn zero_sized_aggregate_fixture_instances_normalize_and_borrowcheck() {
 #[test]
 fn if_let_fixture_instances_normalize_and_borrowcheck() {
     for_each_fixture_instance(
-        include_str!("../../fe/tests/fixtures/fe_test/if_let_while_let.fe"),
+        include_str!("../../../fe/tests/fixtures/fe_test/if_let_while_let.fe"),
         |db, instance| {
             let raw = instance.body(db);
             let artifacts = normalize_raw_body(db, instance, raw, instance.assumptions(db))
@@ -7662,7 +7664,7 @@ fn if_let_fixture_instances_normalize_and_borrowcheck() {
 #[test]
 fn custom_effect_handle_fixture_instances_normalize_and_borrowcheck() {
     for_each_fixture_instance(
-        include_str!("../../fe/tests/fixtures/fe_test/effect_handle_representation.fe"),
+        include_str!("../../../fe/tests/fixtures/fe_test/effect_handle_representation.fe"),
         |db, instance| {
             let raw = instance.body(db);
             let local_types = raw
@@ -7727,7 +7729,7 @@ fn erc20_has_role_self_ty_app_chain_is_acyclic() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "semantic_borrowck.fe".into(),
-        include_str!("../../codegen/tests/fixtures/erc20.fe"),
+        include_str!("../../../codegen/tests/fixtures/erc20.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     let has_role = top_mod

@@ -1,6 +1,4 @@
-#[path = "support/layout.rs"]
-mod layout_test_support;
-
+use crate::layout_test_support::{parse_module, parse_ok};
 use fe_hir::{
     analysis::{
         initialize_analysis_pass,
@@ -35,7 +33,6 @@ use fe_hir::{
     hir_def::{CallableDef, Contract, Expr, IdentId, ItemKind, Partial},
     test_db::{HirAnalysisTestDb, find_contract, find_func, format_diagnostics},
 };
-use layout_test_support::{parse_module, parse_ok};
 
 fn field<'db>(
     db: &'db HirAnalysisTestDb,

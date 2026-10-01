@@ -1,6 +1,4 @@
-#[path = "support/layout.rs"]
-mod layout_test_support;
-
+use crate::layout_test_support::parse_ok;
 use fe_hir::{
     analysis::ty::ProviderAddressSpace,
     core::semantic::{
@@ -9,7 +7,6 @@ use fe_hir::{
     },
     test_db::{HirAnalysisTestDb, find_contract},
 };
-use layout_test_support::parse_ok;
 
 fn entry<'a, 'db>(
     db: &'db HirAnalysisTestDb,

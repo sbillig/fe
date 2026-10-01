@@ -680,7 +680,7 @@ Compound assignment instead accesses the referent, so `*slot += 1` requires
 call results, become explicit referent loads in normalized IR. The frontend also
 rejects mutable method borrows of fields through an immutable `own self` binding.
 These distinctions are covered by the
-[type-check tests](../../crates/hir/tests/ty_check.rs) and
+[type-check tests](../../crates/hir/tests/frontend/ty_check.rs) and
 [normalization tests](../../crates/hir/src/analysis/semantic/normalized/normalize.rs).
 
 ## Stored native references and static runtime views

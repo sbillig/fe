@@ -1,8 +1,6 @@
-#[path = "support/layout.rs"]
-mod layout_test_support;
-
 use std::collections::HashSet;
 
+use crate::layout_test_support::{parse_module, parse_ok};
 use camino::Utf8PathBuf;
 use cranelift_entity::EntityRef;
 use fe_hir::{
@@ -29,7 +27,6 @@ use fe_hir::{
     hir_def::{CallableDef, IdentId, ItemKind, TopLevelMod},
     test_db::{HirAnalysisTestDb, find_contract, find_func},
 };
-use layout_test_support::{parse_module, parse_ok};
 
 fn verify_layout_evidence_body<'db>(
     db: &'db HirAnalysisTestDb,
@@ -3131,60 +3128,68 @@ fn layout_evidence_covers_existing_forwarding_matrix() {
         (
             "layout_root_constructed_aggregate_forwarding.fe",
             include_str!(
-                "../../fe/tests/fixtures/fe_test/layout_root_constructed_aggregate_forwarding.fe"
+                "../../../fe/tests/fixtures/fe_test/layout_root_constructed_aggregate_forwarding.fe"
             ),
         ),
         (
             "layout_root_fresh_constructor_forwarding.fe",
             include_str!(
-                "../../fe/tests/fixtures/fe_test/layout_root_fresh_constructor_forwarding.fe"
+                "../../../fe/tests/fixtures/fe_test/layout_root_fresh_constructor_forwarding.fe"
             ),
         ),
         (
             "layout_root_return_index_forwarding.fe",
-            include_str!("../../fe/tests/fixtures/fe_test/layout_root_return_index_forwarding.fe"),
+            include_str!(
+                "../../../fe/tests/fixtures/fe_test/layout_root_return_index_forwarding.fe"
+            ),
         ),
         (
             "layout_root_enum_helper_forwarding.fe",
-            include_str!("../../fe/tests/fixtures/fe_test/layout_root_enum_helper_forwarding.fe"),
+            include_str!(
+                "../../../fe/tests/fixtures/fe_test/layout_root_enum_helper_forwarding.fe"
+            ),
         ),
         (
             "layout_root_return_effect_forwarding.fe",
-            include_str!("../../fe/tests/fixtures/fe_test/layout_root_return_effect_forwarding.fe"),
+            include_str!(
+                "../../../fe/tests/fixtures/fe_test/layout_root_return_effect_forwarding.fe"
+            ),
         ),
         (
             "layout_root_array_enum_overlay.fe",
-            include_str!("../../fe/tests/fixtures/fe_test/layout_root_array_enum_overlay.fe"),
+            include_str!("../../../fe/tests/fixtures/fe_test/layout_root_array_enum_overlay.fe"),
         ),
         (
             "effect_handle_field_deref.fe",
-            include_str!("../../codegen/tests/fixtures/effect_handle_field_deref.fe"),
+            include_str!("../../../codegen/tests/fixtures/effect_handle_field_deref.fe"),
         ),
         (
             "layout_root_aggregate_effect_forwarding.fe",
             include_str!(
-                "../../fe/tests/fixtures/fe_test/layout_root_aggregate_effect_forwarding.fe"
+                "../../../fe/tests/fixtures/fe_test/layout_root_aggregate_effect_forwarding.fe"
             ),
         ),
         (
             "layout_root_nested_provider_matrix.fe",
-            include_str!("../../fe/tests/fixtures/fe_test/layout_root_nested_provider_matrix.fe"),
+            include_str!(
+                "../../../fe/tests/fixtures/fe_test/layout_root_nested_provider_matrix.fe"
+            ),
         ),
         (
             "layout_root_recursive_forwarding.fe",
-            include_str!("../../fe/tests/fixtures/fe_test/layout_root_recursive_forwarding.fe"),
+            include_str!("../../../fe/tests/fixtures/fe_test/layout_root_recursive_forwarding.fe"),
         ),
         (
             "mutable_array_args_and_effects.fe",
-            include_str!("../../fe/tests/fixtures/fe_test/mutable_array_args_and_effects.fe"),
+            include_str!("../../../fe/tests/fixtures/fe_test/mutable_array_args_and_effects.fe"),
         ),
         (
             "nested_provider_layout_roots.fe",
-            include_str!("../../fe/tests/fixtures/fe_test/nested_provider_layout_roots.fe"),
+            include_str!("../../../fe/tests/fixtures/fe_test/nested_provider_layout_roots.fe"),
         ),
         (
             "with_block_custom_effect.fe",
-            include_str!("../../fe/tests/fixtures/fe_test/with_block_custom_effect.fe"),
+            include_str!("../../../fe/tests/fixtures/fe_test/with_block_custom_effect.fe"),
         ),
     ] {
         assert_layoutizes(name, src);
@@ -3196,7 +3201,7 @@ fn specialized_array_enum_leaf_methods_bind_runtime_layout_consts() {
     parse_ok!(
         db,
         top_mod,
-        include_str!("../../fe/tests/fixtures/fe_test/layout_root_array_enum_overlay.fe"),
+        include_str!("../../../fe/tests/fixtures/fe_test/layout_root_array_enum_overlay.fe"),
     );
     let contract = find_contract(&db, top_mod, "C");
     let mut pending = Vec::new();

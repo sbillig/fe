@@ -4785,7 +4785,7 @@ fn by_ref_trait_provider_storage_bug_fixture_keeps_callables_on_all_typed_calls(
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
-        include_str!("../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
+        include_str!("../../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
@@ -4834,7 +4834,7 @@ fn impl_trait_method_typed_body_instantiation_substitutes_self() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
-        include_str!("../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
+        include_str!("../../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
@@ -4876,7 +4876,7 @@ fn impl_trait_method_self_paths_preserve_binding_ty_after_instantiation() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
-        include_str!("../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
+        include_str!("../../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
@@ -4933,7 +4933,7 @@ fn use_ctx_semantic_body_keeps_receiver_as_effect_binding_local() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
-        include_str!("../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
+        include_str!("../../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
@@ -4977,7 +4977,7 @@ fn zero_effect_arg_method_calls_finalize_under_forwarded_witnesses() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
-        include_str!("../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
+        include_str!("../../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
@@ -5081,7 +5081,7 @@ fn impl_sum_semantic_body_uses_self_binding_directly() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
-        include_str!("../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
+        include_str!("../../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
@@ -5140,7 +5140,7 @@ fn effect_handle_values_preserve_direct_carrier_roles_without_constructor_calls(
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("effect_handle_field_deref.fe"),
-        include_str!("../../codegen/tests/fixtures/effect_handle_field_deref.fe"),
+        include_str!("../../../codegen/tests/fixtures/effect_handle_field_deref.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
@@ -5207,7 +5207,7 @@ fn function_effect_bindings_use_instantiated_provider_bindings() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("effect_handle_field_deref.fe"),
-        include_str!("../../codegen/tests/fixtures/effect_handle_field_deref.fe"),
+        include_str!("../../../codegen/tests/fixtures/effect_handle_field_deref.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
@@ -5311,7 +5311,7 @@ fn root_effect_bindings_specialize_rawmem_to_evm() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("explicit_raw_boundaries.fe"),
-        include_str!("../../codegen/tests/fixtures/explicit_raw_boundaries.fe"),
+        include_str!("../../../codegen/tests/fixtures/explicit_raw_boundaries.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
@@ -5418,7 +5418,7 @@ fn root_trait_effect_bindings_specialize_call_to_concrete_evm() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("address_call_method.fe"),
-        include_str!("../../fe/tests/fixtures/fe_test/address_call_method.fe"),
+        include_str!("../../../fe/tests/fixtures/fe_test/address_call_method.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
@@ -5479,7 +5479,7 @@ fn with_bound_plain_effect_params_specialize_to_memory_capabilities() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("effect_params.fe"),
-        include_str!("../../fe/tests/fixtures/fe_test/effect_params.fe"),
+        include_str!("../../../fe/tests/fixtures/fe_test/effect_params.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
@@ -5541,7 +5541,7 @@ fn root_effect_handle_bindings_specialize_provider_targets_to_underlying_values(
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("explicit_raw_boundaries.fe"),
-        include_str!("../../codegen/tests/fixtures/explicit_raw_boundaries.fe"),
+        include_str!("../../../codegen/tests/fixtures/explicit_raw_boundaries.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
@@ -5710,7 +5710,7 @@ fn free_function_effect_bindings_keep_explicit_memory_address_space() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("mutable_array_args_and_effects.fe"),
-        include_str!("../../fe/tests/fixtures/fe_test/mutable_array_args_and_effects.fe"),
+        include_str!("../../../fe/tests/fixtures/fe_test/mutable_array_args_and_effects.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
@@ -5895,7 +5895,7 @@ fn handle_typed_effect_bindings_use_by_value_transport() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("handle_typed_effect_bindings_use_by_value_transport.fe"),
-        include_str!("../../codegen/tests/fixtures/explicit_raw_boundaries.fe"),
+        include_str!("../../../codegen/tests/fixtures/explicit_raw_boundaries.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
@@ -5936,7 +5936,7 @@ fn root_semantic_instance_keys_are_closed_under_root_provider_subst() {
     let mut db = HirAnalysisTestDb::default();
     let storage_map_file = db.new_stand_alone(
         Utf8PathBuf::from("storage_map_contract.fe"),
-        include_str!("../../codegen/tests/fixtures/storage_map_contract.fe"),
+        include_str!("../../../codegen/tests/fixtures/storage_map_contract.fe"),
     );
     let (top_mod, _) = db.top_mod(storage_map_file);
     db.assert_no_diags(top_mod);
@@ -5953,7 +5953,7 @@ fn root_semantic_instance_keys_are_closed_under_root_provider_subst() {
 
     let test_file = db.new_stand_alone(
         Utf8PathBuf::from("contract_init_fixed_array_arg.fe"),
-        include_str!("../../fe/tests/fixtures/fe_test/contract_init_fixed_array_arg.fe"),
+        include_str!("../../../fe/tests/fixtures/fe_test/contract_init_fixed_array_arg.fe"),
     );
     let (top_mod, _) = db.top_mod(test_file);
     db.assert_no_diags(top_mod);
