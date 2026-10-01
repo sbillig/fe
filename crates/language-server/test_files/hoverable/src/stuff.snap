@@ -562,15 +562,10 @@ note:
    │         ^^^^^^^^^ ref: 89:8
 
 note: 
-   ┌─ lib.fe:92:1
-   │  
-92 │ ╭ msg TokenMsg {
-93 │ │   #[selector = 0x01]
-94 │ │   Mint { to: i32, amount: i32 } -> bool,
-95 │ │   #[selector = 0x02]
-96 │ │   Burn { amount: i32 } -> bool,
-97 │ │ }
-   │ ╰─^ def: defined here @ 92:0 (8 refs)
+   ┌─ lib.fe:92:5
+   │
+92 │ msg TokenMsg {
+   │     ^^^^^^^^ def: defined here @ 92:4 (8 refs)
 
 note: 
    ┌─ lib.fe:94:3

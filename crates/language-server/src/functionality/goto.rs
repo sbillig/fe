@@ -200,7 +200,7 @@ mod tests {
         span::LazySpan,
         visitor::{Visitor, VisitorCtxt, prelude::LazyPathSpan},
     };
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, ops::Range};
     use test_utils::{normalize::normalize_newlines, snap_test};
     use url::Url;
 
@@ -515,6 +515,44 @@ mod tests {
                 .join("\n")
         );
         snap_test!(result, fixture.path());
+    }
+
+    #[test]
+    fn test_msg_definition_names_do_not_cover_body() {
+        let mut db = DriverDataBase::default();
+        let code = "msg TokenMsg { Mint { amount: u256 } -> bool, GetSupply -> u256 }";
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test_msg.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        for name in ["TokenMsg", "Mint", "GetSupply"] {
+            let cursor = Cursor::from(code.find(name).unwrap() as u32);
+            let resolution = goto_target_at_cursor(&db, top_mod, cursor);
+            let Some(Target::Scope(scope)) = resolution.first() else {
+                panic!("expected a definition target for {name}");
+            };
+            let span = scope.name_span(&db).unwrap().resolve(&db).unwrap();
+            assert_eq!(&code[Range::<usize>::from(span.range)], name);
+        }
+
+        for token in ["u256", "bool", "->", "{", "}"] {
+            for (offset, _) in code.match_indices(token) {
+                let cursor = Cursor::from(offset as u32);
+                assert!(
+                    top_mod.definition_at(&db, cursor).is_none(),
+                    "{token} at {offset} is not a definition name"
+                );
+                assert!(
+                    goto_target_at_cursor(&db, top_mod, cursor)
+                        .as_slice()
+                        .is_empty(),
+                    "{token} at {offset} must not navigate to a message definition"
+                );
+            }
+        }
     }
 
     /// Diagnostic test: traces the full semantic API chain for `C::static_method()`

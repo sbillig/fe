@@ -63,7 +63,6 @@ define_lazy_span_node!(
     @token {
         (pub_kw, pub_kw),
         (unsafe_kw, unsafe_kw),
-        (name, name),
     }
     @node {
         (attributes, attr_list, LazyAttrListSpan),
@@ -72,6 +71,28 @@ define_lazy_span_node!(
 impl<'db> LazyModSpan<'db> {
     pub fn new(m: Mod<'db>) -> Self {
         Self(crate::span::transition::SpanTransitionChain::new(m))
+    }
+
+    /// The module name token, including the original name of a desugared `msg`.
+    pub fn name(mut self) -> LazySpanAtom<'db> {
+        fn f(origin: ResolvedOrigin, _: LazyArg) -> ResolvedOrigin {
+            origin
+                .map(|node| ast::Mod::cast(node).and_then(|m| m.name()).map(Into::into))
+                .map_desugared(|root, desugared| match desugared {
+                    DesugaredOrigin::Msg(msg) => msg
+                        .msg
+                        .to_node(&root)
+                        .name()
+                        .map_or(ResolvedOriginKind::None, ResolvedOriginKind::Token),
+                    other => ResolvedOriginKind::Desugared(root, other),
+                })
+        }
+
+        self.0.push(LazyTransitionFn {
+            f,
+            arg: LazyArg::None,
+        });
+        LazySpanAtom(self.0)
     }
 }
 
@@ -769,6 +790,18 @@ mod tests {
             db.text_at(top_mod, &mod_span)
         );
         assert_eq!("foo", db.text_at(top_mod, &mod_span.name()));
+    }
+
+    #[test]
+    fn msg_mod_span() {
+        let mut db = TestDb::default();
+        let text = "msg TokenMsg { Mint { amount: u256 } -> bool, GetSupply -> u256 }";
+        let file = db.standalone_file(text);
+        let mod_ = db.expect_item::<Mod>(file);
+        let top_mod = mod_.top_mod(&db);
+
+        assert_eq!(text, db.text_at(top_mod, &mod_.span()));
+        assert_eq!("TokenMsg", db.text_at(top_mod, &mod_.span().name()));
     }
 
     #[test]
