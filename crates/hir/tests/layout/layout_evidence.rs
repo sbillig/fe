@@ -498,6 +498,55 @@ fn make<const ROOT: u256>(value: Rooted<ROOT>) {
 }
 
 #[test]
+fn arrays_reaching_roots_through_recursive_provider_targets_are_rejected() {
+    for target in ["([Loop; 2], Rooted)", "(Rooted, [Loop; 2])"] {
+        let source = format!(
+            r#"
+use core::effect_ref::{{AddressSpace, EffectHandle}}
+
+struct Rooted<const ROOT: u256 = _> {{}}
+struct Loop {{ raw: u256 }}
+impl EffectHandle for Loop {{
+    type Target = {target}
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+
+struct Plain {{ raw: u256 }}
+impl EffectHandle for Plain {{
+    type Target = ([Plain; 2], u256)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+
+fn take(l: Loop) {{}}
+
+fn take_plain(p: Plain) {{}}
+"#
+        );
+        parse_ok!(trusted db, top_mod, &source);
+        let mut messages = collect_layout_evidence_diagnostic_vouchers(&db, top_mod)
+            .iter()
+            .map(|diagnostic| diagnostic.to_complete(&db).message)
+            .collect::<Vec<_>>();
+        messages.sort();
+        // `Loop::raw` receives a `Loop`; root-free `Plain` stays valid.
+        assert_eq!(
+            messages,
+            [
+                "array of layout-root values in `raw`",
+                "array of layout-root values in `take`",
+            ],
+            "{target}"
+        );
+    }
+}
+
+#[test]
 fn arrays_of_layout_root_values_are_rejected() {
     parse_ok!(
         db,

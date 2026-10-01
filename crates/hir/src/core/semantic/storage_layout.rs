@@ -1211,10 +1211,15 @@ struct ProviderTargetEdge<'db> {
     space: ProviderAddressSpace,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ExpandingProvider<'db> {
     ty: TyId<'db>,
     implementation: ImplementorId<'db>,
+    /// Root and concrete occurrence counts when the expansion began.
+    occurrences: (usize, usize),
+    /// Arrays whose elements close a back-edge to this expansion. Their
+    /// elements reach its roots, which are known only once it finishes.
+    back_edge_arrays: Vec<TyId<'db>>,
 }
 
 fn instantiate_provider_target_layout<'db>(
@@ -1321,6 +1326,8 @@ struct FieldCollector<'db> {
     reached_concrete_sites: Vec<ConcreteRootSite<'db>>,
     visiting: FxHashSet<(TyId<'db>, StoragePlace<'db>)>,
     expanding_providers: Vec<ExpandingProvider<'db>>,
+    /// Enclosing arrays, each with the provider expansion depth at its start.
+    arrays: Vec<(TyId<'db>, usize)>,
     nonterminal_occurrences: FxHashSet<RootOccurrenceId>,
 }
 
@@ -1343,6 +1350,7 @@ impl<'db> FieldCollector<'db> {
             reached_concrete_sites: Vec::new(),
             visiting: FxHashSet::default(),
             expanding_providers: Vec::new(),
+            arrays: Vec::new(),
             nonterminal_occurrences: FxHashSet::default(),
         }
     }
@@ -1805,7 +1813,15 @@ impl<'db> FieldCollector<'db> {
                 .rev()
                 .map(|(idx, frame)| (idx, frame.ty, frame.implementation)),
         ) {
-            LayoutViewRecurrence::BackEdge { .. } => {
+            LayoutViewRecurrence::BackEdge { ancestor } => {
+                if let Some(&(array, depth)) = self.arrays.last()
+                    && ancestor < depth
+                {
+                    let frame = &mut self.expanding_providers[ancestor];
+                    if !frame.back_edge_arrays.contains(&array) {
+                        frame.back_edge_arrays.push(array);
+                    }
+                }
                 return self.walk_ty_representation(
                     views,
                     parent_instance,
@@ -1829,6 +1845,8 @@ impl<'db> FieldCollector<'db> {
         self.expanding_providers.push(ExpandingProvider {
             ty,
             implementation: target_edge.impl_instance.selected(),
+            occurrences: (self.occurrences.len(), self.concrete_occurrences.len()),
+            back_edge_arrays: Vec::new(),
         });
 
         let declared_start = self.occurrences.len();
@@ -1845,7 +1863,7 @@ impl<'db> FieldCollector<'db> {
             Ok(target) => target,
             Err(error) => {
                 self.push_error(error);
-                self.expanding_providers.pop();
+                self.finish_provider_expansion();
                 return output;
             }
         };
@@ -1881,8 +1899,23 @@ impl<'db> FieldCollector<'db> {
             .collect::<Vec<_>>();
         self.nonterminal_occurrences.extend(nonterminal);
         output.events.extend(target_output.events);
-        self.expanding_providers.pop();
+        self.finish_provider_expansion();
         output
+    }
+
+    /// Ends the innermost provider expansion. An array whose element closed a
+    /// back-edge to it reaches the expansion's roots, so the array carries
+    /// roots exactly when the expansion produced any.
+    fn finish_provider_expansion(&mut self) {
+        let frame = self
+            .expanding_providers
+            .pop()
+            .expect("a provider expansion must be active");
+        if (self.occurrences.len(), self.concrete_occurrences.len()) != frame.occurrences {
+            for array in frame.back_edge_arrays {
+                self.push_error(ContractLayoutError::LayoutRootArray { array });
+            }
+        }
     }
 
     fn walk_sequence(
@@ -1983,6 +2016,7 @@ impl<'db> FieldCollector<'db> {
         let mut element_dimensions = dimensions.to_vec();
         element_dimensions.push(len);
         let occurrences = (self.occurrences.len(), self.concrete_occurrences.len());
+        self.arrays.push((ty, self.expanding_providers.len()));
         let mut output = self.walk_ty(
             ConcreteTypeView::new(element.ty, source_element),
             element.instance,
@@ -1990,6 +2024,7 @@ impl<'db> FieldCollector<'db> {
             &element_dimensions,
             mode,
         );
+        self.arrays.pop();
         // Every element shares one element type, so the elements cannot carry
         // distinct layout roots. This holds at every extent, including zero.
         if (self.occurrences.len(), self.concrete_occurrences.len()) != occurrences {

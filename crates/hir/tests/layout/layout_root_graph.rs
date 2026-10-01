@@ -1518,6 +1518,66 @@ fn pass<const VALUE: u8>(value: Ordinary<VALUE>) -> Ordinary<VALUE> {
 }
 
 #[test]
+fn arrays_reaching_roots_through_recursive_provider_targets_are_rejected() {
+    // An embedded handle is already expanding when its target reaches the
+    // array, so the element closes a back-edge instead of walking the target.
+    for target in ["([Loop; 2], Rooted)", "(Rooted, [Loop; 2])"] {
+        let source = format!(
+            r#"
+use core::effect_ref::{{AddressSpace, EffectHandle}}
+
+struct Rooted<const ROOT: u256 = _> {{}}
+struct Loop {{ raw: u256 }}
+impl EffectHandle for Loop {{
+    type Target = {target}
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct Holder {{ l: Loop }}
+struct Plain {{ raw: u256 }}
+impl EffectHandle for Plain {{
+    type Target = ([Plain; 2], u256)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct PlainHolder {{ p: Plain }}
+
+contract C {{
+    mut direct: Loop,
+    mut embedded: Holder,
+    mut plain: PlainHolder,
+}}
+"#
+        );
+        parse_module!(trusted db, top_mod, &source);
+        let contract = find_contract(&db, top_mod, "C");
+        for field in ["direct", "embedded"] {
+            let errors = contract
+                .storage_layout(&db)
+                .field_errors(&IdentId::new(&db, field.to_string()))
+                .unwrap_or_else(|| panic!("{target}: `{field}` must be rejected"));
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| matches!(error, ContractLayoutError::LayoutRootArray { .. })),
+                "{target}: {field}: {errors:?}"
+            );
+        }
+        // Recursion through an array of root-free handles stays valid.
+        assert!(
+            contract
+                .storage_layout(&db)
+                .field_errors(&IdentId::new(&db, "plain".to_string()))
+                .is_none()
+        );
+    }
+}
+
+#[test]
 fn root_bearing_array_fields_are_rejected() {
     parse_module!(
         db,

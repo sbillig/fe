@@ -784,9 +784,10 @@ struct CallableLayoutProjectionCollector<'db> {
     adt_stack: Vec<CallableLayoutAdtFrame<'db>>,
     view_aliases: Vec<LayoutViewAlias>,
     unrepresentable: Option<LayoutBundleUnrepresentable>,
-    /// Whether the walk is inside an array element. Array elements carry no
-    /// layout components, so their roots are only detected, never recorded.
-    in_array_element: bool,
+    /// Enclosing arrays, each with the ADT stack depth at its start. Array
+    /// elements carry no layout components, so their roots are only
+    /// detected, never recorded.
+    arrays: Vec<(LayoutEvidencePath, usize)>,
     expand_effect_targets: bool,
     bound_roots: FxHashMap<LayoutRootId<'db>, TyId<'db>>,
 }
@@ -795,6 +796,11 @@ struct CallableLayoutAdtFrame<'db> {
     ty: TyId<'db>,
     family: CallableLayoutExpansionFamily<'db>,
     evidence_path: LayoutEvidencePath,
+    /// Value occurrence count when the expansion began.
+    occurrences: usize,
+    /// Arrays whose elements close a back-edge to this expansion. Their
+    /// elements reach its roots, which are known only once it finishes.
+    back_edge_arrays: Vec<LayoutEvidencePath>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1111,7 +1117,8 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                     )],
                 );
                 let occurrences = self.value_occurrences.len();
-                let in_array_element = std::mem::replace(&mut self.in_array_element, true);
+                self.arrays
+                    .push((evidence_path.clone(), self.adt_stack.len()));
                 path.push(LayoutBundlePathStep::Index);
                 if let Some(len) = extent {
                     index_lengths.push(len);
@@ -1129,7 +1136,7 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                     index_lengths.pop();
                 }
                 path.pop();
-                self.in_array_element = in_array_element;
+                self.arrays.pop();
                 if self.value_occurrences.len() != occurrences {
                     self.value_occurrences.truncate(occurrences);
                     self.unrepresentable
@@ -1178,13 +1185,22 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                 .map(|(idx, frame)| (idx, frame.ty, frame.family)),
         ) {
             LayoutViewRecurrence::BackEdge { ancestor } => {
+                if let Some((array, depth)) = self.arrays.last()
+                    && ancestor < *depth
+                {
+                    let array = array.clone();
+                    let frame = &mut self.adt_stack[ancestor];
+                    if !frame.back_edge_arrays.contains(&array) {
+                        frame.back_edge_arrays.push(array);
+                    }
+                }
                 let canonical = self.adt_stack[ancestor].evidence_path.clone();
                 let alias = LayoutViewAlias {
                     alias: evidence_path.clone(),
                     canonical,
                 };
                 if materialized
-                    && !self.in_array_element
+                    && self.arrays.is_empty()
                     && alias.alias != alias.canonical
                     && !self.view_aliases.contains(&alias)
                 {
@@ -1192,16 +1208,17 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                 }
                 return;
             }
+            // A non-regular cycle has no finite view, so whether an array
+            // element reaches a root through it is unknown. It is rejected
+            // wherever it occurs.
             LayoutViewRecurrence::NonRegular { ancestor } => {
-                if materialized && !self.in_array_element {
-                    let frame = &self.adt_stack[ancestor];
-                    self.unrepresentable.get_or_insert_with(|| {
-                        LayoutBundleUnrepresentable::NonRegularViewCycle {
-                            canonical: frame.evidence_path.clone(),
-                            recursive: evidence_path.clone(),
-                        }
-                    });
-                }
+                let frame = &self.adt_stack[ancestor];
+                self.unrepresentable.get_or_insert_with(|| {
+                    LayoutBundleUnrepresentable::NonRegularViewCycle {
+                        canonical: frame.evidence_path.clone(),
+                        recursive: evidence_path.clone(),
+                    }
+                });
                 return;
             }
             LayoutViewRecurrence::Expand => {}
@@ -1210,6 +1227,8 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             ty,
             family,
             evidence_path: evidence_path.clone(),
+            occurrences: self.value_occurrences.len(),
+            back_edge_arrays: Vec::new(),
         });
         let args = ty.generic_args(self.db);
         let forwarded_params = forwarded_layout_params(self.db, adt);
@@ -1230,7 +1249,7 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                 self.bind_ty(arg)
             };
             let placeholders = collect_unique_layout_placeholders_in_order(self.db, bound_arg);
-            if placeholders.is_empty() && !self.in_array_element {
+            if placeholders.is_empty() && self.arrays.is_empty() {
                 self.port_tys
                     .entry(LayoutPortKey {
                         value_path: evidence_path.clone(),
@@ -1268,7 +1287,7 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                     structural_root: Some(*root),
                     can_refine_to_descendant: forwarded_params.contains(&param_idx),
                 });
-                if !self.in_array_element {
+                if self.arrays.is_empty() {
                     self.port_tys.insert(
                         LayoutPortKey {
                             value_path: evidence_path.clone(),
@@ -1343,7 +1362,7 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                         structural_root: None,
                         can_refine_to_descendant: forwarded_params.contains(&param_idx),
                     });
-                    if !self.in_array_element {
+                    if self.arrays.is_empty() {
                         self.port_tys.insert(
                             LayoutPortKey {
                                 value_path: evidence_path.clone(),
@@ -1460,7 +1479,18 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             );
             evidence_path.pop();
         }
-        self.adt_stack.pop();
+        // An array whose element closed a back-edge to this expansion reaches
+        // its roots, so the array carries roots exactly when it produced any.
+        let frame = self
+            .adt_stack
+            .pop()
+            .expect("an ADT expansion must be active");
+        if self.value_occurrences.len() != frame.occurrences
+            && let Some(array) = frame.back_edge_arrays.into_iter().next()
+        {
+            self.unrepresentable
+                .get_or_insert(LayoutBundleUnrepresentable::RootArray { array });
+        }
     }
 
     fn finish(self) -> CallableLayoutProjections<'db> {
@@ -1641,7 +1671,7 @@ fn callable_layout_projections_for_ty_with_effect_targets<'db>(
         adt_stack: Vec::new(),
         view_aliases: Vec::new(),
         unrepresentable: None,
-        in_array_element: false,
+        arrays: Vec::new(),
         expand_effect_targets,
         bound_roots: FxHashMap::default(),
     };
