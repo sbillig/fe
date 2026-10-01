@@ -86,7 +86,7 @@ impl GraphAllocation {
         // lives in this table and is released by the backing allocation.
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let id = NEXT
-            .fetch_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |id| {
+            .try_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |id| {
                 id.checked_add(1)
             })
             .expect("graph allocation identifiers exhausted");
