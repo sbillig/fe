@@ -12,7 +12,7 @@ use std::{
     ffi::OsStr,
     marker::PhantomData,
     sync::{Arc, LazyLock, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Copy)]
@@ -224,7 +224,9 @@ impl ProfileScope {
                 let scope = &mut p.scopes[depth];
                 scope.sweep += 1;
                 scope.phase = "sweep";
-                if scope.started.elapsed().as_secs_f64() >= 0.5 {
+                if scope.started.elapsed() >= Duration::from_millis(500)
+                    && p.reported.elapsed() >= Duration::from_millis(500)
+                {
                     eprintln!(
                         "SOLVER_SWEEP scope={:?} sweep={} loans={loans} generation={generation}",
                         scope.label, scope.sweep
@@ -310,7 +312,7 @@ impl Drop for Operation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{panic::catch_unwind, sync::mpsc, thread, time::Duration};
+    use std::{panic::catch_unwind, sync::mpsc, thread};
 
     fn install(config: Config) {
         TEST_CONFIG.set(Some(config));
@@ -389,6 +391,56 @@ mod tests {
             PROFILE.with_borrow(|p| {
                 assert_eq!(p.as_ref().unwrap().operation, "none");
                 assert!(p.as_ref().unwrap().scopes.is_empty());
+            });
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn sweeps_are_rate_limited_without_losing_progress() {
+        thread::spawn(|| {
+            install(Config::from_vars(Some(OsStr::new("1")), None));
+            let scope = ProfileScope::new(|| "long-running solver".into());
+            let old_report = Instant::now() - Duration::from_secs(1);
+            PROFILE.with_borrow_mut(|p| {
+                let p = p.as_mut().unwrap();
+                p.scopes[0].started = old_report;
+                p.reported = old_report;
+            });
+            scope.sweep(3, 1);
+            PROFILE.with_borrow(|p| assert_ne!(p.as_ref().unwrap().reported, old_report));
+
+            // Future instants keep ineligible cases deterministic without sleeps.
+            let recent_report = Instant::now() + Duration::from_secs(60);
+            PROFILE.with_borrow_mut(|p| p.as_mut().unwrap().reported = recent_report);
+            scope.sweep(4, 2);
+            scope.sweep(5, 3);
+            PROFILE.with_borrow(|p| {
+                let p = p.as_ref().unwrap();
+                assert_eq!(p.reported, recent_report);
+                assert_eq!(p.scopes[0].sweep, 3);
+                assert_eq!(p.scopes[0].phase, "sweep");
+            });
+
+            PROFILE.with_borrow_mut(|p| p.as_mut().unwrap().reported = old_report);
+            scope.sweep(6, 4);
+            PROFILE.with_borrow(|p| {
+                let p = p.as_ref().unwrap();
+                assert_ne!(p.reported, old_report);
+                assert_eq!(p.scopes[0].sweep, 4);
+            });
+
+            PROFILE.with_borrow_mut(|p| {
+                let p = p.as_mut().unwrap();
+                p.scopes[0].started = recent_report;
+                p.reported = old_report;
+            });
+            scope.sweep(7, 5);
+            PROFILE.with_borrow(|p| {
+                let p = p.as_ref().unwrap();
+                assert_eq!(p.reported, old_report);
+                assert_eq!(p.scopes[0].sweep, 5);
             });
         })
         .join()
