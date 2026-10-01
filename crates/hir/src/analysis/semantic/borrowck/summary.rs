@@ -2922,6 +2922,52 @@ impl<'db> Borrowck<'db> {
         let state = instantiations.state;
         let result = instantiations.result;
         let inputs = instantiations.inputs;
+        // Valid calls establish the callee's separation preconditions. Its
+        // ordinary effects can therefore exclude overwrites those preconditions
+        // forbid. Checking the preconditions themselves must still resolve every
+        // alternative physically, without assuming the fact being proved.
+        if instantiations.basis == AliasBasis::Assumed
+            && let Some(clobber) = &source.source.clobber
+            && self.calls[&result]
+                .summary
+                .loan_requirements
+                .clauses()
+                .iter()
+                .any(|clause| {
+                    clause.payload.suspended.is_empty()
+                        && Guard::always(clause.guard.scope()).implies(&clause.guard)
+                        && SourceExpr::from_place(&clause.payload.protected).is_some_and(
+                            |protected| {
+                                protected.source == clobber.target.source
+                                    && protected.views == clobber.target.views
+                                    && clobber
+                                        .target
+                                        .path
+                                        .as_slice()
+                                        .starts_with(protected.path.as_slice())
+                                    && !clobber.target.invalidated
+                            },
+                        )
+                        && SourceExpr::from_place(&clause.payload.access).is_some_and(|access| {
+                            if clause.payload.extent == AccessExtent::Unknown {
+                                let mut written = &clobber.written;
+                                while !written.invalidated
+                                    && written.source.dereferences().is_empty()
+                                    && !written.source.is_reachable()
+                                    && let ExternalOrigin::Memory { base, .. } =
+                                        &written.source.origin
+                                {
+                                    written = base;
+                                }
+                                access == *written
+                            } else {
+                                clause.payload.extent == clobber.extent && access == clobber.written
+                            }
+                        })
+                })
+        {
+            return Ok(Resolution::empty(scope));
+        }
         let CallInputs {
             args,
             effects,
@@ -5677,6 +5723,131 @@ fn clobber(slot: *ref u256) {
                     payload: payload(semantics),
                 }]
             })
+    }
+
+    #[test]
+    fn callee_separation_filters_effects_without_assuming_its_own_proof() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "callee_separation_effects.fe".into(),
+            "fn leaf(_ a: *u256, _ b: *u256, _ flag: bool) {}\n\
+             fn wrapper(_ a: *u256, _ b: *u256, _ flag: bool) { leaf(a, b, flag) }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "wrapper"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        let ((block, index), result, args) = first_call(&checker);
+        let state = checker.before[block][index].clone();
+        let scope = BinderScope::default();
+        let inputs = CallInputs {
+            args: &args,
+            effects: &[],
+            origin: SemOrigin::Body(checker.body.template_owner),
+        };
+        let input = |param| summary_input(&db, param);
+        let place = |param| SymbolicPlace {
+            root: RegionRoot::External(input(param).source),
+            path: RegionPath::default(),
+            views: Default::default(),
+        };
+        for case in [
+            "exact",
+            "unknown_extent",
+            "unknown_offset",
+            "typed_offset",
+            "invalidated",
+            "conditional",
+            "suspended",
+            "extent",
+            "endpoint",
+            "missing",
+        ] {
+            let mut written = input(1);
+            if matches!(case, "unknown_offset" | "typed_offset") {
+                written = SourceExpr::whole(ExternalSource::memory(
+                    &db,
+                    written,
+                    TyId::u256(&db),
+                    MemoryOffset::Element(TyId::u256(&db), IndexExpr::Const(3)),
+                ));
+            }
+            written.invalidated = case == "invalidated";
+            let mut source = SourceExpr::from_place(&clobbered(&db, input(0), written)).unwrap();
+            source.invalidated = true;
+            let mut relation = Separation {
+                protected: place(0),
+                protected_kind: BorrowKind::Mut,
+                access: place(1),
+                access_kind: BorrowKind::Mut,
+                extent: AccessExtent::Typed,
+                suspended: Box::new([]),
+            };
+            let mut guard = Guard::always(&scope);
+            match case {
+                "unknown_extent" | "unknown_offset" => relation.extent = AccessExtent::Unknown,
+                "conditional" => {
+                    guard = guard
+                        .with_boolean(
+                            ChoiceKey::new(ValueOccurrence::Argument(2), StructuralPath::default()),
+                            true,
+                        )
+                        .unwrap();
+                }
+                "suspended" => {
+                    relation.suspended = Box::new([Guarded {
+                        guard: guard.clone(),
+                        payload: RegionPath::default(),
+                    }])
+                }
+                "extent" => relation.extent = AccessExtent::Bytes(IndexExpr::Const(1)),
+                "endpoint" => relation.access = place(0),
+                _ => {}
+            }
+            checker
+                .calls
+                .get_mut(&result)
+                .unwrap()
+                .summary
+                .loan_requirements = SeparationSet::new(
+                &db,
+                &scope,
+                (case != "missing").then_some(Guarded {
+                    guard,
+                    payload: relation,
+                }),
+            );
+            let mut assumed = SourceInstantiations::new(&state, result, inputs);
+            let mut physical = SourceInstantiations::physical(&state, result, inputs);
+            let effect = assumed.resolve(&mut checker, &source, &scope).unwrap();
+            let proof = physical.resolve(&mut checker, &source, &scope).unwrap();
+            let excluded = matches!(case, "exact" | "unknown_extent" | "unknown_offset");
+            assert_eq!(effect.region.is_empty(), excluded, "{case}");
+            assert!(!proof.region.is_empty(), "{case}");
+            assert!(!proof.invalidated.requirements.is_empty(), "{case}");
+            if excluded {
+                assert!(!effect.invalidated.invalid && effect.invalidated.requirements.is_empty());
+            }
+            // Cached effects cannot substitute for the independent proof.
+            assert_eq!(
+                assumed
+                    .resolve(&mut checker, &source, &scope)
+                    .unwrap()
+                    .region,
+                effect.region
+            );
+            assert_eq!(
+                physical
+                    .resolve(&mut checker, &source, &scope)
+                    .unwrap()
+                    .region,
+                proof.region
+            );
+        }
     }
 
     #[test]

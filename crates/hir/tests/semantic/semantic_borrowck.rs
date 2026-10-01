@@ -13476,3 +13476,33 @@ fn aliased() {{
     assert_eq!(summary.loan_requirements.clauses().len(), 1);
     assert_eq!(conflicting_functions(&source), ["aliased"]);
 }
+
+#[test]
+fn callee_separation_excludes_impossible_clobbers_of_independent_locals() {
+    let source = r#"
+use core::ptr
+struct Cell { pointer: *u256 }
+fn write(_ cell: mut Cell) {
+    *cell.pointer = 1
+    *cell.pointer = 2
+}
+fn hold(_ local: mut u256, _ cell: mut Cell) { write(cell) }
+fn forward(_ cell: mut Cell) -> u256 {
+    let mut local: u256 = 0
+    hold(mut local, cell)
+    local
+}
+fn disjoint() {
+    let data = ptr::alloc<u256>()
+    *data = 0
+    let mut cell = Cell { pointer: data }
+    let _ = forward(mut cell)
+}
+fn aliased() {
+    let cell = ptr::alloc<Cell>()
+    *cell = Cell { pointer: ptr::cast<Cell, u256>(cell) }
+    let _ = forward(mut *cell)
+}
+"#;
+    assert_eq!(conflicting_functions(source), ["aliased"]);
+}

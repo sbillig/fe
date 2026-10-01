@@ -543,6 +543,15 @@ and exports the rest as `BorrowSummary::loan_requirements`. Each clause relates:
 All four share one witness scope. Two independently quantified regions would
 pair alternatives that never occurred together.
 
+Ordinary call effects may use an unconditional callee separation requirement to
+exclude an opaque overwrite: the requirement must protect the clobbered cell
+(or a containing place), cover the written footprint, and have no suspended slices. A matching
+source and extent is covered; an unknown extent also covers writes through
+offsets of that source. This does not establish loan authority. Resolving the callee's
+requirements and native-validity obligations still uses the physical basis and
+retains the overwrite until the caller independently proves it impossible.
+Effect and proof resolutions have separate caches.
+
 A reborrow descended from an input loan still names caller-supplied memory, so
 its unresolved separation is also exported. Creating `mut input` or `ref input`
 does not make the referent concrete. An input ancestor permits deferral only;

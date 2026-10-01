@@ -1103,3 +1103,64 @@ pub fn main() -> i32 {
         assert!(result.status.success(), "O{level}: {result:?}");
     }
 }
+
+#[test]
+fn native_callee_separation_preserves_fresh_buffer_callers() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("independent_frames.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::ByteBuffer
+struct Journal { bytes: ByteBuffer }
+struct Frame { data: Journal, value: u256 }
+impl Frame {
+    fn new() -> Self { Self { data: Journal { bytes: ByteBuffer::new() }, value: 0 } }
+    fn run(mut self, state: mut Frame) {
+        self.data.bytes.clear()
+        self.value = 1
+        core::assert(self.data.bytes.try_resize(32))
+        core::assert(state.data.bytes.try_resize(32))
+        self.data.bytes.set_byte(index: 0, value: 2)
+        let mut i: u64 = 0
+        while i < 32 {
+            state.data.bytes.set_byte(index: i, value: 3)
+            i += 1
+        }
+        state.value += 1
+    }
+    fn release(own self) { self.data.bytes.release() }
+}
+fn execute(state: mut Frame) -> Frame {
+    let mut vm = Frame::new()
+    vm.run(state)
+    vm
+}
+fn finish(state: mut Frame) {
+    let mut vm = Frame::new()
+    vm.run(state)
+    vm.release()
+}
+pub fn main() -> i32 {
+    let mut state = Frame::new()
+    let vm = execute(state: mut state)
+    core::assert(vm.value == 1 && state.value == 1)
+    core::assert(vm.data.bytes.byte_at(0) == 2 && state.data.bytes.byte_at(31) == 3)
+    vm.release()
+    finish(state: mut state)
+    core::assert(state.value == 2 && state.data.bytes.byte_at(31) == 3)
+    state.release()
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("independent_frames"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
