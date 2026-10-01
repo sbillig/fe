@@ -12,6 +12,8 @@ pub mod index;
 pub mod loan;
 pub mod opaque;
 pub mod path;
+#[cfg(feature = "borrowck-profile")]
+pub(crate) mod profile;
 pub mod region;
 pub mod repack;
 pub mod semantics;

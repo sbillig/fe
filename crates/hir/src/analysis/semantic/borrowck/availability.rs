@@ -335,6 +335,8 @@ impl<'db> Borrowck<'db> {
     }
 
     pub fn analyze_availability(&self) -> AvailabilityAnalysis<'db> {
+        #[cfg(feature = "borrowck-profile")]
+        let profile = self.profile_scope("availability");
         let mut entries = vec![None; self.body.blocks.len()];
         entries[self.body.entry.index()] = Some(AvailabilityState::new());
         // Revisit only blocks whose entry state changed: an unchanged block
@@ -342,6 +344,8 @@ impl<'db> Borrowck<'db> {
         let mut dirty = vec![false; self.body.blocks.len()];
         dirty[self.body.entry.index()] = true;
         while dirty.contains(&true) {
+            #[cfg(feature = "borrowck-profile")]
+            profile.sweep(self.inventory.loans.len(), self.source_generation);
             for (block_index, block) in self.body.blocks.iter().enumerate() {
                 if !std::mem::take(&mut dirty[block_index]) {
                     continue;
@@ -350,6 +354,8 @@ impl<'db> Borrowck<'db> {
                     continue;
                 };
                 for (index, _) in self.before[block_index].iter().enumerate() {
+                    #[cfg(feature = "borrowck-profile")]
+                    profile.point("evaluate", block_index, index);
                     self.evaluate_availability(&mut state, block_index, index, None);
                 }
                 let Some(terminal) = &self.terminal[block_index] else {
@@ -465,6 +471,8 @@ impl<'db> Borrowck<'db> {
                     let entry = &mut entries[successor.block.index()];
                     if let Some(previous) = entry {
                         let old = previous.clone();
+                        #[cfg(feature = "borrowck-profile")]
+                        profile.point("join", block_index, 0);
                         previous.join(edge);
                         dirty[successor.block.index()] |= *previous != old;
                     } else {

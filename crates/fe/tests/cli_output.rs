@@ -289,7 +289,10 @@ fn fe_binary() -> &'static str {
 
 fn run_fe_main_impl(args: &[&str], cwd: Option<&Path>, extra_env: &[(&str, &str)]) -> FeOutput {
     let mut cmd = Command::new(fe_binary());
-    cmd.args(args).env("NO_COLOR", "1");
+    cmd.args(args)
+        .env("NO_COLOR", "1")
+        .env_remove("FE_BORROWCK_PROFILE")
+        .env_remove("FE_BORROWCK_SUBGRAPHS");
     for (key, value) in extra_env {
         cmd.env(key, value);
     }
@@ -3534,6 +3537,53 @@ fn test_cli_test_fe_repo_root() {
         .expect("fe repo root");
     let (output, exit_code) = run_fe_main_in_dir(&["test"], root);
     assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+}
+
+#[test]
+fn test_cli_borrowck_profiling_is_silent_without_exact_activation() {
+    let root = workspace_fixture("test_workspace_fe_test_core_std_no_tests");
+    for env in [
+        &[][..],
+        &[("FE_BORROWCK_SUBGRAPHS", "1")][..],
+        &[("FE_BORROWCK_PROFILE", "0"), ("FE_BORROWCK_SUBGRAPHS", "1")][..],
+        &[("FE_BORROWCK_PROFILE", "")][..],
+    ] {
+        let output = run_fe_main_impl(&["test", "--ingot", "app"], Some(&root), env);
+        let display = output.combined();
+        assert_eq!(output.exit_code, 0, "fe test failed: {display}");
+        assert!(
+            !output.stderr.contains("GRAPH_PROFILE"),
+            "unsolicited graph profile: {display}"
+        );
+        assert!(
+            !output.stderr.contains("SOLVER_"),
+            "unsolicited solver profile: {display}"
+        );
+    }
+}
+
+#[cfg(feature = "borrowck-profile")]
+#[test]
+fn test_cli_borrowck_profiling_opt_in_repo_root() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("fe repo root");
+    let output = run_fe_main_impl(&["test"], Some(root), &[("FE_BORROWCK_PROFILE", "1")]);
+    let display = output.combined();
+    assert_eq!(output.exit_code, 0, "profiled fe test failed: {display}");
+    assert!(
+        output.stderr.contains("GRAPH_PROFILE event=start"),
+        "missing activation report: {display}"
+    );
+    assert!(
+        !output.stderr.contains("panicked"),
+        "profiling panic: {display}"
+    );
+    assert!(
+        !output.stderr.contains("counted"),
+        "profiling invariant failure: {display}"
+    );
 }
 
 #[test]
