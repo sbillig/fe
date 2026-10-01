@@ -43,6 +43,9 @@ pub struct BorrowSummary<'db> {
     /// Separation between accesses and borrows live across them that this body
     /// could not prove. Callers establish it physically, never by authority.
     pub loan_requirements: SeparationSet<'db>,
+    /// Native validity of the accesses `loan_requirements` relate. Callers
+    /// resolve these, like the relations, with only physical separation.
+    pub separation_validity: RegionSet<'db>,
 }
 
 /// Where a separation requirement arose: a borrow a body held and the access it
