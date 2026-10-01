@@ -13217,3 +13217,82 @@ fn drive() {
         }
     }
 }
+
+#[test]
+fn separation_requirements_scale_through_chains_cycles_and_diamonds() {
+    // A requirement forwarded through a deep wrapper chain, a recursive cycle
+    // or a diamond of callers reaches the concrete caller once, in a verdict
+    // that depends only on whether the stored borrow aliases the value.
+    let foreign = r#"
+use core::ptr
+fn foreign(value: mut u256, saved: *mut u256) {
+    let other = *saved
+    other = 5
+    value = 9
+}
+"#;
+    let drive = |call: &str, stored: &str| {
+        format!(
+            r#"
+fn drive() {{
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let elsewhere = ptr::alloc<u256>()
+    *elsewhere = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut {stored}
+    {call}
+}}
+"#
+        )
+    };
+    let chain: String = (0..8)
+        .map(|index| {
+            let callee = if index == 0 {
+                "foreign".to_string()
+            } else {
+                format!("wrap{}", index - 1)
+            };
+            format!(
+                "fn wrap{index}(value: mut u256, saved: *mut u256) {{ {callee}(value, saved) }}\n"
+            )
+        })
+        .collect();
+    let cycle: String = (0..4)
+        .map(|index| {
+            format!(
+                "fn rec{index}(value: mut u256, saved: *mut u256, depth: u256) {{\n    \
+                 if depth > 0 {{ rec{}(value, saved, depth: depth - 1) }}\n    \
+                 foreign(value, saved)\n}}\n",
+                (index + 1) % 4
+            )
+        })
+        .collect();
+    let layers = 4;
+    let diamond: String = (0..layers)
+        .flat_map(|layer| {
+            ["a", "b"].map(|side| {
+                let body = if layer + 1 == layers {
+                    "foreign(value, saved)".to_string()
+                } else {
+                    format!(
+                        "d{next}a(value, saved)\n    d{next}b(value, saved)",
+                        next = layer + 1
+                    )
+                };
+                format!("fn d{layer}{side}(value: mut u256, saved: *mut u256) {{\n    {body}\n}}\n")
+            })
+        })
+        .collect();
+    for (shape, callees, call) in [
+        ("chain", chain, "wrap7(value: native, saved)"),
+        ("cycle", cycle, "rec0(value: native, saved, depth: 3)"),
+        ("diamond", diamond, "d0a(value: native, saved)"),
+    ] {
+        for (stored, expected) in [("native", &["drive"][..]), ("*elsewhere", &[][..])] {
+            let source = format!("{foreign}{callees}{}", drive(call, stored));
+            assert_eq!(conflicting_functions(&source), expected, "{shape} {stored}");
+        }
+    }
+}
