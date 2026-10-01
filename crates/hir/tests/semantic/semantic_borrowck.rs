@@ -11820,3 +11820,766 @@ fn inspect() {{
         );
     }
 }
+
+/// Functions with a reported borrow conflict. Internal errors fail the test.
+fn conflicting_functions(src: &str) -> Vec<String> {
+    let diagnostics = checked_borrow_diags(src);
+    assert!(
+        !diagnostics.contains("internal borrow checking error"),
+        "{diagnostics}"
+    );
+    let marker = "borrow conflict in `fn ";
+    let mut functions: Vec<_> = diagnostics
+        .match_indices(marker)
+        .map(|(start, _)| {
+            let name = &diagnostics[start + marker.len()..];
+            name[..name.find('`').unwrap()].to_string()
+        })
+        .collect();
+    functions.sort();
+    functions.dedup();
+    functions
+}
+
+#[test]
+fn deferred_input_loan_separation_is_enforced_at_callers() {
+    // A body compares its input loans with other accesses only by exact
+    // aliasing; callers must establish the rest physically. Authority found
+    // through a stored child of the borrowed input never establishes it.
+    for (name, source, expected) in [
+        (
+            "write_through_stored_child",
+            r#"
+use core::ptr
+
+fn foreign(value: mut u256, saved: *mut u256) {
+    let other = *saved
+    other = 5
+    value = 9
+}
+
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    foreign(value: native, saved)
+}
+"#,
+            &["drive"][..],
+        ),
+        (
+            "read_through_stored_child",
+            r#"
+use core::ptr
+
+fn foreign(value: mut u256, saved: *ref u256) -> u256 {
+    let other = *saved
+    let seen: u256 = other
+    value = 9
+    seen
+}
+
+fn drive() -> u256 {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<ref u256>()
+    *saved = ref native
+    foreign(value: native, saved)
+}
+"#,
+            &["drive"][..],
+        ),
+        (
+            "wrapper",
+            r#"
+use core::ptr
+
+fn foreign(value: mut u256, saved: *mut u256) {
+    let other = *saved
+    other = 5
+    value = 9
+}
+
+fn wrap(value: mut u256, saved: *mut u256) {
+    foreign(value, saved)
+}
+
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    wrap(value: native, saved)
+}
+"#,
+            &["drive"][..],
+        ),
+        (
+            "fresh_reborrow_control",
+            r#"
+use core::ptr
+
+fn foreign(value: mut u256, saved: *mut u256) {
+    let other = *saved
+    other = 5
+    value = 9
+}
+
+// Control: a fresh reborrow argument is not authorized by the stored child.
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    foreign(value: mut native, saved)
+}
+"#,
+            &["drive"][..],
+        ),
+        (
+            "disjoint_control",
+            r#"
+use core::ptr
+
+fn foreign(value: mut u256, saved: *mut u256) {
+    let other = *saved
+    other = 5
+    value = 9
+}
+
+// Control: the stored borrow targets a different allocation.
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let elsewhere = ptr::alloc<u256>()
+    *elsewhere = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut *elsewhere
+    foreign(value: native, saved)
+}
+"#,
+            &[][..],
+        ),
+        (
+            "returned_authority",
+            r#"
+use core::ptr
+fn load(saved: *mut u256) -> mut u256 { *saved }
+fn foreign(value: mut u256, saved: *mut u256) {
+    let other = load(saved)
+    other = 5
+    value = 9
+}
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    foreign(value: native, saved)
+}
+"#,
+            &["drive"][..],
+        ),
+        (
+            "view_raw_route",
+            r#"
+use core::ptr
+struct Holder { slot: *mut u256 }
+fn foreign(value: mut u256, holder: Holder) {
+    let other = *holder.slot
+    other = 5
+    value = 9
+}
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    let holder = Holder { slot: saved }
+    foreign(value: native, holder)
+}
+"#,
+            &["drive"][..],
+        ),
+        (
+            "native_raw_route",
+            r#"
+use core::ptr
+struct Holder { slot: *mut u256 }
+fn foreign(value: mut u256, holder: mut Holder) {
+    let other = *holder.slot
+    other = 5
+    value = 9
+}
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    let mut holder = Holder { slot: saved }
+    foreign(value: native, holder: mut holder)
+}
+"#,
+            &["drive"][..],
+        ),
+        (
+            "effect_raw_route",
+            r#"
+use core::ptr
+struct Holder { slot: *mut u256 }
+fn foreign(value: mut u256) uses (holder: Holder) {
+    let other = *holder.slot
+    other = 5
+    value = 9
+}
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    let holder = Holder { slot: saved }
+    with (holder) { foreign(value: native) }
+}
+"#,
+            &["drive"][..],
+        ),
+        (
+            "native_referent_route",
+            r#"
+use core::ptr
+struct Holder { saved: mut u256 }
+fn foreign(value: mut u256, holder: mut Holder) {
+    let other = holder.saved
+    other = 5
+    value = 9
+}
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let mut holder = Holder { saved: mut native }
+    foreign(value: native, holder: mut holder)
+}
+"#,
+            &["drive"][..],
+        ),
+        (
+            "view_route",
+            r#"
+use core::ptr
+struct Holder { saved: mut u256 }
+fn foreign(value: mut u256, holder: Holder) {
+    let seen = holder.saved
+    let n: u256 = seen
+    value = n
+}
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let holder = Holder { saved: mut native }
+    foreign(value: native, holder)
+}
+"#,
+            &["drive"][..],
+        ),
+        (
+            "hidden_protected_loan",
+            r#"
+use core::ptr
+fn foreign(saved: *mut u256, raw: *u256) {
+    let native = *saved
+    *raw = 5
+    native = 9
+}
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut *target
+    foreign(saved, raw: target)
+}
+"#,
+            &["foreign"][..],
+        ),
+        (
+            "suspended_shared_control",
+            r#"
+use core::ptr
+struct Pair { first: u256, second: u256 }
+fn foreign(value: mut Pair, saved: *ref u256) -> u256 {
+    let child = ref value.first
+    let other = *saved
+    let seen: u256 = other
+    value.second = 9
+    child + seen
+}
+fn drive() -> u256 {
+    let target = ptr::alloc<Pair>()
+    *target = Pair { first: 1, second: 2 }
+    let native = mut *target
+    let saved = ptr::alloc<ref u256>()
+    *saved = ref native.first
+    foreign(value: native, saved)
+}
+"#,
+            &[][..],
+        ),
+        (
+            "whole_suspended_control",
+            r#"
+use core::ptr
+fn foreign(value: mut u256, saved: *ref u256) -> u256 {
+    let child = ref value
+    let other = *saved
+    let seen: u256 = other
+    child + seen
+}
+fn drive() -> u256 {
+    let target = ptr::alloc<u256>()
+    *target = 1
+    let native = mut *target
+    let saved = ptr::alloc<ref u256>()
+    *saved = ref native
+    foreign(value: native, saved)
+}
+"#,
+            &[][..],
+        ),
+        (
+            "empty_effect_access",
+            r#"
+use core::ptr
+fn sink() uses (slot: mut u256) {}
+fn foreign(value: mut u256, pointer: *u256) {
+    with (pointer) { sink() }
+    value = 9
+}
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    foreign(value: native, pointer: target)
+}
+"#,
+            &["drive"][..],
+        ),
+        (
+            "empty_effect_inline_control",
+            r#"
+use core::ptr
+fn sink() uses (slot: mut u256) {}
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    with (target) { sink() }
+    native = 9
+}
+"#,
+            &["drive"][..],
+        ),
+        (
+            "recursive_alias",
+            r#"
+use core::ptr
+
+fn foreign(value: mut u256, saved: *mut u256) {
+    let other = *saved
+    other = 5
+    value = 9
+}
+
+fn recurse(value: mut u256, saved: *mut u256, again: bool) {
+    if again {
+        recurse(value, saved, again: false)
+    } else {
+        foreign(value, saved)
+    }
+}
+
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    recurse(value: native, saved, again: true)
+}
+"#,
+            &["drive"][..],
+        ),
+        (
+            "recursive_disjoint",
+            r#"
+use core::ptr
+
+fn foreign(value: mut u256, saved: *mut u256) {
+    let other = *saved
+    other = 5
+    value = 9
+}
+
+fn recurse(value: mut u256, saved: *mut u256, again: bool) {
+    if again {
+        recurse(value, saved, again: false)
+    } else {
+        foreign(value, saved)
+    }
+}
+
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    let separate = ptr::alloc<u256>()
+    *separate = 1
+    *saved = mut *separate
+    recurse(value: native, saved, again: true)
+}
+"#,
+            &[][..],
+        ),
+        (
+            "views_may_alias",
+            r#"
+struct Cell { value: u256 }
+fn inspect(left: Cell, right: Cell) -> u256 { left.value + right.value }
+fn drive() -> u256 { let value = Cell { value: 3 }
+    inspect(left: value, right: value) }
+"#,
+            &[][..],
+        ),
+        (
+            "shared_natives_may_alias",
+            r#"
+fn inspect(left: ref u256, right: ref u256) -> u256 { left + right }
+fn drive() -> u256 { let value: u256 = 3
+    inspect(left: ref value, right: ref value) }
+"#,
+            &[][..],
+        ),
+        (
+            "view_and_mut_conflict",
+            r#"
+struct Cell { value: u256 }
+fn inspect(left: mut u256, right: Cell) { left = right.value }
+fn drive() { let mut value = Cell { value: 3 }
+    inspect(left: mut value.value, right: value) }
+"#,
+            &["drive"][..],
+        ),
+        (
+            "aggregate_native_pair_conflict",
+            r#"
+struct Pair { left: mut u256, right: mut u256 }
+fn inspect(pair: own Pair) {}
+fn drive() { let mut value: u256 = 3
+    let native = mut value
+    inspect(pair: Pair { left: native, right: native }) }
+"#,
+            &["drive"][..],
+        ),
+    ] {
+        assert_eq!(conflicting_functions(source), expected, "{name}");
+    }
+}
+
+#[test]
+fn separation_between_distinct_inputs_forwards_until_callers_are_concrete() {
+    // Distinct inputs are separate only by an entry assumption, so a body
+    // forwards that separation. Concrete callers establish it physically.
+    let diagnostics = conflicting_functions(
+        r#"
+use core::ptr
+fn write_other(_ first: mut u256, _ second: mut u256) {
+    second = 1
+    first = 2
+}
+fn forward(_ first: mut u256, _ second: mut u256) { write_other(first, second) }
+fn forward_again(_ first: mut u256, _ second: mut u256) { forward(first, second) }
+fn locals() {
+    let mut left: u256 = 0
+    let mut right: u256 = 0
+    forward_again(mut left, mut right)
+}
+fn allocations() {
+    let left = ptr::alloc<u256>()
+    *left = 0
+    let right = ptr::alloc<u256>()
+    *right = 0
+    forward_again(mut *left, mut *right)
+}
+fn fields() {
+    let pair = ptr::alloc<(u256, u256)>()
+    *pair = (0, 0)
+    let whole = mut *pair
+    forward_again(mut whole.0, mut whole.1)
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn caller_conflicts_name_the_borrow_and_access_that_began_the_requirement() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::ptr
+
+fn foreign(value: mut u256, saved: *mut u256) {
+    let other = *saved
+    other = 5
+    value = 9
+}
+
+fn wrap(value: mut u256, saved: *mut u256) {
+    foreign(value, saved)
+}
+
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    wrap(value: native, saved)
+}
+"#,
+    );
+    assert!(
+        diagnostics.contains("borrow conflict in `fn drive`"),
+        "{diagnostics}"
+    );
+    // Forwarding through `wrap` keeps the origins inside `foreign`.
+    for label in [
+        "borrow held across the access",
+        "access that must stay separate from it",
+        "other = 5",
+        "fn foreign(value: mut u256",
+    ] {
+        assert!(diagnostics.contains(label), "{label}: {diagnostics}");
+    }
+}
+
+#[test]
+fn separation_requirements_are_query_order_independent() {
+    let source = r#"
+use core::ptr
+
+fn foreign(value: mut u256, saved: *mut u256) {
+    let other = *saved
+    other = 5
+    value = 9
+}
+
+fn wrap(value: mut u256, saved: *mut u256) {
+    foreign(value, saved)
+}
+
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    wrap(value: native, saved)
+}
+"#;
+    let mut observed = Vec::new();
+    for first in [
+        None,
+        Some("foreign"),
+        Some("wrap"),
+        Some("drive"),
+        Some("admission"),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("separation_order.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        match first {
+            Some("admission") => {
+                let _ = semantic_body_admission(&db, func_instance(&db, module, "wrap"));
+            }
+            Some(name) => {
+                let _ = semantic_borrow_summary(&db, func_instance(&db, module, name));
+            }
+            None => {}
+        }
+        let diagnostics = format_diagnostics(
+            &db,
+            &collect_semantic_borrow_diagnostic_vouchers(&db, module),
+        );
+        let requirements = semantic_borrow_summary(&db, func_instance(&db, module, "wrap"))
+            .unwrap()
+            .unwrap()
+            .loan_requirements;
+        assert!(!requirements.is_empty(), "{first:?}");
+        // Interned identities differ between databases; compare the relations.
+        let relations: Vec<_> = requirements
+            .clauses()
+            .iter()
+            .map(|clause| {
+                let relation = &clause.payload;
+                (
+                    relation.protected_kind,
+                    relation.access_kind,
+                    relation.extent == AccessExtent::Typed,
+                    relation.suspended.len(),
+                    relation.protected.path.as_slice().len(),
+                    relation.access.path.as_slice().len(),
+                )
+            })
+            .collect();
+        observed.push((first, diagnostics, format!("{relations:?}")));
+    }
+    for (first, diagnostics, requirements) in &observed[1..] {
+        assert_eq!(diagnostics, &observed[0].1, "{first:?}");
+        assert_eq!(requirements, &observed[0].2, "{first:?}");
+    }
+}
+
+#[test]
+fn storage_entries_hold_no_admissible_borrowed_capability() {
+    // Storing a borrowed capability in storage is rejected and raw bytes never
+    // form a valid one, so a stored borrow cannot be live across a forwarded
+    // receiver call. Requirements conditioned on one have no alternative.
+    for (name, body) in [
+        ("noop", "fn forward(mut self) { self.noop() }"),
+        ("store", "fn forward(mut self) { self.store(Maybe::Empty) }"),
+        ("count", "fn forward(mut self) { self.inc() }"),
+        ("peek", "fn forward(mut self) { let x: u256 = self.peek() }"),
+        (
+            "direct",
+            "fn forward(mut self) { self.value = Maybe::Empty }",
+        ),
+    ] {
+        let source = format!(
+            r#"
+enum Maybe {{ Empty, Full(ref u256) }}
+struct Holder {{ value: Maybe, count: u256 }}
+impl Holder {{
+    fn noop(mut self) {{}}
+    fn store(mut self, _ value: own Maybe) {{ self.value = value }}
+    fn inc(mut self) {{ self.count += 1 }}
+    fn peek(ref self) -> u256 {{
+        match self.value {{ Maybe::Empty => 0, Maybe::Full(x) => x }}
+    }}
+    {body}
+}}
+pub contract Store {{
+    mut slot: Holder
+    init() uses (mut slot) {{ slot.forward() }}
+}}
+"#
+        );
+        let diagnostics = checked_trusted_borrow_diags(&source);
+        assert!(diagnostics.is_empty(), "{name}: {diagnostics}");
+    }
+    // A memory holder can hold a valid borrow; separation is then physical.
+    assert!(
+        conflicting_functions(
+            r#"
+enum Maybe { Empty, Full(ref u256) }
+struct Holder { value: Maybe }
+impl Holder {
+    fn store(mut self, _ value: own Maybe) { self.value = value }
+    fn forward(mut self, _ value: own Maybe) { self.store(value) }
+}
+fn drive() {
+    let local: u256 = 0
+    let mut slot = Holder { value: Maybe::Full(ref local) }
+    slot.forward(Maybe::Empty)
+}
+"#
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn concrete_specializations_enforce_separation_of_pending_generics() {
+    // A pending template exports no validated contract; its concrete
+    // specialization exports the requirement its caller must establish.
+    assert_eq!(
+        conflicting_functions(
+            r#"
+use core::ptr
+trait Operation { fn apply(_ saved: *mut u256) }
+struct Alias {}
+impl Operation for Alias {
+    fn apply(_ saved: *mut u256) {
+        let other = *saved
+        other = 5
+    }
+}
+fn generic<T: Operation>(value: mut u256, saved: *mut u256) {
+    T::apply(saved)
+    value = 9
+}
+fn drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    generic<Alias>(value: native, saved)
+}
+fn disjoint() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let elsewhere = ptr::alloc<u256>()
+    *elsewhere = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut *elsewhere
+    generic<Alias>(value: native, saved)
+}
+"#
+        ),
+        ["drive"]
+    );
+}
+
+#[test]
+fn separation_requirements_past_the_limit_fail_absorbingly() {
+    // Every write to one borrowed input while the others stay live leaves a
+    // relation to each of them: 33 inputs give 1056 relations.
+    let count = 33;
+    let params: Vec<_> = (0..count)
+        .map(|index| format!("_ p{index}: mut u256"))
+        .collect();
+    let writes: Vec<_> = (0..count)
+        .map(|index| format!("    p{index} = 1"))
+        .collect();
+    let uses: Vec<_> = (0..count).map(|index| format!("p{index}")).collect();
+    let locals: Vec<_> = (0..count)
+        .map(|index| format!("    let mut v{index}: u256 = 0"))
+        .collect();
+    let args: Vec<_> = (0..count).map(|index| format!("mut v{index}")).collect();
+    let source = format!(
+        "fn wide({}) -> u256 {{\n{}\n    {}\n}}\nfn caller() -> u256 {{\n{}\n    wide({})\n}}\n",
+        params.join(", "),
+        writes.join("\n"),
+        uses.join(" + "),
+        locals.join("\n"),
+        args.join(", "),
+    );
+    let diagnostics = checked_borrow_diags(&source);
+    assert!(
+        diagnostics.contains("borrow separation requirements exceed the analysis limits"),
+        "{diagnostics}"
+    );
+}

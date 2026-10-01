@@ -16,9 +16,24 @@ use super::{
     guard::{Guard, ValueOccurrence},
     index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     path::RegionPath,
-    region::{RegionSet, SymbolicPlace},
+    region::{RegionRoot, RegionSet, SymbolicPlace},
     value::Guarded,
 };
+
+// Limits are well above the largest measured on the repository workspace and
+// the `fe_test` fixtures: 8 pairs per comparison, 26 relations per summary,
+// 1287 guard nodes and 6 witnesses per clause, and nesting depth 4.
+
+/// Most jointly opened pairs one comparison may materialize.
+pub const SEPARATION_PAIR_LIMIT: usize = 256;
+/// Most relations one summary may export.
+pub const SEPARATION_CLAUSE_LIMIT: usize = 1024;
+/// Most guard nodes in one clause, counting its suspension conditions.
+pub const SEPARATION_GUARD_NODE_LIMIT: usize = 4096;
+/// Most witnesses one clause may own.
+pub const SEPARATION_WITNESS_LIMIT: u32 = 32;
+/// Deepest Memory or clobber nesting of an endpoint.
+pub const SEPARATION_NESTING_LIMIT: usize = 16;
 
 /// On every valuation of its clause guard, the access footprint touches no part
 /// of `protected` outside the suspended projections.
@@ -118,7 +133,7 @@ impl<'db> Separation<'db> {
     }
 
     /// Rename every part with one substitution, preserving shared witnesses.
-    fn rename(&self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
+    pub fn substitute(&self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
         let place = |place: &SymbolicPlace<'db>| SymbolicPlace {
             root: place.root.substitute(db, subst),
             path: place.path.substitute(subst),
@@ -166,7 +181,7 @@ impl<'db> Separation<'db> {
             let observed = observed.contains(&index);
             (observed || used.contains(&index)).then_some(!observed)
         });
-        let relation = relation.rename(db, &substitution);
+        let relation = relation.substitute(db, &substitution);
         let scope = relation.scope(owner);
         // Suspension conditions observe no witness beyond the relation's.
         let narrow = substitution
@@ -231,6 +246,30 @@ fn canonical_mask<'db>(
     mask.into_iter()
         .map(|(payload, guard)| Guarded { guard, payload })
         .collect()
+}
+
+/// Whether a clause over `owner` fits the representation limits. Exceeding one
+/// is a deterministic analysis failure, never a truncated set of requirements.
+pub fn within_limits<'db>(clause: &Guarded<'db, Separation<'db>>, owner: &BinderScope) -> bool {
+    let relation = &clause.payload;
+    let nodes = clause.guard.node_count()
+        + relation
+            .suspended
+            .iter()
+            .map(|slice| slice.guard.node_count())
+            .sum::<usize>();
+    nodes <= SEPARATION_GUARD_NODE_LIMIT
+        && clause
+            .guard
+            .scope()
+            .existential_extension_of(owner)
+            .is_some_and(|witnesses| witnesses <= SEPARATION_WITNESS_LIMIT)
+        && [&relation.protected, &relation.access]
+            .into_iter()
+            .all(|place| {
+                !matches!(&place.root, RegionRoot::External(source)
+                if source.nesting() > SEPARATION_NESTING_LIMIT)
+            })
 }
 
 /// Guarded separation clauses over one owner scope, one per relation. A
@@ -301,6 +340,28 @@ impl<'db> SeparationSet<'db> {
     /// representation, never the meaning, of a relation whose guards keep two
     /// or more witnesses only they observe, since merges share those by
     /// position.
+    /// Express this set in `owner`, a lexical ancestor of its scope. The
+    /// binders `owner` lacks become each clause's own witnesses.
+    pub fn quantify_into(&self, db: &'db dyn HirAnalysisDb, owner: &BinderScope) -> Self {
+        if &self.scope == owner {
+            return self.clone();
+        }
+        Self::new(
+            db,
+            owner,
+            self.clauses.iter().map(|clause| {
+                let subst = clause.guard.scope().quantifying(owner);
+                Guarded {
+                    guard: clause
+                        .guard
+                        .substitute(&subst)
+                        .expect("renaming preserves feasibility"),
+                    payload: clause.payload.substitute(db, &subst),
+                }
+            }),
+        )
+    }
+
     pub fn union(&self, db: &'db dyn HirAnalysisDb, other: &Self) -> Self {
         assert_eq!(self.scope, other.scope, "separation scopes must match");
         Self::new(
@@ -328,7 +389,7 @@ impl<'db> SeparationSet<'db> {
                 let subst = subst.under_existentials(clause.guard.scope());
                 Some(Guarded {
                     guard: clause.guard.substitute(&subst)?,
-                    payload: clause.payload.rename(db, &subst),
+                    payload: clause.payload.substitute(db, &subst),
                 })
             }),
         )

@@ -343,7 +343,7 @@ mod tests {
             let mut checker =
                 Borrowck::new_with_body(&db, instance, body, BorrowSummaryMode::Final).unwrap();
             checker.solve().unwrap();
-            let summary = checker.build_summary().unwrap();
+            let (summary, _) = checker.build_summary().unwrap();
             assert_eq!(summary.may_return, returns);
             assert!(summary.availability.unavailable.is_empty());
         }
@@ -406,7 +406,7 @@ mod tests {
         let mut checker =
             Borrowck::new_with_body(&db, instance, body, BorrowSummaryMode::Final).unwrap();
         checker.solve().unwrap();
-        assert!(!checker.build_summary().unwrap().may_return);
+        assert!(!checker.build_summary().unwrap().0.may_return);
     }
 
     fn graph_body<'db>(

@@ -4,7 +4,10 @@ use crate::analysis::semantic::diagnostics::{
     BlockedSemanticBody, SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
     SemanticDiagnosticSpan,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::OnceCell,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use cranelift_entity::EntityRef;
 
@@ -13,21 +16,23 @@ use crate::analysis::{
     semantic::{
         BorrowActivation, SemOrigin,
         capability::{
-            external::{ExternalSource, ReferentContract},
-            footprint::AccessFootprint,
+            external::{ExternalOrigin, ExternalSource, ReferentContract},
+            footprint::{AccessExtent, AccessFootprint, FootprintPair},
             guard::{Guard, ValueOccurrence},
             handle::HandleAddressSpace,
             index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
-            loan::{CapabilityRef, LoanRef},
+            loan::{CapabilityRef, LoanDef, LoanRef},
             path::{Projection, RegionPath},
-            region::{OverlapResult, RegionRoot, RegionSet},
+            region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace},
             semantics::{CapabilityClass, CapabilitySemantics},
+            separation::{SEPARATION_PAIR_LIMIT, Separation, SeparationSet},
+            source::SourceExpr,
             state::{BorrowState, CapabilityValue},
             value::{Guarded, IndexPayload},
         },
         normalized::{
-            NEffectArgValue, NExpr, NPlace, NPlaceBase, NRootId, NStatementKind, NValueId,
-            NormalizedBody, access::AccessTarget,
+            NEffectArgValue, NExpr, NPlace, NPlaceBase, NRootId, NStatementKind, NValueDefinition,
+            NValueId, NormalizedBody, access::AccessTarget,
         },
     },
     ty::{
@@ -35,10 +40,12 @@ use crate::analysis::{
         ty_def::{BorrowKind, TyId},
     },
 };
+use crate::semantic::ProviderSource;
 
 use super::{
     access::effect_occurrence,
-    ir::{LocalBorrowCheck, SemanticBorrowCheckResult},
+    ir::{LocalBorrowCheck, SemanticBorrowCheckResult, SeparationOrigin},
+    memory::ResolvedSeparation,
     solver::{Borrowck, Resolution},
     summary::CallInputs,
 };
@@ -159,7 +166,9 @@ impl<'db> Borrowck<'db> {
         {
             self.pending.callees.insert(self.instance.key(self.db));
         }
-        self.check_conflicts()?;
+        if let Some(diagnostic) = &self.conflicts().diagnostic {
+            return Err(diagnostic.clone());
+        }
         if let Some(diagnostic) = self.availability_diagnostic() {
             return Err(diagnostic);
         }
@@ -699,7 +708,26 @@ impl<'db> Borrowck<'db> {
         Ok(())
     }
 
-    pub(super) fn check_conflicts(&self) -> Result<(), SemanticDiagnostic<'db>> {
+    /// The analysis published with the solved fixed point.
+    pub(super) fn conflicts(&self) -> &ConflictAnalysis<'db> {
+        self.conflicts.as_ref().expect("solved conflict analysis")
+    }
+
+    /// Compare every settled operation with the borrows live across it. This
+    /// reads only published facts, so the check and the summary share it.
+    pub(super) fn analyze_conflicts(&self) -> ConflictAnalysis<'db> {
+        let mut analysis = ConflictFacts::default();
+        self.collect_conflicts(&mut analysis);
+        ConflictAnalysis {
+            diagnostic: analysis.diagnostic,
+            exhausted: analysis.exhausted,
+            deferred: analysis.deferred,
+        }
+    }
+
+    /// Stop at the first conflict: a body with a conflict never validates, and
+    /// neither does any caller, whose check includes this body's.
+    fn collect_conflicts(&self, analysis: &mut ConflictFacts<'db>) {
         for (block, operations) in self.operations.iter().enumerate() {
             for (index, operation) in operations.iter().enumerate() {
                 if self.validation_dependencies[block][index] {
@@ -708,49 +736,72 @@ impl<'db> Borrowck<'db> {
                 let origin = self.body.blocks[block].statements[index].origin;
                 for access in &operation.accesses {
                     if access.invalidated.invalid {
-                        return Err(self.invalidated_diag(access.origin));
+                        return analysis.report(self.invalidated_diag(access.origin));
                     }
-                    self.check_access(
+                    self.compare_access(
                         &operation.active,
                         access.conflict_kind,
                         AccessFootprint::typed(&access.region),
                         &access.authority,
                         access.origin,
-                    )?;
+                        analysis,
+                    );
+                    if analysis.diagnostic.is_some() {
+                        return;
+                    }
                 }
-                for resolved in &operation.calls {
-                    if self.call_validation_pending(block, index) {
-                        break;
-                    }
+                let pending = self.call_validation_pending(block, index);
+                for resolved in operation.calls.iter().filter(|_| !pending) {
                     if resolved.invalidated.invalid {
-                        return Err(self.invalidated_diag(origin));
+                        return analysis.report(self.invalidated_diag(origin));
                     }
-                    self.check_access(
+                    self.compare_access(
                         &operation.active,
                         resolved.access.kind.borrow_kind(),
                         resolved.access.footprint(),
                         &resolved.authority,
                         origin,
-                    )?;
+                        analysis,
+                    );
+                    if analysis.diagnostic.is_some() {
+                        return;
+                    }
                 }
                 for (position, (group, member)) in operation.arguments.iter().enumerate() {
                     for (other_group, other) in operation.arguments.iter().skip(position) {
-                        self.check_call_pair(*group == *other_group, member, other, origin)?;
+                        if let Err(diagnostic) =
+                            self.check_call_pair(*group == *other_group, member, other, origin)
+                        {
+                            return analysis.report(diagnostic);
+                        }
                     }
                     if let Some(kind) = member.access {
                         let authority = self.ancestors(member.payload.authority(&member.guard));
-                        self.check_access(
+                        self.compare_access(
                             &operation.active,
                             kind,
                             AccessFootprint::typed(&member.region),
                             &authority,
                             origin,
-                        )?;
+                            analysis,
+                        );
+                        if analysis.diagnostic.is_some() {
+                            return;
+                        }
+                    }
+                }
+                // Argument conflicts explain an aliased call more directly.
+                for requirement in operation.requirements.iter().filter(|_| !pending) {
+                    if requirement.invalidated.invalid {
+                        return analysis.report(self.invalidated_diag(origin));
+                    }
+                    self.discharge(requirement, origin, analysis);
+                    if analysis.diagnostic.is_some() {
+                        return;
                     }
                 }
             }
         }
-        Ok(())
     }
 
     pub(super) fn invalidated_diag(&self, origin: SemOrigin<'db>) -> SemanticDiagnostic<'db> {
@@ -817,14 +868,19 @@ impl<'db> Borrowck<'db> {
         Ok(())
     }
 
-    fn check_access(
+    /// Compare one access with every active loan. Other loans are checked
+    /// conservatively. An input loan's unresolved remainder, without the entry
+    /// assumption that distinct inputs are separate, becomes a separation
+    /// requirement on callers.
+    fn compare_access(
         &self,
         active: &[CapabilityOccurrence<'db>],
         kind: BorrowKind,
         footprint: AccessFootprint<'_, 'db>,
         authority: &[Guarded<'db, LoanRef<'db>>],
         origin: SemOrigin<'db>,
-    ) -> Result<(), SemanticDiagnostic<'db>> {
+        analysis: &mut ConflictFacts<'db>,
+    ) {
         let region = footprint.region;
         for loan in active {
             if loan.semantics.target_ty.is_zero_sized(self.db) {
@@ -832,111 +888,468 @@ impl<'db> Borrowck<'db> {
             }
             let reference = loan.payload.loan().expect("active loan");
             let definition = &self.inventory.loans[reference.id.0];
-            let active_kind = definition.kind();
-            if kind == BorrowKind::Ref && active_kind == BorrowKind::Ref {
+            if kind == BorrowKind::Ref && definition.kind() == BorrowKind::Ref {
                 continue;
             }
             let fresh = loan.guard.scope().freshening(region.scope());
             let loan = loan.substitute(self.db, &fresh);
             let lift = IndexSubst::new(region.scope(), fresh.destination(), [])
                 .expect("access comparison scope");
-            let accessed = region.substitute(self.db, &lift);
-            // Input exclusivity is a precondition checked at each call. Keep
-            // exact alias checks here; unresolved accesses remain in the summary
-            // so a caller cannot use this assumption to hide an actual conflict.
-            let (overlap, uncertain) = if self.inventory.input_loans.contains(&reference.id) {
-                (accessed.proven_intersection(&loan.region), false)
-            } else {
-                AccessFootprint {
-                    region: &accessed,
-                    extent: footprint.extent.substitute(&lift),
-                }
-                .intersect(self.db, AccessFootprint::typed(&loan.region))
+            let footprint = AccessFootprint {
+                region: &region.substitute(self.db, &lift),
+                extent: footprint.extent.substitute(&lift),
             };
-            if !uncertain && (overlap.is_empty() || loan.suspended.provably_covers(&overlap)) {
-                continue;
-            }
-            let mut permitted = None;
-            for parent in self.ancestors(authority.iter().cloned()) {
-                // Access offsets can introduce witnesses unused by the authority.
-                // Drop only those unused binders before comparing exact loan occurrences.
-                let canonical = parent
-                    .guard
-                    .scope()
-                    .canonical_existentials(region.scope(), || {
-                        parent
-                            .guard
-                            .indices()
-                            .into_iter()
-                            .chain(parent.payload.args.iter().copied())
-                    });
-                let parent = Guarded {
-                    guard: parent
-                        .guard
-                        .substitute(&canonical)
-                        .expect("authority normalization"),
-                    payload: parent.payload.substitute(&canonical),
-                };
-                let subst = lift.under_existentials(parent.guard.scope());
-                let parent = Guarded {
-                    guard: parent.guard.substitute(&subst).expect("authority scope"),
-                    payload: parent.payload.substitute(&subst),
-                };
-                if parent.guard.scope() != overlap.scope() {
+            // Authority matching is costly; compute it only for an overlap.
+            let permitted = OnceCell::new();
+            let permitted = || {
+                permitted
+                    .get_or_init(|| self.permitted(&loan, region, &lift, authority))
+                    .as_ref()
+            };
+            if !self.inventory.input_loans.contains(&reference.id) {
+                let (overlap, uncertain) =
+                    footprint.intersect(self.db, AccessFootprint::typed(&loan.region));
+                if !uncertain && (overlap.is_empty() || loan.suspended.provably_covers(&overlap)) {
                     continue;
                 }
-                if let Some(guard) = loan
-                    .payload
-                    .loan()
-                    .expect("loan occurrence")
-                    .matching_guard(&parent.payload, parent.guard)
+                // Exact occurrence authority remains valid when its target is opaque.
+                // Unknown overlap alone never establishes that authority.
+                if !overlap.is_empty()
+                    && let Some(permitted) = permitted()
+                    && overlap.clauses().iter().all(|clause| {
+                        clause
+                            .guard
+                            .implies(&permitted.in_scope(clause.guard.scope()))
+                    })
                 {
-                    permitted = Some(
-                        permitted.map_or_else(|| guard.clone(), |old: Guard<'db>| old.or(&guard)),
-                    );
+                    continue;
                 }
+                return analysis.report(self.conflict_diag(kind, definition, origin));
             }
-            // Exact occurrence authority remains valid when its target is opaque.
-            // Unknown overlap alone never establishes that authority.
-            if !overlap.is_empty()
-                && let Some(permitted) = permitted
-                && overlap.clauses().iter().all(|clause| {
-                    clause
-                        .guard
-                        .implies(&permitted.in_scope(clause.guard.scope()))
-                })
+            if footprint.region.clauses().len() * loan.region.clauses().len()
+                > SEPARATION_PAIR_LIMIT
             {
-                continue;
+                return analysis.exhaust(self.separation_limit_diag(origin));
             }
-            let mut diagnostic = self.diag(
-                SemanticDiagnosticKind::BorrowConflict,
-                origin,
-                match (kind, active_kind) {
-                    (BorrowKind::Mut, BorrowKind::Mut) => {
-                        "cannot mutably borrow this place while a mut borrow is active"
+            let mut clauses = Vec::new();
+            for pair in footprint.physical_pairs(self.db, &loan.region) {
+                let Some(guard) = (match permitted() {
+                    Some(permitted) => pair
+                        .possible
+                        .difference(&permitted.in_scope(pair.possible.scope())),
+                    None => Some(pair.possible.clone()),
+                }) else {
+                    continue;
+                };
+                let lift = IndexSubst::new(loan.suspended.scope(), guard.scope(), [])
+                    .expect("suspension pair scope");
+                let suspended = loan.suspended.substitute(self.db, &lift);
+                let Some(unsuspended) = remove_suspended(&suspended, &pair, guard) else {
+                    continue;
+                };
+                let guard = match unsuspended {
+                    Unsuspended::Possible(guard) => guard,
+                    Unsuspended::Definite => {
+                        return analysis.report(self.conflict_diag(kind, definition, origin));
                     }
-                    (BorrowKind::Mut, BorrowKind::Ref) => {
-                        "cannot mutably borrow this place while an immutable borrow is active"
-                    }
-                    (BorrowKind::Ref, BorrowKind::Mut) => {
-                        "cannot immutably borrow this place while a mutable borrow is active"
-                    }
-                    (BorrowKind::Ref, BorrowKind::Ref) => unreachable!(),
+                };
+                if !representable(&pair.access) || !representable(&pair.borrowed) {
+                    // A caller cannot name this endpoint.
+                    return analysis.report(self.conflict_diag(kind, definition, origin));
                 }
-                .into(),
+                let suspended = Separation::suspension_slices(&pair.borrowed, &suspended, &guard);
+                clauses.push(Guarded {
+                    guard,
+                    payload: Separation {
+                        protected: pair.borrowed,
+                        protected_kind: definition.kind(),
+                        access: pair.access,
+                        access_kind: kind,
+                        extent: pair.extent,
+                        suspended,
+                    },
+                });
+            }
+            let origin = SeparationOrigin {
+                owner: self.instance.key(self.db).owner(self.db),
+                template_owner: self.body.template_owner,
+                borrow: definition.origin(),
+                access: origin,
+            };
+            analysis.deferred.extend(
+                SeparationSet::new(self.db, region.scope(), clauses)
+                    .quantify_into(self.db, &BinderScope::default())
+                    .clauses()
+                    .iter()
+                    .map(|clause| (clause.clone(), origin)),
             );
+        }
+    }
+
+    /// Settle a callee's separation clause at this call. Only physical
+    /// separation or the callee's frozen suspension discharges it; authority
+    /// found while resolving an endpoint never does. What callers can still
+    /// refine is forwarded, and the rest is a conflict here.
+    fn discharge(
+        &self,
+        requirement: &ResolvedSeparation<'db>,
+        origin: SemOrigin<'db>,
+        analysis: &mut ConflictFacts<'db>,
+    ) {
+        let scope = requirement.guard.scope();
+        if requirement.access.clauses().len() * requirement.protected.clauses().len()
+            > SEPARATION_PAIR_LIMIT
+        {
+            return analysis.exhaust(self.separation_limit_diag(origin));
+        }
+        let footprint = AccessFootprint {
+            region: &requirement.access.with_guard(&requirement.guard),
+            extent: requirement.extent,
+        };
+        let mut clauses = Vec::new();
+        for pair in footprint.physical_pairs(
+            self.db,
+            &requirement.protected.with_guard(&requirement.guard),
+        ) {
+            let lift =
+                IndexSubst::new(scope, pair.possible.scope(), []).expect("separation pair scope");
+            let slices: Vec<_> = requirement
+                .suspended
+                .iter()
+                .map(|slice| Guarded {
+                    guard: slice
+                        .guard
+                        .substitute(&lift)
+                        .expect("scope extension preserves feasibility"),
+                    payload: slice.payload.clone(),
+                })
+                .collect();
+            // The callee's certified slices of whichever place it borrowed.
+            let suspended = RegionSet::new(
+                pair.possible.scope(),
+                slices.iter().map(|slice| Guarded {
+                    guard: slice.guard.clone(),
+                    payload: SymbolicPlace {
+                        root: pair.borrowed.root.clone(),
+                        path: pair.borrowed.path.concat(&slice.payload),
+                        views: pair.borrowed.views.clone(),
+                    },
+                }),
+            );
+            let guard = match remove_suspended(&suspended, &pair, pair.possible.clone()) {
+                None => continue,
+                Some(Unsuspended::Definite) => {
+                    return analysis.report(self.separation_diag(
+                        "this call accesses memory that the callee keeps borrowed across the access",
+                        origin,
+                        requirement.origin,
+                    ));
+                }
+                Some(Unsuspended::Possible(guard)) => guard,
+            };
+            if !representable(&pair.access)
+                || !representable(&pair.borrowed)
+                || !(self.refinable_place(&pair.access)
+                    || self.refinable_place(&pair.borrowed)
+                    || pair
+                        .extent
+                        .indices()
+                        .any(|index| self.refinable_index(index))
+                    || self.refinable_guard(&guard)
+                    || slices.iter().any(|slice| {
+                        slice
+                            .payload
+                            .indices()
+                            .any(|index| self.refinable_index(index))
+                            || self.refinable_guard(&slice.guard)
+                    }))
+            {
+                return analysis.report(self.separation_diag(
+                    "cannot prove that this call keeps memory the callee holds borrowed separate from the callee's access",
+                    origin,
+                    requirement.origin,
+                ));
+            }
+            clauses.push(Guarded {
+                guard,
+                payload: Separation {
+                    protected: pair.borrowed,
+                    protected_kind: requirement.protected_kind,
+                    access: pair.access,
+                    access_kind: requirement.access_kind,
+                    extent: pair.extent,
+                    suspended: slices.into(),
+                },
+            });
+        }
+        analysis.deferred.extend(
+            SeparationSet::new(self.db, scope, clauses)
+                .quantify_into(self.db, &BinderScope::default())
+                .clauses()
+                .iter()
+                .map(|clause| (clause.clone(), requirement.origin)),
+        );
+    }
+
+    pub(super) fn separation_limit_diag(&self, origin: SemOrigin<'db>) -> SemanticDiagnostic<'db> {
+        self.diag(
+            SemanticDiagnosticKind::BorrowConflict,
+            origin,
+            "borrow separation requirements exceed the analysis limits".into(),
+        )
+    }
+
+    /// A conflict at a call, with the borrow and access the requirement began
+    /// with, wherever it was first deferred.
+    fn separation_diag(
+        &self,
+        message: &str,
+        origin: SemOrigin<'db>,
+        separation: SeparationOrigin<'db>,
+    ) -> SemanticDiagnostic<'db> {
+        let mut diagnostic = self.diag(
+            SemanticDiagnosticKind::BorrowConflict,
+            origin,
+            message.into(),
+        );
+        for (message, origin) in [
+            ("borrow held across the access", separation.borrow),
+            ("access that must stay separate from it", separation.access),
+        ] {
             diagnostic.push_secondary(
-                "borrow created here".into(),
+                message.into(),
                 SemanticDiagnosticSpan::OriginWithTemplateFallback {
-                    owner: self.instance.key(self.db).owner(self.db),
-                    template_owner: self.body.template_owner,
-                    origin: definition.origin(),
+                    owner: separation.owner,
+                    template_owner: separation.template_owner,
+                    origin,
                 },
             );
-            return Err(diagnostic);
         }
-        Ok(())
+        diagnostic
     }
+
+    /// Whether a caller supplies part of this place's identity.
+    fn refinable_place(&self, place: &SymbolicPlace<'db>) -> bool {
+        place
+            .path
+            .indices()
+            .any(|index| self.refinable_index(index))
+            || matches!(&place.root, RegionRoot::External(source) if self.refinable_source(source))
+    }
+
+    fn refinable_source(&self, source: &ExternalSource<'db>) -> bool {
+        source.indices().any(|index| self.refinable_index(index))
+            || match &source.origin {
+                ExternalOrigin::Input(_) => true,
+                ExternalOrigin::Provider { provider, .. } => matches!(
+                    provider.binding(self.db).source,
+                    ProviderSource::UsesParam { .. }
+                ),
+                ExternalOrigin::Memory { base, .. } => self.refinable_source(&base.source),
+                _ => false,
+            }
+            || source.clobber.as_ref().is_some_and(|clobber| {
+                self.refinable_source(&clobber.target.source)
+                    || self.refinable_source(&clobber.written.source)
+            })
+    }
+
+    /// A scalar that becomes a formal parameter in the summary. Type-level
+    /// constants are fixed by this instance and never refined by a caller.
+    fn refinable_index(&self, index: IndexExpr<'db>) -> bool {
+        match index {
+            IndexExpr::Runtime(value) => matches!(self.index(value),
+                IndexExpr::Runtime(actual)
+                    if matches!(self.body.values[actual.index()].definition,
+                        NValueDefinition::EntryParam { .. })),
+            IndexExpr::FormalValue(_) => true,
+            IndexExpr::Const(_)
+            | IndexExpr::TypeConst(_)
+            | IndexExpr::Bound(_)
+            | IndexExpr::Iteration(_) => false,
+        }
+    }
+
+    fn refinable_guard(&self, guard: &Guard<'db>) -> bool {
+        guard
+            .indices()
+            .into_iter()
+            .any(|index| self.refinable_index(index))
+            || guard
+                .occurrences()
+                .into_iter()
+                .any(|occurrence| match occurrence {
+                    ValueOccurrence::Value(value) => matches!(
+                        self.body.values[value.index()].definition,
+                        NValueDefinition::EntryParam { .. }
+                    ),
+                    ValueOccurrence::Argument(_) => true,
+                    _ => false,
+                })
+    }
+
+    /// Where the access's authority descends from exactly this loan occurrence,
+    /// in the occurrence's freshened scope.
+    fn permitted(
+        &self,
+        loan: &CapabilityOccurrence<'db>,
+        region: &RegionSet<'db>,
+        lift: &IndexSubst<'db>,
+        authority: &[Guarded<'db, LoanRef<'db>>],
+    ) -> Option<Guard<'db>> {
+        let mut permitted = None;
+        for parent in self.ancestors(authority.iter().cloned()) {
+            // Access offsets can introduce witnesses unused by the authority.
+            // Drop only those unused binders before comparing exact loan occurrences.
+            let canonical = parent
+                .guard
+                .scope()
+                .canonical_existentials(region.scope(), || {
+                    parent
+                        .guard
+                        .indices()
+                        .into_iter()
+                        .chain(parent.payload.args.iter().copied())
+                });
+            let parent = Guarded {
+                guard: parent
+                    .guard
+                    .substitute(&canonical)
+                    .expect("authority normalization"),
+                payload: parent.payload.substitute(&canonical),
+            };
+            let subst = lift.under_existentials(parent.guard.scope());
+            let parent = Guarded {
+                guard: parent.guard.substitute(&subst).expect("authority scope"),
+                payload: parent.payload.substitute(&subst),
+            };
+            if parent.guard.scope() != lift.destination() {
+                continue;
+            }
+            if let Some(guard) = loan
+                .payload
+                .loan()
+                .expect("loan occurrence")
+                .matching_guard(&parent.payload, parent.guard)
+            {
+                permitted =
+                    Some(permitted.map_or_else(|| guard.clone(), |old: Guard<'db>| old.or(&guard)));
+            }
+        }
+        permitted
+    }
+
+    fn conflict_diag(
+        &self,
+        kind: BorrowKind,
+        definition: &LoanDef<'db>,
+        origin: SemOrigin<'db>,
+    ) -> SemanticDiagnostic<'db> {
+        let mut diagnostic = self.diag(
+            SemanticDiagnosticKind::BorrowConflict,
+            origin,
+            match (kind, definition.kind()) {
+                (BorrowKind::Mut, BorrowKind::Mut) => {
+                    "cannot mutably borrow this place while a mut borrow is active"
+                }
+                (BorrowKind::Mut, BorrowKind::Ref) => {
+                    "cannot mutably borrow this place while an immutable borrow is active"
+                }
+                (BorrowKind::Ref, BorrowKind::Mut) => {
+                    "cannot immutably borrow this place while a mutable borrow is active"
+                }
+                (BorrowKind::Ref, BorrowKind::Ref) => unreachable!(),
+            }
+            .into(),
+        );
+        diagnostic.push_secondary(
+            "borrow created here".into(),
+            SemanticDiagnosticSpan::OriginWithTemplateFallback {
+                owner: self.instance.key(self.db).owner(self.db),
+                template_owner: self.body.template_owner,
+                origin: definition.origin(),
+            },
+        );
+        diagnostic
+    }
+}
+
+/// Local conflicts and the separation left to callers, from one read-only
+/// pass over the settled operations.
+#[derive(Clone)]
+pub(super) struct ConflictAnalysis<'db> {
+    /// The first conflict in operation order, where the analysis stopped.
+    pub diagnostic: Option<SemanticDiagnostic<'db>>,
+    /// The analysis exceeded a limit, so no summary may use `deferred`.
+    pub exhausted: bool,
+    /// Unresolved separation, in the default owner scope and body order. It
+    /// is complete only without a diagnostic, which prevents validation.
+    pub deferred: Vec<(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)>,
+}
+
+#[derive(Default)]
+pub(super) struct ConflictFacts<'db> {
+    diagnostic: Option<SemanticDiagnostic<'db>>,
+    exhausted: bool,
+    deferred: Vec<(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)>,
+}
+
+impl<'db> ConflictFacts<'db> {
+    fn report(&mut self, diagnostic: SemanticDiagnostic<'db>) {
+        self.diagnostic.get_or_insert(diagnostic);
+    }
+
+    fn exhaust(&mut self, diagnostic: SemanticDiagnostic<'db>) {
+        self.exhausted = true;
+        self.report(diagnostic);
+    }
+}
+
+/// What remains of a pair's overlap outside a certified suspension.
+enum Unsuspended<'db> {
+    /// An uncovered certain overlap.
+    Definite,
+    /// Only a possible overlap, on this guard.
+    Possible(Guard<'db>),
+}
+
+/// Remove the parts of `guard` whose overlap lies in `suspended`, which is in
+/// the pair's scope. Suspension of the whole borrowed place covers any access;
+/// otherwise only a typed access's exact intersection can be covered.
+fn remove_suspended<'db>(
+    suspended: &RegionSet<'db>,
+    pair: &FootprintPair<'db>,
+    guard: Guard<'db>,
+) -> Option<Unsuspended<'db>> {
+    let guard = match suspended.covering_guard(&pair.borrowed, &guard) {
+        Some(whole) => guard.difference(&whole)?,
+        None => guard,
+    };
+    let Some(definite) = pair
+        .definite
+        .as_ref()
+        .and_then(|definite| definite.and(&guard))
+    else {
+        return Some(Unsuspended::Possible(guard));
+    };
+    let intersection = if pair.extent == AccessExtent::Typed
+        && pair.access.path.as_slice().len() > pair.borrowed.path.as_slice().len()
+    {
+        &pair.access
+    } else {
+        &pair.borrowed
+    };
+    let covered = suspended.covering_guard(intersection, &definite);
+    if covered.is_none_or(|covered| definite.difference(&covered).is_some()) {
+        return Some(Unsuspended::Definite);
+    }
+    guard.difference(&definite).map(Unsuspended::Possible)
+}
+
+/// Whether a caller can name this place: an external route without local
+/// storage anywhere in it.
+fn representable(place: &SymbolicPlace<'_>) -> bool {
+    SourceExpr::from_place(place).is_some_and(|source| !source.source.names_local_storage())
 }
 
 fn independent<'db>(
@@ -956,4 +1369,79 @@ fn independent<'db>(
         left.substitute(db, &left_subst),
         right.substitute(db, &right_subst),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        analysis::semantic::{
+            FieldIndex,
+            capability::{source::InputSource, test_roots},
+        },
+        test_db::HirAnalysisTestDb,
+    };
+
+    #[test]
+    fn suspension_removes_only_overlap_it_certainly_contains() {
+        let db = HirAnalysisTestDb::default();
+        let scope = BinderScope::default();
+        let root = |param| RegionRoot::External(test_roots::input(&db, InputSource::place(param)));
+        let field = RegionPath::new([Projection::Field(FieldIndex(0))]);
+        let borrowed = RegionSet::singleton(&scope, root(0), RegionPath::default());
+        fn suspension<'db>(
+            pair: &FootprintPair<'db>,
+            path: &RegionPath<IndexExpr<'db>>,
+        ) -> RegionSet<'db> {
+            RegionSet::new(
+                pair.possible.scope(),
+                [Guarded {
+                    guard: Guard::always(pair.possible.scope()),
+                    payload: SymbolicPlace {
+                        path: pair.borrowed.path.concat(path),
+                        ..pair.borrowed.clone()
+                    },
+                }],
+            )
+        }
+        // An access of unknown extent through another input may overlap only.
+        let other = RegionSet::singleton(&scope, root(1), RegionPath::default());
+        let [pair] = <[_; 1]>::try_from(
+            AccessFootprint {
+                region: &other,
+                extent: AccessExtent::Unknown,
+            }
+            .physical_pairs(&db, &borrowed),
+        )
+        .ok()
+        .unwrap();
+        assert!(pair.definite.is_none());
+        let whole = suspension(&pair, &RegionPath::default());
+        assert!(remove_suspended(&whole, &pair, pair.possible.clone()).is_none());
+        let partial = suspension(&pair, &field);
+        assert!(matches!(
+            remove_suspended(&partial, &pair, pair.possible.clone()),
+            Some(Unsuspended::Possible(_))
+        ));
+        // A byte span starting in a suspended field may reach past it.
+        let start = RegionSet::singleton(&scope, root(0), field.clone());
+        let [span] = <[_; 1]>::try_from(
+            AccessFootprint {
+                region: &start,
+                extent: AccessExtent::Bytes(IndexExpr::Const(64)),
+            }
+            .physical_pairs(&db, &borrowed),
+        )
+        .ok()
+        .unwrap();
+        let partial = suspension(&span, &field);
+        assert!(remove_suspended(&partial, &span, span.possible.clone()).is_some());
+        // A typed access within the suspended field is covered exactly.
+        let [typed] =
+            <[_; 1]>::try_from(AccessFootprint::typed(&start).physical_pairs(&db, &borrowed))
+                .ok()
+                .unwrap();
+        let partial = suspension(&typed, &field);
+        assert!(remove_suspended(&partial, &typed, typed.possible.clone()).is_none());
+    }
 }

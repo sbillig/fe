@@ -138,6 +138,22 @@ impl<'db> RegionRoot<'db> {
             _ => self.alias_guard(other, guard, true),
         }
     }
+
+    /// Possible overlap without the entry assumption. Local roots and values
+    /// keep their frame identity, which is physical.
+    pub(super) fn physical_alias_guard(
+        &self,
+        other: &Self,
+        guard: Guard<'db>,
+        typed: bool,
+    ) -> Option<Guard<'db>> {
+        match (self, other) {
+            (Self::External(left), Self::External(right)) => {
+                left.physical_alias_guard(right, guard, typed)
+            }
+            _ => self.alias_guard(other, guard, true),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -653,33 +669,38 @@ impl<'db> RegionSet<'db> {
     pub fn provably_covers(&self, other: &Self) -> bool {
         assert_eq!(self.scope, other.scope, "region scopes must match");
         other.clauses.iter().all(|right| {
-            let coverage = self
-                .clauses
-                .iter()
-                .filter_map(|left| {
-                    // An existential witness establishes possible overlap, not
-                    // universal coverage of another occurrence.
-                    if left.guard.scope() != &self.scope {
-                        return None;
-                    }
-                    let guard = left.guard.in_scope(right.guard.scope()).and(&right.guard)?;
-                    let guard = left
-                        .payload
-                        .root
-                        .alias_guard(&right.payload.root, guard, false)?;
-                    if left.payload.path.as_slice().len() > right.payload.path.as_slice().len() {
-                        return None;
-                    }
-                    path_alias_guard(
-                        left.payload.path.as_slice(),
-                        right.payload.path.as_slice(),
-                        guard,
-                        false,
-                    )
-                })
-                .reduce(|left, right| left.or(&right));
-            coverage.is_some_and(|coverage| right.guard.implies(&coverage))
+            self.covering_guard(&right.payload, &right.guard)
+                .is_some_and(|coverage| right.guard.implies(&coverage))
         })
+    }
+
+    /// Where, within `guard`, some clause covers `place`: an exact root and a
+    /// proven path prefix. `guard`'s scope extends this region's scope.
+    pub fn covering_guard(
+        &self,
+        place: &SymbolicPlace<'db>,
+        guard: &Guard<'db>,
+    ) -> Option<Guard<'db>> {
+        self.clauses
+            .iter()
+            .filter_map(|left| {
+                // An existential witness establishes possible overlap, not
+                // universal coverage of another occurrence.
+                if left.guard.scope() != &self.scope
+                    || left.payload.path.as_slice().len() > place.path.as_slice().len()
+                {
+                    return None;
+                }
+                let guard = left.guard.in_scope(guard.scope()).and(guard)?;
+                let guard = left.payload.root.alias_guard(&place.root, guard, false)?;
+                path_alias_guard(
+                    left.payload.path.as_slice(),
+                    place.path.as_slice(),
+                    guard,
+                    false,
+                )
+            })
+            .reduce(|left, right| left.or(&right))
     }
 
     /// Forget covered portions of a moved region after a definite write. A partial
