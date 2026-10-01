@@ -1,0 +1,7 @@
+use std::abi::DynArray
+
+// Reported once as a recursive type, not by the generated impls.
+#[abi]
+pub struct Node {
+    pub children: DynArray<Node>,
+}

@@ -1,0 +1,27 @@
+// Solidity hashes an indexed array, tuple or struct into its topic, which
+// `#[event]` does not generate.
+#[abi]
+struct Key {
+    a: u256,
+}
+
+type Pairs = [(u256, u256); 2]
+type Words = [u256; 2]
+type Pair = (u256, u256)
+
+#[event]
+struct Indexed {
+    #[indexed]
+    key: Key,
+    #[indexed]
+    pairs: Pairs,
+    #[indexed]
+    words: Words,
+}
+
+// Rejected once, as a tuple event field.
+#[event]
+struct IndexedTuple {
+    #[indexed]
+    pair: Pair,
+}

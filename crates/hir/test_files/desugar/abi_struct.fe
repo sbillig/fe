@@ -1,0 +1,18 @@
+use std::abi::Bytes
+
+#[abi]
+pub struct Key {
+    pub currency0: u256,
+    pub fee: u32,
+}
+
+// Field names that match the generated parameters.
+#[abi]
+pub struct Hop {
+    pub key: Key,
+    pub data: Bytes,
+    pub base: u256,
+    pub pos: u256,
+    pub input_len: u256,
+    pub ptr: u256,
+}

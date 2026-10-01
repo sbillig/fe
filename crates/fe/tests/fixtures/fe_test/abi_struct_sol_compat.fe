@@ -1,0 +1,140 @@
+// `#[abi]` structs implement `SolCompat` as the Solidity tuple of their
+// fields, so they can be event and error fields.
+use std::abi::{Bytes, Bytes32, DynArray, SolCompat}
+use std::evm::{Address, Evm, revert_error}
+
+#[abi]
+pub struct Item {
+    pub itemType: u8,
+    pub token: Address,
+    pub identifier: u256,
+    pub amount: u256,
+}
+impl Copy for Item {}
+
+#[abi]
+pub struct Nested {
+    pub item: Item,
+    pub data: Bytes,
+}
+
+// Nine fields make 19 signature fragments, more than one `AsBytes` tuple.
+#[abi]
+pub struct Wide {
+    pub a: u8,
+    pub b: u16,
+    pub c: u32,
+    pub d: u64,
+    pub e: u128,
+    pub f: u256,
+    pub g: Address,
+    pub h: bool,
+    pub i: Bytes32,
+}
+
+#[abi]
+pub struct Unit {}
+
+// An array of `#[abi]` structs as a field: its `SolCompat` value comes from
+// the generic `DynArray` impl. Chunked, since it has nine fields.
+#[abi]
+pub struct Orders {
+    pub items: DynArray<Item>,
+    pub nested: DynArray<Nested>,
+    pub c: u256,
+    pub d: u256,
+    pub e: u256,
+    pub f: u256,
+    pub g: u256,
+    pub h: u256,
+    pub i: u256,
+}
+
+// Tuple fields spell their Solidity tuple type.
+#[abi]
+pub struct Tuples {
+    pub pair: (u256, Address),
+    pub single: (bool,),
+    pub quad: (u8, u16, u32, u64),
+    pub unit: (),
+}
+
+// `usize` and `isize` are Solidity's `uint256` and `int256`.
+#[abi]
+pub struct Sizes {
+    pub n: usize,
+    pub d: isize,
+}
+
+#[event]
+struct SizesEvent {
+    sizes: Sizes,
+    #[indexed]
+    n: usize,
+    #[indexed]
+    d: isize,
+}
+
+// 16 elements is the largest tuple arity.
+type Wide16 = (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)
+const WIDE16_HASH: u256 = core::keccak(<Wide16 as SolCompat>::SOL_TYPE)
+
+#[event]
+struct TupleEvent { tuples: Tuples }
+
+#[event]
+struct Offered {
+    offer: DynArray<Item>,
+    #[indexed]
+    offerer: Address,
+}
+
+#[event]
+struct Nest { nested: Nested }
+
+#[event]
+struct WideEvent { wide: Wide }
+
+#[event]
+struct UnitEvent { unit: Unit }
+
+#[event]
+struct Pair { item: Item, nested: DynArray<Nested> }
+
+#[event]
+struct OrdersEvent { orders: Orders }
+
+#[error]
+struct BadItem { item: Item }
+
+fn item(_ amount: u256) -> Item {
+    Item { itemType: 2, token: Address { inner: 0xbeef }, identifier: 7, amount }
+}
+
+#[test]
+fn abi_struct_event_topics() {
+    // keccak256("Offered((uint8,address,uint256,uint256)[],address)")
+    assert!(Offered::TOPIC0 == 0xa91ba378cc9599366fd2f17ff4f1ee77767d612e77544e891977670356397d04)
+    // keccak256("Nest(((uint8,address,uint256,uint256),bytes))")
+    assert!(Nest::TOPIC0 == 0x58005724aa265efdb2c161059496b7c71b5d19918a56abb1ee522542c47396da)
+    // keccak256("WideEvent((uint8,uint16,uint32,uint64,uint128,uint256,address,bool,bytes32))")
+    assert!(WideEvent::TOPIC0 == 0x048ab3dde30925695618f921c2e3e6aaa300b35442c3e3fb54c6b3fd94bd5796)
+    // keccak256("UnitEvent(())")
+    assert!(UnitEvent::TOPIC0 == 0x25a4581f37ebd5524e7bdf316e1ccf78504c2248f0360df41b558fd2d5608c82)
+    // keccak256("Pair((uint8,address,uint256,uint256),((uint8,address,uint256,uint256),bytes)[])")
+    assert!(Pair::TOPIC0 == 0x44042ff68b2c73faef022cb89fb09f843af2259cea24f2ad474607b05d8abeaa)
+    // keccak256("OrdersEvent(((uint8,address,uint256,uint256)[],((uint8,address,uint256,uint256),bytes)[],uint256,uint256,uint256,uint256,uint256,uint256,uint256))")
+    assert!(OrdersEvent::TOPIC0 == 0x3639c754d04f0ebf08e07ee4b74dd225851aebde4feb904783436dc6c89f1288)
+    // keccak256("SizesEvent((uint256,int256),uint256,int256)")
+    assert!(SizesEvent::TOPIC0 == 0xe014529359c91f35cb164fb1ce79ce32a9d89a187e3c49c306a7cc23fe5792aa)
+    // keccak256("TupleEvent(((uint256,address),(bool),(uint8,uint16,uint32,uint64),()))")
+    assert!(TupleEvent::TOPIC0 == 0x487b51dd6cea96a1b2c470869e12c3901946f79127de534ac9a803b7906093fa)
+    // keccak256("(uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8)")
+    assert!(WIDE16_HASH == 0x70a4f9110d5b6eb01facb4ce24ff6ea6e4b85af583214a673231757ecfbefeee)
+}
+
+// BadItem((uint8,address,uint256,uint256))
+#[test(should_revert, selector = 0x81ead8b7)]
+fn abi_struct_error_selector() uses (evm: mut Evm) {
+    revert_error(BadItem { item: item(4) })
+}

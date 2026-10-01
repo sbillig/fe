@@ -1,0 +1,17 @@
+#[abi]
+fn foo() {}
+
+#[abi]
+enum E {
+    A,
+}
+
+#[abi]
+trait T {}
+
+#[abi]
+mod m {}
+
+mod n {
+    #![abi]
+}

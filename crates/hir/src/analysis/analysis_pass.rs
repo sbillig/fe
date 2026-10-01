@@ -1,15 +1,29 @@
 use crate::analysis::{
     HirAnalysisDb,
     diagnostics::DiagnosticVoucher,
-    ty::{abi_ty::is_dynamic_event_ty, adt_def::AdtRef, ty_lower::lower_hir_ty},
+    ty::{
+        abi_struct_field_checks,
+        abi_ty::{is_composite_event_ty, is_dynamic_event_ty},
+        adt_def::AdtRef,
+        corelib::{resolve_core_trait, resolve_lib_trait_path, resolve_lib_type_path},
+        non_copy_array_abi_fields,
+        trait_def::TraitInstId,
+        trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
+        ty_lower::lower_hir_ty,
+    },
 };
 use crate::{
-    AbiFieldContext, AbiFieldDiagnostic, AttrMisuseError, ErrorDiagnostic, EventError,
-    EventErrorKind, FieldModifierError, MsgDiagnostic, ParserError,
-    hir_def::{ModuleTree, TopLevelMod},
+    AbiFieldContext, AbiFieldDiagnostic, AbiFieldDiagnosticKind, AbiStructDiagnostic,
+    AbiStructDiagnosticKind, AttrMisuseError, ErrorDiagnostic, EventError, EventErrorKind,
+    FieldModifierError, MsgDiagnostic, ParserError,
+    hir_def::{ModuleTree, Partial, TopLevelMod, TypeKind},
     lower::{parse_file_impl, scope_graph_impl, top_mod_ast},
     semantic::constraints_for,
     span::{DesugaredOrigin, HirOrigin},
+};
+use common::{
+    diagnostics::{DiagnosticPass, GlobalErrorCode},
+    file::File,
 };
 use parser::ast::{self, prelude::*};
 
@@ -124,10 +138,19 @@ impl ModuleAnalysisPass for EventLowerPass {
                 .map(|d| Box::new(d) as _),
         );
         diags.extend(
-            semantic_tuple_field_type_errors(db, top_mod, AbiFieldContext::Event)
+            semantic_field_type_errors(db, top_mod, AbiFieldContext::Event)
                 .map(|d| Box::new(d) as _),
         );
         diags.extend(semantic_indexed_dynamic_field_errors(db, top_mod).map(|d| Box::new(d) as _));
+        diags.extend(
+            non_copy_array_field_errors(
+                db,
+                top_mod,
+                |origin| matches!(origin, DesugaredOrigin::Event(_)),
+                GlobalErrorCode::new(DiagnosticPass::EventLower, 10),
+            )
+            .map(|d| Box::new(d) as _),
+        );
         diags
     }
 }
@@ -177,9 +200,15 @@ fn semantic_indexed_dynamic_field_errors<'db>(
                 continue;
             };
             let resolved_ty = lower_hir_ty(db, field_ty, event_struct.scope(), assumptions);
-            if !is_dynamic_event_ty(db, resolved_ty) {
+            let ty = resolved_ty.pretty_print(db).to_string();
+            let kind = if is_dynamic_event_ty(db, resolved_ty) {
+                EventErrorKind::IndexedDynamicField { ty }
+            } else if is_composite_event_ty(db, resolved_ty) && !resolved_ty.is_tuple(db) {
+                // Tuples are already rejected as event fields.
+                EventErrorKind::IndexedCompositeField { ty }
+            } else {
                 continue;
-            }
+            };
 
             let ast_field = ast_struct
                 .as_ref()
@@ -194,9 +223,7 @@ fn semantic_indexed_dynamic_field_errors<'db>(
                 },
             );
             diags.push(EventError {
-                kind: EventErrorKind::IndexedDynamicField {
-                    ty: resolved_ty.pretty_print(db).to_string(),
-                },
+                kind,
                 file: top_mod.file(db),
                 primary_range,
                 struct_name: event_struct
@@ -225,13 +252,17 @@ fn accumulated_abi_field_diagnostics<'db>(
         .cloned()
 }
 
-fn semantic_tuple_field_type_errors<'db>(
+/// Tuple fields, and fields without a Solidity type name for the signature,
+/// once type aliases are resolved. Fields that are not paths are reported
+/// during lowering.
+fn semantic_field_type_errors<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
     context: AbiFieldContext,
 ) -> impl Iterator<Item = AbiFieldDiagnostic> {
     let mut diags = Vec::new();
     let mut seen_structs = Vec::new();
+    let root = top_mod_ast(db, top_mod).syntax().clone();
 
     for &impl_trait in top_mod.all_impl_traits(db) {
         let HirOrigin::Desugared(origin) = impl_trait.origin(db) else {
@@ -258,38 +289,51 @@ fn semantic_tuple_field_type_errors<'db>(
         }
         seen_structs.push(abi_struct);
 
-        let root = top_mod_ast(db, top_mod).syntax().clone();
-        let ast_struct = struct_ptr
-            .syntax_node_ptr()
-            .try_to_node(&root)
-            .and_then(ast::Struct::cast);
-
+        let scope = abi_struct.scope();
         let assumptions = constraints_for(db, abi_struct.into());
-        let fields = abi_struct.hir_fields(db);
-        for (field_idx, field) in fields.data(db).iter().enumerate() {
-            let Some(field_ty) = field.type_ref().to_opt() else {
+        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+        let traits = (
+            resolve_lib_type_path(db, scope, "std::abi::Sol"),
+            resolve_core_trait(db, scope, &["abi", "AbiSize"]),
+            resolve_core_trait(db, scope, &["abi", "Encode"]),
+            resolve_lib_trait_path(db, scope, "std::abi::SolCompat"),
+        );
+        let implements = |trait_, args| {
+            !matches!(
+                is_goal_satisfiable(db, solve_cx, TraitInstId::new_simple(db, trait_, args)),
+                GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation { .. }
+            )
+        };
+        for (field_idx, field) in abi_struct.hir_fields(db).data(db).iter().enumerate() {
+            let Some(hir_ty) = field.type_ref().to_opt() else {
                 continue;
             };
-
-            let resolved_ty = lower_hir_ty(db, field_ty, abi_struct.scope(), assumptions);
-            if !resolved_ty.is_tuple(db) {
+            if !matches!(hir_ty.data(db), TypeKind::Path(Partial::Present(_))) {
                 continue;
             }
 
-            let primary_range = ast_struct
-                .as_ref()
-                .and_then(|ast_struct| ast_struct.fields())
-                .and_then(|fields| fields.into_iter().nth(field_idx))
-                .and_then(|field| field.ty())
-                .map_or_else(
-                    || parser::TextRange::empty(0.into()),
-                    |ty| ty.syntax().text_range(),
-                );
+            let resolved_ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+            // Only a type with an ABI encoding lacks just its Solidity name;
+            // the generated code reports types that cannot be encoded.
+            let kind = if resolved_ty.is_tuple(db) {
+                AbiFieldDiagnosticKind::Unsupported
+            } else if !resolved_ty.has_invalid(db)
+                && let (Some(sol_ty), Some(abi_size), Some(encode), Some(sol_compat)) = traits
+                && implements(abi_size, vec![resolved_ty])
+                && implements(encode, vec![resolved_ty, sol_ty])
+                && !implements(sol_compat, vec![resolved_ty])
+            {
+                AbiFieldDiagnosticKind::MissingSolCompat
+            } else {
+                continue;
+            };
+
             diags.push(AbiFieldDiagnostic {
+                kind,
                 context,
                 ty: resolved_ty.pretty_print(db).to_string(),
                 file: top_mod.file(db),
-                primary_range,
+                primary_range: field_ty_range(&root, &struct_ptr, field_idx),
                 struct_name: abi_struct
                     .name(db)
                     .to_opt()
@@ -335,11 +379,113 @@ impl ModuleAnalysisPass for ErrorLowerPass {
                 .map(|d| Box::new(d) as _),
         );
         diags.extend(
-            semantic_tuple_field_type_errors(db, top_mod, AbiFieldContext::Error)
+            semantic_field_type_errors(db, top_mod, AbiFieldContext::Error)
                 .map(|d| Box::new(d) as _),
+        );
+        diags.extend(
+            non_copy_array_field_errors(
+                db,
+                top_mod,
+                |origin| matches!(origin, DesugaredOrigin::Error(_)),
+                GlobalErrorCode::new(DiagnosticPass::ErrorLower, 6),
+            )
+            .map(|d| Box::new(d) as _),
         );
         diags
     }
+}
+
+/// Analysis pass that collects diagnostics of `#[abi]` struct desugaring.
+pub struct AbiStructLowerPass {}
+
+impl ModuleAnalysisPass for AbiStructLowerPass {
+    fn run_on_module<'db>(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        top_mod: TopLevelMod<'db>,
+    ) -> Vec<Box<dyn DiagnosticVoucher>> {
+        let mut diags = scope_graph_impl::accumulated::<AbiStructDiagnostic>(db, top_mod)
+            .into_iter()
+            .map(|d| Box::new(d.clone()) as _)
+            .collect::<Vec<_>>();
+        diags.extend(
+            non_copy_array_field_errors(
+                db,
+                top_mod,
+                |origin| matches!(origin, DesugaredOrigin::AbiStruct(_)),
+                GlobalErrorCode::new(DiagnosticPass::AbiStructLower, 3),
+            )
+            .map(|d| Box::new(d) as _),
+        );
+        let root = top_mod_ast(db, top_mod).syntax().clone();
+        diags.extend(
+            abi_struct_field_checks(db, top_mod)
+                .unsupported
+                .iter()
+                .map(|field| {
+                    Box::new(AbiStructDiagnostic {
+                        kind: AbiStructDiagnosticKind::UnsupportedFieldType {
+                            ty: field.field_ty.pretty_print(db).to_string(),
+                            missing: field.missing.clone(),
+                        },
+                        file: top_mod.file(db),
+                        primary_range: field_ty_range(&root, &field.ast_struct, field.field_idx),
+                    }) as _
+                }),
+        );
+        diags
+    }
+}
+
+/// The range of the type of a struct's field, or an empty range if the
+/// syntax is unavailable.
+fn field_ty_range(
+    root: &parser::SyntaxNode,
+    ast_struct: &parser::ast::AstPtr<ast::Struct>,
+    field_idx: usize,
+) -> parser::TextRange {
+    ast_struct
+        .syntax_node_ptr()
+        .try_to_node(root)
+        .and_then(ast::Struct::cast)
+        .and_then(|ast_struct| ast_struct.fields())
+        .and_then(|fields| fields.into_iter().nth(field_idx))
+        .and_then(|field| field.ty())
+        .map_or_else(
+            || parser::TextRange::empty(0.into()),
+            |ty| ty.syntax().text_range(),
+        )
+}
+
+/// A field of an `#[abi]`, `#[event]` or `#[error]` struct that holds a fixed
+/// array of non-`Copy` elements, which the fixed-array ABI codecs cannot
+/// encode. Each struct kind's lowering pass reports it under its own code.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AbiArrayElemNotCopy {
+    pub error_code: GlobalErrorCode,
+    pub ty: String,
+    pub elem_ty: String,
+    pub file: File,
+    pub primary_range: parser::TextRange,
+}
+
+fn non_copy_array_field_errors<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+    owns: fn(&DesugaredOrigin) -> bool,
+    error_code: GlobalErrorCode,
+) -> impl Iterator<Item = AbiArrayElemNotCopy> {
+    let root = top_mod_ast(db, top_mod).syntax().clone();
+    non_copy_array_abi_fields(db, top_mod)
+        .iter()
+        .filter(move |field| owns(&field.origin))
+        .map(move |field| AbiArrayElemNotCopy {
+            error_code: error_code.clone(),
+            ty: field.field_ty.pretty_print(db).to_string(),
+            elem_ty: field.elem_ty.pretty_print(db).to_string(),
+            file: top_mod.file(db),
+            primary_range: field_ty_range(&root, &field.ast_struct, field.field_idx),
+        })
 }
 
 /// Analysis pass that collects generic attribute misuse diagnostics.

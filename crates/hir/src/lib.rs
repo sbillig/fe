@@ -1,6 +1,7 @@
 use common::InputDb;
 pub use core::lower::{
-    AbiFieldContext, AbiFieldDiagnostic, AttrMisuseError, AttrMisuseErrorKind, ErrorDiagnostic,
+    AbiFieldContext, AbiFieldDiagnostic, AbiFieldDiagnosticKind, AbiStructDiagnostic,
+    AbiStructDiagnosticKind, AttrMisuseError, AttrMisuseErrorKind, ErrorDiagnostic,
     ErrorDiagnosticKind, EventError, EventErrorKind, FieldModifierError, FieldModifierErrorKind,
     MsgDiagnostic, MsgDiagnosticKind, parse::ParserError,
 };

@@ -1445,6 +1445,13 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         origin: SemOrigin<'db>,
     ) -> EvalResult<'db, CtfeValue<'db>> {
         self.bump(origin)?;
+        // Semantic bodies of generic instances are substituted but not
+        // normalized, so a local may still be typed `(<u8 as Tr>::A, u16)`.
+        // Values carry the normalized type, like the aggregates embedding them.
+        let result_ty = self.frames[frame_idx]
+            .body
+            .owner
+            .normalized_ty(self.db, result_ty);
         // Keep the large value-operation frame off recursive call paths.
         match expr {
             SExpr::Call {
@@ -1591,7 +1598,6 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 let source_ty = body
                     .owner
                     .normalized_ty(self.db, body.locals[value.value.index()].ty);
-                let result_ty = body.owner.normalized_ty(self.db, result_ty);
                 if source_ty != result_ty
                     && result_ty.as_capability(self.db).is_none()
                     && let CtfeValue::Ref(r#ref) = &read

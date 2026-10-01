@@ -1,5 +1,5 @@
 use num_bigint::BigUint;
-use parser::ast::{self, AttrListOwner as _};
+use parser::ast::{self, AttrListOwner as _, prelude::AstNode as _};
 use salsa::Accumulator as _;
 
 use super::{
@@ -58,7 +58,7 @@ pub(super) fn lower_msg_as_mod<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Msg
         focus: Default::default(),
     };
 
-    let mut builder = HirBuilder::new(ctxt, msg_desugared);
+    let mut builder = HirBuilder::new(ctxt, msg_desugared, ast.syntax());
     builder.desugared_mod(name, attributes, vis, |builder| {
         if let Some(variants) = ast.variants() {
             for (idx, variant) in variants.into_iter().enumerate() {
@@ -369,7 +369,7 @@ pub(super) fn create_head_size_assoc_const<'db, O: Clone + Into<crate::span::Des
     }
 }
 
-fn build_decode_head_pos_expr<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
+pub(super) fn build_decode_head_pos_expr<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
     body: &mut BodyBuilder<'_, 'db, O>,
     base_ident: IdentId<'db>,
     prior_fields: &[(IdentId<'db>, TypeId<'db>)],

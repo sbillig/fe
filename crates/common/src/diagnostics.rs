@@ -187,6 +187,7 @@ pub enum DiagnosticPass {
     MsgLower,
     EventLower,
     ErrorLower,
+    AbiStructLower,
     AttrMisuse,
 
     NameResolution,
@@ -212,6 +213,7 @@ impl DiagnosticPass {
             Self::MsgLower => 9,
             Self::EventLower => 10,
             Self::ErrorLower => 13,
+            Self::AbiStructLower => 18,
             Self::AttrMisuse => 12,
             Self::NameResolution => 2,
             Self::TypeDefinition => 3,
@@ -232,4 +234,62 @@ impl DiagnosticPass {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ExternalAnalysisKey {
     name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DiagnosticPass::*;
+
+    #[test]
+    fn pass_codes_are_unique() {
+        let passes = [
+            Parse,
+            MsgLower,
+            EventLower,
+            ErrorLower,
+            AbiStructLower,
+            AttrMisuse,
+            NameResolution,
+            TypeDefinition,
+            TraitDefinition,
+            ImplTraitDefinition,
+            TraitSatisfaction,
+            MethodDefinition,
+            TyCheck,
+            Mir,
+            SemanticBorrowck,
+            SemanticLayoutEvidence,
+        ];
+        // Exhaustive, so that a new pass is also added to `passes`.
+        for pass in &passes {
+            match pass {
+                Parse
+                | MsgLower
+                | EventLower
+                | ErrorLower
+                | AbiStructLower
+                | AttrMisuse
+                | NameResolution
+                | TypeDefinition
+                | TraitDefinition
+                | ImplTraitDefinition
+                | TraitSatisfaction
+                | MethodDefinition
+                | TyCheck
+                | Mir
+                | SemanticBorrowck
+                | SemanticLayoutEvidence
+                | ExternalAnalysis(_) => {}
+            }
+        }
+        for (idx, pass) in passes.iter().enumerate() {
+            for other in &passes[idx + 1..] {
+                assert_ne!(
+                    pass.code(),
+                    other.code(),
+                    "{pass:?} and {other:?} share a diagnostic pass code"
+                );
+            }
+        }
+    }
 }

@@ -22,11 +22,19 @@ impl<'db> GenericArgListId<'db> {
     }
 
     pub fn given1_type(db: &'db dyn HirDb, ty: TypeId<'db>) -> Self {
+        Self::given_types(db, [ty])
+    }
+
+    pub fn given_types(db: &'db dyn HirDb, tys: impl IntoIterator<Item = TypeId<'db>>) -> Self {
         Self::given(
             db,
-            vec![GenericArg::Type(TypeGenericArg {
-                ty: Partial::Present(ty),
-            })],
+            tys.into_iter()
+                .map(|ty| {
+                    GenericArg::Type(TypeGenericArg {
+                        ty: Partial::Present(ty),
+                    })
+                })
+                .collect(),
         )
     }
 

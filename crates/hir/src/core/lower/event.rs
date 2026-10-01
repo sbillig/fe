@@ -2,7 +2,7 @@ use parser::ast::{self, prelude::*};
 use salsa::Accumulator as _;
 
 use super::{
-    AbiFieldContext, AbiFieldDiagnostic, FileLowerCtxt,
+    AbiFieldContext, AbiFieldDiagnostic, AbiFieldDiagnosticKind, FileLowerCtxt,
     attr::{
         AttrForm, AttrRule, AttrTarget, has_named_attr, lower_attrs_without_named,
         named_attr_specs, validate_attr_rules,
@@ -36,6 +36,7 @@ pub enum EventErrorKind {
     GenericEventStruct,
     TooManyIndexedFields { indexed_count: usize },
     IndexedDynamicField { ty: String },
+    IndexedCompositeField { ty: String },
 }
 
 pub(super) fn is_event_struct(ast: &ast::Struct) -> bool {
@@ -52,7 +53,7 @@ pub(super) fn lower_event_struct<'db>(
     let event_desugared = EventDesugared {
         event_struct: parser::ast::AstPtr::new(&ast),
     };
-    let mut builder = HirBuilder::new(ctxt, event_desugared.clone());
+    let mut builder = HirBuilder::new(ctxt, event_desugared.clone(), ast.syntax());
 
     let struct_name_token = ast.name();
     let struct_name = struct_name_token.as_ref().map(|n| n.text().to_string());
@@ -241,6 +242,7 @@ fn parse_event_fields<'db>(
         // supported as event fields.
         let TypeKind::Path(Partial::Present(_)) = ty.data(db) else {
             AbiFieldDiagnostic {
+                kind: AbiFieldDiagnosticKind::Unsupported,
                 context: AbiFieldContext::Event,
                 ty: ty.pretty_print(db),
                 file,

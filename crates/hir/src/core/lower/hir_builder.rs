@@ -1,6 +1,10 @@
+use std::rc::Rc;
+
 use common::ingot::IngotKind;
 use parser::ast;
 use parser::ast::prelude::AstNode;
+use parser::{SyntaxKind, SyntaxNode};
+use rustc_hash::FxHashSet;
 
 use crate::{
     HirDb,
@@ -51,6 +55,20 @@ where
     ctxt: &'ctxt mut FileLowerCtxt<'db>,
     roots: LibRoots<'db>,
     desugared: O,
+    reserved: Rc<FxHashSet<String>>,
+}
+
+/// `__fe_{name}`, or `__fe_{name}_{n}` for the first `n` that the desugared
+/// source does not mention. Generated code then cannot capture a name that a
+/// field type refers to, whichever namespace it is in.
+fn fresh_ident<'db>(db: &'db dyn HirDb, reserved: &FxHashSet<String>, name: &str) -> IdentId<'db> {
+    let mut ident = format!("__fe_{name}");
+    let mut suffix = 0;
+    while reserved.contains(&ident) {
+        suffix += 1;
+        ident = format!("__fe_{name}_{suffix}");
+    }
+    IdentId::new(db, ident)
 }
 
 struct FuncBodySpec<'db> {
@@ -66,12 +84,25 @@ impl<'ctxt, 'db, O> HirBuilder<'ctxt, 'db, O>
 where
     O: Clone + Into<DesugaredOrigin>,
 {
-    pub(super) fn new(ctxt: &'ctxt mut FileLowerCtxt<'db>, desugared: O) -> Self {
+    /// A builder for the items desugared from `source`, whose identifiers
+    /// generated names avoid.
+    pub(super) fn new(
+        ctxt: &'ctxt mut FileLowerCtxt<'db>,
+        desugared: O,
+        source: &SyntaxNode,
+    ) -> Self {
         let roots = LibRoots::for_ctxt(ctxt);
+        let reserved = source
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .filter(|token| token.kind() == SyntaxKind::Ident)
+            .map(|token| token.text().to_string())
+            .collect();
         Self {
             ctxt,
             roots,
             desugared,
+            reserved: Rc::new(reserved),
         }
     }
 
@@ -92,7 +123,7 @@ where
     }
 
     pub(super) fn generated_ident(&self, name: &str) -> IdentId<'db> {
-        IdentId::new(self.db(), format!("__fe_{name}"))
+        fresh_ident(self.db(), &self.reserved, name)
     }
 
     pub(super) fn roots(&self) -> LibRoots<'db> {
@@ -114,6 +145,7 @@ where
             ctxt: self.ctxt,
             roots: self.roots,
             desugared,
+            reserved: self.reserved.clone(),
         }
     }
 
@@ -201,13 +233,15 @@ where
         TraitRefId::new(db, Partial::Present(path))
     }
 
+    /// A generated generic parameter, named so that it cannot shadow a user
+    /// type spelled `name` in the generated signature or body.
     pub(super) fn type_param_with_trait_bound(
         &self,
         name: &str,
         bound: TraitRefId<'db>,
     ) -> (GenericParamListId<'db>, TypeId<'db>) {
         let db = self.db();
-        let ident = self.ident(name);
+        let ident = self.generated_ident(name);
         let params = GenericParamListId::new(
             db,
             vec![GenericParam::Type(TypeGenericParam {
@@ -496,6 +530,7 @@ where
                     this.ctxt,
                     this.roots,
                     this.desugared.clone(),
+                    this.reserved.clone(),
                     TrackedItemVariant::FuncBody,
                 );
                 build_body(&mut body_builder);
@@ -550,6 +585,7 @@ where
     body: BodyCtxt<'ctxt, 'db>,
     roots: LibRoots<'db>,
     desugared: O,
+    reserved: Rc<FxHashSet<String>>,
     stmts: Vec<StmtId>,
 }
 
@@ -569,6 +605,7 @@ where
         ctxt: &'ctxt mut FileLowerCtxt<'db>,
         roots: LibRoots<'db>,
         desugared: O,
+        reserved: Rc<FxHashSet<String>>,
         id: TrackedItemVariant<'db>,
     ) -> Self {
         let id = ctxt.joined_id(id);
@@ -576,6 +613,7 @@ where
             body: BodyCtxt::new(ctxt, id),
             roots,
             desugared,
+            reserved,
             stmts: Vec::new(),
         }
     }
@@ -584,7 +622,15 @@ where
         self.body.f_ctxt.db()
     }
 
-    fn sol_ty(&self) -> TypeId<'db> {
+    pub(super) fn generated_ident(&self, name: &str) -> IdentId<'db> {
+        fresh_ident(self.db(), &self.reserved, name)
+    }
+
+    pub(super) fn roots(&self) -> LibRoots<'db> {
+        self.roots
+    }
+
+    pub(super) fn sol_ty(&self) -> TypeId<'db> {
         let path = PathId::from_ident(self.db(), self.roots.std)
             .push_str(self.db(), "abi")
             .push_str(self.db(), "Sol");
@@ -726,8 +772,8 @@ where
 
         let db = self.db();
         let self_expr = self.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
-        let tail_ident = IdentId::new(db, "__tail".to_string());
-        let head_pos_ident = IdentId::new(db, "__head_pos".to_string());
+        let tail_ident = self.generated_ident("tail");
+        let head_pos_ident = self.generated_ident("head_pos");
         let head_size = self.abi_size_assoc_expr(TypeId::fallback_self_ty(db), "HEAD_SIZE");
         let tail_pat = self.push_pat(Pat::Path(
             Partial::Present(PathId::from_ident(db, tail_ident)),
@@ -742,7 +788,7 @@ where
         self.emit_stmt(Stmt::Let(head_pos_pat, None, Some(zero)));
 
         for (index, (field, field_ty)) in fields.iter().copied().enumerate() {
-            let field_ident = IdentId::new(db, format!("__field_{index}"));
+            let field_ident = self.generated_ident(&format!("field_{index}"));
             let field_pat = self.push_pat(Pat::Path(
                 Partial::Present(PathId::from_ident(db, field_ident)),
                 false,
@@ -867,24 +913,24 @@ where
         input: DecodeInputBindings<'db>,
         head_pos: ExprId,
     ) {
+        self.decode_field_into("decode_msg_field_from", target_ident, ty, input, head_pos);
+    }
+
+    /// `let target: ty = core::abi::<decode_fn><Sol, ty, I>(input, base:,
+    /// head_pos:, input_len:)`.
+    pub(super) fn decode_field_into(
+        &mut self,
+        decode_fn: &str,
+        target_ident: IdentId<'db>,
+        ty: TypeId<'db>,
+        input: DecodeInputBindings<'db>,
+        head_pos: ExprId,
+    ) {
         let db = self.db();
-        let decode_args = GenericArgListId::given(
-            db,
-            vec![
-                GenericArg::Type(TypeGenericArg {
-                    ty: Partial::Present(self.sol_ty()),
-                }),
-                GenericArg::Type(TypeGenericArg {
-                    ty: Partial::Present(ty),
-                }),
-                GenericArg::Type(TypeGenericArg {
-                    ty: Partial::Present(input.input_ty),
-                }),
-            ],
-        );
+        let decode_args = GenericArgListId::given_types(db, [self.sol_ty(), ty, input.input_ty]);
         let decode_path = PathId::from_ident(db, self.roots.core)
             .push_str(db, "abi")
-            .push_str_args(db, "decode_msg_field_from", decode_args);
+            .push_str_args(db, decode_fn, decode_args);
         let decode_callee = self.path_expr(decode_path);
         let input_expr = self.ident_expr(input.input_ident);
         let base_expr = self.ident_expr(input.base_ident);

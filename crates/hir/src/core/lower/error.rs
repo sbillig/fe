@@ -2,7 +2,7 @@ use parser::ast::{self, prelude::*};
 use salsa::Accumulator as _;
 
 use super::{
-    AbiFieldContext, AbiFieldDiagnostic, FileLowerCtxt,
+    AbiFieldContext, AbiFieldDiagnostic, AbiFieldDiagnosticKind, FileLowerCtxt,
     attr::{has_named_attr, lower_attrs_without_named, named_attr_specs},
     hir_builder::HirBuilder,
     msg::{create_head_size_assoc_const, create_is_dynamic_assoc_const, create_payload_size_func},
@@ -67,7 +67,7 @@ pub(super) fn lower_error_struct<'db>(
     let error_desugared = ErrorDesugared {
         error_struct: parser::ast::AstPtr::new(&ast),
     };
-    let mut builder = HirBuilder::new(ctxt, error_desugared.clone());
+    let mut builder = HirBuilder::new(ctxt, error_desugared.clone(), ast.syntax());
 
     let struct_name_token = ast.name();
     let struct_name = struct_name_token.as_ref().map(|n| n.text().to_string());
@@ -218,6 +218,7 @@ fn parse_error_fields<'db>(
 
         let TypeKind::Path(Partial::Present(path)) = ty.data(db) else {
             AbiFieldDiagnostic {
+                kind: AbiFieldDiagnosticKind::Unsupported,
                 context: AbiFieldContext::Error,
                 ty: ty.pretty_print(db),
                 file,

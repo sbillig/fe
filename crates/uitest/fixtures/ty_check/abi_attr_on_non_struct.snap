@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/abi_attr_on_non_struct.fe
+---
+error[12-0001]: unsupported `#[abi]` attribute on fn `foo`
+  ┌─ abi_attr_on_non_struct.fe:1:1
+  │
+1 │ #[abi]
+  │ ^^^^^^ `#[abi]` is only supported on structs
+
+error[12-0001]: unsupported `#[abi]` attribute on enum `E`
+  ┌─ abi_attr_on_non_struct.fe:4:1
+  │
+4 │ #[abi]
+  │ ^^^^^^ `#[abi]` is only supported on structs
+
+error[12-0001]: unsupported `#[abi]` attribute on trait `T`
+  ┌─ abi_attr_on_non_struct.fe:9:1
+  │
+9 │ #[abi]
+  │ ^^^^^^ `#[abi]` is only supported on structs
+
+error[12-0001]: unsupported `#[abi]` attribute on mod `m`
+   ┌─ abi_attr_on_non_struct.fe:12:1
+   │
+12 │ #[abi]
+   │ ^^^^^^ `#[abi]` is only supported on structs
+
+error[12-0001]: unsupported `#[abi]` attribute on module
+   ┌─ abi_attr_on_non_struct.fe:16:5
+   │
+16 │     #![abi]
+   │     ^^^^^^^ `#[abi]` is only supported on structs
