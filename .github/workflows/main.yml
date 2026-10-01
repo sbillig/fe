@@ -24,6 +24,99 @@ env:
   FOUNDRY_VERSION: v1.5.1
 
 jobs:
+  windows-abi-diagnostic:
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 1666
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
+      CARGO_PROFILE_RELEASE_DEBUG: 1
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Generate tree-sitter parser
+        working-directory: crates/tree-sitter-fe
+        shell: bash
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild tree-sitter-cli
+          npx tree-sitter generate --abi=14
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-abi-debug-symbols
+      - name: Install Windows debugger
+        shell: pwsh
+        run: |
+          $debugger = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
+          if (!(Test-Path $debugger)) {
+            $installer = "$env:RUNNER_TEMP\winsdksetup.exe"
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/?linkid=2382321' -OutFile $installer
+            $process = Start-Process $installer -ArgumentList '/features OptionId.WindowsDesktopDebuggers /quiet /norestart' -Wait -PassThru
+            if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
+              throw "Debugger installation failed: $($process.ExitCode)"
+            }
+          }
+          if (!(Test-Path $debugger)) { throw "CDB was not installed" }
+      - name: Build compiler with symbols
+        run: cargo build --locked --release -p fe --all-features
+      - name: Capture Wallet ABI compiler exception frames
+        shell: pwsh
+        run: |
+          $fixture = "$env:RUNNER_TEMP\wallet-abi-diagnostic"
+          New-Item -ItemType Directory -Force "$fixture\src" | Out-Null
+          @'
+          [ingot]
+          name = "emit_abi_mutability"
+          version = "0.1.0"
+          '@ | Set-Content "$fixture\fe.toml"
+          @'
+          use std::abi::sol
+
+          msg WalletMsg {
+              #[selector = sol("fund()")]
+              Fund,
+
+              #[selector = sol("peek()")]
+              Peek -> u256,
+          }
+
+          pub contract Wallet {
+              #[payable]
+              init(seed: u256, values: [u256; 2]) {}
+
+              recv WalletMsg {
+                  #[payable]
+                  Fund {} {}
+
+                  Peek -> u256 {
+                      7
+                  }
+              }
+          }
+          '@ | Set-Content "$fixture\src\lib.fe"
+          $env:NO_COLOR = '1'
+          [Environment]::SetEnvironmentVariable('FE_BORROWCK_PROFILE', $null)
+          [Environment]::SetEnvironmentVariable('FE_BORROWCK_SUBGRAPHS', $null)
+          $commands = "$env:RUNNER_TEMP\wallet-abi-cdb.txt"
+          @"
+          .symfix
+          .sympath+ $env:GITHUB_WORKSPACE\target\release
+          .reload
+          sxe -c ".echo ABI_STACK_OVERFLOW; .exr -1; r; kn 100; !teb; q" c00000fd
+          g
+          q
+          "@ | Set-Content $commands
+          $debugger = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
+          & $debugger -lines -cf $commands "$env:GITHUB_WORKSPACE\target\release\fe.exe" build --emit abi --contract Wallet --out-dir "$fixture\out" $fixture 2>&1 | Tee-Object "$env:RUNNER_TEMP\wallet-abi-cdb.log"
+          if (!(Test-Path "$fixture\out\Wallet.abi.json") -and !(Select-String -Quiet '^ABI_STACK_OVERFLOW$' "$env:RUNNER_TEMP\wallet-abi-cdb.log")) {
+            throw 'Neither ABI output nor a captured stack-overflow trace was produced'
+          }
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 20
