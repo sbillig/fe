@@ -1,0 +1,619 @@
+// Tests for the revert/returndata helpers: `bubble_revert_or`,
+// `encode_error`, `revert_bytes`, `revert_empty`, `revert_selector`,
+// `has_selector`, `is_error`, `decode_error_string`, `decode_panic` and the
+// `ReturnData` byte input.
+
+use core::abi::store_word
+use core::message::MsgVariant
+use core::ptr
+use std::abi::DynString
+use std::evm::{
+    CallOutcome,
+    PANIC_OVERFLOW,
+    ReturnData,
+    bubble_revert_or,
+    decode_error_string,
+    decode_panic,
+    copy_returndata,
+    encode_error,
+    has_selector,
+    is_error,
+    revert_bytes,
+    revert_empty,
+    revert_selector,
+}
+
+#[error]
+pub struct Insufficient { pub available: u256, pub required: u256 }
+
+#[error]
+pub struct Unauthorized {}
+
+#[error]
+pub struct WithData { pub code: u256, pub data: Bytes }
+
+#[error]
+pub struct CallFailed {}
+
+msg MockMsg {
+    #[selector = 0x01]
+    RevertWith { data: Bytes },
+    #[selector = 0x02]
+    FailInsufficient { available: u256, required: u256 },
+    #[selector = 0x03]
+    FailEmpty,
+    #[selector = 0x04]
+    Overflow { a: u256 } -> u256,
+    #[selector = 0x05]
+    Pair -> (u256, Bytes),
+    #[selector = 0x06]
+    FailPreEncoded { available: u256, required: u256 },
+    #[selector = 0x07]
+    FailWithData { code: u256, data: Bytes },
+}
+
+/// Reverts with arbitrary caller-chosen data, custom errors, panics.
+pub contract Mock {
+    recv MockMsg {
+        RevertWith { data } {
+            revert_bytes(data.payload_span())
+        }
+        FailInsufficient { available, required } {
+            revert_error(Insufficient { available, required })
+        }
+        FailEmpty {} {
+            revert_empty()
+        }
+        Overflow { a } -> u256 {
+            a + 1
+        }
+        Pair -> (u256, Bytes) {
+            (7, Bytes::from_word_prefix(word: 0xaabbcc << 232, len: 3))
+        }
+        FailPreEncoded { available, required } {
+            let failure = encode_error(Insufficient { available, required })
+            revert_bytes(failure.span())
+        }
+        FailWithData { code, data } {
+            revert_error(WithData { code, data })
+        }
+    }
+}
+
+msg ForwarderMsg {
+    #[selector = 0x10]
+    Forward { target: Address, data: Bytes },
+}
+
+/// OpenZeppelin `functionCall`-style wrapper.
+pub contract Forwarder uses (call: mut Call) {
+    recv ForwarderMsg {
+        Forward { target, data } uses (mut call) {
+            let mut ret = ptr::MemBuffer::empty()
+            let outcome = call
+                .raw_call(
+                    addr: target,
+                    gas: 1000000,
+                    value: 0,
+                    args: data.payload_span(),
+                    ret: mut ret,
+                )
+            if !outcome.success() {
+                bubble_revert_or(CallFailed {})
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+
+/// A zeroed scratch area of `len` bytes plus a word of slack for unaligned
+/// stores near the end.
+fn scratch(_ len: u256) -> *u8 {
+    let buf = ptr::alloc_bytes(len + 32)
+    ptr::zero_bytes(buf, len + 32)
+    buf
+}
+
+fn put(_ buf: *u8, _ at: u256, _ value: u256) {
+    store_word(ptr: ptr::offset_bytes(buf, at), value)
+}
+
+fn span(_ buf: *u8, _ len: u256) -> ptr::MemSpan {
+    ptr::MemSpan::from_raw_parts(ptr: buf, len)
+}
+
+/// `Error(string)` revert data with explicit offset, length and total size;
+/// the payload bytes are "hi".
+fn error_string_data(offset: u256, length: u256, total: u256) -> ptr::MemSpan {
+    let buf = scratch(total + offset + 128)
+    put(buf, 0, 0x08c379a0 << 224)
+    put(buf, 4, offset)
+    put(buf, 4 + offset, length)
+    put(buf, 36 + offset, 0x6869 << 240)
+    span(buf, total)
+}
+
+fn panic_data(_ code: u256, _ total: u256) -> ptr::MemSpan {
+    let buf = scratch(total)
+    put(buf, 0, 0x4e487b71 << 224)
+    put(buf, 4, code)
+    span(buf, total)
+}
+
+fn insufficient_data(_ total: u256) -> ptr::MemSpan {
+    let buf = scratch(total)
+    put(
+        buf,
+        0,
+        (<Insufficient as ErrorVariant<Sol>>::SELECTOR as u256) << 224,
+    )
+    put(buf, 4, 1)
+    put(buf, 36, 2)
+    span(buf, total)
+}
+
+fn mock_revert(_ mock: Address, _ data: ptr::MemSpan) -> CallOutcome
+uses (call: mut Call)
+{
+    mock.try_call(
+        MockMsg::RevertWith { data: Bytes::from_payload(source: data) },
+    )
+}
+
+fn span_eq(_ a: ptr::MemSpan, _ b: ptr::MemSpan) -> bool {
+    Bytes::from_payload(source: a) == Bytes::from_payload(source: b)
+}
+
+fn is_hi(_ s: DynString) -> bool {
+    s.len() == 2 && s.byte_at(0) == 0x68 && s.byte_at(1) == 0x69
+}
+
+// -----------------------------------------------------------------------------
+// Raising errors
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_encode_error_matches_revert_error()
+uses (evm: mut Evm, call: mut Call)
+{
+    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    let direct = mock.try_call(MockMsg::FailInsufficient { available: 1, required: 2 })
+    let pre = mock.try_call(MockMsg::FailPreEncoded { available: 1, required: 2 })
+    assert!(!direct.success() && !pre.success())
+    assert!(direct.returndata_len() == 68)
+    let encoded = encode_error(Insufficient { available: 1, required: 2 })
+    assert!(span_eq(encoded.span(), direct.returndata()))
+    assert!(span_eq(encoded.span(), pre.returndata()))
+    assert!(span_eq(encoded.span(), insufficient_data(68)))
+
+    // Dynamic fields are encoded like `revert_error` too.
+    let with_data = mock
+        .try_call(
+            MockMsg::FailWithData {
+                code: 5,
+                data: Bytes::from_word_prefix(word: 0xff << 248, len: 1),
+            },
+        )
+    let encoded = encode_error(
+        WithData { code: 5, data: Bytes::from_word_prefix(word: 0xff << 248, len: 1) },
+    )
+    assert!(encoded.len() == 4 + 128)
+    assert!(span_eq(encoded.span(), with_data.returndata()))
+
+    // A field-less error is just the selector.
+    assert!(encode_error(Unauthorized {}).len() == 4)
+}
+
+#[test]
+fn test_revert_empty_and_revert_bytes() uses (evm: mut Evm, call: mut Call) {
+    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    let empty = mock.try_call(MockMsg::FailEmpty {})
+    assert!(!empty.success())
+    assert!(empty.returndata_len() == 0)
+
+    // Arbitrary, unaligned revert data is reverted verbatim.
+    let data = error_string_data(offset: 0x20, length: 2, total: 70)
+    let out = mock_revert(mock, data)
+    assert!(!out.success())
+    assert!(span_eq(out.returndata(), data))
+
+    let nothing = mock_revert(mock, ptr::MemSpan::empty())
+    assert!(!nothing.success() && nothing.returndata_len() == 0)
+}
+
+fn forward<M>(_ forwarder: Address, _ target: Address, _ inner: own M) -> CallOutcome
+uses (call: mut Call)
+where M: MsgVariant<Sol> + Encode<Sol>
+{
+    let data = std::evm::encode_msg_calldata(inner)
+    forwarder
+        .try_call(
+            ForwarderMsg::Forward { target, data: Bytes::from_payload(source: data.span()) },
+        )
+}
+
+#[test]
+fn test_bubble_revert_or() uses (evm: mut Evm, call: mut Call) {
+    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    let forwarder = evm.create2<Forwarder>(value: 0, args: (), salt: 1)
+
+    // Non-empty revert data is bubbled unchanged.
+    let out = forward(
+        forwarder,
+        mock,
+        MockMsg::FailInsufficient { available: 1, required: 2 },
+    )
+    assert!(!out.success())
+    assert!(span_eq(out.returndata(), insufficient_data(68)))
+
+    // Empty revert data is replaced by the fallback error.
+    let out = forward(forwarder, mock, MockMsg::FailEmpty {})
+    assert!(!out.success())
+    assert!(out.returndata_len() == 4)
+    assert!(is_error<CallFailed>(out.returndata()))
+
+    // Success does not revert.
+    let out = forward(forwarder, mock, MockMsg::Pair {})
+    assert!(out.success())
+}
+
+// -----------------------------------------------------------------------------
+// Matching custom errors
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_revert_selector() {
+    let buf = scratch(8)
+    put(buf, 0, 0x11223344aa << 216)
+    assert!(revert_selector(span(buf, 0)).is_none())
+    assert!(revert_selector(span(buf, 3)).is_none())
+    assert!(revert_selector(span(buf, 4)).unwrap() == 0x11223344)
+    assert!(revert_selector(span(buf, 5)).unwrap() == 0x11223344)
+}
+
+#[test]
+fn test_is_error_static() {
+    assert!(is_error<Insufficient>(insufficient_data(68)))
+    // One byte short or long of the exact encoding.
+    assert!(!is_error<Insufficient>(insufficient_data(67)))
+    assert!(!is_error<Insufficient>(insufficient_data(69)))
+    assert!(!is_error<Insufficient>(insufficient_data(3)))
+    // Different selector.
+    assert!(!is_error<Unauthorized>(insufficient_data(68)))
+    assert!(!is_error<Insufficient>(panic_data(1, 68)))
+
+    let unauthorized = encode_error(Unauthorized {})
+    assert!(is_error<Unauthorized>(unauthorized.span()))
+    assert!(!is_error<Insufficient>(unauthorized.span()))
+}
+
+#[test]
+fn test_has_selector() {
+    // The selector alone decides, whatever the length of the rest.
+    assert!(has_selector<Insufficient>(insufficient_data(68)))
+    assert!(has_selector<Insufficient>(insufficient_data(4)))
+    assert!(has_selector<Insufficient>(insufficient_data(67)))
+    assert!(has_selector<Insufficient>(insufficient_data(100)))
+    assert!(!is_error<Insufficient>(insufficient_data(4)))
+    assert!(!is_error<Insufficient>(insufficient_data(100)))
+    // Fewer than 4 bytes never match.
+    assert!(!has_selector<Insufficient>(insufficient_data(3)))
+    assert!(!has_selector<Insufficient>(ptr::MemSpan::empty()))
+    // Other selectors do not match.
+    assert!(!has_selector<Unauthorized>(insufficient_data(68)))
+    assert!(!has_selector<Insufficient>(panic_data(1, 68)))
+    let unauthorized = encode_error(Unauthorized {})
+    assert!(has_selector<Unauthorized>(unauthorized.span()))
+}
+
+#[test]
+fn test_is_error_dynamic() {
+    let encoded = encode_error(
+        WithData { code: 9, data: Bytes::from_word_prefix(word: 0xab << 248, len: 1) },
+    )
+    let data = encoded.span()
+    assert!(is_error<WithData>(data))
+    // Only the 64-byte head is required; the tail is not validated.
+    assert!(is_error<WithData>(data.slice(offset: 0, len: 68)))
+    assert!(!is_error<WithData>(data.slice(offset: 0, len: 67)))
+}
+
+// -----------------------------------------------------------------------------
+// Error(string) and Panic(uint256)
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_decode_error_string_valid() {
+    // Canonical: 4 + 32 + 32 + 32 bytes.
+    assert!(
+        is_hi(
+            decode_error_string(error_string_data(offset: 0x20, length: 2, total: 100)).unwrap(),
+        ),
+    )
+    // Unpadded tail and trailing bytes are accepted.
+    assert!(
+        is_hi(
+            decode_error_string(error_string_data(offset: 0x20, length: 2, total: 70)).unwrap(),
+        ),
+    )
+    assert!(
+        is_hi(
+            decode_error_string(error_string_data(offset: 0x20, length: 2, total: 200)).unwrap(),
+        ),
+    )
+    // Non-standard offset.
+    assert!(
+        is_hi(
+            decode_error_string(error_string_data(offset: 0x40, length: 2, total: 134)).unwrap(),
+        ),
+    )
+    // Empty message.
+    assert!(
+        decode_error_string(error_string_data(offset: 0x20, length: 0, total: 68)).unwrap().len()
+            == 0,
+    )
+    // Offset 0: the offset word doubles as a zero length word.
+    assert!(
+        decode_error_string(error_string_data(offset: 0, length: 0, total: 68)).unwrap().len() == 0,
+    )
+}
+
+#[test]
+fn test_decode_error_string_rejects_malformed() {
+    // Shorter than 68 bytes, even with a readable message.
+    assert!(
+        decode_error_string(error_string_data(offset: 0x20, length: 0, total: 67)).is_none(),
+    )
+    // Message runs one byte past the end.
+    assert!(
+        decode_error_string(error_string_data(offset: 0x20, length: 2, total: 69)).is_none(),
+    )
+    // Length word past the end.
+    assert!(
+        decode_error_string(error_string_data(offset: 0x40, length: 0, total: 99)).is_none(),
+    )
+    // Offset above 2^64 - 1.
+    let huge = error_string_data(offset: 0x20, length: 2, total: 100)
+    put(huge.ptr(), 4, 0x10000000000000000)
+    assert!(decode_error_string(huge).is_none())
+    // Length above 2^64 - 1.
+    let long = error_string_data(offset: 0x20, length: 0x10000000000000000, total: 100)
+    assert!(decode_error_string(long).is_none())
+    // Length that would overflow without the 2^64 bound.
+    let wrap = error_string_data(offset: 0x20, length: !(0 as u256), total: 100)
+    assert!(decode_error_string(wrap).is_none())
+    // Wrong selector.
+    let other = error_string_data(offset: 0x20, length: 2, total: 100)
+    put(other.ptr(), 0, 0x08c379a1 << 224)
+    assert!(decode_error_string(other).is_none())
+    assert!(decode_error_string(insufficient_data(68)).is_none())
+    assert!(decode_error_string(ptr::MemSpan::empty()).is_none())
+}
+
+#[test]
+fn test_decode_panic() {
+    assert!(decode_panic(panic_data(0x11, 36)).unwrap() == 0x11)
+    // Trailing data is ignored, like Solidity's `catch Panic(uint)`.
+    assert!(decode_panic(panic_data(0x32, 40)).unwrap() == 0x32)
+    assert!(decode_panic(panic_data(0x11, 35)).is_none())
+    assert!(decode_panic(insufficient_data(68)).is_none())
+    assert!(decode_panic(ptr::MemSpan::empty()).is_none())
+}
+
+#[test]
+fn test_real_panic_and_custom_error_from_callee()
+uses (evm: mut Evm, call: mut Call)
+{
+    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    let out = mock.try_call(MockMsg::Overflow { a: !(0 as u256) })
+    assert!(!out.success())
+    assert!(decode_panic(out.returndata()).unwrap() == PANIC_OVERFLOW)
+    assert!(decode_error_string(out.returndata()).is_none())
+
+    let out = mock.try_call(MockMsg::FailInsufficient { available: 1, required: 2 })
+    assert!(is_error<Insufficient>(out.returndata()))
+    assert!(decode_panic(out.returndata()).is_none())
+}
+
+// -----------------------------------------------------------------------------
+// ReturnData
+// -----------------------------------------------------------------------------
+
+fn raw_call_mock<M>(_ mock: Address, _ message: own M) -> bool
+uses (evm: mut Evm)
+where M: MsgVariant<Sol> + Encode<Sol>
+{
+    let data = std::evm::encode_msg_calldata(message)
+    let mut ret = ptr::MemBuffer::empty()
+    evm.raw_call(
+        addr: mock,
+        gas: 1000000,
+        value: 0,
+        args: data.span(),
+        ret: mut ret,
+    ).success()
+}
+
+#[test]
+fn test_returndata_decode_in_place() uses (evm: mut Evm) {
+    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    assert!(raw_call_mock(mock, MockMsg::Pair {}))
+    let rd = ReturnData::new()
+    // Decoded in place with the same rules as a typed call's return value,
+    // whatever the tuple layout of the return data is.
+    let (n, b): (u256, Bytes) = rd.decode()
+    assert!(n == 7)
+    assert!(b.len() == 3 && b.byte_at(2) == 0xcc)
+}
+
+#[test]
+fn test_returndata_matches_errors_in_place() uses (evm: mut Evm) {
+    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    assert!(
+        !raw_call_mock(
+            mock,
+            MockMsg::FailInsufficient { available: 3, required: 4 },
+        ),
+    )
+    let rd = ReturnData::new()
+    assert!(
+        revert_selector(rd).unwrap() == <Insufficient as ErrorVariant<Sol>>::SELECTOR,
+    )
+    assert!(rd.len() == 68)
+    // Decode the error arguments without copying, skipping the selector.
+    let (available, required): (u256, u256) = ReturnData::with_base(4).decode()
+    assert!(available == 3 && required == 4)
+
+    let data = error_string_data(offset: 0x20, length: 2, total: 70)
+    assert!(
+        !raw_call_mock(
+            mock,
+            MockMsg::RevertWith { data: Bytes::from_payload(source: data) },
+        ),
+    )
+    assert!(is_hi(decode_error_string(ReturnData::new()).unwrap()))
+
+    assert!(
+        !raw_call_mock(mock, MockMsg::Overflow { a: !(0 as u256) }),
+    )
+    assert!(decode_panic(ReturnData::new()).unwrap() == PANIC_OVERFLOW)
+}
+
+#[test]
+fn test_returndata_bounds() uses (evm: mut Evm) {
+    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    let buf = scratch(40)
+    put(
+        buf,
+        0,
+        0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20,
+    )
+    put(buf, 32, 0x2122232425262728 << 192)
+    assert!(
+        !raw_call_mock(
+            mock,
+            MockMsg::RevertWith { data: Bytes::from_payload(source: span(buf, 40)) },
+        ),
+    )
+    let rd = ReturnData::new()
+    assert!(rd.len() == 40)
+    // A word straddling the end is zero padded.
+    assert!(
+        rd.word_at(8) == 0x090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728,
+    )
+    assert!(rd.word_at(32) == 0x2122232425262728 << 192)
+    assert!(rd.byte_at(39) == 0x28)
+    assert!(rd.byte_at(40) == 0)
+    // Reads at or past the end are zero instead of halting.
+    assert!(rd.word_at(40) == 0)
+    assert!(rd.word_at(!(0 as u256)) == 0)
+    // A rebased view.
+    let tail = ReturnData::with_base(36)
+    assert!(tail.len() == 4)
+    assert!(tail.word_at(0) == 0x25262728 << 224)
+    assert!(ReturnData::with_base(41).len() == 0)
+    assert!(ReturnData::with_base(41).word_at(0) == 0)
+
+    // In-bounds copies work.
+    let out = scratch(8)
+    rd.copy_to_memory(dest: out, src_offset: 32, len: 8)
+    assert!(evm.mload(out) == 0x2122232425262728 << 192)
+    // Zero-length copies at the end of a view, including an empty view
+    // rebased past the end, are no-ops rather than halting.
+    rd.copy_to_memory(dest: out, src_offset: 40, len: 0)
+    ReturnData::with_base(41).copy_to_memory(dest: out, src_offset: 0, len: 0)
+    ReturnData::with_base(41).copy_to_memory_unchecked(
+        dest: out,
+        src_offset: 0,
+        len: 0,
+    )
+    assert!(evm.mload(out) == 0x2122232425262728 << 192)
+}
+
+#[test(should_revert)]
+fn test_returndata_copy_out_of_bounds_reverts() uses (evm: mut Evm) {
+    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    assert!(
+        !raw_call_mock(
+            mock,
+            MockMsg::FailInsufficient { available: 3, required: 4 },
+        ),
+    )
+    let out = scratch(64)
+    ReturnData::new().copy_to_memory(dest: out, src_offset: 60, len: 9)
+}
+
+#[test(should_revert)]
+fn test_returndata_decode_short_reverts() uses (evm: mut Evm) {
+    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    assert!(
+        !raw_call_mock(
+            mock,
+            MockMsg::FailInsufficient { available: 3, required: 4 },
+        ),
+    )
+    let _: (u256, u256, u256) = ReturnData::with_base(4).decode()
+}
+
+#[test]
+fn test_returndata_to_bytes() uses (evm: mut Evm) {
+    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+
+    // Unaligned data: the copy is exact and the padding is zero.
+    let buf = scratch(40)
+    put(
+        buf,
+        0,
+        0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20,
+    )
+    put(buf, 32, 0x2122232425262728 << 192)
+    assert!(
+        !raw_call_mock(
+            mock,
+            MockMsg::RevertWith { data: Bytes::from_payload(source: span(buf, 40)) },
+        ),
+    )
+    let bytes = ReturnData::new().to_bytes()
+    assert!(bytes.len() == 40)
+    assert!(bytes.encoded_size() == 96)
+    assert!(bytes.encoded_span().word_at(0) == 40)
+    assert!(
+        bytes.encoded_span().word_at(64) == 0x2122232425262728 << 192,
+    )
+    assert!(span_eq(bytes.payload_span(), span(buf, 40)))
+    assert!(
+        bytes == Bytes::from_payload(source: copy_returndata().span()),
+    )
+
+    // A rebased view copies from `base` on.
+    let tail = ReturnData::with_base(36).to_bytes()
+    assert!(tail.len() == 4 && tail.encoded_size() == 64)
+    assert!(tail.encoded_span().word_at(32) == 0x25262728 << 224)
+    let none = ReturnData::with_base(41).to_bytes()
+    assert!(none.len() == 0 && none.encoded_size() == 32)
+
+    // Word-aligned data needs no padding.
+    assert!(
+        !raw_call_mock(
+            mock,
+            MockMsg::FailInsufficient { available: 3, required: 4 },
+        ),
+    )
+    let aligned = ReturnData::with_base(4).to_bytes()
+    assert!(aligned.len() == 64 && aligned.encoded_size() == 96)
+    assert!(aligned.encoded_span().word_at(32) == 3)
+    assert!(aligned.encoded_span().word_at(64) == 4)
+    let whole = ReturnData::new().to_bytes()
+    assert!(
+        whole.len() == 68 && is_error<Insufficient>(whole.payload_span()),
+    )
+
+    // No returndata.
+    assert!(!raw_call_mock(mock, MockMsg::FailEmpty {}))
+    let empty = ReturnData::new().to_bytes()
+    assert!(empty.len() == 0 && empty.encoded_size() == 32)
+    assert!(empty.encoded_span().word_at(0) == 0)
+}

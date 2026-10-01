@@ -1191,6 +1191,24 @@ pub fn bubble_last_revert() -> ! {
     ops::revert(offset: ret.ptr(), len: ret.len())
 }
 
+/// Revert with the current returndata if there is any, otherwise with the
+/// custom error `error`.
+///
+/// This is OpenZeppelin's `Address.verifyCallResult` fallback: after a failed
+/// call, a callee's reason (custom error, `Error(string)`, `Panic`, raw bytes)
+/// is bubbled unchanged, and a callee that reverted without data (or a
+/// failure with no returndata, such as a call running out of gas) gets a
+/// descriptive error instead of an empty revert. The returndata is read
+/// directly from the EVM; the current returndata must be the failed call's.
+pub fn bubble_revert_or<E>(_ error: own E) -> !
+    where E: ErrorVariant<Sol> + Encode<Sol>
+{
+    if ops::returndatasize() == 0 {
+        revert_error(error)
+    }
+    bubble_last_revert()
+}
+
 /// Decode Solidity ABI data from an in-memory returndata buffer.
 pub fn decode_returndata<R>(_ ret: MemSpan) -> R
     where R: Decode<Sol> + AbiSize
@@ -1247,8 +1265,34 @@ pub fn revert<T>(_ value: own T) -> !
 pub fn revert_error<T>(_ error: own T) -> !
     where T: ErrorVariant<Sol> + Encode<Sol>
 {
-    let buffer = encode_calldata(<T as ErrorVariant<Sol>>::SELECTOR, error)
+    let buffer = encode_error(error)
     ops::revert(offset: buffer.ptr(), len: buffer.len())
+}
+
+/// Encode a custom error (4-byte selector + ABI-encoded fields) into freshly
+/// allocated memory without reverting.
+///
+/// The bytes are exactly what `revert_error(error)` reverts with. Encode the
+/// error ahead of time and revert later with `revert_bytes` when the revert
+/// must be cheap, for example after a call that may burn all forwarded gas
+/// and leave only the retained 1/64 for the failure path.
+pub fn encode_error<T>(_ error: own T) -> MemBuffer
+    where T: ErrorVariant<Sol> + Encode<Sol>
+{
+    encode_calldata(<T as ErrorVariant<Sol>>::SELECTOR, error)
+}
+
+/// Revert with `data` as the raw revert payload.
+///
+/// Use it to rethrow preserved revert data (for example
+/// `CallOutcome::returndata()`) or bytes pre-encoded with `encode_error`.
+pub fn revert_bytes(_ data: MemSpan) -> ! {
+    ops::revert(offset: data.ptr(), len: data.len())
+}
+
+/// Revert without revert data, like Solidity's `revert()`.
+pub fn revert_empty() -> ! {
+    ops::revert_empty()
 }
 
 impl Super for Evm {}
