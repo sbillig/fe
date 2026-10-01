@@ -10,6 +10,15 @@ note:
    │                  ^^^^^^^ -> goto_hover_bugs::AbiSize
 
 note: 
+   ┌─ goto_hover_bugs.fe:17:20
+   │
+17 │     type InitArgs: Encode<u256>
+   │                    ^^^^^^------
+   │                    │
+   │                    full segment (includes generics)
+   │                    -> goto_hover_bugs::Encode
+
+note: 
    ┌─ goto_hover_bugs.fe:50:14
    │
 50 │ fn create<C: Contract>() {
