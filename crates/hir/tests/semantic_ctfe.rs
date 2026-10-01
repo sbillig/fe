@@ -106,6 +106,40 @@ fn semantic_ctfe_rejects_references_to_a_returning_frame() {
     assert!(matches!(root, CtfeError::InvalidBorrow { .. }), "{error:?}");
 }
 
+/// Borrowing or reading one element of an interned constant must not copy
+/// the others, or a loop over a large constant takes quadratic time within
+/// its step budget. The evaluation runs on a worker thread under a deadline
+/// that linear projection meets with a wide margin and copying misses.
+#[test]
+fn semantic_ctfe_projects_interned_constants_in_linear_time() {
+    let (path, text) = semantic_ctfe_fixture("interned_projection_scaling.fe");
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(path, &text);
+        let (top_mod, _) = db.top_mod(file);
+        let func = find_func(&db, top_mod, "answer");
+        let result = match eval_body_owner_const(
+            &db,
+            BodyOwner::Func(func),
+            GenericSubst::for_body_owner(&db, BodyOwner::Func(func), vec![]),
+        ) {
+            EvalOutcome::Ready(value) => Ok(value.pretty_print(&db)),
+            outcome => Err(format!("{outcome:?}")),
+        };
+        sender.send(result).expect("test thread is waiting");
+    });
+    match receiver.recv_timeout(std::time::Duration::from_secs(60)) {
+        Ok(result) => assert_eq!(result.as_deref(), Ok("20000")),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("projecting an interned constant did not finish within 60 seconds")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("projecting an interned constant panicked")
+        }
+    }
+}
+
 #[test]
 fn semantic_ctfe_preserves_const_and_anonymous_result_modes() {
     let mut db = HirAnalysisTestDb::default();
@@ -531,7 +565,7 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
             SemConstValue::Scalar {
                 value: SemConstScalar::Bytes(bytes),
                 ..
-            } => bytes,
+            } => bytes.clone(),
             SemConstValue::Array { elems, .. } => elems
                 .iter()
                 .map(|elem| match elem.value(db) {
@@ -587,7 +621,7 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
             SemConstValue::Scalar {
                 value: SemConstScalar::Bool(flag),
                 ..
-            } => flag,
+            } => *flag,
             other => panic!("expected bool scalar const, got {other:?}"),
         }
     }
@@ -678,7 +712,7 @@ const fn high_word_string_as_bytes() -> [u8; 4] {
         SemConstValue::Scalar {
             value: SemConstScalar::Int { value },
             ..
-        } => assert_eq!(value, num_bigint::BigInt::from(0x01000000434f4f4cu64)),
+        } => assert_eq!(*value, num_bigint::BigInt::from(0x01000000434f4f4cu64)),
         other => panic!("expected int scalar const, got {other:?}"),
     }
 
@@ -731,7 +765,7 @@ const fn truncated_concat() -> [u8; 6] {
         SemConstValue::Scalar {
             value: SemConstScalar::Bytes(bytes),
             ..
-        } => assert_eq!(bytes, vec![65, 66, 67, 68, 69, 70]),
+        } => assert_eq!(*bytes, vec![65, 66, 67, 68, 69, 70]),
         SemConstValue::Array { elems, .. } => {
             let bytes = elems
                 .iter()

@@ -71,6 +71,21 @@ impl<'db> VerifiedConstValueId<'db> {
             _ => unreachable!("verified aggregate children requested from scalar"),
         }
     }
+
+    /// One child of a verified aggregate, found without reading its siblings.
+    pub(super) fn aggregate_child(self, db: &'db dyn HirAnalysisDb, idx: usize) -> Option<Self> {
+        match self.0.value(db) {
+            SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => {
+                elems.get(idx)
+            }
+            SemConstValue::Struct { fields, .. } | SemConstValue::Enum { fields, .. } => {
+                fields.get(idx)
+            }
+            _ => unreachable!("verified aggregate child requested from scalar"),
+        }
+        .copied()
+        .map(Self)
+    }
 }
 
 impl<'db> SConst<'db> {

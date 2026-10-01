@@ -693,7 +693,7 @@ const fn empty() -> [Maybe<u8>; 0] { Marker<0>::VALUES }
             panic!("expected array")
         };
         assert_eq!(elems.len(), len);
-        for elem in elems {
+        for &elem in elems {
             let payloads = if name == "nested" {
                 let SemConstValue::Tuple { elems, .. } = elem.value(&db) else {
                     panic!("expected tuple")
@@ -976,7 +976,7 @@ fn outer<const A: usize, const B: usize>() {}
         else {
             panic!("expected enum")
         };
-        assert_eq!(enum_ty, ty.generic_args(&db)[0]);
+        assert_eq!(*enum_ty, ty.generic_args(&db)[0]);
         assert_eq!(enum_ty.generic_args(&db), [args[1], args[0]]);
         assert_eq!(
             sem_const_ty(&db, fields[0]).generic_args(&db),

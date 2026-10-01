@@ -110,7 +110,7 @@ pub(crate) fn const_scalar_from_value<'db>(
         | SemConstValue::Enum { .. }
         | SemConstValue::Description(..) => None,
         SemConstValue::Scalar { value, .. } => match value {
-            SemConstScalar::Bool(value) => Some(ConstScalar::Bool(value)),
+            SemConstScalar::Bool(value) => Some(ConstScalar::Bool(*value)),
             SemConstScalar::Int { value } => {
                 let scalar = scalar_class_for_ty_in_env(db, env, ty)?;
                 match scalar.repr {
@@ -118,12 +118,12 @@ pub(crate) fn const_scalar_from_value<'db>(
                     ScalarRepr::Int { bits, signed } => Some(ConstScalar::Int {
                         bits,
                         signed,
-                        words: encode_int_words(&value, bits, signed),
+                        words: encode_int_words(value, bits, signed),
                     }),
                     ScalarRepr::FixedBytes { .. } => None,
                     ScalarRepr::Address { bits } => Some(ConstScalar::Address {
                         bits,
-                        bytes: encode_int_words(&value, bits, false),
+                        bytes: encode_int_words(value, bits, false),
                     }),
                 }
             }
@@ -275,7 +275,7 @@ fn lower_const_node<'db>(
         } => {
             let layout = layout_for_ty_in_env(db, env, ty);
             let mut nodes = Vec::with_capacity(fields.len() + 1);
-            nodes.push(ConstNode::Scalar(enum_tag_scalar(db, layout, variant)?));
+            nodes.push(ConstNode::Scalar(enum_tag_scalar(db, layout, *variant)?));
             nodes.extend(
                 fields
                     .iter()

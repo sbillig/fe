@@ -175,7 +175,7 @@ fn fold_sem_const<'db, F>(
 where
     F: TyFolder<'db>,
 {
-    if let SemConstValue::Description(term) = value.value(db) {
+    if let &SemConstValue::Description(term) = value.value(db) {
         let folded = folder.fold_ty(db, TyId::const_ty(db, term));
         let TyData::ConstTy(term) = folded.data(db) else {
             unreachable!("folding a dependent description lost its constant representation")
@@ -186,12 +186,12 @@ where
     let value = match value.value(db) {
         SemConstValue::Unit => SemConstValue::Unit,
         SemConstValue::Scalar { ty, value } => SemConstValue::Scalar {
-            ty: folder.fold_ty(db, ty),
-            value,
+            ty: folder.fold_ty(db, *ty),
+            value: value.clone(),
         },
         SemConstValue::Description(..) => unreachable!(),
         SemConstValue::Tuple { ty, elems } => SemConstValue::Tuple {
-            ty: folder.fold_ty(db, ty),
+            ty: folder.fold_ty(db, *ty),
             elems: elems
                 .iter()
                 .copied()
@@ -199,7 +199,7 @@ where
                 .collect(),
         },
         SemConstValue::Struct { ty, fields } => SemConstValue::Struct {
-            ty: folder.fold_ty(db, ty),
+            ty: folder.fold_ty(db, *ty),
             fields: fields
                 .iter()
                 .copied()
@@ -207,7 +207,7 @@ where
                 .collect(),
         },
         SemConstValue::Array { ty, elems } => SemConstValue::Array {
-            ty: folder.fold_ty(db, ty),
+            ty: folder.fold_ty(db, *ty),
             elems: elems
                 .iter()
                 .copied()
@@ -219,8 +219,8 @@ where
             variant,
             fields,
         } => SemConstValue::Enum {
-            ty: folder.fold_ty(db, ty),
-            variant,
+            ty: folder.fold_ty(db, *ty),
+            variant: *variant,
             fields: fields
                 .iter()
                 .copied()

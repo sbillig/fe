@@ -26,6 +26,7 @@ use super::ir::VariantIndex;
 #[salsa::interned]
 #[derive(Debug)]
 pub struct SemConstId<'db> {
+    #[return_ref]
     pub value: SemConstValue<'db>,
 }
 
@@ -139,7 +140,7 @@ pub fn sem_const_ty<'db>(db: &'db dyn HirAnalysisDb, value: SemConstId<'db>) -> 
         | SemConstValue::Tuple { ty, .. }
         | SemConstValue::Struct { ty, .. }
         | SemConstValue::Array { ty, .. }
-        | SemConstValue::Enum { ty, .. } => ty,
+        | SemConstValue::Enum { ty, .. } => *ty,
     }
 }
 
@@ -148,7 +149,7 @@ pub(crate) fn retype_sem_const_description<'db>(
     value: SemConstId<'db>,
     ty: TyId<'db>,
 ) -> Option<SemConstId<'db>> {
-    let value = match value.value(db) {
+    let value = match value.value(db).clone() {
         SemConstValue::Unit if ty == TyId::unit(db) => SemConstValue::Unit,
         SemConstValue::Unit => return None,
         SemConstValue::Scalar { value, .. } => SemConstValue::Scalar { ty, value },
@@ -266,13 +267,13 @@ fn verify_sem_const_shape_impl<'db>(
         }
         SemConstValue::Description(..) => Err("verified constant contains a dependent value"),
         SemConstValue::Scalar { ty, value } => {
-            let ty = ty.as_view(db).unwrap_or(ty);
+            let ty = ty.as_view(db).unwrap_or(*ty);
             match value {
                 SemConstScalar::Bool(_) if ty.is_bool(db) => Ok(()),
                 SemConstScalar::Int { value }
                     if int_ty_shape(db, ty).is_some() || ty.is_integral_var(db) =>
                 {
-                    if normalize_int(db, ty, value.clone()) == value {
+                    if normalize_int(db, ty, value.clone()) == *value {
                         Ok(())
                     } else {
                         Err("constant integer exceeds its declared type")
@@ -293,14 +294,14 @@ fn verify_sem_const_shape_impl<'db>(
             }
         }
         SemConstValue::Tuple { ty, elems } => {
-            let ty = ty.as_view(db).unwrap_or(ty);
+            let ty = ty.as_view(db).unwrap_or(*ty);
             if !ty.is_tuple(db) {
                 return Err("constant tuple payload has a non-tuple type");
             }
-            verify_sem_const_children(db, &elems, ty.field_types(db).into_iter(), allow_dependent)
+            verify_sem_const_children(db, elems, ty.field_types(db).into_iter(), allow_dependent)
         }
         SemConstValue::Struct { ty, fields } => {
-            let ty = ty.as_view(db).unwrap_or(ty);
+            let ty = ty.as_view(db).unwrap_or(*ty);
             // A function item value is a fieldless record of its item type.
             if ty.is_func(db) && fields.is_empty() {
                 return Ok(());
@@ -308,10 +309,10 @@ fn verify_sem_const_shape_impl<'db>(
             if !ty.is_struct(db) {
                 return Err("constant record payload has a non-record type");
             }
-            verify_sem_const_children(db, &fields, ty.field_types(db).into_iter(), allow_dependent)
+            verify_sem_const_children(db, fields, ty.field_types(db).into_iter(), allow_dependent)
         }
         SemConstValue::Array { ty, elems } => {
-            let ty = ty.as_view(db).unwrap_or(ty);
+            let ty = ty.as_view(db).unwrap_or(*ty);
             if !ty.is_array(db) {
                 return Err("constant array payload has a non-array type");
             }
@@ -325,7 +326,7 @@ fn verify_sem_const_shape_impl<'db>(
                 .ok_or("constant array type has no element type")?;
             verify_sem_const_children(
                 db,
-                &elems,
+                elems,
                 std::iter::repeat_n(elem_ty, elems.len()),
                 allow_dependent,
             )
@@ -335,7 +336,7 @@ fn verify_sem_const_shape_impl<'db>(
             variant,
             fields,
         } => {
-            let ty = ty.as_view(db).unwrap_or(ty);
+            let ty = ty.as_view(db).unwrap_or(*ty);
             let enum_ = ty
                 .as_enum(db)
                 .ok_or("constant enum payload has a non-enum type")?;
@@ -349,7 +350,7 @@ fn verify_sem_const_shape_impl<'db>(
                 .into_iter()
                 .map(|field| field.instantiate(db, args))
                 .collect::<Vec<_>>();
-            verify_sem_const_children(db, &fields, field_tys.into_iter(), allow_dependent)
+            verify_sem_const_children(db, fields, field_tys.into_iter(), allow_dependent)
         }
     }
 }
@@ -426,16 +427,16 @@ pub fn sem_const_eq<'db>(
                 value: rhs_value,
             },
         ) => {
-            if is_string_like(db, lhs_ty)
-                && is_string_like(db, rhs_ty)
+            if is_string_like(db, *lhs_ty)
+                && is_string_like(db, *rhs_ty)
                 && let (SemConstScalar::Bytes(lhs_bytes), SemConstScalar::Bytes(rhs_bytes)) =
-                    (&lhs_value, &rhs_value)
+                    (lhs_value, rhs_value)
             {
                 return fixed_string_bytes_eq(
                     db,
-                    lhs_ty,
+                    *lhs_ty,
                     lhs_bytes.as_slice(),
-                    rhs_ty,
+                    *rhs_ty,
                     rhs_bytes.as_slice(),
                 );
             }
@@ -449,8 +450,8 @@ pub fn sem_const_eq<'db>(
                 && if lhs_term == rhs_term {
                     true
                 } else {
-                    let lhs_value = sem_const_from_ty(db, TyId::const_ty(db, lhs_term));
-                    let rhs_value = sem_const_from_ty(db, TyId::const_ty(db, rhs_term));
+                    let lhs_value = sem_const_from_ty(db, TyId::const_ty(db, *lhs_term));
+                    let rhs_value = sem_const_from_ty(db, TyId::const_ty(db, *rhs_term));
                     match (lhs_value, rhs_value) {
                         (Some(lhs_value), Some(rhs_value))
                             if !matches!(lhs_value.value(db), SemConstValue::Description(..))
@@ -652,12 +653,12 @@ fn reify_runtime_const_impl<'db>(
             let ty = if ty.pretty_print(db) == "{integer}" || ty.is_integral_var(db) {
                 expected_ty
             } else {
-                ty
+                *ty
             };
             match value {
-                SemConstScalar::Bool(value) => bool_const(db, value),
-                SemConstScalar::Int { value } => int_const(db, ty, value),
-                SemConstScalar::Bytes(bytes) => bytes_const(db, ty, bytes),
+                SemConstScalar::Bool(value) => bool_const(db, *value),
+                SemConstScalar::Int { value } => int_const(db, ty, value.clone()),
+                SemConstScalar::Bytes(bytes) => bytes_const(db, ty, bytes.clone()),
             }
         }
         SemConstValue::Description(term) => {
@@ -668,7 +669,7 @@ fn reify_runtime_const_impl<'db>(
             } else {
                 ty
             };
-            let evaluated = evaluate_type_level_const_ty(db, term, Some(ty));
+            let evaluated = evaluate_type_level_const_ty(db, *term, Some(ty));
             let value = sem_const_from_ty(db, TyId::const_ty(db, evaluated))?;
             if matches!(value.value(db), SemConstValue::Description(..)) {
                 return None;
@@ -761,7 +762,7 @@ fn reify_runtime_const_impl<'db>(
             enum_const(
                 db,
                 ty,
-                variant,
+                *variant,
                 fields
                     .iter()
                     .copied()

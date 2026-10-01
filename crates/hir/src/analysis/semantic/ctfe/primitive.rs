@@ -138,7 +138,7 @@ pub(crate) fn execute_scalar_cast<'db>(
             value: SemConstScalar::Bool(value),
             ..
         } if int_ty_shape(db, result_ty).is_some() => {
-            Ok(int_const(db, result_ty, BigInt::from(u8::from(value))))
+            Ok(int_const(db, result_ty, BigInt::from(u8::from(*value))))
         }
         SemConstValue::Scalar {
             value: SemConstScalar::Int { value },
@@ -147,13 +147,13 @@ pub(crate) fn execute_scalar_cast<'db>(
         SemConstValue::Scalar {
             value: SemConstScalar::Int { value },
             ..
-        } if int_ty_shape(db, result_ty).is_some() => Ok(int_const(db, result_ty, value)),
+        } if int_ty_shape(db, result_ty).is_some() => Ok(int_const(db, result_ty, value.clone())),
         SemConstValue::Scalar {
             value: SemConstScalar::Int { value },
             ..
         } if result_ty.is_string(db) => {
             fixed_string_capacity_bytes(db, result_ty).ok_or(PrimitiveFault::UnsupportedCast)?;
-            let word = normalize_int_to_shape(value, 256, false);
+            let word = normalize_int_to_shape(value.clone(), 256, false);
             let (_, bytes) = word.to_bytes_be();
             let mut padded = vec![0; 32 - bytes.len()];
             padded.extend(bytes);
@@ -180,7 +180,7 @@ pub(crate) fn execute_scalar_cast<'db>(
         SemConstValue::Scalar {
             value: SemConstScalar::Bytes(bytes),
             ..
-        } => Ok(bytes_const(db, result_ty, bytes)),
+        } => Ok(bytes_const(db, result_ty, bytes.clone())),
         _ => Err(PrimitiveFault::InvalidCast),
     }
 }

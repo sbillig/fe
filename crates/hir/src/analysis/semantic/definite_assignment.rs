@@ -503,7 +503,7 @@ pub(crate) fn literal_bool_cond<'db>(
                     SemConstValue::Scalar {
                         value: SemConstScalar::Bool(value),
                         ..
-                    } => Some(value),
+                    } => Some(*value),
                     _ => None,
                 };
             }

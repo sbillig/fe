@@ -179,7 +179,7 @@ where
 {
     let db = visitor.db();
     match value.value(db) {
-        SemConstValue::Description(term) => visitor.visit_ty(TyId::const_ty(db, term)),
+        SemConstValue::Description(term) => visitor.visit_ty(TyId::const_ty(db, *term)),
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => {
             for child in elems.iter().copied() {
                 visitor.visit_ty(sem_const_ty(db, child));

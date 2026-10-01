@@ -703,7 +703,7 @@ fn static_assert_bool_value<'db>(
     else {
         return None;
     };
-    Some(value)
+    Some(*value)
 }
 
 /// Whether a const body with these diagnostics can still be evaluated: it

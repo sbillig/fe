@@ -503,7 +503,7 @@ fn canonicalize_const_value<'db>(
     match value.value(db) {
         SemConstValue::Unit | SemConstValue::Scalar { .. } => value,
         SemConstValue::Description(term) => {
-            let evaluated = evaluate_type_level_const_ty(db, term, Some(term.ty(db)));
+            let evaluated = evaluate_type_level_const_ty(db, *term, Some(term.ty(db)));
             let Some(evaluated) = sem_const_from_ty(db, TyId::const_ty(db, evaluated)) else {
                 return value;
             };
@@ -520,7 +520,7 @@ fn canonicalize_const_value<'db>(
         }
         SemConstValue::Tuple { ty, elems } => tuple_const(
             db,
-            ty,
+            *ty,
             elems
                 .iter()
                 .copied()
@@ -530,7 +530,7 @@ fn canonicalize_const_value<'db>(
         ),
         SemConstValue::Struct { ty, fields } => struct_const(
             db,
-            ty,
+            *ty,
             fields
                 .iter()
                 .copied()
@@ -540,7 +540,7 @@ fn canonicalize_const_value<'db>(
         ),
         SemConstValue::Array { ty, elems } => array_const(
             db,
-            ty,
+            *ty,
             elems
                 .iter()
                 .copied()
@@ -554,8 +554,8 @@ fn canonicalize_const_value<'db>(
             fields,
         } => enum_const(
             db,
-            ty,
-            variant,
+            *ty,
+            *variant,
             fields
                 .iter()
                 .copied()

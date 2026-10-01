@@ -31,7 +31,18 @@ const fn through_ref(_ idx: usize) -> u8 {
     inner(ref values, idx)
 }
 
+const VALUES: [S; 2] = [S { x: 1 }, S { x: 2 }]
+
+// A local copied from a constant keeps it interned, so the borrow is checked
+// against the interned array.
+const fn from_const(_ idx: usize) -> u8 {
+    let values = VALUES
+    let a = ref values[idx].x
+    42
+}
+
 const BORROWED: u8 = borrowed(3)
 const BORROWED_MUT: u8 = borrowed_mut(3)
 const RECEIVER: u8 = receiver(3)
 const THROUGH_REF: u8 = through_ref(3)
+const FROM_CONST: u8 = from_const(3)
