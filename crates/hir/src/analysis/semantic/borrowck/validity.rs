@@ -4,7 +4,7 @@ use std::ops::BitOrAssign;
 use super::solver::Borrowck;
 use super::summary::CallInputs;
 use crate::analysis::semantic::capability::{
-    external::ExternalOrigin,
+    external::{ExternalOrigin, MemoryOffset},
     guard::ValueOccurrence,
     index::BinderScope,
     loan::CapabilityRef,
@@ -123,7 +123,7 @@ fn physical_base<'a, 'db>(mut source: &'a SourceExpr<'db>) -> &'a SourceExpr<'db
         && source.source.dereferences().is_empty()
         && let ExternalOrigin::Memory {
             base,
-            element: None,
+            offset: MemoryOffset::Zero,
             ..
         } = &source.source.origin
     {

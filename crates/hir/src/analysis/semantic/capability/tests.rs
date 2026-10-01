@@ -1,3 +1,5 @@
+use rustc_hash::FxHashSet;
+
 use crate::analysis::semantic::capability::test_roots;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -6,7 +8,11 @@ use std::{
 
 use super::{
     birth::AllocationBirth,
-    external::{ClobberCondition, ExternalOrigin, ExternalSource, ReferentContract},
+    external::{
+        ClobberCondition, ExternalOrigin, ExternalSource, FeedbackPlaces, FeedbackRepeats,
+        FeedbackSlot, MemoryOffset, ReferentContract, feedback_clause_guard,
+        is_existential_renaming,
+    },
     footprint::AccessExtent,
     guard::{ChoiceKey, Guard, ValueOccurrence},
     handle::{
@@ -162,8 +168,13 @@ fn typed_storage_matching_binds_an_erased_zero_selector() {
     };
     let empty = BinderScope::default();
     let (family_scope, member) = empty.bind(IndexNamespace::InputSlot);
-    let family = ExternalSource::memory(&db, source(base.clone()), ty, Some((ty, member)));
-    let zero = ExternalSource::memory(&db, source(base.clone()), ty, None);
+    let family = ExternalSource::memory(
+        &db,
+        source(base.clone()),
+        ty,
+        MemoryOffset::Element(ty, member),
+    );
+    let zero = ExternalSource::memory(&db, source(base.clone()), ty, MemoryOffset::Zero);
     assert_eq!(zero, base);
     let witness = family
         .match_instance(&family_scope, &zero, &empty)
@@ -178,7 +189,12 @@ fn typed_storage_matching_binds_an_erased_zero_selector() {
     );
 
     let index = runtime(1);
-    let symbolic = ExternalSource::memory(&db, source(base.clone()), ty, Some((ty, index)));
+    let symbolic = ExternalSource::memory(
+        &db,
+        source(base.clone()),
+        ty,
+        MemoryOffset::Element(ty, index),
+    );
     let witness = base
         .match_instance(&empty, &symbolic, &empty)
         .expect("base and same-type symbolic wrapper match conditionally");
@@ -224,10 +240,15 @@ fn typed_storage_matching_keeps_repeated_and_distinct_index_roles() {
     let contract = ReferentContract::memory(&db, byte);
     let base =
         ExternalSource::unknown(contract, AddressOccurrence::Summary(0), [generation].into());
-    let family = ExternalSource::memory(&db, SourceExpr::whole(base), word, Some((byte, element)));
+    let family = ExternalSource::memory(
+        &db,
+        SourceExpr::whole(base),
+        word,
+        MemoryOffset::Element(byte, element),
+    );
     let base =
         ExternalSource::unknown(contract, AddressOccurrence::Summary(0), [runtime(3)].into());
-    let request = ExternalSource::memory(&db, SourceExpr::whole(base), word, None);
+    let request = ExternalSource::memory(&db, SourceExpr::whole(base), word, MemoryOffset::Zero);
     let witness = family
         .match_instance(&family_scope, &request, &scope)
         .unwrap();
@@ -330,13 +351,13 @@ fn typed_storage_matching_keeps_alpha_roles_and_rejects_distinct_offsets() {
         &db,
         source.clone(),
         TyId::u256(&db),
-        Some((TyId::u8(&db), IndexExpr::Const(1))),
+        MemoryOffset::Element(TyId::u8(&db), IndexExpr::Const(1)),
     );
     let second = ExternalSource::memory(
         &db,
         source,
         TyId::u256(&db),
-        Some((TyId::u8(&db), IndexExpr::Const(2))),
+        MemoryOffset::Element(TyId::u8(&db), IndexExpr::Const(2)),
     );
     assert!(first.match_instance(&scope, &second, &scope).is_none());
     assert_ne!(
@@ -386,7 +407,7 @@ fn physical_offsets_do_not_prove_disjoint_wide_accesses() {
                     views: Default::default(),
                 },
                 TyId::u256(&db),
-                Some((TyId::u8(&db), IndexExpr::Const(offset))),
+                MemoryOffset::Element(TyId::u8(&db), IndexExpr::Const(offset)),
             )),
             RegionPath::default(),
         )
@@ -2541,7 +2562,7 @@ fn allocation_birth_selects_guarded_full_families_and_only_their_own_bytes() {
         &db,
         SourceExpr::whole(source.clone()),
         TyId::u8(&db),
-        Some((TyId::u8(&db), IndexExpr::Const(1))),
+        MemoryOffset::Element(TyId::u8(&db), IndexExpr::Const(1)),
     );
     assert_eq!(
         birth.selector(&RegionRoot::External(viewed), &scope()),
@@ -2661,7 +2682,7 @@ fn allocation_birth_selection_commutes_with_index_substitution() {
                         &db,
                         SourceExpr::whole(direct.clone()),
                         TyId::u8(&db),
-                        Some((TyId::u8(&db), IndexExpr::Const(1))),
+                        MemoryOffset::Element(TyId::u8(&db), IndexExpr::Const(1)),
                     );
                     let followed = direct.follow(RegionPath::default(), direct.contract, false);
                     for source in [direct, viewed, followed] {
@@ -3105,4 +3126,452 @@ fn substituted_projection_prunes_siblings_and_preserves_enum_and_index_domains()
             }
         }
     }
+}
+
+#[test]
+fn unknown_offsets_preserve_allocation_separation_without_proving_cell_identity() {
+    let db = HirAnalysisTestDb::default();
+    let byte = TyId::u8(&db);
+    let array = TyId::array_with_len(&db, TyId::u256(&db), 2);
+    let allocation = |choice| {
+        ExternalSource::allocation(
+            &db,
+            OpaqueHandleRef {
+                contract: OpaqueHandleContract {
+                    handle_ty: TyId::ptr_to(&db, byte),
+                    target_ty: byte,
+                    address_space: HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+                },
+                occurrence: AddressOccurrence::Summary(choice),
+                arguments: Box::new([]),
+            },
+        )
+    };
+    let base = allocation(0);
+    let family = ExternalSource::memory(
+        &db,
+        SourceExpr::whole(base.clone()),
+        array,
+        MemoryOffset::Unknown,
+    );
+    assert_eq!(family.fresh_allocation(), base.fresh_allocation());
+    let region = RegionSet::singleton(
+        &scope(),
+        RegionRoot::External(family.clone()),
+        RegionPath::default(),
+    );
+    assert!(region.definite_write().is_none());
+    let matched = family.match_instance(&scope(), &family, &scope()).unwrap();
+    assert!(matched.write.is_none());
+    assert!(matched.typed.is_none());
+    for (choice, expected) in [(0, false), (1, true)] {
+        let cell = ExternalSource::memory(
+            &db,
+            SourceExpr::whole(allocation(choice)),
+            array,
+            MemoryOffset::Element(byte, IndexExpr::Const(256)),
+        );
+        let cell =
+            RegionSet::singleton(&scope(), RegionRoot::External(cell), RegionPath::default());
+        assert_eq!(
+            region.overlap(&db, &cell) == OverlapResult::Disjoint,
+            expected
+        );
+    }
+    let first = region.project(&RegionPath::new([Projection::Index(IndexExpr::Const(0))]));
+    let second = region.project(&RegionPath::new([Projection::Index(IndexExpr::Const(1))]));
+    assert_ne!(first.overlap(&db, &second), OverlapResult::Disjoint);
+    assert!(first.proven_intersection(&second).is_empty());
+    for index in [IndexExpr::Const(1), runtime(2)] {
+        assert_eq!(
+            ExternalSource::memory(
+                &db,
+                SourceExpr::whole(family.clone()),
+                array,
+                MemoryOffset::Element(byte, index)
+            ),
+            family
+        );
+    }
+}
+
+#[test]
+fn feedback_widens_growing_offsets_but_preserves_invariant_sources() {
+    let db = HirAnalysisTestDb::default();
+    let ty = TyId::u256(&db);
+    let always = Guard::always(&scope());
+    let base = ExternalSource::input(
+        InputSource::slot(0, StructuralPath::default()),
+        ReferentContract::memory(&db, ty),
+        false,
+    );
+    let first = ExternalSource::memory(
+        &db,
+        SourceExpr::whole(base.clone()),
+        ty,
+        MemoryOffset::Element(ty, IndexExpr::Const(1)),
+    );
+    // Growth nests prior values: `first` is itself an offset of `base`.
+    let previous = feedback_sources([
+        (base.clone(), always.clone()),
+        (first.clone(), always.clone()),
+    ]);
+    assert!(
+        first
+            .widen_feedback_for(&db, &always, &previous, &FxHashSet::default())
+            .is_none()
+    );
+    let next = ExternalSource::memory(
+        &db,
+        SourceExpr::whole(first),
+        ty,
+        MemoryOffset::Element(ty, IndexExpr::Const(1)),
+    );
+    let widened = next
+        .widen_feedback_for(&db, &always, &previous, &FxHashSet::default())
+        .unwrap();
+    assert_eq!(
+        widened,
+        ExternalSource::memory(&db, SourceExpr::whole(base), ty, MemoryOffset::Unknown)
+    );
+    assert!(
+        widened
+            .widen_feedback_for(
+                &db,
+                &always,
+                &feedback_sources([(widened.clone(), always.clone())]),
+                &FxHashSet::default()
+            )
+            .is_none()
+    );
+}
+
+fn feedback_sources<'db>(
+    sources: impl IntoIterator<Item = (ExternalSource<'db>, Guard<'db>)>,
+) -> FeedbackPlaces<'db> {
+    let mut previous = FeedbackPlaces::default();
+    for (source, guard) in sources {
+        previous
+            .entry(SourceExpr::whole(source))
+            .or_default()
+            .insert(guard);
+    }
+    previous
+}
+
+/// Feedback of a whole source against one prior slot at the same path.
+trait WidenFeedbackFor<'db> {
+    fn widen_feedback_for(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        guard: &Guard<'db>,
+        previous: &FeedbackPlaces<'db>,
+        invariant_replacements: &FxHashSet<ExternalSource<'db>>,
+    ) -> Option<ExternalSource<'db>>;
+}
+
+impl<'db> WidenFeedbackFor<'db> for ExternalSource<'db> {
+    fn widen_feedback_for(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        guard: &Guard<'db>,
+        previous: &FeedbackPlaces<'db>,
+        invariant_replacements: &FxHashSet<ExternalSource<'db>>,
+    ) -> Option<ExternalSource<'db>> {
+        self.widen_feedback(
+            db,
+            &SourceExpr::whole(self.clone()),
+            guard,
+            &[FeedbackSlot {
+                pairs: Vec::new(),
+                places: previous,
+            }],
+            invariant_replacements,
+        )
+    }
+}
+
+#[test]
+fn feedback_recognizes_offset_growth_after_existential_renumbering() {
+    let db = HirAnalysisTestDb::default();
+    let ty = TyId::u256(&db);
+    let base = ExternalSource::input(
+        InputSource::slot(0, StructuralPath::default()),
+        ReferentContract::memory(&db, ty),
+        false,
+    );
+    let (outer, first_index) = scope().bind(IndexNamespace::Existential);
+    let (inner, renamed_index) = outer.bind(IndexNamespace::Existential);
+    let first = ExternalSource::memory(
+        &db,
+        SourceExpr::whole(base.clone()),
+        ty,
+        MemoryOffset::Element(ty, first_index),
+    );
+    let renamed = ExternalSource::memory(
+        &db,
+        SourceExpr::whole(base.clone()),
+        ty,
+        MemoryOffset::Element(ty, renamed_index),
+    );
+    let next = ExternalSource::memory(
+        &db,
+        SourceExpr::whole(renamed),
+        ty,
+        MemoryOffset::Element(ty, first_index),
+    );
+    let previous = feedback_sources([
+        (base.clone(), Guard::always(&scope())),
+        (first, Guard::always(&outer)),
+    ]);
+    assert_eq!(
+        next.widen_feedback_for(
+            &db,
+            &Guard::always(&inner),
+            &previous,
+            &FxHashSet::default()
+        )
+        .unwrap(),
+        ExternalSource::memory(&db, SourceExpr::whole(base), ty, MemoryOffset::Unknown)
+    );
+}
+
+#[test]
+fn feedback_matches_prior_places_by_referent_path() {
+    let db = HirAnalysisTestDb::default();
+    let ty = TyId::u256(&db);
+    let always = Guard::always(&scope());
+    let object = ExternalSource::input(
+        InputSource::slot(0, StructuralPath::default()),
+        ReferentContract::memory(&db, ty),
+        false,
+    );
+    let field = |index| SourceExpr {
+        source: object.clone(),
+        path: RegionPath::new([Projection::Field(FieldIndex(index))]),
+        views: Default::default(),
+        invalidated: false,
+    };
+    let offset = |base| {
+        ExternalSource::memory(
+            &db,
+            base,
+            ty,
+            MemoryOffset::Element(ty, IndexExpr::Const(1)),
+        )
+    };
+    // The loop held `obj.0` and then an offset of it.
+    let mut previous = FeedbackPlaces::default();
+    for place in [field(0), SourceExpr::whole(offset(field(0)))] {
+        previous.entry(place).or_default().insert(always.clone());
+    }
+    let slots = [FeedbackSlot {
+        pairs: Vec::new(),
+        places: &previous,
+    }];
+    for (field_index, grows) in [(1, false), (0, true)] {
+        // Offsetting a prior offset of `obj.0` is growth; the same expression
+        // over a different field of the same object is not.
+        let source = offset(SourceExpr::whole(offset(field(field_index))));
+        let widened = source.widen_feedback(
+            &db,
+            &SourceExpr::whole(source.clone()),
+            &always,
+            &slots,
+            &FxHashSet::default(),
+        );
+        assert_eq!(widened.is_some(), grows);
+    }
+}
+
+#[test]
+fn invariant_replacements_match_only_under_a_bijective_renaming() {
+    let (outer, x) = scope().bind(IndexNamespace::Existential);
+    let (_, y) = outer.bind(IndexNamespace::Existential);
+    let (outer, a) = scope().bind(IndexNamespace::Existential);
+    let (_, b) = outer.bind(IndexNamespace::Existential);
+    // A consistent renaming, also with repeated and fixed selectors.
+    assert!(is_existential_renaming(&[(x, b), (y, a), (x, b)]));
+    assert!(is_existential_renaming(&[
+        (x, x),
+        (IndexExpr::Const(1), IndexExpr::Const(1))
+    ]));
+    // One binder onto two, or two distinct binders collapsing onto one.
+    assert!(!is_existential_renaming(&[(x, a), (x, b)]));
+    assert!(!is_existential_renaming(&[(x, a), (y, a)]));
+    // Only existentials rename; other indices must agree exactly.
+    assert!(!is_existential_renaming(&[(x, IndexExpr::Const(0))]));
+    assert!(!is_existential_renaming(&[(runtime(1), runtime(2))]));
+}
+
+#[test]
+fn feedback_keeps_loop_invariant_guard_facts() {
+    let db = HirAnalysisTestDb::default();
+    let ty = TyId::u256(&db);
+    let always = Guard::always(&scope());
+    let base = ExternalSource::input(
+        InputSource::slot(0, StructuralPath::default()),
+        ReferentContract::memory(&db, ty),
+        false,
+    );
+    let offset = |base| {
+        ExternalSource::memory(
+            &db,
+            SourceExpr::whole(base),
+            ty,
+            MemoryOffset::Element(ty, IndexExpr::Const(1)),
+        )
+    };
+    let first = offset(base.clone());
+    let next = offset(first.clone());
+    let occurrence = ValueOccurrence::Value(NValueId::from_u32(7));
+    let choice = ChoiceKey::new(occurrence, StructuralPath::default());
+    // The prior offset and the current clause are separated by a runtime
+    // value or a choice made before the loop, so `next` cannot derive from it.
+    let separations = [
+        (
+            always
+                .with_equality(runtime(5), IndexExpr::Const(0))
+                .unwrap(),
+            always
+                .with_equality(runtime(5), IndexExpr::Const(1))
+                .unwrap(),
+        ),
+        (
+            always.with_boolean(choice.clone(), true).unwrap(),
+            always.with_boolean(choice, false).unwrap(),
+        ),
+    ];
+    for (prior, current) in separations {
+        for repeated in [false, true] {
+            let index = |index| repeated && index == runtime(5);
+            let occurrences = |candidate| repeated && candidate == occurrence;
+            let repeats = FeedbackRepeats {
+                index: &index,
+                occurrence: &occurrences,
+            };
+            let [always_guard, prior_guard, current_guard] = [&always, &prior, &current]
+                .map(|guard| feedback_clause_guard(guard, &always, repeats).unwrap());
+            let mut previous = FeedbackPlaces::default();
+            previous
+                .entry(SourceExpr::whole(base.clone()))
+                .or_default()
+                .insert(always_guard);
+            previous
+                .entry(SourceExpr::whole(first.clone()))
+                .or_default()
+                .insert(prior_guard);
+            let widened = next.widen_feedback(
+                &db,
+                &SourceExpr::whole(next.clone()),
+                &current_guard,
+                &[FeedbackSlot {
+                    pairs: Vec::new(),
+                    places: &previous,
+                }],
+                &FxHashSet::default(),
+            );
+            // Only a fact the loop may change is forgotten.
+            assert_eq!(widened.is_some(), repeated);
+        }
+    }
+}
+
+#[test]
+fn feedback_keeps_recomputed_offsets_with_contradictory_selectors() {
+    let db = HirAnalysisTestDb::default();
+    let ty = TyId::u256(&db);
+    let base = ExternalSource::input(
+        InputSource::slot(0, StructuralPath::default()),
+        ReferentContract::memory(&db, ty),
+        false,
+    );
+    // Constant selectors, both literal and existential under an equality guard.
+    let (outer, first_index) = scope().bind(IndexNamespace::Existential);
+    let (inner, inner_index) = outer.bind(IndexNamespace::Existential);
+    let previous_guard = Guard::always(&outer)
+        .with_equality(first_index, IndexExpr::Const(1))
+        .unwrap();
+    let current_guard = Guard::always(&inner)
+        .with_equality(inner_index, IndexExpr::Const(2))
+        .unwrap()
+        .with_equality(first_index, IndexExpr::Const(1))
+        .unwrap();
+    for (previous_index, previous_guard, inner_offset, outer_offset, current_guard) in [
+        (
+            IndexExpr::Const(1),
+            Guard::always(&scope()),
+            IndexExpr::Const(2),
+            IndexExpr::Const(1),
+            Guard::always(&scope()),
+        ),
+        (
+            first_index,
+            previous_guard,
+            inner_index,
+            first_index,
+            current_guard.clone(),
+        ),
+    ] {
+        let first = ExternalSource::memory(
+            &db,
+            SourceExpr::whole(base.clone()),
+            ty,
+            MemoryOffset::Element(ty, previous_index),
+        );
+        // `offset(offset(base, 2), 1)` is recomputed, not an offset of `first`.
+        let recomputed = ExternalSource::memory(
+            &db,
+            SourceExpr::whole(ExternalSource::memory(
+                &db,
+                SourceExpr::whole(base.clone()),
+                ty,
+                MemoryOffset::Element(ty, inner_offset),
+            )),
+            ty,
+            MemoryOffset::Element(ty, outer_offset),
+        );
+        let previous = feedback_sources([(first, previous_guard)]);
+        assert!(
+            recomputed
+                .widen_feedback_for(&db, &current_guard, &previous, &FxHashSet::default())
+                .is_none()
+        );
+    }
+    // A consistent selector is still recognized as growth.
+    let first = ExternalSource::memory(
+        &db,
+        SourceExpr::whole(base.clone()),
+        ty,
+        MemoryOffset::Element(ty, first_index),
+    );
+    let grown = ExternalSource::memory(
+        &db,
+        SourceExpr::whole(ExternalSource::memory(
+            &db,
+            SourceExpr::whole(base.clone()),
+            ty,
+            MemoryOffset::Element(ty, inner_index),
+        )),
+        ty,
+        MemoryOffset::Element(ty, first_index),
+    );
+    let consistent = Guard::always(&inner)
+        .with_equality(inner_index, IndexExpr::Const(1))
+        .unwrap();
+    let previous = feedback_sources([
+        (base.clone(), Guard::always(&scope())),
+        (
+            first,
+            Guard::always(&outer)
+                .with_equality(first_index, IndexExpr::Const(1))
+                .unwrap(),
+        ),
+    ]);
+    assert_eq!(
+        grown
+            .widen_feedback_for(&db, &consistent, &previous, &FxHashSet::default())
+            .unwrap(),
+        ExternalSource::memory(&db, SourceExpr::whole(base), ty, MemoryOffset::Unknown)
+    );
 }

@@ -1,7 +1,9 @@
 //! Static borrow definitions and exact, parameterized occurrences held by values.
+use rustc_hash::FxHashSet;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
+    external::{ExternalSource, FeedbackRepeats, FeedbackSlot},
     guard::{Guard, ValueOccurrence},
     index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     region::RegionSet,
@@ -98,6 +100,24 @@ impl<'db> CapabilityRef<'db> {
                     .collect()
             }
             Self::Address(_) | Self::Invalidated { .. } => Vec::new(),
+        }
+    }
+
+    /// See `RegionSet::widen_feedback`. Native capabilities
+    /// keep their conditions, which decide whether invalidation is deferred.
+    pub(super) fn widen_feedback(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        domain: &Guard<'db>,
+        repeats: FeedbackRepeats<'_, 'db>,
+        previous: &[FeedbackSlot<'_, 'db>],
+        invariant_replacements: &FxHashSet<ExternalSource<'db>>,
+    ) -> Option<Self> {
+        match self {
+            Self::Address(region) => region
+                .widen_feedback(db, domain, repeats, previous, invariant_replacements)
+                .map(Self::Address),
+            _ => None,
         }
     }
 

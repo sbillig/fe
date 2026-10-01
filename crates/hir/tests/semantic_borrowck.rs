@@ -10631,3 +10631,1041 @@ fn disjoint() {
         "{diagnostics}"
     );
 }
+
+#[test]
+fn straight_line_pointer_offsets_preserve_allocation_separation() {
+    for depth in [4, 5, 12] {
+        let offsets = (1..=depth)
+            .map(|index| format!("let p{index} = ptr::offset(p{}, 1)\n", index - 1))
+            .collect::<String>();
+        for forwarded in [false, true] {
+            for aliases in [false, true] {
+                let pointer = if forwarded {
+                    "let pointer = forward(base)".to_owned()
+                } else {
+                    format!("let p0 = base\n{offsets}let pointer = p{depth}")
+                };
+                let other = if aliases {
+                    "pointer"
+                } else {
+                    "ptr::alloc<u256>()"
+                };
+                let source = format!(
+                    r#"
+use core::ptr
+fn advance(_ p0: *u256) -> *u256 {{
+    {offsets}
+    p{depth}
+}}
+fn forward(_ pointer: *u256) -> *u256 {{ advance(pointer) }}
+fn inspect() {{
+    let base = ptr::cast<u8, u256>(ptr::alloc_bytes(1024))
+    {pointer}
+    let other = {other}
+    *other = 1
+    let held = mut *other
+    *pointer = 3
+    held = 4
+}}
+"#
+                );
+                let diagnostics = checked_borrow_diags(&source);
+                assert_eq!(diagnostics.is_empty(), !aliases, "{source}\n{diagnostics}");
+                if aliases {
+                    assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn loop_pointer_offsets_preserve_allocation_separation() {
+    for offset in ["ptr::offset(pointer, 1)", "ptr::offset_bytes(pointer, 32)"] {
+        for aliases in [false, true] {
+            let other = if aliases {
+                "base"
+            } else {
+                "ptr::alloc<u256>()"
+            };
+            let source = format!(
+                r#"
+use core::ptr
+fn advance(_ base: *u256, n: u256) -> *u256 {{
+    let mut pointer = base
+    let mut i: u256 = 0
+    while i < n {{
+        pointer = {offset}
+        i += 1
+    }}
+    pointer
+}}
+fn forward(_ base: *u256, n: u256) -> *u256 {{ advance(base, n) }}
+fn inspect(n: u256) {{
+    let base = ptr::cast<u8, u256>(ptr::alloc_bytes(1024))
+    let other = {other}
+    *other = 1
+    let held = mut *other
+    let pointer = forward(base, n)
+    *pointer = 3
+    held = 4
+}}
+"#
+            );
+            let diagnostics = checked_borrow_diags(&source);
+            assert_eq!(diagnostics.is_empty(), !aliases, "{source}\n{diagnostics}");
+            if aliases {
+                assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+            }
+        }
+    }
+}
+
+#[test]
+fn unrelated_loops_preserve_conditional_pointer_replacements() {
+    for (loops, result) in [
+        ("", "pointer"),
+        ("let mut i: u256 = 0\nwhile i < n { i += 1 }", "pointer"),
+        (
+            "let mut i: u256 = 0\nwhile i < n {\nlet mut j: u256 = 0\nwhile j < n { j += 1 }\ni += 1\n}",
+            "pointer",
+        ),
+        (
+            "let mut result = ptr::cast<u8, u256>(destination)\nlet mut i: u256 = 0\nwhile i < n {\nresult = pointer\ni += 1\n}",
+            "result",
+        ),
+    ] {
+        for call in [
+            "work(slot, destination, n: 2)",
+            "forward(slot, destination, n: 2)",
+        ] {
+            for aliases in [false, true] {
+                let destination = if aliases {
+                    "ptr::byte_ptr(slot)"
+                } else {
+                    "ptr::alloc_bytes(32)"
+                };
+                let source = format!(
+                    r#"
+use core::ptr
+fn work(slot: **u256, destination: *u8, n: u256) -> *u256 {{
+    ptr::zero_bytes(destination, 32)
+    let pointer = *slot
+    {loops}
+    {result}
+}}
+fn forward(slot: **u256, destination: *u8, n: u256) -> *u256 {{
+    work(slot, destination, n)
+}}
+fn inspect() {{
+    let owner = ptr::alloc<u256>()
+    *owner = 7
+    let slot = ptr::alloc<*u256>()
+    *slot = owner
+    let destination = {destination}
+    let other = ptr::alloc<u256>()
+    *other = 1
+    let held = mut *other
+    let pointer = {call}
+    *pointer = 3
+    held = 4
+}}
+"#
+                );
+                let diagnostics = checked_borrow_diags(&source);
+                assert_eq!(diagnostics.is_empty(), !aliases, "{source}\n{diagnostics}");
+                if aliases {
+                    assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn unrelated_loops_preserve_native_invalidation_obligations() {
+    for call in [
+        "work(slot, destination, n: 2)",
+        "forward(slot, destination, n: 2)",
+    ] {
+        for aliases in [false, true] {
+            let destination = if aliases {
+                "ptr::byte_ptr(slot)"
+            } else {
+                "ptr::alloc_bytes(32)"
+            };
+            let source = format!(
+                r#"
+use core::ptr
+fn work(slot: *ref u256, destination: *u8, n: u256) -> ref u256 {{
+    ptr::zero_bytes(destination, 32)
+    let pointer = *slot
+    let mut i: u256 = 0
+    while i < n {{ i += 1 }}
+    pointer
+}}
+fn forward(slot: *ref u256, destination: *u8, n: u256) -> ref u256 {{
+    work(slot, destination, n)
+}}
+fn inspect() -> u256 {{
+    let owner = ptr::alloc<u256>()
+    *owner = 7
+    let slot = ptr::alloc<ref u256>()
+    *slot = ref *owner
+    let destination = {destination}
+    let pointer = {call}
+    pointer
+}}
+"#
+            );
+            let diagnostics = checked_borrow_diags(&source);
+            assert_eq!(diagnostics.is_empty(), !aliases, "{source}\n{diagnostics}");
+            if aliases {
+                assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+            }
+        }
+    }
+}
+
+#[test]
+fn loop_recomputed_pointer_offsets_converge_and_keep_allocation_separation() {
+    for initial in [
+        "base",
+        "ptr::offset(base, 1)",
+        "ptr::offset(ptr::offset(base, 2), 1)",
+    ] {
+        for aliases in [false, true] {
+            let other = if aliases {
+                "pointer"
+            } else {
+                "ptr::alloc<u256>()"
+            };
+            let source = format!(
+                r#"
+use core::ptr
+fn advance(_ base: *u256, n: u256) -> *u256 {{
+    let mut pointer = {initial}
+    let mut i: u256 = 0
+    while i < n {{
+        pointer = ptr::offset(ptr::offset(base, 2), 1)
+        i += 1
+    }}
+    pointer
+}}
+fn inspect(n: u256) {{
+    let base = ptr::cast<u8, u256>(ptr::alloc_bytes(1024))
+    let pointer = advance(base, n)
+    let other = {other}
+    *other = 1
+    let held = mut *other
+    *pointer = 3
+    held = 4
+}}
+"#
+            );
+            let diagnostics = checked_borrow_diags(&source);
+            assert_eq!(diagnostics.is_empty(), !aliases, "{source}\n{diagnostics}");
+            if aliases {
+                assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+            }
+        }
+    }
+}
+
+#[test]
+fn writes_through_conditional_replacements_keep_their_prerequisite() {
+    // Offsets and casts of the replaced pointer keep its prerequisite too.
+    for (call, returned) in [
+        ("work(slot, second, destination)", "*second"),
+        ("forward(slot, second, destination)", "*second"),
+        ("work(slot, second, destination)", "ptr::offset(*second, 1)"),
+        (
+            "forward(slot, second, destination)",
+            "ptr::cast<u8, u256>(ptr::offset_bytes(ptr::byte_ptr(*second), 32))",
+        ),
+    ] {
+        for aliases in [false, true] {
+            let destination = if aliases {
+                "ptr::byte_ptr(slot)"
+            } else {
+                "ptr::alloc_bytes(32)"
+            };
+            let source = format!(
+                r#"
+use core::ptr
+fn work(slot: **u256, second: **u256, destination: *u8) -> *u256 {{
+    ptr::zero_bytes(destination, 32)
+    let pointer = *slot
+    ptr::zero_bytes(ptr::byte_ptr(pointer), 32)
+    {returned}
+}}
+fn forward(slot: **u256, second: **u256, destination: *u8) -> *u256 {{
+    work(slot, second, destination)
+}}
+fn inspect() {{
+    let owner = ptr::alloc<u256>()
+    *owner = 7
+    let slot = ptr::alloc<*u256>()
+    *slot = owner
+    let target = ptr::alloc<u256>()
+    *target = 8
+    let second = ptr::alloc<*u256>()
+    *second = target
+    let destination = {destination}
+    let other = ptr::alloc<u256>()
+    *other = 1
+    let held = mut *other
+    let pointer = {call}
+    *pointer = 3
+    held = 4
+}}
+"#
+            );
+            let diagnostics = checked_borrow_diags(&source);
+            assert_eq!(diagnostics.is_empty(), !aliases, "{source}\n{diagnostics}");
+            if aliases {
+                assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+            }
+        }
+    }
+}
+
+#[test]
+fn loop_feedback_matches_pointer_sources_by_structural_slot() {
+    for (first, body, aliases) in [
+        (
+            "ptr::alloc_bytes(32)",
+            "pair.first = ptr::offset_bytes(pair.second, 32)",
+            false,
+        ),
+        (
+            "ptr::alloc_bytes(32)",
+            "pair = Pair { first: ptr::offset_bytes(pair.second, 32), second: pair.second }",
+            false,
+        ),
+        // A leaf that grows from its own prior value is still widened.
+        (
+            "base",
+            "pair.first = ptr::offset_bytes(pair.first, 32)",
+            true,
+        ),
+    ] {
+        for summary in [false, true] {
+            let make = format!(
+                "let mut pair = Pair {{ first: {first}, second: base }}
+    let mut i: u256 = 0
+    while i < n {{
+        {body}
+        i += 1
+    }}"
+            );
+            let (helper, call) = if summary {
+                (
+                    format!(
+                        "fn advance(_ base: *u8, n: u256) -> Pair {{\n    {make}\n    pair\n}}"
+                    ),
+                    "let pair = advance(base, n)".to_owned(),
+                )
+            } else {
+                (String::new(), make)
+            };
+            let source = format!(
+                r#"
+use core::ptr
+struct Pair {{ first: *u8, second: *u8 }}
+{helper}
+fn inspect(n: u256) {{
+    let base = ptr::alloc_bytes(128)
+    {call}
+    let first = ptr::cast<u8, u256>(pair.first)
+    let second = ptr::cast<u8, u256>(pair.second)
+    *first = 1
+    *second = 2
+    let a = mut *first
+    let b = mut *second
+    a = 3
+    b = 4
+}}
+"#
+            );
+            let diagnostics = checked_borrow_diags(&source);
+            assert_eq!(diagnostics.is_empty(), !aliases, "{source}\n{diagnostics}");
+            if aliases {
+                assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+            }
+        }
+    }
+}
+
+#[test]
+fn loop_feedback_keeps_constant_element_slots_distinct() {
+    for (decl, body, first, second) in [
+        (
+            "let mut ps: [*u8; 2] = [ptr::alloc_bytes(32), base]",
+            "ps[0] = ptr::offset_bytes(ps[1], 32)",
+            "ps[0]",
+            "ps[1]",
+        ),
+        (
+            "let mut ps: [*u8; 2] = [ptr::alloc_bytes(32), base]",
+            "ps = [ptr::offset_bytes(ps[1], 32), ps[1]]",
+            "ps[0]",
+            "ps[1]",
+        ),
+        (
+            "let mut ps: (*u8, *u8) = (ptr::alloc_bytes(32), base)",
+            "ps.0 = ptr::offset_bytes(ps.1, 32)",
+            "ps.0",
+            "ps.1",
+        ),
+        (
+            "let mut ps = Outer { inner: Pair { first: ptr::alloc_bytes(32), second: base } }",
+            "ps.inner.first = ptr::offset_bytes(ps.inner.second, 32)",
+            "ps.inner.first",
+            "ps.inner.second",
+        ),
+        (
+            "let mut ps: [Pair; 2] = [Pair { first: ptr::alloc_bytes(32), second: base }, Pair { first: base, second: base }]",
+            "ps[0].first = ptr::offset_bytes(ps[1].second, 32)",
+            "ps[0].first",
+            "ps[0].second",
+        ),
+    ] {
+        for summary in [false, true] {
+            let make = format!(
+                "{decl}
+    let mut i: u256 = 0
+    while i < n {{
+        {body}
+        i += 1
+    }}"
+            );
+            let (helper, call, first, second) = if summary {
+                let ty = decl
+                    .split_once(": ")
+                    .and_then(|(_, rest)| rest.split_once(" = "))
+                    .map_or_else(
+                        || decl.split_once("= ").unwrap().1.split_once(' ').unwrap().0,
+                        |(ty, _)| ty,
+                    );
+                (
+                    format!("fn advance(_ base: *u8, n: u256) -> {ty} {{\n    {make}\n    ps\n}}"),
+                    "let ps = advance(base, n)".to_owned(),
+                    first,
+                    second,
+                )
+            } else {
+                (String::new(), make, first, second)
+            };
+            let source = format!(
+                r#"
+use core::ptr
+struct Pair {{ first: *u8, second: *u8 }}
+struct Outer {{ inner: Pair }}
+{helper}
+fn inspect(n: u256) {{
+    let base = ptr::alloc_bytes(128)
+    {call}
+    let first = ptr::cast<u8, u256>({first})
+    let second = ptr::cast<u8, u256>({second})
+    *first = 1
+    *second = 2
+    let a = mut *first
+    let b = mut *second
+    a = 3
+    b = 4
+}}
+"#
+            );
+            let diagnostics = checked_borrow_diags(&source);
+            assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+        }
+    }
+}
+
+#[test]
+fn loop_feedback_slot_matching_converges_on_cross_slot_growth() {
+    // Each slot grows only through another slot, a runtime element, or a
+    // variant change. Widening must still reach a fixed point.
+    for (decl, body, first, second) in [
+        (
+            "let mut ps = Pair { first: base, second: ptr::offset_bytes(base, 32) }",
+            "ps = Pair { first: ptr::offset_bytes(ps.second, 32), second: ptr::offset_bytes(ps.first, 32) }",
+            "ps.first",
+            "ps.second",
+        ),
+        (
+            "let mut ps: [*u8; 2] = [base, ptr::offset_bytes(base, 32)]",
+            "ps = [ptr::offset_bytes(ps[1], 32), ptr::offset_bytes(ps[0], 32)]",
+            "ps[0]",
+            "ps[1]",
+        ),
+        (
+            "let mut ps: [*u8; 2] = [base, ptr::offset_bytes(base, 32)]",
+            "ps[(i % 2) as usize] = ptr::offset_bytes(ps[((i + 1) % 2) as usize], 32)",
+            "ps[0]",
+            "ps[1]",
+        ),
+        (
+            "let mut ps = Slot::A(base)",
+            "ps = match ps {\n            Slot::A(p) => Slot::B(ptr::offset_bytes(p, 32))\n            Slot::B(p) => Slot::A(ptr::offset_bytes(p, 32))\n        }",
+            "match ps {\n        Slot::A(p) => p\n        Slot::B(p) => p\n    }",
+            "base",
+        ),
+    ] {
+        let source = format!(
+            r#"
+use core::ptr
+struct Pair {{ first: *u8, second: *u8 }}
+enum Slot {{
+    A(*u8),
+    B(*u8),
+}}
+fn inspect(n: u256) {{
+    let base = ptr::alloc_bytes(128)
+    {decl}
+    let mut i: u256 = 0
+    while i < n {{
+        {body}
+        i += 1
+    }}
+    let first = ptr::cast<u8, u256>({first})
+    let second = ptr::cast<u8, u256>({second})
+    *first = 1
+    *second = 2
+    let a = mut *first
+    let b = mut *second
+    a = 3
+    b = 4
+}}
+"#
+        );
+        // Growing offsets may meet, so these legitimately conflict.
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(
+            diagnostics.contains("borrow conflict"),
+            "{source}\n{diagnostics}"
+        );
+    }
+}
+
+#[test]
+fn loop_feedback_respects_array_default_domains() {
+    // A parameter array has a default member excluding the exact `ps[0]`,
+    // so the default's `ps[1]` is no ancestor of `ps[0]`.
+    for (argument, aliases) in [
+        ("[ptr::alloc_bytes(32), base, base]", false),
+        ("[base, base, base]", true),
+    ] {
+        let source = format!(
+            r#"
+use core::ptr
+fn advance(_ input: [*u8; 3], n: u256) -> [*u8; 3] {{
+    let mut ps = input
+    let mut i: u256 = 0
+    while i < n {{
+        ps[0] = ptr::offset_bytes(ps[1], 32)
+        i += 1
+    }}
+    ps
+}}
+fn inspect(n: u256) {{
+    let base = ptr::alloc_bytes(128)
+    let ps = advance({argument}, n)
+    let first = ptr::cast<u8, u256>(ps[0])
+    let second = ptr::cast<u8, u256>(ps[1])
+    *first = 1
+    *second = 2
+    let a = mut *first
+    let b = mut *second
+    a = 3
+    b = 4
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        assert_eq!(diagnostics.is_empty(), !aliases, "{source}\n{diagnostics}");
+        if aliases {
+            assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+        }
+    }
+}
+
+#[test]
+fn loop_offsets_recomputed_from_invariant_bases_stay_exact() {
+    for (initial, body, aliases) in [
+        (
+            "ptr::offset_bytes(base, 32)",
+            "ptr::offset_bytes(ptr::offset_bytes(base, 32), 32)",
+            false,
+        ),
+        (
+            "base",
+            "ptr::offset_bytes(ptr::offset_bytes(base, 32), 32)",
+            true,
+        ),
+        // Genuine growth is still widened, one feedback later.
+        (
+            "ptr::offset_bytes(base, 32)",
+            "ptr::offset_bytes(p, 32)",
+            true,
+        ),
+    ] {
+        for summary in [false, true] {
+            let make = format!(
+                "let mut p = {initial}
+    let mut i: u256 = 0
+    while i < n {{
+        p = {body}
+        i += 1
+    }}"
+            );
+            let (helper, call) = if summary {
+                (
+                    format!("fn advance(_ base: *u8, n: u256) -> *u8 {{\n    {make}\n    p\n}}"),
+                    "let p = advance(base, n)".to_owned(),
+                )
+            } else {
+                (String::new(), make)
+            };
+            let source = format!(
+                r#"
+use core::ptr
+{helper}
+fn inspect(n: u256) {{
+    let base = ptr::alloc_bytes(128)
+    {call}
+    let first = ptr::cast<u8, u256>(base)
+    let second = ptr::cast<u8, u256>(p)
+    *first = 1
+    *second = 2
+    let a = mut *first
+    let b = mut *second
+    a = 3
+    b = 4
+}}
+"#
+            );
+            let diagnostics = checked_borrow_diags(&source);
+            assert_eq!(diagnostics.is_empty(), !aliases, "{source}\n{diagnostics}");
+            if aliases {
+                assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+            }
+        }
+    }
+}
+
+/// A loop over `decl`/`body` in `inspect`, or in a summarized `advance`
+/// returning `var: ty`, followed by simultaneous borrows of `first` and
+/// `second` as words.
+fn loop_pointer_case(
+    decl: &str,
+    body: &str,
+    var: &str,
+    ty: &str,
+    first: &str,
+    second: &str,
+    summary: bool,
+) -> String {
+    let make = format!(
+        "{decl}
+    let mut i: u256 = 0
+    while i < n {{
+        {body}
+        i += 1
+    }}"
+    );
+    let (helper, call) = if summary {
+        (
+            format!("fn advance(_ base: *u8, n: u256) -> {ty} {{\n    {make}\n    {var}\n}}"),
+            format!("let {var} = advance(base, n)"),
+        )
+    } else {
+        (String::new(), make)
+    };
+    format!(
+        r#"
+use core::ptr
+struct Pair {{ first: *u8, second: *u8 }}
+struct Outer {{ inner: Pair }}
+struct Holder {{ items: [*u8; 2] }}
+enum Slot {{
+    A(*u8),
+    B(*u8),
+}}
+fn unwrap(_ slot: Slot) -> *u8 {{
+    match slot {{
+        Slot::A(p) => p
+        Slot::B(p) => p
+    }}
+}}
+{helper}
+fn inspect(n: u256) {{
+    let base = ptr::alloc_bytes(256)
+    {call}
+    let first = ptr::cast<u8, u256>({first})
+    let second = ptr::cast<u8, u256>({second})
+    *first = 1
+    *second = 2
+    let a = mut *first
+    let b = mut *second
+    a = 3
+    b = 4
+}}
+"#
+    )
+}
+
+#[test]
+fn loop_feedback_recomputations_stay_exact() {
+    // Each loop recomputes a pointer from invariant data; none grows.
+    for (decl, body, var, ty, first, second) in [
+        (
+            "let mut ps: [*u8; 2] = [ptr::offset_bytes(base, 32), base]",
+            "ps[(i % 2) as usize] = ptr::offset_bytes(ptr::offset_bytes(base, 32), 32)",
+            "ps",
+            "[*u8; 2]",
+            "base",
+            "ps[0]",
+        ),
+        (
+            "let q = ptr::offset_bytes(base, 32)\n    let mut x = q",
+            "x = ptr::offset_bytes(q, 32)",
+            "x",
+            "*u8",
+            "base",
+            "x",
+        ),
+        (
+            "let mut s = Holder { items: [ptr::alloc_bytes(32), base] }",
+            "s.items[0] = ptr::offset_bytes(s.items[1], 32)",
+            "s",
+            "Holder",
+            "s.items[0]",
+            "s.items[1]",
+        ),
+        (
+            "let mut e = Slot::A(ptr::offset_bytes(base, 32))",
+            "e = Slot::A(ptr::offset_bytes(ptr::offset_bytes(base, 32), 32))",
+            "e",
+            "Slot",
+            "base",
+            "unwrap(e)",
+        ),
+        (
+            "let mut e = Slot::A(ptr::offset_bytes(base, 32))",
+            "e = Slot::B(ptr::offset_bytes(ptr::offset_bytes(base, 32), 32))",
+            "e",
+            "Slot",
+            "base",
+            "unwrap(e)",
+        ),
+        (
+            "let mut p = ptr::offset_bytes(ptr::offset_bytes(base, 32), 32)",
+            "p = ptr::offset_bytes(ptr::offset_bytes(ptr::offset_bytes(base, 32), 32), 32)",
+            "p",
+            "*u8",
+            "base",
+            "p",
+        ),
+        (
+            "let mut s = Pair { first: ptr::offset_bytes(base, 32), second: base }",
+            "s = Pair { first: ptr::offset_bytes(ptr::offset_bytes(s.second, 32), 32), second: s.second }",
+            "s",
+            "Pair",
+            "s.second",
+            "s.first",
+        ),
+        // A new variant recomputed from `base` while the prior `A` holds
+        // both `base` and an offset of it: no growth through `A`.
+        (
+            "let mut e = Slot::A(base)",
+            "e = if i == 0 {\n            Slot::A(ptr::offset_bytes(base, 32))\n        } else {\n            Slot::B(ptr::offset_bytes(ptr::offset_bytes(base, 32), 32))\n        }",
+            "e",
+            "Slot",
+            "ptr::offset_bytes(base, 96)",
+            "unwrap(e)",
+        ),
+        (
+            "let mut e = Slot::A(base)\n    let mut j: u256 = 0\n    while j < n {\n        e = Slot::A(ptr::offset_bytes(base, 32))\n        j += 1\n    }",
+            "e = Slot::B(ptr::offset_bytes(ptr::offset_bytes(base, 32), 32))",
+            "e",
+            "Slot",
+            "ptr::offset_bytes(base, 96)",
+            "unwrap(e)",
+        ),
+        // The prior slot holds both `base` and an offset of it from before
+        // the loop; the recomputation is still no growth.
+        (
+            "let mut p = if n > 5 { base } else { ptr::offset_bytes(base, 32) }",
+            "p = ptr::offset_bytes(ptr::offset_bytes(base, 32), 32)",
+            "p",
+            "*u8",
+            "ptr::offset_bytes(base, 96)",
+            "p",
+        ),
+    ] {
+        for summary in [false, true] {
+            let source = loop_pointer_case(decl, body, var, ty, first, second, summary);
+            let diagnostics = checked_borrow_diags(&source);
+            assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+        }
+    }
+}
+
+#[test]
+fn loop_feedback_ancestry_stays_within_one_slot() {
+    // `ps[0]` holds `base` while the other elements hold an offset of it. A
+    // recomputed nested offset stored at a runtime index is no growth, even
+    // though `base` sits in a sibling slot.
+    for (setup, index, read, aliases) in [
+        (
+            "ps[k] = ptr::offset_bytes(base, 32)\n    ps[0] = base",
+            "k",
+            "ps[1]",
+            false,
+        ),
+        (
+            "ps[k] = ptr::offset_bytes(base, 32)\n    ps[0] = base",
+            "(i % 2 + 1) as usize",
+            "ps[1]",
+            false,
+        ),
+        (
+            "ps[k] = ptr::offset_bytes(base, 32)\n    ps[0] = base",
+            "k",
+            "ps[0]",
+            true,
+        ),
+    ] {
+        let source = format!(
+            r#"
+use core::ptr
+fn advance(_ input: [*u8; 3], base: *u8, k: usize, n: u256) -> [*u8; 3] {{
+    let mut ps = input
+    {setup}
+    let mut i: u256 = 0
+    while i < n {{
+        ps[{index}] = ptr::offset_bytes(ptr::offset_bytes(base, 32), 32)
+        i += 1
+    }}
+    ps
+}}
+fn inspect(n: u256, k: usize) {{
+    let base = ptr::alloc_bytes(256)
+    let ps = advance([ptr::alloc_bytes(32), ptr::alloc_bytes(32), ptr::alloc_bytes(32)], base, k, n)
+    let first = ptr::cast<u8, u256>(base)
+    let second = ptr::cast<u8, u256>({read})
+    *first = 1
+    *second = 2
+    let a = mut *first
+    let b = mut *second
+    a = 3
+    b = 4
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        assert_eq!(diagnostics.is_empty(), !aliases, "{source}\n{diagnostics}");
+        if aliases {
+            assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+        }
+    }
+}
+
+#[test]
+fn loop_feedback_widens_growth_through_slots_holders_and_variants() {
+    // Every case grows without bound, through its own slot, a sibling slot,
+    // another holder, a runtime element or a variant change. Widening must
+    // reach a fixed point; the unknown offsets then legitimately conflict.
+    for (decl, body, var, ty, first, second) in [
+        (
+            "let mut p = ptr::offset_bytes(base, 32)",
+            "p = ptr::offset_bytes(p, 32)",
+            "p",
+            "*u8",
+            "base",
+            "p",
+        ),
+        (
+            "let mut x = ptr::offset_bytes(base, 64)\n    let mut y = ptr::offset_bytes(base, 32)",
+            "x = ptr::offset_bytes(y, 64)\n        y = ptr::offset_bytes(y, 32)",
+            "x",
+            "*u8",
+            "base",
+            "x",
+        ),
+        (
+            "let mut s = Outer { inner: Pair { first: base, second: base } }",
+            "s.inner.first = ptr::offset_bytes(s.inner.first, 32)",
+            "s",
+            "Outer",
+            "base",
+            "s.inner.first",
+        ),
+        (
+            "let mut s = Pair { first: base, second: ptr::offset_bytes(base, 32) }",
+            "s = Pair { first: ptr::offset_bytes(s.second, 32), second: ptr::offset_bytes(s.first, 32) }",
+            "s",
+            "Pair",
+            "s.first",
+            "s.second",
+        ),
+        (
+            "let mut ps: [*u8; 2] = [base, ptr::offset_bytes(base, 32)]",
+            "ps[(i % 2) as usize] = ptr::offset_bytes(ps[((i + 1) % 2) as usize], 32)",
+            "ps",
+            "[*u8; 2]",
+            "ps[0]",
+            "ps[1]",
+        ),
+        (
+            "let mut e = Slot::A(base)",
+            "e = match e {\n            Slot::A(p) => Slot::B(ptr::offset_bytes(p, 32))\n            Slot::B(p) => Slot::A(ptr::offset_bytes(p, 32))\n        }",
+            "e",
+            "Slot",
+            "base",
+            "unwrap(e)",
+        ),
+        (
+            "let mut s = Pair { first: base, second: base }\n    let mut y = base",
+            "s.first = ptr::offset_bytes(y, 32)\n        y = ptr::offset_bytes(s.first, 32)",
+            "s",
+            "Pair",
+            "base",
+            "s.first",
+        ),
+        (
+            "let mut e = Slot::A(base)",
+            "e = match e {\n            Slot::A(p) => Slot::B(ptr::offset_bytes(p, 32))\n            Slot::B(p) => Slot::B(ptr::offset_bytes(p, 32))\n        }",
+            "e",
+            "Slot",
+            "base",
+            "unwrap(e)",
+        ),
+        (
+            "let mut p = base",
+            "p = bump(p)",
+            "p",
+            "*u8",
+            "base",
+            "bump(p)",
+        ),
+    ] {
+        for summary in [false, true] {
+            let source = loop_pointer_case(decl, body, var, ty, first, second, summary).replace(
+                "fn inspect(",
+                "fn bump(_ q: *u8) -> *u8 { ptr::offset_bytes(q, 32) }\nfn inspect(",
+            );
+            let diagnostics = checked_borrow_diags(&source);
+            assert!(
+                diagnostics.contains("borrow conflict"),
+                "{source}\n{diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
+fn loops_preserve_offsets_of_invariant_conditional_replacements() {
+    // `*slot` may be replaced by the write through `destination`; its
+    // condition is dischargeable by the caller. A loop that recomputes a
+    // fixed offset from it, or grows one, keeps that condition.
+    for body in [
+        "result = ptr::offset(pointer, 1)",
+        "result = ptr::cast<u8, u256>(ptr::offset_bytes(ptr::byte_ptr(pointer), 32))",
+        "result = ptr::offset(result, 1)",
+    ] {
+        for call in [
+            "work(slot, destination, n: 2)",
+            "forward(slot, destination, n: 2)",
+        ] {
+            for aliases in [false, true] {
+                let destination = if aliases {
+                    "ptr::byte_ptr(slot)"
+                } else {
+                    "ptr::alloc_bytes(32)"
+                };
+                let source = format!(
+                    r#"
+use core::ptr
+fn work(slot: **u256, destination: *u8, n: u256) -> *u256 {{
+    ptr::zero_bytes(destination, 32)
+    let pointer = *slot
+    let mut result = ptr::offset(pointer, 1)
+    let mut i: u256 = 0
+    while i < n {{
+        {body}
+        i += 1
+    }}
+    result
+}}
+fn forward(slot: **u256, destination: *u8, n: u256) -> *u256 {{
+    work(slot, destination, n)
+}}
+fn inspect() {{
+    let owner = ptr::alloc<[u256; 4]>()
+    let slot = ptr::alloc<*u256>()
+    *slot = ptr::cast<[u256; 4], u256>(owner)
+    let destination = {destination}
+    let other = ptr::alloc<u256>()
+    *other = 1
+    let held = mut *other
+    let pointer = {call}
+    *pointer = 3
+    held = 4
+}}
+"#
+                );
+                let diagnostics = checked_borrow_diags(&source);
+                assert_eq!(diagnostics.is_empty(), !aliases, "{source}\n{diagnostics}");
+                if aliases {
+                    assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn loops_bound_offsets_of_replacements_created_in_the_loop() {
+    // A replacement made on every iteration joins the opaque family at the
+    // back edge, so offsets of it cannot multiply alternatives.
+    for body in [
+        "result = ptr::offset(*slot, 1)",
+        "*slot = ptr::offset(*slot, 1)\n        result = *slot",
+    ] {
+        let source = format!(
+            r#"
+use core::ptr
+fn work(slot: **u256, destination: *u8, n: u256) -> *u256 {{
+    let mut result = *slot
+    let mut i: u256 = 0
+    while i < n {{
+        ptr::zero_bytes(destination, 32)
+        {body}
+        i += 1
+    }}
+    result
+}}
+fn inspect() {{
+    let owner = ptr::alloc<[u256; 4]>()
+    let slot = ptr::alloc<*u256>()
+    *slot = ptr::cast<[u256; 4], u256>(owner)
+    let destination = ptr::byte_ptr(slot)
+    let other = ptr::alloc<u256>()
+    *other = 1
+    let held = mut *other
+    let pointer = work(slot, destination, n: 2)
+    *pointer = 3
+    held = 4
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(
+            diagnostics.contains("borrow conflict"),
+            "{source}\n{diagnostics}"
+        );
+    }
+}
