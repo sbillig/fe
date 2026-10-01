@@ -821,27 +821,6 @@ impl DiagnosticVoucher for crate::ErrorDiagnostic {
                 "`#[error]` conflicts with `#[event]` on the same struct".to_string(),
                 vec!["split this into separate structs or remove one attribute".to_string()],
             ),
-            ErrorDiagnosticKind::GenericAbiStruct => (
-                6,
-                "`#[abi]` structs must be non-generic".to_string(),
-                "generics are not supported on `#[abi]` structs".to_string(),
-                vec!["remove generic parameters from the struct".to_string()],
-            ),
-            ErrorDiagnosticKind::AbiAttrConflict => (
-                7,
-                "`#[abi]` cannot be combined with `#[event]` or `#[error]`".to_string(),
-                "this struct already gets an ABI encoding from `#[event]` or `#[error]`"
-                    .to_string(),
-                vec!["remove `#[abi]`".to_string()],
-            ),
-            ErrorDiagnosticKind::AbiArrayElemNotCopy { ty, elem_ty } => (
-                8,
-                "fixed-array ABI fields need `Copy` elements".to_string(),
-                format!("`{ty}` holds a fixed array of `{elem_ty}`, which is not `Copy`"),
-                vec![format!(
-                    "implement `Copy` for `{elem_ty}`, or use `DynArray<{elem_ty}>`"
-                )],
-            ),
         };
 
         let error_code = GlobalErrorCode::new(DiagnosticPass::ErrorLower, code);
@@ -856,6 +835,58 @@ impl DiagnosticVoucher for crate::ErrorDiagnostic {
             )],
             notes,
             error_code,
+        )
+    }
+}
+
+impl DiagnosticVoucher for crate::AbiStructDiagnostic {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::AbiStructDiagnosticKind;
+
+        let (code, message, label, note) = match self.kind {
+            AbiStructDiagnosticKind::GenericStruct => (
+                1,
+                "`#[abi]` structs must be non-generic",
+                "generics are not supported on `#[abi]` structs",
+                "remove generic parameters from the struct",
+            ),
+            AbiStructDiagnosticKind::AttrConflict => (
+                2,
+                "`#[abi]` cannot be combined with `#[event]` or `#[error]`",
+                "this struct already gets an ABI encoding from `#[event]` or `#[error]`",
+                "remove `#[abi]`",
+            ),
+        };
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message.to_string(),
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                label.to_string(),
+                Some(Span::new(self.file, self.primary_range, SpanKind::Original)),
+            )],
+            vec![note.to_string()],
+            GlobalErrorCode::new(DiagnosticPass::AbiStructLower, code),
+        )
+    }
+}
+
+impl DiagnosticVoucher for crate::analysis::analysis_pass::AbiArrayElemNotCopy {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        let Self { ty, elem_ty, .. } = self;
+        CompleteDiagnostic::new(
+            Severity::Error,
+            "fixed-array ABI fields need `Copy` elements".to_string(),
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                format!("`{ty}` holds a fixed array of `{elem_ty}`, which is not `Copy`"),
+                Some(Span::new(self.file, self.primary_range, SpanKind::Original)),
+            )],
+            vec![format!(
+                "implement `Copy` for `{elem_ty}`, or use `DynArray<{elem_ty}>`"
+            )],
+            self.error_code.clone(),
         )
     }
 }

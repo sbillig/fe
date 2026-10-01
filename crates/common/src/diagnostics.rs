@@ -187,6 +187,7 @@ pub enum DiagnosticPass {
     MsgLower,
     EventLower,
     ErrorLower,
+    AbiStructLower,
     AttrMisuse,
 
     NameResolution,
@@ -212,6 +213,7 @@ impl DiagnosticPass {
             Self::MsgLower => 9,
             Self::EventLower => 10,
             Self::ErrorLower => 13,
+            Self::AbiStructLower => 18,
             Self::AttrMisuse => 12,
             Self::NameResolution => 2,
             Self::TypeDefinition => 3,

@@ -353,8 +353,8 @@ fn events_with_indexed_dynamic_fields<'db>(
 /// A field of an `#[abi]`, `#[event]` or `#[error]` struct whose type holds
 /// a fixed array of non-`Copy` elements, which the fixed-array ABI codecs
 /// cannot handle.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub(crate) struct NonCopyArrayAbiField<'db> {
-    pub(crate) struct_: crate::hir_def::Struct<'db>,
     pub(crate) origin: DesugaredOrigin,
     pub(crate) ast_struct: parser::ast::AstPtr<parser::ast::Struct>,
     pub(crate) field_idx: usize,
@@ -362,6 +362,9 @@ pub(crate) struct NonCopyArrayAbiField<'db> {
     pub(crate) elem_ty: TyId<'db>,
 }
 
+/// Shared by the `#[abi]`, `#[event]` and `#[error]` lowering passes, which
+/// report the fields, and the body pass, which skips the generated bodies.
+#[salsa::tracked(return_ref)]
 pub(crate) fn non_copy_array_abi_fields<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
@@ -387,7 +390,6 @@ pub(crate) fn non_copy_array_abi_fields<'db>(
                 abi_ty::non_copy_fixed_array_elem(db, struct_.scope(), field_ty, assumptions)
             {
                 fields.push(NonCopyArrayAbiField {
-                    struct_,
                     origin: origin.clone(),
                     ast_struct: ast_struct.clone(),
                     field_idx,
@@ -409,11 +411,11 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         // Check function and const bodies; contract-specific analysis is handled separately.
         let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
         let indexed_dynamic_events = events_with_indexed_dynamic_fields(db, top_mod);
-        // Reported once at the field by the `ErrorLower` pass.
-        let non_copy_array_structs: FxHashSet<DesugaredOrigin> =
+        // Reported once at the field by the struct's lowering pass.
+        let non_copy_array_structs: FxHashSet<&DesugaredOrigin> =
             non_copy_array_abi_fields(db, top_mod)
-                .into_iter()
-                .map(|field| field.origin)
+                .iter()
+                .map(|field| &field.origin)
                 .collect();
         let keep = |origin: &DesugaredOrigin| !non_copy_array_structs.contains(origin);
         for func in top_mod

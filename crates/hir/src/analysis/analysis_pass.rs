@@ -9,12 +9,16 @@ use crate::analysis::{
     },
 };
 use crate::{
-    AbiFieldContext, AbiFieldDiagnostic, AttrMisuseError, ErrorDiagnostic, ErrorDiagnosticKind,
+    AbiFieldContext, AbiFieldDiagnostic, AbiStructDiagnostic, AttrMisuseError, ErrorDiagnostic,
     EventError, EventErrorKind, FieldModifierError, MsgDiagnostic, ParserError,
     hir_def::{ModuleTree, TopLevelMod},
     lower::{parse_file_impl, scope_graph_impl, top_mod_ast},
     semantic::constraints_for,
     span::{DesugaredOrigin, HirOrigin},
+};
+use common::{
+    diagnostics::{DiagnosticPass, GlobalErrorCode},
+    file::File,
 };
 use parser::ast::{self, prelude::*};
 
@@ -133,6 +137,15 @@ impl ModuleAnalysisPass for EventLowerPass {
                 .map(|d| Box::new(d) as _),
         );
         diags.extend(semantic_indexed_dynamic_field_errors(db, top_mod).map(|d| Box::new(d) as _));
+        diags.extend(
+            non_copy_array_field_errors(
+                db,
+                top_mod,
+                |origin| matches!(origin, DesugaredOrigin::Event(_)),
+                GlobalErrorCode::new(DiagnosticPass::EventLower, 10),
+            )
+            .map(|d| Box::new(d) as _),
+        );
         diags
     }
 }
@@ -347,18 +360,67 @@ impl ModuleAnalysisPass for ErrorLowerPass {
             semantic_tuple_field_type_errors(db, top_mod, AbiFieldContext::Error)
                 .map(|d| Box::new(d) as _),
         );
-        diags.extend(non_copy_array_field_errors(db, top_mod).map(|d| Box::new(d) as _));
+        diags.extend(
+            non_copy_array_field_errors(
+                db,
+                top_mod,
+                |origin| matches!(origin, DesugaredOrigin::Error(_)),
+                GlobalErrorCode::new(DiagnosticPass::ErrorLower, 6),
+            )
+            .map(|d| Box::new(d) as _),
+        );
         diags
     }
+}
+
+/// Analysis pass that collects diagnostics of `#[abi]` struct desugaring.
+pub struct AbiStructLowerPass {}
+
+impl ModuleAnalysisPass for AbiStructLowerPass {
+    fn run_on_module<'db>(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        top_mod: TopLevelMod<'db>,
+    ) -> Vec<Box<dyn DiagnosticVoucher>> {
+        let mut diags = scope_graph_impl::accumulated::<AbiStructDiagnostic>(db, top_mod)
+            .into_iter()
+            .map(|d| Box::new(d.clone()) as _)
+            .collect::<Vec<_>>();
+        diags.extend(
+            non_copy_array_field_errors(
+                db,
+                top_mod,
+                |origin| matches!(origin, DesugaredOrigin::AbiStruct(_)),
+                GlobalErrorCode::new(DiagnosticPass::AbiStructLower, 3),
+            )
+            .map(|d| Box::new(d) as _),
+        );
+        diags
+    }
+}
+
+/// A field of an `#[abi]`, `#[event]` or `#[error]` struct that holds a fixed
+/// array of non-`Copy` elements, which the fixed-array ABI codecs cannot
+/// encode. Each struct kind's lowering pass reports it under its own code.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AbiArrayElemNotCopy {
+    pub error_code: GlobalErrorCode,
+    pub ty: String,
+    pub elem_ty: String,
+    pub file: File,
+    pub primary_range: parser::TextRange,
 }
 
 fn non_copy_array_field_errors<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
-) -> impl Iterator<Item = ErrorDiagnostic> {
+    owns: fn(&DesugaredOrigin) -> bool,
+    error_code: GlobalErrorCode,
+) -> impl Iterator<Item = AbiArrayElemNotCopy> {
     let root = top_mod_ast(db, top_mod).syntax().clone();
     non_copy_array_abi_fields(db, top_mod)
-        .into_iter()
+        .iter()
+        .filter(move |field| owns(&field.origin))
         .map(move |field| {
             let primary_range = field
                 .ast_struct
@@ -372,23 +434,12 @@ fn non_copy_array_field_errors<'db>(
                     || parser::TextRange::empty(0.into()),
                     |ty| ty.syntax().text_range(),
                 );
-            let hir_field = &field.struct_.hir_fields(db).data(db)[field.field_idx];
-            ErrorDiagnostic {
-                kind: ErrorDiagnosticKind::AbiArrayElemNotCopy {
-                    ty: field.field_ty.pretty_print(db).to_string(),
-                    elem_ty: field.elem_ty.pretty_print(db).to_string(),
-                },
+            AbiArrayElemNotCopy {
+                error_code: error_code.clone(),
+                ty: field.field_ty.pretty_print(db).to_string(),
+                elem_ty: field.elem_ty.pretty_print(db).to_string(),
                 file: top_mod.file(db),
                 primary_range,
-                struct_name: field
-                    .struct_
-                    .name(db)
-                    .to_opt()
-                    .map(|name| name.data(db).to_string()),
-                field_name: hir_field
-                    .name
-                    .to_opt()
-                    .map(|name| name.data(db).to_string()),
             }
         })
 }

@@ -31,14 +31,6 @@ pub struct ErrorDiagnostic {
 pub enum ErrorDiagnosticKind {
     GenericErrorStruct,
     EventErrorAttrConflict,
-    GenericAbiStruct,
-    AbiAttrConflict,
-    /// An `#[abi]`, `#[event]` or `#[error]` field holds a fixed array of
-    /// non-`Copy` elements.
-    AbiArrayElemNotCopy {
-        ty: String,
-        elem_ty: String,
-    },
 }
 
 pub(super) fn is_error_struct(ast: &ast::Struct) -> bool {

@@ -11,7 +11,7 @@ use super::{
     },
 };
 use crate::{
-    ErrorDiagnostic, ErrorDiagnosticKind, HirDb,
+    HirDb,
     hir_def::{
         AssocConstDef, AttrListId, Body, BodyKind, Expr, ExprId, FieldDefListId, FuncModifiers,
         FuncParam, FuncParamMode, FuncParamName, GenericArgListId, GenericParamListId, IdentId,
@@ -21,6 +21,22 @@ use crate::{
     },
     span::{AbiStructDesugared, HirOrigin},
 };
+
+/// Diagnostics for `#[abi]` struct declarations.
+#[salsa::accumulator]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AbiStructDiagnostic {
+    pub kind: AbiStructDiagnosticKind,
+    pub file: common::file::File,
+    pub primary_range: parser::TextRange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AbiStructDiagnosticKind {
+    GenericStruct,
+    /// `#[abi]` together with `#[event]` or `#[error]`.
+    AttrConflict,
+}
 
 /// Returns true for a struct annotated with `#[abi]`.
 pub(super) fn is_abi_struct(ast: &ast::Struct) -> bool {
@@ -32,12 +48,10 @@ pub(super) fn report_abi_attr_conflict<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: 
     let db = ctxt.db();
     let file = ctxt.top_mod().file(db);
     for attr in named_attr_specs(ast.attr_list(), "abi") {
-        ErrorDiagnostic {
-            kind: ErrorDiagnosticKind::AbiAttrConflict,
+        AbiStructDiagnostic {
+            kind: AbiStructDiagnosticKind::AttrConflict,
             file,
             primary_range: attr.range,
-            struct_name: ast.name().map(|n| n.text().to_string()),
-            field_name: None,
         }
         .accumulate(db);
     }
@@ -78,15 +92,13 @@ pub(super) fn lower_abi_struct<'db>(
     let struct_ = builder.struct_item(name, attributes, vis, generic_params, where_clause, fields);
 
     if !generic_params.data(db).is_empty() {
-        ErrorDiagnostic {
-            kind: ErrorDiagnosticKind::GenericAbiStruct,
+        AbiStructDiagnostic {
+            kind: AbiStructDiagnosticKind::GenericStruct,
             file,
             primary_range: ast
                 .generic_params()
                 .map(|g| g.syntax().text_range())
                 .unwrap_or_else(|| ast.syntax().text_range()),
-            struct_name: ast.name().map(|n| n.text().to_string()),
-            field_name: None,
         }
         .accumulate(db);
         return struct_;

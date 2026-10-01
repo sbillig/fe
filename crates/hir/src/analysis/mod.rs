@@ -6,7 +6,8 @@ pub mod place;
 pub mod semantic;
 
 use self::analysis_pass::{
-    AnalysisPassManager, AttrMisusePass, ErrorLowerPass, EventLowerPass, MsgLowerPass, ParsingPass,
+    AbiStructLowerPass, AnalysisPassManager, AttrMisusePass, ErrorLowerPass, EventLowerPass,
+    MsgLowerPass, ParsingPass,
 };
 use self::name_resolution::ImportAnalysisPass;
 use self::ty::{
@@ -31,6 +32,7 @@ pub(crate) fn initialize_pre_contract_analysis_pass() -> AnalysisPassManager {
     pass_manager.add_module_pass("MsgLower", Box::new(MsgLowerPass {}));
     pass_manager.add_module_pass("EventLower", Box::new(EventLowerPass {}));
     pass_manager.add_module_pass("ErrorLower", Box::new(ErrorLowerPass {}));
+    pass_manager.add_module_pass("AbiStructLower", Box::new(AbiStructLowerPass {}));
     pass_manager.add_module_pass("MsgAnalysis", Box::new(MsgAnalysisPass {}));
     pass_manager.add_module_pass("DefConflict", Box::new(DefConflictAnalysisPass {}));
     pass_manager.add_module_pass("Import", Box::new(ImportAnalysisPass {}));
