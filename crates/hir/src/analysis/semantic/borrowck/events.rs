@@ -792,7 +792,7 @@ impl<'db> Borrowck<'db> {
                 }
                 // Argument conflicts explain an aliased call more directly.
                 for requirement in operation.requirements.iter().filter(|_| !pending) {
-                    if requirement.invalidated.invalid {
+                    if requirement.access_invalidated.invalid {
                         return analysis.report(self.invalidated_diag(origin));
                     }
                     self.discharge(requirement, origin, analysis);

@@ -32,8 +32,11 @@ pub const SEPARATION_CLAUSE_LIMIT: usize = 1024;
 pub const SEPARATION_GUARD_NODE_LIMIT: usize = 4096;
 /// Most witnesses one clause may own.
 pub const SEPARATION_WITNESS_LIMIT: u32 = 32;
-/// Deepest Memory or clobber nesting of an endpoint.
-pub const SEPARATION_NESTING_LIMIT: usize = 16;
+/// Most sources in one endpoint's route, counting Memory bases and clobbers.
+pub const SEPARATION_ROUTE_LIMIT: usize = 16;
+/// Most index occurrences in one relation: paths, handle arguments, the
+/// extent and its suspension.
+pub const SEPARATION_INDEX_LIMIT: usize = 256;
 
 /// On every valuation of its clause guard, the access footprint touches no part
 /// of `protected` outside the suspended projections.
@@ -264,11 +267,12 @@ pub fn within_limits<'db>(clause: &Guarded<'db, Separation<'db>>, owner: &Binder
             .scope()
             .existential_extension_of(owner)
             .is_some_and(|witnesses| witnesses <= SEPARATION_WITNESS_LIMIT)
+        && relation.indices().count() <= SEPARATION_INDEX_LIMIT
         && [&relation.protected, &relation.access]
             .into_iter()
             .all(|place| {
                 !matches!(&place.root, RegionRoot::External(source)
-                if source.nesting() > SEPARATION_NESTING_LIMIT)
+                if source.route_size() > SEPARATION_ROUTE_LIMIT)
             })
 }
 
