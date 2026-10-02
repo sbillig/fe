@@ -26,7 +26,7 @@ use fe_hir::{
     diagnosable::Diagnosable,
     hir_def::{ArithBinOp, Func, ItemKind, Partial, TopLevelMod, UnOp, attr::ArithmeticMode},
     span::LazySpan,
-    test_db::HirAnalysisTestDb,
+    test_db::{HirAnalysisTestDb, format_diagnostics},
 };
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
@@ -238,7 +238,6 @@ fn invocation<'db>(
             ImplEnv::empty(db, owner.scope()),
         ),
         args,
-        parameter_owner: owner.scope(),
     })
 }
 
@@ -2005,7 +2004,6 @@ fn repeated_invocations_share_identity_after_scope_transfer() {
         let ConstExpr::Invocation(invocation) = expr.data(&db) else {
             panic!("expected a canonical invocation: {description:?}");
         };
-        assert_eq!(invocation.parameter_owner, outer_owner.scope());
         assert_eq!(
             invocation.key.owner(&db),
             BodyOwner::Func(function(&db, module, "value"))
@@ -2040,6 +2038,55 @@ fn repeated_invocations_share_identity_after_scope_transfer() {
             "equal type-level identities must not erase the reached fault: {outcome:?}"
         );
     }
+}
+
+#[test]
+fn invocation_extents_share_identity_across_written_bodies() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "invocation_extent_identity.fe".into(),
+        r#"
+const fn word_len(_ n: usize) -> usize { n / 32 + if n % 32 == 0 { 0 } else { 1 } }
+struct Packed<const N: usize> { words: [u256; word_len(N)] }
+const fn pass<const N: usize>(_ x: [u8; word_len(N)]) -> [u8; word_len(N)] { x }
+const fn annotated<const N: usize>(_ x: [u8; word_len(N)]) -> [u8; word_len(N)] {
+    let y: [u8; word_len(N)] = x
+    let z: [u8; word_len(N)] = y
+    z
+}
+const fn words<const N: usize>(_ p: Packed<N>) -> [u256; word_len(N)] { p.words }
+const fn rebuild<const N: usize>(_ w: [u256; word_len(N)]) -> Packed<N> { Packed { words: w } }
+const fn passed() -> u8 { pass<33>([1, 2])[1] + annotated<65>([3, 4, 5])[2] }
+const fn round_trip() -> u256 { words<64>(rebuild<64>([6, 7]))[1] }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let u8_ty = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::U8)));
+    for (name, ty) in [("passed", u8_ty), ("round_trip", TyId::u256(&db))] {
+        let owner = BodyOwner::Func(function(&db, module, name));
+        assert_integer_result(
+            &db,
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![])),
+            ty,
+            7,
+        );
+    }
+
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "invocation_extent_distinct.fe".into(),
+        r#"
+const fn word_len(_ n: usize) -> usize { n / 32 + if n % 32 == 0 { 0 } else { 1 } }
+fn shifted<const N: usize>(_ x: [u8; word_len(N)]) -> [u8; word_len({ N + 1 })] { x }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    let rendered = format_diagnostics(&db, &db.run_on_top_mod(module));
+    assert!(
+        rendered.contains("type mismatch"),
+        "different invocation arguments must keep distinct extents: {rendered}"
+    );
 }
 
 #[test]

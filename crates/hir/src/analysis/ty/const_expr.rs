@@ -2,7 +2,7 @@ use crate::analysis::ty::assoc_const::{AssocConstUse, InherentConstUse};
 use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::ty::{corelib::ctfe_extern_intrinsic_kind, ty_check::BodyOwner};
 use crate::analysis::{HirAnalysisDb, semantic::SemanticInstanceKey};
-use crate::hir_def::{ArithBinOp, UnOp, attr::ArithmeticMode, scope_graph::ScopeId};
+use crate::hir_def::{ArithBinOp, UnOp, attr::ArithmeticMode};
 use salsa::Update;
 
 #[salsa::interned]
@@ -47,12 +47,13 @@ pub enum ConstExpr<'db> {
 }
 
 /// A call's final selected instance and original owned arguments. The result
-/// type belongs to the enclosing `ConstTyData::Abstract`.
+/// type belongs to the enclosing `ConstTyData::Abstract`. The call is its
+/// identity: every occurrence of the same call shares one term, wherever it
+/// is written, because parameters in the key and arguments name their owners.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct ConstInvocation<'db> {
     pub key: SemanticInstanceKey<'db>,
     pub args: Vec<TyId<'db>>,
-    pub parameter_owner: ScopeId<'db>,
 }
 
 impl<'db> ConstExprId<'db> {

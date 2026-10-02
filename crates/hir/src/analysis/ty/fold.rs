@@ -287,7 +287,6 @@ where
             ConstExpr::Invocation(ConstInvocation {
                 key: invocation.key.fold_with(db, folder),
                 args: invocation.args.clone().fold_with(db, folder),
-                parameter_owner: folder.fold_scope(invocation.parameter_owner),
             }),
         ),
         ConstExpr::ArithBinOp { op, mode, lhs, rhs } => {

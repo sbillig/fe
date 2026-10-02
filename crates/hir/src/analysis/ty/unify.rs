@@ -321,7 +321,6 @@ where
                 if k1.owner(self.db) != k2.owner(self.db)
                     || k1.effect_providers(self.db) != k2.effect_providers(self.db)
                     || k1.impl_env(self.db) != k2.impl_env(self.db)
-                    || i1.parameter_owner != i2.parameter_owner
                     || ga1.len() != ga2.len()
                     || i1.args.len() != i2.args.len()
                 {

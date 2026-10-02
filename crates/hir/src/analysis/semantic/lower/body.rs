@@ -1267,7 +1267,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 ConstIntrinsicKind::SizeOf => ConstExpr::Invocation(ConstInvocation {
                     key,
                     args: Vec::new(),
-                    parameter_owner: caller.owner(self.db).scope(),
                 }),
             };
             let const_ty = ConstTyId::new(

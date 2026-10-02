@@ -970,7 +970,6 @@ fn canonicalize_const_expr_for_mode<'db>(
                 ConstExpr::Invocation(ConstInvocation {
                     key: invocation.key.fold_with(db, &mut folder),
                     args: invocation.args.clone().fold_with(db, &mut folder),
-                    parameter_owner: invocation.parameter_owner,
                 }),
             )
         }

@@ -312,15 +312,7 @@ fn extract_whole_const_term<'db>(
         remaining: config.step_limit.min(256),
         depth_limit: config.recursion_limit.min(64),
     };
-    let term = extract_pure_body_term(
-        db,
-        key,
-        &[],
-        computation.parameter_owner(db),
-        &[],
-        &[],
-        &mut extraction,
-    )?;
+    let term = extract_pure_body_term(db, key, &[], &[], &[], &mut extraction)?;
     let mut observed = 0;
     (term.term.ty(db) == computation.result_ty(db)
         && term.preserves_source_order(&mut observed)
@@ -359,7 +351,6 @@ fn extract_pure_body_term<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
     inputs: &[TermProvenance<'db>],
-    parameter_owner: ScopeId<'db>,
     stack: &[BodyOwner<'db>],
     frames: &[TermCallFrame<'db>],
     extraction: &mut TermExtraction,
@@ -456,7 +447,6 @@ fn extract_pure_body_term<'db>(
                             db,
                             reference.instance(db),
                             &[],
-                            parameter_owner,
                             &stack,
                             &nested_frames,
                             extraction,
@@ -620,7 +610,6 @@ fn extract_pure_body_term<'db>(
                                 db,
                                 callee.key,
                                 &operands,
-                                parameter_owner,
                                 &stack,
                                 &nested_frames,
                                 extraction,
@@ -645,7 +634,6 @@ fn extract_pure_body_term<'db>(
                                                 .iter()
                                                 .map(|operand| TyId::const_ty(db, operand.term))
                                                 .collect(),
-                                            parameter_owner,
                                         }),
                                     ),
                                     local.ty,
@@ -657,7 +645,6 @@ fn extract_pure_body_term<'db>(
                                 db,
                                 callee.key,
                                 &operands,
-                                parameter_owner,
                                 &stack,
                                 &nested_frames,
                                 extraction,
@@ -1148,6 +1135,9 @@ fn force_const_term<'db>(
     provenance: Option<&TermProvenance<'db>>,
 ) -> EvalResult<'db, SemConstId<'db>> {
     if let ConstExpr::Invocation(invocation) = term.data(db) {
+        // Inputs are forced here, so the request is a resolved call owned by
+        // its callee, as `const_computation_for_instance` builds one.
+        let scope = invocation.key.owner(db).scope();
         let inputs = invocation
             .args
             .iter()
@@ -1157,13 +1147,9 @@ fn force_const_term<'db>(
                 TyData::ConstTy(term) => {
                     let child = term_child_provenance(db, provenance, arg, index, origin)?;
                     Ok(if let Some(child) = child {
-                        ConstDesc::term_with_provenance(
-                            db,
-                            invocation.parameter_owner,
-                            child.clone(),
-                        )
+                        ConstDesc::term_with_provenance(db, scope, child.clone())
                     } else {
-                        ConstDesc::term(db, invocation.parameter_owner, *term)
+                        ConstDesc::term(db, scope, *term)
                     })
                 }
                 _ => Err(EvalStop::Failed(EvalFailure::Invariant {
@@ -1175,9 +1161,7 @@ fn force_const_term<'db>(
         let mut values = Vec::with_capacity(inputs.len());
         for input in inputs {
             match force_const_description_in_context(db, &input, cx, origin) {
-                EvalOutcome::Ready(value) => {
-                    values.push(ConstDesc::value(db, value, invocation.parameter_owner))
-                }
+                EvalOutcome::Ready(value) => values.push(ConstDesc::value(db, value, scope)),
                 EvalOutcome::Blocked(info) => return Err(EvalStop::Blocked(info)),
                 EvalOutcome::Failed(failure) => return Err(EvalStop::Failed(failure)),
             }
@@ -1187,7 +1171,7 @@ fn force_const_term<'db>(
             ConstEntry::Resolved(invocation.key),
             values,
             result_ty,
-            invocation.parameter_owner,
+            scope,
             origin,
         );
         let wraps_callee = matches!(invocation.key.owner(db), BodyOwner::Func(func) if func.is_const(db) && !func.is_extern(db));
