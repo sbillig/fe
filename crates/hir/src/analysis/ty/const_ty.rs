@@ -776,7 +776,11 @@ pub fn evaluate_type_level_int_const_expr<'db>(
 ) -> Option<ConstTyId<'db>> {
     if !matches!(
         expr.data(db),
-        ConstExpr::ArithBinOp { .. } | ConstExpr::UnOp { .. } | ConstExpr::Cast { .. }
+        ConstExpr::ArithBinOp { .. }
+            | ConstExpr::UnOp { .. }
+            | ConstExpr::Cast { .. }
+            | ConstExpr::Compare { .. }
+            | ConstExpr::Select { .. }
     ) {
         return None;
     }
@@ -930,6 +934,7 @@ fn const_expr_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, expr: ConstExprId
             check.ground
         }
         ConstExpr::ArithBinOp { lhs, rhs, .. }
+        | ConstExpr::Compare { lhs, rhs, .. }
         | ConstExpr::ArrayRepeat {
             value: lhs,
             len: rhs,
@@ -938,6 +943,13 @@ fn const_expr_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, expr: ConstExprId
             array: lhs,
             index: rhs,
         } => ty_is_fully_ground(db, *lhs) && ty_is_fully_ground(db, *rhs),
+        ConstExpr::Select {
+            cond,
+            then,
+            otherwise,
+        } => [cond, then, otherwise]
+            .into_iter()
+            .all(|ty| ty_is_fully_ground(db, *ty)),
         ConstExpr::UnOp { expr, .. }
         | ConstExpr::Cast { expr, .. }
         | ConstExpr::Field { value: expr, .. } => ty_is_fully_ground(db, *expr),
@@ -1005,6 +1017,26 @@ fn canonicalize_const_expr_for_mode<'db>(
             ConstExpr::Cast {
                 expr: canonicalize_ty_for_mode(db, *expr, env, mode),
                 to: canonicalize_ty_for_mode(db, *to, env, mode),
+            },
+        ),
+        ConstExpr::Compare { op, lhs, rhs } => ConstExprId::new(
+            db,
+            ConstExpr::Compare {
+                op: *op,
+                lhs: canonicalize_ty_for_mode(db, *lhs, env, mode),
+                rhs: canonicalize_ty_for_mode(db, *rhs, env, mode),
+            },
+        ),
+        ConstExpr::Select {
+            cond,
+            then,
+            otherwise,
+        } => ConstExprId::new(
+            db,
+            ConstExpr::Select {
+                cond: canonicalize_ty_for_mode(db, *cond, env, mode),
+                then: canonicalize_ty_for_mode(db, *then, env, mode),
+                otherwise: canonicalize_ty_for_mode(db, *otherwise, env, mode),
             },
         ),
         ConstExpr::ArrayRepeat { value, len } => ConstExprId::new(

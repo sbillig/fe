@@ -2,7 +2,7 @@ use crate::analysis::ty::assoc_const::{AssocConstUse, InherentConstUse};
 use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::ty::{corelib::ctfe_extern_intrinsic_kind, ty_check::BodyOwner};
 use crate::analysis::{HirAnalysisDb, semantic::SemanticInstanceKey};
-use crate::hir_def::{ArithBinOp, UnOp, attr::ArithmeticMode};
+use crate::hir_def::{ArithBinOp, CompBinOp, UnOp, attr::ArithmeticMode};
 use salsa::Update;
 
 #[salsa::interned]
@@ -29,6 +29,18 @@ pub enum ConstExpr<'db> {
     Cast {
         expr: TyId<'db>,
         to: TyId<'db>,
+    },
+    Compare {
+        op: CompBinOp,
+        lhs: TyId<'db>,
+        rhs: TyId<'db>,
+    },
+    /// A conditional whose arms are forced only when the condition selects
+    /// them, as execution evaluates only the arm it takes.
+    Select {
+        cond: TyId<'db>,
+        then: TyId<'db>,
+        otherwise: TyId<'db>,
     },
     ArrayRepeat {
         value: TyId<'db>,
@@ -83,6 +95,22 @@ impl<'db> ConstExprId<'db> {
             ConstExpr::Cast { expr, to } => {
                 format!("({} as {})", expr.pretty_print(db), to.pretty_print(db))
             }
+            ConstExpr::Compare { op, lhs, rhs } => format!(
+                "({} {} {})",
+                lhs.pretty_print(db),
+                op.symbol(),
+                rhs.pretty_print(db)
+            ),
+            ConstExpr::Select {
+                cond,
+                then,
+                otherwise,
+            } => format!(
+                "(if {} {{ {} }} else {{ {} }})",
+                cond.pretty_print(db),
+                then.pretty_print(db),
+                otherwise.pretty_print(db)
+            ),
             ConstExpr::ArrayRepeat { value, len } => {
                 format!("[{}; {}]", value.pretty_print(db), len.pretty_print(db))
             }

@@ -1976,7 +1976,8 @@ fn repeated_invocations_share_identity_after_scope_transfer() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "repeated_invocations.fe".into(),
-        "const fn value<const N: usize>() -> usize { if N == 0 { 1 / 0 } else { N } }\nconst fn left<const N: usize>() -> usize { value<N>() }\nconst fn right<const N: usize>() -> usize { value<N>() }\nfn outer<const X: usize, const Y: usize>() {}",
+        // `value` reads `n` twice, so extraction keeps the call as an invocation.
+        "const fn value<const N: usize>() -> usize { let n = N\n if n == 0 { 1 / 0 } else { n } }\nconst fn left<const N: usize>() -> usize { value<N>() }\nconst fn right<const N: usize>() -> usize { value<N>() }\nfn outer<const X: usize, const Y: usize>() {}",
     );
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
@@ -2163,6 +2164,120 @@ const fn total() -> u8 { sized_pass<u16>([12, 13])[1] }
         TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::U8))),
         13,
     );
+}
+
+#[test]
+fn conditional_extents_share_identity() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "conditional_extent_identity.fe".into(),
+        r#"
+const fn inline_pass<const N: usize>(
+    _ x: [u8; { if N > 1 && N < 9 { N } else { 2 } }],
+) -> [u8; { if N > 1 && N < 9 { N } else { 2 } }] {
+    x
+}
+const fn total() -> u8 { inline_pass<3>([9, 10, 11])[2] + inline_pass<0>([12, 13])[1] }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(function(&db, module, "total"));
+    assert_integer_result(
+        &db,
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![])),
+        TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::U8))),
+        24,
+    );
+
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "distinct_conditional_extents.fe".into(),
+        "fn arms<const N: usize>(_ x: [u8; { if N == 0 { 1 } else { N } }]) -> [u8; { if N == 0 { 2 } else { N } }] { x }",
+    );
+    let (module, _) = db.top_mod(file);
+    let rendered = format_diagnostics(&db, &db.run_on_top_mod(module));
+    assert!(
+        rendered.contains("type mismatch"),
+        "different conditional extents must stay distinct: {rendered}"
+    );
+}
+
+#[test]
+fn conditional_terms_force_only_the_selected_arm() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "conditional_terms.fe".into(),
+        r#"
+const fn branch<const N: usize>() -> usize { if N == 0 { 1 } else { 10 / (N - 1) } }
+const fn logical<const N: usize>() -> usize { if N > 1 && N < 9 { N } else { 2 } }
+const fn either<const N: usize>() -> usize { if N == 0 || N == 5 { 1 } else { 2 } }
+const fn chain<const N: usize>() -> usize { if N == 0 { 1 } else if !(N == 1) { N + 1 } else { 2 } }
+const fn guarded<const N: usize>() -> usize {
+    let x = 10 / N
+    if N == 0 { 0 } else { x }
+}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let usize_ty = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+    let describe = |name| {
+        let owner = BodyOwner::Func(function(&db, module, name));
+        let request = const_computation_for_instance(
+            &db,
+            identity_semantic_instance_key(&db, owner),
+            Vec::new(),
+        );
+        describe_const_computation(&db, request, CtfeConfig::default())
+            .into_ready()
+            .expect("generic declaration must have a description")
+    };
+    for name in ["branch", "logical", "either", "chain"] {
+        let description = describe(name);
+        let ConstRepr::Term(term) = description.repr() else {
+            panic!("{name} must describe a conditional term: {description:?}");
+        };
+        assert!(
+            matches!(term.data(&db), ConstTyData::Abstract(expr, _)
+                if matches!(expr.data(&db), ConstExpr::Select { .. })),
+            "{name} must describe a select: {description:?}"
+        );
+    }
+    // The division before the branch is unconditional, so no select may
+    // move it into the arm that reads it.
+    assert!(
+        !matches!(describe("guarded").repr(), ConstRepr::Term(_)),
+        "an unconditional operand must not become conditional"
+    );
+    for (name, len, expected) in [
+        ("branch", 0, Some(1)),
+        ("branch", 1, None),
+        ("branch", 3, Some(5)),
+        ("logical", 1, Some(2)),
+        ("logical", 5, Some(5)),
+        ("logical", 9, Some(2)),
+        ("either", 0, Some(1)),
+        ("either", 2, Some(2)),
+        ("either", 5, Some(1)),
+        ("chain", 0, Some(1)),
+        ("chain", 1, Some(2)),
+        ("chain", 4, Some(5)),
+        ("guarded", 0, None),
+        ("guarded", 5, Some(2)),
+    ] {
+        let owner = BodyOwner::Func(function(&db, module, name));
+        let outcome =
+            assert_specialization_law(&db, owner, &[integer_const_arg(&db, usize_ty, len)]);
+        match expected {
+            Some(expected) => assert_integer_result(&db, outcome, usize_ty, expected),
+            None => assert!(
+                matches!(outcome, EvalOutcome::Failed(EvalFailure::Ctfe(ref error))
+                    if matches!(root_error(error), CtfeError::DivisionByZero { .. })),
+                "{name}<{len}> must divide by zero: {outcome:?}"
+            ),
+        }
+    }
 }
 
 #[test]

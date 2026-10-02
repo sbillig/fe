@@ -1,0 +1,1 @@
+Identical computed array lengths written with `if`/`else`, comparisons, `&&`, `||` or `!` over generic parameters, such as `[u8; { if N == 0 { 1 } else { N } }]`, now have the same type wherever they are written.

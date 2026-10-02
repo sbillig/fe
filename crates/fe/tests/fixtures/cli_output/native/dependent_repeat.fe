@@ -45,6 +45,10 @@ fn folded_projection<T: Width>() -> [u8; T::N] { [3; T::N] }
 
 fn folded_words<const N: usize>() -> [u256; word_len(N)] { [5; word_len(N)] }
 
+fn folded_conditional<const N: usize>() -> [u8; { if N > 1 && N < 9 { N } else { 2 } }] {
+    [7; { if N > 1 && N < 9 { N } else { 2 } }]
+}
+
 fn runtime_word(_ seed: u256) -> u256 { seed }
 
 fn runtime_byte(_ seed: u8) -> u8 { seed }
@@ -81,7 +85,8 @@ pub fn main() -> i32 {
     }
     let projection = folded_projection<Five>()
     let words = folded_words<65>()
-    if projection[4] != 3 || words[2] != 5 {
+    let conditional = folded_conditional<4>()
+    if projection[4] != 3 || words[2] != 5 || conditional.len() != 4 || conditional[3] != 7 {
         return 8
     }
     0

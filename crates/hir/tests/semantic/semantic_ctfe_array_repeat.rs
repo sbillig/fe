@@ -1047,6 +1047,9 @@ const fn annotated<const N: usize>() -> [u8; word_len(N)] {
     let values: [u8; word_len(N)] = [9; word_len(N)]
     values
 }
+const fn conditional<const N: usize>() -> [u8; { if N > 1 && N < 9 { N } else if N == 0 { 1 } else { 2 } }] {
+    [10; { if N > 1 && N < 9 { N } else if N == 0 { 1 } else { 2 } }]
+}
 const fn sized<T>() -> [u8; { core::size_of<T>() as usize }] { [11; { core::size_of<T>() as usize }] }
 const fn concrete_sized() -> [u8; 32] { sized<u256>() }
 const fn concrete_sized_small() -> [u8; 2] { sized<u16>() }
@@ -1147,6 +1150,10 @@ fn dependent_repeat_lengths_specialize() {
         ("composed", 32, vec![5; 2]),
         ("bare", 0, vec![]),
         ("bare", 2, vec![7; 2]),
+        ("conditional", 0, vec![10]),
+        ("conditional", 1, vec![10; 2]),
+        ("conditional", 5, vec![10; 5]),
+        ("conditional", 9, vec![10; 2]),
     ] {
         assert_eq!(
             array_elems(&db, evaluate(name, Some(len))),
@@ -1244,6 +1251,11 @@ fn dependent_repeat_faults_report_at_concrete_use() {
             "[7 as u8; [1, 2, 3][N - 1]][0]",
             "probe<4, 1>()",
             "index out of bounds",
+        ),
+        (
+            "[7 as u8; { if N == 0 { 1 } else { 10 / (N - 1) } }][0]",
+            "probe<1, 1>()",
+            "divide by zero",
         ),
         (
             "{ let _values = [10 / X; word_len(N)]\n 0 }",

@@ -1,7 +1,7 @@
 // A concrete instance demands the layout of every expression's type, so a
 // checked fault in a specialized extent is reported where the length is
 // written: in a repeat, in an unused repeat, in an array a caller receives,
-// and behind an index.
+// behind an index, and in the arm of a condition that a use selects.
 const fn minus(_ n: usize) -> usize { n - 1 }
 
 const fn lengths(_ n: usize) -> usize {
@@ -17,6 +17,8 @@ fn make<const N: usize>(_ value: u8) -> [u8; { N - 1 }] { [value; { N - 1 }] }
 
 fn indexed<const N: usize>() -> u8 { [7 as u8; lengths(N)][0] }
 
+fn selected<const N: usize>() -> u8 { [7 as u8; { if N == 0 { 1 } else { 10 / (N - 1) } }][0] }
+
 fn runtime(_ value: u8) -> u8 { value }
 
 fn underflow() -> u8 { first<0>() }
@@ -27,8 +29,10 @@ fn receive() { let _values = make<0>(runtime(7)) }
 
 fn bounds() -> u8 { indexed<2>() }
 
+fn condition() -> u8 { selected<1>() }
+
 pub fn main() -> i32 {
     unused<2>()
     let _values = make<2>(runtime(7))
-    (first<2>() + indexed<1>()) as i32
+    (first<2>() + indexed<1>() + selected<0>() + selected<2>()) as i32
 }

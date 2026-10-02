@@ -282,6 +282,40 @@ where
                 }
                 self.unify_ty(*inner1, *inner2)
             }
+            (
+                Compare {
+                    op: op1,
+                    lhs: lhs1,
+                    rhs: rhs1,
+                },
+                Compare {
+                    op: op2,
+                    lhs: lhs2,
+                    rhs: rhs2,
+                },
+            ) => {
+                if op1 != op2 {
+                    return Err(UnificationError::TypeMismatch);
+                }
+                self.unify_ty(*lhs1, *lhs2)?;
+                self.unify_ty(*rhs1, *rhs2)
+            }
+            (
+                Select {
+                    cond: c1,
+                    then: t1,
+                    otherwise: o1,
+                },
+                Select {
+                    cond: c2,
+                    then: t2,
+                    otherwise: o2,
+                },
+            ) => {
+                self.unify_ty(*c1, *c2)?;
+                self.unify_ty(*t1, *t2)?;
+                self.unify_ty(*o1, *o2)
+            }
             (ArrayRepeat { value: v1, len: n1 }, ArrayRepeat { value: v2, len: n2 }) => {
                 self.unify_ty(*n1, *n2)?;
                 self.unify_ty(*v1, *v2)

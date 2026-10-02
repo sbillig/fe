@@ -56,10 +56,16 @@ const SUMMED: [u8; 7] = summed<Two, Five>(4)
 const COMPOSED: [u8; 2] = composed<32>(5)
 const BRANCH: u8 = branch<0>(6)
 
+const fn conditional<const N: usize>(_ value: u8) -> [u8; { if N > 1 && N < 9 { N } else if N == 0 { 1 } else { 2 } }] {
+    [value; { if N > 1 && N < 9 { N } else if N == 0 { 1 } else { 2 } }]
+}
 const fn sized<T>(_ value: u8) -> [u8; { core::size_of<T>() as usize }] {
     [value; { core::size_of<T>() as usize }]
 }
 
+const CONDITIONAL_0: [u8; 1] = conditional<0>(6)
+const CONDITIONAL_5: [u8; 5] = conditional<5>(6)
+const CONDITIONAL_9: [u8; 2] = conditional<9>(6)
 const SIZED: [u8; 32] = sized<u256>(7)
 
 struct Holder<const N: usize> {}
@@ -76,6 +82,9 @@ fn folded_computed<const N: usize>() -> [u8; { N + 1 }] {
 }
 fn folded_words<const N: usize>() -> [u256; word_len(N)] { [5; word_len(N)] }
 fn folded_inherent<const N: usize>() -> [u8; Holder<N>::LEN] { [6; Holder<N>::LEN] }
+fn folded_conditional<const N: usize>() -> [u8; { if N == 0 { 1 } else { N } }] {
+    [7; { if N == 0 { 1 } else { N } }]
+}
 
 fn runtime_word(_ seed: u256) -> u256 { seed }
 
@@ -143,10 +152,22 @@ fn test_returned_folded_extents() {
     assert!(words.len() == 3 && words[2] == 5)
     let inherent = folded_inherent<3>()
     assert!(inherent.len() == 4 && inherent[3] == 6)
+    let conditional = folded_conditional<0>()
+    assert!(conditional.len() == 1 && conditional[0] == 7)
 }
 
 #[test]
 fn test_layout_lengths_match_compile_time_values() {
     let sized = sized<u256>(runtime_byte(7))
     assert!(sized.len() == SIZED.len() && sized[31] == SIZED[31])
+}
+
+#[test]
+fn test_conditional_lengths_match_compile_time_values() {
+    let zero = conditional<0>(runtime_byte(6))
+    assert!(zero.len() == CONDITIONAL_0.len() && zero[0] == CONDITIONAL_0[0])
+    let five = conditional<5>(runtime_byte(6))
+    assert!(five.len() == CONDITIONAL_5.len() && five[4] == CONDITIONAL_5[4])
+    let nine = conditional<9>(runtime_byte(6))
+    assert!(nine.len() == CONDITIONAL_9.len() && nine[1] == CONDITIONAL_9[1])
 }
