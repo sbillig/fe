@@ -1047,6 +1047,9 @@ const fn annotated<const N: usize>() -> [u8; word_len(N)] {
     let values: [u8; word_len(N)] = [9; word_len(N)]
     values
 }
+const fn sized<T>() -> [u8; { core::size_of<T>() as usize }] { [11; { core::size_of<T>() as usize }] }
+const fn concrete_sized() -> [u8; 32] { sized<u256>() }
+const fn concrete_sized_small() -> [u8; 2] { sized<u16>() }
 const fn concrete_summed() -> [u8; 7] { summed<Two, Five>() }
 const fn concrete_projected() -> [u8; 5] { projected<Five>() }
 const fn concrete_cast() -> [u8; 6] { cast<6>() }
@@ -1155,6 +1158,8 @@ fn dependent_repeat_lengths_specialize() {
         ("concrete_summed", vec![4; 7]),
         ("concrete_projected", vec![8; 5]),
         ("concrete_cast", vec![3; 6]),
+        ("concrete_sized", vec![11; 32]),
+        ("concrete_sized_small", vec![11; 2]),
     ] {
         assert_eq!(array_elems(&db, evaluate(name, None)), expected, "{name}");
     }

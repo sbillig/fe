@@ -2141,6 +2141,31 @@ const fn total() -> u256 {
 }
 
 #[test]
+fn generic_size_of_extents_wait_for_their_type() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "generic_size_of_extent.fe".into(),
+        r#"
+const fn sized_pass<T>(
+    _ x: [u8; { core::size_of<T>() as usize }],
+) -> [u8; { core::size_of<T>() as usize }] {
+    x
+}
+const fn total() -> u8 { sized_pass<u16>([12, 13])[1] }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(function(&db, module, "total"));
+    assert_integer_result(
+        &db,
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![])),
+        TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::U8))),
+        13,
+    );
+}
+
+#[test]
 fn describing_a_non_const_body_fails_as_executing_it_does() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
