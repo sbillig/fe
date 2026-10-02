@@ -20,6 +20,7 @@ use crate::{
         ty::{
             CallableLayoutBundleInput, CallableLayoutBundleSignature, CallableLayoutOwner,
             adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape},
+            const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
             corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
             effects::place_effect_provider_param_index_map,
             fold::TyFoldable,
@@ -1310,6 +1311,38 @@ impl<'db> SemanticInstance<'db> {
             }
         }
         Ok(())
+    }
+
+    /// Borrow checking and runtime lowering consume concrete layouts, so each
+    /// array repeat of a concrete instance demands its specialized extent. A
+    /// deferred fault in that extent rejects the body with its source, even
+    /// when the repeated value is unused or empty. Compile-time evaluation
+    /// forces the same extent itself when it materializes the repeat.
+    pub(crate) fn repeat_extent_diagnostic(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<SemanticDiagnosticId<'db>> {
+        let typed_body = self.key(db).typed_body(db);
+        let body = typed_body.body()?;
+        body.exprs(db).iter().find_map(|(expr, data)| {
+            let Partial::Present(Expr::ArrayRep(..)) = data else {
+                return None;
+            };
+            let ty = self.normalized_ty(db, typed_body.expr_ty(db, expr));
+            let len = *ty.generic_args(db).get(1)?;
+            let Err(ConcreteArrayLengthError::Invalid(cause)) =
+                demand_concrete_array_length(db, len, len)
+            else {
+                return None;
+            };
+            Some(invalid_size_diagnostic(
+                db,
+                self,
+                SemOrigin::Expr(expr),
+                ty,
+                RuntimeSizeError::InvalidType(cause),
+            ))
+        })
     }
 
     pub(crate) fn admitted_body(

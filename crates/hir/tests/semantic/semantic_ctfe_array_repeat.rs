@@ -2,9 +2,10 @@ use fe_hir::{
     analysis::{
         semantic::{
             CtfeError, EvalFailure, EvalOutcome, GenericSubst, SConst, SExpr, SStmtKind,
-            SemConstId, SemConstScalar, SemConstValue, SemanticInstanceKey,
-            canonicalize_semantic_consts, eval_body_owner_const, eval_const_instance,
-            get_or_build_semantic_instance, identity_semantic_instance_key, reify_runtime_const,
+            SemConstId, SemConstScalar, SemConstValue, SemanticDiagnosticKind, SemanticInstanceKey,
+            SemanticNormalizationFailure, canonicalize_semantic_consts, eval_body_owner_const,
+            eval_const_instance, get_or_build_semantic_instance, identity_semantic_instance_key,
+            normalize_runtime_semantic_body, normalize_semantic_body, reify_runtime_const,
             reify_runtime_const_for_ty, sem_const_ty,
         },
         ty::{
@@ -1014,5 +1015,272 @@ fn outer<const A: usize, const B: usize>() {}
             aggregate_count >= 4,
             "expected nested aggregate constants in the semantic body"
         );
+    }
+}
+
+const DEPENDENT_LENGTHS: &str = r#"
+const fn word_len(_ n: usize) -> usize { n / 32 + if n % 32 == 0 { 0 } else { 1 } }
+const fn plus(_ n: usize) -> usize { n + 1 }
+trait Width { const N: usize = 1 }
+struct Two {}
+impl Width for Two { const N: usize = 2 }
+struct Five {}
+impl Width for Five { const N: usize = 5 }
+struct Packed<const N: usize> { words: [u256; word_len(N)] }
+impl<const N: usize> Packed<N> {
+    const ZERO: Packed<N> = Packed { words: [0; word_len(N)] }
+    const fn filled(_ word: u256) -> Self { Self { words: [word; word_len(N)] } }
+}
+const fn packed_words<const N: usize>() -> [u256; word_len(N)] { Packed<N>::filled(7).words }
+const fn zero_words<const N: usize>() -> [u256; word_len(N)] { Packed<N>::ZERO.words }
+const fn computed<const N: usize>() -> [u8; { N + 1 }] { [1; { N + 1 }] }
+const fn called<const N: usize>() -> [u8; plus(N)] { [2; plus(N)] }
+const fn cast<const N: u8>() -> [u8; { N as usize }] { [3; { N as usize }] }
+const fn summed<T0: Width, T1: Width>() -> [u8; { T0::N + T1::N }] { [4; { T0::N + T1::N }] }
+const fn composed<const N: usize>() -> [u8; word_len(plus(N))] { [5; word_len(plus(N))] }
+const fn branch<const N: usize>() -> u8 { [6 as u8; { if N == 0 { 1 } else { N } }][0] }
+const fn bare<const N: usize>() -> [u8; N] { [7; N] }
+const fn projected<T: Width>() -> [u8; T::N] { [8; T::N] }
+const fn annotated<const N: usize>() -> [u8; word_len(N)] {
+    let values: [u8; word_len(N)] = [9; word_len(N)]
+    values
+}
+const fn concrete_summed() -> [u8; 7] { summed<Two, Five>() }
+const fn concrete_projected() -> [u8; 5] { projected<Five>() }
+const fn concrete_cast() -> [u8; 6] { cast<6>() }
+const fn concrete_branch() -> u8 { branch<0>() }
+"#;
+
+fn array_elems<'db>(db: &'db HirAnalysisTestDb, value: SemConstId<'db>) -> Vec<usize> {
+    let SemConstValue::Array { elems, .. } = value.value(db) else {
+        panic!("expected array, got {:?}", value.value(db));
+    };
+    elems.iter().map(|elem| scalar(db, *elem)).collect()
+}
+
+#[test]
+fn dependent_repeat_lengths_specialize() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("dependent_lengths.fe".into(), DEPENDENT_LENGTHS);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let usize_ty = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+    let evaluate = |name: &str, len: Option<u32>| {
+        let owner = BodyOwner::Func(function(&db, module, name));
+        let Some(len) = len else {
+            return eval_body_owner_const(
+                &db,
+                owner,
+                GenericSubst::for_body_owner(&db, owner, vec![]),
+            )
+            .into_ready()
+            .unwrap_or_else(|| panic!("{name} must evaluate"));
+        };
+        let identity = identity_semantic_instance_key(&db, owner);
+        assert!(
+            matches!(
+                eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![])),
+                EvalOutcome::Blocked(_)
+            ),
+            "{name} must wait for its length"
+        );
+        let arg = TyId::new(
+            &db,
+            TyData::ConstTy(ConstTyId::integer(&db, usize_ty, BigInt::from(len))),
+        );
+        let key = SemanticInstanceKey::new(
+            &db,
+            owner,
+            GenericSubst::for_body_owner(&db, owner, vec![arg]),
+            identity.effect_providers(&db),
+            identity.impl_env(&db),
+        );
+        let instance = get_or_build_semantic_instance(&db, key);
+        let value = eval_const_instance(&db, instance)
+            .into_ready()
+            .unwrap_or_else(|| panic!("{name}<{len}> must evaluate"));
+        let expected = key.typed_body(&db).result_ty();
+        let reified = reify_runtime_const_for_ty(&db, instance, expected, value)
+            .unwrap_or_else(|| panic!("{name}<{len}> must reify"));
+        assert_eq!(reify_runtime_const(&db, instance, value), Some(reified));
+        assert_eq!(
+            sem_const_ty(&db, reified),
+            instance.normalized_ty(&db, expected),
+            "{name}<{len}> type"
+        );
+        assert!(!sem_const_ty(&db, reified).has_param(&db));
+        reified
+    };
+    for (bits, words) in [
+        (0, 0),
+        (1, 1),
+        (31, 1),
+        (32, 1),
+        (33, 2),
+        (63, 2),
+        (64, 2),
+        (65, 3),
+    ] {
+        for (name, element) in [("packed_words", 7), ("zero_words", 0)] {
+            assert_eq!(
+                array_elems(&db, evaluate(name, Some(bits))),
+                vec![element; words],
+                "{name}<{bits}>"
+            );
+        }
+        assert_eq!(
+            array_elems(&db, evaluate("annotated", Some(bits))),
+            vec![9; words],
+            "annotated<{bits}>"
+        );
+    }
+    for (name, len, expected) in [
+        ("computed", 0, vec![1]),
+        ("computed", 3, vec![1; 4]),
+        ("called", 3, vec![2; 4]),
+        ("composed", 31, vec![5]),
+        ("composed", 32, vec![5; 2]),
+        ("bare", 0, vec![]),
+        ("bare", 2, vec![7; 2]),
+    ] {
+        assert_eq!(
+            array_elems(&db, evaluate(name, Some(len))),
+            expected,
+            "{name}<{len}>"
+        );
+    }
+    for (name, expected) in [
+        ("concrete_summed", vec![4; 7]),
+        ("concrete_projected", vec![8; 5]),
+        ("concrete_cast", vec![3; 6]),
+    ] {
+        assert_eq!(array_elems(&db, evaluate(name, None)), expected, "{name}");
+    }
+    assert_eq!(scalar(&db, evaluate("concrete_branch", None)), 6);
+}
+
+#[test]
+fn dependent_repeat_lengths_reject_unforceable_extents() {
+    for (source, rejected) in [
+        (
+            "extern { const fn opaque() -> usize }\nfn closed() { let _values = [0 as u8; opaque()] }",
+            "opaque()",
+        ),
+        (
+            "extern { const fn opaque_of(_ n: usize) -> usize }\nfn open<const N: usize>() { let _values = [0 as u8; opaque_of(N)] }",
+            "opaque_of(N)",
+        ),
+        (
+            "fn runtime(_ n: usize) -> u8 { [0 as u8; { n + 1 }][0] }",
+            "{ n + 1 }",
+        ),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("unforceable_length.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        let diags = db.run_on_top_mod(module);
+        let rendered = format_diagnostics(&db, &diags);
+        assert_eq!(diags.len(), 1, "{rendered}");
+        assert!(
+            rendered.contains("const value must be resolvable during type checking"),
+            "{rejected} must be rejected: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn dependent_repeat_faults_report_at_concrete_use() {
+    for (expression, call, fault) in [
+        ("[7 as u8; { N - 1 }][0]", "probe<0, 1>()", "overflow"),
+        ("[7 as u8; minus(N)][0]", "probe<0, 1>()", "overflow"),
+        (
+            "[7 as u8; { 10 / N }][0]",
+            "probe<0, 1>()",
+            "divide by zero",
+        ),
+        (
+            "{ let _values = [10 / X; word_len(N)]\n 0 }",
+            "probe<0, 0>()",
+            "divide by zero",
+        ),
+    ] {
+        let source = format!(
+            r#"
+const fn word_len(_ n: usize) -> usize {{ n / 32 + if n % 32 == 0 {{ 0 }} else {{ 1 }} }}
+const fn minus(_ n: usize) -> usize {{ n - 1 }}
+const fn probe<const N: usize, const X: u8>() -> u8 {{ {expression} }}
+"#
+        );
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("dependent_fault_template.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "dependent_fault.fe".into(),
+            &format!("{source}const VALID: u8 = probe<2, 1>()\nconst BAD: u8 = {call}\n"),
+        );
+        let (module, _) = db.top_mod(file);
+        let diags = db.run_on_top_mod(module);
+        let rendered = format_diagnostics(&db, &diags);
+        assert_eq!(diags.len(), 1, "{expression}: {rendered}");
+        assert!(rendered.contains(fault), "{expression}: {rendered}");
+        assert!(!rendered.contains("internal"), "{rendered}");
+    }
+}
+
+#[test]
+fn runtime_admission_demands_specialized_repeat_lengths() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "runtime_repeat_admission.fe".into(),
+        r#"
+fn first<const N: usize>() -> u8 { [7 as u8; { N - 1 }][0] }
+fn unused<const N: usize>() { let _values = [7 as u8; { 10 / N }] }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let usize_ty = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+    for (name, len, valid) in [
+        ("first", 2, true),
+        ("first", 0, false),
+        ("unused", 5, true),
+        ("unused", 0, false),
+    ] {
+        let owner = BodyOwner::Func(function(&db, module, name));
+        let identity = identity_semantic_instance_key(&db, owner);
+        assert!(
+            normalize_semantic_body(&db, get_or_build_semantic_instance(&db, identity)).is_ok(),
+            "{name} template must be admitted"
+        );
+        let arg = TyId::new(
+            &db,
+            TyData::ConstTy(ConstTyId::integer(&db, usize_ty, BigInt::from(len))),
+        );
+        let instance = get_or_build_semantic_instance(
+            &db,
+            SemanticInstanceKey::new(
+                &db,
+                owner,
+                GenericSubst::for_body_owner(&db, owner, vec![arg]),
+                identity.effect_providers(&db),
+                identity.impl_env(&db),
+            ),
+        );
+        for result in [
+            normalize_semantic_body(&db, instance),
+            normalize_runtime_semantic_body(&db, instance),
+        ] {
+            match result {
+                Ok(_) => assert!(valid, "{name}<{len}> must be rejected"),
+                Err(SemanticNormalizationFailure::Rejected(diag)) => {
+                    assert!(!valid, "{name}<{len}> must be admitted: {diag:?}");
+                    assert_eq!(diag.kind, SemanticDiagnosticKind::InvalidConcreteType);
+                    assert_eq!(diag.secondaries.len(), 1, "{diag:?}");
+                }
+                Err(failure) => panic!("{name}<{len}>: unexpected failure {failure:?}"),
+            }
+        }
     }
 }

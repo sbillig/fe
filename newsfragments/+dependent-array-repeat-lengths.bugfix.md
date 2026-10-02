@@ -1,0 +1,1 @@
+Array repeat expressions accept lengths computed from generic parameters, such as `[0; word_len(N)]` or `[0; { N + 1 }]`. Each concrete use evaluates the length with checked arithmetic and reports a fault where the length is written.

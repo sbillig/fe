@@ -1,0 +1,18 @@
+// A repeat length is forced now or waits only on generic facts. An opaque
+// extern can never be forced, a closed non-const call fails when forced, and
+// a runtime value is never known.
+extern {
+    const fn opaque_of(_ n: usize) -> usize
+}
+
+const fn word_len(_ n: usize) -> usize { n / 32 + if n % 32 == 0 { 0 } else { 1 } }
+
+fn runtime_len(_ n: usize) -> usize { n }
+
+fn dependent<const N: usize>() -> [u8; word_len(N)] { [0; word_len(N)] }
+
+fn opaque<const N: usize>() -> [u8; opaque_of(N)] { [0; opaque_of(N)] }
+
+fn closed_non_const() -> u8 { [0 as u8; runtime_len(3)][0] }
+
+fn runtime(_ n: usize) -> u8 { [0 as u8; { n + 1 }][0] }

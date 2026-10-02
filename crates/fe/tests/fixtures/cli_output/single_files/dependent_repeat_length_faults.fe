@@ -1,0 +1,16 @@
+// A concrete instance demands each computed repeat length, including an
+// unused one, and reports its checked fault where the length is written.
+const fn minus(_ n: usize) -> usize { n - 1 }
+
+fn first<const N: usize>() -> u8 { [7 as u8; minus(N)][0] }
+
+fn unused<const N: usize>() { let _values = [7 as u8; { 10 / N }] }
+
+fn underflow() -> u8 { first<0>() }
+
+fn divide() { unused<0>() }
+
+pub fn main() -> i32 {
+    unused<2>()
+    first<2>() as i32
+}
