@@ -23,8 +23,8 @@ use crate::{
             capability::{
                 birth::AllocationBirth,
                 external::{
-                    AddressProvenance, ClobberCondition, ExternalOrigin, ExternalSource,
-                    MemoryOffset, ReferentContract,
+                    AddressProvenance, AliasBasis, ClobberCondition, ExternalOrigin,
+                    ExternalSource, MemoryOffset, ReferentContract,
                 },
                 footprint::{AccessExtent, AccessFootprint},
                 guard::{ChoiceKey, Guard, ValueOccurrence},
@@ -38,12 +38,16 @@ use crate::{
                 path::{Projection, RegionPath, StructuralPath},
                 region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace, substitute_clause},
                 semantics::{CapabilityClass, CapabilitySemantics},
+                separation::{
+                    SEPARATION_CLAUSE_LIMIT, SEPARATION_PAIR_LIMIT, Separation, SeparationSet,
+                    validity_within_limits, within_limits,
+                },
                 shape::{ShapeChildren, ShapeId},
                 source::{InputOrigin, SourceExpr},
                 state::{BorrowState, CapabilityValue, CapabilityValues},
                 value::{Guarded, IndexPayload, ValueId, ValueInterner, ValueLimits},
             },
-            definite_assignment::literal_bool_cond,
+            definite_assignment::{literal_bool_cond, literal_enum_variant},
             get_or_build_semantic_instance, instantiated_effect_env,
             normalized::{
                 NEffectArg, NEffectArgValue, NExpr, NOperand, NStatement, NStatementKind,
@@ -68,10 +72,11 @@ use super::{
         BorrowSummaryComputation, BorrowSummaryVoucher, provisional_borrow_summary_voucher,
         semantic_borrow_summary_voucher,
     },
+    events::ConflictAnalysis,
     ir::{
         AvailabilityRequirement, AvailabilitySummary, BorrowSummary, BoundaryRequirement,
         CertifiedRangePoststate, InputPoststate, MemoryAccess, PendingSemanticValidation,
-        ScalarInputPoststate,
+        ScalarInputPoststate, SeparationOrigin,
     },
     solver::{BorrowSummaryMode, Borrowck, Resolution},
     transport::{TransportRoute, referent_contract},
@@ -86,11 +91,15 @@ impl<'db> BorrowSummary<'db> {
     /// numbers on first encounter separates related observations when poststates
     /// and access requirements encounter them in different orders. Preserve the
     /// local order through this injective renaming and subsequent call expansion.
+    /// Loan requirements arrive separately with their origins, and leave as the
+    /// summary component with origins in clause order.
     fn abstract_choices(
         mut self,
+        db: &'db dyn HirAnalysisDb,
         values: &mut SourceValues<'db>,
         choices: BTreeSet<ValueOccurrence>,
-    ) -> Self {
+        separations: Vec<(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)>,
+    ) -> (Self, Vec<SeparationOrigin<'db>>) {
         let choices: BTreeMap<_, _> = choices
             .into_iter()
             .enumerate()
@@ -98,12 +107,11 @@ impl<'db> BorrowSummary<'db> {
                 (occurrence, index.try_into().expect("summary choice count"))
             })
             .collect();
-        let map = |guard: &Guard<'db>| {
-            guard.map_occurrences(|occurrence| match occurrence {
-                ValueOccurrence::Argument(_) | ValueOccurrence::Summary => occurrence,
-                _ => ValueOccurrence::SummaryChoice(choices[&occurrence]),
-            })
+        let rename = |occurrence: ValueOccurrence| match occurrence {
+            ValueOccurrence::Argument(_) | ValueOccurrence::Summary => occurrence,
+            _ => ValueOccurrence::SummaryChoice(choices[&occurrence]),
         };
+        let map = |guard: &Guard<'db>| guard.map_occurrences(rename);
         for value in std::iter::once(&mut self.result)
             .chain(self.mutable_inputs.iter_mut().map(|input| &mut input.value))
             .chain(
@@ -138,6 +146,7 @@ impl<'db> BorrowSummary<'db> {
                 &mut self.availability.reinitialized,
                 &mut self.availability.unavailable,
                 &mut self.native_requirements,
+                &mut self.separation_validity,
             ])
         {
             *region = RegionSet::new(
@@ -148,9 +157,27 @@ impl<'db> BorrowSummary<'db> {
                 }),
             );
         }
+        // Equal relations merge; the first origin in body order names each.
+        let scope = BinderScope::default();
+        let mut origins = BTreeMap::new();
+        let mut clauses = Vec::new();
+        for (clause, origin) in separations {
+            let renamed = SeparationSet::new(db, &scope, [clause]).map_occurrences(db, rename);
+            for clause in renamed.clauses() {
+                origins.entry(clause.payload.clone()).or_insert(origin);
+                clauses.push(clause.clone());
+            }
+        }
+        self.loan_requirements = SeparationSet::new(db, &scope, clauses);
+        let provenance = self
+            .loan_requirements
+            .clauses()
+            .iter()
+            .map(|clause| origins[&clause.payload])
+            .collect();
         self.accesses.sort();
         self.availability.incoming.sort();
-        self
+        (self, provenance)
     }
 }
 
@@ -211,6 +238,9 @@ pub(super) struct SourceInstantiations<'a, 'db> {
     state: &'a BorrowState<'db>,
     result: NValueId,
     inputs: CallInputs<'a, 'db>,
+    /// Separation that may drop a clobber-conditioned alternative. Resolutions
+    /// are cached per session, so a basis never reuses another's results.
+    basis: AliasBasis,
     generation: Option<usize>,
     resolved: BTreeMap<BinderScope, FxHashMap<SourceExpr<'db>, Resolution<'db>>>,
     guards: FxHashMap<Guard<'db>, Option<Guard<'db>>>,
@@ -224,10 +254,30 @@ impl<'a, 'db> SourceInstantiations<'a, 'db> {
         result: NValueId,
         inputs: CallInputs<'a, 'db>,
     ) -> Self {
+        Self::with_basis(state, result, inputs, AliasBasis::Assumed)
+    }
+
+    /// Resolution of separation endpoints, which may use only physical
+    /// separation to drop an alternative.
+    pub(super) fn physical(
+        state: &'a BorrowState<'db>,
+        result: NValueId,
+        inputs: CallInputs<'a, 'db>,
+    ) -> Self {
+        Self::with_basis(state, result, inputs, AliasBasis::Physical)
+    }
+
+    fn with_basis(
+        state: &'a BorrowState<'db>,
+        result: NValueId,
+        inputs: CallInputs<'a, 'db>,
+        basis: AliasBasis,
+    ) -> Self {
         Self {
             state,
             result,
             inputs,
+            basis,
             generation: None,
             resolved: BTreeMap::new(),
             guards: FxHashMap::default(),
@@ -287,6 +337,8 @@ impl<'a, 'db> SourceInstantiations<'a, 'db> {
 pub(super) struct CallSummary<'db> {
     pub instance: SemanticInstance<'db>,
     pub summary: BorrowSummary<'db>,
+    /// Origins of the summary's loan requirements, when the callee has them.
+    pub provenance: Vec<SeparationOrigin<'db>>,
     pub pending: bool,
     updates: Vec<CapabilityValue<'db>>,
     births: Vec<AllocationBirth<'db>>,
@@ -367,6 +419,7 @@ impl<'db> Borrowck<'db> {
                     pending: PendingSemanticValidation {
                         callees: [callee.key].into(),
                     },
+                    provenance: Vec::new(),
                 }
             } else {
                 match self.summary_mode {
@@ -485,16 +538,34 @@ impl<'db> Borrowck<'db> {
                     &summary.availability.reinitialized,
                     &summary.availability.unavailable,
                     &summary.native_requirements,
+                    &summary.separation_validity,
                 ]);
             external.extend(
                 regions
-                    .flat_map(|region| region.clauses())
-                    .filter_map(|clause| {
-                        SourceExpr::from_place(&clause.payload).map(|source| {
+                    .flat_map(|region| {
+                        region
+                            .clauses()
+                            .iter()
+                            .map(|clause| (&clause.guard, &clause.payload))
+                    })
+                    .chain(
+                        summary
+                            .loan_requirements
+                            .clauses()
+                            .iter()
+                            .flat_map(|clause| {
+                                [
+                                    (&clause.guard, &clause.payload.protected),
+                                    (&clause.guard, &clause.payload.access),
+                                ]
+                            }),
+                    )
+                    .filter_map(|(guard, place)| {
+                        SourceExpr::from_place(place).map(|source| {
                             (
                                 source.source,
-                                clause.guard.scope().clone(),
-                                Some(clause.guard.clone()),
+                                guard.scope().clone(),
+                                Some(guard.clone()),
                                 PortUse::Other,
                             )
                         })
@@ -512,6 +583,7 @@ impl<'db> Borrowck<'db> {
             let single_result_port = summary.result.shape().direct(self.db).is_some()
                 && summary.certified_ranges.is_empty()
                 && summary.native_requirements.is_empty()
+                && summary.separation_validity.is_empty()
                 && external.iter().all(|(source, _, _, port)| match port {
                     PortUse::Result => true,
                     PortUse::Copy => source.fresh_allocation().is_none_or(|handle| {
@@ -566,6 +638,7 @@ impl<'db> Borrowck<'db> {
                 CallSummary {
                     instance,
                     summary,
+                    provenance: voucher.provenance,
                     pending,
                     updates,
                     births,
@@ -605,6 +678,7 @@ impl<'db> Borrowck<'db> {
                 summary: Some(summary),
                 blocked: None,
                 pending: Default::default(),
+                provenance: Vec::new(),
             }));
         }
         if self
@@ -620,6 +694,7 @@ impl<'db> Borrowck<'db> {
                 pending: PendingSemanticValidation {
                     callees: [self.instance.key(self.db)].into(),
                 },
+                provenance: Vec::new(),
             }));
         }
         Ok(None)
@@ -629,9 +704,18 @@ impl<'db> Borrowck<'db> {
     pub(super) fn solved_borrow_summary(
         &mut self,
     ) -> Result<BorrowSummaryComputation<'db>, SemanticDiagnostic<'db>> {
+        // Requirements past a limit are incomplete; no fallback may hide that.
+        if let ConflictAnalysis {
+            exhausted: true,
+            diagnostic: Some(diagnostic),
+            ..
+        } = self.conflicts()
+        {
+            return Err(diagnostic.clone());
+        }
         let recursive_unresolved = !self.recursive_calls.is_empty()
             && (self.blocked.is_some() || !self.pending.callees.is_empty());
-        let summary = if (!self.pending.callees.is_empty()
+        let (summary, provenance) = if (!self.pending.callees.is_empty()
             && can_specialize(self.db, self.instance))
             || recursive_unresolved
         {
@@ -650,7 +734,7 @@ impl<'db> Borrowck<'db> {
             // its Pending or Blocked status until those callees are resolved.
             // Independent final returning paths were checked above when the
             // component was pending rather than blocked.
-            signature_summary(self.db, self.instance, true)?
+            (signature_summary(self.db, self.instance, true)?, Vec::new())
         } else {
             self.build_summary()?
         };
@@ -658,6 +742,7 @@ impl<'db> Borrowck<'db> {
             summary: Some(summary),
             blocked: self.blocked.clone(),
             pending: self.pending.clone(),
+            provenance,
         })
     }
 
@@ -708,9 +793,24 @@ impl<'db> Borrowck<'db> {
         Ok(())
     }
 
-    pub fn build_summary(&self) -> Result<BorrowSummary<'db>, SemanticDiagnostic<'db>> {
+    /// The summary of the solved body, with its loan requirements' origins.
+    pub fn build_summary(
+        &self,
+    ) -> Result<(BorrowSummary<'db>, Vec<SeparationOrigin<'db>>), SemanticDiagnostic<'db>> {
         #[cfg(feature = "borrowck-profile")]
         let profile = self.profile_scope("build_summary");
+        // Provisional summaries supply provider facts needed for body admission
+        // and definite assignment. Boundary policy must not suppress those facts.
+        // A boundary violation is reported here; the local check reports its
+        // ownership diagnostic.
+        let pending = if self.summary_mode == BorrowSummaryMode::Final {
+            self.boundary_requirements
+                .as_ref()
+                .expect("solved boundary requirements")
+                .clone()?
+        } else {
+            Vec::new()
+        };
         let ownership = self.analyze_availability();
         let _ = self
             .availability_diagnostic
@@ -721,16 +821,6 @@ impl<'db> Borrowck<'db> {
         {
             return Err(diagnostic);
         }
-        // Provisional summaries supply provider facts needed for body admission
-        // and definite assignment. Boundary policy must not suppress those facts.
-        let pending = if self.summary_mode == BorrowSummaryMode::Final {
-            self.boundary_requirements
-                .as_ref()
-                .expect("solved boundary requirements")
-                .clone()?
-        } else {
-            Vec::new()
-        };
         let scope = BinderScope::default();
         let result_shape = self.shape(self.instance.normalized_result_ty(self.db))?;
         let mut values = SourceValues::new(self.db, ValueLimits::default());
@@ -1185,9 +1275,23 @@ impl<'db> Borrowck<'db> {
         }
         let scalar_result =
             scalar_result.filter(|guard: &Guard<'db>| !Guard::always(guard.scope()).implies(guard));
+        let mut separations =
+            self.summarize_separations(&self.conflicts().deferred, &mut choices, &handles)?;
+        // Equal relations take the first origin: prefer one forwarded from a
+        // callee, which names the borrow and access where the relation began.
+        let owner = self.instance.key(self.db).owner(self.db);
+        separations.sort_by_key(|(_, origin)| origin.owner == owner);
         let summary = BorrowSummary {
             native_requirements: self.summarize_availability_region(
                 &ownership.native_validity.requirements,
+                origin,
+                &mut choices,
+                &handles,
+                false,
+            )?,
+            loan_requirements: SeparationSet::empty(&BinderScope::default()),
+            separation_validity: self.summarize_availability_region(
+                &self.conflicts().validity.requirements,
                 origin,
                 &mut choices,
                 &handles,
@@ -1203,11 +1307,122 @@ impl<'db> Borrowck<'db> {
             scalar_inputs,
             requirements,
         };
-        let summary = summary.abstract_choices(&mut values, choices);
+        let (summary, provenance) =
+            summary.abstract_choices(self.db, &mut values, choices, separations);
+        // Merging equal relations ORs their guards, so check the final clauses.
+        let requirements = &summary.loan_requirements;
+        let validity = &summary.separation_validity;
+        if requirements.clauses().len() > SEPARATION_CLAUSE_LIMIT
+            || !requirements
+                .clauses()
+                .iter()
+                .all(|clause| within_limits(clause, requirements.scope()))
+            || validity.clauses().len() > SEPARATION_CLAUSE_LIMIT
+            || !validity
+                .clauses()
+                .iter()
+                .all(|clause| validity_within_limits(clause, validity.scope()))
+        {
+            return Err(self.separation_limit_diag(SemOrigin::Body(self.body.template_owner)));
+        }
         self.verify_summary(&summary)?;
         #[cfg(feature = "borrowck-profile")]
         drop(profile);
-        Ok(summary)
+        Ok((summary, provenance))
+    }
+
+    /// Export the separation callers owe. Each relation is abstracted as a
+    /// whole, so its endpoints, extent and slices keep their shared selectors
+    /// and address identities. There is no fresh-effect elision of an endpoint.
+    fn summarize_separations(
+        &self,
+        requirements: &[(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)],
+        choices: &mut BTreeSet<ValueOccurrence>,
+        exposed: &BTreeMap<AddressOccurrence<'db>, u32>,
+    ) -> Result<Vec<(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)>, SemanticDiagnostic<'db>>
+    {
+        let limit = || self.separation_limit_diag(SemOrigin::Body(self.body.template_owner));
+        if requirements.len() > SEPARATION_CLAUSE_LIMIT {
+            return Err(limit());
+        }
+        let mut clauses = Vec::new();
+        for (clause, origin) in requirements {
+            let subst = self.abstract_local_indices(
+                clause.guard.scope(),
+                clause
+                    .guard
+                    .indices()
+                    .into_iter()
+                    .chain(clause.payload.indices()),
+            );
+            let Some(guard) = clause.guard.substitute(&subst) else {
+                continue;
+            };
+            let mut relation = clause.payload.substitute(self.db, &subst);
+            // An address used only by this relation is named by its family and
+            // an independent witness per distinct argument list, so recursion
+            // cannot grow its arguments, and equal arguments stay shared.
+            let mut handles = exposed.clone();
+            let mut witnesses = BTreeMap::new();
+            let mut scope = guard.scope().clone();
+            for place in [&mut relation.protected, &mut relation.access] {
+                let RegionRoot::External(source) = &mut place.root else {
+                    unreachable!("representable separation endpoint")
+                };
+                source.map_occurrences(&mut |occurrence, arguments| {
+                    if !exposed.contains_key(occurrence) {
+                        let witness = *witnesses
+                            .entry((*occurrence, arguments.clone()))
+                            .or_insert_with(|| {
+                                let (nested, witness) = scope.bind(IndexNamespace::Existential);
+                                scope = nested;
+                                witness
+                            });
+                        *arguments = Box::new([witness]);
+                    }
+                    let next = handles.len().try_into().expect("summary handle count");
+                    *occurrence =
+                        AddressOccurrence::Summary(*handles.entry(*occurrence).or_insert(next));
+                });
+            }
+            // Forgetting a recursive choice widens the possible conflict. A
+            // suspension that depended on one is dropped, never widened.
+            let Some(guard) = guard
+                .in_scope(&scope)
+                .forget_occurrences(|occurrence| self.recursive_call_choice(occurrence))
+                .map_occurrences(|occurrence| self.summary_occurrence(occurrence, choices))
+            else {
+                continue;
+            };
+            relation.suspended = relation
+                .suspended
+                .iter()
+                .filter(|slice| {
+                    !slice
+                        .guard
+                        .occurrences()
+                        .into_iter()
+                        .any(|occurrence| self.recursive_call_choice(occurrence))
+                })
+                .filter_map(|slice| {
+                    Some(Guarded {
+                        guard: slice.guard.map_occurrences(|occurrence| {
+                            self.summary_occurrence(occurrence, choices)
+                        })?,
+                        payload: slice.payload.clone(),
+                    })
+                })
+                .collect();
+            let clause = Guarded {
+                guard,
+                payload: relation,
+            };
+            if !within_limits(&clause, &BinderScope::default()) {
+                return Err(limit());
+            }
+            clauses.push((clause, *origin));
+        }
+        Ok(clauses)
     }
 
     fn summarize_availability_region(
@@ -1413,62 +1628,75 @@ impl<'db> Borrowck<'db> {
             let next = handles.len().try_into().expect("summary handle count");
             *occurrence = AddressOccurrence::Summary(*handles.entry(*occurrence).or_insert(next));
         });
-        let mut scope = guard.scope().clone();
-        let mut substitutions = BTreeMap::new();
-        for index in guard.indices().into_iter().chain(payload.indices()) {
-            if matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_)) {
-                substitutions.entry(index).or_insert_with(|| {
-                    match match index {
-                        IndexExpr::Runtime(value) => self.index(value),
-                        index => index,
-                    } {
-                        IndexExpr::Runtime(actual) => {
-                            match self.body.values[actual.index()].definition {
-                                NValueDefinition::EntryParam { param } => {
-                                    IndexExpr::FormalValue(param)
-                                }
-                                NValueDefinition::BlockParam { .. }
-                                | NValueDefinition::Statement { .. } => {
-                                    let (nested, witness) = scope.bind(IndexNamespace::Existential);
-                                    scope = nested;
-                                    witness
-                                }
-                            }
-                        }
-                        IndexExpr::Iteration(_) => {
-                            let (nested, witness) = scope.bind(IndexNamespace::Existential);
-                            scope = nested;
-                            witness
-                        }
-                        index => index,
-                    }
-                });
-            }
-        }
-        let subst = IndexSubst::new(guard.scope(), &scope, substitutions)
-            .expect("summary local index abstraction");
+        let subst = self.abstract_local_indices(
+            guard.scope(),
+            guard.indices().into_iter().chain(payload.indices()),
+        );
         let guard = guard.substitute(&subst).and_then(|guard| {
-            guard.map_occurrences(|occurrence| {
-                if let ValueOccurrence::Value(value) = occurrence
-                    && let NValueDefinition::EntryParam { param } =
-                        self.body.values[value.index()].definition
-                {
-                    return ValueOccurrence::Argument(param);
-                }
-                if matches!(
-                    occurrence,
-                    ValueOccurrence::Argument(_) | ValueOccurrence::Summary
-                ) {
-                    return occurrence;
-                }
-                choices.insert(occurrence);
-                occurrence
-            })
+            guard.map_occurrences(|occurrence| self.summary_occurrence(occurrence, choices))
         })?;
         Some(Guarded {
             guard,
             payload: payload.substitute(self.db, &subst),
         })
+    }
+
+    /// Abstract indices local to this body: an entry parameter becomes a
+    /// formal value, and each other runtime value or loop iteration a fresh
+    /// witness of `scope`.
+    fn abstract_local_indices(
+        &self,
+        scope: &BinderScope,
+        indices: impl IntoIterator<Item = IndexExpr<'db>>,
+    ) -> IndexSubst<'db> {
+        let mut destination = scope.clone();
+        let mut substitutions = BTreeMap::new();
+        for index in indices {
+            if matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_)) {
+                substitutions.entry(index).or_insert_with(|| {
+                    let actual = match index {
+                        IndexExpr::Runtime(value) => self.index(value),
+                        index => index,
+                    };
+                    if let IndexExpr::Runtime(actual) = actual
+                        && let NValueDefinition::EntryParam { param } =
+                            self.body.values[actual.index()].definition
+                    {
+                        return IndexExpr::FormalValue(param);
+                    }
+                    if !matches!(actual, IndexExpr::Runtime(_) | IndexExpr::Iteration(_)) {
+                        return actual;
+                    }
+                    let (nested, witness) = destination.bind(IndexNamespace::Existential);
+                    destination = nested;
+                    witness
+                });
+            }
+        }
+        IndexSubst::new(scope, &destination, substitutions)
+            .expect("summary local index abstraction")
+    }
+
+    /// Name a guard occurrence at the summary boundary. Entry parameters are
+    /// arguments; other choices are collected for summary-wide renaming.
+    fn summary_occurrence(
+        &self,
+        occurrence: ValueOccurrence,
+        choices: &mut BTreeSet<ValueOccurrence>,
+    ) -> ValueOccurrence {
+        if let ValueOccurrence::Value(value) = occurrence
+            && let NValueDefinition::EntryParam { param } =
+                self.body.values[value.index()].definition
+        {
+            return ValueOccurrence::Argument(param);
+        }
+        if !matches!(
+            occurrence,
+            ValueOccurrence::Argument(_) | ValueOccurrence::Summary
+        ) {
+            choices.insert(occurrence);
+        }
+        occurrence
     }
 
     pub(super) fn summary_param_ty(&self, param: u32) -> Option<TyId<'db>> {
@@ -1900,6 +2128,7 @@ impl<'db> Borrowck<'db> {
                 }
             }
         }
+        self.verify_loan_requirements(&summary.loan_requirements)?;
         for region in summary
             .availability
             .incoming
@@ -1909,6 +2138,7 @@ impl<'db> Borrowck<'db> {
                 &summary.availability.reinitialized,
                 &summary.availability.unavailable,
                 &summary.native_requirements,
+                &summary.separation_validity,
             ])
         {
             if region.scope() != &BinderScope::default() {
@@ -1983,6 +2213,73 @@ impl<'db> Borrowck<'db> {
         Ok(())
     }
 
+    /// Each relation is closed over its own witnesses: both endpoints are
+    /// caller-visible sources, its kinds can conflict, its extent uses no local
+    /// index, and every suspension slice projects its protected place.
+    fn verify_loan_requirements(
+        &self,
+        requirements: &SeparationSet<'db>,
+    ) -> Result<(), SemanticDiagnostic<'db>> {
+        let invalid = |message: &str| {
+            self.internal_diag(
+                SemOrigin::Body(self.body.template_owner),
+                format!("invalid separation requirement: {message}"),
+            )
+        };
+        if requirements.scope() != &BinderScope::default() {
+            return Err(invalid("it retains a lexical scope"));
+        }
+        for clause in requirements.clauses() {
+            let separation = &clause.payload;
+            let scope = clause.guard.scope();
+            if separation.protected_kind == BorrowKind::Ref
+                && separation.access_kind == BorrowKind::Ref
+            {
+                return Err(invalid("shared kinds cannot conflict"));
+            }
+            let endpoint = |place| {
+                let source = SourceExpr::from_place(place)
+                    .ok_or_else(|| invalid("it retains local storage"))?;
+                self.verify_source(&source, scope, None, false)?;
+                self.verify_summary_guard(&clause.guard, &source)?;
+                Ok::<_, SemanticDiagnostic<'db>>(source)
+            };
+            let protected = endpoint(&separation.protected)?;
+            endpoint(&separation.access)?;
+            let local = |scope: &BinderScope, index: IndexExpr<'db>| match index {
+                IndexExpr::FormalValue(param) => !self
+                    .summary_param_ty(param)
+                    .is_some_and(|ty| ty.as_view(self.db).unwrap_or(ty).is_integral(self.db)),
+                IndexExpr::Const(_) | IndexExpr::TypeConst(_) => false,
+                IndexExpr::Bound(_) => scope.validate(index).is_err(),
+                IndexExpr::Runtime(_) | IndexExpr::Iteration(_) => true,
+            };
+            if separation.extent.indices().any(|index| local(scope, index)) {
+                return Err(invalid("its extent retains a local index"));
+            }
+            for slice in &separation.suspended {
+                // Suspension conditions lie in a prefix of the clause scope.
+                let prefix = slice.guard.scope();
+                if scope.existential_extension_of(prefix).is_none()
+                    || slice.payload.indices().any(|index| local(prefix, index))
+                {
+                    return Err(invalid("a suspension slice is not in the clause scope"));
+                }
+                self.verify_summary_guard(&slice.guard, &protected)?;
+                let projected = SourceExpr {
+                    path: protected.path.concat(&slice.payload),
+                    ..protected.clone()
+                };
+                if projected.referent_ty(self.db, self.instance).is_none() {
+                    return Err(invalid(
+                        "a suspension slice does not project its protected place",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn verify_summary_guard(
         &self,
         guard: &Guard<'db>,
@@ -2048,17 +2345,7 @@ impl<'db> Borrowck<'db> {
             let Some(guard) = self.instantiate_guard(&template.guard, result, inputs)? else {
                 continue;
             };
-            let subst = IndexSubst::new(
-                template.guard.scope(),
-                guard.scope(),
-                inputs.args.iter().enumerate().map(|(param, arg)| {
-                    (
-                        IndexExpr::FormalValue(param.try_into().expect("parameter count")),
-                        self.index(arg.value),
-                    )
-                }),
-            )
-            .expect("birth scalar substitution");
+            let subst = self.formal_substitution(template.guard.scope(), guard.scope(), inputs);
             let source = ExternalSource::allocation(self.db, template.allocation.clone())
                 .substitute(self.db, &subst);
             let source = self.instantiate_address_base(
@@ -2422,6 +2709,26 @@ impl<'db> Borrowck<'db> {
         }
     }
 
+    /// Replace formal scalar parameters with this call's actual arguments.
+    pub(super) fn formal_substitution(
+        &self,
+        source: &BinderScope,
+        destination: &BinderScope,
+        inputs: CallInputs<'_, 'db>,
+    ) -> IndexSubst<'db> {
+        IndexSubst::new(
+            source,
+            destination,
+            inputs.args.iter().enumerate().map(|(param, arg)| {
+                (
+                    IndexExpr::FormalValue(param.try_into().expect("parameter count")),
+                    self.index(arg.value),
+                )
+            }),
+        )
+        .expect("call scalar substitution")
+    }
+
     pub(super) fn instantiate_guard(
         &self,
         guard: &Guard<'db>,
@@ -2430,17 +2737,7 @@ impl<'db> Borrowck<'db> {
     ) -> Result<Option<Guard<'db>>, SemanticDiagnostic<'db>> {
         #[cfg(test)]
         GUARD_INSTANTIATIONS.set(GUARD_INSTANTIATIONS.get() + 1);
-        let subst = IndexSubst::new(
-            guard.scope(),
-            guard.scope(),
-            inputs.args.iter().enumerate().map(|(param, arg)| {
-                (
-                    IndexExpr::FormalValue(param.try_into().expect("parameter count")),
-                    self.index(arg.value),
-                )
-            }),
-        )
-        .expect("call guard substitution");
+        let subst = self.formal_substitution(guard.scope(), guard.scope(), inputs);
         let mut invalid = false;
         let guard = guard
             .substitute(&subst)
@@ -2472,13 +2769,21 @@ impl<'db> Borrowck<'db> {
             })
             .and_then(|mut guard| {
                 for arg in inputs.args {
+                    let occurrence = ValueOccurrence::Value(self.forwarded_value(arg.value));
                     if let Some(value) = literal_bool_cond(self.db, &self.body, arg.value) {
-                        let occurrence = ValueOccurrence::Value(self.forwarded_value(arg.value));
                         guard = guard.with_boolean(
                             ChoiceKey::new(occurrence, StructuralPath::default()),
                             value,
                         )?;
                         guard = guard.forget_occurrences(|candidate| candidate == occurrence);
+                    } else if let Some(variant) =
+                        literal_enum_variant(self.db, &self.body, arg.value)
+                    {
+                        // Payload choices of the literal stay; only its variant is known.
+                        guard = guard.with_variant(
+                            ChoiceKey::new(occurrence, StructuralPath::default()),
+                            variant,
+                        )?;
                     }
                 }
                 Some(guard)
@@ -2541,6 +2846,7 @@ impl<'db> Borrowck<'db> {
         source: ExternalSource<'db>,
         clobber: Option<(RegionSet<'db>, RegionSet<'db>, AccessExtent<'db>)>,
         path: RegionPath<IndexExpr<'db>>,
+        disjoint: impl Fn(&RegionSet<'db>, &RegionSet<'db>, AccessExtent<'db>) -> bool,
     ) -> RegionSet<'db> {
         if let Some((target, written, extent)) = clobber {
             let mut clauses = Vec::new();
@@ -2569,19 +2875,10 @@ impl<'db> Borrowck<'db> {
                     let Some(guard) = target_clause.guard.and(&written_clause.guard) else {
                         continue;
                     };
-                    if matches!(
-                        AccessFootprint::typed(&RegionSet::new(
-                            guard.scope(),
-                            [target_clause.clone()]
-                        ))
-                        .overlap(
-                            self.db,
-                            AccessFootprint {
-                                region: &RegionSet::new(guard.scope(), [written_clause.clone()]),
-                                extent: extent.substitute(&written_subst)
-                            }
-                        ),
-                        OverlapResult::Disjoint
+                    if disjoint(
+                        &RegionSet::new(guard.scope(), [target_clause.clone()]),
+                        &RegionSet::new(guard.scope(), [written_clause.clone()]),
+                        extent.substitute(&written_subst),
                     ) {
                         continue;
                     }
@@ -2625,35 +2922,46 @@ impl<'db> Borrowck<'db> {
             effects,
             origin,
         } = inputs;
-        let subst = IndexSubst::new(
-            scope,
-            scope,
-            args.iter().enumerate().map(|(param, arg)| {
-                (
-                    IndexExpr::FormalValue(param.try_into().expect("parameter count")),
-                    self.index(arg.value),
-                )
-            }),
-        )
-        .expect("summary destination scalar substitution");
+        let subst = self.formal_substitution(scope, scope, inputs);
         let source = source.substitute(self.db, &subst);
         let invalidated = source.invalidated;
         let path = &source.path;
         let external = &source.source;
+        let basis = instantiations.basis;
+        // A clobber applies only where its target and written span overlap.
+        let disjoint = |target: &RegionSet<'db>, written: &RegionSet<'db>, extent| {
+            let written = AccessFootprint {
+                region: written,
+                extent,
+            };
+            match basis {
+                AliasBasis::Assumed => matches!(
+                    AccessFootprint::typed(target).overlap(self.db, written),
+                    OverlapResult::Disjoint
+                ),
+                AliasBasis::Physical => written.physical_pairs(self.db, target).is_empty(),
+            }
+        };
+        // A separation endpoint keeps its dependencies' native validity,
+        // including where a dependency resolves to no valid alternative.
+        let mut dependencies = NativeValidity::default();
         let clobber = if let Some(clobber) = &external.clobber {
             let target = instantiations.resolve(self, &clobber.target, scope)?;
             let written = instantiations.resolve(self, &clobber.written, scope)?;
-            if matches!(
-                AccessFootprint::typed(&target.region).overlap(
-                    self.db,
-                    AccessFootprint {
-                        region: &written.region,
-                        extent: clobber.extent
-                    }
-                ),
-                OverlapResult::Disjoint
-            ) {
-                return Ok(Resolution::empty(scope));
+            if basis == AliasBasis::Physical {
+                if target.region.clauses().len() * written.region.clauses().len()
+                    > SEPARATION_PAIR_LIMIT
+                {
+                    return Err(self.separation_limit_diag(origin));
+                }
+                dependencies |= target.invalidated;
+                dependencies |= written.invalidated;
+            }
+            if disjoint(&target.region, &written.region, clobber.extent) {
+                return Ok(Resolution {
+                    invalidated: dependencies,
+                    ..Resolution::empty(scope)
+                });
             }
             Some((target.region, written.region, clobber.extent))
         } else {
@@ -2675,14 +2983,13 @@ impl<'db> Borrowck<'db> {
                 // The callee's condition is restated over caller places.
                 let family = ExternalSource::opaque_memory(external.contract);
                 let region = self
-                    .conditional_region(scope, family, clobber, path.clone())
+                    .conditional_region(scope, family, clobber, path.clone(), disjoint)
                     .with_relative_views(self.db, &source.views, path.as_slice().len());
+                if invalidated {
+                    dependencies |= NativeValidity::from_region(&region);
+                }
                 return Ok(Resolution {
-                    invalidated: if invalidated {
-                        NativeValidity::from_region(&region)
-                    } else {
-                        NativeValidity::default()
-                    },
+                    invalidated: dependencies,
                     region,
                     parents: Vec::new(),
                     traversed: Vec::new(),
@@ -2718,7 +3025,13 @@ impl<'db> Borrowck<'db> {
                     self.calls[&result].single_result_port,
                 )?;
                 let ty = source.contract.ty;
-                let region = self.conditional_region(scope, source, clobber, RegionPath::default());
+                let region = self.conditional_region(
+                    scope,
+                    source,
+                    clobber,
+                    RegionPath::default(),
+                    disjoint,
+                );
                 (
                     Resolution {
                         invalidated: NativeValidity::default(),
@@ -2960,6 +3273,7 @@ impl<'db> Borrowck<'db> {
         if invalidated {
             resolved.invalidated |= NativeValidity::from_region(&resolved.region);
         }
+        resolved.invalidated |= dependencies;
         Ok(resolved)
     }
 }
@@ -3280,6 +3594,8 @@ pub(super) fn signature_summary<'db>(
     }
     let summary = BorrowSummary {
         native_requirements: RegionSet::empty(&BinderScope::default()),
+        loan_requirements: SeparationSet::empty(&BinderScope::default()),
+        separation_validity: RegionSet::empty(&BinderScope::default()),
         may_return: opaque && !instance.is_intrinsically_never_returning(db),
         result,
         scalar_result: None,
@@ -3302,9 +3618,15 @@ mod tests {
             semantic::{
                 VariantIndex,
                 capability::{
-                    DECISION_INTERN_ATTEMPTS, external::ProviderStorage, guard::ChoiceKey,
-                    handle::HandleAddressSpace, region::CANONICALIZED_REGION_CLAUSES,
-                    source::InputSource, test_roots,
+                    DECISION_INTERN_ATTEMPTS,
+                    external::ProviderStorage,
+                    guard::ChoiceKey,
+                    handle::HandleAddressSpace,
+                    region::CANONICALIZED_REGION_CLAUSES,
+                    repack::{ReferentRepackId, ReferentViews},
+                    separation::{SEPARATION_GUARD_NODE_LIMIT, SEPARATION_WITNESS_LIMIT},
+                    source::InputSource,
+                    test_roots,
                 },
                 identity_semantic_instance_key,
                 normalized::{NRootId, ReadMode},
@@ -3312,10 +3634,12 @@ mod tests {
             },
             ty::{
                 corelib::{resolve_core_trait, resolve_lib_func_path},
+                trait_resolution::PredicateListId,
                 ty_check::{BodyOwner, EffectArgLayoutView, EffectPassMode},
             },
         },
         hir_def::ItemKind,
+        semantic::ContractFieldId,
         test_db::{HirAnalysisTestDb, find_func},
     };
 
@@ -3473,6 +3797,254 @@ fn raw(_ ptr: *Outer) {}
     }
 
     #[test]
+    fn loan_requirements_are_verified_as_closed_relations() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "separation_verification.fe".into(),
+            r#"
+struct Pair { left: u256, right: u256 }
+fn relate(_ held: mut Pair, _ other: mut Pair, _ count: u256) {}
+"#,
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "relate"))),
+        );
+        let checker = Borrowck::new(&db, instance).unwrap();
+        let referent = |param| {
+            checker
+                .inventory
+                .inputs
+                .iter()
+                .find(|target| {
+                    matches!(&target.source.origin, ExternalOrigin::Input(input)
+                        if input.param() == param && input.dereferences().is_empty())
+                        && target.source.dereferences().is_empty()
+                })
+                .expect("direct input referent")
+                .source
+                .clone()
+        };
+        let field = |index| Projection::Field(FieldIndex(index));
+        let scope = BinderScope::default();
+        let always = Guard::always(&scope);
+        let place = |root, path: Vec<_>| SymbolicPlace {
+            root,
+            path: RegionPath::new(path),
+            views: Default::default(),
+        };
+        let valid = Separation {
+            protected: place(RegionRoot::External(referent(0)), vec![]),
+            protected_kind: BorrowKind::Mut,
+            access: place(RegionRoot::External(referent(1)), vec![field(0)]),
+            access_kind: BorrowKind::Ref,
+            extent: AccessExtent::Typed,
+            suspended: Box::new([Guarded {
+                guard: always.clone(),
+                payload: RegionPath::new([field(1)]),
+            }]),
+        };
+        let requirements = |guard, separation| {
+            SeparationSet::new(
+                &db,
+                &scope,
+                [Guarded {
+                    guard,
+                    payload: separation,
+                }],
+            )
+        };
+        let slice = |guard| {
+            Box::new([Guarded {
+                guard,
+                payload: RegionPath::new([field(1)]),
+            }])
+        };
+        let (witnessed, witness) = scope.bind(IndexNamespace::Existential);
+        for (name, guard, separation) in [
+            ("valid", always.clone(), valid.clone()),
+            (
+                "integral formal extent",
+                always.clone(),
+                Separation {
+                    extent: AccessExtent::Bytes(IndexExpr::FormalValue(2)),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "clause-owned extent",
+                Guard::always(&witnessed)
+                    .with_disequality(witness, IndexExpr::Const(0))
+                    .unwrap(),
+                // Slice conditions live in the clause scope.
+                Separation {
+                    extent: AccessExtent::Bytes(witness),
+                    suspended: slice(Guard::always(&witnessed)),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "guard-only witness",
+                Guard::always(&witnessed)
+                    .with_boolean(
+                        ChoiceKey::new(
+                            ValueOccurrence::SummaryChoice(0),
+                            StructuralPath::new([Projection::Index(witness)]),
+                        ),
+                        true,
+                    )
+                    .unwrap(),
+                valid.clone(),
+            ),
+        ] {
+            let requirements = requirements(guard, separation);
+            assert!(
+                checker.verify_loan_requirements(&requirements).is_ok(),
+                "{name}: {requirements:#?}"
+            );
+        }
+        let runtime = IndexExpr::Runtime(NValueId::from_u32(0));
+        let local_choice = ChoiceKey::new(
+            ValueOccurrence::Value(NValueId::from_u32(0)),
+            StructuralPath::default(),
+        );
+        let mut malformed = referent(1);
+        malformed.contract =
+            ReferentContract::new(&db, TyId::u256(&db), malformed.contract.address_space);
+        let mut views = ReferentViews::default();
+        views.append(
+            &db,
+            0,
+            ReferentRepackId::new(
+                &db,
+                TyId::u8(&db),
+                TyId::u256(&db),
+                module.scope(),
+                PredicateListId::empty_list(&db),
+            ),
+        );
+        for (name, guard, invalid) in [
+            (
+                "shared kinds",
+                always.clone(),
+                Separation {
+                    protected_kind: BorrowKind::Ref,
+                    ..valid.clone()
+                },
+            ),
+            (
+                "local endpoint",
+                always.clone(),
+                Separation {
+                    access: place(test_roots::local(&db, NRootId::from_u32(0)), vec![]),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "malformed endpoint contract",
+                always.clone(),
+                Separation {
+                    access: place(RegionRoot::External(malformed), vec![field(0)]),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "invalid endpoint view",
+                always.clone(),
+                Separation {
+                    protected: SymbolicPlace {
+                        views,
+                        ..valid.protected.clone()
+                    },
+                    ..valid.clone()
+                },
+            ),
+            (
+                "local extent",
+                always.clone(),
+                Separation {
+                    extent: AccessExtent::Bytes(runtime),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "nonintegral formal extent",
+                always.clone(),
+                Separation {
+                    extent: AccessExtent::Bytes(IndexExpr::FormalValue(0)),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "missing formal extent",
+                always.clone(),
+                Separation {
+                    extent: AccessExtent::Bytes(IndexExpr::FormalValue(9)),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "local guard occurrence",
+                always.with_boolean(local_choice, true).unwrap(),
+                valid.clone(),
+            ),
+            (
+                "local guard index",
+                always
+                    .with_disequality(runtime, IndexExpr::Const(1))
+                    .unwrap(),
+                valid.clone(),
+            ),
+            (
+                "nonintegral guard index",
+                always
+                    .with_disequality(IndexExpr::FormalValue(0), IndexExpr::Const(1))
+                    .unwrap(),
+                valid.clone(),
+            ),
+            (
+                "local slice condition",
+                always.clone(),
+                Separation {
+                    suspended: slice(
+                        always
+                            .with_disequality(runtime, IndexExpr::Const(1))
+                            .unwrap(),
+                    ),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "unprojected slice",
+                always.clone(),
+                Separation {
+                    suspended: Box::new([Guarded {
+                        guard: always.clone(),
+                        payload: RegionPath::new([field(7)]),
+                    }]),
+                    ..valid.clone()
+                },
+            ),
+        ] {
+            assert!(
+                checker
+                    .verify_loan_requirements(&requirements(guard, invalid))
+                    .is_err(),
+                "{name}"
+            );
+        }
+        let (lexical, _) = scope.bind(IndexNamespace::Value);
+        assert!(
+            checker
+                .verify_loan_requirements(&SeparationSet::empty(&lexical))
+                .is_err(),
+            "lexical scope"
+        );
+    }
+
+    #[test]
     fn provider_storage_classification_and_hashed_slot_contracts_are_verified() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
@@ -3522,24 +4094,35 @@ pub contract C {
         else {
             unreachable!();
         };
-        assert_eq!(storage, ProviderStorage::AllocatedField);
+        let ProviderStorage::AllocatedField(field) = storage else {
+            panic!("allocated contract field");
+        };
         let mut source = SourceExpr::whole(target.source.clone());
         assert!(
             checker
                 .verify_source(&source, &target.scope, None, false)
                 .is_ok()
         );
-        source.source.origin = ExternalOrigin::Provider {
-            provider,
-            target_ty,
-            storage: ProviderStorage::Other,
+        let other_field = ContractFieldId {
+            index: field.index + 1,
+            ..field
         };
-        assert!(
-            checker
-                .verify_source(&source, &target.scope, None, false)
-                .is_err(),
-            "a forged provider classification was accepted"
-        );
+        for storage in [
+            ProviderStorage::Other,
+            ProviderStorage::AllocatedField(other_field),
+        ] {
+            source.source.origin = ExternalOrigin::Provider {
+                provider,
+                target_ty,
+                storage,
+            };
+            assert!(
+                checker
+                    .verify_source(&source, &target.scope, None, false)
+                    .is_err(),
+                "a forged provider classification was accepted: {storage:?}"
+            );
+        }
 
         // Only a hashed slot is constrained to the storage word contract.
         let scope = BinderScope::default();
@@ -3843,6 +4426,7 @@ pub contract C {
                 CallSummary {
                     instance,
                     summary,
+                    provenance: Vec::new(),
                     pending: false,
                     updates: Vec::new(),
                     births: Vec::new(),
@@ -4061,6 +4645,7 @@ pub contract C {
                 CallSummary {
                     instance,
                     summary,
+                    provenance: Vec::new(),
                     pending: false,
                     updates: Vec::new(),
                     births: Vec::new(),
@@ -4724,7 +5309,7 @@ fn absent() -> Maybe { Maybe::None }
                 }
             };
             checker.solve().unwrap();
-            let concrete = checker.build_summary().unwrap();
+            let (concrete, _) = checker.build_summary().unwrap();
             let fallback = signature_summary(&db, instance, true).unwrap();
             assert_eq!(
                 fallback,
@@ -4871,7 +5456,7 @@ fn clobber(slot: *ref u256) {
             );
             let mut checker = Borrowck::new(&db, instance).unwrap();
             checker.solve().unwrap();
-            let concrete = checker.build_summary().unwrap();
+            let (concrete, _) = checker.build_summary().unwrap();
             let fallback = signature_summary(&db, instance, true).unwrap();
             if name == "lend" {
                 assert!(
@@ -4951,7 +5536,7 @@ fn clobber(slot: *ref u256) {
         );
         let mut checker = Borrowck::new(&db, instance).unwrap();
         checker.solve().unwrap();
-        let summary = checker.build_summary().unwrap();
+        let (summary, _) = checker.build_summary().unwrap();
         let values = SourceValues::new(&db, ValueLimits::default());
         let leaf = values
             .leaves(&summary.result, ValueOccurrence::Summary)
@@ -4993,5 +5578,999 @@ fn clobber(slot: *ref u256) {
         let mut source = leaf.payload.clone();
         source.path = RegionPath::new([Projection::Index(unowned)]);
         assert!(!check(&source));
+    }
+
+    /// The first call in a solved body: its position, result and arguments.
+    fn first_call(checker: &Borrowck<'_>) -> ((usize, usize), NValueId, Vec<NOperand>) {
+        checker
+            .body
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(block, data)| {
+                data.statements
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, statement)| match &statement.kind {
+                        NStatementKind::Define {
+                            result,
+                            expr: NExpr::Call { args, .. },
+                        } => Some(((block, index), *result, args.to_vec())),
+                        _ => None,
+                    })
+            })
+            .unwrap()
+    }
+
+    fn summary_input<'db>(db: &'db dyn HirAnalysisDb, param: u32) -> SourceExpr<'db> {
+        SourceExpr::whole(ExternalSource::input(
+            InputSource::slot(param, StructuralPath::default()),
+            ReferentContract::new(db, TyId::u256(db), HandleAddressSpace::Unspecified),
+            false,
+        ))
+    }
+
+    /// Arbitrary bytes at an unknown address, present only where `target` and
+    /// `written` overlap.
+    fn clobbered<'db>(
+        db: &'db dyn HirAnalysisDb,
+        target: SourceExpr<'db>,
+        written: SourceExpr<'db>,
+    ) -> SymbolicPlace<'db> {
+        let mut source = ExternalSource::unknown(
+            ReferentContract::new(
+                db,
+                TyId::u256(db),
+                HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+            ),
+            AddressOccurrence::Summary(0),
+            Box::new([]),
+            AddressProvenance::Raw,
+        );
+        source.clobber = Some(Box::new(ClobberCondition::new(
+            target,
+            written,
+            AccessExtent::Typed,
+        )));
+        SymbolicPlace {
+            root: RegionRoot::External(source),
+            path: RegionPath::default(),
+            views: Default::default(),
+        }
+    }
+
+    /// The caller parameters each alternative's clobber condition compares.
+    fn clobber_params(region: &RegionSet<'_>) -> BTreeSet<(Option<u32>, Option<u32>)> {
+        region
+            .clauses()
+            .iter()
+            .map(|clause| {
+                let RegionRoot::External(source) = &clause.payload.root else {
+                    panic!("clobbered alternative without a source");
+                };
+                let clobber = source.clobber.as_ref().expect("clobber condition");
+                (
+                    clobber.target.source.param(),
+                    clobber.written.source.param(),
+                )
+            })
+            .collect()
+    }
+
+    /// A value of `like`'s shape whose every leaf is `payload`.
+    fn uniform<'db>(
+        checker: &mut Borrowck<'db>,
+        like: &CapabilityValue<'db>,
+        payload: impl Fn(CapabilitySemantics<'db>) -> CapabilityRef<'db>,
+    ) -> CapabilityValue<'db> {
+        checker
+            .inventory
+            .values
+            .from_shape(like.shape(), like.scope(), |semantics, _, scope| {
+                vec![Guarded {
+                    guard: Guard::always(scope),
+                    payload: payload(semantics),
+                }]
+            })
+    }
+
+    #[test]
+    fn physical_resolution_keeps_clobbers_between_distinct_certain_inputs() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "physical_clobbers.fe".into(),
+            "fn leaf(_ a: ref u256, _ b: ref u256, _ c: *u256, _ flag: bool) {}\n\
+             fn wrapper(_ first: ref u256, _ second: ref u256, _ third: *u256, _ flag: bool) {\n    \
+                 leaf(first, second, third, flag)\n}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "wrapper"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        let ((block, index), result, args) = first_call(&checker);
+        let state = checker.before[block][index].clone();
+        let scope = BinderScope::default();
+        let inputs = CallInputs {
+            args: &args,
+            effects: &[],
+            origin: SemOrigin::Body(checker.body.template_owner),
+        };
+        let input = |param| summary_input(&db, param);
+        let source = |place| SourceExpr::from_place(&place).unwrap();
+        let referents: Vec<_> = args
+            .iter()
+            .map(|arg| checker.resolve_capability(state.value(arg.value)).region)
+            .collect();
+
+        // Distinct certain inputs are separate only by the entry assumption:
+        // its first filter drops the alternative, the physical one keeps it.
+        let between = source(clobbered(&db, input(0), input(1)));
+        let mut assumed = SourceInstantiations::new(&state, result, inputs);
+        let mut physical = SourceInstantiations::physical(&state, result, inputs);
+        assert!(
+            assumed
+                .resolve(&mut checker, &between, &scope)
+                .unwrap()
+                .region
+                .is_empty()
+        );
+        let kept = physical.resolve(&mut checker, &between, &scope).unwrap();
+        assert_eq!(clobber_params(&kept.region), [(Some(0), Some(1))].into());
+        // Each session reuses only its own resolutions.
+        let evaluations = physical.evaluations;
+        assert!(
+            assumed
+                .resolve(&mut checker, &between, &scope)
+                .unwrap()
+                .region
+                .is_empty()
+        );
+        assert_eq!(
+            physical
+                .resolve(&mut checker, &between, &scope)
+                .unwrap()
+                .region,
+            kept.region
+        );
+        assert_eq!(physical.evaluations, evaluations);
+
+        // A pointer that may also hold the first input's address. The
+        // per-alternative filter keeps only its uncertain target under the
+        // assumption, and both physically.
+        let first = &referents[0];
+        let pointer = state.value(args[2].value).clone();
+        let alias = uniform(&mut checker, &pointer, |_| {
+            CapabilityRef::Address(first.clone())
+        });
+        let mut mixed = state.clone();
+        mixed.set_value(
+            args[2].value,
+            checker.inventory.values.join(&pointer, &alias),
+        );
+        let either = source(clobbered(&db, input(2), input(1)));
+        let assumed = SourceInstantiations::new(&mixed, result, inputs)
+            .resolve(&mut checker, &either, &scope)
+            .unwrap();
+        assert_eq!(clobber_params(&assumed.region), [(Some(2), Some(1))].into());
+        let kept = SourceInstantiations::physical(&mixed, result, inputs)
+            .resolve(&mut checker, &either, &scope)
+            .unwrap();
+        assert_eq!(
+            clobber_params(&kept.region),
+            [(Some(0), Some(1)), (Some(2), Some(1))].into()
+        );
+
+        // A dependency resolved through memory keeps its session's basis.
+        let mut redirected = state.clone();
+        redirected.set_value(args[2].value, alias.clone());
+        let element = SourceExpr::whole(ExternalSource::memory(
+            &db,
+            input(2),
+            TyId::u256(&db),
+            MemoryOffset::Element(TyId::u256(&db), IndexExpr::Const(1)),
+        ));
+        let through = source(clobbered(&db, element, input(1)));
+        assert!(
+            SourceInstantiations::new(&redirected, result, inputs)
+                .resolve(&mut checker, &through, &scope)
+                .unwrap()
+                .region
+                .is_empty()
+        );
+        assert_eq!(
+            clobber_params(
+                &SourceInstantiations::physical(&redirected, result, inputs)
+                    .resolve(&mut checker, &through, &scope)
+                    .unwrap()
+                    .region
+            ),
+            [(Some(0), Some(1))].into()
+        );
+
+        // A clobber whose dependencies resolve to 17 places each exceeds the
+        // pair limit before any comparison; the assumed basis compares no
+        // pairs and needs no limit.
+        let pointee = SourceExpr::from_place(&referents[2].clauses()[0].payload).unwrap();
+        let cells = (0..17).fold(pointer.clone(), |value, cell| {
+            let region = RegionSet::singleton(
+                &scope,
+                RegionRoot::External(ExternalSource::memory(
+                    &db,
+                    pointee.clone(),
+                    TyId::u256(&db),
+                    MemoryOffset::Element(TyId::u256(&db), IndexExpr::Const(cell + 1)),
+                )),
+                RegionPath::default(),
+            );
+            let cell = uniform(&mut checker, &pointer, |_| {
+                CapabilityRef::Address(region.clone())
+            });
+            checker.inventory.values.join(&value, &cell)
+        });
+        let mut wide = state.clone();
+        wide.set_value(args[2].value, cells);
+        let product = source(clobbered(&db, input(2), input(2)));
+        assert!(
+            SourceInstantiations::new(&wide, result, inputs)
+                .resolve(&mut checker, &product, &scope)
+                .is_ok()
+        );
+        let exhausted = SourceInstantiations::physical(&wide, result, inputs)
+            .resolve(&mut checker, &product, &scope)
+            .unwrap_err();
+        assert_eq!(
+            exhausted.primary.message,
+            "borrow separation requirements exceed the analysis limits"
+        );
+
+        // A requirement holds only where the call executes, even where the
+        // resolved endpoints do not carry that condition themselves.
+        let flag = |occurrence| ChoiceKey::new(occurrence, StructuralPath::default());
+        let relation = Separation {
+            protected: SymbolicPlace {
+                root: RegionRoot::External(input(0).source),
+                path: RegionPath::default(),
+                views: Default::default(),
+            },
+            protected_kind: BorrowKind::Ref,
+            access: SymbolicPlace {
+                root: RegionRoot::External(input(1).source),
+                path: RegionPath::default(),
+                views: Default::default(),
+            },
+            access_kind: BorrowKind::Mut,
+            extent: AccessExtent::Typed,
+            suspended: Box::new([]),
+        };
+        let touched = Guard::always(&scope)
+            .with_boolean(flag(ValueOccurrence::Argument(3)), true)
+            .unwrap();
+        checker
+            .calls
+            .get_mut(&result)
+            .unwrap()
+            .summary
+            .loan_requirements = SeparationSet::new(
+            &db,
+            &scope,
+            [Guarded {
+                guard: touched.clone(),
+                payload: relation,
+            }],
+        );
+        // Execute the call only where the requirement cannot hold, leaving
+        // the argument values unconstrained.
+        let instantiated = checker
+            .instantiate_guard(&touched, result, inputs)
+            .unwrap()
+            .unwrap();
+        let mut skipped = state.clone();
+        assert!(skipped.constrain(
+            &Guard::always(&scope).difference(&instantiated).unwrap(),
+            &mut checker.inventory.values,
+        ));
+        for arg in &args {
+            skipped.set_value(arg.value, state.value(arg.value).clone());
+        }
+        let (requirements, _) = checker
+            .call_loan_requirements(&state, result, inputs)
+            .unwrap();
+        assert_eq!(requirements.len(), 1);
+        let (requirements, _) = checker
+            .call_loan_requirements(&skipped, result, inputs)
+            .unwrap();
+        assert!(requirements.is_empty());
+        checker
+            .calls
+            .get_mut(&result)
+            .unwrap()
+            .summary
+            .loan_requirements = SeparationSet::empty(&scope);
+
+        // Dependencies keep their native validity, immediate or deferred,
+        // where nothing valid remains to compare.
+        let deferred = source(clobbered(
+            &db,
+            SourceExpr::from_place(&first.clauses()[0].payload).unwrap(),
+            SourceExpr::from_place(&referents[2].clauses()[0].payload).unwrap(),
+        ));
+        for (param, immediate) in [(0u32, true), (1, true), (0, false), (1, false)] {
+            let arg = args[param as usize].value;
+            let region = if immediate {
+                referents[param as usize].clone()
+            } else {
+                source_region(&deferred, &Guard::always(&scope))
+            };
+            let original = state.value(arg).clone();
+            let invalid = uniform(&mut checker, &original, |semantics| {
+                CapabilityRef::Invalidated {
+                    class: semantics.class,
+                    region: region.clone(),
+                }
+            });
+            let mut damaged = state.clone();
+            damaged.set_value(arg, invalid);
+            let resolved = SourceInstantiations::physical(&damaged, result, inputs)
+                .resolve(&mut checker, &between, &scope)
+                .unwrap();
+            assert!(resolved.region.is_empty());
+            assert_eq!(resolved.invalidated.invalid, immediate);
+            assert!(!resolved.invalidated.requirements.is_empty());
+
+            // The access's validity reaches the caller with the relation's.
+            // An invalid protected referent holds no loan to protect, and its
+            // use fails through its own validity contract.
+            let call = &mut checker.calls.get_mut(&result).unwrap().summary;
+            let place = |param| SymbolicPlace {
+                root: RegionRoot::External(input(param).source),
+                path: RegionPath::default(),
+                views: Default::default(),
+            };
+            let relation = |protected, access| Separation {
+                protected: place(protected),
+                protected_kind: BorrowKind::Ref,
+                access: place(access),
+                access_kind: BorrowKind::Mut,
+                extent: AccessExtent::Typed,
+                suspended: Box::new([]),
+            };
+            call.loan_requirements = SeparationSet::new(
+                &db,
+                &scope,
+                [Guarded {
+                    guard: Guard::always(&scope),
+                    payload: relation(param, 1 - param),
+                }],
+            );
+            call.native_requirements = RegionSet::empty(&scope);
+            let (requirements, validity) = checker
+                .call_loan_requirements(&damaged, result, inputs)
+                .unwrap();
+            assert!(requirements[0].protected.is_empty());
+            assert!(!requirements[0].access.is_empty());
+            assert!(!validity.invalid && validity.requirements.is_empty());
+            assert!(
+                !checker
+                    .call_native_validity(&damaged, result, inputs)
+                    .unwrap()
+                    .invalid
+            );
+            checker
+                .calls
+                .get_mut(&result)
+                .unwrap()
+                .summary
+                .native_requirements = RegionSet::new(
+                &scope,
+                [Guarded {
+                    guard: Guard::always(&scope),
+                    payload: place(param),
+                }],
+            );
+            let used = checker
+                .call_native_validity(&damaged, result, inputs)
+                .unwrap();
+            assert_eq!(used.invalid, immediate);
+            assert!(!used.requirements.is_empty());
+
+            let call = &mut checker.calls.get_mut(&result).unwrap().summary;
+            call.native_requirements = RegionSet::empty(&scope);
+            call.loan_requirements = SeparationSet::new(
+                &db,
+                &scope,
+                [Guarded {
+                    guard: Guard::always(&scope),
+                    payload: relation(1 - param, param),
+                }],
+            );
+            let (requirements, validity) = checker
+                .call_loan_requirements(&damaged, result, inputs)
+                .unwrap();
+            assert!(requirements[0].access.is_empty());
+            assert_eq!(validity.invalid, immediate);
+            assert!(!validity.requirements.is_empty());
+        }
+    }
+
+    #[test]
+    fn separation_validity_keeps_its_physical_basis_through_export() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "separation_validity_export.fe".into(),
+            "fn leaf(_ a: ref u256, _ b: ref u256) {}\n\
+             fn wrapper(_ first: ref u256, _ second: ref u256) { leaf(first, second) }\n\
+             fn alias(_ value: ref u256) { wrapper(value, value) }\n\
+             fn locals() {\n    let a: u256 = 1\n    let b: u256 = 2\n    wrapper(ref a, ref b)\n}\n\
+             fn inputs(_ x: ref u256, _ y: ref u256) { wrapper(x, y) }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let solved = |name| {
+            let instance = get_or_build_semantic_instance(
+                &db,
+                identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, name))),
+            );
+            let mut checker = Borrowck::new(&db, instance).unwrap();
+            checker.solve().unwrap();
+            checker
+        };
+        /// Give the wrapper's callee a relation from its first input to
+        /// `validity`, and that access's validity, then settle the analysis.
+        fn inject<'db>(
+            db: &'db dyn HirAnalysisDb,
+            checker: &mut Borrowck<'db>,
+            validity: SymbolicPlace<'db>,
+        ) {
+            let scope = BinderScope::default();
+            let (_, result, _) = first_call(checker);
+            let call = &mut checker.calls.get_mut(&result).unwrap().summary;
+            call.separation_validity = RegionSet::new(
+                &scope,
+                [Guarded {
+                    guard: Guard::always(&scope),
+                    payload: validity.clone(),
+                }],
+            );
+            call.loan_requirements = SeparationSet::new(
+                db,
+                &scope,
+                [Guarded {
+                    guard: Guard::always(&scope),
+                    payload: Separation {
+                        protected: SymbolicPlace {
+                            root: RegionRoot::External(summary_input(db, 0).source),
+                            path: RegionPath::default(),
+                            views: Default::default(),
+                        },
+                        protected_kind: BorrowKind::Ref,
+                        access: validity,
+                        access_kind: BorrowKind::Mut,
+                        extent: AccessExtent::Typed,
+                        suspended: Box::new([]),
+                    },
+                }],
+            );
+            checker.resolve_operations().unwrap();
+            checker.conflicts = Some(checker.analyze_conflicts());
+        }
+        let input = |param| summary_input(&db, param);
+        let place = |param| SymbolicPlace {
+            root: RegionRoot::External(input(param).source),
+            path: RegionPath::default(),
+            views: Default::default(),
+        };
+
+        // An access whose validity fails at this call is diagnosed here.
+        let mut wrapper = solved("wrapper");
+        inject(&db, &mut wrapper, clobbered(&db, input(0), input(0)));
+        assert!(wrapper.conflicts().diagnostic.is_some());
+
+        // An access through a borrow that is invalid where the wrapper's
+        // inputs overlap leaves no relation; its validity is exported alone.
+        let mut wrapper = solved("wrapper");
+        let ((block, index), result, args) = first_call(&wrapper);
+        let state = wrapper.before[block][index].clone();
+        let [first, second] = [0, 1].map(|arg| {
+            let region = wrapper
+                .resolve_capability(state.value(args[arg].value))
+                .region;
+            SourceExpr::from_place(&region.clauses()[0].payload).unwrap()
+        });
+        let mut overwritten = ExternalSource::unknown(
+            first.source.contract,
+            AddressOccurrence::Value {
+                instance: wrapper.instance,
+                value: result,
+                choice: 0,
+            },
+            Box::new([]),
+            AddressProvenance::Raw,
+        );
+        overwritten.clobber = Some(Box::new(ClobberCondition::new(
+            first,
+            second,
+            AccessExtent::Typed,
+        )));
+        let damaged = RegionSet::singleton(
+            &BinderScope::default(),
+            RegionRoot::External(overwritten),
+            RegionPath::default(),
+        );
+        let original = state.value(args[1].value).clone();
+        let invalid = uniform(&mut wrapper, &original, |semantics| {
+            CapabilityRef::Invalidated {
+                class: semantics.class,
+                region: damaged.clone(),
+            }
+        });
+        wrapper.before[block][index].set_value(args[1].value, invalid);
+        inject(&db, &mut wrapper, place(1));
+        wrapper
+            .calls
+            .get_mut(&result)
+            .unwrap()
+            .summary
+            .separation_validity = RegionSet::empty(&BinderScope::default());
+        wrapper.resolve_operations().unwrap();
+        wrapper.conflicts = Some(wrapper.analyze_conflicts());
+        assert!(wrapper.conflicts().diagnostic.is_none());
+        let (summary, _) = wrapper.build_summary().unwrap();
+        assert!(summary.loan_requirements.is_empty());
+        assert_eq!(
+            clobber_params(&summary.separation_validity),
+            [(Some(0), Some(1))].into()
+        );
+
+        // Over distinct certain inputs, the obligations are exported with the
+        // clobber condition intact.
+        let mut wrapper = solved("wrapper");
+        inject(&db, &mut wrapper, clobbered(&db, input(0), input(1)));
+        assert!(wrapper.conflicts().diagnostic.is_none());
+        let (summary, _) = wrapper.build_summary().unwrap();
+        assert_eq!(
+            clobber_params(&summary.separation_validity),
+            [(Some(0), Some(1))].into()
+        );
+        let [relation] = summary.loan_requirements.clauses() else {
+            panic!("one forwarded relation");
+        };
+        assert_eq!(
+            clobber_params(&RegionSet::new(
+                relation.guard.scope(),
+                [Guarded {
+                    guard: relation.guard.clone(),
+                    payload: relation.payload.access.clone(),
+                }]
+            )),
+            [(Some(0), Some(1))].into()
+        );
+
+        // A further caller refines them physically.
+        for name in ["alias", "locals", "inputs"] {
+            let mut caller = solved(name);
+            let ((block, index), result, args) = first_call(&caller);
+            let state = caller.before[block][index].clone();
+            let call = &mut caller.calls.get_mut(&result).unwrap().summary;
+            call.separation_validity = summary.separation_validity.clone();
+            call.loan_requirements = summary.loan_requirements.clone();
+            let inputs = CallInputs {
+                args: &args,
+                effects: &[],
+                origin: SemOrigin::Body(caller.body.template_owner),
+            };
+            let (requirements, validity) = caller
+                .call_loan_requirements(&state, result, inputs)
+                .unwrap();
+            let [requirement] = &requirements[..] else {
+                panic!("{name}: one requirement");
+            };
+            match name {
+                "alias" => assert!(validity.invalid, "{name}"),
+                "locals" => {
+                    assert!(!validity.invalid && validity.requirements.is_empty());
+                    assert!(requirement.access.is_empty());
+                }
+                _ => {
+                    assert!(!validity.invalid && !validity.requirements.is_empty());
+                    assert_eq!(
+                        clobber_params(&requirement.access),
+                        [(Some(0), Some(1))].into()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn separation_export_names_unexposed_addresses_by_family_and_selector() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "separation_export.fe".into(),
+            "struct Pair { a: u256, b: u256 }\n\
+             fn holder(_ value: mut Pair, _ first: u256, _ second: u256, _ flag: bool) {}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "holder"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        let params: BTreeMap<_, _> = checker
+            .body
+            .values
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| match value.definition {
+                NValueDefinition::EntryParam { param } => Some((param, NValueId::new(index))),
+                _ => None,
+            })
+            .collect();
+        let scope = BinderScope::default();
+        let u256 = TyId::u256(&db);
+        // One allocation family, observed at two selectors that may be equal.
+        let family = AddressOccurrence::Value {
+            instance,
+            value: params[&0],
+            choice: 0,
+        };
+        let allocation = |selector: NValueId| {
+            ExternalSource::allocation(
+                &db,
+                OpaqueHandleRef {
+                    contract: OpaqueHandleContract {
+                        handle_ty: TyId::ptr_to(&db, u256),
+                        target_ty: u256,
+                        address_space: HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+                    },
+                    occurrence: family,
+                    arguments: Box::new([checker.index(selector)]),
+                },
+            )
+        };
+        let mut access = allocation(params[&1]);
+        access.clobber = Some(Box::new(ClobberCondition::new(
+            SourceExpr::whole(allocation(params[&1])),
+            SourceExpr::whole(allocation(params[&2])),
+            AccessExtent::Typed,
+        )));
+        // The clause and one slice observe a choice of a recursive call; the
+        // other slice observes a choice only it mentions.
+        let (recursive, other) = (params[&1], params[&2]);
+        checker.recursive_calls.insert(recursive);
+        let choice = |occurrence| ChoiceKey::new(occurrence, StructuralPath::default());
+        let call_choice = |result, choice| ValueOccurrence::CallChoice { result, choice };
+        let guard = Guard::always(&scope)
+            .with_boolean(choice(call_choice(recursive, 0)), true)
+            .and_then(|guard| guard.with_boolean(choice(ValueOccurrence::Value(params[&3])), true))
+            .unwrap();
+        let slice = |field, occurrence| Guarded {
+            guard: Guard::always(&scope)
+                .with_boolean(choice(occurrence), true)
+                .unwrap(),
+            payload: RegionPath::new([Projection::Field(FieldIndex(field))]),
+        };
+        let pair = ReferentContract::new(
+            &db,
+            checker.summary_param_ty(0).unwrap(),
+            HandleAddressSpace::Unspecified,
+        );
+        let clause = Guarded {
+            guard,
+            payload: Separation {
+                protected: SymbolicPlace {
+                    root: RegionRoot::External(ExternalSource::input(
+                        InputSource::slot(0, StructuralPath::default()),
+                        pair,
+                        false,
+                    )),
+                    path: RegionPath::default(),
+                    views: Default::default(),
+                },
+                protected_kind: BorrowKind::Mut,
+                access: SymbolicPlace {
+                    root: RegionRoot::External(access),
+                    path: RegionPath::default(),
+                    views: Default::default(),
+                },
+                access_kind: BorrowKind::Mut,
+                extent: AccessExtent::Typed,
+                suspended: Box::new([
+                    slice(0, call_choice(other, 1)),
+                    slice(1, call_choice(recursive, 1)),
+                ]),
+            },
+        };
+        let origin = SeparationOrigin {
+            owner: instance.key(&db).owner(&db),
+            template_owner: checker.body.template_owner,
+            borrow: SemOrigin::Body(checker.body.template_owner),
+            access: SemOrigin::Body(checker.body.template_owner),
+        };
+        /// Every handle the source mentions, in visit order.
+        fn handles<'db>(
+            source: &ExternalSource<'db>,
+        ) -> Vec<(AddressOccurrence<'db>, Vec<IndexExpr<'db>>)> {
+            let mut handles = Vec::new();
+            source
+                .clone()
+                .map_occurrences(&mut |occurrence, arguments| {
+                    handles.push((*occurrence, arguments.to_vec()));
+                });
+            handles
+        }
+        for exposed in [BTreeMap::new(), BTreeMap::from([(family, 5)])] {
+            let mut choices = BTreeSet::new();
+            let [(exported, _)] = &checker
+                .summarize_separations(&[(clause.clone(), origin)], &mut choices, &exposed)
+                .unwrap()[..]
+            else {
+                panic!("one exported relation");
+            };
+            let RegionRoot::External(access) = &exported.payload.access.root else {
+                panic!("external access");
+            };
+            let handles = handles(access);
+            assert_eq!(handles.len(), 3);
+            let number = if exposed.is_empty() { 0 } else { 5 };
+            assert!(
+                handles
+                    .iter()
+                    .all(|(occurrence, _)| *occurrence == AddressOccurrence::Summary(number))
+            );
+            // The written selector and the access's own are distinct names
+            // that may still denote one address.
+            let arguments: BTreeSet<_> = handles.iter().map(|(_, arguments)| arguments).collect();
+            assert_eq!(arguments.len(), 2);
+            if exposed.is_empty() {
+                let witnesses: Vec<_> = arguments.iter().map(|arguments| arguments[0]).collect();
+                assert!(arguments.iter().all(|arguments| arguments.len() == 1));
+                assert!(
+                    exported
+                        .guard
+                        .with_equality(witnesses[0], witnesses[1])
+                        .is_some()
+                );
+            } else {
+                assert_eq!(
+                    arguments,
+                    [
+                        vec![IndexExpr::FormalValue(1)],
+                        vec![IndexExpr::FormalValue(2)]
+                    ]
+                    .iter()
+                    .collect()
+                );
+            }
+            // The recursive choice is forgotten, and the slice it conditions
+            // is dropped; the other slice keeps its choice for renaming.
+            assert_eq!(
+                exported.guard.occurrences(),
+                [ValueOccurrence::Argument(3)].into()
+            );
+            let [suspended] = &*exported.payload.suspended else {
+                panic!("{exported:#?}");
+            };
+            assert_eq!(
+                suspended.payload,
+                RegionPath::new([Projection::Field(FieldIndex(0))])
+            );
+            assert_eq!(
+                suspended.guard.occurrences(),
+                [call_choice(other, 1)].into()
+            );
+            assert!(choices.contains(&call_choice(other, 1)));
+        }
+    }
+
+    #[test]
+    fn separation_limits_apply_to_merged_relations() {
+        // Two clauses of one relation, or of one access's validity, each fit
+        // the guard limit; merging them ORs their guards past it, which only
+        // the final check sees.
+        let count = 44;
+        let params: Vec<_> = (0..count)
+            .map(|index| format!("_ x{index}: u256"))
+            .collect();
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "separation_merge.fe".into(),
+            &format!(
+                "fn holder(_ value: mut u256, _ saved: *u256, {}) {{}}",
+                params.join(", ")
+            ),
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "holder"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        let params: BTreeMap<_, _> = checker
+            .body
+            .values
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| match value.definition {
+                NValueDefinition::EntryParam { param } => Some((param, NValueId::new(index))),
+                _ => None,
+            })
+            .collect();
+        let scope = BinderScope::default();
+        let index = |position: usize| checker.index(params[&(position as u32 + 2)]);
+        // Equal neighbors, paired from the first or the second scalar.
+        let paired = |offset: usize| {
+            (offset..count - 1)
+                .step_by(2)
+                .try_fold(Guard::always(&scope), |guard, position| {
+                    guard.with_equality(index(position), index(position + 1))
+                })
+                .unwrap()
+        };
+        let (first, second) = (paired(0), paired(1));
+        assert!(first.node_count() <= SEPARATION_GUARD_NODE_LIMIT);
+        assert!(second.node_count() <= SEPARATION_GUARD_NODE_LIMIT);
+        assert!(first.or(&second).node_count() > SEPARATION_GUARD_NODE_LIMIT);
+        let referent = |param| {
+            checker
+                .resolve_capability(checker.inventory.entry.value(params[&param]))
+                .region
+                .clauses()[0]
+                .payload
+                .clone()
+        };
+        let relation = Separation {
+            protected: referent(0),
+            protected_kind: BorrowKind::Mut,
+            access: referent(1),
+            access_kind: BorrowKind::Mut,
+            extent: AccessExtent::Typed,
+            suspended: Box::new([]),
+        };
+        let origin = SeparationOrigin {
+            owner: instance.key(&db).owner(&db),
+            template_owner: checker.body.template_owner,
+            borrow: SemOrigin::Body(checker.body.template_owner),
+            access: SemOrigin::Body(checker.body.template_owner),
+        };
+        for (guards, merged) in [
+            (vec![first.clone()], false),
+            (vec![second.clone()], false),
+            (vec![first, second], true),
+        ] {
+            // Either relation clauses, or the validity of an access with no
+            // relation left.
+            for validity in [false, true] {
+                checker.conflicts = Some(ConflictAnalysis {
+                    diagnostic: None,
+                    exhausted: false,
+                    deferred: guards
+                        .iter()
+                        .filter(|_| !validity)
+                        .map(|guard| {
+                            let clause = Guarded {
+                                guard: guard.clone(),
+                                payload: relation.clone(),
+                            };
+                            (clause, origin)
+                        })
+                        .collect(),
+                    validity: NativeValidity {
+                        invalid: false,
+                        requirements: RegionSet::new(
+                            &scope,
+                            guards.iter().filter(|_| validity).map(|guard| Guarded {
+                                guard: guard.clone(),
+                                payload: relation.access.clone(),
+                            }),
+                        ),
+                    },
+                });
+                match checker.build_summary() {
+                    Ok((summary, _)) => {
+                        assert!(!merged);
+                        let exported = if validity {
+                            summary.separation_validity.clauses().len()
+                        } else {
+                            summary.loan_requirements.clauses().len()
+                        };
+                        assert_eq!(exported, 1);
+                    }
+                    Err(diagnostic) => {
+                        assert!(merged);
+                        assert_eq!(
+                            diagnostic.primary.message,
+                            "borrow separation requirements exceed the analysis limits"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn separation_validity_limits_bound_retained_witnesses() {
+        // The validity of an access with no relation left keeps every witness
+        // its place names; past the witness limit it fails like a relation.
+        let depth = SEPARATION_WITNESS_LIMIT as usize + 1;
+        let ty = (0..depth).fold("u256".to_string(), |ty, _| format!("[{ty}; 2]"));
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "separation_witnesses.fe".into(),
+            &format!("fn holder(_ cells: *{ty}) {{}}"),
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "holder"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        let param = checker
+            .body
+            .values
+            .iter()
+            .position(|value| matches!(value.definition, NValueDefinition::EntryParam { .. }))
+            .unwrap();
+        let cells = checker
+            .resolve_capability(checker.inventory.entry.value(NValueId::new(param)))
+            .region
+            .clauses()[0]
+            .payload
+            .clone();
+        let owner = BinderScope::default();
+        for witnesses in [depth - 1, depth] {
+            let (scope, selectors) =
+                (0..witnesses).fold((owner.clone(), Vec::new()), |(scope, mut selectors), _| {
+                    let (scope, selector) = scope.bind(IndexNamespace::Existential);
+                    selectors.push(Projection::Index(selector));
+                    (scope, selectors)
+                });
+            checker.conflicts = Some(ConflictAnalysis {
+                diagnostic: None,
+                exhausted: false,
+                deferred: Vec::new(),
+                validity: NativeValidity {
+                    invalid: false,
+                    requirements: RegionSet::new(
+                        &owner,
+                        [Guarded {
+                            guard: Guard::always(&scope),
+                            payload: SymbolicPlace {
+                                path: RegionPath::new(selectors),
+                                ..cells.clone()
+                            },
+                        }],
+                    ),
+                },
+            });
+            match checker.build_summary() {
+                Ok((summary, _)) => {
+                    assert!(witnesses <= SEPARATION_WITNESS_LIMIT as usize);
+                    let [clause] = summary.separation_validity.clauses() else {
+                        panic!("one validity requirement");
+                    };
+                    assert_eq!(
+                        clause.guard.scope().existential_extension_of(&owner),
+                        Some(witnesses as u32)
+                    );
+                }
+                Err(diagnostic) => {
+                    assert!(witnesses > SEPARATION_WITNESS_LIMIT as usize);
+                    assert_eq!(
+                        diagnostic.primary.message,
+                        "borrow separation requirements exceed the analysis limits"
+                    );
+                }
+            }
+        }
     }
 }

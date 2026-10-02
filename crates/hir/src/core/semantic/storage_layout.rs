@@ -46,7 +46,7 @@ use crate::{
     hir_def::{Contract, EnumVariant, FieldParent, IdentId, IntegerId, VariantKind},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
 pub struct ContractFieldId<'db> {
     pub contract: Contract<'db>,
     pub index: u32,

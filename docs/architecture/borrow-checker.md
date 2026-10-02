@@ -409,6 +409,8 @@ encode an execution order.
 - Incoming ownership requirements and normal-return availability effects.
 - Native-validity obligations for conditional raw overwrites.
 - Boundary requirements for transport, retention, and writable storage.
+- Separation requirements that callers must establish, with the native validity
+  of the accesses they relate.
 - Whether a normal return is possible.
 
 All components participate in equality and interning. Summary construction runs
@@ -525,6 +527,75 @@ which its selected pointer was allocated.
 Every cyclic region has a repeated-value set, including an empty set when the
 verified normalized cycle defines no values. Such cycles still participate in
 feedback and no-normal-return analysis.
+
+### Separation requirements
+
+An input loan protects memory that the caller lends. Inside the body, an access
+can usually not be proved separate from it: the caller decides which places its
+inputs and pointers name. The body therefore reports only a definite overlap
+and exports the rest as `BorrowSummary::loan_requirements`. Each clause relates:
+- a protected borrow live across an access;
+- the access, with its extent;
+- the parts of the protected place that a live child borrow certainly
+  suspended;
+- the guard under which they must not overlap.
+
+All four share one witness scope. Two independently quantified regions would
+pair alternatives that never occurred together.
+
+Requirements come from local accesses, from call effects, and from accesses of
+arguments and effect arguments. A caller resolves both endpoints of each callee
+clause at the call, on a physical basis. Distinct inputs may alias unless
+something separates them:
+- their layout or contracts;
+- distinct objects, or disjoint paths within one object;
+- a fresh allocation against incoming memory;
+- a hashed slot against an allocated field;
+- typed accesses of two allocated fields of one contract.
+
+The layout gives each contract field its own block of slots for its typed
+contents. A raw span may cross into the next block, and storage named through a
+field's layout roots, such as a map entry, is a separate source.
+
+The distinct-input assumption that ordinary resolution uses never applies
+here. Authority never discharges a requirement: a loan found while resolving an
+endpoint is not the borrow the callee held.
+
+At the call:
+- A definite overlap outside the suspended parts is a conflict.
+- A possible overlap is forwarded when a caller can still refine one of its
+  endpoints, and rejected otherwise.
+- The call's execution guard and the callee's choices, instantiated from the
+  arguments, restrict every clause.
+
+Diagnostics name the borrow and access where a requirement began. That
+provenance travels beside the summary and never enters its equality.
+
+`separation_validity` holds the native validity of the related accesses. An
+access whose stored borrow may have been overwritten has no valid region left,
+so its relation disappears while its validity remains. Callers resolve these
+obligations on the same physical basis. A protected referent with invalid
+contents holds no loan to protect; any use of it has its own validity
+obligation.
+
+Clauses are normalized as a whole. Witnesses that the relation itself names
+come first. A witness that only guards observe is eliminated: the clause keeps
+it existentially, and a suspended part stays suspended only where it holds on
+every value the clause admits. Equal relations merge their guards.
+
+Limits bound the representation:
+- pairs per comparison;
+- relations per summary;
+- guard nodes and witnesses per clause;
+- stored nodes per clause.
+
+Stored nodes are the sources, projection steps, conversion views and index
+arguments of both endpoints and their dependencies. Exceeding a limit is a
+deterministic analysis failure; it never truncates the requirements.
+
+A borrow stored in contract storage or transient storage is invalid native
+contents, because storing one there is rejected. A method on a storage struct
+whose type contains a borrow must reinitialize that field before using it.
 
 ### Boolean and scalar predicates
 

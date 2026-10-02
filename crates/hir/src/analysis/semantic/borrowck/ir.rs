@@ -10,11 +10,12 @@ use crate::analysis::{
             guard::Guard,
             index::BinderScope,
             region::RegionSet,
+            separation::SeparationSet,
             source::SourceExpr,
             value::ValueId,
         },
     },
-    ty::{corelib::MemoryAccessKind, ty_def::TyId},
+    ty::{corelib::MemoryAccessKind, ty_check::BodyOwner, ty_def::TyId},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -39,6 +40,23 @@ pub struct BorrowSummary<'db> {
     pub availability: AvailabilitySummary<'db>,
     /// Conditional overwrites that must be disjoint before a native capability is used.
     pub native_requirements: RegionSet<'db>,
+    /// Separation between accesses and borrows live across them that this body
+    /// could not prove. Callers establish it physically, never by authority.
+    pub loan_requirements: SeparationSet<'db>,
+    /// Native validity of the accesses `loan_requirements` relate. Callers
+    /// resolve these, like the relations, with only physical separation.
+    pub separation_validity: RegionSet<'db>,
+}
+
+/// Where a separation requirement arose: a borrow a body held and the access it
+/// could not separate from it. Diagnostics resolve both spans from the owning
+/// body, so this never enters a summary's semantic equality.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub struct SeparationOrigin<'db> {
+    pub owner: BodyOwner<'db>,
+    pub template_owner: BodyOwner<'db>,
+    pub borrow: SemOrigin<'db>,
+    pub access: SemOrigin<'db>,
 }
 
 /// A normal-return ownership transformer, separate from unordered access history.
@@ -177,6 +195,8 @@ pub(crate) enum CallSiteRefinements<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct SemanticBorrowAnalysis<'db> {
     pub summary: SemanticBorrowSummaryResult<'db>,
+    /// Origins of the summary's loan requirements, in clause order.
+    pub provenance: Vec<SeparationOrigin<'db>>,
     /// `None` when the summary did not come from solving the body, e.g. for
     /// intrinsic contracts; the borrow check then solves the body itself.
     pub check: Option<LocalBorrowCheck<'db>>,

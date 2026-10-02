@@ -3,10 +3,13 @@ use common::layout::enum_tag_bits;
 
 use super::{
     external::{ExternalOrigin, MemoryOffset},
+    guard::Guard,
     handle::HandleAddressSpace,
     index::{IndexExpr, IndexSubst},
     path::Projection,
-    region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace, open_clause_pair},
+    region::{
+        OverlapResult, RegionRoot, RegionSet, SymbolicPlace, open_clause_pair, path_alias_guard,
+    },
     value::Guarded,
 };
 use crate::analysis::{
@@ -97,51 +100,23 @@ impl<'a, 'db> AccessFootprint<'a, 'db> {
                 let guard = left.guard.and(&right.guard)?;
                 let left_address = LinearAddress::new(db, &left.payload);
                 let right_address = LinearAddress::new(db, &right.payload);
-                let length =
-                    |extent, place: &SymbolicPlace<'db>, address: &Option<LinearAddress<'db>>| {
-                        match extent {
-                            AccessExtent::Typed
-                                if place
-                                    .root
-                                    .contract()
-                                    .is_some_and(|contract| !contract.addressable) =>
-                            {
-                                Some(0)
-                            }
-                            AccessExtent::Typed => address
-                                .as_ref()
-                                .and_then(|address| semantic_size(db, address.ty)),
-                            AccessExtent::Bytes(IndexExpr::Const(len)) => u64::try_from(len).ok(),
-                            AccessExtent::Bytes(index)
-                                if guard.proves_equal(index, IndexExpr::Const(0)) =>
-                            {
-                                Some(0)
-                            }
-                            AccessExtent::Bytes(_) | AccessExtent::Unknown => None,
-                        }
-                    };
-                let left_len = length(
+                let left_len = extent_length(
+                    db,
                     self.extent.substitute(&left_subst),
                     &left.payload,
                     &left_address,
+                    &guard,
                 );
-                let right_len = length(
+                let right_len = extent_length(
+                    db,
                     other.extent.substitute(&right_subst),
                     &right.payload,
                     &right_address,
+                    &guard,
                 );
-                if left_len == Some(0) || right_len == Some(0) {
-                    return None;
-                }
-                if let (Some(left), Some(right), Some(left_len), Some(right_len)) =
-                    (&left_address, &right_address, left_len, right_len)
-                    && left.object == right.object
-                    && let (Some(left_start), Some(right_start)) = (left.offset, right.offset)
-                    && let (Some(left_end), Some(right_end)) = (
-                        left_start.checked_add(left_len),
-                        right_start.checked_add(right_len),
-                    )
-                    && (left_end <= right_start || right_end <= left_start)
+                if left_len == Some(0)
+                    || right_len == Some(0)
+                    || disjoint_ranges(&left_address, &right_address, left_len, right_len)
                 {
                     return None;
                 }
@@ -176,6 +151,181 @@ impl<'a, 'db> AccessFootprint<'a, 'db> {
                 }
             })
         })
+    }
+}
+
+/// One access clause and one borrowed clause, opened in one scope.
+pub struct FootprintPair<'db> {
+    pub access: SymbolicPlace<'db>,
+    pub borrowed: SymbolicPlace<'db>,
+    /// The access extent in the pair's scope.
+    pub extent: AccessExtent<'db>,
+    /// Where the two may share a byte, using only physical separation.
+    pub possible: Guard<'db>,
+    /// Where they certainly share a byte, in the same scope.
+    pub definite: Option<Guard<'db>>,
+}
+
+impl<'a, 'db> AccessFootprint<'a, 'db> {
+    /// Classify every pair of this access with a typed borrowed region without
+    /// the entry assumption that distinct certain sources are separate. Pairs
+    /// separated physically, including by empty or disjoint constant ranges,
+    /// are omitted.
+    pub fn physical_pairs(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        borrowed: &RegionSet<'db>,
+    ) -> Vec<FootprintPair<'db>> {
+        let scope = self.region.scope();
+        assert_eq!(scope, borrowed.scope(), "footprint scopes must match");
+        let mut pairs = Vec::new();
+        for left in self.region.clauses() {
+            for right in borrowed.clauses() {
+                let (left, right, left_subst, _) = open_clause_pair(left, right, scope);
+                let Some(guard) = left.guard.and(&right.guard) else {
+                    continue;
+                };
+                let extent = self.extent.substitute(&left_subst);
+                let left_address = LinearAddress::new(db, &left.payload);
+                let right_address = LinearAddress::new(db, &right.payload);
+                let left_len = extent_length(db, extent, &left.payload, &left_address, &guard);
+                let right_len = extent_length(
+                    db,
+                    AccessExtent::Typed,
+                    &right.payload,
+                    &right_address,
+                    &guard,
+                );
+                if left_len == Some(0)
+                    || right_len == Some(0)
+                    || disjoint_ranges(&left_address, &right_address, left_len, right_len)
+                {
+                    continue;
+                }
+                // Paths separate only places of one typed object, in one
+                // interpretation; objects that may overlap do so anywhere.
+                let (left_place, right_place) = (&left.payload, &right.payload);
+                let exact = left_place
+                    .root
+                    .alias_guard(&right_place.root, guard.clone(), false)
+                    .filter(|_| left_place.views == right_place.views);
+                let possible = if extent == AccessExtent::Typed {
+                    let same = exact.clone().and_then(|exact| {
+                        path_alias_guard(
+                            left_place.path.as_slice(),
+                            right_place.path.as_slice(),
+                            exact,
+                            true,
+                        )
+                    });
+                    let other = left_place
+                        .root
+                        .physical_alias_guard(&right_place.root, guard, true)
+                        .and_then(|any| match &exact {
+                            Some(exact) => any.difference(exact),
+                            None => Some(any),
+                        });
+                    match (same, other) {
+                        (Some(same), Some(other)) => Some(same.or(&other)),
+                        (same, other) => same.or(other),
+                    }
+                } else {
+                    let object =
+                        |place: &'_ SymbolicPlace<'db>, address: &Option<LinearAddress<'db>>| {
+                            address
+                                .as_ref()
+                                .map_or(&place.root, |address| &address.object)
+                                .clone()
+                        };
+                    object(left_place, &left_address).physical_alias_guard(
+                        &object(right_place, &right_address),
+                        guard,
+                        false,
+                    )
+                };
+                let Some(possible) = possible else {
+                    continue;
+                };
+                // A typed access shares its exact intersection with the typed
+                // borrow. A byte span certainly shares a byte only when it is
+                // nonempty and starts at the borrowed place.
+                let certain = match extent {
+                    AccessExtent::Typed => true,
+                    AccessExtent::Bytes(_) => {
+                        left_len.is_some_and(|len| len > 0)
+                            && left_place.path.as_slice().len() == right_place.path.as_slice().len()
+                    }
+                    AccessExtent::Unknown => false,
+                };
+                let definite = exact
+                    .filter(|_| certain)
+                    .and_then(|exact| {
+                        path_alias_guard(
+                            left_place.path.as_slice(),
+                            right_place.path.as_slice(),
+                            exact,
+                            false,
+                        )
+                    })
+                    .and_then(|definite| definite.and(&possible));
+                pairs.push(FootprintPair {
+                    access: left.payload,
+                    borrowed: right.payload,
+                    extent,
+                    possible,
+                    definite,
+                });
+            }
+        }
+        pairs
+    }
+}
+
+/// The byte length of one side of a comparison, when known.
+fn extent_length<'db>(
+    db: &'db dyn HirAnalysisDb,
+    extent: AccessExtent<'db>,
+    place: &SymbolicPlace<'db>,
+    address: &Option<LinearAddress<'db>>,
+    guard: &Guard<'db>,
+) -> Option<u64> {
+    match extent {
+        AccessExtent::Typed
+            if place
+                .root
+                .contract()
+                .is_some_and(|contract| !contract.addressable) =>
+        {
+            Some(0)
+        }
+        AccessExtent::Typed => address
+            .as_ref()
+            .and_then(|address| semantic_size(db, address.ty)),
+        AccessExtent::Bytes(IndexExpr::Const(len)) => u64::try_from(len).ok(),
+        AccessExtent::Bytes(index) if guard.proves_equal(index, IndexExpr::Const(0)) => Some(0),
+        AccessExtent::Bytes(_) | AccessExtent::Unknown => None,
+    }
+}
+
+/// Constant, nonwrapping byte ranges of one linear object that do not meet.
+fn disjoint_ranges<'db>(
+    left: &Option<LinearAddress<'db>>,
+    right: &Option<LinearAddress<'db>>,
+    left_len: Option<u64>,
+    right_len: Option<u64>,
+) -> bool {
+    if let (Some(left), Some(right), Some(left_len), Some(right_len)) =
+        (left, right, left_len, right_len)
+        && left.object == right.object
+        && let (Some(left_start), Some(right_start)) = (left.offset, right.offset)
+        && let (Some(left_end), Some(right_end)) = (
+            left_start.checked_add(left_len),
+            right_start.checked_add(right_len),
+        )
+    {
+        left_end <= right_start || right_end <= left_start
+    } else {
+        false
     }
 }
 
@@ -316,11 +466,11 @@ mod tests {
     use super::*;
     use crate::{
         analysis::semantic::{
-            VariantIndex,
+            FieldIndex, VariantIndex,
             capability::{
                 external::{ExternalSource, ReferentContract},
                 guard::{ChoiceKey, Guard, ValueOccurrence},
-                index::BinderScope,
+                index::{BinderScope, IndexNamespace},
                 path::{RegionPath, StructuralPath},
                 source::{InputSource, SourceExpr},
             },
@@ -560,5 +710,124 @@ mod tests {
                 OverlapResult::Disjoint
             );
         }
+    }
+
+    fn input_root<'db>(
+        db: &'db HirAnalysisTestDb,
+        param: u32,
+        dereferences: Vec<RegionPath<IndexExpr<'db>>>,
+    ) -> RegionRoot<'db> {
+        let contract = ReferentContract::memory(db, TyId::u256(db));
+        let source = dereferences.into_iter().fold(
+            ExternalSource::input(InputSource::place(param), contract, false),
+            |source, path| source.follow(path, contract, false),
+        );
+        RegionRoot::External(source)
+    }
+
+    fn pairs<'db>(
+        db: &'db HirAnalysisTestDb,
+        access: (
+            &BinderScope,
+            RegionRoot<'db>,
+            Vec<Projection<IndexExpr<'db>>>,
+        ),
+        borrowed: (RegionRoot<'db>, Vec<Projection<IndexExpr<'db>>>),
+    ) -> Vec<FootprintPair<'db>> {
+        let (scope, root, path) = access;
+        let access = RegionSet::singleton(scope, root, RegionPath::new(path));
+        let borrowed = RegionSet::singleton(scope, borrowed.0, RegionPath::new(borrowed.1));
+        AccessFootprint::typed(&access).physical_pairs(db, &borrowed)
+    }
+
+    #[test]
+    fn physical_pairs_separate_paths_only_within_one_proved_object() {
+        let db = HirAnalysisTestDb::default();
+        let scope = BinderScope::default();
+        let field = |index| Projection::Field(FieldIndex(index));
+        let variant = |variant| Projection::VariantField {
+            variant: VariantIndex(variant),
+            field: FieldIndex(0),
+        };
+        // Distinct certain inputs may overlap anywhere; fields do not separate them.
+        let possible = pairs(
+            &db,
+            (&scope, input_root(&db, 0, vec![]), vec![field(0)]),
+            (input_root(&db, 1, vec![]), vec![field(1)]),
+        );
+        assert!(matches!(possible.as_slice(), [pair] if pair.definite.is_none()));
+        // Within one proved object, different fields are separate.
+        assert!(
+            pairs(
+                &db,
+                (&scope, input_root(&db, 0, vec![]), vec![field(0)]),
+                (input_root(&db, 0, vec![]), vec![field(1)]),
+            )
+            .is_empty()
+        );
+        // Enum variants overlay the same storage.
+        assert_eq!(
+            pairs(
+                &db,
+                (&scope, input_root(&db, 0, vec![]), vec![variant(0)]),
+                (input_root(&db, 0, vec![]), vec![variant(1)]),
+            )
+            .len(),
+            1
+        );
+        // Unequal selectors of stored pointers can still hold equal addresses.
+        let (scope, first) = scope.bind(IndexNamespace::Value);
+        let (scope, second) = scope.bind(IndexNamespace::Value);
+        let loaded = |index| input_root(&db, 0, vec![RegionPath::new([Projection::Index(index)])]);
+        assert_eq!(
+            pairs(
+                &db,
+                (&scope, loaded(first), vec![field(0)]),
+                (loaded(second), vec![field(1)]),
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn physical_pairs_call_only_certain_intersections_definite() {
+        let db = HirAnalysisTestDb::default();
+        let (scope, index) = BinderScope::default().bind(IndexNamespace::Value);
+        let root = RegionRoot::External(ExternalSource::input(
+            InputSource::place(0),
+            ReferentContract::memory(&db, TyId::u256(&db)),
+            false,
+        ));
+        let whole = RegionSet::singleton(&scope, root.clone(), RegionPath::default());
+        let member =
+            RegionSet::singleton(&scope, root, RegionPath::new([Projection::Index(index)]));
+        // A typed access contains every typed member it prefixes.
+        let [typed] = AccessFootprint::typed(&whole)
+            .physical_pairs(&db, &member)
+            .try_into()
+            .ok()
+            .unwrap();
+        assert!(typed.definite.is_some());
+        // One byte at the start need not reach the member a caller selects.
+        let [byte] = AccessFootprint {
+            region: &whole,
+            extent: AccessExtent::Bytes(IndexExpr::Const(1)),
+        }
+        .physical_pairs(&db, &member)
+        .try_into()
+        .ok()
+        .unwrap();
+        assert!(byte.definite.is_none());
+        // It certainly shares the first byte of a place it starts at.
+        let [start] = AccessFootprint {
+            region: &member,
+            extent: AccessExtent::Bytes(IndexExpr::Const(1)),
+        }
+        .physical_pairs(&db, &member)
+        .try_into()
+        .ok()
+        .unwrap();
+        assert!(start.definite.is_some());
     }
 }

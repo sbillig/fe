@@ -6,7 +6,7 @@ use cranelift_entity::EntityRef;
 use super::{
     availability::ResolvedAvailability,
     events::{CapabilityOccurrence, CapabilityTraversal},
-    memory::ResolvedMemoryAccess,
+    memory::{ResolvedMemoryAccess, ResolvedSeparation},
     solver::Borrowck,
     summary::CallInputs,
 };
@@ -47,6 +47,10 @@ pub(super) struct ResolvedAccess<'db> {
 pub(super) struct ResolvedOperation<'db> {
     pub accesses: Vec<ResolvedAccess<'db>>,
     pub calls: Vec<ResolvedMemoryAccess<'db>>,
+    /// The callee's separation clauses at this call.
+    pub requirements: Vec<ResolvedSeparation<'db>>,
+    /// Native validity of the accesses those clauses relate.
+    pub separation_validity: NativeValidity<'db>,
     pub availability: Option<ResolvedAvailability<'db>>,
     pub births: Vec<AllocationBirth<'db>>,
     pub native_validity: NativeValidity<'db>,
@@ -202,7 +206,7 @@ impl<'db> Borrowck<'db> {
                         }
                     }
                 }
-                let (calls, availability, native_validity, births) =
+                let (calls, separations, availability, native_validity, births) =
                     if let NStatementKind::Define {
                         result,
                         expr:
@@ -218,6 +222,7 @@ impl<'db> Borrowck<'db> {
                         };
                         (
                             self.call_memory_accesses(&state, *result, inputs)?,
+                            self.call_loan_requirements(&state, *result, inputs)?,
                             self.call_availability(&state, *result, inputs)?,
                             self.call_native_validity(&state, *result, inputs)?,
                             self.call_births(*result, inputs)?,
@@ -229,6 +234,7 @@ impl<'db> Borrowck<'db> {
                     {
                         (
                             Vec::new(),
+                            Default::default(),
                             None,
                             NativeValidity::default(),
                             self.literal_birth(*result, constant)
@@ -237,11 +243,20 @@ impl<'db> Borrowck<'db> {
                                 .collect(),
                         )
                     } else {
-                        (Vec::new(), None, NativeValidity::default(), Vec::new())
+                        (
+                            Vec::new(),
+                            Default::default(),
+                            None,
+                            NativeValidity::default(),
+                            Vec::new(),
+                        )
                     };
+                let (requirements, separation_validity) = separations;
                 operations.push(ResolvedOperation {
                     accesses,
                     calls,
+                    requirements,
+                    separation_validity,
                     availability,
                     births,
                     native_validity,
