@@ -38,3 +38,9 @@ error[3-0024]: non-const function call in const context
    │
 29 │     const LEN: usize = ordinary(N) + 1
    │                        ^^^^^^^^^^^ calls in const context must be `const fn`
+
+error[3-0024]: non-const function call in const context
+   ┌─ generic_const_non_const_call.fe:37:22
+   │
+37 │         for value in [N, 1] { result += value }
+   │                      ^^^^^^ calls in const context must be `const fn`

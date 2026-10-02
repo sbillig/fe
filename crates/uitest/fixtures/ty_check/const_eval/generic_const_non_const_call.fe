@@ -1,6 +1,6 @@
 // Constants are held to the const language before evaluation, so a non-const
 // call is reported where it is written, even in a constant that waits on
-// generic parameters.
+// generic parameters, and once when a concrete use evaluates it.
 fn ordinary(_ n: usize) -> usize { n }
 
 const fn identity<const N: usize>() -> usize { N }
@@ -28,5 +28,17 @@ trait HasLen {
 impl<const N: usize> HasLen for Holder<N> {
     const LEN: usize = ordinary(N) + 1
 }
+
+struct Looped<const N: usize> {}
+
+impl<const N: usize> Looped<N> {
+    const LEN: usize = {
+        let mut result: usize = 0
+        for value in [N, 1] { result += value }
+        result
+    }
+}
+
+const USED: usize = Looped<3>::LEN
 
 const fn allowed<const N: usize>() -> usize { identity<N>() }
