@@ -2206,15 +2206,22 @@ const fn total() -> u8 { inline_pass<3>([9, 10, 11])[2] + inline_pass<0>([12, 13
 #[test]
 fn conditional_terms_force_only_the_selected_arm() {
     let mut db = HirAnalysisTestDb::default();
-    // `wide` has more blocks than the extraction budget, so it stays a
-    // deferred body that execution still forces.
+    // `wide` reaches more blocks than the extraction budget, so it stays a
+    // deferred body that execution still forces. `pass` returns `N` before
+    // as many unreachable blocks, so its extent keeps the identity of `N`.
     let arms = (0..120)
         .map(|arm| format!("if N == {arm} {{ {arm} }} else "))
         .collect::<String>();
+    let unreachable = (0..120)
+        .map(|arm| format!("if N == {arm} {{ }}\n"))
+        .collect::<String>();
     let file = db.new_stand_alone(
         "conditional_terms.fe".into(),
-        &(format!("const fn wide<const N: usize>() -> usize {{ {arms}{{ N }} }}\n")
-            + r#"
+        &(format!(
+            "const fn wide<const N: usize>() -> usize {{ {arms}{{ N }} }}
+fn pass<const N: usize>(_ x: [u8; {{ if {{ return N }} {{ {unreachable} 1 }} else {{ 1 }} }}]) -> [u8; N] {{ x }}
+"
+        ) + r#"
 const fn branch<const N: usize>() -> usize { if N == 0 { 1 } else { 10 / (N - 1) } }
 const fn logical<const N: usize>() -> usize { if N > 1 && N < 9 { N } else { 2 } }
 const fn either<const N: usize>() -> usize { if N == 0 || N == 5 { 1 } else { 2 } }

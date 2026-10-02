@@ -371,14 +371,29 @@ fn extract_pure_body_term<'db>(
     let body = get_or_build_semantic_instance(db, key)
         .admitted_body(db)
         .ok()?;
-    // The walk charges a step for each block it reaches, so a body with more
-    // blocks than remain cannot be described. Rejecting it first also bounds
-    // the branch-join analysis, which spans the whole body.
-    if body.entry_locals.len() != inputs.len()
-        || body.blocks.is_empty()
-        || body.blocks.len() > extraction.remaining
-    {
+    if body.entry_locals.len() != inputs.len() || body.blocks.is_empty() {
         return None;
+    }
+    // The walk charges a step for each block it reaches, so a body that
+    // reaches more blocks than remain cannot be described. Counting them
+    // within that bound also bounds the branch-join analysis, which spans
+    // only the reachable blocks.
+    let mut reachable = vec![false; body.blocks.len()];
+    let mut pending = vec![0];
+    let mut count = 0;
+    while let Some(block) = pending.pop() {
+        if std::mem::replace(reachable.get_mut(block)?, true) {
+            continue;
+        }
+        count += 1;
+        if count > extraction.remaining {
+            return None;
+        }
+        pending.extend(
+            block_successors(&body.blocks[block].terminator.kind)
+                .into_iter()
+                .map(|block| block.index()),
+        );
     }
     let mut state = BodyTerms {
         terms: vec![None; body.locals.len()],
@@ -408,6 +423,7 @@ fn extract_pure_body_term<'db>(
         stack,
         frames,
         extraction,
+        reachable,
         post_dominators: None,
     };
     let BodyTermExit::Return(result) = walk.walk(0, None, &mut state)? else {
@@ -457,6 +473,7 @@ struct BodyTermWalk<'a, 'db> {
     stack: Vec<BodyOwner<'db>>,
     frames: &'a [TermCallFrame<'db>],
     extraction: &'a mut TermExtraction,
+    reachable: Vec<bool>,
     post_dominators: Option<Vec<FxHashSet<usize>>>,
 }
 
@@ -525,23 +542,31 @@ impl<'db> BodyTermWalk<'_, 'db> {
     /// post-dominator.
     fn join_of(&mut self, block: usize) -> Option<usize> {
         let post_dominators = self.post_dominators.get_or_insert_with(|| {
+            // Unreachable blocks keep no successors or post-dominators; no
+            // reachable block leads to them.
             let successors = self
                 .body
                 .blocks
                 .iter()
-                .map(|block| {
+                .zip(&self.reachable)
+                .map(|(block, &reachable)| {
                     block_successors(&block.terminator.kind)
                         .into_iter()
+                        .filter(|_| reachable)
                         .map(|block| block.index())
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
-            let all = (0..successors.len()).collect::<FxHashSet<_>>();
+            let all = (0..successors.len())
+                .filter(|&block| self.reachable[block])
+                .collect::<FxHashSet<_>>();
             let mut post_dominators = successors
                 .iter()
                 .enumerate()
                 .map(|(block, successors)| {
-                    if successors.is_empty() {
+                    if !self.reachable[block] {
+                        FxHashSet::default()
+                    } else if successors.is_empty() {
                         FxHashSet::from_iter([block])
                     } else {
                         all.clone()
