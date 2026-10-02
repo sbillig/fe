@@ -13699,3 +13699,47 @@ fn inspect() {
         "{diagnostics}"
     );
 }
+
+#[test]
+fn discarded_scalar_call_results_keep_argument_postconditions() {
+    let source = r#"
+fn constrain(_ index: usize) -> usize {
+    if index != 1 { assert!(false) }
+    index
+}
+fn discard(_ index: usize) -> usize {
+    let unused = constrain(index)
+    index
+}
+"#;
+    assert_eq!(checked_borrow_diags(source), "");
+    with_borrow_summary(source, "discard", |_db, summary| {
+        let guard = summary
+            .scalar_result
+            .expect("argument equality survives an unused result");
+        let bound = fe_hir::analysis::semantic::capability::guard::Guard::always(guard.scope())
+            .with_equality(IndexExpr::FormalValue(0), IndexExpr::Const(1))
+            .unwrap();
+        assert!(guard.implies(&bound));
+    });
+}
+
+#[test]
+fn forwarded_scalar_call_results_keep_return_relations() {
+    let source = r#"
+fn identity(_ index: usize) -> usize { index }
+fn forward(_ index: usize) -> usize { identity(index) }
+"#;
+    with_borrow_summary(source, "forward", |_db, summary| {
+        use fe_hir::analysis::semantic::capability::guard::Guard;
+        use fe_hir::analysis::semantic::capability::index::{BinderScope, IndexNamespace};
+        let guard = summary
+            .scalar_result
+            .expect("a used result keeps its relation");
+        let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
+        let equality = Guard::always(guard.scope())
+            .with_equality(returned, IndexExpr::FormalValue(0))
+            .unwrap();
+        assert!(guard.implies(&equality));
+    });
+}
