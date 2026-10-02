@@ -2090,6 +2090,57 @@ fn shifted<const N: usize>(_ x: [u8; word_len(N)]) -> [u8; word_len({ N + 1 })] 
 }
 
 #[test]
+fn generic_callee_extents_share_identity() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "generic_extent_identity.fe".into(),
+        r#"
+const fn generic_len<const N: usize>() -> usize {
+    let n = N
+    n / 32 + if n % 32 == 0 { 0 } else { 1 }
+}
+trait HasN { const N: usize }
+struct Big {}
+impl HasN for Big { const N: usize = 3 }
+const fn bounded<T: HasN>() -> usize {
+    let n = T::N
+    if n == 0 { 1 } else { n }
+}
+struct Packed<const N: usize> { words: [u256; generic_len<N>()] }
+const fn generic_pass<const N: usize>(_ x: [u8; generic_len<N>()]) -> [u8; generic_len<N>()] { x }
+const fn generic_field<const N: usize>(_ p: Packed<N>) -> [u256; generic_len<N>()] { p.words }
+const fn bounded_pass<T: HasN>(_ x: [u8; bounded<T>()]) -> [u8; bounded<T>()] { x }
+const fn total() -> u256 {
+    generic_pass<33>([1, 2])[1] as u256
+        + generic_field<65>(Packed<65> { words: [3, 4, 5] })[2]
+        + bounded_pass<Big>([6, 7, 8])[2] as u256
+}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(function(&db, module, "total"));
+    assert_integer_result(
+        &db,
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![])),
+        TyId::u256(&db),
+        15,
+    );
+
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "distinct_extents.fe".into(),
+        "const fn generic_len<const N: usize>() -> usize { let n = N\n if n == 0 { 1 } else { n } }\nfn shifted<const N: usize>(_ x: [u8; generic_len<N>()]) -> [u8; generic_len<{ N + 1 }>()] { x }",
+    );
+    let (module, _) = db.top_mod(file);
+    let rendered = format_diagnostics(&db, &db.run_on_top_mod(module));
+    assert!(
+        rendered.contains("type mismatch"),
+        "different extents must stay distinct: {rendered}"
+    );
+}
+
+#[test]
 fn describing_a_non_const_body_fails_as_executing_it_does() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
