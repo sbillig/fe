@@ -9,6 +9,7 @@ use std::{fs, io::IsTerminal, path::Path, process::Command};
     )
 ))]
 use std::{
+    path::PathBuf,
     thread,
     time::{Duration, Instant},
 };
@@ -564,9 +565,21 @@ fn test_cli_build_native_executes_representative_programs_at_o0_and_o1() {
 ))]
 fn native_exit_code(source: &str, level: &str) -> Option<i32> {
     let temp = tempdir().expect("tempdir");
-    let source_path = temp.path().join("program.fe");
+    let executable = build_native_program(source, level, temp.path());
+    native_program_exit_code(&executable, &[], level)
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+fn build_native_program(source: &str, level: &str, temp: &Path) -> PathBuf {
+    let source_path = temp.join("program.fe");
     fs::write(&source_path, source).expect("write native source");
-    let out_dir = temp.path().join("out");
+    let out_dir = temp.join("out");
     let (output, exit_code) = run_fe_main(&[
         "build",
         "--backend",
@@ -581,7 +594,19 @@ fn native_exit_code(source: &str, level: &str) -> Option<i32> {
         exit_code, 0,
         "fe native build failed at O{level}:\n{output}"
     );
-    let mut child = Command::new(out_dir.join("program"))
+    out_dir.join("program")
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+fn native_program_exit_code(executable: &Path, args: &[&str], level: &str) -> Option<i32> {
+    let mut child = Command::new(executable)
+        .args(args)
         .spawn()
         .expect("run native executable");
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -592,7 +617,7 @@ fn native_exit_code(source: &str, level: &str) -> Option<i32> {
         if Instant::now() >= deadline {
             child.kill().expect("kill timed out native executable");
             child.wait().expect("reap native executable");
-            panic!("native program did not finish within 10 seconds at O{level}");
+            panic!("native program {args:?} did not finish within 10 seconds at O{level}");
         }
         thread::sleep(Duration::from_millis(10));
     }
@@ -709,33 +734,88 @@ pub fn main() -> i32 {{
     )
 ))]
 #[test]
-fn test_cli_build_native_checked_div_rem_still_traps() {
+fn test_cli_build_native_checked_arithmetic_still_traps() {
+    let mut cases = Vec::new();
     for bits in [8, 128, 256] {
         let sign_bit = bits - 1;
         let min = format!("1 << {sign_bit}");
-        for (prefix, op, value, divisor) in [
+        for (prefix, op, value, rhs) in [
             ("u", "/", "17", "0"),
             ("u", "%", "17", "0"),
             ("i", "/", "-17", "0"),
             ("i", "%", "-17", "0"),
             ("i", "/", min.as_str(), "-1"),
         ] {
-            let ty = format!("{prefix}{bits}");
-            let source = format!(
-                r#"
-fn calculate(value: {ty}, divisor: {ty}) -> {ty} {{ value {op} divisor }}
-pub fn main() -> i32 {{
-    if calculate(value: {value}, divisor: {divisor}) == 0 {{ 0 }} else {{ 1 }}
-}}
-"#
+            cases.push((
+                format!("{prefix}{bits}"),
+                op,
+                value.to_owned(),
+                rhs.to_owned(),
+            ));
+        }
+        for (prefix, base, exponent) in [("u", 2, bits), ("i", 2, sign_bit), ("i", 3, -1)] {
+            cases.push((
+                format!("{prefix}{bits}"),
+                "**",
+                base.to_string(),
+                exponent.to_string(),
+            ));
+        }
+    }
+    assert_eq!(cases.len(), 24);
+
+    let mut source = String::from("use std::native::Args\n");
+    for (index, (ty, op, _, _)) in cases.iter().enumerate() {
+        source.push_str(&format!(
+            "fn calculate_{index}(value: {ty}, rhs: {ty}) -> {ty} {{ value {op} rhs }}\n"
+        ));
+    }
+    source.push_str(
+        r#"
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    let args = Args::new(argc, argv)
+    if args.len() != 2 { return 97 }
+    let arg = args.get(1)
+    if arg.len() != 1 { return 97 }
+    let selector = arg.byte_at(0)
+"#,
+    );
+    let selectors: Vec<_> = cases
+        .iter()
+        .enumerate()
+        .map(|(index, (_, _, value, rhs))| {
+            let selector = b'A' + u8::try_from(index).expect("case selector fits u8");
+            source.push_str(&format!(
+                "    if selector == {selector} {{ if calculate_{index}(value: {value}, rhs: {rhs}) == 0 {{ return 0 }} else {{ return 1 }} }}\n"
+            ));
+            char::from(selector).to_string()
+        })
+        .collect();
+    source.push_str("    if selector == 89 { 0 } else { 97 }\n}\n");
+
+    // Each exceptional input still runs in a separate process, sharing one
+    // compiled executable per optimization level instead of rebuilding it.
+    for level in ["0", "1"] {
+        let temp = tempdir().expect("tempdir");
+        let executable = build_native_program(&source, level, temp.path());
+        for (args, expected) in [
+            (&[][..], 97),
+            (&["Y"][..], 0),
+            (&["Z"][..], 97),
+            (&[""][..], 97),
+        ] {
+            assert_eq!(
+                native_program_exit_code(&executable, args, level),
+                Some(expected),
+                "native arithmetic selector control {args:?} failed at O{level}"
             );
-            for level in ["0", "1"] {
-                assert_eq!(
-                    native_exit_code(&source, level),
-                    None,
-                    "checked {ty} {value} {op} {divisor} did not trap at O{level}"
-                );
-            }
+        }
+        for ((ty, op, value, rhs), selector) in cases.iter().zip(&selectors) {
+            assert_eq!(
+                native_program_exit_code(&executable, &[selector], level),
+                None,
+                "checked {ty} {value} {op} {rhs} did not trap at O{level}"
+            );
         }
     }
 }
@@ -819,38 +899,6 @@ fn test_cli_evm_power_edges() {
                 exit_code, 0,
                 "{bits}-bit EVM power failed at O{level}:\n{output}"
             );
-        }
-    }
-}
-
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
-#[test]
-fn test_cli_build_native_checked_power_still_traps() {
-    for bits in [8, 128, 256] {
-        let sign_bit = bits - 1;
-        for (prefix, base, exponent) in [("u", 2, bits), ("i", 2, sign_bit), ("i", 3, -1)] {
-            let ty = format!("{prefix}{bits}");
-            let source = format!(
-                r#"
-fn calculate(base: {ty}, exponent: {ty}) -> {ty} {{ base ** exponent }}
-pub fn main() -> i32 {{
-    if calculate(base: {base}, exponent: {exponent}) == 0 {{ 0 }} else {{ 1 }}
-}}
-"#
-            );
-            for level in ["0", "1"] {
-                assert_eq!(
-                    native_exit_code(&source, level),
-                    None,
-                    "checked {ty} {base} ** {exponent} did not trap at O{level}"
-                );
-            }
         }
     }
 }
@@ -3515,9 +3563,10 @@ fn test_cli_test_workspace_root_is_workspace_aware() {
         output.contains("running `fe test` for 2 inputs"),
         "expected workspace member expansion, got:\n{output}"
     );
-    assert!(
-        output.contains("No tests found in"),
-        "expected no-tests warning, got:\n{output}"
+    assert_eq!(
+        output.matches("No tests found in").count(),
+        2,
+        "expected a no-tests warning for each workspace member, got:\n{output}"
     );
     assert!(
         !output.contains("Failed to emit test"),
@@ -3530,13 +3579,28 @@ fn test_cli_test_workspace_root_is_workspace_aware() {
 }
 
 #[test]
-fn test_cli_test_fe_repo_root() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|path| path.parent())
-        .expect("fe repo root");
-    let (output, exit_code) = run_fe_main_in_dir(&["test"], root);
-    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+fn test_cli_test_workspace_preserves_builtin_authority() {
+    let root = workspace_fixture("test_workspace_builtin_authority");
+    let (output, exit_code) = run_fe_main_in_dir(&["test"], &root);
+    assert_eq!(exit_code, 0, "fe test lost workspace authority:\n{output}");
+    assert!(output.contains("No tests found in"), "{output}");
+
+    // The integer-backed handle requires workspace authority. The same source
+    // must be rejected when its ingot is tested outside that workspace.
+    let isolated = tempdir().expect("tempdir");
+    fs::create_dir(isolated.path().join("src")).expect("create src dir");
+    for file in ["fe.toml", "src/lib.fe"] {
+        fs::copy(root.join("std").join(file), isolated.path().join(file)).expect("copy std ingot");
+    }
+    let (output, exit_code) = run_fe_main_in_dir(&["test"], isolated.path());
+    assert_ne!(
+        exit_code, 0,
+        "expected an untrusted handle error:\n{output}"
+    );
+    assert!(
+        output.contains("integer-backed handles are reserved for compiler-provided libraries"),
+        "expected an untrusted handle error:\n{output}"
+    );
 }
 
 #[test]

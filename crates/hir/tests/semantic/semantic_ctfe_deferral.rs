@@ -2141,15 +2141,16 @@ fn term_extraction_bounds_expanding_recursion() {
         let output = Command::new(current_exe().unwrap())
             .args([
                 "--exact",
-                "term_extraction_bounds_expanding_recursion",
+                "semantic_ctfe_deferral::term_extraction_bounds_expanding_recursion",
                 "--nocapture",
             ])
             .env(CHILD, "1")
             .output()
             .unwrap();
         assert!(
-            output.status.success(),
-            "extraction subprocess failed: {}\n{}",
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
+            "extraction subprocess did not run its test successfully: {}\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );

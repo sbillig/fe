@@ -53,6 +53,8 @@ jobs:
           npx tree-sitter generate --abi=14
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: Validate release notes entry
         run: ./newsfragments/validate_files.py
       - name: Lint with rustfmt
@@ -72,7 +74,7 @@ jobs:
           - os: macOS-latest
           - os: windows-latest
     env:
-      # MSVC's link.exe is much slower than lld at linking the ~100 large test
+      # MSVC's link.exe is much slower than lld at linking the large test
       # binaries. Only affects Windows builds.
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
     steps:
@@ -148,12 +150,22 @@ jobs:
         uses: taiki-e/install-action@nextest
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: Build
-        run: cargo test --release --workspace --all-features --no-run --locked --exclude fe-bench
+        run: cargo test --release --workspace --all-features --no-run --locked --exclude fe-bench --timings
       - name: Run tests
         env:
           FE_SOLC_PATH: ${{ runner.os == 'Windows' && format('{0}\\solc-{1}.exe', runner.temp, env.SOLC_VERSION) || format('{0}/solc-{1}', runner.temp, env.SOLC_VERSION) }}
         run: cargo nextest run --release --workspace --all-features --no-fail-fast --locked --exclude fe-bench
+      - name: Upload build timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-timings-${{ runner.os }}
+          path: target/cargo-timings/*.html
+          if-no-files-found: ignore
+          retention-days: 14
 
   wasm-wasi-check:
     runs-on: ubuntu-latest
@@ -172,6 +184,8 @@ jobs:
           rustup target add wasm32-wasip1
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: Check core crates for wasm32-unknown-unknown
         run: cargo check --locked -p fe-common -p fe-parser -p fe-hir --target wasm32-unknown-unknown
       - name: Check filesystem crates for wasm32-wasip1

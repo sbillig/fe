@@ -373,7 +373,7 @@ fn semantic_ctfe_evaluates_as_bytes_const_fns() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "semantic_ctfe.fe".into(),
-        include_str!("../../uitest/fixtures/ty_check/const_eval/user_const_fn_ok.fe"),
+        include_str!("../../../uitest/fixtures/ty_check/const_eval/user_const_fn_ok.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
 
@@ -790,7 +790,7 @@ fn const_fn_match_has_no_const_body_diagnostic() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "semantic_ctfe.fe".into(),
-        include_str!("../test_files/ty_check/const_eval_const_fn_match.fe"),
+        include_str!("../../test_files/ty_check/const_eval_const_fn_match.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     let func = top_mod
@@ -906,7 +906,7 @@ fn type_alias_len_reports_nested_const_eval_error() {
     let file = db.new_stand_alone(
         "semantic_ctfe.fe".into(),
         include_str!(
-            "../../uitest/fixtures/ty_check/const_eval/as_bytes_mixed_enum_unsupported.fe"
+            "../../../uitest/fixtures/ty_check/const_eval/as_bytes_mixed_enum_unsupported.fe"
         ),
     );
     let (top_mod, _) = db.top_mod(file);
@@ -988,7 +988,7 @@ fn contract_init_fixed_array_arg_fixture_has_no_type_level_semantic_consts() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "semantic_ctfe.fe".into(),
-        include_str!("../../fe/tests/fixtures/fe_test/contract_init_fixed_array_arg.fe"),
+        include_str!("../../../fe/tests/fixtures/fe_test/contract_init_fixed_array_arg.fe"),
     );
     let (top_mod, _) = db.top_mod(file);
     let mut pending = VecDeque::new();

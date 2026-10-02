@@ -1,6 +1,4 @@
-#[path = "support/layout.rs"]
-mod layout_test_support;
-
+use crate::layout_test_support::{parse_module, parse_ok};
 use fe_hir::analysis::ty::{
     const_ty::ConstTyData,
     ty_check::{check_contract_recv_arm_body, check_func_body},
@@ -15,7 +13,6 @@ use fe_hir::hir_def::{
     TopLevelMod,
 };
 use fe_hir::test_db::{HirAnalysisTestDb, find_contract, find_func};
-use layout_test_support::{parse_module, parse_ok};
 
 fn const_lit_usize<'db>(
     db: &'db HirAnalysisTestDb,

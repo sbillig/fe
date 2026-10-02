@@ -1,6 +1,4 @@
-#[path = "support/layout.rs"]
-mod layout_test_support;
-
+use crate::layout_test_support::{parse_module, parse_ok};
 use fe_hir::{
     analysis::ty::{
         abi_ty::{AbiTypeError, semantic_ty_to_abi_desc},
@@ -9,7 +7,6 @@ use fe_hir::{
     },
     test_db::find_func,
 };
-use layout_test_support::{parse_module, parse_ok};
 
 #[test]
 fn specialized_adt_array_field_has_concrete_abi_extent() {
