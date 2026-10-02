@@ -71,11 +71,6 @@ debug = 0
 [profile.release]
 debug = 0
 
-[profile.ci]
-# Skip per-crate thin LTO to reduce CI build plus test time.
-inherits = "release"
-lto = "off"
-
 [profile.dev.package]
 revm = { opt-level = 3 }
 revm-bytecode = { opt-level = 3 }
