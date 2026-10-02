@@ -5,7 +5,7 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            CallSiteId, PlaceProvenance, RuntimeSizeError, SBlockId, SExpr, SStmtKind,
+            CallSiteId, PlaceProvenance, RuntimeSizeError, SBlockId, SExpr, SLocalId, SStmtKind,
             STerminatorKind, SemOrigin, SemanticBody, SemanticCalleeRef, SemanticLocalRole,
             ValueProvenance, VariantIndex,
             borrowck::CallSiteRefinements,
@@ -885,18 +885,19 @@ fn replan_call_site<'db>(
 fn invalid_size_diagnostic<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    origin: SemOrigin<'db>,
+    span: SemanticDiagnosticSpan<'db>,
     ty: TyId<'db>,
     error: RuntimeSizeError<'db>,
 ) -> SemanticDiagnosticId<'db> {
+    let subject = match span {
+        SemanticDiagnosticSpan::LocalSourceOrBody { .. } => "value",
+        _ => "operation",
+    };
     let mut diagnostic = SemanticDiagnostic::new(
         instance,
         SemanticDiagnosticKind::InvalidConcreteType,
-        "this operation requires a valid concrete type size".into(),
-        SemanticDiagnosticSpan::Origin {
-            owner: instance.key(db).owner(db),
-            origin,
-        },
+        format!("this {subject} requires a valid concrete type size"),
+        span,
     );
     let message = match error {
         RuntimeSizeError::Overflow => format!(
@@ -1372,7 +1373,16 @@ impl<'db> SemanticInstance<'db> {
                 let arg = normalize_ty(db, arg, body.scope(), self.assumptions(db));
                 if let Err(error) = runtime_size_bytes(db, arg) {
                     return Err(SemanticBodyAdmissionError::InvalidConcreteType(
-                        invalid_size_diagnostic(db, self, SemOrigin::Expr(expr), arg, error),
+                        invalid_size_diagnostic(
+                            db,
+                            self,
+                            SemanticDiagnosticSpan::Origin {
+                                owner: self.key(db).owner(db),
+                                origin: SemOrigin::Expr(expr),
+                            },
+                            arg,
+                            error,
+                        ),
                     ));
                 }
             }
@@ -1381,33 +1391,77 @@ impl<'db> SemanticInstance<'db> {
     }
 
     /// Borrow checking and runtime lowering consume concrete layouts, so a
-    /// concrete instance demands the layout of each expression's type. A
-    /// deferred fault in a specialized extent, whether this body writes it or
-    /// receives it from a callee or field, rejects the body with its source,
-    /// even when the value is unused or empty. Compile-time evaluation forces
-    /// the same extents itself when it materializes them.
+    /// concrete instance demands the layout of every type `body` consumes:
+    /// each expression's, each local's (parameters and bindings included) and
+    /// each callee parameter's. A deferred fault in a specialized extent,
+    /// whether this body writes it or receives it through a callee signature
+    /// or a field, rejects the body with its source, even when the value is
+    /// unused or empty. Admission demands this before canonicalization folds
+    /// any value of such a type. Compile-time evaluation forces the same
+    /// extents itself when it materializes them.
     pub(crate) fn concrete_layout_diagnostic(
         self,
         db: &'db dyn HirAnalysisDb,
+        body: &SemanticBody<'db>,
     ) -> Option<SemanticDiagnosticId<'db>> {
-        let typed_body = self.key(db).typed_body(db);
-        let body = typed_body.body()?;
+        let key = self.key(db);
+        let typed_body = key.typed_body(db);
+        let at = move |origin| SemanticDiagnosticSpan::Origin {
+            owner: key.owner(db),
+            origin,
+        };
+        let exprs = typed_body.body().into_iter().flat_map(|hir| {
+            hir.exprs(db).iter().map(move |(expr, _)| {
+                (
+                    self.normalized_ty(db, typed_body.expr_ty(db, expr)),
+                    at(SemOrigin::Expr(expr)),
+                )
+            })
+        });
+        // A place carrier's own type is a reference; its layout is the value's.
+        let locals = body.locals.iter().enumerate().map(|(index, local)| {
+            (
+                self.normalized_ty(db, local.role.layout_ty(local.ty)),
+                SemanticDiagnosticSpan::LocalSourceOrBody {
+                    instance: self,
+                    local: SLocalId::new(index),
+                },
+            )
+        });
+        // Normalization reads each argument's target type from the callee.
+        let params = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.stmts)
+            .filter_map(|stmt| match &stmt.kind {
+                SStmtKind::Assign {
+                    expr: SExpr::Call { callee, args, .. },
+                    ..
+                } => Some((
+                    stmt.origin,
+                    get_or_build_semantic_instance(db, callee.key),
+                    args,
+                )),
+                _ => None,
+            })
+            .flat_map(|(origin, callee, args)| {
+                let typed_body = callee.key(db).typed_body(db);
+                args.iter().enumerate().filter_map(move |(index, _)| {
+                    Some((
+                        callee.normalized_binding_ty(db, typed_body.param_binding(index)?),
+                        at(origin),
+                    ))
+                })
+            });
         let mut demanded = FxHashSet::default();
-        body.exprs(db).iter().find_map(|(expr, _)| {
-            let ty = self.normalized_ty(db, typed_body.expr_ty(db, expr));
+        exprs.chain(locals).chain(params).find_map(|(ty, span)| {
             if !demanded.insert(ty) {
                 return None;
             }
             let Err(error @ RuntimeSizeError::InvalidType(_)) = runtime_size_bytes(db, ty) else {
                 return None;
             };
-            Some(invalid_size_diagnostic(
-                db,
-                self,
-                SemOrigin::Expr(expr),
-                ty,
-                error,
-            ))
+            Some(invalid_size_diagnostic(db, self, span, ty, error))
         })
     }
 

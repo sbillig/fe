@@ -1303,53 +1303,80 @@ fn make<const N: usize>(_ value: u8) -> [u8; { N - 1 }] { [value; { N - 1 }] }
 fn receive<const N: usize>() { let _values = make<N>(runtime(7)) }
 fn wrap<const N: usize>(_ value: u8) -> Wrap<N> { Wrap { values: [value; minus(N)] } }
 fn receive_field<const N: usize>() { let _wrapped = wrap<N>(runtime(7)) }
+fn produce<const N: usize>() -> [u8; { N - 1 }] { todo() }
+fn returned<const N: usize>() -> u8 { produce<N>()[0] }
+fn produced() -> u8 { produce<0>()[0] }
+fn ignored<const N: usize>(_ wrapped: Wrap<N>) {}
+fn take<const N: usize>(_ values: [u8; { N - 1 }]) -> u8 { 0 }
+fn passes() -> u8 {
+    let values: [u8; 0] = []
+    take<0>(values)
+}
+fn passes_valid() -> u8 {
+    let values: [u8; 1] = [1]
+    take<2>(values)
+}
 "#,
     );
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
     let usize_ty = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+    // A fault reaches a concrete instance through a repeat, a callee's return
+    // or parameter type, or a parameter's field; folding a returned value
+    // must not see it first.
     for (name, len, valid) in [
-        ("first", 2, true),
-        ("first", 0, false),
-        ("unused", 5, true),
-        ("unused", 0, false),
-        ("receive", 2, true),
-        ("receive", 0, false),
-        ("receive_field", 2, true),
-        ("receive_field", 0, false),
+        ("first", Some(2), true),
+        ("first", Some(0), false),
+        ("unused", Some(5), true),
+        ("unused", Some(0), false),
+        ("receive", Some(2), true),
+        ("receive", Some(0), false),
+        ("receive_field", Some(2), true),
+        ("receive_field", Some(0), false),
+        ("returned", Some(2), true),
+        ("returned", Some(0), false),
+        ("ignored", Some(2), true),
+        ("ignored", Some(0), false),
+        ("produced", None, false),
+        ("passes", None, false),
+        ("passes_valid", None, true),
     ] {
         let owner = BodyOwner::Func(function(&db, module, name));
         let identity = identity_semantic_instance_key(&db, owner);
-        assert!(
-            normalize_semantic_body(&db, get_or_build_semantic_instance(&db, identity)).is_ok(),
-            "{name} template must be admitted"
-        );
-        let arg = TyId::new(
-            &db,
-            TyData::ConstTy(ConstTyId::integer(&db, usize_ty, BigInt::from(len))),
-        );
-        let instance = get_or_build_semantic_instance(
-            &db,
-            SemanticInstanceKey::new(
-                &db,
-                owner,
-                GenericSubst::for_body_owner(&db, owner, vec![arg]),
-                identity.effect_providers(&db),
-                identity.impl_env(&db),
-            ),
-        );
+        let key = match len {
+            Some(len) => {
+                assert!(
+                    normalize_semantic_body(&db, get_or_build_semantic_instance(&db, identity))
+                        .is_ok(),
+                    "{name} template must be admitted"
+                );
+                let arg = TyId::new(
+                    &db,
+                    TyData::ConstTy(ConstTyId::integer(&db, usize_ty, BigInt::from(len))),
+                );
+                SemanticInstanceKey::new(
+                    &db,
+                    owner,
+                    GenericSubst::for_body_owner(&db, owner, vec![arg]),
+                    identity.effect_providers(&db),
+                    identity.impl_env(&db),
+                )
+            }
+            None => identity,
+        };
+        let instance = get_or_build_semantic_instance(&db, key);
         for result in [
             normalize_semantic_body(&db, instance),
             normalize_runtime_semantic_body(&db, instance),
         ] {
             match result {
-                Ok(_) => assert!(valid, "{name}<{len}> must be rejected"),
+                Ok(_) => assert!(valid, "{name}<{len:?}> must be rejected"),
                 Err(SemanticNormalizationFailure::Rejected(diag)) => {
-                    assert!(!valid, "{name}<{len}> must be admitted: {diag:?}");
+                    assert!(!valid, "{name}<{len:?}> must be admitted: {diag:?}");
                     assert_eq!(diag.kind, SemanticDiagnosticKind::InvalidConcreteType);
                     assert_eq!(diag.secondaries.len(), 1, "{diag:?}");
                 }
-                Err(failure) => panic!("{name}<{len}>: unexpected failure {failure:?}"),
+                Err(failure) => panic!("{name}<{len:?}>: unexpected failure {failure:?}"),
             }
         }
     }
