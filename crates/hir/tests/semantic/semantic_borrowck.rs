@@ -584,17 +584,8 @@ let outcome = call.{method}(
 )
 "#
         );
-        for slot_ty in ["u256", "TStorPtr<u256>"] {
-            for kind in ["ref", "mut"] {
-                for call in [
-                    operation.as_str(),
-                    "access()",
-                    "forward()",
-                    "recursive(again: true)",
-                    "specialized<u256>(0)",
-                ] {
-                    let source = format!(
-                        r#"
+        let mut source = format!(
+            r#"
 use core::ptr::{{MemBuffer, MemSpan}}
 use std::evm::{{Address, Call}}
 use std::evm::effects::TStorPtr
@@ -604,7 +595,22 @@ fn recursive(again: bool) uses (call: mut Call) {{
     if again {{ recursive(again: false) }} else {{ forward() }}
 }}
 fn specialized<T: Copy>(_ witness: T) uses (call: mut Call) {{ forward() }}
-pub contract Cell {{
+"#
+        );
+        let mut cases = Vec::new();
+        for slot_ty in ["u256", "TStorPtr<u256>"] {
+            for kind in ["ref", "mut"] {
+                for call in [
+                    operation.as_str(),
+                    "access()",
+                    "forward()",
+                    "recursive(again: true)",
+                    "specialized<u256>(0)",
+                ] {
+                    let index = cases.len();
+                    source.push_str(&format!(
+                        r#"
+pub contract Cell_{index} {{
     mut slot: {slot_ty}
     init() uses (mut slot, call: mut Call) {{
         let native = {kind} slot
@@ -612,30 +618,36 @@ pub contract Cell {{
         let observed: u256 = native
     }}
 }}
-fn memory() uses (call: mut Call) {{
+fn memory_{index}() uses (call: mut Call) {{
     let mut value: u256 = 0
     let native = {kind} value
     {call}
     let observed: u256 = native
 }}
 "#
-                    );
-                    let diagnostics = checked_borrow_diags(&source);
-                    assert_eq!(
-                        diagnostics.contains("borrow conflict in `fn Cell::__init__`"),
-                        writes || kind == "mut",
-                        "{source}\n{diagnostics}"
-                    );
-                    assert!(
-                        !diagnostics.contains("borrow conflict in `fn memory`"),
-                        "{source}\n{diagnostics}"
-                    );
-                    assert!(
-                        !diagnostics.contains("internal borrow checking error"),
-                        "{diagnostics}"
-                    );
+                    ));
+                    cases.push((slot_ty, kind, call));
                 }
             }
+        }
+        assert_eq!(cases.len(), 20);
+        // All variants share library/callee analysis, with distinct functions
+        // so every expected state conflict and disjoint-memory result is checked.
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(
+            !diagnostics.contains("internal borrow checking error"),
+            "{diagnostics}"
+        );
+        for (index, (slot_ty, kind, call)) in cases.iter().enumerate() {
+            assert_eq!(
+                diagnostics.contains(&format!("borrow conflict in `fn Cell_{index}::__init__`")),
+                writes || *kind == "mut",
+                "{method} {slot_ty} {kind} via {call}:\n{diagnostics}"
+            );
+            assert!(
+                !diagnostics.contains(&format!("borrow conflict in `fn memory_{index}`")),
+                "{method} {slot_ty} {kind} via {call}:\n{diagnostics}"
+            );
         }
     }
 }
