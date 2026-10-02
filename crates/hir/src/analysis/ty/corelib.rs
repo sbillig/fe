@@ -766,14 +766,20 @@ pub fn intrinsic_contract<'db>(
             });
         }
     }
-    // These exact std declarations call host C I/O and process accounting.
+    // These exact std declarations call host I/O, process accounting, or the
+    // native scalar optimization barrier.
     // They can observe/change host state, but cannot access or retain Fe memory.
     // A same-named user extern or a scalar-only signature carries no such trust.
     let host_import = func.top_mod(db).ingot(db).kind(db) == IngotKind::Std
         && func.body(db).is_none()
-        && ["std::io::getchar", "std::io::putchar", "std::native::clock"]
-            .iter()
-            .any(|path| lib_func_matches(db, func, path));
+        && [
+            "std::io::getchar",
+            "std::io::putchar",
+            "std::native::clock",
+            "std::native::__fe_native_black_box_u64",
+        ]
+        .iter()
+        .any(|path| lib_func_matches(db, func, path));
     if numeric
         || host_import
         || [

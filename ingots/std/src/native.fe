@@ -5,6 +5,9 @@ pub use bytes::ByteBuffer
 extern {
     // Trusted by the compiler: reads process accounting without accessing Fe memory.
     fn clock() -> i64
+
+    // Trusted scalar identity; implemented by the native runtime, opaque to optimization.
+    fn __fe_native_black_box_u64(_ value: u64) -> u64
 }
 
 /// Process CPU time in host clock ticks. Negative readings are unavailable.
@@ -16,6 +19,17 @@ extern {
 /// as i64: the C failure sentinel is -1, and counts beyond i64::MAX are negative.
 pub fn cpu_clock_ticks() -> i64 {
     clock()
+}
+
+/// Return `value` through an opaque native optimization barrier.
+///
+/// Useful for benchmarking: optimizers cannot assume the returned value equals
+/// the input or eliminate the call, even when its result is unused. It does not
+/// read, write, or retain Fe-managed memory. This is a scalar benchmark hint,
+/// not a hardware memory fence or a constant-time/security guarantee.
+/// Native executables and tests automatically link the required runtime helper.
+pub fn black_box_u64(_ value: u64) -> u64 {
+    __fe_native_black_box_u64(value)
 }
 
 /// Read-only view of the process argument vector supplied to native main.

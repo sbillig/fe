@@ -243,7 +243,11 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 db,
                 package,
                 fixed_symbol,
-                if native { &["memmove"] } else { &[] },
+                if native {
+                    &["memmove", "__fe_native_black_box_u64"]
+                } else {
+                    &[]
+                },
             ),
             section_membership: compute_section_membership(db, package),
             type_cache: FxHashMap::default(),

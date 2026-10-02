@@ -499,6 +499,82 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_black_box_preserves_scalars_borrows_and_optimized_calls() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("barrier.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::{ByteBuffer, black_box_u64}
+use std::io::{Read, host, read_char}
+
+// Even when the runtime is linked, ordinary Fe functions keep their identity.
+fn __fe_native_black_box_u64() -> u64 { 17 }
+
+#[test]
+fn scalar_barrier() {
+    for value in [0 as u64, 1, 1 << 63, 0xffffffffffffffff] {
+        core::assert(black_box_u64(value) == value)
+    }
+    let mut slot: u64 = 7
+    let held = mut slot
+    let mut bytes = ByteBuffer::new()
+    core::assert(bytes.try_resize(8))
+    let mut index: u64 = 0
+    while index < 8 {
+        bytes.set_byte(index, value: black_box_u64(index).downcast_truncate())
+        index += 1
+    }
+    held = black_box_u64(held) + 1
+    core::assert(slot == 8 && bytes.byte_at(7) == 7)
+    bytes.release()
+    core::assert(__fe_native_black_box_u64() == 17)
+    black_box_u64(99)
+}
+
+pub fn main() -> i32 {
+    with (Read = host()) {
+        let mut marker = read_char()
+        while marker != -1 {
+            scalar_barrier()
+            marker = read_char()
+        }
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let executable = out.join("barrier");
+        let mut child = Command::new(&executable)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(b"AB").unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert!(
+            result.stdout.is_empty() && result.stderr.is_empty(),
+            "{result:?}"
+        );
+        let ir = fs::read_to_string(out.join("barrier.native.sona")).unwrap();
+        assert!(ir.contains("call %__fe_native_black_box_u64"), "{ir}");
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "-O", level])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert!(String::from_utf8_lossy(&result.stdout).contains("1 passed; 0 failed"));
+    }
+}
+
+#[test]
 fn native_process_clock_preserves_borrows_and_host_io() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("clock.fe");

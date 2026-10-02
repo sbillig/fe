@@ -234,9 +234,9 @@ fn host_import_memory_contracts_require_standard_library_identity() {
     let file = db.new_stand_alone(
         "host_io_contracts.fe".into(),
         r#"
-extern { fn getchar() -> i32 fn putchar(c: i32) -> i32 fn abs(value: i32) -> i32 fn clock() -> i64 }
+extern { fn getchar() -> i32 fn putchar(c: i32) -> i32 fn abs(value: i32) -> i32 fn clock() -> i64 fn __fe_native_black_box_u64(_ value: u64) -> u64 }
 mod std { pub mod io { extern { pub fn getchar() -> i32 pub fn putchar(c: i32) -> i32 } }
- pub mod native { extern { pub fn clock() -> i64 } } }
+ pub mod native { extern { pub fn clock() -> i64 pub fn __fe_native_black_box_u64(_ value: u64) -> u64 } } }
 fn anchor() {}
 "#,
     );
@@ -251,7 +251,12 @@ fn anchor() {}
     let file = db.new_stand_alone("host_io_trusted.fe".into(), "fn trusted() {}");
     let (trusted, _) = db.top_mod(file);
     db.assert_no_diags(trusted);
-    for path in ["std::io::getchar", "std::io::putchar", "std::native::clock"] {
+    for path in [
+        "std::io::getchar",
+        "std::io::putchar",
+        "std::native::clock",
+        "std::native::__fe_native_black_box_u64",
+    ] {
         let func = resolve_lib_func_path(&db, trusted.all_funcs(&db)[0].scope(), path).unwrap();
         let contract = intrinsic_contract(&db, func).expect("trusted host import contract");
         assert_eq!(contract.memory, Some(&[][..]), "{path}");
