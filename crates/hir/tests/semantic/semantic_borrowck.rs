@@ -12304,6 +12304,58 @@ fn drive() { let mut value: u256 = 3
 }
 
 #[test]
+fn distinct_contract_fields_establish_caller_separation() {
+    // A method that keeps its receiver borrowed across a write to an effect
+    // requires its callers to keep the two separate. Distinct fields of one
+    // contract occupy separate allocated storage, directly or forwarded.
+    let diagnostics = checked_borrow_diags(
+        r#"
+pub struct Pool {
+    pub supply: u256,
+    pub fees: u256,
+}
+
+pub struct Vault {
+    pub reserve: u256,
+}
+
+impl Pool {
+    fn absorb(mut self) uses (vault: mut Vault) {
+        vault.reserve = 2
+        self.supply = 1
+    }
+}
+
+fn settle() uses (pool: mut Pool, vault: mut Vault) {
+    pool.absorb()
+}
+
+msg Msg {
+    #[selector = 1]
+    Absorb,
+    #[selector = 2]
+    Settle,
+}
+
+pub contract C {
+    mut pool: Pool,
+    mut vault: Vault,
+
+    recv Msg {
+        Absorb uses (mut pool, mut vault) {
+            pool.absorb()
+        }
+        Settle uses (mut pool, mut vault) {
+            settle()
+        }
+    }
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
 fn separation_between_distinct_inputs_forwards_until_callers_are_concrete() {
     // Distinct inputs are separate only by an entry assumption, so a body
     // forwards that separation. Concrete callers establish it physically.

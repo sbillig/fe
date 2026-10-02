@@ -3663,20 +3663,30 @@ fn provider_storage_classifies_only_direct_persistent_allocated_fields() {
     let file = db.new_stand_alone("provider_storage.fe".into(), LEDGER_FIELDS);
     let [ledger, other, transient] = ledger_field_bindings(&db, file);
     let (module, _) = db.top_mod(file);
-    let storage = |binding: &ProviderBinding<'_>| match provider_source(&db, binding).origin {
-        ExternalOrigin::Provider { storage, .. } => storage,
-        _ => unreachable!("provider origin"),
-    };
-    assert_eq!(storage(&ledger), ProviderStorage::AllocatedField);
-    assert_eq!(storage(&other), ProviderStorage::AllocatedField);
-    assert_eq!(storage(&transient), ProviderStorage::Other);
-
+    fn storage<'db>(
+        db: &'db dyn HirAnalysisDb,
+        binding: &ProviderBinding<'db>,
+    ) -> ProviderStorage<'db> {
+        match provider_source(db, binding).origin {
+            ExternalOrigin::Provider { storage, .. } => storage,
+            _ => unreachable!("provider origin"),
+        }
+    }
     let ProviderSource::ContractField { field } = ledger.source else {
         panic!("contract-field source");
     };
     let ProviderSource::ContractField { field: other_field } = other.source else {
         panic!("contract-field source");
     };
+    assert_eq!(
+        storage(&db, &ledger),
+        ProviderStorage::AllocatedField(field)
+    );
+    assert_eq!(
+        storage(&db, &other),
+        ProviderStorage::AllocatedField(other_field)
+    );
+    assert_eq!(storage(&db, &transient), ProviderStorage::Other);
     let missing = ContractFieldId {
         contract: field.contract,
         index: 99,
@@ -3711,13 +3721,111 @@ fn provider_storage_classifies_only_direct_persistent_allocated_fields() {
         ("transient space", transient_space),
         ("unresolved space", unresolved_space),
     ] {
-        assert_eq!(storage(&binding), ProviderStorage::Other, "{name}");
+        assert_eq!(storage(&db, &binding), ProviderStorage::Other, "{name}");
     }
 
     // The classification caches a function of the unchanged interned binding.
     let field = provider_source(&db, &ledger);
     let identity = IndexSubst::new(&scope(), &scope(), []).unwrap();
     assert_eq!(field.substitute(&db, &identity), field);
+}
+
+#[test]
+fn distinct_allocated_fields_are_physically_disjoint_only_as_typed_direct_targets() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("allocated_fields.fe".into(), LEDGER_FIELDS);
+    let foreign = db.new_stand_alone("foreign_fields.fe".into(), LEDGER_FIELDS);
+    let [ledger, other, _] = ledger_field_bindings(&db, file);
+    let [_, foreign, _] = ledger_field_bindings(&db, foreign);
+    let scope = scope();
+    let word = ReferentContract::new(
+        &db,
+        TyId::u256(&db),
+        HandleAddressSpace::Known(ProviderAddressSpace::Storage),
+    );
+    let region = |source, path| RegionSet::singleton(&scope, RegionRoot::External(source), path);
+    let whole = |source| region(source, RegionPath::default());
+    // Whether an access may overlap a typed borrow without the entry assumption.
+    let possible = |access: &RegionSet<'_>, extent, borrowed: &RegionSet<'_>| {
+        !AccessFootprint {
+            region: access,
+            extent,
+        }
+        .physical_pairs(&db, borrowed)
+        .is_empty()
+    };
+    let field = provider_source(&db, &ledger);
+    let sibling = provider_source(&db, &other);
+    let supply = RegionPath::new([Projection::Field(FieldIndex(1))]);
+
+    for (left, right) in [
+        (whole(field.clone()), whole(sibling.clone())),
+        (
+            region(field.clone(), supply.clone()),
+            whole(sibling.clone()),
+        ),
+        (
+            whole(field.clone()),
+            region(sibling.clone(), supply.clone()),
+        ),
+    ] {
+        assert!(!possible(&left, AccessExtent::Typed, &right));
+        assert!(!possible(&right, AccessExtent::Typed, &left));
+    }
+    // A raw span may cross from one block into the next.
+    for extent in [
+        AccessExtent::Unknown,
+        AccessExtent::Bytes(IndexExpr::Const(32)),
+    ] {
+        assert!(possible(
+            &whole(field.clone()),
+            extent,
+            &whole(sibling.clone())
+        ));
+        assert!(possible(
+            &whole(sibling.clone()),
+            extent,
+            &whole(field.clone())
+        ));
+    }
+    assert!(possible(
+        &whole(field.clone()),
+        AccessExtent::Typed,
+        &whole(field.clone())
+    ));
+
+    let mut unallocated = other.clone();
+    unallocated.layout_env = None;
+    let mut rebound = ledger.clone();
+    rebound.is_mut = !rebound.is_mut;
+    for (name, other) in [
+        (
+            "followed field",
+            whole(sibling.follow(supply.clone(), word, false)),
+        ),
+        ("widened field", whole(sibling.clone().widen())),
+        (
+            "unallocated provider",
+            whole(provider_source(&db, &unallocated)),
+        ),
+        (
+            "another contract's field",
+            whole(provider_source(&db, &foreign)),
+        ),
+        (
+            "the same field through another provider",
+            whole(provider_source(&db, &rebound)),
+        ),
+    ] {
+        assert!(
+            possible(&whole(field.clone()), AccessExtent::Typed, &other),
+            "{name}"
+        );
+        assert!(
+            possible(&other, AccessExtent::Typed, &whole(field.clone())),
+            "{name}"
+        );
+    }
 }
 
 #[test]

@@ -3639,6 +3639,7 @@ mod tests {
             },
         },
         hir_def::ItemKind,
+        semantic::ContractFieldId,
         test_db::{HirAnalysisTestDb, find_func},
     };
 
@@ -4093,24 +4094,35 @@ pub contract C {
         else {
             unreachable!();
         };
-        assert_eq!(storage, ProviderStorage::AllocatedField);
+        let ProviderStorage::AllocatedField(field) = storage else {
+            panic!("allocated contract field");
+        };
         let mut source = SourceExpr::whole(target.source.clone());
         assert!(
             checker
                 .verify_source(&source, &target.scope, None, false)
                 .is_ok()
         );
-        source.source.origin = ExternalOrigin::Provider {
-            provider,
-            target_ty,
-            storage: ProviderStorage::Other,
+        let other_field = ContractFieldId {
+            index: field.index + 1,
+            ..field
         };
-        assert!(
-            checker
-                .verify_source(&source, &target.scope, None, false)
-                .is_err(),
-            "a forged provider classification was accepted"
-        );
+        for storage in [
+            ProviderStorage::Other,
+            ProviderStorage::AllocatedField(other_field),
+        ] {
+            source.source.origin = ExternalOrigin::Provider {
+                provider,
+                target_ty,
+                storage,
+            };
+            assert!(
+                checker
+                    .verify_source(&source, &target.scope, None, false)
+                    .is_err(),
+                "a forged provider classification was accepted: {storage:?}"
+            );
+        }
 
         // Only a hashed slot is constrained to the storage word contract.
         let scope = BinderScope::default();

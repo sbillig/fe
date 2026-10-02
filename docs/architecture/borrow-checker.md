@@ -550,7 +550,12 @@ something separates them:
 - their layout or contracts;
 - distinct objects, or disjoint paths within one object;
 - a fresh allocation against incoming memory;
-- a hashed slot against an allocated field.
+- a hashed slot against an allocated field;
+- typed accesses of two allocated fields of one contract.
+
+The layout gives each contract field its own block of slots for its typed
+contents. A raw span may cross into the next block, and storage named through a
+field's layout roots, such as a map entry, is a separate source.
 
 The distinct-input assumption that ordinary resolution uses never applies
 here. Authority never discharges a requirement: a loan found while resolving an

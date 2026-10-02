@@ -15,7 +15,7 @@ use crate::{
             ty_def::{TyData, TyId},
         },
     },
-    semantic::{LayoutViewKind, ProviderSource},
+    semantic::{ContractFieldId, LayoutViewKind, ProviderSource},
 };
 
 use super::{
@@ -129,11 +129,12 @@ pub enum AddressProvenance {
 }
 
 /// Whether a provider's target is the compiler-allocated storage of a
-/// contract field. This is a function of the interned binding, cached where a
-/// database is available so that aliasing stays database-free.
+/// contract field, and of which field. This is a function of the interned
+/// binding, cached where a database is available so that aliasing stays
+/// database-free.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ProviderStorage {
-    AllocatedField,
+pub enum ProviderStorage<'db> {
+    AllocatedField(ContractFieldId<'db>),
     Other,
 }
 
@@ -145,7 +146,7 @@ pub enum ExternalOrigin<'db> {
     Provider {
         provider: ProviderRegionId<'db>,
         target_ty: TyId<'db>,
-        storage: ProviderStorage,
+        storage: ProviderStorage<'db>,
     },
     OpaqueHandle(OpaqueHandleRef<'db>),
     /// All addresses of this contract, without a distinguished object or loan.
@@ -611,7 +612,7 @@ impl<'db> ExternalSource<'db> {
                         .checked_add(layout.slot_count)
                         .is_some_and(|end| u64::try_from(end).is_ok())
                 }) {
-            ProviderStorage::AllocatedField
+            ProviderStorage::AllocatedField(*field)
         } else {
             ProviderStorage::Other
         };
@@ -1460,12 +1461,35 @@ impl<'db> ExternalSource<'db> {
         ) && matches!(
             field.origin,
             ExternalOrigin::Provider {
-                storage: ProviderStorage::AllocatedField,
+                storage: ProviderStorage::AllocatedField(_),
                 ..
             }
         ) && [self, field]
             .iter()
             .all(|source| source.dereferences.is_empty() && !source.reachable)
+    }
+
+    /// The layout gives each field of a contract its own block of slots, which
+    /// holds the field's typed contents. Storage named through the field's
+    /// layout roots, such as a `StorageMap` entry, is a different source. A raw
+    /// span may cross into the next block, and following or widening either
+    /// source forfeits the block.
+    fn is_allocated_field_beside(&self, other: &Self) -> bool {
+        matches!(
+            (&self.origin, &other.origin),
+            (
+                ExternalOrigin::Provider {
+                    storage: ProviderStorage::AllocatedField(left),
+                    ..
+                },
+                ExternalOrigin::Provider {
+                    storage: ProviderStorage::AllocatedField(right),
+                    ..
+                },
+            ) if left.contract == right.contract && left.index != right.index
+        ) && [self, other]
+            .iter()
+            .all(|source| source.dereferences.is_empty() && !source.uncertain())
     }
 
     pub(super) fn alias_guard(
@@ -1561,7 +1585,8 @@ impl<'db> ExternalSource<'db> {
             ) && self.dereferences.is_empty()
                 && other.dereferences.is_empty())
                 || self.is_hashed_slot_beside_allocated_field(other)
-                || other.is_hashed_slot_beside_allocated_field(self);
+                || other.is_hashed_slot_beside_allocated_field(self)
+                || (typed && self.is_allocated_field_beside(other));
             // Distinct certain sources are separate only by the entry assumption.
             (!disjoint && (self.uncertain() || other.uncertain() || basis == AliasBasis::Physical))
                 .then_some(guard)
