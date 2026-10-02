@@ -13766,24 +13766,50 @@ fn nested(_ index: usize) -> usize { identity(identity(index)) }
 
 #[test]
 fn named_scalar_call_results_keep_return_relations() {
-    // The result itself is not tracked, but a comparison with a tracked index,
-    // a tracked cell it is stored to, or a kept call relation it is passed to
-    // needs its relation to the argument.
+    // The result itself is not tracked, but another fact names it: a
+    // comparison with a tracked index, a tracked cell it is stored to, a kept
+    // call relation or argument postcondition it is passed to, or a callee
+    // that indexes with it.
     for body in [
-        "if same(k) != j { arr[j] = 0 }",
-        "if same(same(k)) != j { arr[j] = 0 }",
-        "if j != k {\n        let mut m: usize = same(j)\n        if flag { m = j }\n        arr[m] = 0\n    }",
+        "let held = mut arr[k]\n    if same(k) != j { arr[j] = 0 }\n    held = 1",
+        "let held = mut arr[k]\n    if same(same(k)) != j { arr[j] = 0 }\n    held = 1",
+        "let held = mut arr[k]\n    if j != k {\n        let mut m: usize = same(j)\n        \
+         if flag { m = j }\n        arr[m] = 0\n    }\n    held = 1",
+        "let held = mut arr[0]\n    let unused = constrain(same(k))\n    arr[k] = 2\n    held = 1",
+        "let cells = ptr::alloc<[u64; 8]>()\n    *cells = [0; 8]\n    \
+         let held = mut (*cells)[k]\n    if j != k { write(cells, same(j)) }\n    held = 1",
     ] {
         let source = format!(
             r#"
+use core::ptr
 fn same(_ x: usize) -> usize {{ x }}
+fn constrain(_ index: usize) -> usize {{
+    if index != 1 {{ assert!(false) }}
+    index
+}}
+fn write(_ cells: *[u64; 8], _ index: usize) {{ (*cells)[index] = 0 }}
 fn f(_ arr: mut [u64; 8], k: usize, j: usize, flag: bool) {{
-    let held = mut arr[k]
     {body}
-    held = 1
 }}
 "#
         );
         assert_eq!(checked_borrow_diags(&source), "", "{source}");
     }
+}
+
+#[test]
+fn summaries_observe_indexing_parameters_not_arithmetic_ones() {
+    let source = r#"
+fn pick(_ offset: usize, _ index: usize, _ arr: [u64; 4]) -> u64 {
+    let unused = offset + 1
+    arr[index]
+}
+"#;
+    with_borrow_summary(source, "pick", |_db, summary| {
+        let observed = summary.observed_params.as_ref().unwrap();
+        assert!(
+            observed.contains(&1) && !observed.contains(&0),
+            "{observed:?}"
+        );
+    });
 }

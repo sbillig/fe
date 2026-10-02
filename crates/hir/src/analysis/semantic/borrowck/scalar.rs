@@ -17,9 +17,9 @@ use crate::{
             definite_assignment::literal_bool_cond,
             diagnostics::{SemanticDiagnostic, normalized_body_internal_diag},
             normalized::{
-                NDataPath, NDataProjection, NExpr, NIndex, NPlace, NPlaceBase, NRootKind,
-                NStatement, NStatementKind, NTerminatorKind, NValueDefinition, NValueId,
-                NormalizedBody, copied_scalar_ty,
+                NDataPath, NDataProjection, NEffectArgValue, NExpr, NIndex, NOperand, NPlace,
+                NPlaceBase, NRootKind, NStatement, NStatementKind, NTerminatorKind,
+                NValueDefinition, NValueId, NormalizedBody, copied_scalar_ty,
             },
         },
         ty::{
@@ -48,14 +48,13 @@ pub(super) struct ScalarDemand<'db> {
     pub selectors: FxHashSet<IndexExpr<'db>>,
     /// Block parameters that keep their incoming equalities.
     pub phis: FxHashSet<NValueId>,
-    /// Indices some tracked fact can name: tracked indices, the other side of
-    /// a comparison with a tracked side, values stored to tracked cells, and
-    /// the arguments of calls whose result is named.
-    pub observed: FxHashSet<IndexExpr<'db>>,
     /// Exact scalar cells whose store versions are tracked.
     pub cells: FxHashSet<NPlaceBase>,
     /// Reader-loop conditions whose bounds apply once a fill is certified.
     pub bounded_readers: FxHashSet<NValueId>,
+    /// Values whose scalar facts a check, a region, an export or a callee can
+    /// read; see [`Borrowck::scalar_liveness`].
+    pub live: FxHashSet<NValueId>,
     readers: Vec<(NValueId, Vec<NValueId>)>,
 }
 
@@ -147,6 +146,139 @@ impl<'db> Borrowck<'db> {
         Ok(())
     }
 
+    /// Values whose scalar facts something can read. Every use counts unless it
+    /// is known to relate no fact to its operands: arithmetic, an unused or
+    /// fact-free result, or an argument the callee's summary never observes.
+    /// A call result outside this set occurs in no other fact, so forgetting its
+    /// relation to the arguments is exact.
+    pub(super) fn scalar_liveness(&self) -> FxHashSet<NValueId> {
+        let mut pending = Vec::new();
+        for block in &self.body.blocks {
+            for statement in &block.statements {
+                match &statement.kind {
+                    NStatementKind::Define { result, expr } => {
+                        expr.for_each_place_operand(|place| {
+                            pending.extend(self.body.place_values(place));
+                        });
+                        if let NExpr::ProjectValue { path, .. } = expr {
+                            pending.extend(path.0.iter().filter_map(
+                                |projection| match projection {
+                                    NDataProjection::Index(NIndex::Value(value)) => Some(*value),
+                                    _ => None,
+                                },
+                            ));
+                        }
+                        // A primitive operator relates its operands only through
+                        // its result, below.
+                        if let NExpr::Call {
+                            args, effect_args, ..
+                        } = expr
+                            && self.primitive_operator(*result).is_none()
+                        {
+                            let observed = self
+                                .calls
+                                .get(result)
+                                .and_then(|call| call.summary.observed_params.as_ref());
+                            pending.extend(args.iter().enumerate().filter_map(|(param, arg)| {
+                                observed
+                                    .is_none_or(|observed| {
+                                        observed.contains(&u32::try_from(param).unwrap())
+                                    })
+                                    .then_some(arg.value)
+                            }));
+                            pending.extend(effect_args.iter().filter_map(|arg| match arg.arg {
+                                NEffectArgValue::Value(value) => Some(value.value),
+                                NEffectArgValue::Place(_) => None,
+                            }));
+                        }
+                    }
+                    NStatementKind::Store { destination, value } => {
+                        pending.extend(self.body.place_values(destination));
+                        // Only a whole scalar cell records the value it holds.
+                        if destination.path.is_empty() {
+                            pending.push(value.value);
+                        }
+                    }
+                }
+            }
+            match &block.terminator.kind {
+                NTerminatorKind::Branch { cond: value, .. }
+                | NTerminatorKind::MatchEnum { value, .. }
+                | NTerminatorKind::Return(Some(value)) => pending.push(value.value),
+                NTerminatorKind::Goto(_)
+                | NTerminatorKind::Assert { .. }
+                | NTerminatorKind::Return(None) => {}
+            }
+        }
+        let mut live = FxHashSet::default();
+        while let Some(value) = pending.pop() {
+            if !live.insert(value) {
+                continue;
+            }
+            match self.body.values[value.index()].definition {
+                NValueDefinition::BlockParam { block, index } => pending.extend(
+                    self.body
+                        .blocks
+                        .iter()
+                        .flat_map(|predecessor| predecessor.terminator.kind.successors())
+                        .filter(|successor| successor.block == block)
+                        .filter_map(|successor| successor.args.get(index as usize))
+                        .map(|argument| argument.value),
+                ),
+                NValueDefinition::Statement { .. } => {
+                    let Some((_, expr)) = self.body.defining_expr(value) else {
+                        continue;
+                    };
+                    // Arithmetic relates no fact to its operands, and a
+                    // comparison relates them only with a tracked side. A call
+                    // reads only the arguments its summary observes, unless it
+                    // is a primitive operator.
+                    let tracked = |operands: &[NOperand]| {
+                        operands
+                            .iter()
+                            .any(|operand| self.scalar.indices.contains(&self.index(operand.value)))
+                    };
+                    let relates = match expr {
+                        NExpr::Binary {
+                            op: BinOp::Comp(_),
+                            lhs,
+                            rhs,
+                        } => tracked(&[*lhs, *rhs]),
+                        NExpr::Binary { op, .. } => !matches!(op, BinOp::Arith(_)),
+                        NExpr::Unary { op, .. } => {
+                            !matches!(op, UnOp::Plus | UnOp::Minus | UnOp::BitNot)
+                        }
+                        NExpr::Call { args, .. } => match self.primitive_operator(value) {
+                            Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(_))) => tracked(args),
+                            Some(
+                                PrimitiveWrapperCallKind::Binary(BinOp::Logical(_))
+                                | PrimitiveWrapperCallKind::Unary(UnOp::Not),
+                            ) => true,
+                            _ => false,
+                        },
+                        _ => true,
+                    };
+                    if relates {
+                        expr.for_each_value_operand(|operand| pending.push(operand.value));
+                    }
+                }
+                NValueDefinition::EntryParam { .. } => {}
+            }
+        }
+        live
+    }
+
+    /// The primitive operator a core wrapper method call defining `value` stands for.
+    fn primitive_operator(&self, value: NValueId) -> Option<PrimitiveWrapperCallKind> {
+        let (_, NExpr::Call { callee, .. }) = self.body.defining_expr(value)? else {
+            return None;
+        };
+        let BodyOwner::Func(function) = callee.key.owner(self.db) else {
+            return None;
+        };
+        core_primitive_wrapper_call_kind(self.db, function, self.body.values[value.index()].ty)
+    }
+
     /// A reader loop uses its unsigned bound only once a fill is certified.
     pub(super) fn enable_bounded_readers(&mut self) {
         let mut selectors = FxHashSet::default();
@@ -195,49 +327,7 @@ impl<'db> Borrowck<'db> {
             .copied()
             .filter(|value| self.compact_scalar_phi(*value))
             .collect();
-        // A call result that is not tracked can still be named by a comparison
-        // with a tracked side or by a tracked cell it is stored to.
-        let mut observed = self.scalar.indices.clone();
-        for statement in self.body.blocks.iter().flat_map(|block| &block.statements) {
-            match &statement.kind {
-                NStatementKind::Define { result, .. } => {
-                    if let Some((lhs, rhs)) = self
-                        .comparison(*result)
-                        .map(|(_, lhs, rhs)| (self.index(lhs), self.index(rhs)))
-                        && (self.scalar.indices.contains(&lhs)
-                            || self.scalar.indices.contains(&rhs))
-                    {
-                        observed.extend([lhs, rhs]);
-                    }
-                }
-                NStatementKind::Store { destination, value }
-                    if destination.path.is_empty()
-                        && self.scalar.cells.contains(&destination.base) =>
-                {
-                    observed.insert(self.index(value.value));
-                }
-                NStatementKind::Store { .. } => {}
-            }
-        }
-        // A kept call relation names the call's arguments, so a result passed
-        // to a call whose result is named is named too.
-        loop {
-            let previous = observed.len();
-            for statement in self.body.blocks.iter().flat_map(|block| &block.statements) {
-                if let NStatementKind::Define {
-                    result,
-                    expr: NExpr::Call { args, .. },
-                } = &statement.kind
-                    && observed.contains(&self.index(*result))
-                {
-                    observed.extend(args.iter().map(|arg| self.index(arg.value)));
-                }
-            }
-            if observed.len() == previous {
-                break;
-            }
-        }
-        self.scalar.observed = observed;
+        self.scalar.live = self.scalar_liveness();
     }
 
     pub(super) fn stores_capability(&self, statement: &NStatement<'db>) -> bool {
@@ -357,48 +447,59 @@ impl<'db> Borrowck<'db> {
         let Some((_, expr)) = self.body.defining_expr(value) else {
             return Some(selected);
         };
-        let relation = if let Some((operator, lhs, rhs)) = self.comparison(value) {
-            self.comparison_guard(operator, lhs, rhs, expected, include_bounds)
-        } else {
-            match expr {
-                NExpr::Forward { src } => {
-                    self.condition_guard(src.value, expected, include_bounds, budget - 1)
-                }
-                NExpr::Unary {
-                    op: UnOp::Not,
-                    value,
-                } => self.condition_guard(value.value, !expected, include_bounds, budget - 1),
-                NExpr::Binary {
-                    op: BinOp::Logical(operator),
-                    lhs,
-                    rhs,
-                } => self.logical_guard(
-                    *operator,
-                    lhs.value,
-                    rhs.value,
-                    expected,
-                    include_bounds,
-                    budget - 1,
-                ),
-                NExpr::Call { callee, args, .. } => {
-                    let BodyOwner::Func(function) = callee.key.owner(self.db) else {
-                        return Some(selected);
-                    };
-                    match (
-                        core_primitive_wrapper_call_kind(
-                            self.db,
-                            function,
-                            self.body.values[value.index()].ty,
-                        ),
-                        args.as_ref(),
-                    ) {
-                        (Some(PrimitiveWrapperCallKind::Unary(UnOp::Not)), [operand]) => self
-                            .condition_guard(operand.value, !expected, include_bounds, budget - 1),
-                        _ => Some(always),
-                    }
-                }
-                _ => Some(always),
+        let relation = match expr {
+            NExpr::Forward { src } => {
+                self.condition_guard(src.value, expected, include_bounds, budget - 1)
             }
+            NExpr::Unary {
+                op: UnOp::Not,
+                value,
+            } => self.condition_guard(value.value, !expected, include_bounds, budget - 1),
+            NExpr::Binary {
+                op: BinOp::Logical(operator),
+                lhs,
+                rhs,
+            } => self.logical_guard(
+                *operator,
+                lhs.value,
+                rhs.value,
+                expected,
+                include_bounds,
+                budget - 1,
+            ),
+            NExpr::Binary {
+                op: BinOp::Comp(operator),
+                lhs,
+                rhs,
+            } => self.comparison_guard(*operator, lhs.value, rhs.value, expected, include_bounds),
+            NExpr::Call { callee, args, .. } => {
+                let BodyOwner::Func(function) = callee.key.owner(self.db) else {
+                    return Some(selected);
+                };
+                match (
+                    core_primitive_wrapper_call_kind(
+                        self.db,
+                        function,
+                        self.body.values[value.index()].ty,
+                    ),
+                    args.as_ref(),
+                ) {
+                    (Some(PrimitiveWrapperCallKind::Unary(UnOp::Not)), [operand]) => {
+                        self.condition_guard(operand.value, !expected, include_bounds, budget - 1)
+                    }
+                    (Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(operator))), [lhs, rhs]) => {
+                        self.comparison_guard(
+                            operator,
+                            lhs.value,
+                            rhs.value,
+                            expected,
+                            include_bounds,
+                        )
+                    }
+                    _ => Some(always),
+                }
+            }
+            _ => Some(always),
         }?;
         selected.and(&relation)
     }
@@ -422,36 +523,6 @@ impl<'db> Borrowck<'db> {
                 (Some(left), Some(right)) => Some(left.or(&right)),
                 (left, right) => left.or(right),
             }
-        }
-    }
-
-    /// The operator and operands of a trusted comparison defining `value`.
-    fn comparison(&self, value: NValueId) -> Option<(CompBinOp, NValueId, NValueId)> {
-        match self.body.defining_expr(value)?.1 {
-            NExpr::Binary {
-                op: BinOp::Comp(operator),
-                lhs,
-                rhs,
-            } => Some((*operator, lhs.value, rhs.value)),
-            NExpr::Call { callee, args, .. } => {
-                let BodyOwner::Func(function) = callee.key.owner(self.db) else {
-                    return None;
-                };
-                match (
-                    core_primitive_wrapper_call_kind(
-                        self.db,
-                        function,
-                        self.body.values[value.index()].ty,
-                    ),
-                    args.as_ref(),
-                ) {
-                    (Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(operator))), [lhs, rhs]) => {
-                        Some((operator, lhs.value, rhs.value))
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
         }
     }
 

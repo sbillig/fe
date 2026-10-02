@@ -1,0 +1,80 @@
+// Comparisons of many-arm call results that no condition reads. Their operands
+// are not live, so each call's result alternatives are forgotten rather than
+// multiplied across calls.
+trait Tagged {
+    fn ordinal(self) -> usize
+}
+
+enum Many {
+    V0,
+    V1,
+    V2,
+    V3,
+    V4,
+    V5,
+    V6,
+    V7,
+    V8,
+    V9,
+    V10,
+    V11,
+    V12,
+    V13,
+    V14,
+    V15,
+    V16,
+    V17,
+    V18,
+    V19,
+}
+
+impl Tagged for Many {
+    fn ordinal(self) -> usize {
+        match self {
+            Many::V0 => 0
+            Many::V1 => 1
+            Many::V2 => 2
+            Many::V3 => 3
+            Many::V4 => 4
+            Many::V5 => 5
+            Many::V6 => 6
+            Many::V7 => 7
+            Many::V8 => 8
+            Many::V9 => 9
+            Many::V10 => 10
+            Many::V11 => 11
+            Many::V12 => 12
+            Many::V13 => 13
+            Many::V14 => 14
+            Many::V15 => 15
+            Many::V16 => 16
+            Many::V17 => 17
+            Many::V18 => 18
+            Many::V19 => 19
+        }
+    }
+}
+
+fn sum(k: usize) -> usize {
+    let c0 = Many::V0.ordinal() == k
+    let c1 = Many::V1.ordinal() == k
+    let c2 = Many::V2.ordinal() == k
+    let c3 = Many::V3.ordinal() == k
+    let c4 = Many::V4.ordinal() == k
+    let c5 = Many::V5.ordinal() == k
+    let c6 = Many::V6.ordinal() == k
+    let c7 = Many::V7.ordinal() == k
+    let c8 = Many::V8.ordinal() == k
+    let c9 = Many::V9.ordinal() == k
+    let c10 = Many::V10.ordinal() == k
+    let c11 = Many::V11.ordinal() == k
+    let c12 = Many::V12.ordinal() == k
+    let c13 = Many::V13.ordinal() == k
+    let c14 = Many::V14.ordinal() == k
+    let c15 = Many::V15.ordinal() == k
+    let c16 = Many::V16.ordinal() == k
+    let c17 = Many::V17.ordinal() == k
+    let c18 = Many::V18.ordinal() == k
+    let c19 = Many::V19.ordinal() == k
+    k
+}
