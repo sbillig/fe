@@ -1212,21 +1212,20 @@ impl<'db> Borrowck<'db> {
     ) -> Option<Guard<'db>> {
         let mut permitted = None;
         for parent in self.ancestors(authority.iter().cloned()) {
+            // An entry's own witnesses that its arguments do not name, such as a
+            // previous iteration's selectors, only decide whether the entry holds.
+            // Quantify them; witnesses naming arguments identify the occurrence.
+            let named: BTreeSet<_> = parent.payload.args.iter().copied().collect();
+            let guard = parent.guard.project_witnesses(|index| {
+                region.scope().validate(index).is_err() && !named.contains(&index)
+            });
             // Access offsets can introduce witnesses unused by the authority.
-            // Drop only those unused binders before comparing exact loan occurrences.
-            let canonical = parent
-                .guard
-                .scope()
-                .canonical_existentials(region.scope(), || {
-                    parent
-                        .guard
-                        .indices()
-                        .into_iter()
-                        .chain(parent.payload.args.iter().copied())
-                });
+            // Drop those binders before comparing exact loan occurrences.
+            let canonical = guard.scope().canonical_existentials(region.scope(), || {
+                guard.indices().into_iter().chain(named.iter().copied())
+            });
             let parent = Guarded {
-                guard: parent
-                    .guard
+                guard: guard
                     .substitute(&canonical)
                     .expect("authority normalization"),
                 payload: parent.payload.substitute(&canonical),
