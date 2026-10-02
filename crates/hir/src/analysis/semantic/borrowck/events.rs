@@ -1210,23 +1210,31 @@ impl<'db> Borrowck<'db> {
         lift: &IndexSubst<'db>,
         authority: &[Guarded<'db, LoanRef<'db>>],
     ) -> Option<Guard<'db>> {
+        let reference = loan.payload.loan().expect("loan occurrence");
+        // An overlap constrains the occurrence's own witnesses only through its
+        // region. An argument that is an unconstrained witness never provably
+        // equals another, so relating them bit by bit, at a cost exponential in
+        // the number of such arguments, could never permit an access.
+        let constrained = loan.region.indices();
+        let unconstrained = |index: IndexExpr<'db>| {
+            region.scope().validate(index).is_err() && !constrained.contains(&index)
+        };
         let mut permitted = None;
         for parent in self.ancestors(authority.iter().cloned()) {
+            // An entry's own witnesses that its arguments do not name, such as a
+            // previous iteration's selectors, only decide whether the entry holds.
+            // Quantify them; witnesses naming arguments identify the occurrence.
+            let named: BTreeSet<_> = parent.payload.args.iter().copied().collect();
+            let guard = parent.guard.project_witnesses(|index| {
+                region.scope().validate(index).is_err() && !named.contains(&index)
+            });
             // Access offsets can introduce witnesses unused by the authority.
-            // Drop only those unused binders before comparing exact loan occurrences.
-            let canonical = parent
-                .guard
-                .scope()
-                .canonical_existentials(region.scope(), || {
-                    parent
-                        .guard
-                        .indices()
-                        .into_iter()
-                        .chain(parent.payload.args.iter().copied())
-                });
+            // Drop those binders before comparing exact loan occurrences.
+            let canonical = guard.scope().canonical_existentials(region.scope(), || {
+                guard.indices().into_iter().chain(named.iter().copied())
+            });
             let parent = Guarded {
-                guard: parent
-                    .guard
+                guard: guard
                     .substitute(&canonical)
                     .expect("authority normalization"),
                 payload: parent.payload.substitute(&canonical),
@@ -1236,15 +1244,16 @@ impl<'db> Borrowck<'db> {
                 guard: parent.guard.substitute(&subst).expect("authority scope"),
                 payload: parent.payload.substitute(&subst),
             };
-            if parent.guard.scope() != lift.destination() {
+            if parent.guard.scope() != lift.destination()
+                || reference
+                    .args
+                    .iter()
+                    .zip(&parent.payload.args)
+                    .any(|(arg, other)| arg != other && unconstrained(*arg))
+            {
                 continue;
             }
-            if let Some(guard) = loan
-                .payload
-                .loan()
-                .expect("loan occurrence")
-                .matching_guard(&parent.payload, parent.guard)
-            {
+            if let Some(guard) = reference.matching_guard(&parent.payload, parent.guard) {
                 permitted =
                     Some(permitted.map_or_else(|| guard.clone(), |old: Guard<'db>| old.or(&guard)));
             }
@@ -1392,12 +1401,70 @@ fn independent<'db>(
 mod tests {
     use super::*;
     use crate::{
-        analysis::semantic::{
-            FieldIndex,
-            capability::{source::InputSource, test_roots},
+        analysis::{
+            semantic::{
+                FieldIndex,
+                capability::{source::InputSource, test_roots},
+                get_or_build_semantic_instance, identity_semantic_instance_key,
+            },
+            ty::ty_check::BodyOwner,
         },
-        test_db::HirAnalysisTestDb,
+        test_db::{HirAnalysisTestDb, find_func},
     };
+
+    #[test]
+    fn stale_occurrence_arguments_never_match_current_authority() {
+        // The inner back edge gives `held` an earlier generation of its loan whose
+        // arguments are witnesses its region leaves unconstrained. Relating each
+        // of them to the current iteration's values grew exponentially.
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "stale_occurrence.fe".into(),
+            "fn update() {\n    let mut cells: [u64; 5] = [0; 5]\n    \
+             let mut x: usize = 0\n    while x < 5 {\n        \
+             let held = mut cells[x]\n        let mut y: usize = 0\n        \
+             while y < 5 { y += 1 }\n        held = 1\n        x += 1\n    }\n}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "update"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        let (mut stale, mut current) = (0, 0);
+        for operation in checker.operations.iter().flatten() {
+            for access in &operation.accesses {
+                for loan in &operation.active {
+                    let id = loan.payload.loan().unwrap().id;
+                    if !access.authority.iter().any(|entry| entry.payload.id == id) {
+                        continue;
+                    }
+                    let region = &access.region;
+                    let fresh = loan.guard.scope().freshening(region.scope());
+                    let loan = loan.substitute(&db, &fresh);
+                    let lift = IndexSubst::new(region.scope(), fresh.destination(), []).unwrap();
+                    let permitted = checker.permitted(&loan, region, &lift, &access.authority);
+                    if loan
+                        .payload
+                        .loan()
+                        .unwrap()
+                        .args
+                        .iter()
+                        .all(|arg| arg.bound_namespace() == Some(IndexNamespace::Existential))
+                    {
+                        assert!(permitted.is_none());
+                        stale += 1;
+                    } else {
+                        assert!(permitted.is_some());
+                        current += 1;
+                    }
+                }
+            }
+        }
+        assert!(stale > 0 && current > 0, "stale {stale}, current {current}");
+    }
 
     #[test]
     fn suspension_removes_only_overlap_it_certainly_contains() {
