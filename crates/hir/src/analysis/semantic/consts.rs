@@ -1145,26 +1145,39 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
 
 /// The first evaluation fault in the layout of `ty`: in the type itself, in
 /// an array extent, or in a field instantiated for its application, walked as
-/// capability shapes walk it. Unlike [`runtime_size_bytes`], it looks past
-/// generic components and sizes, so a known fault is found however the rest
-/// of the layout turns out.
+/// capability shapes walk it, with each part normalized by `normalize`.
+/// Unlike [`runtime_size_bytes`], it looks past generic components and
+/// sizes, so a known fault is found however the rest of the layout turns out.
 pub(crate) fn concrete_layout_fault<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
+    normalize: &dyn Fn(TyId<'db>) -> TyId<'db>,
 ) -> Option<InvalidCause<'db>> {
+    // The walk stops at the first fault, so a view seen before is either on
+    // the current path or free of faults.
     fn inner<'db>(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
         source: TyId<'db>,
-        visiting: &mut FxHashSet<TyId<'db>>,
+        normalize: &dyn Fn(TyId<'db>) -> TyId<'db>,
+        seen: &mut FxHashSet<(TyId<'db>, TyId<'db>)>,
     ) -> Option<InvalidCause<'db>> {
+        // An instantiated field may still be a projection. The source view
+        // keeps its anonymous const bodies for checked evaluation, so only a
+        // projection is resolved there.
+        let ty = normalize(ty);
+        let source = if source.has_projection(db) {
+            normalize(source)
+        } else {
+            source
+        };
         if let Some(cause) = ty.invalid_cause(db) {
             return Some(cause);
         }
         if ty.has_invalid(db) {
             return Some(first_invalid_ty_cause(db, ty).unwrap_or(InvalidCause::Other));
         }
-        if ty.has_var(db) || !visiting.insert(ty) {
+        if ty.has_var(db) || !seen.insert((ty, source)) {
             return None;
         }
         let parts = if let Some(target) = ty.as_view(db) {
@@ -1211,12 +1224,10 @@ pub(crate) fn concrete_layout_fault<'db>(
         } else {
             Vec::new()
         };
-        let fault = parts
+        parts
             .into_iter()
-            .find_map(|part| inner(db, part.canonical, part.source, visiting));
-        visiting.remove(&ty);
-        fault
+            .find_map(|part| inner(db, part.canonical, part.source, normalize, seen))
     }
 
-    inner(db, ty, ty, &mut FxHashSet::default())
+    inner(db, ty, ty, normalize, &mut FxHashSet::default())
 }

@@ -1458,7 +1458,7 @@ impl<'db> SemanticInstance<'db> {
         exprs.chain(locals).chain(params).find_map(|(ty, span)| {
             let cause = demanded
                 .insert(ty)
-                .then(|| concrete_layout_fault(db, ty))??;
+                .then(|| concrete_layout_fault(db, ty, &|ty| self.normalized_ty(db, ty)))??;
             Some(invalid_size_diagnostic(
                 db,
                 self,

@@ -1322,6 +1322,16 @@ fn mixed<T>(_ mixed: Mixed<T, 0>) {}
 fn mixed_valid<T>(_ mixed: Mixed<T, 1>) {}
 fn masked(_ masked: Masked<0>) {}
 fn masked_valid(_ masked: Masked<1>) {}
+trait Has { type Item }
+struct Faulty {}
+struct Fine {}
+impl Has for Faulty { type Item = Wrap<0> }
+impl Has for Fine { type Item = Wrap<2> }
+struct Outer<T: Has> { field: T::Item }
+fn projected(_ outer: Outer<Faulty>) {}
+fn projected_valid(_ outer: Outer<Fine>) {}
+fn bounded<T: Has<Item = Wrap<0>>>(_ outer: Outer<T>) {}
+fn bounded_valid<T: Has<Item = Wrap<2>>>(_ outer: Outer<T>) {}
 "#,
     );
     let (module, _) = db.top_mod(file);
@@ -1330,7 +1340,7 @@ fn masked_valid(_ masked: Masked<1>) {}
     // A fault reaches a concrete instance through a repeat, a callee's return
     // or parameter type, or a parameter's field; folding a returned value
     // must not see it first. A field's fault is known even beside a generic
-    // or an oversized field.
+    // or an oversized field, or behind a projection the instance resolves.
     for (name, len, valid) in [
         ("first", Some(2), true),
         ("first", Some(0), false),
@@ -1351,6 +1361,10 @@ fn masked_valid(_ masked: Masked<1>) {}
         ("mixed_valid", None, true),
         ("masked", None, false),
         ("masked_valid", None, true),
+        ("projected", None, false),
+        ("projected_valid", None, true),
+        ("bounded", None, false),
+        ("bounded_valid", None, true),
     ] {
         let owner = BodyOwner::Func(function(&db, module, name));
         let identity = identity_semantic_instance_key(&db, owner);
