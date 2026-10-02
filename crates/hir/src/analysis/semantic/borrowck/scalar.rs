@@ -48,6 +48,9 @@ pub(super) struct ScalarDemand<'db> {
     pub selectors: FxHashSet<IndexExpr<'db>>,
     /// Block parameters that keep their incoming equalities.
     pub phis: FxHashSet<NValueId>,
+    /// Indices some tracked fact can name: tracked indices, the other side of
+    /// a comparison with a tracked side, and values stored to tracked cells.
+    pub observed: FxHashSet<IndexExpr<'db>>,
     /// Exact scalar cells whose store versions are tracked.
     pub cells: FxHashSet<NPlaceBase>,
     /// Reader-loop conditions whose bounds apply once a fill is certified.
@@ -191,6 +194,31 @@ impl<'db> Borrowck<'db> {
             .copied()
             .filter(|value| self.compact_scalar_phi(*value))
             .collect();
+        // A call result that is not tracked can still be named by a comparison
+        // with a tracked side or by a tracked cell it is stored to.
+        let mut observed = self.scalar.indices.clone();
+        for statement in self.body.blocks.iter().flat_map(|block| &block.statements) {
+            match &statement.kind {
+                NStatementKind::Define { result, .. } => {
+                    if let Some((lhs, rhs)) = self
+                        .comparison(*result)
+                        .map(|(_, lhs, rhs)| (self.index(lhs), self.index(rhs)))
+                        && (self.scalar.indices.contains(&lhs)
+                            || self.scalar.indices.contains(&rhs))
+                    {
+                        observed.extend([lhs, rhs]);
+                    }
+                }
+                NStatementKind::Store { destination, value }
+                    if destination.path.is_empty()
+                        && self.scalar.cells.contains(&destination.base) =>
+                {
+                    observed.insert(self.index(value.value));
+                }
+                NStatementKind::Store { .. } => {}
+            }
+        }
+        self.scalar.observed = observed;
     }
 
     pub(super) fn stores_capability(&self, statement: &NStatement<'db>) -> bool {
@@ -310,59 +338,48 @@ impl<'db> Borrowck<'db> {
         let Some((_, expr)) = self.body.defining_expr(value) else {
             return Some(selected);
         };
-        let relation = match expr {
-            NExpr::Forward { src } => {
-                self.condition_guard(src.value, expected, include_bounds, budget - 1)
-            }
-            NExpr::Unary {
-                op: UnOp::Not,
-                value,
-            } => self.condition_guard(value.value, !expected, include_bounds, budget - 1),
-            NExpr::Binary {
-                op: BinOp::Logical(operator),
-                lhs,
-                rhs,
-            } => self.logical_guard(
-                *operator,
-                lhs.value,
-                rhs.value,
-                expected,
-                include_bounds,
-                budget - 1,
-            ),
-            NExpr::Binary {
-                op: BinOp::Comp(operator),
-                lhs,
-                rhs,
-            } => self.comparison_guard(*operator, lhs.value, rhs.value, expected, include_bounds),
-            NExpr::Call { callee, args, .. } => {
-                let BodyOwner::Func(function) = callee.key.owner(self.db) else {
-                    return Some(selected);
-                };
-                match (
-                    core_primitive_wrapper_call_kind(
-                        self.db,
-                        function,
-                        self.body.values[value.index()].ty,
-                    ),
-                    args.as_ref(),
-                ) {
-                    (Some(PrimitiveWrapperCallKind::Unary(UnOp::Not)), [operand]) => {
-                        self.condition_guard(operand.value, !expected, include_bounds, budget - 1)
-                    }
-                    (Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(operator))), [lhs, rhs]) => {
-                        self.comparison_guard(
-                            operator,
-                            lhs.value,
-                            rhs.value,
-                            expected,
-                            include_bounds,
-                        )
-                    }
-                    _ => Some(always),
+        let relation = if let Some((operator, lhs, rhs)) = self.comparison(value) {
+            self.comparison_guard(operator, lhs, rhs, expected, include_bounds)
+        } else {
+            match expr {
+                NExpr::Forward { src } => {
+                    self.condition_guard(src.value, expected, include_bounds, budget - 1)
                 }
+                NExpr::Unary {
+                    op: UnOp::Not,
+                    value,
+                } => self.condition_guard(value.value, !expected, include_bounds, budget - 1),
+                NExpr::Binary {
+                    op: BinOp::Logical(operator),
+                    lhs,
+                    rhs,
+                } => self.logical_guard(
+                    *operator,
+                    lhs.value,
+                    rhs.value,
+                    expected,
+                    include_bounds,
+                    budget - 1,
+                ),
+                NExpr::Call { callee, args, .. } => {
+                    let BodyOwner::Func(function) = callee.key.owner(self.db) else {
+                        return Some(selected);
+                    };
+                    match (
+                        core_primitive_wrapper_call_kind(
+                            self.db,
+                            function,
+                            self.body.values[value.index()].ty,
+                        ),
+                        args.as_ref(),
+                    ) {
+                        (Some(PrimitiveWrapperCallKind::Unary(UnOp::Not)), [operand]) => self
+                            .condition_guard(operand.value, !expected, include_bounds, budget - 1),
+                        _ => Some(always),
+                    }
+                }
+                _ => Some(always),
             }
-            _ => Some(always),
         }?;
         selected.and(&relation)
     }
@@ -386,6 +403,36 @@ impl<'db> Borrowck<'db> {
                 (Some(left), Some(right)) => Some(left.or(&right)),
                 (left, right) => left.or(right),
             }
+        }
+    }
+
+    /// The operator and operands of a trusted comparison defining `value`.
+    fn comparison(&self, value: NValueId) -> Option<(CompBinOp, NValueId, NValueId)> {
+        match self.body.defining_expr(value)?.1 {
+            NExpr::Binary {
+                op: BinOp::Comp(operator),
+                lhs,
+                rhs,
+            } => Some((*operator, lhs.value, rhs.value)),
+            NExpr::Call { callee, args, .. } => {
+                let BodyOwner::Func(function) = callee.key.owner(self.db) else {
+                    return None;
+                };
+                match (
+                    core_primitive_wrapper_call_kind(
+                        self.db,
+                        function,
+                        self.body.values[value.index()].ty,
+                    ),
+                    args.as_ref(),
+                ) {
+                    (Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(operator))), [lhs, rhs]) => {
+                        Some((operator, lhs.value, rhs.value))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
         }
     }
 

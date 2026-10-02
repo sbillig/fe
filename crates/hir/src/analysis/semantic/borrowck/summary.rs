@@ -2687,7 +2687,7 @@ impl<'db> Borrowck<'db> {
             // Keep facts about the arguments, but drop the relation for a result
             // that no scalar check uses. Otherwise each call adds its return
             // alternatives, and repeated calls multiply them.
-            let postcondition = if self.scalar.indices.contains(&IndexExpr::Runtime(result)) {
+            let postcondition = if self.scalar.observed.contains(&IndexExpr::Runtime(result)) {
                 postcondition.clone()
             } else {
                 postcondition.forget_indices(|index| index == returned)

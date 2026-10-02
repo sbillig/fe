@@ -13743,3 +13743,25 @@ fn forward(_ index: usize) -> usize { identity(index) }
         assert!(guard.implies(&equality));
     });
 }
+
+#[test]
+fn compared_and_stored_scalar_call_results_keep_return_relations() {
+    // The result itself is not tracked, but a comparison with a tracked index
+    // or a tracked cell it is stored to needs its relation to the argument.
+    for body in [
+        "if same(k) != j { arr[j] = 0 }",
+        "if j != k {\n        let mut m: usize = same(j)\n        if flag { m = j }\n        arr[m] = 0\n    }",
+    ] {
+        let source = format!(
+            r#"
+fn same(_ x: usize) -> usize {{ x }}
+fn f(_ arr: mut [u64; 8], k: usize, j: usize, flag: bool) {{
+    let held = mut arr[k]
+    {body}
+    held = 1
+}}
+"#
+        );
+        assert_eq!(checked_borrow_diags(&source), "", "{source}");
+    }
+}
