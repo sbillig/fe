@@ -49,7 +49,8 @@ pub(super) struct ScalarDemand<'db> {
     /// Block parameters that keep their incoming equalities.
     pub phis: FxHashSet<NValueId>,
     /// Indices some tracked fact can name: tracked indices, the other side of
-    /// a comparison with a tracked side, and values stored to tracked cells.
+    /// a comparison with a tracked side, values stored to tracked cells, and
+    /// the arguments of calls whose result is named.
     pub observed: FxHashSet<IndexExpr<'db>>,
     /// Exact scalar cells whose store versions are tracked.
     pub cells: FxHashSet<NPlaceBase>,
@@ -216,6 +217,24 @@ impl<'db> Borrowck<'db> {
                     observed.insert(self.index(value.value));
                 }
                 NStatementKind::Store { .. } => {}
+            }
+        }
+        // A kept call relation names the call's arguments, so a result passed
+        // to a call whose result is named is named too.
+        loop {
+            let previous = observed.len();
+            for statement in self.body.blocks.iter().flat_map(|block| &block.statements) {
+                if let NStatementKind::Define {
+                    result,
+                    expr: NExpr::Call { args, .. },
+                } = &statement.kind
+                    && observed.contains(&self.index(*result))
+                {
+                    observed.extend(args.iter().map(|arg| self.index(arg.value)));
+                }
+            }
+            if observed.len() == previous {
+                break;
             }
         }
         self.scalar.observed = observed;

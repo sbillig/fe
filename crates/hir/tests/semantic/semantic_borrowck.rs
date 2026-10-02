@@ -13745,11 +13745,33 @@ fn forward(_ index: usize) -> usize { identity(index) }
 }
 
 #[test]
-fn compared_and_stored_scalar_call_results_keep_return_relations() {
-    // The result itself is not tracked, but a comparison with a tracked index
-    // or a tracked cell it is stored to needs its relation to the argument.
+fn nested_scalar_call_results_keep_return_relations() {
+    let source = r#"
+fn identity(_ index: usize) -> usize { index }
+fn nested(_ index: usize) -> usize { identity(identity(index)) }
+"#;
+    with_borrow_summary(source, "nested", |_db, summary| {
+        use fe_hir::analysis::semantic::capability::guard::Guard;
+        use fe_hir::analysis::semantic::capability::index::{BinderScope, IndexNamespace};
+        let guard = summary
+            .scalar_result
+            .expect("a returned call chain keeps its relation");
+        let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
+        let equality = Guard::always(guard.scope())
+            .with_equality(returned, IndexExpr::FormalValue(0))
+            .unwrap();
+        assert!(guard.implies(&equality));
+    });
+}
+
+#[test]
+fn named_scalar_call_results_keep_return_relations() {
+    // The result itself is not tracked, but a comparison with a tracked index,
+    // a tracked cell it is stored to, or a kept call relation it is passed to
+    // needs its relation to the argument.
     for body in [
         "if same(k) != j { arr[j] = 0 }",
+        "if same(same(k)) != j { arr[j] = 0 }",
         "if j != k {\n        let mut m: usize = same(j)\n        if flag { m = j }\n        arr[m] = 0\n    }",
     ] {
         let source = format!(
