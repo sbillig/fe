@@ -68,6 +68,7 @@ use super::{
     LayoutBundlePath, LayoutBundlePathStep,
     adt_def::ConcreteTypeView,
     assoc_const::{AssocConstUse, InherentConstUse},
+    binder::Binder,
     canonical::Canonical,
     diagnostics::{
         BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, StaticAssertComparisonValues,
@@ -83,14 +84,14 @@ use super::{
     },
     ty_contains_const_hole,
     ty_def::{
-        BorrowKind, CapabilityKind, InvalidCause, Kind, MAX_INLINE_STRING_BYTES, StringFallback,
-        TyId, TyVarSort,
+        AssocTy, BorrowKind, CapabilityKind, InvalidCause, Kind, MAX_INLINE_STRING_BYTES,
+        StringFallback, TyId, TyParam, TyVar, TyVarSort,
     },
     ty_lower::{
-        CallableInputLayoutBackingSource, callable_input_layout_backing_index_lengths,
-        callable_input_layout_backing_sources, collect_generic_params,
-        layout_param_projection_paths_in_ty, lower_hir_ty, lower_hir_ty_deferred,
-        resolve_callable_input_effect_key,
+        CallableInputLayoutBackingSource, ParamDomainId, ParamKey, ParamSchemaId, PartialSubst,
+        callable_input_layout_backing_index_lengths, callable_input_layout_backing_sources,
+        collect_generic_params, layout_param_projection_paths_in_ty, lower_hir_ty,
+        lower_hir_ty_deferred, resolve_callable_input_effect_key,
     },
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
@@ -487,11 +488,13 @@ fn declared_call_bound<'db>(
 /// impl proving the owned goal may differ from the one whose bound failed for
 /// the borrowed value (`impl<A: Mark> Foo for W<A>` next to `impl Foo for
 /// W<S>`). It must never be wrong:
-/// - The capability type occurs exactly once in `primary`'s self type, and
-///   nowhere else in `primary` except in positions that follow the value.
-///   That occurrence is the borrowed value; with further occurrences (two
-///   borrowed values, or a type written out in a bound) the failure cannot be
-///   pinned to one value.
+/// - Either the capability type occurs once in `primary`'s self type, and
+///   elsewhere only in positions that follow it, or repeated positions come
+///   from one declared type binding containing the capability exactly once.
+///   The repeated case must reconstruct the complete bound, mention no other
+///   parameter, and leave no occurrence of that exact capability when owned.
+///   Other bindings can depend on the borrowed type through separate bounds,
+///   so holding them fixed would not prove the owned form of this bound.
 /// - `primary` holds with the value owned. The solver re-derives every
 ///   sub-goal from its declared bounds (including `Self`-dependent defaults
 ///   and explicit arguments such as `A: Rel<ref S>`).
@@ -504,11 +507,14 @@ fn declared_call_bound<'db>(
 /// `Out<Item = W<X>>`). Such a position is recomputed from its declared type
 /// with `X` bound to the owned value, after checking that binding `X` to the
 /// borrowed value reproduces the instantiated position.
+///
+/// One type binding can describe multiple input values. This explanation is
+/// about the bound's types, not a claim that owning one argument fixes a call.
 fn capability_only_unsat_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     primary: TraitInstId<'db>,
-    declared: Option<TraitInstId<'db>>,
+    call_bound: Option<(CallableDef<'db>, usize)>,
     unsat: Option<TraitInstId<'db>>,
 ) -> Option<TyId<'db>> {
     fn occurrences<'db>(
@@ -548,8 +554,6 @@ fn capability_only_unsat_ty<'db>(
     /// Whether `ty` mentions `param` and no other parameter, inference
     /// variable or projection, so it is determined by `param` alone.
     fn determined_by<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, param: TyId<'db>) -> bool {
-        use crate::analysis::ty::ty_def::{AssocTy, TyParam, TyVar};
-
         struct Determined<'db> {
             db: &'db dyn HirAnalysisDb,
             param: TyId<'db>,
@@ -614,6 +618,28 @@ fn capability_only_unsat_ty<'db>(
         }
     }
 
+    fn match_ty<'db>(
+        db: &'db dyn HirAnalysisDb,
+        declared: TyId<'db>,
+        actual: TyId<'db>,
+        subst: &mut PartialSubst<'db>,
+        parameters: &mut IndexMap<ParamKey<'db>, bool>,
+    ) -> Option<()> {
+        if declared.as_generic_param(db).is_some() {
+            let key = subst.domain().schema(db).original_key(db, declared)?;
+            subst.bind(db, key, actual).ok()?;
+            parameters.insert(key, matches!(declared.data(db), TyData::TyParam(_)));
+            Some(())
+        } else if let (TyData::TyApp(left, right), TyData::TyApp(actual_left, actual_right)) =
+            (declared.data(db), actual.data(db))
+        {
+            match_ty(db, *left, *actual_left, subst, parameters)?;
+            match_ty(db, *right, *actual_right, subst, parameters)
+        } else {
+            (declared == actual).then_some(())
+        }
+    }
+
     let replace = |ty: TyId<'db>, from: TyId<'db>, to: TyId<'db>| {
         ty.fold_with(db, &mut ReplaceTy { from, to })
     };
@@ -627,14 +653,66 @@ fn capability_only_unsat_ty<'db>(
     let (_, inner) = self_ty.as_capability(db)?;
 
     let primary_self = primary.self_ty(db);
-    if occurrences(db, self_ty, &primary_self) != 1 {
+    let count = occurrences(db, self_ty, &primary_self);
+    if count == 0 {
         return None;
     }
-    let owned_self = replace(primary_self, self_ty, inner);
+    let declared = call_bound
+        .and_then(|(callable_def, idx)| declared_call_bound(db, callable_def, idx))
+        .filter(|declared| {
+            declared.def(db) == primary.def(db) && declared.args(db).len() == primary.args(db).len()
+        });
+    if count > 1 {
+        let (callable_def, _) = call_bound?;
+        let declared = declared?;
+        let unsupported =
+            TyFlags::HAS_PROJECTION | TyFlags::HAS_VAR | TyFlags::HAS_INVALID | TyFlags::HAS_HOLE;
+        if collect_flags(db, declared).intersects(unsupported)
+            || collect_flags(db, primary).intersects(unsupported)
+            || declared.assoc_type_bindings(db).len() != primary.assoc_type_bindings(db).len()
+        {
+            return None;
+        }
 
-    let declared = declared.filter(|declared| {
-        declared.def(db) == primary.def(db) && declared.args(db).len() == primary.args(db).len()
-    });
+        let domain = ParamDomainId::full(db, ParamSchemaId::callable(db, callable_def));
+        let mut subst = PartialSubst::new(db, domain);
+        let mut parameters = IndexMap::new();
+        for (&declared_ty, &actual) in declared.args(db).iter().zip(primary.args(db)) {
+            match_ty(db, declared_ty, actual, &mut subst, &mut parameters)?;
+        }
+        for (name, &declared_ty) in declared.assoc_type_bindings(db) {
+            let actual = *primary.assoc_type_bindings(db).get(name)?;
+            match_ty(db, declared_ty, actual, &mut subst, &mut parameters)?;
+        }
+        let bound = Binder::bind(callable_def.generic_owner(), declared);
+        if bound.instantiate_subst(db, &subst.residualize(db)).ok()? != primary
+            || parameters.len() != 1
+        {
+            return None;
+        }
+        let (&key, &is_type) = parameters.iter().next()?;
+        let actual = subst.get(db, key)?;
+        if !is_type
+            || !matches!(key, ParamKey::Source { .. } | ParamKey::TraitSelf(_))
+            || occurrences(db, self_ty, &actual) != 1
+            || collect_flags(db, actual).intersects(unsupported)
+        {
+            return None;
+        }
+        let mut owned_subst = PartialSubst::new(db, domain);
+        owned_subst
+            .bind(db, key, replace(actual, self_ty, inner))
+            .ok()?;
+        let owned_primary = bound
+            .instantiate_subst(db, &owned_subst.residualize(db))
+            .ok()?;
+        return (occurrences(db, self_ty, &owned_primary) == 0
+            && !collect_flags(db, owned_primary).intersects(unsupported)
+            && holds(owned_primary))
+        .then_some(self_ty);
+    }
+
+    let owned_self = replace(primary_self, self_ty, inner);
     let declared_self = declared.map(|declared| declared.self_ty(db));
     // The owned form of a position declared as `declared_ty` and instantiated
     // as `actual`, if it follows the value.
@@ -2285,16 +2363,16 @@ impl<'db> TyChecker<'db> {
                         env::TraitObligationOrigin::GenericConfirmation => None,
                     };
                     let unsat = subgoal.map(|goal| query.extract_subgoal(&mut self.table, goal));
-                    let declared = match obligation.origin {
+                    let call_bound = match obligation.origin {
                         env::TraitObligationOrigin::CallConstraint {
                             callable_def,
                             constraint_idx,
                             ..
-                        } => declared_call_bound(db, callable_def, constraint_idx),
+                        } => Some((callable_def, constraint_idx)),
                         env::TraitObligationOrigin::GenericConfirmation => None,
                     };
                     let capability_hint =
-                        capability_only_unsat_ty(db, solve_cx, goal, declared, unsat);
+                        capability_only_unsat_ty(db, solve_cx, goal, call_bound, unsat);
                     self.push_diag(TyDiagCollection::from(
                         TraitConstraintDiag::TraitBoundNotSat {
                             span: obligation.span.clone(),
@@ -6176,6 +6254,80 @@ impl<'db> TyCheckerFinalizer<'db> {
         if let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span) {
             self.diags.push(diag.into());
         }
+    }
+}
+
+#[cfg(test)]
+mod capability_hint_tests {
+    use crate::{
+        analysis::ty::{
+            diagnostics::{FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
+            trait_resolution::{
+                GoalSatisfiability, TraitSolveCompletion, TraitSolveCx, is_goal_satisfiable,
+            },
+            ty_def::CapabilityKind,
+        },
+        test_db::{HirAnalysisTestDb, find_func},
+    };
+
+    use super::{check_func_body, declared_call_bound};
+
+    #[test]
+    fn ambiguous_owned_bound_keeps_the_ordinary_capability_diagnostic() {
+        let mut db = HirAnalysisTestDb::default();
+        // Query the body and solver directly: coherence checking rejects the
+        // overlapping owned impls before an ordinary source fixture can isolate
+        // this diagnostic boundary.
+        let file = db.new_stand_alone(
+            "ambiguous_owned_capability_hint.fe".into(),
+            r#"
+trait Mark {}
+trait Foo {}
+struct S { x: u256 }
+impl Mark for S {}
+struct W<A> { a: A }
+struct P<A, B> { a: A, b: B }
+impl<A: Mark, B: Mark> Foo for P<A, B> {}
+impl Foo for P<S, S> {}
+
+fn need<X>(_ w: W<X>) where P<X, X>: Foo {}
+fn borrowed(_ s: ref S) { need(W { a: s }) }
+fn owned_bound() where P<S, S>: Foo {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let owned_bound = find_func(&db, top_mod, "owned_bound");
+        let owned_goal = declared_call_bound(&db, owned_bound.into(), 0).expect("owned bound");
+        assert!(matches!(
+            is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), owned_goal),
+            GoalSatisfiability::NeedsConfirmation {
+                solutions,
+                completion: TraitSolveCompletion::Saturated,
+            } if solutions.len() == 2
+        ));
+
+        let borrowed = find_func(&db, top_mod, "borrowed");
+        let (diags, _) = check_func_body(&db, borrowed);
+        let [
+            FuncBodyDiag::Ty(TyDiagCollection::Satisfiability(
+                TraitConstraintDiag::TraitBoundNotSat {
+                    primary_goal,
+                    unsat_subgoal: Some(unsat),
+                    capability_hint,
+                    ..
+                },
+            )),
+        ] = diags.as_slice()
+        else {
+            panic!("expected one direct capability-bound failure, got {diags:?}");
+        };
+        assert_eq!(primary_goal.pretty_print(&db, true), "P<ref S, ref S>: Foo");
+        assert_eq!(unsat.pretty_print(&db, true), "ref S: Mark");
+        assert_eq!(
+            unsat.self_ty(&db).as_capability(&db).map(|(kind, _)| kind),
+            Some(CapabilityKind::Ref)
+        );
+        assert_eq!(*capability_hint, None);
     }
 }
 
