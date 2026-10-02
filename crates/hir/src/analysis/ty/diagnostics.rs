@@ -229,12 +229,11 @@ pub enum TyLowerDiag<'db> {
         ty: TyId<'db>,
     },
 
-    /// A contract field contains a root-bearing array whose length did not
-    /// evaluate before layout. Symbolic families require a checked static
-    /// extent and cannot represent a runtime-dependent number of members.
-    ContractFieldUnknownLayoutArrayLength {
+    /// A contract field contains an array whose elements carry layout roots.
+    /// The elements share one type, so they cannot have distinct roots.
+    ContractFieldLayoutRootArray {
         span: DynLazySpan<'db>,
-        ty: TyId<'db>,
+        element: TyId<'db>,
     },
 
     /// A contract field explicitly supplies a slot-root expression that remains
@@ -282,7 +281,6 @@ pub enum ContractFieldLayoutIssue {
     AmbiguousBindingSelector,
     InconsistentRootType,
     RootNeedsLanding,
-    RootNeedsIndex,
     InternalGraph,
 }
 
@@ -338,7 +336,7 @@ impl TyLowerDiag<'_> {
             Self::ContractFieldNonSlotConstHole { .. } => 40,
             Self::ContractFieldHandleSpaceUnresolved { .. } => 41,
             Self::ContractFieldExplicitConstHole { .. } => 42,
-            Self::ContractFieldUnknownLayoutArrayLength { .. } => 43,
+            Self::ContractFieldLayoutRootArray { .. } => 43,
             Self::ContractFieldProviderLayoutAmbiguous { .. } => 44,
             Self::ContractFieldProviderTargetUnresolved { .. } => 45,
             Self::ContractFieldLayoutInvariant { .. } => 46,

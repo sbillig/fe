@@ -1717,12 +1717,7 @@ pub(crate) fn provider_erases_runtime_root<'db>(
             .values()
             .find(|field| field.field == field_id)
             .is_none_or(|field| {
-                field.inline_span == 0
-                    && field.cells.iter().all(|cell| cell.allocation.is_none())
-                    && field
-                        .families
-                        .iter()
-                        .all(|family| family.allocation.is_none())
+                field.inline_span == 0 && field.cells.iter().all(|cell| cell.allocation.is_none())
             });
     }
 

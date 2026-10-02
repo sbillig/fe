@@ -17,8 +17,8 @@ use super::{
         CallableInputLayoutHoleOrigin, CallableLayoutOwner, ConstBodyLowering, ConstCaptureEnv,
         ConstTyData, ConstTyId, HoleAnchor, HoleId, LayoutBoundaryIdentity, LayoutHoleArgSite,
         LayoutInstantiationContext, LayoutInstantiationId, LayoutIntroSite, LayoutOccurrencePath,
-        LayoutOccurrenceStep, LayoutRootId, LayoutRootIdentity, LoweringContext,
-        StructuralHoleOrigin, UnevaluatedConstPolicy, const_ty_from_sem_const,
+        LayoutOccurrenceStep, LayoutRootId, LoweringContext, StructuralHoleOrigin,
+        UnevaluatedConstPolicy, const_ty_from_sem_const,
     },
     effects::{ResolvedEffectKey, TraitKeySchema, lower_effect_key_schema},
     fold::TyFoldable,
@@ -27,8 +27,8 @@ use super::{
         CallableLayoutBundleInput, CallableLayoutBundleSignature, LayoutBundleComponent,
         LayoutBundleComponentDeclaration, LayoutBundleComponentKey, LayoutBundleComponentTransport,
         LayoutBundleInterface, LayoutBundlePath, LayoutBundlePathStep, LayoutBundleSchema,
-        LayoutBundleTransport, LayoutEvidencePath, LayoutEvidencePathStep, LayoutPortKey,
-        LayoutRootPort, LayoutViewAlias, NonRegularLayoutViewCycle,
+        LayoutBundleTransport, LayoutBundleUnrepresentable, LayoutEvidencePath,
+        LayoutEvidencePathStep, LayoutPortKey, LayoutRootPort, LayoutViewAlias,
     },
     layout_holes::{
         LayoutInstantiation, LayoutRootUse, LayoutTemplateSubst, LayoutViewRecurrence,
@@ -753,7 +753,8 @@ pub struct CallableInputLayoutBackingSource {
 #[derive(Default)]
 struct CallableLayoutProjections<'db> {
     placeholders: Vec<TyId<'db>>,
-    component_placeholders: Vec<Vec<TyId<'db>>>,
+    /// The structural placeholder bound to each root component, if any.
+    component_placeholders: Vec<Option<TyId<'db>>>,
     /// Nonterminal declaration ports replaced by each terminal component.
     /// This preserves specialization topology without transporting both an
     /// aggregate carrier alias and its physical descendant.
@@ -773,7 +774,6 @@ struct CallableLayoutProjectionCollector<'db> {
     next_ordinal: usize,
     placeholders: Vec<TyId<'db>>,
     seen_placeholders: FxHashSet<TyId<'db>>,
-    transport_roots: FxHashMap<TyId<'db>, LayoutRootId<'db>>,
     placeholder_roots: FxHashMap<TyId<'db>, LayoutRootId<'db>>,
     transport_declarations: FxHashMap<TyId<'db>, LayoutBundleComponentDeclaration<'db>>,
     tys: FxHashMap<LayoutBundlePath, TyId<'db>>,
@@ -783,7 +783,11 @@ struct CallableLayoutProjectionCollector<'db> {
     port_tys: FxHashMap<LayoutPortKey, TyId<'db>>,
     adt_stack: Vec<CallableLayoutAdtFrame<'db>>,
     view_aliases: Vec<LayoutViewAlias>,
-    non_regular_view_cycle: Option<NonRegularLayoutViewCycle>,
+    unrepresentable: Option<LayoutBundleUnrepresentable>,
+    /// Enclosing arrays, each with the ADT stack depth at its start. Array
+    /// elements carry no layout components, so their roots are only
+    /// detected, never recorded.
+    arrays: Vec<(LayoutEvidencePath, usize)>,
     expand_effect_targets: bool,
     bound_roots: FxHashMap<LayoutRootId<'db>, TyId<'db>>,
 }
@@ -792,6 +796,15 @@ struct CallableLayoutAdtFrame<'db> {
     ty: TyId<'db>,
     family: CallableLayoutExpansionFamily<'db>,
     evidence_path: LayoutEvidencePath,
+    /// Value occurrence count when the expansion began.
+    occurrences: usize,
+    /// Stack index of the outermost expansion that this one closes a
+    /// back-edge to, directly or through a nested expansion; its own index if
+    /// none. This expansion reaches every root that one reaches.
+    recurs_to: usize,
+    /// Arrays whose elements reach this expansion's roots, which are known
+    /// only once its outermost recurrence finishes.
+    back_edge_arrays: Vec<LayoutEvidencePath>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -806,7 +819,6 @@ struct CallableLayoutOccurrence<'db> {
     declaration: LayoutBundleComponentDeclaration<'db>,
     ty: TyId<'db>,
     port: LayoutPortKey,
-    dimensions: Vec<usize>,
     structural_root: Option<LayoutRootId<'db>>,
     can_refine_to_descendant: bool,
 }
@@ -819,7 +831,6 @@ fn callable_layout_occurrence_descends_from<'db>(
     ancestor.can_refine_to_descendant
         && ancestor.declaration == candidate.declaration
         && ancestor.ty == candidate.ty
-        && candidate.dimensions.starts_with(&ancestor.dimensions)
         && ancestor.port.value_path.len() < candidate.port.value_path.len()
         && candidate
             .port
@@ -899,25 +910,6 @@ impl<'db> CallableLayoutSchemaSite<'db> {
 
     fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         generic_param_owner_assumptions(db, self.scope())
-    }
-}
-
-/// Canonicalizes only the landing chain that preserves one indexed physical
-/// transport. Crossing any other boundary can fan one source out into sibling
-/// roots, so those landings must remain distinct callable parameters.
-fn callable_indexed_transport_root<'db>(
-    db: &'db dyn HirAnalysisDb,
-    mut root: LayoutRootId<'db>,
-) -> LayoutRootId<'db> {
-    loop {
-        match root.identity(db) {
-            LayoutRootIdentity::Landing { source, instance }
-                if instance.boundary(db) == LayoutBoundaryIdentity::ArrayElement =>
-            {
-                root = source;
-            }
-            LayoutRootIdentity::Source { .. } | LayoutRootIdentity::Landing { .. } => return root,
-        }
     }
 }
 
@@ -1057,7 +1049,6 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             bound_roots.insert(root, placeholder);
             created.push((
                 placeholder,
-                callable_indexed_transport_root(db, root),
                 root,
                 LayoutBundleComponentDeclaration::Structural {
                     origin: hole.origin(db),
@@ -1066,9 +1057,8 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             ));
             Some(placeholder)
         });
-        for (placeholder, transport_root, root, declaration) in created {
+        for (placeholder, root, declaration) in created {
             self.collect_placeholder(placeholder);
-            self.transport_roots.insert(placeholder, transport_root);
             self.placeholder_roots.insert(placeholder, root);
             self.transport_declarations.insert(placeholder, declaration);
         }
@@ -1111,10 +1101,10 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
         }
         if ty.is_array(self.db) {
             if let Some(&element) = ty.generic_args(self.db).first() {
-                // Slot identities follow the structural traversal, even when
-                // the extent is deferred or zero. Only physical evidence needs
-                // a known nonzero extent. Skipping the traversal would both lose
-                // indexed slots and renumber roots in later sibling fields.
+                // The element is traversed even when the extent is deferred or
+                // zero: roots must be detected at every extent, and skipping
+                // the traversal would renumber roots in later sibling fields.
+                // Only the projected-type tables need a known nonzero extent.
                 let extent = ty
                     .array_len(self.db)
                     .filter(|&len| materialized && len != 0);
@@ -1130,8 +1120,10 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                             .count() as u32,
                     )],
                 );
+                let occurrences = self.value_occurrences.len();
+                self.arrays
+                    .push((evidence_path.clone(), self.adt_stack.len()));
                 path.push(LayoutBundlePathStep::Index);
-                evidence_path.push(LayoutEvidencePathStep::Index);
                 if let Some(len) = extent {
                     index_lengths.push(len);
                     self.record_ty(path, element.ty, index_lengths);
@@ -1147,8 +1139,15 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                 if extent.is_some() {
                     index_lengths.pop();
                 }
-                evidence_path.pop();
                 path.pop();
+                self.arrays.pop();
+                if self.value_occurrences.len() != occurrences {
+                    self.value_occurrences.truncate(occurrences);
+                    self.unrepresentable
+                        .get_or_insert(LayoutBundleUnrepresentable::RootArray {
+                            array: evidence_path.clone(),
+                        });
+                }
             }
             return;
         }
@@ -1190,12 +1189,27 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                 .map(|(idx, frame)| (idx, frame.ty, frame.family)),
         ) {
             LayoutViewRecurrence::BackEdge { ancestor } => {
+                if let Some((array, depth)) = self.arrays.last()
+                    && ancestor < *depth
+                {
+                    let array = array.clone();
+                    let frame = &mut self.adt_stack[ancestor];
+                    if !frame.back_edge_arrays.contains(&array) {
+                        frame.back_edge_arrays.push(array);
+                    }
+                }
+                let frame = self
+                    .adt_stack
+                    .last_mut()
+                    .expect("a back-edge closes inside an ADT expansion");
+                frame.recurs_to = frame.recurs_to.min(ancestor);
                 let canonical = self.adt_stack[ancestor].evidence_path.clone();
                 let alias = LayoutViewAlias {
                     alias: evidence_path.clone(),
                     canonical,
                 };
                 if materialized
+                    && self.arrays.is_empty()
                     && alias.alias != alias.canonical
                     && !self.view_aliases.contains(&alias)
                 {
@@ -1203,15 +1217,17 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                 }
                 return;
             }
+            // A non-regular cycle has no finite view, so whether an array
+            // element reaches a root through it is unknown. It is rejected
+            // wherever it occurs.
             LayoutViewRecurrence::NonRegular { ancestor } => {
-                if materialized {
-                    let frame = &self.adt_stack[ancestor];
-                    self.non_regular_view_cycle
-                        .get_or_insert_with(|| NonRegularLayoutViewCycle {
-                            canonical: frame.evidence_path.clone(),
-                            recursive: evidence_path.clone(),
-                        });
-                }
+                let frame = &self.adt_stack[ancestor];
+                self.unrepresentable.get_or_insert_with(|| {
+                    LayoutBundleUnrepresentable::NonRegularViewCycle {
+                        canonical: frame.evidence_path.clone(),
+                        recursive: evidence_path.clone(),
+                    }
+                });
                 return;
             }
             LayoutViewRecurrence::Expand => {}
@@ -1220,10 +1236,13 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             ty,
             family,
             evidence_path: evidence_path.clone(),
+            occurrences: self.value_occurrences.len(),
+            recurs_to: self.adt_stack.len(),
+            back_edge_arrays: Vec::new(),
         });
         let args = ty.generic_args(self.db);
         let forwarded_params = forwarded_layout_params(self.db, adt);
-        for (param_idx, arg) in args.iter().copied().enumerate().filter(|_| materialized) {
+        for (param_idx, arg) in args.iter().copied().enumerate() {
             if !matches!(arg.data(self.db), TyData::ConstTy(_)) {
                 continue;
             }
@@ -1234,9 +1253,13 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             let declared_layout_param = adt
                 .param_set(self.db)
                 .const_param_default_is_slot_layout_hole(self.db, param_idx);
-            let bound_arg = self.record_ty(path, arg, index_lengths);
+            let bound_arg = if materialized {
+                self.record_ty(path, arg, index_lengths)
+            } else {
+                self.bind_ty(arg)
+            };
             let placeholders = collect_unique_layout_placeholders_in_order(self.db, bound_arg);
-            if placeholders.is_empty() {
+            if placeholders.is_empty() && self.arrays.is_empty() {
                 self.port_tys
                     .entry(LayoutPortKey {
                         value_path: evidence_path.clone(),
@@ -1248,13 +1271,10 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                     .or_insert(bound_arg);
             }
             for (ordinal, placeholder) in placeholders.iter().copied().enumerate() {
-                let Some(root) = self.transport_roots.get(&placeholder) else {
+                let Some(root) = self.placeholder_roots.get(&placeholder) else {
                     continue;
                 };
                 let Some(declaration) = self.transport_declarations.get(&placeholder) else {
-                    continue;
-                };
-                let Some(structural_root) = self.placeholder_roots.get(&placeholder) else {
                     continue;
                 };
                 let TyData::ConstTy(const_ty) = placeholder.data(self.db) else {
@@ -1274,20 +1294,21 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                             ordinal,
                         },
                     },
-                    dimensions: index_lengths.clone(),
-                    structural_root: Some(*structural_root),
+                    structural_root: Some(*root),
                     can_refine_to_descendant: forwarded_params.contains(&param_idx),
                 });
-                self.port_tys.insert(
-                    LayoutPortKey {
-                        value_path: evidence_path.clone(),
-                        root: LayoutRootPort {
-                            param: param_idx,
-                            ordinal,
+                if self.arrays.is_empty() {
+                    self.port_tys.insert(
+                        LayoutPortKey {
+                            value_path: evidence_path.clone(),
+                            root: LayoutRootPort {
+                                param: param_idx,
+                                ordinal,
+                            },
                         },
-                    },
-                    bound_arg,
-                );
+                        bound_arg,
+                    );
+                }
             }
             if declared_layout_param
                 && placeholders.is_empty()
@@ -1348,20 +1369,21 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                                 ordinal: placeholders.len(),
                             },
                         },
-                        dimensions: index_lengths.clone(),
                         structural_root: None,
                         can_refine_to_descendant: forwarded_params.contains(&param_idx),
                     });
-                    self.port_tys.insert(
-                        LayoutPortKey {
-                            value_path: evidence_path.clone(),
-                            root: LayoutRootPort {
-                                param: param_idx,
-                                ordinal: placeholders.len(),
+                    if self.arrays.is_empty() {
+                        self.port_tys.insert(
+                            LayoutPortKey {
+                                value_path: evidence_path.clone(),
+                                root: LayoutRootPort {
+                                    param: param_idx,
+                                    ordinal: placeholders.len(),
+                                },
                             },
-                        },
-                        bound_arg,
-                    );
+                            bound_arg,
+                        );
+                    }
                 }
             }
             path.pop();
@@ -1467,7 +1489,30 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             );
             evidence_path.pop();
         }
-        self.adt_stack.pop();
+        // An expansion that recurs to an enclosing one reaches every root of
+        // the enclosing one, so it defers its back-edge and arrays to its
+        // parent. The outermost expansion of a recurrence reaches exactly the
+        // roots it produced, so its arrays carry roots exactly when it
+        // produced any.
+        let frame = self
+            .adt_stack
+            .pop()
+            .expect("an ADT expansion must be active");
+        if frame.recurs_to < self.adt_stack.len()
+            && let Some(parent) = self.adt_stack.last_mut()
+        {
+            parent.recurs_to = parent.recurs_to.min(frame.recurs_to);
+            for array in frame.back_edge_arrays {
+                if !parent.back_edge_arrays.contains(&array) {
+                    parent.back_edge_arrays.push(array);
+                }
+            }
+        } else if self.value_occurrences.len() != frame.occurrences
+            && let Some(array) = frame.back_edge_arrays.into_iter().next()
+        {
+            self.unrepresentable
+                .get_or_insert(LayoutBundleUnrepresentable::RootArray { array });
+        }
     }
 
     fn finish(self) -> CallableLayoutProjections<'db> {
@@ -1491,21 +1536,18 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             .collect::<Vec<_>>();
         let mut all_components = Vec::<(
             LayoutBundleComponent<'db>,
-            Vec<TyId<'db>>,
+            Option<TyId<'db>>,
             Vec<LayoutPortKey>,
         )>::new();
         let mut component_by_port = FxHashMap::<LayoutPortKey, usize>::default();
         for occurrence in value_occurrences {
-            let placeholders = match &occurrence.representative {
+            let placeholder = match &occurrence.representative {
                 LayoutBundleComponentKey::Root(root) => self
                     .placeholders
                     .iter()
                     .copied()
-                    .filter(|placeholder| self.transport_roots.get(placeholder) == Some(root))
-                    .collect(),
-                LayoutBundleComponentKey::Param(_) | LayoutBundleComponentKey::Static(_) => {
-                    Vec::new()
-                }
+                    .find(|placeholder| self.placeholder_roots.get(placeholder) == Some(root)),
+                LayoutBundleComponentKey::Param(_) | LayoutBundleComponentKey::Static(_) => None,
             };
             let refined_ports = self
                 .value_occurrences
@@ -1516,11 +1558,9 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                 .map(|ancestor| ancestor.port.clone())
                 .collect::<Vec<_>>();
             if let Some(existing) = component_by_port.get(&occurrence.port).copied() {
-                let (component, existing_placeholders, existing_refined_ports) =
-                    &mut all_components[existing];
+                let (component, _, existing_refined_ports) = &mut all_components[existing];
                 assert_eq!(
-                    component.representative,
-                    Some(occurrence.representative),
+                    component.representative, occurrence.representative,
                     "one layout port has multiple root values"
                 );
                 assert_eq!(
@@ -1531,15 +1571,6 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                     component.ty, occurrence.ty,
                     "one layout port has multiple scalar types"
                 );
-                assert_eq!(
-                    component.dimensions, occurrence.dimensions,
-                    "one layout port has multiple dimension shapes"
-                );
-                for placeholder in placeholders {
-                    if !existing_placeholders.contains(&placeholder) {
-                        existing_placeholders.push(placeholder);
-                    }
-                }
                 for port in refined_ports {
                     if !existing_refined_ports.contains(&port) {
                         existing_refined_ports.push(port);
@@ -1551,13 +1582,12 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                     LayoutBundleComponent {
                         port: occurrence.port,
                         declaration: occurrence.declaration,
-                        representative: Some(occurrence.representative),
+                        representative: occurrence.representative,
                         ty: occurrence.ty,
                         supplied_const_params: Vec::new(),
                         dependent_const_params: Vec::new(),
-                        dimensions: occurrence.dimensions,
                     },
-                    placeholders,
+                    placeholder,
                     refined_ports,
                 ));
             }
@@ -1566,20 +1596,20 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
         let mut components = Vec::with_capacity(all_components.len());
         let mut component_placeholders = Vec::with_capacity(all_components.len());
         let mut component_refined_ports = Vec::with_capacity(all_components.len());
-        for (component, placeholders, refined_ports) in all_components {
+        for (component, placeholder, refined_ports) in all_components {
             components.push(component);
-            component_placeholders.push(placeholders);
+            component_placeholders.push(placeholder);
             component_refined_ports.push(refined_ports);
         }
 
         let schema = LayoutBundleSchema {
             components,
             view_aliases: self.view_aliases,
-            non_regular_view_cycle: self.non_regular_view_cycle,
+            unrepresentable: self.unrepresentable,
         };
         let transport = LayoutBundleTransport::inferred(&schema);
         debug_assert!(
-            schema.non_regular_view_cycle.is_some() || schema.validate().is_ok(),
+            schema.unrepresentable.is_some() || schema.validate().is_ok(),
             "callable layout collector produced an invalid schema: {schema:#?}",
         );
         CallableLayoutProjections {
@@ -1653,7 +1683,6 @@ fn callable_layout_projections_for_ty_with_effect_targets<'db>(
         next_ordinal: 0,
         placeholders: Vec::new(),
         seen_placeholders: FxHashSet::default(),
-        transport_roots: FxHashMap::default(),
         placeholder_roots: FxHashMap::default(),
         transport_declarations: FxHashMap::default(),
         tys: FxHashMap::default(),
@@ -1663,7 +1692,8 @@ fn callable_layout_projections_for_ty_with_effect_targets<'db>(
         port_tys: FxHashMap::default(),
         adt_stack: Vec::new(),
         view_aliases: Vec::new(),
-        non_regular_view_cycle: None,
+        unrepresentable: None,
+        arrays: Vec::new(),
         expand_effect_targets,
         bound_roots: FxHashMap::default(),
     };
@@ -1873,32 +1903,26 @@ fn bind_callable_layout_bundle_interface<'db>(
     let mut schema = projection.schema.clone();
     bind_direct_layout_const_params(db, &mut schema);
     bind_projected_component_const_metadata(db, site, &mut schema, &projection.port_tys);
-    for (component, placeholders) in schema
+    for (component, placeholder) in schema
         .components
         .iter_mut()
         .zip(&projection.component_placeholders)
     {
-        for param in placeholders.iter().filter_map(|placeholder| {
+        let Some(param) = placeholder.and_then(|placeholder| {
             bindings
                 .iter()
-                .find_map(|(candidate, param)| (candidate == placeholder).then_some(*param))
-        }) {
-            if !component.supplied_const_params.contains(&param) {
-                component.supplied_const_params.push(param);
-            }
-            if !component.dependent_const_params.contains(&param) {
-                component.dependent_const_params.push(param);
-            }
+                .find_map(|(candidate, param)| (*candidate == placeholder).then_some(*param))
+        }) else {
+            continue;
+        };
+        if !component.supplied_const_params.contains(&param) {
+            component.supplied_const_params.push(param);
         }
-        if matches!(
-            component.representative,
-            Some(LayoutBundleComponentKey::Root(_))
-        ) && let Some(param) = placeholders.iter().find_map(|placeholder| {
-            bindings
-                .iter()
-                .find_map(|(candidate, param)| (candidate == placeholder).then_some(*param))
-        }) {
-            component.representative = Some(LayoutBundleComponentKey::Param(param));
+        if !component.dependent_const_params.contains(&param) {
+            component.dependent_const_params.push(param);
+        }
+        if matches!(component.representative, LayoutBundleComponentKey::Root(_)) {
+            component.representative = LayoutBundleComponentKey::Param(param);
         }
     }
     LayoutBundleInterface {
@@ -1912,7 +1936,7 @@ fn bind_direct_layout_const_params<'db>(
     schema: &mut LayoutBundleSchema<'db>,
 ) {
     for component in &mut schema.components {
-        if let Some(LayoutBundleComponentKey::Param(param)) = component.representative
+        if let LayoutBundleComponentKey::Param(param) = component.representative
             && matches!(
                 param.data(db),
                 TyData::ConstTy(const_ty)
@@ -2044,7 +2068,7 @@ fn output_witness_layout_interface<'db>(
     let schema = LayoutBundleSchema {
         components,
         view_aliases: output.schema.view_aliases.clone(),
-        non_regular_view_cycle: output.schema.non_regular_view_cycle.clone(),
+        unrepresentable: output.schema.unrepresentable.clone(),
     };
     LayoutBundleInterface::all_runtime(schema)
 }
@@ -2062,7 +2086,7 @@ pub fn callable_layout_bundle_signature<'db>(
                 .layout_bundle_interfaces_by_origin
                 .get(&origin)?
                 .clone();
-            (!interface.schema.components.is_empty())
+            (!interface.schema.is_empty())
                 .then_some(CallableLayoutBundleInput { origin, interface })
         })
         .collect::<Vec<_>>();
@@ -2135,7 +2159,7 @@ fn preserve_declared_component_ports<'db>(
         .collect::<Vec<_>>();
     for component in missing {
         projection.schema.components.push(component);
-        projection.component_placeholders.push(Vec::new());
+        projection.component_placeholders.push(None);
         projection.component_refined_ports.push(Vec::new());
     }
     for alias in &declared.schema.view_aliases {
@@ -2143,8 +2167,8 @@ fn preserve_declared_component_ports<'db>(
             projection.schema.view_aliases.push(alias.clone());
         }
     }
-    if projection.schema.non_regular_view_cycle.is_none() {
-        projection.schema.non_regular_view_cycle = declared.schema.non_regular_view_cycle.clone();
+    if projection.schema.unrepresentable.is_none() {
+        projection.schema.unrepresentable = declared.schema.unrepresentable.clone();
     }
     let declared_transport = declared
         .schema
@@ -2181,9 +2205,9 @@ fn specialize_component_representative<'db>(
     owner: GenericParamOwner<'db>,
     args: &[TyId<'db>],
 ) {
-    if let Some(LayoutBundleComponentKey::Param(value)) = component.representative {
+    if let LayoutBundleComponentKey::Param(value) = component.representative {
         let value = Binder::bind(owner, value).instantiate(db, args);
-        component.representative = Some(specialized_layout_component_key(db, value));
+        component.representative = specialized_layout_component_key(db, value);
     }
     component.ty = Binder::bind(owner, component.ty).instantiate(db, args);
 }
@@ -2203,33 +2227,27 @@ fn specialize_callable_input_layout_interface<'db>(
         projection.transport = LayoutBundleTransport::all_runtime(&projection.schema);
         Vec::new()
     };
-    for (component, placeholders) in projection
+    for (component, placeholder) in projection
         .schema
         .components
         .iter_mut()
         .zip(&projection.component_placeholders)
     {
-        let values = placeholders
-            .iter()
-            .filter_map(|placeholder| {
-                let (_, bound) = bindings
-                    .iter()
-                    .find(|(candidate, _)| candidate == placeholder)?;
-                let TyData::ConstTy(const_ty) = bound.data(db) else {
-                    return Some(*bound);
-                };
-                let ConstTyData::TyParam(param, _) = const_ty.data(db) else {
-                    return Some(*bound);
-                };
-                Some(args.get(param.idx).copied().unwrap_or(*bound))
-            })
-            .collect::<Vec<_>>();
-        if let Some(value) = values.first().copied() {
-            component.representative = values
+        if let Some((_, bound)) = placeholder.and_then(|placeholder| {
+            bindings
                 .iter()
-                .copied()
-                .all(|candidate| same_layout_argument(db, value, candidate))
-                .then(|| specialized_layout_component_key(db, value));
+                .find(|(candidate, _)| *candidate == placeholder)
+        }) {
+            let value = match bound.data(db) {
+                TyData::ConstTy(const_ty) => match const_ty.data(db) {
+                    ConstTyData::TyParam(param, _) => {
+                        args.get(param.idx).copied().unwrap_or(*bound)
+                    }
+                    _ => *bound,
+                },
+                _ => *bound,
+            };
+            component.representative = specialized_layout_component_key(db, value);
         }
         if restored_ports.contains(&component.port) {
             let CallableLayoutSchemaSite::Input {
@@ -2255,7 +2273,7 @@ fn specialize_callable_input_layout_interface<'db>(
         );
     }
     debug_assert!(
-        schema.non_regular_view_cycle.is_some() || schema.validate().is_ok(),
+        schema.unrepresentable.is_some() || schema.validate().is_ok(),
         "layout specialization produced an invalid schema: {schema:#?}",
     );
     LayoutBundleInterface {
@@ -2317,7 +2335,7 @@ pub(crate) fn specialized_callable_layout_bundle_signature_with_normalizer<'db>(
                 bindings,
                 args,
             );
-            (!interface.schema.components.is_empty())
+            (!interface.schema.is_empty())
                 .then_some(CallableLayoutBundleInput { origin, interface })
         })
         .collect::<Vec<_>>();
@@ -2362,7 +2380,7 @@ pub(crate) fn specialized_callable_layout_bundle_signature_with_normalizer<'db>(
         &declared_output.port_tys,
     );
     debug_assert!(
-        output_schema.non_regular_view_cycle.is_some() || output_schema.validate().is_ok(),
+        output_schema.unrepresentable.is_some() || output_schema.validate().is_ok(),
         "layout output specialization produced an invalid schema: {output_schema:#?}",
     );
     let output = LayoutBundleInterface {
@@ -2913,8 +2931,8 @@ pub fn callable_input_layout_bundle_schema<'db>(
 ///
 /// This is ownership provenance for borrow checking, not runtime layout
 /// evidence. Aggregate ancestors are omitted when a descendant names the
-/// concrete carrier place. Indexed families retain the projection needed to
-/// decide whether a unique backing place exists.
+/// concrete carrier place. Projections through array elements are retained so
+/// callers can decide whether a unique backing place exists.
 pub fn callable_input_layout_backing_sources<'db>(
     db: &'db dyn HirAnalysisDb,
     func: crate::hir_def::Func<'db>,
@@ -3587,7 +3605,6 @@ impl<'db> TyAlias<'db> {
                     Binder::bind(self.alias.into(), owner).instantiate(db, &completed)
                 }),
                 selector,
-                index_dimensions: root_use.index_dimensions.clone(),
             };
             if !instantiated.root_uses.contains(&root_use) {
                 instantiated.root_uses.push(root_use);
@@ -3641,7 +3658,6 @@ impl<'a, 'db> LayoutParamRootUseCollector<'a, 'db> {
                 value: *value,
                 owner: direct_owner,
                 selector,
-                index_dimensions: Vec::new(),
             });
             return;
         }

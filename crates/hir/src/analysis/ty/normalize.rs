@@ -115,7 +115,6 @@ pub(crate) fn normalize_layout_root_uses<'db>(
                             )
                         }),
                         selector: root_use.selector,
-                        index_dimensions: root_use.index_dimensions,
                     };
                     if !uses.contains(&root_use) {
                         uses.push(root_use);

@@ -426,7 +426,6 @@ pub(crate) fn instantiate_adt_field_layout<'db>(
             value,
             owner,
             selector,
-            index_dimensions: root_use.index_dimensions,
         };
         if !instantiated.root_uses.contains(&root_use) {
             instantiated.root_uses.push(root_use);

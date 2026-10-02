@@ -71,8 +71,8 @@ pub use layout_bundle::{
     LayoutBundleComponent, LayoutBundleComponentId, LayoutBundleComponentKey,
     LayoutBundleComponentTransport, LayoutBundleInterface, LayoutBundleInterfaceError,
     LayoutBundlePath, LayoutBundlePathStep, LayoutBundleSchema, LayoutBundleSchemaError,
-    LayoutBundleTransport, LayoutBundleViewMapping, LayoutEvidencePath, LayoutEvidencePathStep,
-    LayoutMapTy, LayoutPortKey, LayoutRootPort, LayoutViewAlias, NonRegularLayoutViewCycle,
+    LayoutBundleTransport, LayoutBundleUnrepresentable, LayoutBundleViewMapping,
+    LayoutEvidencePath, LayoutEvidencePathStep, LayoutPortKey, LayoutRootPort, LayoutViewAlias,
 };
 pub use layout_holes::{
     LayoutShapeKey, layout_root_descends_from, layout_root_id, layout_root_placeholder,

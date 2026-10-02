@@ -122,18 +122,11 @@ pub(crate) fn layout_root_lineage<'db>(
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub struct LayoutIndexDimension<'db> {
-    pub instance: LayoutInstantiationId<'db>,
-    pub len: usize,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct LayoutRootUse<'db> {
     pub value: TyId<'db>,
     pub owner: Option<TyId<'db>>,
     pub selector: LayoutOccurrencePath,
-    pub index_dimensions: Vec<LayoutIndexDimension<'db>>,
 }
 
 impl<'db> LayoutRootUse<'db> {
@@ -523,7 +516,6 @@ fn collect_root_uses<'db>(
                 value: placeholder,
                 owner: None,
                 selector: selector.clone(),
-                index_dimensions: Vec::new(),
             });
         }
     }
@@ -671,7 +663,6 @@ impl<'db> LayoutTemplateInstantiator<'db> {
             value: placeholder,
             owner: None,
             selector: occurrence,
-            index_dimensions: Vec::new(),
         });
         placeholder
     }

@@ -338,7 +338,6 @@ impl<'db> ResolvedImplInstance<'db> {
                                             .instantiate(db, trait_args)
                                     }),
                                     selector: root_use.selector,
-                                    index_dimensions: root_use.index_dimensions,
                                 })
                                 .collect()
                         })

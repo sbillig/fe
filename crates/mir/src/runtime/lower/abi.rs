@@ -1,5 +1,5 @@
 use cranelift_entity::EntityRef;
-use hir::analysis::ty::{CallableLayoutParamPort, LayoutBundleComponentId, LayoutMapTy};
+use hir::analysis::ty::{CallableLayoutParamPort, LayoutBundleComponentId, ty_def::TyId};
 
 use crate::{
     db::MirDb,
@@ -12,7 +12,7 @@ use crate::{
 
 use super::{
     interface::runtime_param_locals,
-    layout_evidence::runtime_layout_map_for_map_ty,
+    layout_evidence::layout_root_scalar_class,
     returns::{declaration_runtime_return_class, runtime_return_class_for_body},
     semantic_body::RuntimeSemanticBody,
     type_info::RuntimeTypeEnv,
@@ -21,14 +21,16 @@ use super::{
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeAbiEvidenceParam<'db> {
     pub source: CallableLayoutParamPort,
-    pub map_ty: LayoutMapTy<'db>,
+    /// The layout root's const type.
+    pub ty: TyId<'db>,
     pub param: RuntimeParam<'db>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeAbiEvidenceResult<'db> {
     pub component_id: LayoutBundleComponentId,
-    pub map_ty: LayoutMapTy<'db>,
+    /// The layout root's const type.
+    pub ty: TyId<'db>,
     pub class: RuntimeClass<'db>,
 }
 
@@ -104,35 +106,25 @@ fn semantic_runtime_abi_plan<'db>(
     let signature = semantic.key(db).layout_bundle_signature(db);
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
     let first_local = visible_params.len();
-    let evidence_param_specs = signature
+    let evidence_params = signature
         .runtime_params()
-        .map(|param| (param.source, param.component.map_ty()))
-        .collect::<Vec<_>>();
-    let evidence_params = evidence_param_specs
-        .into_iter()
         .enumerate()
-        .map(|(index, (source, map_ty))| {
-            let param = RuntimeParam {
+        .map(|(index, param)| RuntimeAbiEvidenceParam {
+            source: param.source,
+            ty: param.component.ty,
+            param: RuntimeParam {
                 local: RLocalId::from_u32(first_local as u32 + index as u32),
-                class: runtime_layout_map_for_map_ty(db, env, &map_ty).class(),
-            };
-            RuntimeAbiEvidenceParam {
-                source,
-                map_ty,
-                param,
-            }
+                class: RuntimeClass::Scalar(layout_root_scalar_class(db, env, param.component.ty)),
+            },
         })
         .collect::<Vec<_>>();
 
     let evidence = signature
         .runtime_results()
-        .map(|result| {
-            let map_ty = result.component.map_ty();
-            RuntimeAbiEvidenceResult {
-                component_id: result.component_id,
-                class: runtime_layout_map_for_map_ty(db, env, &map_ty).class(),
-                map_ty,
-            }
+        .map(|result| RuntimeAbiEvidenceResult {
+            component_id: result.component_id,
+            ty: result.component.ty,
+            class: RuntimeClass::Scalar(layout_root_scalar_class(db, env, result.component.ty)),
         })
         .collect::<Vec<_>>();
     let (class, layout) = if evidence.is_empty() {
