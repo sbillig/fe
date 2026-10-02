@@ -9,6 +9,7 @@ use crate::{
             STerminatorKind, SemOrigin, SemanticBody, SemanticCalleeRef, SemanticLocalRole,
             ValueProvenance, VariantIndex,
             borrowck::CallSiteRefinements,
+            concrete_layout_fault,
             diagnostics::{
                 SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
                 SemanticDiagnosticLabel, SemanticDiagnosticSpan,
@@ -1455,13 +1456,16 @@ impl<'db> SemanticInstance<'db> {
             });
         let mut demanded = FxHashSet::default();
         exprs.chain(locals).chain(params).find_map(|(ty, span)| {
-            if !demanded.insert(ty) {
-                return None;
-            }
-            let Err(error @ RuntimeSizeError::InvalidType(_)) = runtime_size_bytes(db, ty) else {
-                return None;
-            };
-            Some(invalid_size_diagnostic(db, self, span, ty, error))
+            let cause = demanded
+                .insert(ty)
+                .then(|| concrete_layout_fault(db, ty))??;
+            Some(invalid_size_diagnostic(
+                db,
+                self,
+                span,
+                ty,
+                RuntimeSizeError::InvalidType(cause),
+            ))
         })
     }
 

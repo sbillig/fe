@@ -1316,6 +1316,12 @@ fn passes_valid() -> u8 {
     let values: [u8; 1] = [1]
     take<2>(values)
 }
+struct Mixed<T, const N: usize> { values: [u8; { N - 1 }], item: T }
+struct Masked<const N: usize> { huge: [u256; 0xffffffffffffffff], values: [u8; { N - 1 }] }
+fn mixed<T>(_ mixed: Mixed<T, 0>) {}
+fn mixed_valid<T>(_ mixed: Mixed<T, 1>) {}
+fn masked(_ masked: Masked<0>) {}
+fn masked_valid(_ masked: Masked<1>) {}
 "#,
     );
     let (module, _) = db.top_mod(file);
@@ -1323,7 +1329,8 @@ fn passes_valid() -> u8 {
     let usize_ty = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
     // A fault reaches a concrete instance through a repeat, a callee's return
     // or parameter type, or a parameter's field; folding a returned value
-    // must not see it first.
+    // must not see it first. A field's fault is known even beside a generic
+    // or an oversized field.
     for (name, len, valid) in [
         ("first", Some(2), true),
         ("first", Some(0), false),
@@ -1340,6 +1347,10 @@ fn passes_valid() -> u8 {
         ("produced", None, false),
         ("passes", None, false),
         ("passes_valid", None, true),
+        ("mixed", None, false),
+        ("mixed_valid", None, true),
+        ("masked", None, false),
+        ("masked_valid", None, true),
     ] {
         let owner = BodyOwner::Func(function(&db, module, name));
         let identity = identity_semantic_instance_key(&db, owner);
