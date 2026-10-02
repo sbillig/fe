@@ -1163,18 +1163,22 @@ fn dependent_repeat_lengths_specialize() {
 
 #[test]
 fn dependent_repeat_lengths_reject_unforceable_extents() {
-    for (source, rejected) in [
+    for (source, message) in [
         (
             "extern { const fn opaque() -> usize }\nfn closed() { let _values = [0 as u8; opaque()] }",
-            "opaque()",
+            "const value must be resolvable during type checking",
         ),
         (
             "extern { const fn opaque_of(_ n: usize) -> usize }\nfn open<const N: usize>() { let _values = [0 as u8; opaque_of(N)] }",
-            "opaque_of(N)",
+            "const value must be resolvable during type checking",
         ),
         (
             "fn runtime(_ n: usize) -> u8 { [0 as u8; { n + 1 }][0] }",
-            "{ n + 1 }",
+            "const value must be resolvable during type checking",
+        ),
+        (
+            "fn ordinary(_ n: usize) -> usize { n }\nfn generic<const N: usize>() { let _values = [0 as u8; ordinary(N)] }",
+            "non-const function call in const context",
         ),
     ] {
         let mut db = HirAnalysisTestDb::default();
@@ -1183,10 +1187,7 @@ fn dependent_repeat_lengths_reject_unforceable_extents() {
         let diags = db.run_on_top_mod(module);
         let rendered = format_diagnostics(&db, &diags);
         assert_eq!(diags.len(), 1, "{rendered}");
-        assert!(
-            rendered.contains("const value must be resolvable during type checking"),
-            "{rejected} must be rejected: {rendered}"
-        );
+        assert!(rendered.contains(message), "{source}: {rendered}");
     }
 }
 

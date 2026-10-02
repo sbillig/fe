@@ -355,7 +355,11 @@ fn extract_pure_body_term<'db>(
     frames: &[TermCallFrame<'db>],
     extraction: &mut TermExtraction,
 ) -> Option<TermProvenance<'db>> {
-    if stack.len() >= extraction.depth_limit || stack.contains(&key.owner(db)) {
+    // Execution rejects a non-const function, so a term must not erase it.
+    if stack.len() >= extraction.depth_limit
+        || stack.contains(&key.owner(db))
+        || matches!(key.owner(db), BodyOwner::Func(func) if !func.is_const(db))
+    {
         return None;
     }
     extraction.remaining = extraction.remaining.checked_sub(1)?;

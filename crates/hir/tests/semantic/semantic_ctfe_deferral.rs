@@ -2090,6 +2090,32 @@ fn shifted<const N: usize>(_ x: [u8; word_len(N)]) -> [u8; word_len({ N + 1 })] 
 }
 
 #[test]
+fn describing_a_non_const_body_fails_as_executing_it_does() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "non_const_description.fe".into(),
+        "fn runtime<const N: usize>() -> usize { N + 1 }",
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(function(&db, module, "runtime"));
+    let request =
+        const_computation_for_instance(&db, identity_semantic_instance_key(&db, owner), Vec::new());
+    let described = describe_const_computation(&db, request, CtfeConfig::default());
+    assert!(
+        matches!(described, EvalOutcome::Failed(EvalFailure::Ctfe(ref error))
+            if matches!(root_error(error), CtfeError::NonConstCall { .. })),
+        "a non-const body must not be described as a term: {described:?}"
+    );
+    let forced = force_const_computation(&db, request, CtfeConfig::default());
+    assert!(
+        matches!(forced, EvalOutcome::Failed(EvalFailure::Ctfe(ref error))
+            if matches!(root_error(error), CtfeError::NonConstCall { .. })),
+        "{forced:?}"
+    );
+}
+
+#[test]
 fn ctfe_typed_read_through_frame_local_borrow_evaluates() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

@@ -13,6 +13,7 @@ use super::const_expr::{ConstExpr, ConstExprId, ConstInvocation, pretty_print_un
 use super::{
     adt_def::AdtDef,
     assoc_const::{AssocConstUse, InherentConstUse},
+    const_check::const_body_language_failure,
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{TyFoldable, TyFolder},
     generic_defaults::DefaultApplication,
@@ -1671,6 +1672,9 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
     // A named constant's checked body also rejects an invalid declared type.
     if const_def.is_some_and(|const_def| const_def.ty(db).has_invalid(db)) {
         return Err(const_body_result_cause(db, *body, typed_body));
+    }
+    if let Some(cause) = const_body_language_failure(db, *body, typed_body) {
+        return Err(cause);
     }
 
     if const_def.is_some() {
