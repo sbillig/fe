@@ -835,6 +835,7 @@ pub(super) fn profile_subgraphs() {
 }
 
 #[cfg(feature = "borrowck-profile")]
+#[allow(clippy::print_stderr)] // Opt-in subgraph census reports are intentionally written to stderr.
 fn profile_graph_table<V: Clone + Ord + Hash, T: Clone + Eq + Hash>(
     name: &str,
     shared: &SharedGraphs<V, T>,

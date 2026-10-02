@@ -3827,6 +3827,7 @@ impl<'db> TyChecker<'db> {
                                 primary_goal: inst,
                                 unsat_subgoal: None,
                                 required_by: None,
+                                capability_hint: None,
                             },
                         ));
                         return ExprProp::invalid(self.db);

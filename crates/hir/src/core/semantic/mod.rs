@@ -1354,6 +1354,7 @@ impl<'db> FuncParamView<'db> {
                     primary_goal: goal,
                     unsat_subgoal: subgoal,
                     required_by: None,
+                    capability_hint: None,
                 }
                 .into(),
             );
@@ -3358,6 +3359,7 @@ impl<'db> TypeAlias<'db> {
                     primary_goal: goal,
                     unsat_subgoal: subgoal,
                     required_by: None,
+                    capability_hint: None,
                 }
                 .into(),
             ]
@@ -4363,6 +4365,7 @@ impl<'db> ImplTrait<'db> {
                         primary_goal: goal,
                         unsat_subgoal: subgoal,
                         required_by: None,
+                        capability_hint: None,
                     }
                     .into(),
                 ],
@@ -4562,6 +4565,7 @@ impl<'db> ImplAssocTypeView<'db> {
                     primary_goal: goal,
                     unsat_subgoal: subgoal,
                     required_by: None,
+                    capability_hint: None,
                 }
                 .into(),
             ];
@@ -5227,6 +5231,7 @@ impl<'db> FieldView<'db> {
                     primary_goal: goal,
                     unsat_subgoal: subgoal,
                     required_by: None,
+                    capability_hint: None,
                 }
                 .into(),
             );

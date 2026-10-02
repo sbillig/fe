@@ -680,6 +680,7 @@ impl<'db> TyId<'db> {
                     primary_goal: goal,
                     unsat_subgoal: subgoal,
                     required_by: None,
+                    capability_hint: None,
                 }
                 .into(),
             )
