@@ -1174,10 +1174,6 @@ fn dependent_repeat_lengths_reject_unforceable_extents() {
             "const value must be resolvable during type checking",
         ),
         (
-            "extern { const fn opaque_of(_ n: usize) -> usize }\nfn open<const N: usize>() { let _values = [0 as u8; opaque_of(N)] }",
-            "const value must be resolvable during type checking",
-        ),
-        (
             "fn runtime(_ n: usize) -> u8 { [0 as u8; { n + 1 }][0] }",
             "const value must be resolvable during type checking",
         ),
@@ -1193,6 +1189,44 @@ fn dependent_repeat_lengths_reject_unforceable_extents() {
         let rendered = format_diagnostics(&db, &diags);
         assert_eq!(diags.len(), 1, "{rendered}");
         assert!(rendered.contains(message), "{source}: {rendered}");
+    }
+}
+
+#[test]
+fn opaque_extern_lengths_fail_where_specialization_forces_them() {
+    for expression in [
+        "[7 as u8; opaque_of(N)][0]",
+        "[7 as u8; { if N == 0 { opaque() } else { opaque() } }][0]",
+        "[7 as u8; wrapped<N>()][0]",
+    ] {
+        let source = format!(
+            r#"
+extern {{
+    const fn opaque() -> usize
+    const fn opaque_of(_ n: usize) -> usize
+}}
+const fn wrapped<const N: usize>() -> usize {{ if N == 0 {{ opaque() }} else {{ opaque() }} }}
+const fn probe<const N: usize>() -> u8 {{ {expression} }}
+"#
+        );
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("opaque_template.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "opaque_use.fe".into(),
+            &format!("{source}const BAD: u8 = probe<1>()\n"),
+        );
+        let (module, _) = db.top_mod(file);
+        let diags = db.run_on_top_mod(module);
+        let rendered = format_diagnostics(&db, &diags);
+        assert_eq!(diags.len(), 1, "{expression}: {rendered}");
+        assert!(
+            rendered.contains("cannot be evaluated at compile time"),
+            "{expression}: {rendered}"
+        );
+        assert!(!rendered.contains("internal"), "{rendered}");
     }
 }
 

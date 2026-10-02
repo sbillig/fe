@@ -88,7 +88,7 @@ use crate::analysis::{
     },
     ty::{
         LayoutBundlePathStep,
-        const_ty::{ConstTyData, ConstTyId, const_ty_from_sem_const, try_eval_const_int_expr},
+        const_ty::{ConstTyId, const_ty_from_sem_const, try_eval_const_int_expr},
         normalize::normalize_ty,
         ty_check::{RecordInitLowering, TyChecker, path::RecordInitChecker},
         ty_def::{InvalidCause, TyId},
@@ -97,7 +97,6 @@ use crate::analysis::{
             callable_input_layout_projection_paths, callable_input_projected_layout_ty,
             instantiate_callable_effect_layout_args, instantiate_callable_projection_layout_args,
         },
-        visitor::{TyVisitor, walk_const_ty},
     },
 };
 use crate::hir_def::{FieldParent, ItemKind, scope_graph::ScopeId};
@@ -4677,38 +4676,18 @@ impl<'db> TyChecker<'db> {
 
     /// Whether `const_ty` is acceptable as an array-repeat length. Each
     /// specialization materializes the repeat by forcing its length through
-    /// the common CTFE service, so the length must be forceable now, or be
-    /// blocked only on generic facts that specialization supplies: the service
-    /// reports reached faults and unsupported operations as failures, and an
-    /// unresolved parameter, selection or type as blocked. Holes and inference
-    /// variables are never supplied, and an opaque extern invocation can never
-    /// be forced, so a length that mentions one cannot wait.
+    /// the common CTFE service, so the length must be forceable now or be
+    /// blocked only on facts that specialization supplies. Admission depends
+    /// on that outcome alone, not on how the length is described: the service
+    /// reports a reached fault or an unsupported operation, such as an opaque
+    /// extern call with known inputs, as a failure, and any fault behind an
+    /// unresolved parameter, selection or type when a concrete use forces it.
+    /// Holes and inference variables are never supplied, so a length that
+    /// mentions one cannot wait.
     fn array_len_const_is_acceptable(&self, const_ty: ConstTyId<'db>) -> bool {
-        struct OpaqueExtern<'db> {
-            db: &'db dyn HirAnalysisDb,
-            found: bool,
-        }
-        impl<'db> TyVisitor<'db> for OpaqueExtern<'db> {
-            fn db(&self) -> &'db dyn HirAnalysisDb {
-                self.db
-            }
-
-            fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
-                self.found |= matches!(const_ty.data(self.db),
-                    ConstTyData::Abstract(expr, _) if expr.is_opaque_extern(self.db));
-                walk_const_ty(self, const_ty);
-            }
-        }
-
         let len = TyId::const_ty(self.db, const_ty);
-        let mut opaque = OpaqueExtern {
-            db: self.db,
-            found: false,
-        };
-        opaque.visit_ty(len);
         !len.has_var(self.db)
             && !len.has_hole(self.db)
-            && !opaque.found
             && !matches!(
                 force_const_term_value(
                     self.db,
