@@ -146,7 +146,7 @@ fn normalize_and_verify<'db>(
     raw: &SemanticBody<'db>,
     assumptions: PredicateListId<'db>,
 ) -> SemanticBodyAdmission<'db> {
-    if let Some(diag) = instance.repeat_extent_diagnostic(db) {
+    if let Some(diag) = instance.concrete_layout_diagnostic(db) {
         return SemanticBodyAdmission::Rejected(diag);
     }
     match normalize_raw_body(db, instance, raw, assumptions) {

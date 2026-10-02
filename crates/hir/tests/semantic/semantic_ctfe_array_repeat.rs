@@ -1207,6 +1207,11 @@ fn dependent_repeat_faults_report_at_concrete_use() {
             "divide by zero",
         ),
         (
+            "[7 as u8; [1, 2, 3][N - 1]][0]",
+            "probe<4, 1>()",
+            "index out of bounds",
+        ),
+        (
             "{ let _values = [10 / X; word_len(N)]\n 0 }",
             "probe<0, 0>()",
             "divide by zero",
@@ -1238,13 +1243,20 @@ const fn probe<const N: usize, const X: u8>() -> u8 {{ {expression} }}
 }
 
 #[test]
-fn runtime_admission_demands_specialized_repeat_lengths() {
+fn runtime_admission_demands_specialized_layouts() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "runtime_repeat_admission.fe".into(),
         r#"
+const fn minus(_ n: usize) -> usize { n - 1 }
+struct Wrap<const N: usize> { values: [u8; minus(N)] }
+fn runtime(_ value: u8) -> u8 { value }
 fn first<const N: usize>() -> u8 { [7 as u8; { N - 1 }][0] }
 fn unused<const N: usize>() { let _values = [7 as u8; { 10 / N }] }
+fn make<const N: usize>(_ value: u8) -> [u8; { N - 1 }] { [value; { N - 1 }] }
+fn receive<const N: usize>() { let _values = make<N>(runtime(7)) }
+fn wrap<const N: usize>(_ value: u8) -> Wrap<N> { Wrap { values: [value; minus(N)] } }
+fn receive_field<const N: usize>() { let _wrapped = wrap<N>(runtime(7)) }
 "#,
     );
     let (module, _) = db.top_mod(file);
@@ -1255,6 +1267,10 @@ fn unused<const N: usize>() { let _values = [7 as u8; { 10 / N }] }
         ("first", 0, false),
         ("unused", 5, true),
         ("unused", 0, false),
+        ("receive", 2, true),
+        ("receive", 0, false),
+        ("receive_field", 2, true),
+        ("receive_field", 0, false),
     ] {
         let owner = BodyOwner::Func(function(&db, module, name));
         let identity = identity_semantic_instance_key(&db, owner);

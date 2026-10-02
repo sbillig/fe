@@ -20,7 +20,6 @@ use crate::{
         ty::{
             CallableLayoutBundleInput, CallableLayoutBundleSignature, CallableLayoutOwner,
             adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape},
-            const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
             corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
             effects::place_effect_provider_param_index_map,
             fold::TyFoldable,
@@ -908,36 +907,104 @@ fn invalid_size_diagnostic<'db>(
             "concrete type size could not be determined".to_string()
         }
         RuntimeSizeError::InvalidType(cause) => {
-            let source = match &cause {
-                InvalidCause::ConstEvalDivisionByZero { body, expr }
-                | InvalidCause::ConstEvalArithmeticOverflow { body, expr }
-                | InvalidCause::ConstEvalNegativeExponent { body, expr }
-                | InvalidCause::ConstEvalUnsupported { body, expr }
-                | InvalidCause::ConstEvalNonConstCall { body, expr }
-                | InvalidCause::ConstEvalStepLimitExceeded { body, expr }
-                | InvalidCause::ConstEvalRecursionLimitExceeded { body, expr }
-                | InvalidCause::ConstEvalRecursiveConst { body, expr }
-                | InvalidCause::ConstEvalAssertionFailed { body, expr, .. } => {
-                    Some(SemanticDiagnosticSpan::HirExpr {
-                        body: *body,
-                        expr: *expr,
-                    })
+            // Every evaluation fault keeps the expression it occurred at.
+            let fault = match &cause {
+                InvalidCause::ConstEvalUnsupported { body, expr } => Some((
+                    *body,
+                    *expr,
+                    "the expression cannot be evaluated at compile time".to_string(),
+                )),
+                InvalidCause::ConstEvalAssertionFailed { body, expr, .. } => Some((
+                    *body,
+                    *expr,
+                    "assertion failed in const context".to_string(),
+                )),
+                InvalidCause::ConstEvalNonConstCall { body, expr } => Some((
+                    *body,
+                    *expr,
+                    "non-const function call in const context".to_string(),
+                )),
+                InvalidCause::ConstEvalDivisionByZero { body, expr } => Some((
+                    *body,
+                    *expr,
+                    "division by zero in const context".to_string(),
+                )),
+                InvalidCause::ConstEvalOutOfBounds { body, expr } => Some((
+                    *body,
+                    *expr,
+                    "index out of bounds in const context".to_string(),
+                )),
+                InvalidCause::ConstEvalInvalidOperation {
+                    body,
+                    expr,
+                    message,
+                } => Some((
+                    *body,
+                    *expr,
+                    format!("invalid operation in const context: {message}"),
+                )),
+                InvalidCause::ConstEvalInvalidBorrow { body, expr } => {
+                    Some((*body, *expr, "invalid borrow in const context".to_string()))
+                }
+                InvalidCause::ConstEvalInvalidProviderUse { body, expr } => Some((
+                    *body,
+                    *expr,
+                    "invalid effect provider in const context".to_string(),
+                )),
+                InvalidCause::ConstEvalVariantMismatch { body, expr } => Some((
+                    *body,
+                    *expr,
+                    "variant mismatch in const context".to_string(),
+                )),
+                InvalidCause::ConstEvalUninitializedLocal { body, expr } => Some((
+                    *body,
+                    *expr,
+                    "uninitialized value in const context".to_string(),
+                )),
+                InvalidCause::ConstEvalInvariant {
+                    body,
+                    expr,
+                    message,
+                } => Some((
+                    *body,
+                    *expr,
+                    format!("compiler invariant failed during const evaluation: {message}"),
+                )),
+                InvalidCause::ConstEvalArithmeticOverflow { body, expr } => Some((
+                    *body,
+                    *expr,
+                    "arithmetic overflow in const context".to_string(),
+                )),
+                InvalidCause::ConstEvalNegativeExponent { body, expr } => Some((
+                    *body,
+                    *expr,
+                    "negative exponent in const context".to_string(),
+                )),
+                InvalidCause::ConstEvalStepLimitExceeded { body, expr } => Some((
+                    *body,
+                    *expr,
+                    "const evaluation exceeded the step limit".to_string(),
+                )),
+                InvalidCause::ConstEvalRecursionLimitExceeded { body, expr } => Some((
+                    *body,
+                    *expr,
+                    "const evaluation exceeded the recursion limit".to_string(),
+                )),
+                InvalidCause::ConstEvalRecursiveConst { body, expr } => {
+                    Some((*body, *expr, "recursive constant definition".to_string()))
                 }
                 _ => None,
             };
-            let message = match cause {
-                InvalidCause::ConstEvalDivisionByZero { .. } => {
-                    "division by zero in const context".to_string()
+            match fault {
+                Some((body, expr, message)) => {
+                    diagnostic.push_secondary(
+                        message.clone(),
+                        SemanticDiagnosticSpan::HirExpr { body, expr },
+                    );
+                    message
                 }
-                InvalidCause::ConstEvalArithmeticOverflow { .. } => {
-                    "arithmetic overflow in const context".to_string()
-                }
-                _ => format!("invalid const value: {}", cause.pretty_print(db)),
-            };
-            if let Some(source) = source {
-                diagnostic.push_secondary(message.clone(), source);
+                None => format!("invalid const value: {}", cause.pretty_print(db)),
             }
-            message
         }
     };
     if diagnostic.secondaries.is_empty() {
@@ -1313,26 +1380,25 @@ impl<'db> SemanticInstance<'db> {
         Ok(())
     }
 
-    /// Borrow checking and runtime lowering consume concrete layouts, so each
-    /// array repeat of a concrete instance demands its specialized extent. A
-    /// deferred fault in that extent rejects the body with its source, even
-    /// when the repeated value is unused or empty. Compile-time evaluation
-    /// forces the same extent itself when it materializes the repeat.
-    pub(crate) fn repeat_extent_diagnostic(
+    /// Borrow checking and runtime lowering consume concrete layouts, so a
+    /// concrete instance demands the layout of each expression's type. A
+    /// deferred fault in a specialized extent, whether this body writes it or
+    /// receives it from a callee or field, rejects the body with its source,
+    /// even when the value is unused or empty. Compile-time evaluation forces
+    /// the same extents itself when it materializes them.
+    pub(crate) fn concrete_layout_diagnostic(
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Option<SemanticDiagnosticId<'db>> {
         let typed_body = self.key(db).typed_body(db);
         let body = typed_body.body()?;
-        body.exprs(db).iter().find_map(|(expr, data)| {
-            let Partial::Present(Expr::ArrayRep(..)) = data else {
-                return None;
-            };
+        let mut demanded = FxHashSet::default();
+        body.exprs(db).iter().find_map(|(expr, _)| {
             let ty = self.normalized_ty(db, typed_body.expr_ty(db, expr));
-            let len = *ty.generic_args(db).get(1)?;
-            let Err(ConcreteArrayLengthError::Invalid(cause)) =
-                demand_concrete_array_length(db, len, len)
-            else {
+            if !demanded.insert(ty) {
+                return None;
+            }
+            let Err(error @ RuntimeSizeError::InvalidType(_)) = runtime_size_bytes(db, ty) else {
                 return None;
             };
             Some(invalid_size_diagnostic(
@@ -1340,7 +1406,7 @@ impl<'db> SemanticInstance<'db> {
                 self,
                 SemOrigin::Expr(expr),
                 ty,
-                RuntimeSizeError::InvalidType(cause),
+                error,
             ))
         })
     }

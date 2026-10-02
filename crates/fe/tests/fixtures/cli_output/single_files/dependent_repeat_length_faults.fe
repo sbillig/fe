@@ -1,16 +1,34 @@
-// A concrete instance demands each computed repeat length, including an
-// unused one, and reports its checked fault where the length is written.
+// A concrete instance demands the layout of every expression's type, so a
+// checked fault in a specialized extent is reported where the length is
+// written: in a repeat, in an unused repeat, in an array a caller receives,
+// and behind an index.
 const fn minus(_ n: usize) -> usize { n - 1 }
+
+const fn lengths(_ n: usize) -> usize {
+    let values: [usize; 2] = [1, 2]
+    values[n]
+}
 
 fn first<const N: usize>() -> u8 { [7 as u8; minus(N)][0] }
 
 fn unused<const N: usize>() { let _values = [7 as u8; { 10 / N }] }
 
+fn make<const N: usize>(_ value: u8) -> [u8; { N - 1 }] { [value; { N - 1 }] }
+
+fn indexed<const N: usize>() -> u8 { [7 as u8; lengths(N)][0] }
+
+fn runtime(_ value: u8) -> u8 { value }
+
 fn underflow() -> u8 { first<0>() }
 
 fn divide() { unused<0>() }
 
+fn receive() { let _values = make<0>(runtime(7)) }
+
+fn bounds() -> u8 { indexed<2>() }
+
 pub fn main() -> i32 {
     unused<2>()
-    first<2>() as i32
+    let _values = make<2>(runtime(7))
+    (first<2>() + indexed<1>()) as i32
 }
