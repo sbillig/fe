@@ -1101,7 +1101,6 @@ impl<'db> Borrowck<'db> {
             // shared. An address used only by this effect is existential within
             // the effect: retaining call-depth identities would grow recursive
             // summaries forever without distinguishing their possible targets.
-            let mut access_handles = handles.clone();
             let external = |region: &RegionSet<'db>| {
                 RegionSet::new(
                     region.scope(),
@@ -1115,30 +1114,86 @@ impl<'db> Borrowck<'db> {
                         .cloned(),
                 )
             };
-            let region = self.summarize_region(
-                &external(&access.region)
-                    .forget_occurrences(|occurrence| self.recursive_call_choice(occurrence)),
-                SemOrigin::Body(self.body.template_owner),
-                &mut choices,
-                &mut access_handles,
-            )?;
-            if region.is_empty() {
-                continue;
-            }
-            let authorizers = self.summarize_region(
-                &external(&access.authorizers),
-                SemOrigin::Body(self.body.template_owner),
-                &mut choices,
-                &mut access_handles,
-            )?;
-            let access = MemoryAccess {
-                kind: access.kind,
-                extent: self.summarize_extent(access.extent),
-                region,
-                authorizers,
+            let target = external(&access.region);
+            let external_authorizers = external(&access.authorizers);
+            let project_authorizers = external_authorizers.clauses().iter().any(|clause| {
+                clause
+                    .guard
+                    .occurrences()
+                    .into_iter()
+                    .any(|choice| self.recursive_call_choice(choice))
+            });
+            // Different targets can have different receivers on hidden branches.
+            // Keep their domains separate, while canonical clauses still combine
+            // every execution that can reach the same target.
+            let targets = if project_authorizers {
+                target
+                    .clauses()
+                    .iter()
+                    .map(|clause| RegionSet::new(target.scope(), [clause.clone()]))
+                    .collect()
+            } else {
+                vec![target]
             };
-            if !accesses.contains(&access) {
-                accesses.push(access);
+            let mut access_handles = handles.clone();
+            for target in targets {
+                let region = self.summarize_region(
+                    &target.forget_occurrences(|occurrence| self.recursive_call_choice(occurrence)),
+                    SemOrigin::Body(self.body.template_owner),
+                    &mut choices,
+                    &mut access_handles,
+                )?;
+                if region.is_empty() {
+                    continue;
+                }
+                let mut authorizers = external_authorizers.clone();
+                if project_authorizers {
+                    // The effect may run on any recursive execution. Its receiver
+                    // authority must hold on every execution that can reach it.
+                    // Access witnesses are private to their clauses, so project
+                    // them before comparing their execution domain with authority.
+                    let domain = target
+                        .clauses()
+                        .iter()
+                        .map(|clause| {
+                            let guard = clause.guard.forget_indices(|index| {
+                                access.region.scope().validate(index).is_err()
+                            });
+                            let subst = guard
+                                .scope()
+                                .canonical_existentials(access.region.scope(), || guard.indices());
+                            guard.substitute(&subst).expect("access execution domain")
+                        })
+                        .reduce(|left, right| left.or(&right))
+                        .expect("nonempty external effect");
+                    authorizers = RegionSet::new(
+                        authorizers.scope(),
+                        authorizers.clauses().iter().filter_map(|clause| {
+                            Some(Guarded {
+                                guard: clause.guard.forget_occurrences_universally(
+                                    &domain.in_scope(clause.guard.scope()),
+                                    |choice| self.recursive_call_choice(choice),
+                                )?,
+                                payload: clause.payload.clone(),
+                            })
+                        }),
+                    );
+                }
+                let authorizers = self.summarize_region(
+                    &authorizers,
+                    SemOrigin::Body(self.body.template_owner),
+                    &mut choices,
+                    &mut access_handles,
+                )?;
+                let access = MemoryAccess {
+                    kind: access.kind,
+                    extent: self.summarize_extent(access.extent),
+                    region,
+                    authorizers,
+                };
+                if !accesses.contains(&access) {
+                    accesses.push(access);
+                }
             }
         }
         accesses.sort();
@@ -3664,6 +3719,7 @@ pub(super) fn signature_summary<'db>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::{access::ResolvedOperation, memory::ResolvedMemoryAccess};
     use super::*;
     use crate::{
         analysis::{
@@ -3707,6 +3763,199 @@ mod tests {
                 },
             }],
         )
+    }
+
+    #[test]
+    fn recursive_effect_authority_stays_correlated_with_each_target() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "recursive_effect_authority.fe".into(),
+            "fn holder(_ first: mut u256, _ second: mut u256) {}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "holder"))),
+        );
+        for case in [
+            "alternatives",
+            "mismatched",
+            "same_target_partial",
+            "always",
+            "effect_only_targets",
+        ] {
+            let mut checker = Borrowck::new(&db, instance).unwrap();
+            checker.solve().unwrap();
+            let recursive = NValueId::new(0);
+            checker.recursive_calls.insert(recursive);
+            let scope = BinderScope::default();
+            let choice = ChoiceKey::new(
+                ValueOccurrence::CallChoice {
+                    result: recursive,
+                    choice: 0,
+                },
+                StructuralPath::default(),
+            );
+            let guard = |value| {
+                Guard::always(&scope)
+                    .with_boolean(choice.clone(), value)
+                    .unwrap()
+            };
+            let place = |param| {
+                checker
+                    .inventory
+                    .inputs
+                    .iter()
+                    .find(|input| input.source.param() == Some(param))
+                    .map(|input| SymbolicPlace {
+                        root: RegionRoot::External(input.source.clone()),
+                        path: RegionPath::default(),
+                        views: Default::default(),
+                    })
+                    .unwrap()
+            };
+            let (mut first, mut second) = (place(0), place(1));
+            if case == "effect_only_targets" {
+                for (choice, target) in [&mut first, &mut second].into_iter().enumerate() {
+                    target.root = RegionRoot::External(ExternalSource::unknown(
+                        ReferentContract::new(
+                            &db,
+                            TyId::u256(&db),
+                            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+                        ),
+                        AddressOccurrence::Value {
+                            instance,
+                            value: recursive,
+                            choice: choice.try_into().unwrap(),
+                        },
+                        Box::new([]),
+                        AddressProvenance::Raw,
+                    ));
+                }
+            }
+            let region = RegionSet::new(
+                &scope,
+                [
+                    Guarded {
+                        guard: guard(true),
+                        payload: first.clone(),
+                    },
+                    Guarded {
+                        guard: guard(case == "effect_only_targets"),
+                        payload: if case == "same_target_partial" {
+                            first.clone()
+                        } else {
+                            second.clone()
+                        },
+                    },
+                ],
+            );
+            let authorizers = RegionSet::new(
+                &scope,
+                [
+                    Guarded {
+                        guard: if case == "always" {
+                            Guard::always(&scope)
+                        } else {
+                            guard(case != "mismatched")
+                        },
+                        payload: place(0),
+                    },
+                    Guarded {
+                        guard: if case == "always" {
+                            Guard::always(&scope)
+                        } else {
+                            guard(case == "mismatched")
+                        },
+                        payload: place(1),
+                    },
+                ],
+            );
+            checker.operations[0].push(ResolvedOperation {
+                calls: vec![ResolvedMemoryAccess {
+                    invalidated: NativeValidity::default(),
+                    access: MemoryAccess {
+                        kind: MemoryAccessKind::Write,
+                        extent: AccessExtent::Unknown,
+                        region,
+                        authorizers,
+                    },
+                    authority: Vec::new(),
+                }],
+                ..ResolvedOperation::default()
+            });
+            let (summary, _) = checker.build_summary().unwrap();
+            checker.verify_summary(&summary).unwrap();
+            if case == "effect_only_targets" {
+                assert_eq!(summary.accesses.len(), 2, "distinct targets collapsed");
+                let occurrences: BTreeSet<_> = summary
+                    .accesses
+                    .iter()
+                    .flat_map(|access| {
+                        access.region.clauses().iter().map(|clause| {
+                            let RegionRoot::External(source) = &clause.payload.root else {
+                                panic!("external target");
+                            };
+                            let ExternalOrigin::Unknown { occurrence, .. } =
+                                source.address_base(&db).unwrap().origin
+                            else {
+                                panic!("unknown address identity");
+                            };
+                            occurrence
+                        })
+                    })
+                    .collect();
+                assert_eq!(
+                    occurrences.len(),
+                    2,
+                    "distinct address identities collapsed"
+                );
+                for access in &summary.accesses {
+                    assert_eq!(access.authorizers.clauses().len(), 1);
+                    assert_eq!(access.authorizers.clauses()[0].payload, place(0));
+                    assert_eq!(access.authorizers.clauses()[0].guard, Guard::always(&scope));
+                }
+                continue;
+            }
+            for target in [&first, &second] {
+                let effects: Vec<_> = summary
+                    .accesses
+                    .iter()
+                    .filter(|access| {
+                        access
+                            .region
+                            .clauses()
+                            .iter()
+                            .any(|clause| &clause.payload == target)
+                    })
+                    .collect();
+                if case == "same_target_partial" && target == &second {
+                    assert!(effects.is_empty());
+                    continue;
+                }
+                assert_eq!(effects.len(), 1, "{case}: {target:?}");
+                let authorized = effects[0].authorizers.clauses().iter().any(|clause| {
+                    &clause.payload == target && clause.guard == Guard::always(&scope)
+                });
+                assert_eq!(
+                    authorized,
+                    matches!(case, "alternatives" | "always"),
+                    "{case}: {target:?}"
+                );
+                match case {
+                    "alternatives" => assert!(
+                        effects[0]
+                            .authorizers
+                            .clauses()
+                            .iter()
+                            .all(|clause| &clause.payload == target)
+                    ),
+                    "same_target_partial" => assert!(effects[0].authorizers.is_empty()),
+                    _ => {}
+                }
+            }
+        }
     }
 
     #[test]
