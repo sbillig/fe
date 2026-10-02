@@ -1,3 +1,4 @@
+use cranelift_entity::EntityRef;
 use fe_hir::{
     analysis::{
         semantic::{
@@ -5,8 +6,9 @@ use fe_hir::{
             SemConstId, SemConstScalar, SemConstValue, SemanticDiagnosticKind, SemanticInstanceKey,
             SemanticNormalizationFailure, canonicalize_semantic_consts, eval_body_owner_const,
             eval_const_instance, get_or_build_semantic_instance, identity_semantic_instance_key,
-            normalize_runtime_semantic_body, normalize_semantic_body, reify_runtime_const,
-            reify_runtime_const_for_ty, sem_const_ty,
+            normalize_runtime_semantic_body, normalize_semantic_body,
+            normalized::{NLayoutLocals, NValueId},
+            reify_runtime_const, reify_runtime_const_for_ty, sem_const_ty,
         },
         ty::{
             const_ty::ConstTyId,
@@ -1282,5 +1284,55 @@ fn unused<const N: usize>() { let _values = [7 as u8; { 10 / N }] }
                 Err(failure) => panic!("{name}<{len}>: unexpected failure {failure:?}"),
             }
         }
+    }
+}
+
+#[test]
+fn runtime_homes_share_the_normalized_value_types() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "runtime_homes.fe".into(),
+        r#"
+trait HasN { const N: usize }
+struct Big {}
+impl HasN for Big { const N: usize = 3 }
+fn ret<T: HasN, const M: usize>() -> [u8; { T::N + M }] {
+    let values: [u8; { T::N + M }] = [3; { T::N + M }]
+    values
+}
+fn caller() -> u8 { ret<Big, 1>()[2] }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let caller = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(function(&db, module, "caller"))),
+    );
+    let key = caller
+        .body(&db)
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .find_map(|stmt| match &stmt.kind {
+            SStmtKind::Assign {
+                expr: SExpr::Call { callee, .. },
+                ..
+            } => Some(callee.key),
+            _ => None,
+        })
+        .expect("caller calls ret");
+    let instance = get_or_build_semantic_instance(&db, key);
+    let runtime = normalize_runtime_semantic_body(&db, instance).expect("runtime body");
+    let homes = NLayoutLocals::new(&db, &runtime.body, &runtime.layout_plan, instance.body(&db));
+    for (index, value) in runtime.body.values.iter().enumerate() {
+        let home = homes
+            .value_local(NValueId::new(index))
+            .expect("every value has a runtime home");
+        assert_eq!(
+            homes.locals[home.index()].ty,
+            value.ty,
+            "a folded value and its home must share one type identity"
+        );
     }
 }
