@@ -1217,8 +1217,12 @@ struct ExpandingProvider<'db> {
     implementation: ImplementorId<'db>,
     /// Root and concrete occurrence counts when the expansion began.
     occurrences: (usize, usize),
-    /// Arrays whose elements close a back-edge to this expansion. Their
-    /// elements reach its roots, which are known only once it finishes.
+    /// Stack index of the outermost expansion that this one closes a
+    /// back-edge to, directly or through a nested expansion; its own index if
+    /// none. This expansion reaches every root that one reaches.
+    recurs_to: usize,
+    /// Arrays whose elements reach this expansion's roots, which are known
+    /// only once its outermost recurrence finishes.
     back_edge_arrays: Vec<TyId<'db>>,
 }
 
@@ -1822,6 +1826,11 @@ impl<'db> FieldCollector<'db> {
                         frame.back_edge_arrays.push(array);
                     }
                 }
+                let frame = self
+                    .expanding_providers
+                    .last_mut()
+                    .expect("a back-edge closes inside a provider expansion");
+                frame.recurs_to = frame.recurs_to.min(ancestor);
                 return self.walk_ty_representation(
                     views,
                     parent_instance,
@@ -1846,6 +1855,7 @@ impl<'db> FieldCollector<'db> {
             ty,
             implementation: target_edge.impl_instance.selected(),
             occurrences: (self.occurrences.len(), self.concrete_occurrences.len()),
+            recurs_to: self.expanding_providers.len(),
             back_edge_arrays: Vec::new(),
         });
 
@@ -1903,15 +1913,26 @@ impl<'db> FieldCollector<'db> {
         output
     }
 
-    /// Ends the innermost provider expansion. An array whose element closed a
-    /// back-edge to it reaches the expansion's roots, so the array carries
-    /// roots exactly when the expansion produced any.
+    /// Ends the innermost provider expansion. An expansion that recurs to an
+    /// enclosing one reaches every root of the enclosing one, so it defers its
+    /// back-edge and arrays to its parent. The outermost expansion of a
+    /// recurrence reaches exactly the roots it produced, so its arrays carry
+    /// roots exactly when it produced any.
     fn finish_provider_expansion(&mut self) {
         let frame = self
             .expanding_providers
             .pop()
             .expect("a provider expansion must be active");
-        if (self.occurrences.len(), self.concrete_occurrences.len()) != frame.occurrences {
+        if frame.recurs_to < self.expanding_providers.len()
+            && let Some(parent) = self.expanding_providers.last_mut()
+        {
+            parent.recurs_to = parent.recurs_to.min(frame.recurs_to);
+            for array in frame.back_edge_arrays {
+                if !parent.back_edge_arrays.contains(&array) {
+                    parent.back_edge_arrays.push(array);
+                }
+            }
+        } else if (self.occurrences.len(), self.concrete_occurrences.len()) != frame.occurrences {
             for array in frame.back_edge_arrays {
                 self.push_error(ContractLayoutError::LayoutRootArray { array });
             }

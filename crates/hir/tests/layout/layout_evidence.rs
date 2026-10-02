@@ -547,6 +547,96 @@ fn take_plain(p: Plain) {{}}
 }
 
 #[test]
+fn arrays_reaching_roots_through_chained_provider_back_edges_are_rejected() {
+    // Expanding `Outer`, the array closes a back-edge to `Inner`, which
+    // reaches `Outer`'s roots only through its own back-edge to `Outer`,
+    // directly or by way of `Mid`.
+    for target in [
+        "(Inner, Rooted)",
+        "(Rooted, Inner)",
+        "(Mid, Rooted)",
+        "(Rooted, Mid)",
+    ] {
+        let source = format!(
+            r#"
+use core::effect_ref::{{AddressSpace, EffectHandle}}
+
+struct Rooted<const ROOT: u256 = _> {{}}
+struct Outer {{ raw: u256 }}
+impl EffectHandle for Outer {{
+    type Target = {target}
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct Inner {{ raw: u256 }}
+impl EffectHandle for Inner {{
+    type Target = ([Inner; 2], Outer)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct Mid {{ raw: u256 }}
+impl EffectHandle for Mid {{
+    type Target = (Inner, u256)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+
+struct PlainOuter {{ raw: u256 }}
+impl EffectHandle for PlainOuter {{
+    type Target = (PlainInner, u256)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct PlainInner {{ raw: u256 }}
+impl EffectHandle for PlainInner {{
+    type Target = ([PlainInner; 2], PlainOuter)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+
+fn take_outer(o: Outer) {{}}
+
+fn take_inner(i: Inner) {{}}
+
+fn take_mid(m: Mid) {{}}
+
+fn take_plain(p: PlainOuter) {{}}
+"#
+        );
+        parse_ok!(trusted db, top_mod, &source);
+        let mut messages = collect_layout_evidence_diagnostic_vouchers(&db, top_mod)
+            .iter()
+            .map(|diagnostic| diagnostic.to_complete(&db).message)
+            .collect::<Vec<_>>();
+        messages.sort();
+        // Every `raw` method receives a root-reaching handle; the root-free
+        // chain stays valid.
+        assert_eq!(
+            messages,
+            [
+                "array of layout-root values in `raw`",
+                "array of layout-root values in `raw`",
+                "array of layout-root values in `raw`",
+                "array of layout-root values in `take_inner`",
+                "array of layout-root values in `take_mid`",
+                "array of layout-root values in `take_outer`",
+            ],
+            "{target}"
+        );
+    }
+}
+
+#[test]
 fn arrays_of_layout_root_values_are_rejected() {
     parse_ok!(
         db,

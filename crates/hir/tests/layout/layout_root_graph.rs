@@ -1578,6 +1578,99 @@ contract C {{
 }
 
 #[test]
+fn arrays_reaching_roots_through_chained_provider_back_edges_are_rejected() {
+    // Expanding `Outer`, the array closes a back-edge to `Inner`, which
+    // reaches `Outer`'s roots only through its own back-edge to `Outer`,
+    // directly or by way of `Mid`.
+    for target in [
+        "(Inner, Rooted)",
+        "(Rooted, Inner)",
+        "(Mid, Rooted)",
+        "(Rooted, Mid)",
+    ] {
+        let source = format!(
+            r#"
+use core::effect_ref::{{AddressSpace, EffectHandle}}
+
+struct Rooted<const ROOT: u256 = _> {{}}
+struct Outer {{ raw: u256 }}
+impl EffectHandle for Outer {{
+    type Target = {target}
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct Inner {{ raw: u256 }}
+impl EffectHandle for Inner {{
+    type Target = ([Inner; 2], Outer)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct Mid {{ raw: u256 }}
+impl EffectHandle for Mid {{
+    type Target = (Inner, u256)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct Holder {{ o: Outer }}
+
+struct PlainOuter {{ raw: u256 }}
+impl EffectHandle for PlainOuter {{
+    type Target = (PlainInner, u256)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct PlainInner {{ raw: u256 }}
+impl EffectHandle for PlainInner {{
+    type Target = ([PlainInner; 2], PlainOuter)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct PlainHolder {{ o: PlainOuter }}
+
+contract C {{
+    mut outer: Outer,
+    mut inner: Inner,
+    mut mid: Mid,
+    mut embedded: Holder,
+    mut plain: PlainHolder,
+}}
+"#
+        );
+        parse_module!(trusted db, top_mod, &source);
+        let contract = find_contract(&db, top_mod, "C");
+        for field in ["outer", "inner", "mid", "embedded"] {
+            let errors = contract
+                .storage_layout(&db)
+                .field_errors(&IdentId::new(&db, field.to_string()))
+                .unwrap_or_else(|| panic!("{target}: `{field}` must be rejected"));
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| matches!(error, ContractLayoutError::LayoutRootArray { .. })),
+                "{target}: {field}: {errors:?}"
+            );
+        }
+        // A root-free recursive chain stays valid.
+        assert!(
+            contract
+                .storage_layout(&db)
+                .field_errors(&IdentId::new(&db, "plain".to_string()))
+                .is_none()
+        );
+    }
+}
+
+#[test]
 fn root_bearing_array_fields_are_rejected() {
     parse_module!(
         db,
