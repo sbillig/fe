@@ -371,7 +371,13 @@ fn extract_pure_body_term<'db>(
     let body = get_or_build_semantic_instance(db, key)
         .admitted_body(db)
         .ok()?;
-    if body.entry_locals.len() != inputs.len() || body.blocks.is_empty() {
+    // The walk charges a step for each block it reaches, so a body with more
+    // blocks than remain cannot be described. Rejecting it first also bounds
+    // the branch-join analysis, which spans the whole body.
+    if body.entry_locals.len() != inputs.len()
+        || body.blocks.is_empty()
+        || body.blocks.len() > extraction.remaining
+    {
         return None;
     }
     let mut state = BodyTerms {

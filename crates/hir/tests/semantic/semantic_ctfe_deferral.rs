@@ -2206,9 +2206,15 @@ const fn total() -> u8 { inline_pass<3>([9, 10, 11])[2] + inline_pass<0>([12, 13
 #[test]
 fn conditional_terms_force_only_the_selected_arm() {
     let mut db = HirAnalysisTestDb::default();
+    // `wide` has more blocks than the extraction budget, so it stays a
+    // deferred body that execution still forces.
+    let arms = (0..120)
+        .map(|arm| format!("if N == {arm} {{ {arm} }} else "))
+        .collect::<String>();
     let file = db.new_stand_alone(
         "conditional_terms.fe".into(),
-        r#"
+        &(format!("const fn wide<const N: usize>() -> usize {{ {arms}{{ N }} }}\n")
+            + r#"
 const fn branch<const N: usize>() -> usize { if N == 0 { 1 } else { 10 / (N - 1) } }
 const fn logical<const N: usize>() -> usize { if N > 1 && N < 9 { N } else { 2 } }
 const fn either<const N: usize>() -> usize { if N == 0 || N == 5 { 1 } else { 2 } }
@@ -2217,7 +2223,7 @@ const fn guarded<const N: usize>() -> usize {
     let x = 10 / N
     if N == 0 { 0 } else { x }
 }
-"#,
+"#),
     );
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
@@ -2250,6 +2256,10 @@ const fn guarded<const N: usize>() -> usize {
         !matches!(describe("guarded").repr(), ConstRepr::Term(_)),
         "an unconditional operand must not become conditional"
     );
+    assert!(
+        !matches!(describe("wide").repr(), ConstRepr::Term(_)),
+        "a body beyond the extraction budget must stay deferred"
+    );
     for (name, len, expected) in [
         ("branch", 0, Some(1)),
         ("branch", 1, None),
@@ -2265,6 +2275,9 @@ const fn guarded<const N: usize>() -> usize {
         ("chain", 4, Some(5)),
         ("guarded", 0, None),
         ("guarded", 5, Some(2)),
+        ("wide", 0, Some(0)),
+        ("wide", 119, Some(119)),
+        ("wide", 200, Some(200)),
     ] {
         let owner = BodyOwner::Func(function(&db, module, name));
         let outcome =
