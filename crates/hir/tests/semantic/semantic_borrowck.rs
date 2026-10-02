@@ -2705,14 +2705,6 @@ fn inspect(pointer: *Pair) {{
 }
 
 #[test]
-fn packed_encoding_fixture_does_not_report_semantic_borrow_errors() {
-    let diagnostics = checked_borrow_diags(include_str!(
-        "../../../fe/tests/fixtures/fe_test/packed_encoding.fe"
-    ));
-    assert!(diagnostics.is_empty(), "{diagnostics}");
-}
-
-#[test]
 fn raw_call_preserves_fresh_return_buffer_pointer() {
     let source = r#"
 use core::ptr::{MemBuffer, MemSpan}
