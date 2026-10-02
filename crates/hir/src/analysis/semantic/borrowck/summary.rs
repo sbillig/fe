@@ -2951,7 +2951,8 @@ impl<'db> Borrowck<'db> {
                         && SourceExpr::from_place(&clause.payload.access).is_some_and(|access| {
                             if clause.payload.extent == AccessExtent::Unknown {
                                 let mut written = &clobber.written;
-                                while !written.invalidated
+                                while access != *written
+                                    && !written.invalidated
                                     && written.source.dereferences().is_empty()
                                     && !written.source.is_reachable()
                                     && let ExternalOrigin::Memory { base, .. } =
@@ -5759,6 +5760,9 @@ fn clobber(slot: *ref u256) {
             "exact",
             "unknown_extent",
             "unknown_offset",
+            "unknown_offset_exact",
+            "unknown_nested_offset_exact",
+            "unknown_nested_offset_intermediate",
             "typed_offset",
             "invalidated",
             "conditional",
@@ -5768,7 +5772,14 @@ fn clobber(slot: *ref u256) {
             "missing",
         ] {
             let mut written = input(1);
-            if matches!(case, "unknown_offset" | "typed_offset") {
+            if matches!(
+                case,
+                "unknown_offset"
+                    | "unknown_offset_exact"
+                    | "unknown_nested_offset_exact"
+                    | "unknown_nested_offset_intermediate"
+                    | "typed_offset"
+            ) {
                 written = SourceExpr::whole(ExternalSource::memory(
                     &db,
                     written,
@@ -5776,20 +5787,42 @@ fn clobber(slot: *ref u256) {
                     MemoryOffset::Element(TyId::u256(&db), IndexExpr::Const(3)),
                 ));
             }
+            let mut access = place(1);
+            if case == "unknown_nested_offset_intermediate" {
+                access.root = RegionRoot::External(written.source.clone());
+            }
+            if matches!(
+                case,
+                "unknown_nested_offset_exact" | "unknown_nested_offset_intermediate"
+            ) {
+                written = SourceExpr::whole(ExternalSource::memory(
+                    &db,
+                    written,
+                    TyId::u256(&db),
+                    MemoryOffset::Element(TyId::u256(&db), IndexExpr::Const(7)),
+                ));
+            }
+            if matches!(case, "unknown_offset_exact" | "unknown_nested_offset_exact") {
+                access.root = RegionRoot::External(written.source.clone());
+            }
             written.invalidated = case == "invalidated";
             let mut source = SourceExpr::from_place(&clobbered(&db, input(0), written)).unwrap();
             source.invalidated = true;
             let mut relation = Separation {
                 protected: place(0),
                 protected_kind: BorrowKind::Mut,
-                access: place(1),
+                access,
                 access_kind: BorrowKind::Mut,
                 extent: AccessExtent::Typed,
                 suspended: Box::new([]),
             };
             let mut guard = Guard::always(&scope);
             match case {
-                "unknown_extent" | "unknown_offset" => relation.extent = AccessExtent::Unknown,
+                "unknown_extent"
+                | "unknown_offset"
+                | "unknown_offset_exact"
+                | "unknown_nested_offset_exact"
+                | "unknown_nested_offset_intermediate" => relation.extent = AccessExtent::Unknown,
                 "conditional" => {
                     guard = guard
                         .with_boolean(
@@ -5825,7 +5858,15 @@ fn clobber(slot: *ref u256) {
             let mut physical = SourceInstantiations::physical(&state, result, inputs);
             let effect = assumed.resolve(&mut checker, &source, &scope).unwrap();
             let proof = physical.resolve(&mut checker, &source, &scope).unwrap();
-            let excluded = matches!(case, "exact" | "unknown_extent" | "unknown_offset");
+            let excluded = matches!(
+                case,
+                "exact"
+                    | "unknown_extent"
+                    | "unknown_offset"
+                    | "unknown_offset_exact"
+                    | "unknown_nested_offset_exact"
+                    | "unknown_nested_offset_intermediate"
+            );
             assert_eq!(effect.region.is_empty(), excluded, "{case}");
             assert!(!proof.region.is_empty(), "{case}");
             assert!(!proof.invalidated.requirements.is_empty(), "{case}");
