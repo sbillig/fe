@@ -2207,8 +2207,9 @@ const fn total() -> u8 { inline_pass<3>([9, 10, 11])[2] + inline_pass<0>([12, 13
 fn conditional_terms_force_only_the_selected_arm() {
     let mut db = HirAnalysisTestDb::default();
     // `wide` reaches more blocks than the extraction budget, so it stays a
-    // deferred body that execution still forces. `pass` returns `N` before
-    // as many unreachable blocks, so its extent keeps the identity of `N`.
+    // deferred body that execution still forces. `pass` and `joined` return
+    // before as many unreachable blocks, so their extents keep the identity
+    // of `N` and of a conditional whose join is reachable.
     let arms = (0..120)
         .map(|arm| format!("if N == {arm} {{ {arm} }} else "))
         .collect::<String>();
@@ -2220,6 +2221,10 @@ fn conditional_terms_force_only_the_selected_arm() {
         &(format!(
             "const fn wide<const N: usize>() -> usize {{ {arms}{{ N }} }}
 fn pass<const N: usize>(_ x: [u8; {{ if {{ return N }} {{ {unreachable} 1 }} else {{ 1 }} }}]) -> [u8; N] {{ x }}
+fn joined<const N: usize>(
+    _ x: [u8; {{ let length = if N == 0 {{ 1 }} else {{ 2 }}
+        if {{ return length }} {{ {unreachable} 1 }} else {{ 1 }} }}],
+) -> [u8; {{ if N == 0 {{ 1 }} else {{ 2 }} }}] {{ x }}
 "
         ) + r#"
 const fn branch<const N: usize>() -> usize { if N == 0 { 1 } else { 10 / (N - 1) } }
