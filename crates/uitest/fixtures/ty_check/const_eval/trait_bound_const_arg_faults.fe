@@ -1,0 +1,22 @@
+// A trait reference's const argument is evaluated where the reference is
+// written, so a fault or a non-const call in it is reported there instead of
+// silently dropping the bound.
+fn runtime() -> usize { 1 }
+
+trait Has<const N: usize> {}
+
+struct Plain<const N: usize> {}
+
+fn inline_bound<T: Has<{ 1 / 0 }>>() {}
+
+fn where_clause<T>() where T: Has<{ runtime() }> {}
+
+struct Bounded<T: Has<{ 2 - 3 }>> {}
+
+impl Has<{ runtime() }> for u8 {}
+
+impl Has<{ 4 / 0 }> for Plain<1> {}
+
+fn valid<T: Has<{ 1 / 1 }>>() {}
+
+fn caller() { valid<bool>() }

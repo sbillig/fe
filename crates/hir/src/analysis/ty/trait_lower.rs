@@ -599,6 +599,9 @@ pub(crate) enum TraitArgError<'db> {
     ConstHoleNotAllowed {
         arg_idx: usize,
     },
+    /// An argument failed compile-time evaluation, which no other pass
+    /// reports for a trait argument.
+    InvalidArg(InvalidCause<'db>),
     Ignored,
 }
 
@@ -699,6 +702,7 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
                 expected: None,
                 given: Some(given),
             },
+            cause if cause.const_eval_fault().is_some() => TraitArgError::InvalidArg(cause),
             _ => TraitArgError::Ignored,
         })?;
 

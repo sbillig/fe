@@ -86,7 +86,7 @@ impl<'db> SuperTraitRefView<'db> {
     /// Uses the trait's `Self` as subject and checks WF; kind mismatch is emitted
     /// elsewhere via `Trait::diags_super_traits`.
     pub fn diags(self, db: &'db dyn HirAnalysisDb) -> Option<TyDiagCollection<'db>> {
-        use name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
+        use name_resolution::diagnostics::PathResDiag;
         use ty::trait_lower::{self, TraitRefLowerError};
         use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
 
@@ -100,8 +100,7 @@ impl<'db> SuperTraitRefView<'db> {
             Ok(i) => i,
             Err(TraitRefLowerError::PathResError(err)) => {
                 let path = tr.path(db).unwrap();
-                let diag = err.into_diag(db, path, span.path(), ExpectedPathKind::Trait)?;
-                return Some(diag.into());
+                return err.into_trait_ref_diag(db, path, span.path());
             }
             Err(TraitRefLowerError::InvalidDomain(res)) => {
                 let path = tr.path(db).unwrap();
@@ -220,7 +219,7 @@ impl<'db> WherePredicateBoundView<'db> {
         db: &'db dyn HirAnalysisDb,
         subject: ty::ty_def::TyId<'db>,
     ) -> Vec<TyDiagCollection<'db>> {
-        use name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
+        use name_resolution::diagnostics::PathResDiag;
         use ty::trait_lower::{self, TraitRefLowerError};
         use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
 
@@ -284,10 +283,9 @@ impl<'db> WherePredicateBoundView<'db> {
             }
             Err(TraitRefLowerError::PathResError(err)) => {
                 if let Some(path) = tr.path(db).to_opt()
-                    && let Some(diag) =
-                        err.into_diag(db, path, span.path(), ExpectedPathKind::Trait)
+                    && let Some(diag) = err.into_trait_ref_diag(db, path, span.path())
                 {
-                    out.push(diag.into());
+                    out.push(diag);
                 }
             }
             Err(TraitRefLowerError::InvalidDomain(res)) => {
@@ -1449,7 +1447,7 @@ impl<'db> GenericParamOwner<'db> {
     }
 
     pub fn diags_trait_bounds(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        use name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
+        use name_resolution::diagnostics::PathResDiag;
         use ty::trait_lower::{self, TraitRefLowerError};
         use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
 
@@ -1521,10 +1519,9 @@ impl<'db> GenericParamOwner<'db> {
                     }
                     Err(TraitRefLowerError::PathResError(err)) => {
                         if let Some(path) = tr.path(db).to_opt()
-                            && let Some(diag) =
-                                err.into_diag(db, path, span.path(), ExpectedPathKind::Trait)
+                            && let Some(diag) = err.into_trait_ref_diag(db, path, span.path())
                         {
-                            out.push(diag.into());
+                            out.push(diag);
                         }
                     }
                     Err(TraitRefLowerError::InvalidDomain(res)) => {

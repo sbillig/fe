@@ -1,0 +1,1 @@
+A const argument of a trait reference, such as `T: Has<{ 1 / 0 }>` or `impl Has<{ runtime() }> for u8`, is now reported when it fails compile-time evaluation or calls a non-const function. Previously the whole bound was dropped silently, so the program checked cleanly and the bound was never enforced.
