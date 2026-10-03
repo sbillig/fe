@@ -13,12 +13,13 @@ use crate::analysis::{
     HirAnalysisDb,
     ty::{
         binder::Binder,
-        const_ty::{ConstBodyLowering, HoleAnchor, LoweringContext},
+        const_ty::{ConstBodyLowering, EraseConstUseEnv, HoleAnchor, LoweringContext},
         corelib::resolve_core_trait,
         effects::{
             EffectKeyCanonMode, EffectKeyKind, canonical_effect_identity_for_binding,
             place_effect_provider_param_index_map,
         },
+        fold::TyFoldable,
         layout_holes::{collect_layout_hole_tys_in_order, ty_contains_const_hole},
         trait_def::TraitInstId,
         trait_lower::{lower_impl_trait, lower_trait_ref, lower_trait_ref_with_minter},
@@ -549,7 +550,18 @@ fn collect_decl_constraint_pairs_impl<'db>(
         }
     }
 
-    all_predicates.into_iter().collect()
+    // A const use in a bound records the constraints it was solved under,
+    // which include this very list while a cycle computes it, so recording
+    // them makes every iteration differ from the last and the cycle never
+    // settles. Unification and comparison ignore that environment, so the
+    // list keeps none.
+    let mut erased = IndexMap::new();
+    for (inst, source) in all_predicates {
+        erased
+            .entry(inst.fold_with(db, &mut EraseConstUseEnv))
+            .or_insert(source);
+    }
+    erased.into_iter().collect()
 }
 
 fn collect_constraints_cycle_initial<'db>(

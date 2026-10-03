@@ -1078,7 +1078,7 @@ fn canonicalize_const_expr_for_mode<'db>(
 /// scope's ingot. Once evaluation has used them, the comparison form keeps
 /// the ingot root and no assumptions, so the uses one constant gets in
 /// different items compare equal.
-struct EraseConstUseEnv;
+pub(crate) struct EraseConstUseEnv;
 
 impl<'db> TyFolder<'db> for EraseConstUseEnv {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {

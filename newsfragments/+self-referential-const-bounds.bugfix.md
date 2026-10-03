@@ -1,0 +1,1 @@
+A bound whose const argument reads an associated constant through another bound, such as `T: Size + Has<{ T::LEN }>` or `trait Sub: Size + Has<{ Self::LEN }>`, no longer makes `fe check` run forever; the bound is checked and enforced.
