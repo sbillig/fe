@@ -22,7 +22,7 @@ use super::{
     },
     effects::{ResolvedEffectKey, TraitKeySchema, lower_effect_key_schema},
     fold::TyFoldable,
-    generic_defaults::DefaultApplication,
+    generic_defaults::{DefaultApplication, param_declaration_assumptions},
     layout_bundle::{
         CallableLayoutBundleInput, CallableLayoutBundleSignature, LayoutBundleComponent,
         LayoutBundleComponentDeclaration, LayoutBundleComponentKey, LayoutBundleComponentTransport,
@@ -677,7 +677,7 @@ fn lower_path<'db>(
     lower_path_impl(db, scope, path, assumptions, &minter)
 }
 
-pub(crate) fn generic_param_owner_assumptions<'db>(
+fn generic_param_owner_assumptions<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
 ) -> PredicateListId<'db> {
@@ -4666,7 +4666,8 @@ impl<'db> TyParamPrecursor<'db> {
         let Variant::Const(Some(ty)) = self.variant else {
             return None;
         };
-        let assumptions = generic_param_owner_assumptions(db, scope);
+        let owner = GenericParamOwner::from_item_opt(scope.item())?;
+        let assumptions = param_declaration_assumptions(db, owner);
         Some(lower_const_ty_ty(db, scope, ty, assumptions))
     }
 }

@@ -75,7 +75,7 @@ use super::{
         TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key},
-    generic_defaults::{GenericDefault, default_assumptions, generic_default},
+    generic_defaults::{GenericDefault, generic_default, param_declaration_assumptions},
     layout_holes::merge_equated_layout_holes,
     trait_def::{TraitInstId, resolve_trait_method_instance},
     trait_resolution::{
@@ -377,7 +377,7 @@ pub(crate) fn check_generic_default_body_types<'db>(
                 hir_ty,
                 view.span().into_type_param().default_ty(),
                 owner.scope(),
-                default_assumptions(db, owner),
+                param_declaration_assumptions(db, owner),
             )
         }
         GenericDefault::Const { .. } => Vec::new(),

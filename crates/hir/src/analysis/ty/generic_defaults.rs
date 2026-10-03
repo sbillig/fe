@@ -38,9 +38,12 @@ use crate::{
     visitor::{Visitor, VisitorCtxt, walk_path},
 };
 
-/// Unelaborated declaration predicates. No caller or effect-provider predicates
-/// are allowed to influence name resolution within a default.
-pub(crate) fn default_assumptions<'db>(
+/// Unelaborated declaration predicates, under which a parameter's declaration
+/// (its const type and its default) resolves names. No caller or
+/// effect-provider predicates may influence it, and its const arguments stay
+/// unevaluated: discovering a parameter must not execute a constant whose
+/// evaluation needs that parameter.
+pub(crate) fn param_declaration_assumptions<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
 ) -> PredicateListId<'db> {
@@ -143,7 +146,7 @@ pub(crate) fn generic_default<'db>(
                 db,
                 hir_ty,
                 owner.scope(),
-                default_assumptions(db, owner),
+                param_declaration_assumptions(db, owner),
                 &minter,
             );
             let set = collect_generic_params(db, owner);
@@ -275,7 +278,7 @@ pub(crate) fn type_default_diags<'db>(
             owner.scope(),
             hir_ty,
             span.clone(),
-            default_assumptions(db, owner),
+            param_declaration_assumptions(db, owner),
         );
         if errors.is_empty()
             && let Err(error) = generic_default(db, owner, view.idx)

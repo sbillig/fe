@@ -12,7 +12,9 @@ use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
 use crate::analysis::ty;
 use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
-use crate::analysis::ty::generic_defaults::{default_dependencies, type_default_diags};
+use crate::analysis::ty::generic_defaults::{
+    default_dependencies, param_declaration_assumptions, type_default_diags,
+};
 use crate::analysis::ty::method_table::{MethodProbe, probe_method};
 use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::trait_lower::TraitRefLowerError;
@@ -22,7 +24,6 @@ use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::analysis::ty::ty_error::{
     collect_hir_ty_diags, collect_ty_lower_errors, emit_invalid_ty_error,
 };
-use crate::analysis::ty::ty_lower::generic_param_owner_assumptions;
 use crate::hir_def::{
     Contract, Enum, EnumVariant, FieldParent, Func, GenericArg, GenericParam, GenericParamOwner,
     GenericParamView, IdentId, Impl, ImplTrait, ItemKind, Partial, PathId, Struct, Trait,
@@ -1412,7 +1413,7 @@ impl<'db> GenericParamOwner<'db> {
                 self.scope(),
                 hir_ty,
                 span.clone(),
-                generic_param_owner_assumptions(db, self.scope()),
+                param_declaration_assumptions(db, self),
             );
             if !source_diags.is_empty() {
                 out.append(&mut source_diags);
