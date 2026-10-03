@@ -3809,4 +3809,60 @@ mod tests {
         assert_eq!(bound.values(), &[n]);
         assert!(capture.bind_identity_with(&db, &foreign_subst).is_none());
     }
+
+    #[test]
+    fn bound_captures_of_their_formals_are_identity_captures() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("capture_round_trip.fe"),
+            "struct D<const A: usize, const B: usize = { A }> {}\nstruct S<const N: usize> {}\nimpl<const N: usize> S<N> { fn f<const M: usize>() {} }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let impl_ = module.all_impls(&db)[0];
+        let method = module
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "f")
+            })
+            .expect("missing impl method");
+        let defaulted = GenericParamOwner::Struct(
+            module
+                .all_structs(&db)
+                .iter()
+                .copied()
+                .find(|item| {
+                    item.name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "D")
+                })
+                .expect("missing defaulted struct"),
+        );
+        for capture in [
+            ConstCaptureEnv::Identity(ConstCaptureDomain::full(impl_.into(), ParamBasis::Full)),
+            ConstCaptureEnv::Identity(ConstCaptureDomain::full(method.into(), ParamBasis::Full)),
+            ConstCaptureEnv::Identity(ConstCaptureDomain::full(method.into(), ParamBasis::Source)),
+            ConstCaptureEnv::Identity(ConstCaptureDomain::before(
+                defaulted,
+                ParamBasis::Full,
+                SourceParamIndex(1),
+            )),
+        ] {
+            let identity = capture.complete(&db).unwrap();
+            assert_eq!(
+                ConstCaptureEnv::from_subst(&db, identity.clone()),
+                capture,
+                "binding a capture to its own formals must be its identity"
+            );
+            let bound = identity.map_values(|_| TyId::bool(&db));
+            assert!(matches!(
+                ConstCaptureEnv::from_subst(&db, bound),
+                ConstCaptureEnv::Bound(_)
+            ));
+        }
+    }
 }

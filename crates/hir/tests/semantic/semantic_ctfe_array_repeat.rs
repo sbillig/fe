@@ -1468,3 +1468,36 @@ fn caller() -> u8 { ret<Big, 1>()[2] }
         );
     }
 }
+
+#[test]
+fn blocked_bodies_report_only_evaluation_faults() {
+    // A body blocked by a reported type error stays blocked; one that also
+    // consumes a faulting extent reports that fault, which type checking
+    // left to concrete demand.
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "blocked_faults.fe".into(),
+        r#"
+const fn minus(_ n: usize) -> usize { n - 1 }
+struct Wrap<const N: usize> { values: [u8; minus(N)] }
+fn upstream(_ value: mut u256) -> mut u256 { value as mut u256 }
+fn both(_ wrapped: Wrap<0>, _ value: mut u256) -> mut u256 {
+    let _length = wrapped.values.len()
+    value as mut u256
+}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    for (name, rejected) in [("upstream", false), ("both", true)] {
+        let owner = BodyOwner::Func(function(&db, module, name));
+        let instance =
+            get_or_build_semantic_instance(&db, identity_semantic_instance_key(&db, owner));
+        match normalize_semantic_body(&db, instance) {
+            Err(SemanticNormalizationFailure::Rejected(diag)) if rejected => {
+                assert_eq!(diag.kind, SemanticDiagnosticKind::InvalidConcreteType);
+            }
+            Err(SemanticNormalizationFailure::Blocked(_)) if !rejected => {}
+            other => panic!("{name}: unexpected admission {other:?}"),
+        }
+    }
+}
