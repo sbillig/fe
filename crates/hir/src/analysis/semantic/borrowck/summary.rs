@@ -164,6 +164,7 @@ impl<'db> BorrowSummary<'db> {
                 }),
             );
         }
+        self.scalar_result = self.scalar_result.as_ref().and_then(&mut map);
         drop(renamed);
         // Pre-call obligations hide every private choice. Project them before
         // renaming: moving selectors after argument fields can build an
@@ -980,8 +981,6 @@ impl<'db> Borrowck<'db> {
         }
         let mut may_return = false;
         let scalar_ty = self.instance.normalized_result_ty(self.db);
-        let scalar_scope = BinderScope::default().bind(IndexNamespace::Result);
-        let mut scalar_result = None;
         let mut choices = BTreeSet::new();
         let mut handles = BTreeMap::new();
         for index in 0..self.body.blocks.len() {
@@ -994,88 +993,6 @@ impl<'db> Borrowck<'db> {
             };
             may_return = true;
             let origin = block.terminator.origin;
-            // Facts over formal arguments hold on every normal return; a
-            // scalar result also relates to the value this path returns.
-            let actual = returned
-                .filter(|_| scalar_ty.is_integral(self.db))
-                .map(|returned| self.index(returned.value));
-            let uninformative = actual.is_some_and(|actual| {
-                matches!(actual, IndexExpr::Runtime(value)
-                    if !matches!(self.body.values[value.index()].definition,
-                        NValueDefinition::EntryParam { .. })
-                        && !state.guard().indices().contains(&actual))
-            });
-            let guard = if uninformative {
-                Guard::always(&scalar_scope.0)
-            } else {
-                let guard = state.guard().in_scope(&scalar_scope.0);
-                let guard = match actual {
-                    Some(actual) => guard
-                        .with_equality(scalar_scope.1, actual)
-                        .expect("a fresh result can equal a returned scalar"),
-                    None if scalar_ty.is_bool(self.db) => self
-                        .boolean_relation(
-                            returned.expect("Boolean return operand").value,
-                            ChoiceKey::new(ValueOccurrence::Summary, StructuralPath::default()),
-                            true,
-                        )
-                        .in_scope(&scalar_scope.0)
-                        .and(&guard)
-                        .expect("a feasible return has a Boolean result"),
-                    None => guard,
-                };
-                let subst = IndexSubst::new(
-                    &scalar_scope.0,
-                    &scalar_scope.0,
-                    guard.indices().into_iter().filter_map(|index| {
-                        let IndexExpr::Runtime(value) = index else {
-                            return None;
-                        };
-                        let replacement = match self.body.values[value.index()].definition {
-                            NValueDefinition::EntryParam { param } => IndexExpr::FormalValue(param),
-                            _ if Some(index) == actual => scalar_scope.1,
-                            _ => return None,
-                        };
-                        Some((index, replacement))
-                    }),
-                )
-                .expect("scalar result substitution");
-                guard
-                    .substitute(&subst)
-                    .expect("renaming a feasible scalar return preserves feasibility")
-                    // Project private choices before moving the public ones:
-                    // renaming first can create an exponential intermediate.
-                    .forget_occurrences(|occurrence| match occurrence {
-                        ValueOccurrence::Argument(_) => false,
-                        ValueOccurrence::Summary => !scalar_ty.is_bool(self.db),
-                        ValueOccurrence::Value(value) => {
-                            !matches!(self.body.values[value.index()].definition,
-                                NValueDefinition::EntryParam { param }
-                                    if self.summary_param_ty(param).is_some_and(|ty| ty.is_bool(self.db)))
-                        }
-                        _ => true,
-                    })
-                    .map_occurrences(|occurrence| match occurrence {
-                        ValueOccurrence::Value(value)
-                            if let NValueDefinition::EntryParam { param } =
-                                self.body.values[value.index()].definition
-                                && self
-                                    .summary_param_ty(param)
-                                    .is_some_and(|ty| ty.is_bool(self.db)) =>
-                        {
-                            ValueOccurrence::Argument(param)
-                        }
-                        other => other,
-                    })
-                    .expect("scalar choice renaming preserves feasibility")
-                    .forget_indices(|index| {
-                        matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_))
-                    })
-            };
-            scalar_result = Some(
-                scalar_result
-                    .map_or_else(|| guard.clone(), |previous: Guard<'db>| previous.or(&guard)),
-            );
             if let Some(returned) = returned {
                 let returned = state.value(returned.value);
                 if returned.shape() != result_shape {
@@ -1466,8 +1383,6 @@ impl<'db> Borrowck<'db> {
                 contents: combined,
             });
         }
-        let scalar_result =
-            scalar_result.filter(|guard: &Guard<'db>| !Guard::always(guard.scope()).implies(guard));
         let mut separations =
             self.summarize_separations(&self.conflicts().deferred, &mut choices, &handles);
         separations.extend(self.summarize_separations(
@@ -1479,7 +1394,7 @@ impl<'db> Borrowck<'db> {
         // callee, which names the borrow and access where the relation began.
         let owner = self.instance.key(self.db).owner(self.db);
         separations.sort_by_key(|(_, origin)| origin.owner == owner);
-        let summary = BorrowSummary {
+        let mut summary = BorrowSummary {
             native_requirements: self.summarize_availability_region(
                 &ownership.native_validity.requirements,
                 origin,
@@ -1499,13 +1414,112 @@ impl<'db> Borrowck<'db> {
             availability,
             may_return,
             result,
-            scalar_result,
+            scalar_result: None,
             observed_params: Some(self.scalar.observed.clone()),
             mutable_inputs: updates,
             certified_ranges,
             scalar_inputs,
             requirements,
         };
+        // Other components determine which private choices remain observable.
+        // Build scalar facts afterwards so they share the same choice identities.
+        let scalar_scope = BinderScope::default().bind(IndexNamespace::Result);
+        let mut scalar_result = None;
+        for (block, state) in self.body.blocks.iter().zip(&self.terminal) {
+            let NTerminatorKind::Return(returned) = block.terminator.kind else {
+                continue;
+            };
+            let Some(state) = state else {
+                continue;
+            };
+            // Facts over formal arguments hold on every normal return; a
+            // scalar result also relates to the value this path returns.
+            let actual = returned
+                .filter(|_| scalar_ty.is_integral(self.db))
+                .map(|returned| self.index(returned.value));
+            let uninformative = actual.is_some_and(|actual| {
+                matches!(actual, IndexExpr::Runtime(value)
+                    if !matches!(self.body.values[value.index()].definition,
+                        NValueDefinition::EntryParam { .. })
+                        && !state.guard().indices().contains(&actual))
+            });
+            let guard = if uninformative {
+                Guard::always(&scalar_scope.0)
+            } else {
+                let guard = state.guard().in_scope(&scalar_scope.0);
+                let guard = match actual {
+                    Some(actual) => guard
+                        .with_equality(scalar_scope.1, actual)
+                        .expect("a fresh result can equal a returned scalar"),
+                    None if scalar_ty.is_bool(self.db) => self
+                        .boolean_relation(
+                            returned.expect("Boolean return operand").value,
+                            ChoiceKey::new(ValueOccurrence::Summary, StructuralPath::default()),
+                            true,
+                        )
+                        .in_scope(&scalar_scope.0)
+                        .and(&guard)
+                        .expect("a feasible return has a Boolean result"),
+                    None => guard,
+                };
+                let subst = IndexSubst::new(
+                    &scalar_scope.0,
+                    &scalar_scope.0,
+                    guard.indices().into_iter().filter_map(|index| {
+                        let IndexExpr::Runtime(value) = index else {
+                            return None;
+                        };
+                        let replacement = match self.body.values[value.index()].definition {
+                            NValueDefinition::EntryParam { param } => IndexExpr::FormalValue(param),
+                            _ if Some(index) == actual => scalar_scope.1,
+                            _ => return None,
+                        };
+                        Some((index, replacement))
+                    }),
+                )
+                .expect("scalar result substitution");
+                guard
+                    .substitute(&subst)
+                    .expect("renaming a feasible scalar return preserves feasibility")
+                    // Keep private choices shared with other outputs, so a
+                    // scalar result can select their poststates. Project all
+                    // others before renaming to avoid a large intermediate.
+                    .forget_occurrences(|occurrence| match occurrence {
+                        _ if (scalar_ty.is_bool(self.db) || scalar_ty.is_integral(self.db))
+                            && choices.contains(&occurrence) => false,
+                        ValueOccurrence::Argument(_) => false,
+                        ValueOccurrence::Summary => !scalar_ty.is_bool(self.db),
+                        ValueOccurrence::Value(value) => {
+                            !matches!(self.body.values[value.index()].definition,
+                                NValueDefinition::EntryParam { param }
+                                    if self.summary_param_ty(param).is_some_and(|ty| ty.is_bool(self.db)))
+                        }
+                        _ => true,
+                    })
+                    .map_occurrences(|occurrence| match occurrence {
+                        ValueOccurrence::Value(value)
+                            if let NValueDefinition::EntryParam { param } =
+                                self.body.values[value.index()].definition
+                                && self
+                                    .summary_param_ty(param)
+                                    .is_some_and(|ty| ty.is_bool(self.db)) =>
+                        {
+                            ValueOccurrence::Argument(param)
+                        }
+                        other => other,
+                    })
+                    .expect("scalar choice renaming preserves feasibility")
+                    .forget_indices(|index| {
+                        matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_))
+                    })
+            };
+            scalar_result = Some(
+                scalar_result
+                    .map_or_else(|| guard.clone(), |previous: Guard<'db>| previous.or(&guard)),
+            );
+        }
+        summary.scalar_result =
+            scalar_result.filter(|guard: &Guard<'db>| !Guard::always(guard.scope()).implies(guard));
         let (mut summary, provenance) =
             summary.abstract_choices(self.db, &mut values, choices, separations);
         if (scalar_ty.is_bool(self.db) || scalar_ty.is_integral(self.db))
@@ -2299,6 +2313,7 @@ impl<'db> Borrowck<'db> {
                             .summary_param_ty(param)
                             .is_some_and(|ty| ty.is_bool(self.db)),
                         ValueOccurrence::Summary => !result_ty.is_bool(self.db),
+                        ValueOccurrence::SummaryChoice(_) => false,
                         _ => true,
                     })
                 || guard.indices().into_iter().any(|index| match index {

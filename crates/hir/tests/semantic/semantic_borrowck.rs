@@ -13790,6 +13790,98 @@ fn caller(buffer: own ByteBuffer, flag: bool, other: bool) {{
 }
 
 #[test]
+fn boolean_call_results_correlate_private_moves() {
+    for (body, valid) in [
+        ("if !take_if(item, flag) { consume(*item) }", true),
+        ("if !forward(item, flag) { consume(*item) }", true),
+        (
+            "let kept = !take_if(item, flag)\nif kept { consume(*item) }",
+            true,
+        ),
+        ("if take_if(item, flag) { consume(*item) }", false),
+        ("let unused = take_if(item, flag)\nconsume(*item)", false),
+        (
+            r#"
+let other = core::ptr::alloc<Item>()
+*other = Item { n: 2 }
+if !take_if(item, flag) {
+    *flag = true
+    let unused = take_if(other, flag)
+    consume(*other)
+}
+"#,
+            false,
+        ),
+    ] {
+        let source = format!(
+            r#"
+struct Item {{ n: u256 }}
+fn consume(_ item: own Item) {{}}
+fn take_if(_ item: *Item, _ flag: *bool) -> bool {{
+    if *flag {{
+        consume(*item)
+        true
+    }} else {{
+        false
+    }}
+}}
+fn forward(_ item: *Item, _ flag: *bool) -> bool {{ take_if(item, flag) }}
+fn caller(flag: *bool) {{
+    let item = core::ptr::alloc<Item>()
+    *item = Item {{ n: 1 }}
+    {body}
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        if valid {
+            assert_eq!(diagnostics, "", "{source}");
+        } else {
+            assert!(
+                diagnostics.contains("move conflict in `fn caller`"),
+                "{source}\n{diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
+fn boolean_call_results_correlate_private_reinitialization() {
+    for (condition, valid) in [("initialized", true), ("!initialized", false)] {
+        let source = format!(
+            r#"
+struct Item {{ n: u256 }}
+fn consume(_ item: own Item) {{}}
+fn initialize_if(_ item: *Item, _ flag: *bool) -> bool {{
+    if *flag {{
+        *item = Item {{ n: 1 }}
+        true
+    }} else {{
+        false
+    }}
+}}
+fn caller(flag: *bool) {{
+    let item = core::ptr::alloc<Item>()
+    *item = Item {{ n: 1 }}
+    consume(*item)
+    let initialized = initialize_if(item, flag)
+    if {condition} {{ consume(*item) }}
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        if valid {
+            assert_eq!(diagnostics, "", "{source}");
+        } else {
+            assert!(
+                diagnostics.contains("move conflict in `fn caller`"),
+                "{source}\n{diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
 fn boolean_call_results_preserve_integer_predicates() {
     for (predicate, complement) in [
         ("index == 1", "index != 1"),
