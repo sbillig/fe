@@ -1,0 +1,1 @@
+Associated-type bindings in trait references, such as `T: Has<Item = Missing>` or `Has<Item = [u8; { 1 / 0 }]>`, and the bounds an associated type declares, such as `type Item: Missing`, are now checked and reported. Previously they were accepted silently, including bindings and bounds that a call or impl then failed to satisfy.

@@ -4771,11 +4771,15 @@ impl<'db> TraitAssocTypeView<'db> {
 }
 
 impl<'db> AssocTypeBoundView<'db> {
-    fn trait_ref(self, db: &'db dyn HirDb) -> TraitRefId<'db> {
+    pub(crate) fn trait_ref(self, db: &'db dyn HirDb) -> TraitRefId<'db> {
         match self.owner.bounds_raw(db)[self.idx] {
             TypeBound::Trait(tr) => tr,
             _ => unreachable!(),
         }
+    }
+
+    pub(crate) fn span(self) -> crate::span::params::LazyTraitRefSpan<'db> {
+        self.owner.span().bounds().bound(self.idx).trait_bound()
     }
 }
 
