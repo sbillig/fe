@@ -1,7 +1,7 @@
 // A bound passing a const parameter as an argument (`Width<N>`) beside one
 // computing a const argument from it (`Has<{ N + 1 }>`). Discovering the
-// function's layout slots resolves `N` without the constraints that are
-// lowered over those slots.
+// function's layout slots resolves `N` in the source basis, under the
+// enclosing item's bounds, without the constraints lowered over those slots.
 const fn inc(n: usize) -> usize { n + 1 }
 
 trait Width<const N: usize> {}
@@ -27,3 +27,19 @@ fn valid() {
 }
 
 fn wrong() { arith<X, 4>() }
+
+trait Projected<const K: usize> { type Item }
+
+fn dependent<const K: usize, T: Projected<K, Item = usize>, const M: <T as Projected<K>>::Item, U: Has<M> + Has<{ M + 1 }>>() {}
+
+trait Holds { type Item }
+
+trait View<const N: usize> { type Item }
+
+struct Slot<const ROOT: usize = _> {}
+
+struct Inherited<T> {}
+
+impl<T: Holds<Item = usize>> Inherited<T> {
+    fn f<const N: T::Item, U: View<N, Item = Slot>>(_ x: U::Item) {}
+}

@@ -626,25 +626,40 @@ fn lower_hir_ty_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
+/// `source_params` names the owner whose parameters the type resolves in the
+/// source basis; its const arguments then stay deferred.
 fn lower_const_ty_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     ty: HirTyId<'db>,
     assumptions: PredicateListId<'db>,
+    source_params: Option<GenericParamOwner<'db>>,
 ) -> TyId<'db> {
     let HirTyKind::Path(path) = ty.data(db) else {
         return TyId::invalid(db, InvalidCause::InvalidConstParamTy);
     };
-
-    if !path
-        .to_opt()
-        .is_none_or(|p| p.generic_args(db).is_empty(db))
-    {
+    let Some(path) = path.to_opt() else {
+        return TyId::invalid(db, InvalidCause::ParseError);
+    };
+    if !path.generic_args(db).is_empty(db) {
         return TyId::invalid(db, InvalidCause::InvalidConstParamTy);
     }
+    let minter = LoweringContext::for_const_bodies(
+        HoleAnchor::TemplatePath {
+            path,
+            scope,
+            assumptions,
+        },
+        if source_params.is_some() {
+            ConstBodyLowering::Deferred
+        } else {
+            ConstBodyLowering::Eager
+        },
+    )
+    .with_source_params(source_params);
     let ty = normalize_ty(
         db,
-        lower_path(db, scope, *path, assumptions),
+        lower_path_impl(db, scope, Partial::Present(path), assumptions, &minter),
         scope,
         assumptions,
     );
@@ -658,23 +673,6 @@ fn lower_const_ty_ty<'db>(
     } else {
         TyId::invalid(db, InvalidCause::InvalidConstParamTy)
     }
-}
-
-fn lower_path<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    path: Partial<PathId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> TyId<'db> {
-    let Some(p) = path.to_opt() else {
-        return TyId::invalid(db, InvalidCause::ParseError);
-    };
-    let minter = LoweringContext::new(HoleAnchor::TemplatePath {
-        path: p,
-        scope,
-        assumptions,
-    });
-    lower_path_impl(db, scope, path, assumptions, &minter)
 }
 
 pub(crate) fn generic_param_owner_assumptions<'db>(
@@ -4681,9 +4679,11 @@ impl<'db> TyParamPrecursor<'db> {
     }
 
     /// Shape discovery reads the source basis, which must not depend on the
-    /// full parameter list it is discovering slots for. The owner's declared
-    /// constraints are lowered over that full list, so a source parameter's
-    /// type is lowered without them: only a projection type needs them.
+    /// full parameter list it is discovering slots for. A source parameter's
+    /// type therefore resolves the owner's parameters in the source basis,
+    /// with const arguments deferred, under the enclosing item's bounds,
+    /// which do not depend on the owner's slots. The owner's own declared
+    /// constraints are lowered over the full list.
     fn declared_const_ty(
         &self,
         db: &'db dyn HirAnalysisDb,
@@ -4693,11 +4693,23 @@ impl<'db> TyParamPrecursor<'db> {
         let Variant::Const(Some(ty)) = self.variant else {
             return None;
         };
-        let assumptions = match basis {
-            ParamBasis::Source => PredicateListId::empty_list(db),
-            ParamBasis::Full => generic_param_owner_assumptions(db, scope),
-        };
-        Some(lower_const_ty_ty(db, scope, ty, assumptions))
+        Some(match basis {
+            ParamBasis::Source => {
+                let owner = GenericParamOwner::from_item_opt(scope.item());
+                let assumptions = owner.and_then(|owner| owner.parent(db)).map_or_else(
+                    || PredicateListId::empty_list(db),
+                    |parent| collect_candidate_constraints(db, parent).instantiate_identity(),
+                );
+                lower_const_ty_ty(db, scope, ty, assumptions, owner)
+            }
+            ParamBasis::Full => lower_const_ty_ty(
+                db,
+                scope,
+                ty,
+                generic_param_owner_assumptions(db, scope),
+                None,
+            ),
+        })
     }
 }
 
