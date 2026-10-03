@@ -13808,8 +13808,34 @@ fn pick(_ offset: usize, _ index: usize, _ arr: [u64; 4]) -> u64 {
     with_borrow_summary(source, "pick", |_db, summary| {
         let observed = summary.observed_params.as_ref().unwrap();
         assert!(
-            observed.contains(&1) && !observed.contains(&0),
+            observed.unconditional.contains(&1)
+                && !observed.unconditional.contains(&0)
+                && !observed.through_result.contains(&0),
             "{observed:?}"
         );
+    });
+}
+
+#[test]
+fn summaries_observe_returned_parameters_through_the_result() {
+    // A caller that forgets a dead result's relation leaves `x` unread, while a
+    // checked parameter is observed regardless.
+    let source = r#"
+fn identity(_ x: usize) -> usize { x }
+fn constrain(_ index: usize) -> usize {
+    if index != 1 { assert!(false) }
+    0
+}
+"#;
+    with_borrow_summary(source, "identity", |_db, summary| {
+        let observed = summary.observed_params.as_ref().unwrap();
+        assert!(
+            observed.through_result.contains(&0) && !observed.unconditional.contains(&0),
+            "{observed:?}"
+        );
+    });
+    with_borrow_summary(source, "constrain", |_db, summary| {
+        let observed = summary.observed_params.as_ref().unwrap();
+        assert!(observed.unconditional.contains(&0), "{observed:?}");
     });
 }

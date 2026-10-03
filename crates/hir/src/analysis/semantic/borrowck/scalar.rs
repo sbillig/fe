@@ -1,6 +1,7 @@
 //! Trusted scalar predicates share the borrow checker's scoped guard algebra.
 use cranelift_entity::EntityRef;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::BTreeSet;
 
 use crate::{
     analysis::{
@@ -31,7 +32,7 @@ use crate::{
     hir_def::{BinOp, CompBinOp, LogicalBinOp, UnOp},
 };
 
-use super::{loop_certificate::frontier_candidates, solver::Borrowck};
+use super::{ir::ObservedParams, loop_certificate::frontier_candidates, solver::Borrowck};
 
 /// Nested boolean operations followed when deriving a branch condition.
 pub(super) const CONDITION_BUDGET: u8 = 16;
@@ -55,6 +56,8 @@ pub(super) struct ScalarDemand<'db> {
     /// Values whose scalar facts a check, a region, an export or a callee can
     /// read; see [`Borrowck::scalar_liveness`].
     pub live: FxHashSet<NValueId>,
+    /// The parameters among them, as this body's summary exports them.
+    pub observed: ObservedParams,
     readers: Vec<(NValueId, Vec<NValueId>)>,
 }
 
@@ -146,13 +149,17 @@ impl<'db> Borrowck<'db> {
         Ok(())
     }
 
-    /// Values whose scalar facts something can read. Every use counts unless it
-    /// is known to relate no fact to its operands: arithmetic, an unused or
-    /// fact-free result, or an argument the callee's summary never observes.
-    /// A call result outside this set occurs in no other fact, so forgetting its
-    /// relation to the arguments is exact.
-    pub(super) fn scalar_liveness(&self) -> FxHashSet<NValueId> {
+    /// Values whose scalar facts something can read, and those read only through
+    /// an integer result: the result relation is the one fact a caller forgets
+    /// when the call's result is dead. Every use counts unless it is known to
+    /// relate no fact to its operands: arithmetic, a lossy cast, an unused or
+    /// fact-free result, a cell nothing reads, or an argument the callee's
+    /// summary never observes. A call result outside the live set occurs in no
+    /// other fact, so forgetting its relation to the arguments is exact.
+    pub(super) fn scalar_liveness(&self) -> (FxHashSet<NValueId>, ObservedParams) {
         let mut pending = Vec::new();
+        let mut returned = Vec::new();
+        let mut stored: FxHashMap<NPlaceBase, Vec<NValueId>> = FxHashMap::default();
         for block in &self.body.blocks {
             for statement in &block.statements {
                 match &statement.kind {
@@ -175,14 +182,13 @@ impl<'db> Borrowck<'db> {
                         } = expr
                             && self.primitive_operator(*result).is_none()
                         {
-                            let observed = self
-                                .calls
-                                .get(result)
-                                .and_then(|call| call.summary.observed_params.as_ref());
+                            let observed = self.observed_params(*result);
                             pending.extend(args.iter().enumerate().filter_map(|(param, arg)| {
                                 observed
                                     .is_none_or(|observed| {
-                                        observed.contains(&u32::try_from(param).unwrap())
+                                        observed
+                                            .unconditional
+                                            .contains(&u32::try_from(param).unwrap())
                                     })
                                     .then_some(arg.value)
                             }));
@@ -196,21 +202,62 @@ impl<'db> Borrowck<'db> {
                         pending.extend(self.body.place_values(destination));
                         // Only a whole scalar cell records the value it holds.
                         if destination.path.is_empty() {
-                            pending.push(value.value);
+                            stored
+                                .entry(destination.base)
+                                .or_default()
+                                .push(value.value);
                         }
                     }
                 }
             }
             match &block.terminator.kind {
                 NTerminatorKind::Branch { cond: value, .. }
-                | NTerminatorKind::MatchEnum { value, .. }
-                | NTerminatorKind::Return(Some(value)) => pending.push(value.value),
+                | NTerminatorKind::MatchEnum { value, .. } => pending.push(value.value),
+                NTerminatorKind::Return(Some(value)) => returned.push(value.value),
                 NTerminatorKind::Goto(_)
                 | NTerminatorKind::Assert { .. }
                 | NTerminatorKind::Return(None) => {}
             }
         }
         let mut live = FxHashSet::default();
+        self.propagate_liveness(&mut live, pending, &stored);
+        let unconditional = live.clone();
+        self.propagate_liveness(&mut live, returned, &stored);
+        let params = |live: &FxHashSet<NValueId>| {
+            live.iter()
+                .filter_map(|value| match self.body.values[value.index()].definition {
+                    NValueDefinition::EntryParam { param } => Some(param),
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>()
+        };
+        // Only an integer result's relation is forgotten; choices of other
+        // results stay, along with the arguments they name.
+        let observed = if self
+            .instance
+            .normalized_result_ty(self.db)
+            .is_integral(self.db)
+        {
+            let unconditional = params(&unconditional);
+            ObservedParams {
+                through_result: params(&live).difference(&unconditional).copied().collect(),
+                unconditional,
+            }
+        } else {
+            ObservedParams {
+                unconditional: params(&live),
+                through_result: BTreeSet::new(),
+            }
+        };
+        (live, observed)
+    }
+
+    fn propagate_liveness(
+        &self,
+        live: &mut FxHashSet<NValueId>,
+        mut pending: Vec<NValueId>,
+        stored: &FxHashMap<NPlaceBase, Vec<NValueId>>,
+    ) {
         while let Some(value) = pending.pop() {
             if !live.insert(value) {
                 continue;
@@ -229,10 +276,11 @@ impl<'db> Borrowck<'db> {
                     let Some((_, expr)) = self.body.defining_expr(value) else {
                         continue;
                     };
-                    // Arithmetic relates no fact to its operands, and a
-                    // comparison relates them only with a tracked side. A call
-                    // reads only the arguments its summary observes, unless it
-                    // is a primitive operator.
+                    // Arithmetic and lossy casts relate no fact to their
+                    // operands, and a comparison relates them only with a
+                    // tracked side. A call relates the arguments its summary
+                    // observes through its result, unless it is a primitive
+                    // operator. A tracked cell relates a load to its stores.
                     let tracked = |operands: &[NOperand]| {
                         operands
                             .iter()
@@ -248,13 +296,35 @@ impl<'db> Borrowck<'db> {
                         NExpr::Unary { op, .. } => {
                             !matches!(op, UnOp::Plus | UnOp::Minus | UnOp::BitNot)
                         }
+                        NExpr::ScalarCast { value: source, to } => {
+                            self.lossless_scalar_cast(source.value, *to)
+                        }
+                        NExpr::Load { place, .. } => {
+                            if place.path.is_empty() && self.scalar.cells.contains(&place.base) {
+                                pending.extend(stored.get(&place.base).into_iter().flatten());
+                            }
+                            false
+                        }
                         NExpr::Call { args, .. } => match self.primitive_operator(value) {
                             Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(_))) => tracked(args),
                             Some(
                                 PrimitiveWrapperCallKind::Binary(BinOp::Logical(_))
                                 | PrimitiveWrapperCallKind::Unary(UnOp::Not),
                             ) => true,
-                            _ => false,
+                            Some(_) => false,
+                            None => {
+                                if let Some(observed) = self.observed_params(value) {
+                                    pending.extend(args.iter().enumerate().filter_map(
+                                        |(param, arg)| {
+                                            observed
+                                                .through_result
+                                                .contains(&u32::try_from(param).unwrap())
+                                                .then_some(arg.value)
+                                        },
+                                    ));
+                                }
+                                false
+                            }
                         },
                         _ => true,
                     };
@@ -265,7 +335,14 @@ impl<'db> Borrowck<'db> {
                 NValueDefinition::EntryParam { .. } => {}
             }
         }
-        live
+    }
+
+    /// The parameters the callee of the call defining `value` observes, or
+    /// `None` when its summary does not record them.
+    fn observed_params(&self, value: NValueId) -> Option<&ObservedParams> {
+        self.calls
+            .get(&value)
+            .and_then(|call| call.summary.observed_params.as_ref())
     }
 
     /// The primitive operator a core wrapper method call defining `value` stands for.
@@ -327,7 +404,7 @@ impl<'db> Borrowck<'db> {
             .copied()
             .filter(|value| self.compact_scalar_phi(*value))
             .collect();
-        self.scalar.live = self.scalar_liveness();
+        (self.scalar.live, self.scalar.observed) = self.scalar_liveness();
     }
 
     pub(super) fn stores_capability(&self, statement: &NStatement<'db>) -> bool {

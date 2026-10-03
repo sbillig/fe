@@ -1437,16 +1437,7 @@ impl<'db> Borrowck<'db> {
             may_return,
             result,
             scalar_result,
-            observed_params: Some(
-                self.scalar
-                    .live
-                    .iter()
-                    .filter_map(|value| match self.body.values[value.index()].definition {
-                        NValueDefinition::EntryParam { param } => Some(param),
-                        _ => None,
-                    })
-                    .collect(),
-            ),
+            observed_params: Some(self.scalar.observed.clone()),
             mutable_inputs: updates,
             certified_ranges,
             scalar_inputs,

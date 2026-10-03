@@ -29,7 +29,7 @@ pub struct BorrowSummary<'db> {
     /// Parameters whose scalar facts this body can read or export, so a caller
     /// keeps the relations of the values it passes for them. `None` is every
     /// parameter, for a summary not derived from the body.
-    pub observed_params: Option<BTreeSet<u32>>,
+    pub observed_params: Option<ObservedParams>,
     pub mutable_inputs: Vec<InputPoststate<'db>>,
     /// A normal-return must range and its structural contents. The member
     /// binder, guarded coverage, and value share one source-witness namespace.
@@ -50,6 +50,15 @@ pub struct BorrowSummary<'db> {
     /// Native validity of the accesses `loan_requirements` relate. Callers
     /// resolve these, like the relations, with only physical separation.
     pub separation_validity: RegionSet<'db>,
+}
+
+/// The parameters a body observes, split by whether the observation needs its
+/// integer result: a caller that forgets a dead result's relation leaves the
+/// arguments only that relation named unread.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ObservedParams {
+    pub unconditional: BTreeSet<u32>,
+    pub through_result: BTreeSet<u32>,
 }
 
 /// Where a separation requirement arose: a borrow a body held and the access it
