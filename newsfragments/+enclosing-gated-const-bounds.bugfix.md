@@ -1,0 +1,1 @@
+A bound naming an associated or inherent constant whose implementation needs an enclosing `impl`'s or trait's bound, such as `U: Has<{ Marker<T, N>::LEN }>` inside `impl<T: Gate> Foo<T>`, no longer crashes the compiler or rejects valid calls and implementations. A method bound that repeats a bound of its `impl` header is no longer reported as stricter than the trait's method.

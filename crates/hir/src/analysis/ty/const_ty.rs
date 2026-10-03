@@ -1075,12 +1075,12 @@ fn canonicalize_const_expr_for_mode<'db>(
 /// Unification identifies an associated or inherent const use by its trait
 /// instance (or impl and receiver) and name. The scope and assumptions it is
 /// solved under only decide how evaluation finds it; solving reads just the
-/// scope's ingot. Once evaluation has used them, the comparison form keeps
-/// the ingot root and no assumptions, so the uses one constant gets in
-/// different items compare equal.
-pub(crate) struct EraseConstUseEnv;
+/// scope's ingot. This folder gives every use the ingot root and the given
+/// assumptions: the comparison form gives none once evaluation has used them,
+/// so the uses one constant gets in different items compare equal.
+pub(crate) struct RebaseConstUseEnv<'db>(pub(crate) PredicateListId<'db>);
 
-impl<'db> TyFolder<'db> for EraseConstUseEnv {
+impl<'db> TyFolder<'db> for RebaseConstUseEnv<'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         let ty = ty.super_fold_with(db, self);
         let TyData::ConstTy(const_ty) = ty.data(db) else {
@@ -1091,17 +1091,16 @@ impl<'db> TyFolder<'db> for EraseConstUseEnv {
         };
         let root =
             |scope: ScopeId<'db>| ScopeId::Item(ItemKind::TopMod(scope.ingot(db).root_mod(db)));
-        let none = PredicateListId::empty_list(db);
-        let erased = match expr.data(db) {
+        let rebased = match expr.data(db) {
             ConstExpr::TraitConst(use_) => {
-                ConstExpr::TraitConst(use_.with_env(root(use_.origin_scope()), none))
+                ConstExpr::TraitConst(use_.with_env(root(use_.origin_scope()), self.0))
             }
             ConstExpr::InherentConst(use_) => {
-                ConstExpr::InherentConst(use_.with_env(root(use_.origin_scope()), none))
+                ConstExpr::InherentConst(use_.with_env(root(use_.origin_scope()), self.0))
             }
             _ => return ty,
         };
-        let expr = ConstExprId::new(db, erased);
+        let expr = ConstExprId::new(db, rebased);
         TyId::const_ty(
             db,
             ConstTyId::new(db, ConstTyData::Abstract(expr, *expected_ty)),
@@ -1636,7 +1635,7 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
         }
         _ => canonicalized,
     };
-    compared.fold_with(db, &mut EraseConstUseEnv)
+    compared.fold_with(db, &mut RebaseConstUseEnv(PredicateListId::empty_list(db)))
 }
 
 pub(crate) struct ValidatedUnEvaluatedConst<'db> {
