@@ -1,0 +1,1 @@
+An effect key whose type or trait resolves but whose arguments are invalid, such as `uses (p: Has<Item = Missing>)`, `uses (p: Storage<u0>)` or `uses (p: Has<{ 1 / 0 }>)`, now reports the invalid argument where it is written instead of an "unresolved effect" that suggested defining a type named after the whole key.
