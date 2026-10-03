@@ -1300,3 +1300,20 @@ fn native_frame_release_survives_independent_buffer_growth() {
         assert!(result.status.success(), "O{level}: {result:?}");
     }
 }
+
+#[test]
+fn native_stored_references_use_concrete_enum_and_padded_layouts() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("reference_layout.fe");
+    fs::write(
+        &source,
+        include_str!("fixtures/crash_regressions/native_reference_layout.fe"),
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("reference_layout")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}

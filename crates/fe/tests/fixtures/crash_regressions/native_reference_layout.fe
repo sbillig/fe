@@ -1,0 +1,84 @@
+use std::native::ByteBuffer
+use core::ptr
+
+struct BufferView { data: ref ByteBuffer }
+struct BufferWriter { data: mut ByteBuffer }
+#[inline(never)]
+fn read_buffer(_ view: BufferView) -> u8 { view.data.byte_at(0) }
+#[inline(never)]
+fn write_buffer(_ view: mut BufferWriter) { view.data.set_byte(index: 0, value: 42) }
+
+struct Padded { prefix: u8, number: u64, suffix: u8 }
+enum Choice { Small(u8), Large(u64, u8) }
+struct ChoiceView { data: ref Choice }
+#[inline(never)]
+fn read_choice(_ view: ChoiceView) -> u64 {
+    match view.data {
+        Choice::Small(value) => value as u64,
+        Choice::Large(value, suffix) => value + suffix as u64,
+    }
+}
+struct State { prefix: u8, values: [Padded; 2], choice: Choice, suffix: u8 }
+struct View { state: ref State }
+struct Writer { state: mut State }
+
+#[inline(never)]
+fn read(_ view: View, index: usize) -> u64 {
+    core::assert(view.state.prefix == 3 && view.state.suffix == 5)
+    core::assert(view.state.values[index].prefix == 7)
+    core::assert(view.state.values[index].suffix == 9)
+    view.state.values[index].number
+}
+
+#[inline(never)]
+fn choice(_ view: View) -> u64 {
+    match view.state.choice {
+        Choice::Small(value) => value as u64,
+        Choice::Large(value, suffix) => {
+            core::assert(suffix == 11)
+            value
+        },
+    }
+}
+
+#[inline(never)]
+fn write(_ view: mut Writer, index: usize) {
+    view.state.values[index].number += 1
+    view.state.choice = Choice::Large(43, 11)
+}
+
+pub fn main() -> i32 {
+    let mut data = ByteBuffer::new()
+    core::assert(data.try_resize(1))
+    data.set_byte(index: 0, value: 37)
+    core::assert(read_buffer(BufferView { data: ref data }) == 37)
+    let mut writer = BufferWriter { data: mut data }
+    write_buffer(mut writer)
+    core::assert(read_buffer(BufferView { data: ref data }) == 42)
+    data.release()
+
+    let mut state = State {
+        prefix: 3,
+        values: [Padded { prefix: 7, number: 17, suffix: 9 },
+                 Padded { prefix: 7, number: 29, suffix: 9 }],
+        choice: Choice::Small(13), suffix: 5,
+    }
+    core::assert(read(View { state: ref state }, index: 0) == 17)
+    core::assert(read(View { state: ref state }, index: 1) == 29)
+    core::assert(choice(View { state: ref state }) == 13)
+    let mut writer = Writer { state: mut state }
+    write(mut writer, index: 1)
+    core::assert(read(View { state: ref state }, index: 0) == 17)
+    core::assert(read(View { state: ref state }, index: 1) == 30)
+    core::assert(choice(View { state: ref state }) == 43)
+    core::assert(state.values[1].number == 30)
+    core::assert(read_choice(ChoiceView { data: ref state.choice }) == 54)
+    // Raw Fe memory uses packed fields and its own tag representation.
+    let slot = ptr::alloc<Choice>()
+    *slot = Choice::Large(19, 23)
+    core::assert(read_choice(ChoiceView { data: ref *slot }) == 42)
+    *slot = Choice::Small(31)
+    core::assert(read_choice(ChoiceView { data: ref *slot }) == 31)
+
+    0
+}
