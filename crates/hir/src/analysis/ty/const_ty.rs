@@ -1602,10 +1602,22 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
     };
 
     let compared = match const_ty.data(db) {
+        ConstTyData::Abstract(expr, expected_ty)
+            if !matches!(
+                expr.data(db),
+                ConstExpr::TraitConst(_) | ConstExpr::InherentConst(_)
+            ) =>
+        {
+            evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
+                .map_or(canonicalized, |evaluated| TyId::const_ty(db, evaluated))
+        }
+        // A deferred body or a selected constant reduces as far as its
+        // specialized inputs permit, as a type argument's does when applied.
         ConstTyData::UnEvaluated {
             ty: Some(expected_ty),
             ..
-        } => {
+        }
+        | ConstTyData::Abstract(_, expected_ty) => {
             let normalized = const_ty.evaluate(db, Some(*expected_ty));
             if normalized.ty(db).invalid_cause(db).is_none()
                 && !matches!(normalized.data(db), ConstTyData::UnEvaluated { .. })
@@ -1621,10 +1633,6 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
             } else {
                 canonicalized
             }
-        }
-        ConstTyData::Abstract(expr, expected_ty) => {
-            evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
-                .map_or(canonicalized, |evaluated| TyId::const_ty(db, evaluated))
         }
         _ => canonicalized,
     };
