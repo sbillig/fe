@@ -1437,6 +1437,7 @@ impl<'db> Borrowck<'db> {
             may_return,
             result,
             scalar_result,
+            observed_params: Some(self.scalar.observed.clone()),
             mutable_inputs: updates,
             certified_ranges,
             scalar_inputs,
@@ -2684,6 +2685,14 @@ impl<'db> Borrowck<'db> {
         }
         if let Some(postcondition) = &call.summary.scalar_result {
             let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
+            // Keep facts about the arguments, but drop the relation for a result
+            // no other fact can name. Otherwise each call adds its return
+            // alternatives, and repeated calls multiply them.
+            let postcondition = if self.scalar.live.contains(&result) {
+                postcondition.clone()
+            } else {
+                postcondition.forget_indices(|index| index == returned)
+            };
             let subst = IndexSubst::new(
                 postcondition.scope(),
                 &BinderScope::default(),
@@ -3775,6 +3784,7 @@ pub(super) fn signature_summary<'db>(
         may_return: opaque && !instance.is_intrinsically_never_returning(db),
         result,
         scalar_result: None,
+        observed_params: None,
         mutable_inputs,
         certified_ranges: Vec::new(),
         scalar_inputs: Vec::new(),
