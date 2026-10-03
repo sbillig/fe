@@ -1,1 +1,1 @@
-A method in an `impl` or trait whose bound has a computed const argument, such as `fn need<const N: usize, U: Has<{ N + 1 }>>()`, no longer crashes the compiler.
+A method in an `impl` or trait whose bound has a computed const argument, such as `fn need<const N: usize, U: Has<{ N + 1 }>>()`, and a const parameter whose type is a projection selected by a computed bound argument, such as `fn f<T: Width<{ N + 1 }, Item = usize>, const N: usize, const M: <T as Width<{ N + 1 }>>::Item>()`, no longer crash the compiler.
