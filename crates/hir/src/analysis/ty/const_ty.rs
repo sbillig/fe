@@ -1327,8 +1327,13 @@ pub fn canonicalize_const_ty_for_mode<'db>(
                 ty: ty.map(|ty| canonicalize_ty_for_mode(db, ty, env, mode)),
                 template_ty: *template_ty,
                 const_def: *const_def,
-                capture: capture
-                    .map_bound_values(|arg| canonicalize_ty_for_mode(db, arg, env, mode)),
+                capture: match capture {
+                    ConstCaptureEnv::Bound(subst) => ConstCaptureEnv::from_subst(
+                        db,
+                        subst.map_values(|arg| canonicalize_ty_for_mode(db, arg, env, mode)),
+                    ),
+                    ConstCaptureEnv::Empty | ConstCaptureEnv::Identity(_) => capture.clone(),
+                },
                 policy: *policy,
             },
         ),
@@ -2727,7 +2732,7 @@ pub(super) fn const_ty_from_resolved_trait_const<'db>(
     let trait_ = inst.def(db);
     let (body, template_ty, subst) = selected_assoc_const_body_template(db, resolved, name)?;
     let template_ty = Some(template_ty);
-    let capture = ConstCaptureEnv::Bound(subst);
+    let capture = ConstCaptureEnv::from_subst(db, subst);
 
     let declared_ty = trait_
         .const_(db, name)
@@ -3290,11 +3295,44 @@ impl<'db> ConstCaptureEnv<'db> {
             .collect::<Result<Vec<_>, _>>();
         match values {
             Ok(_) if !affected => None,
-            Ok(values) => Some(Ok(Self::Bound(
+            Ok(values) => Some(Ok(Self::from_subst(
+                db,
                 CompleteSubst::new(domain, db, values).expect("identity capture domain"),
             ))),
             Err(error) => Some(Err(error)),
         }
+    }
+
+    /// The capture `subst` describes. A substitution that maps its domain to
+    /// the declared formals is that domain's identity, so both spellings of
+    /// one environment intern as the same type.
+    pub(crate) fn from_subst(db: &'db dyn HirAnalysisDb, subst: CompleteSubst<'db>) -> Self {
+        if subst
+            .values()
+            .iter()
+            .all(|value| value.as_generic_param(db).is_some())
+        {
+            let domain = subst.domain();
+            let schema = domain.schema(db);
+            let before = if domain.len(db) == schema.keys(db).len() {
+                Some(None)
+            } else {
+                schema
+                    .default_dependency_index(db, domain.len(db))
+                    .map(Some)
+            };
+            if let Some(before) = before {
+                let identity = Self::Identity(ConstCaptureDomain {
+                    owner: schema.owner(db),
+                    basis: schema.basis(db),
+                    before,
+                });
+                if identity.complete(db).as_ref() == Some(&subst) {
+                    return identity;
+                }
+            }
+        }
+        Self::Bound(subst)
     }
 
     pub(crate) fn identity_for_body(
@@ -3331,7 +3369,8 @@ impl<'db> ConstCaptureEnv<'db> {
             basis: ParamBasis::Full,
             before,
         };
-        Self::Bound(
+        Self::from_subst(
+            db,
             CompleteSubst::new(domain.materialize(db), db, values).expect("complete const capture"),
         )
     }
@@ -3380,12 +3419,10 @@ impl<'db> ConstCaptureEnv<'db> {
     where
         F: TyFolder<'db>,
     {
-        self.map_bound_values(|value| folder.fold_ty(db, value))
-    }
-
-    fn map_bound_values(&self, f: impl FnMut(TyId<'db>) -> TyId<'db>) -> Self {
         match self {
-            Self::Bound(subst) => Self::Bound(subst.map_values(f)),
+            Self::Bound(subst) => {
+                Self::from_subst(db, subst.map_values(|value| folder.fold_ty(db, value)))
+            }
             Self::Empty | Self::Identity(_) => self.clone(),
         }
     }

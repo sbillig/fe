@@ -1,0 +1,1 @@
+An associated type whose array length is a computed expression that cannot be simplified symbolically, such as `type Item = [u8; { [3 as usize; 2][N] }]`, now takes the implementing type's generic arguments. Previously `Marker<1>::Item` stayed unevaluated: it did not match `[u8; 3]`, a faulting length was not reported, and calling a method on such a value crashed the compiler.

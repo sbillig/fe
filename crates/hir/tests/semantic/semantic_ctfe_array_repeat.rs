@@ -1332,6 +1332,10 @@ fn projected(_ outer: Outer<Faulty>) {}
 fn projected_valid(_ outer: Outer<Fine>) {}
 fn bounded<T: Has<Item = Wrap<0>>>(_ outer: Outer<T>) {}
 fn bounded_valid<T: Has<Item = Wrap<2>>>(_ outer: Outer<T>) {}
+struct Indexed<const N: usize> {}
+impl<const N: usize> Has for Indexed<N> { type Item = [u8; { [3 as usize; 2][N] }] }
+fn indexed(_ outer: Outer<Indexed<2>>) {}
+fn indexed_valid(_ outer: Outer<Indexed<1>>) {}
 "#,
     );
     let (module, _) = db.top_mod(file);
@@ -1340,7 +1344,8 @@ fn bounded_valid<T: Has<Item = Wrap<2>>>(_ outer: Outer<T>) {}
     // A fault reaches a concrete instance through a repeat, a callee's return
     // or parameter type, or a parameter's field; folding a returned value
     // must not see it first. A field's fault is known even beside a generic
-    // or an oversized field, or behind a projection the instance resolves.
+    // or an oversized field, or behind a projection the instance resolves,
+    // including an impl's deferred extent.
     for (name, len, valid) in [
         ("first", Some(2), true),
         ("first", Some(0), false),
@@ -1365,6 +1370,8 @@ fn bounded_valid<T: Has<Item = Wrap<2>>>(_ outer: Outer<T>) {}
         ("projected_valid", None, true),
         ("bounded", None, false),
         ("bounded_valid", None, true),
+        ("indexed", None, false),
+        ("indexed_valid", None, true),
     ] {
         let owner = BodyOwner::Func(function(&db, module, name));
         let identity = identity_semantic_instance_key(&db, owner);

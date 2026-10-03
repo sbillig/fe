@@ -2306,6 +2306,33 @@ const fn guarded<const N: usize>() -> usize {
 }
 
 #[test]
+fn opaque_associated_extents_specialize_with_their_impl() {
+    // An index is outside the term language, so the extent stays a deferred
+    // body; selecting the impl must still bind it to the impl's arguments.
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "opaque_associated_extent.fe".into(),
+        r#"
+trait Has {
+    type Item
+    fn take(_ x: Self::Item)
+}
+struct Marker<const N: usize> {}
+impl<const N: usize> Has for Marker<N> {
+    type Item = [u8; { [3 as usize; 2][N] }]
+    fn take(_ x: Self::Item) {}
+}
+fn generic<T: Has>(_ x: T::Item) { T::take(x) }
+fn projected() -> Marker<1>::Item { [1, 2, 3] }
+fn via_generic() { generic<Marker<1>>([1, 2, 3]) }
+fn length(_ x: Marker<1>::Item) -> usize { x.len() }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+}
+
+#[test]
 fn describing_a_non_const_body_fails_as_executing_it_does() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

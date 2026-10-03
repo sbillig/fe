@@ -16,7 +16,7 @@ use super::{
 };
 use crate::analysis::{
     HirAnalysisDb,
-    ty::const_ty::{ConstTyData, normalize_const_tys_for_comparison},
+    ty::const_ty::{ConstCaptureEnv, ConstTyData, normalize_const_tys_for_comparison},
 };
 
 pub(crate) type UnificationTable<'db> = UnificationTableBase<'db, InPlace<InferenceKey<'db>>>;
@@ -826,5 +826,23 @@ where
         let var = self.table.new_var_from_param(ty);
         self.params.insert(ty, var);
         var
+    }
+
+    // An identity capture names the parameters its body reads, so it binds
+    // to the variables their explicit occurrences are instantiated with.
+    fn fold_const_capture(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        capture: &ConstCaptureEnv<'db>,
+    ) -> ConstCaptureEnv<'db> {
+        if let ConstCaptureEnv::Identity(_) = capture
+            && let Some(identity) = capture.complete(db)
+        {
+            return ConstCaptureEnv::from_subst(
+                db,
+                identity.map_values(|formal| self.fold_ty(db, formal)),
+            );
+        }
+        capture.fold_ranges(db, self)
     }
 }
