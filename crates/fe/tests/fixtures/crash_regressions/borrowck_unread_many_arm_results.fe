@@ -1,7 +1,8 @@
 // Many-arm call results that no fact reads. Each call's result alternatives are
 // forgotten rather than multiplied across calls: comparisons no condition
 // reads, results passed only to a dead wrapper result, a cell nothing loads,
-// and selectors narrowed by a lossy cast.
+// stores after the cell's only load, selectors narrowed by a lossy cast, and
+// fields of a returned aggregate.
 trait Tagged {
     fn ordinal(self) -> usize
 }
@@ -174,4 +175,34 @@ fn narrowed_selectors(_ arr: [u64; 256]) -> u64 {
     let s19: u8 = Many::V19.ordinal().downcast_truncate()
     total += arr[s19 as usize]
     total
+}
+
+fn stores_after_read(_ arr: [u64; 32]) -> u64 {
+    let mut cell: usize = 0
+    let seen = arr[cell]
+    cell = Many::V0.ordinal()
+    cell = Many::V1.ordinal()
+    cell = Many::V2.ordinal()
+    cell = Many::V3.ordinal()
+    cell = Many::V4.ordinal()
+    cell = Many::V5.ordinal()
+    cell = Many::V6.ordinal()
+    cell = Many::V7.ordinal()
+    cell = Many::V8.ordinal()
+    cell = Many::V9.ordinal()
+    cell = Many::V10.ordinal()
+    cell = Many::V11.ordinal()
+    cell = Many::V12.ordinal()
+    cell = Many::V13.ordinal()
+    cell = Many::V14.ordinal()
+    cell = Many::V15.ordinal()
+    cell = Many::V16.ordinal()
+    cell = Many::V17.ordinal()
+    cell = Many::V18.ordinal()
+    cell = Many::V19.ordinal()
+    seen
+}
+
+fn aggregate_return() -> [usize; 20] {
+    [Many::V0.ordinal(), Many::V1.ordinal(), Many::V2.ordinal(), Many::V3.ordinal(), Many::V4.ordinal(), Many::V5.ordinal(), Many::V6.ordinal(), Many::V7.ordinal(), Many::V8.ordinal(), Many::V9.ordinal(), Many::V10.ordinal(), Many::V11.ordinal(), Many::V12.ordinal(), Many::V13.ordinal(), Many::V14.ordinal(), Many::V15.ordinal(), Many::V16.ordinal(), Many::V17.ordinal(), Many::V18.ordinal(), Many::V19.ordinal()]
 }
