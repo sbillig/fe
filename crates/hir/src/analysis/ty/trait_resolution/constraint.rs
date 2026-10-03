@@ -13,11 +13,7 @@ use crate::analysis::{
     HirAnalysisDb,
     ty::{
         binder::Binder,
-        const_expr::ConstExpr,
-        const_ty::{
-            ConstBodyLowering, ConstTyData, ConstTyId, HoleAnchor, LoweringContext,
-            RebaseConstUseEnv,
-        },
+        const_ty::{ConstBodyLowering, HoleAnchor, LoweringContext, RebaseConstUseEnv},
         corelib::resolve_core_trait,
         effects::{
             EffectKeyCanonMode, EffectKeyKind, canonical_effect_identity_for_binding,
@@ -34,7 +30,6 @@ use crate::analysis::{
             lower_hir_ty_with_minter,
         },
         unify::InferenceKey,
-        visitor::{TyVisitable, TyVisitor, walk_const_ty},
     },
 };
 
@@ -566,41 +561,17 @@ fn collect_decl_constraint_pairs_impl<'db>(
     // A const use in a bound records the constraints it was solved under,
     // which include this very list while a cycle computes it, so recording
     // them makes every iteration differ from the last and the cycle never
-    // settles. A use keeps the list's predicates that name no constant use
-    // instead: they cannot refer back to the list, and they hold the bounds,
-    // such as an enclosing item's, that select its implementation once the
-    // list is instantiated.
-    struct ConstUseFinder<'db> {
-        db: &'db dyn HirAnalysisDb,
-        found: bool,
-    }
-
-    impl<'db> TyVisitor<'db> for ConstUseFinder<'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-
-        fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
-            if let ConstTyData::Abstract(expr, _) = const_ty.data(self.db) {
-                self.found |= matches!(
-                    expr.data(self.db),
-                    ConstExpr::TraitConst(_) | ConstExpr::InherentConst(_)
-                );
-            }
-            walk_const_ty(self, const_ty);
-        }
-    }
-
-    let use_free = all_predicates
-        .keys()
-        .copied()
-        .filter(|inst| {
-            let mut finder = ConstUseFinder { db, found: false };
-            inst.visit_with(&mut finder);
-            !finder.found
-        })
-        .collect::<Vec<_>>();
-    let mut rebase = RebaseConstUseEnv(PredicateListId::new(db, use_free));
+    // settles. A use keeps the list with the uses inside it in their
+    // comparison form instead: that cannot refer back to the list, and it
+    // holds the bounds, such as an enclosing item's `T: Gate<{ T::W }>`, that
+    // select the use's implementation once the list is instantiated.
+    let mut rebase = RebaseConstUseEnv::Stored(PredicateListId::new(
+        db,
+        all_predicates
+            .keys()
+            .map(|inst| inst.fold_with(db, &mut RebaseConstUseEnv::Identity))
+            .collect::<Vec<_>>(),
+    ));
     let mut rebased = IndexMap::new();
     for (inst, source) in all_predicates {
         rebased

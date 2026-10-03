@@ -1,6 +1,7 @@
 // A bound naming a constant whose implementation needs an enclosing item's
 // bound lowers to the same constant use with or without that item's
-// constraints, and is selected under the assumptions of whoever proves it.
+// constraints, and keeps the bounds that select it, including one that
+// itself names a constant.
 trait Gate {}
 
 trait Size { const LEN: usize }
@@ -49,3 +50,19 @@ fn valid<T: Gate, U: Has<4> + Has<6>, V: Holds<Item = [u8; 4]>>() {
 fn wrong<T: Gate, U: Has<5>>() { Foo<T>::need<3, U>() }
 
 fn ungated<T, U: Has<4>>() { Foo<T>::need<3, U>() }
+
+trait Width { const W: usize }
+
+trait Keyed<const K: usize> {}
+
+struct Nested<T, const N: usize> {}
+
+impl<T: Width + Keyed<{ T::W }>, const N: usize> Size for Nested<T, N> { const LEN: usize = N + 1 }
+
+struct Bar<T> {}
+
+impl<T: Width + Keyed<{ T::W }>> Bar<T> {
+    fn need<const N: usize, U: Has<{ Nested<T, N>::LEN }>>() {}
+}
+
+fn nested<T: Width + Keyed<{ T::W }>, U: Has<4>>() { Bar<T>::need<3, U>() }

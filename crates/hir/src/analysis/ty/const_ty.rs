@@ -1074,14 +1074,20 @@ fn canonicalize_const_expr_for_mode<'db>(
 
 /// Unification identifies an associated or inherent const use by its trait
 /// instance (or impl and receiver) and name. The scope and assumptions it is
-/// solved under only decide how evaluation finds it. This folder gives every
-/// use the root of the ingot defining its constant (the trait's, or the
-/// inherent impl's) and the given assumptions: the comparison form gives none
-/// once evaluation has used them, so the uses one constant gets in different
-/// items, and ingots, compare equal. The origin ingot cannot change what a use
-/// selects: coherence keeps a trait's impls in the trait's ingot or in the
-/// implementing type's, which solving searches from any origin.
-pub(crate) struct RebaseConstUseEnv<'db>(pub(crate) PredicateListId<'db>);
+/// solved under only decide how evaluation finds it.
+pub(crate) enum RebaseConstUseEnv<'db> {
+    /// The comparison form, once evaluation has used the environment: the
+    /// root of the ingot defining the constant (the trait's, or the inherent
+    /// impl's) and no assumptions, so the uses one constant gets in different
+    /// items and ingots compare equal. Once its implementing type is known, a
+    /// use selects the same impl from any origin: coherence keeps a trait's
+    /// impls in the trait's ingot or the implementing type's.
+    Identity,
+    /// A stored constraint's use, which is evaluated later: the root of the
+    /// ingot it was written in, where selection for a generic `Self` starts
+    /// (a downstream blanket impl lives there), and these assumptions.
+    Stored(PredicateListId<'db>),
+}
 
 impl<'db> TyFolder<'db> for RebaseConstUseEnv<'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
@@ -1092,14 +1098,28 @@ impl<'db> TyFolder<'db> for RebaseConstUseEnv<'db> {
         let ConstTyData::Abstract(expr, expected_ty) = const_ty.data(db) else {
             return ty;
         };
-        let root =
-            |scope: ScopeId<'db>| ScopeId::Item(ItemKind::TopMod(scope.ingot(db).root_mod(db)));
+        let stored = match self {
+            Self::Identity => None,
+            Self::Stored(assumptions) => Some(*assumptions),
+        };
+        let env = |origin: ScopeId<'db>, defining: ScopeId<'db>| {
+            let (scope, assumptions) = stored
+                .map_or((defining, PredicateListId::empty_list(db)), |assumptions| {
+                    (origin, assumptions)
+                });
+            (
+                ScopeId::Item(ItemKind::TopMod(scope.ingot(db).root_mod(db))),
+                assumptions,
+            )
+        };
         let rebased = match expr.data(db) {
             ConstExpr::TraitConst(use_) => {
-                ConstExpr::TraitConst(use_.with_env(root(use_.inst().def(db).scope()), self.0))
+                let (scope, assumptions) = env(use_.origin_scope(), use_.inst().def(db).scope());
+                ConstExpr::TraitConst(use_.with_env(scope, assumptions))
             }
             ConstExpr::InherentConst(use_) => {
-                ConstExpr::InherentConst(use_.with_env(root(use_.impl_().scope()), self.0))
+                let (scope, assumptions) = env(use_.origin_scope(), use_.impl_().scope());
+                ConstExpr::InherentConst(use_.with_env(scope, assumptions))
             }
             _ => return ty,
         };
@@ -1638,7 +1658,7 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
         }
         _ => canonicalized,
     };
-    compared.fold_with(db, &mut RebaseConstUseEnv(PredicateListId::empty_list(db)))
+    compared.fold_with(db, &mut RebaseConstUseEnv::Identity)
 }
 
 pub(crate) struct ValidatedUnEvaluatedConst<'db> {
