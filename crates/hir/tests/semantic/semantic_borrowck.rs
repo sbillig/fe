@@ -13839,3 +13839,64 @@ fn constrain(_ index: usize) -> usize {
         assert!(observed.unconditional.contains(&0), "{observed:?}");
     });
 }
+
+#[test]
+fn conditional_input_corruption_defers_fresh_local_conflicts_to_callers() {
+    let source = r#"
+use core::ptr
+struct State { code: *u8, journal: *u8 }
+fn mixed(_ output: mut u8, _ state: mut State) {
+    *state.journal = 1
+    output = *state.code
+}
+fn execute(_ state: mut State) {
+    let mut output: u8 = 0
+    mixed(mut output, mut state)
+}
+fn forward(_ state: mut State) { execute(mut state) }
+fn disjoint() {
+    let code = ptr::alloc<u8>()
+    *code = 7
+    let journal = ptr::alloc<u8>()
+    let mut state = State { code, journal }
+    forward(mut state)
+}
+fn aliased() {
+    let state = ptr::alloc<State>()
+    let code = ptr::alloc<u8>()
+    *code = 7
+    *state = State { code, journal: ptr::cast<State, u8>(state) }
+    forward(mut *state)
+}
+"#;
+    assert_eq!(conflicting_functions(source), ["aliased"]);
+}
+
+#[test]
+fn reading_one_owned_buffer_after_growing_another_preserves_fresh_local_separation() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use std::native::ByteBuffer
+struct State { code: ByteBuffer, journal: ByteBuffer }
+struct Frame { memory: ByteBuffer }
+impl State {
+    fn read(self, index: u64) -> u8 { self.code.byte_at(index) }
+    fn warm(mut self) { core::assert(self.journal.try_resize(1)) }
+}
+impl Frame {
+    fn copy(mut self, _ state: mut State) {
+        state.warm()
+        core::assert(self.memory.try_resize(1))
+        self.memory.set_byte(index: 0, value: state.read(index: 0))
+    }
+    fn run(mut self, _ state: mut State) { self.copy(mut state) }
+}
+fn execute(_ state: mut State) {
+    let mut frame = Frame { memory: ByteBuffer::new() }
+    frame.run(mut state)
+    frame.memory.release()
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}

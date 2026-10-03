@@ -1,0 +1,42 @@
+use std::native::ByteBuffer
+
+struct State { code: ByteBuffer, journal: ByteBuffer }
+struct Frame { memory: ByteBuffer }
+impl State {
+    fn read(self, index: u64) -> u8 { self.code.byte_at(index) }
+    fn warm(mut self) { core::assert(self.journal.try_resize(1)) }
+}
+impl Frame {
+    fn copy(mut self, _ state: mut State) {
+        state.warm()
+        core::assert(self.memory.try_resize(32))
+        let mut i: u64 = 0
+        while i < 32 {
+            self.memory.set_byte(index: i, value: state.read(index: i))
+            i += 1
+        }
+    }
+    fn run(mut self, _ state: mut State) { self.copy(mut state) }
+}
+fn execute(_ state: mut State) {
+    let mut frame = Frame { memory: ByteBuffer::new() }
+    frame.run(mut state)
+    core::assert(frame.memory.byte_at(0) == 7 && frame.memory.byte_at(31) == 9)
+    core::assert(state.code.byte_at(0) == 7 && state.code.byte_at(31) == 9)
+    frame.memory.release()
+}
+fn nested(_ state: mut State, depth: u64) {
+    if depth == 0 { execute(mut state) }
+    else { nested(mut state, depth: depth - 1) }
+}
+pub fn main() -> i32 {
+    let mut state = State { code: ByteBuffer::new(), journal: ByteBuffer::new() }
+    core::assert(state.code.try_resize(32))
+    state.code.set_byte(index: 0, value: 7)
+    state.code.set_byte(index: 31, value: 9)
+    nested(mut state, depth: 3)
+    nested(mut state, depth: 2)
+    state.code.release()
+    state.journal.release()
+    0
+}

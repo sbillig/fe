@@ -521,7 +521,7 @@ impl<'db> ExternalSource<'db> {
 
     /// The corruption condition under which this address, or the base it
     /// is offset from, exists.
-    fn clobber_dependency(&self) -> Option<&ClobberCondition<'db>> {
+    pub fn clobber_dependency(&self) -> Option<&ClobberCondition<'db>> {
         let mut dependency = self;
         loop {
             if let Some(condition) = &dependency.clobber {

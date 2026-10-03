@@ -937,6 +937,35 @@ impl<'db> Borrowck<'db> {
                 {
                     continue;
                 }
+                // An arbitrary pointer produced by a possible raw overwrite can
+                // alias even a fresh local loan. A caller cannot name that local,
+                // but can exclude the overwrite of an input cell that introduced
+                // the arbitrary pointer. Carry that stronger, physical obligation
+                // instead; never grant authority over the local or assume it here.
+                let pairs = footprint.physical_pairs(self.db, &loan.region);
+                let separation_origin = SeparationOrigin {
+                    owner: self.instance.key(self.db).owner(self.db),
+                    template_owner: self.body.template_owner,
+                    borrow: definition.origin(),
+                    access: origin,
+                };
+                let mut excluded = false;
+                for pair in pairs {
+                    let Some(requirement) =
+                        clobber_exclusion(&pair.access, pair.possible, separation_origin)
+                    else {
+                        excluded = false;
+                        break;
+                    };
+                    self.discharge(&requirement, origin, analysis);
+                    if analysis.diagnostic.is_some() {
+                        return;
+                    }
+                    excluded = true;
+                }
+                if excluded {
+                    continue;
+                }
                 return analysis.report(self.conflict_diag(kind, definition, origin));
             }
             if footprint.region.clauses().len() * loan.region.clauses().len()
@@ -1077,6 +1106,15 @@ impl<'db> Borrowck<'db> {
                             || self.refinable_guard(&slice.guard)
                     }))
             {
+                if let Some(exclusion) =
+                    clobber_exclusion(&pair.access, guard.clone(), requirement.origin)
+                {
+                    self.discharge(&exclusion, origin, analysis);
+                    if analysis.diagnostic.is_some() {
+                        return;
+                    }
+                    continue;
+                }
                 return analysis.report(self.separation_diag(
                     "cannot prove that this call keeps memory the callee holds borrowed separate from the callee's access",
                     origin,
@@ -1370,6 +1408,47 @@ fn remove_suspended<'db>(
         return Some(Unsuspended::Definite);
     }
     guard.difference(&definite).map(Unsuspended::Possible)
+}
+
+/// Excluding the raw overwrite is sufficient to exclude an arbitrary address
+/// introduced by it. This is a new physical obligation, not a permission or an
+/// assumed fact. Clobber conditions retain their original non-clobbered inputs,
+/// so recursively discharging this requirement cannot recreate itself.
+fn clobber_exclusion<'db>(
+    access: &SymbolicPlace<'db>,
+    guard: Guard<'db>,
+    origin: SeparationOrigin<'db>,
+) -> Option<ResolvedSeparation<'db>> {
+    let RegionRoot::External(source) = &access.root else {
+        return None;
+    };
+    let condition = source.clobber_dependency()?;
+    if condition.target.invalidated || condition.written.invalidated {
+        return None;
+    }
+    let region = |source: &SourceExpr<'db>| {
+        RegionSet::new(
+            guard.scope(),
+            [Guarded {
+                guard: Guard::always(guard.scope()),
+                payload: SymbolicPlace {
+                    root: RegionRoot::External(source.source.clone()),
+                    path: source.path.clone(),
+                    views: source.views.clone(),
+                },
+            }],
+        )
+    };
+    Some(ResolvedSeparation {
+        protected: region(&condition.target),
+        protected_kind: BorrowKind::Ref,
+        access: region(&condition.written),
+        access_kind: BorrowKind::Mut,
+        guard,
+        extent: condition.extent,
+        suspended: Vec::new(),
+        origin,
+    })
 }
 
 /// Whether a caller can name this place: an external route without local

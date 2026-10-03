@@ -1264,3 +1264,22 @@ pub fn main() -> i32 {
         assert!(result.status.success(), "O{level}: {result:?}");
     }
 }
+
+#[test]
+fn native_account_code_reads_survive_independent_journal_growth() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("account_code_buffers.fe");
+    fs::write(
+        &source,
+        include_str!("fixtures/crash_regressions/native_account_code_buffers.fe"),
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("account_code_buffers"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
