@@ -1355,3 +1355,27 @@ fn native_recursive_buffer_growth_with_unused_generic_effect() {
         assert!(result.status.success(), "O{level}: {result:?}");
     }
 }
+
+#[test]
+fn native_raw_scalar_reference_accessors_at_o1() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/native/raw_scalar_reference_accessors.fe");
+    build(&source, temp.path(), "1", &["--standalone"]);
+    let result = Command::new(temp.path().join("raw_scalar_reference_accessors"))
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+}
+
+#[test]
+fn native_raw_aggregate_reference_accessors_at_o1() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/native/raw_aggregate_reference_accessors.fe");
+    build(&source, temp.path(), "1", &["--standalone"]);
+    let result = Command::new(temp.path().join("raw_aggregate_reference_accessors"))
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+}
