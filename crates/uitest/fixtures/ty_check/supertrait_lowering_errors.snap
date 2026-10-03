@@ -28,7 +28,7 @@ error[3-0024]: non-const function call in const context
    │                       ^^^^^^^^^ calls in const context must be `const fn`
 
 error[3-0025]: division by zero in const context
-   ┌─ supertrait_lowering_errors.fe:13:21
+   ┌─ supertrait_lowering_errors.fe:13:23
    │
 13 │ trait Faulting: Has<{ 1 / 0 }> {}
-   │                     ^^^^^^^^^ cannot divide by zero
+   │                       ^^^^^ cannot divide by zero

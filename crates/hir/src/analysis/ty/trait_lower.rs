@@ -668,7 +668,6 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
                 ConstBodyLowering::Deferred => DefaultApplication::StructuralMetadata(minter),
             },
         )
-        // A default's faults belong to its declaration, which reports them.
         .map_err(|error| match error.cause {
             InvalidCause::TooManyGenericArgs { expected, given } => {
                 TraitArgError::ArgNumMismatch { expected, given }
@@ -689,9 +688,7 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
                 expected: None,
                 given: Some(given),
             },
-            cause if !error.from_default && cause.const_eval_fault().is_some() => {
-                TraitArgError::InvalidArg(cause)
-            }
+            cause if cause.const_eval_fault().is_some() => TraitArgError::InvalidArg(cause),
             _ => TraitArgError::Ignored,
         })?;
 

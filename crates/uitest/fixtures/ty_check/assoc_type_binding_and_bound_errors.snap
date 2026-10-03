@@ -34,13 +34,13 @@ error[3-0024]: non-const function call in const context
    │                              ^^^^^^^^^ calls in const context must be `const fn`
 
 error[3-0025]: division by zero in const context
-   ┌─ assoc_type_binding_and_bound_errors.fe:14:43
+   ┌─ assoc_type_binding_and_bound_errors.fe:14:45
    │
 14 │ fn faulting<T>() where T: Has<Item = [u8; { 1 / 0 }]> {}
-   │                                           ^^^^^^^^^ cannot divide by zero
+   │                                             ^^^^^ cannot divide by zero
 
 error[3-0025]: division by zero in const context
-   ┌─ assoc_type_binding_and_bound_errors.fe:22:40
+   ┌─ assoc_type_binding_and_bound_errors.fe:22:42
    │
 22 │ trait FaultingBound { type Item: Sized<{ 2 / 0 }> }
-   │                                        ^^^^^^^^^ cannot divide by zero
+   │                                          ^^^^^ cannot divide by zero
