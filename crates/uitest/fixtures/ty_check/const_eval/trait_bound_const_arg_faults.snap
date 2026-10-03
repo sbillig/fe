@@ -4,40 +4,52 @@ expression: diags
 input_file: fixtures/ty_check/const_eval/trait_bound_const_arg_faults.fe
 ---
 error[3-0024]: non-const function call in const context
-   ┌─ trait_bound_const_arg_faults.fe:12:37
+   ┌─ trait_bound_const_arg_faults.fe:13:37
    │
-12 │ fn where_clause<T>() where T: Has<{ runtime() }> {}
+13 │ fn where_clause<T>() where T: Has<{ runtime() }> {}
    │                                     ^^^^^^^^^ calls in const context must be `const fn`
 
 error[3-0024]: non-const function call in const context
-   ┌─ trait_bound_const_arg_faults.fe:16:12
+   ┌─ trait_bound_const_arg_faults.fe:17:12
    │
-16 │ impl Has<{ runtime() }> for u8 {}
+17 │ impl Has<{ runtime() }> for u8 {}
    │            ^^^^^^^^^ calls in const context must be `const fn`
 
 error[3-0025]: division by zero in const context
-   ┌─ trait_bound_const_arg_faults.fe:10:24
+   ┌─ trait_bound_const_arg_faults.fe:11:24
    │
-10 │ fn inline_bound<T: Has<{ 1 / 0 }>>() {}
+11 │ fn inline_bound<T: Has<{ 1 / 0 }>>() {}
    │                        ^^^^^^^^^ cannot divide by zero
 
 error[3-0025]: division by zero in const context
-   ┌─ trait_bound_const_arg_faults.fe:18:10
+   ┌─ trait_bound_const_arg_faults.fe:19:10
    │
-18 │ impl Has<{ 4 / 0 }> for Plain<1> {}
+19 │ impl Has<{ 4 / 0 }> for Plain<1> {}
    │          ^^^^^^^^^ cannot divide by zero
 
-error[3-0034]: arithmetic overflow in const context
-   ┌─ trait_bound_const_arg_faults.fe:14:23
+error[3-0025]: division by zero in const context
+   ┌─ trait_bound_const_arg_faults.fe:21:36
    │
-14 │ struct Bounded<T: Has<{ 2 - 3 }>> {}
+21 │ trait Defaulted<const N: usize = { 5 / 0 }> {}
+   │                                    ^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+   ┌─ trait_bound_const_arg_faults.fe:25:22
+   │
+25 │ const FAULT: usize = 6 / 0
+   │                      ^^^^^ cannot divide by zero
+
+error[3-0034]: arithmetic overflow in const context
+   ┌─ trait_bound_const_arg_faults.fe:15:23
+   │
+15 │ struct Bounded<T: Has<{ 2 - 3 }>> {}
    │                       ^^^^^^^^^ checked arithmetic overflowed during const evaluation
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ trait_bound_const_arg_faults.fe:22:15
+   ┌─ trait_bound_const_arg_faults.fe:31:15
    │
-20 │ fn valid<T: Has<{ 1 / 1 }>>() {}
+29 │ fn valid<T: Has<{ 1 / 1 }>>() {}
    │             -------------- required by this bound on `valid`
-21 │
-22 │ fn caller() { valid<bool>() }
+30 │
+31 │ fn caller() { valid<bool>() }
    │               ^^^^^^^^^^^ `bool` doesn't implement `Has<1>`

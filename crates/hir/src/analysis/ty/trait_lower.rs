@@ -14,16 +14,13 @@ use salsa::Update;
 
 use super::{
     binder::Binder,
-    const_ty::{
-        ConstBodyLowering, ConstCaptureEnv, ConstTyId, HoleAnchor, LoweringContext,
-        UnevaluatedConstPolicy,
-    },
+    const_ty::{ConstBodyLowering, HoleAnchor, LoweringContext},
     fold::{TyFoldable, TyFolder},
     generic_defaults::DefaultApplication,
     trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, PrimTy, TyBase, TyId},
-    ty_lower::{lower_hir_ty_with_minter, lower_opt_hir_ty_with_minter},
+    ty_lower::{lower_hir_ty_with_minter, lower_opt_const_body, lower_opt_hir_ty_with_minter},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -599,8 +596,8 @@ pub(crate) enum TraitArgError<'db> {
     ConstHoleNotAllowed {
         arg_idx: usize,
     },
-    /// An argument failed compile-time evaluation, which no other pass
-    /// reports for a trait argument.
+    /// A written argument failed compile-time evaluation, which no other
+    /// pass reports for a trait argument.
     InvalidArg(InvalidCause<'db>),
     Ignored,
 }
@@ -641,20 +638,9 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
                 provided_explicit.push(ty);
             }
             GenericArg::Const(const_arg) => match const_arg.value {
+                // A trait argument names a constant as a type argument does.
                 ConstGenericArgValue::Expr(body) => {
-                    let const_ty = match minter.const_bodies() {
-                        ConstBodyLowering::Eager => ConstTyId::from_opt_body(db, body),
-                        ConstBodyLowering::Deferred => ConstTyId::unevaluated(
-                            db,
-                            body,
-                            None,
-                            None,
-                            body.to_opt().map_or(ConstCaptureEnv::Empty, |body| {
-                                ConstCaptureEnv::identity_for_body(db, body, Some(minter))
-                            }),
-                            UnevaluatedConstPolicy::DeferValidation,
-                        ),
-                    };
+                    let const_ty = lower_opt_const_body(db, body, scope, assumptions, minter);
                     provided_explicit.push(TyId::const_ty(db, const_ty));
                 }
                 ConstGenericArgValue::Hole => {
@@ -682,6 +668,7 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
                 ConstBodyLowering::Deferred => DefaultApplication::StructuralMetadata(minter),
             },
         )
+        // A default's faults belong to its declaration, which reports them.
         .map_err(|error| match error.cause {
             InvalidCause::TooManyGenericArgs { expected, given } => {
                 TraitArgError::ArgNumMismatch { expected, given }
@@ -702,7 +689,9 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
                 expected: None,
                 given: Some(given),
             },
-            cause if cause.const_eval_fault().is_some() => TraitArgError::InvalidArg(cause),
+            cause if !error.from_default && cause.const_eval_fault().is_some() => {
+                TraitArgError::InvalidArg(cause)
+            }
             _ => TraitArgError::Ignored,
         })?;
 

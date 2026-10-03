@@ -1,6 +1,7 @@
 // A trait reference's const argument is evaluated where the reference is
 // written, so a fault or a non-const call in it is reported there instead of
-// silently dropping the bound.
+// silently dropping the bound. A fault that a default or a named constant
+// declares is reported once, at that declaration.
 fn runtime() -> usize { 1 }
 
 trait Has<const N: usize> {}
@@ -16,6 +17,14 @@ struct Bounded<T: Has<{ 2 - 3 }>> {}
 impl Has<{ runtime() }> for u8 {}
 
 impl Has<{ 4 / 0 }> for Plain<1> {}
+
+trait Defaulted<const N: usize = { 5 / 0 }> {}
+
+fn applies_default<T: Defaulted>() {}
+
+const FAULT: usize = 6 / 0
+
+fn names_constant<T: Has<{ FAULT }>>() {}
 
 fn valid<T: Has<{ 1 / 1 }>>() {}
 
