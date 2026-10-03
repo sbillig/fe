@@ -1,0 +1,11 @@
+// An extent written with another ingot's associated constant is the same
+// type on both sides of the ingot boundary, symbolically and once concrete.
+use assoc_const_extent_provider::{Size, Marker, take}
+
+pub fn forward<const N: usize>(_ x: [u8; <Marker<N> as Size>::LEN]) -> [u8; <Marker<N> as Size>::LEN] {
+    take<N>(x)
+}
+
+pub fn concrete(_ x: [u8; 4]) -> [u8; <Marker<3> as Size>::LEN] {
+    forward<3>(x)
+}

@@ -1074,10 +1074,13 @@ fn canonicalize_const_expr_for_mode<'db>(
 
 /// Unification identifies an associated or inherent const use by its trait
 /// instance (or impl and receiver) and name. The scope and assumptions it is
-/// solved under only decide how evaluation finds it; solving reads just the
-/// scope's ingot. This folder gives every use the ingot root and the given
-/// assumptions: the comparison form gives none once evaluation has used them,
-/// so the uses one constant gets in different items compare equal.
+/// solved under only decide how evaluation finds it. This folder gives every
+/// use the root of the ingot defining its constant (the trait's, or the
+/// inherent impl's) and the given assumptions: the comparison form gives none
+/// once evaluation has used them, so the uses one constant gets in different
+/// items, and ingots, compare equal. The origin ingot cannot change what a use
+/// selects: coherence keeps a trait's impls in the trait's ingot or in the
+/// implementing type's, which solving searches from any origin.
 pub(crate) struct RebaseConstUseEnv<'db>(pub(crate) PredicateListId<'db>);
 
 impl<'db> TyFolder<'db> for RebaseConstUseEnv<'db> {
@@ -1093,10 +1096,10 @@ impl<'db> TyFolder<'db> for RebaseConstUseEnv<'db> {
             |scope: ScopeId<'db>| ScopeId::Item(ItemKind::TopMod(scope.ingot(db).root_mod(db)));
         let rebased = match expr.data(db) {
             ConstExpr::TraitConst(use_) => {
-                ConstExpr::TraitConst(use_.with_env(root(use_.origin_scope()), self.0))
+                ConstExpr::TraitConst(use_.with_env(root(use_.inst().def(db).scope()), self.0))
             }
             ConstExpr::InherentConst(use_) => {
-                ConstExpr::InherentConst(use_.with_env(root(use_.origin_scope()), self.0))
+                ConstExpr::InherentConst(use_.with_env(root(use_.impl_().scope()), self.0))
             }
             _ => return ty,
         };
