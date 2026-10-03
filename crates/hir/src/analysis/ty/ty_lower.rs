@@ -3714,6 +3714,9 @@ pub(crate) fn layout_param_root_uses<'db>(
                 .then_some((*param, (idx, *value)))
         })
         .collect::<FxHashMap<_, _>>();
+    if concrete_roots.is_empty() {
+        return Vec::new();
+    }
     let mut collector = LayoutParamRootUseCollector {
         db,
         concrete_roots,
