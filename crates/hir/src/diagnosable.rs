@@ -35,7 +35,7 @@ use crate::span::{DynLazySpan, params::LazyTraitRefSpan};
 
 use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::binder::Binder;
-use crate::analysis::ty::trait_def::ImplementorId;
+use crate::analysis::ty::trait_def::{ImplementorId, TraitInstId};
 use crate::semantic::{
     FieldView, FuncParamView, ImplAssocTypeView, InherentImplAdmissibility, VariantView,
     WherePredicateBoundView, WherePredicateView, constraints_for, header_constraints_for,
@@ -466,29 +466,66 @@ impl<'db> Trait<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<TyDiagCollection<'db>> {
+        use ty::trait_resolution::{TraitSolveCx, WellFormedness, check_ty_wf};
+
         let scope = self.scope();
         let assumptions = constraints_for(db, self.into());
         let self_ty = self.self_param(db);
+        let formal = TraitInstId::new_simple(db, self, self.params(db).to_vec()).trait_ref(db);
+        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(param_env(db, self.into()));
         let mut diags = Vec::new();
-        for bound in self.assoc_types(db).flat_map(|assoc| assoc.bounds(db)) {
-            let tr = bound.trait_ref(db);
-            diags.extend(trait_ref_binding_diags(
-                db,
-                tr,
-                bound.span(),
-                scope,
-                assumptions,
-            ));
-            if let Err(error) =
-                ty::trait_lower::lower_trait_ref(db, self_ty, tr, scope, assumptions, Some(self_ty))
-            {
-                diags.extend(trait_ref_lowering_diag(
+        for assoc in self.assoc_types(db) {
+            // The bound constrains the associated type, as the trait's
+            // elaborated bounds state it.
+            let subject = assoc
+                .name(db)
+                .map_or(self_ty, |name| TyId::assoc_ty(db, formal, name));
+            for bound in assoc.bounds(db) {
+                let tr = bound.trait_ref(db);
+                diags.extend(trait_ref_binding_diags(
                     db,
-                    error,
                     tr,
                     bound.span(),
-                    "associated type bound",
+                    scope,
+                    assumptions,
                 ));
+                match ty::trait_lower::lower_trait_ref(
+                    db,
+                    subject,
+                    tr,
+                    scope,
+                    assumptions,
+                    Some(self_ty),
+                ) {
+                    // The arguments a bound passes must be well-formed; the
+                    // bound trait's own requirements on the associated type
+                    // fall to the impls that define it.
+                    Ok(inst) => {
+                        if let Some(WellFormedness::IllFormed { goal, .. }) = inst.args(db)[1..]
+                            .iter()
+                            .chain(inst.assoc_type_bindings(db).values())
+                            .map(|&ty| check_ty_wf(db, solve_cx, ty))
+                            .find(|wf| !wf.is_wf())
+                        {
+                            diags.push(
+                                TraitConstraintDiag::TraitBoundNotSat {
+                                    span: bound.span().into(),
+                                    primary_goal: goal,
+                                    unsat_subgoal: None,
+                                    required_by: None,
+                                }
+                                .into(),
+                            );
+                        }
+                    }
+                    Err(error) => diags.extend(trait_ref_lowering_diag(
+                        db,
+                        error,
+                        tr,
+                        bound.span(),
+                        "associated type bound",
+                    )),
+                }
             }
         }
         diags

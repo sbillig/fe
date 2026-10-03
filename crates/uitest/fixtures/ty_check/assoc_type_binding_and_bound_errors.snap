@@ -44,3 +44,9 @@ error[3-0025]: division by zero in const context
    │
 22 │ trait FaultingBound { type Item: Sized<{ 2 / 0 }> }
    │                                          ^^^^^ cannot divide by zero
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_binding_and_bound_errors.fe:34:35
+   │
+34 │ trait IllFormedBound { type Item: Holds<Guarded<bool>> }
+   │                                   ^^^^^^^^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
