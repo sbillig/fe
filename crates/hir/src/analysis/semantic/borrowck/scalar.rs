@@ -1,6 +1,7 @@
 //! Trusted scalar predicates share the borrow checker's scoped guard algebra.
 use cranelift_entity::EntityRef;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::BTreeSet;
 
 use crate::{
     analysis::{
@@ -17,9 +18,9 @@ use crate::{
             definite_assignment::literal_bool_cond,
             diagnostics::{SemanticDiagnostic, normalized_body_internal_diag},
             normalized::{
-                NDataPath, NDataProjection, NExpr, NIndex, NPlace, NPlaceBase, NRootKind,
-                NStatement, NStatementKind, NTerminatorKind, NValueDefinition, NValueId,
-                NormalizedBody, copied_scalar_ty,
+                NDataPath, NDataProjection, NEffectArgValue, NExpr, NIndex, NOperand, NPlace,
+                NPlaceBase, NRootKind, NStatement, NStatementKind, NTerminatorKind,
+                NValueDefinition, NValueId, NormalizedBody, copied_scalar_ty,
             },
         },
         ty::{
@@ -31,7 +32,7 @@ use crate::{
     hir_def::{BinOp, CompBinOp, LogicalBinOp, UnOp},
 };
 
-use super::{loop_certificate::frontier_candidates, solver::Borrowck};
+use super::{ir::ObservedParams, loop_certificate::frontier_candidates, solver::Borrowck};
 
 /// Nested boolean operations followed when deriving a branch condition.
 pub(super) const CONDITION_BUDGET: u8 = 16;
@@ -52,6 +53,11 @@ pub(super) struct ScalarDemand<'db> {
     pub cells: FxHashSet<NPlaceBase>,
     /// Reader-loop conditions whose bounds apply once a fill is certified.
     pub bounded_readers: FxHashSet<NValueId>,
+    /// Values whose scalar facts a check, a region, an export or a callee can
+    /// read; see [`Borrowck::scalar_liveness`].
+    pub live: FxHashSet<NValueId>,
+    /// The parameters among them, as this body's summary exports them.
+    pub observed: ObservedParams,
     readers: Vec<(NValueId, Vec<NValueId>)>,
 }
 
@@ -143,6 +149,265 @@ impl<'db> Borrowck<'db> {
         Ok(())
     }
 
+    /// Values whose scalar facts something can read, and those read only through
+    /// an integer result: the result relation is the one fact a caller forgets
+    /// when the call's result is dead. Every use counts unless it is known to
+    /// relate no fact to its operands: arithmetic, a lossy cast, an unused or
+    /// fact-free result, a cell nothing reads, or an argument the callee's
+    /// summary never observes. A call result outside the live set occurs in no
+    /// other fact, so forgetting its relation to the arguments is exact.
+    pub(super) fn scalar_liveness(&self) -> (FxHashSet<NValueId>, ObservedParams) {
+        let mut pending = Vec::new();
+        let mut returned = Vec::new();
+        for block in &self.body.blocks {
+            for statement in &block.statements {
+                match &statement.kind {
+                    NStatementKind::Define { result, expr } => {
+                        expr.for_each_place_operand(|place| {
+                            pending.extend(self.body.place_values(place));
+                        });
+                        if let NExpr::ProjectValue { path, .. } = expr {
+                            pending.extend(path.0.iter().filter_map(
+                                |projection| match projection {
+                                    NDataProjection::Index(NIndex::Value(value)) => Some(*value),
+                                    _ => None,
+                                },
+                            ));
+                        }
+                        // A primitive operator relates its operands only through
+                        // its result, below.
+                        if let NExpr::Call {
+                            args, effect_args, ..
+                        } = expr
+                            && self.primitive_operator(*result).is_none()
+                        {
+                            let observed = self.observed_params(*result);
+                            pending.extend(args.iter().enumerate().filter_map(|(param, arg)| {
+                                observed
+                                    .is_none_or(|observed| {
+                                        observed
+                                            .unconditional
+                                            .contains(&u32::try_from(param).unwrap())
+                                    })
+                                    .then_some(arg.value)
+                            }));
+                            pending.extend(effect_args.iter().filter_map(|arg| match arg.arg {
+                                NEffectArgValue::Value(value) => Some(value.value),
+                                NEffectArgValue::Place(_) => None,
+                            }));
+                        }
+                    }
+                    NStatementKind::Store { destination, .. } => {
+                        pending.extend(self.body.place_values(destination));
+                    }
+                }
+            }
+            match &block.terminator.kind {
+                NTerminatorKind::Branch { cond: value, .. }
+                | NTerminatorKind::MatchEnum { value, .. } => pending.push(value.value),
+                NTerminatorKind::Return(Some(value)) => returned.push(value.value),
+                NTerminatorKind::Goto(_)
+                | NTerminatorKind::Assert { .. }
+                | NTerminatorKind::Return(None) => {}
+            }
+        }
+        let mut live = FxHashSet::default();
+        let stored = self.reaching_cell_stores();
+        self.propagate_liveness(&mut live, pending, &stored);
+        let unconditional = live.clone();
+        self.propagate_liveness(&mut live, returned, &stored);
+        let params = |live: &FxHashSet<NValueId>| {
+            live.iter()
+                .filter_map(|value| match self.body.values[value.index()].definition {
+                    NValueDefinition::EntryParam { param } => Some(param),
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>()
+        };
+        // Only an integer result's relation is forgotten; choices of other
+        // results stay, along with the arguments they name.
+        let observed = if self
+            .instance
+            .normalized_result_ty(self.db)
+            .is_integral(self.db)
+        {
+            let unconditional = params(&unconditional);
+            ObservedParams {
+                through_result: params(&live).difference(&unconditional).copied().collect(),
+                unconditional,
+            }
+        } else {
+            ObservedParams {
+                unconditional: params(&live),
+                through_result: BTreeSet::new(),
+            }
+        };
+        (live, observed)
+    }
+
+    fn propagate_liveness(
+        &self,
+        live: &mut FxHashSet<NValueId>,
+        mut pending: Vec<NValueId>,
+        stored: &FxHashMap<NValueId, FxHashSet<NValueId>>,
+    ) {
+        while let Some(value) = pending.pop() {
+            if !live.insert(value) {
+                continue;
+            }
+            match self.body.values[value.index()].definition {
+                NValueDefinition::BlockParam { block, index } => pending.extend(
+                    self.body
+                        .blocks
+                        .iter()
+                        .flat_map(|predecessor| predecessor.terminator.kind.successors())
+                        .filter(|successor| successor.block == block)
+                        .filter_map(|successor| successor.args.get(index as usize))
+                        .map(|argument| argument.value),
+                ),
+                NValueDefinition::Statement { .. } => {
+                    let Some((_, expr)) = self.body.defining_expr(value) else {
+                        continue;
+                    };
+                    // Arithmetic, lossy casts and constructors relate no fact
+                    // to their operands, and a comparison relates them only
+                    // with a tracked side. A call relates the arguments its
+                    // summary observes through its result, unless it is a
+                    // primitive operator. A tracked cell relates a load to the
+                    // stores that can reach it.
+                    let tracked = |operands: &[NOperand]| {
+                        operands
+                            .iter()
+                            .any(|operand| self.scalar.indices.contains(&self.index(operand.value)))
+                    };
+                    let relates = match expr {
+                        NExpr::Binary {
+                            op: BinOp::Comp(_),
+                            lhs,
+                            rhs,
+                        } => tracked(&[*lhs, *rhs]),
+                        NExpr::Binary { op, .. } => !matches!(op, BinOp::Arith(_)),
+                        NExpr::Unary { op, .. } => {
+                            !matches!(op, UnOp::Plus | UnOp::Minus | UnOp::BitNot)
+                        }
+                        NExpr::ScalarCast { value: source, to } => {
+                            self.lossless_scalar_cast(source.value, *to)
+                        }
+                        NExpr::Load { .. } => {
+                            pending.extend(stored.get(&value).into_iter().flatten());
+                            false
+                        }
+                        // Constructors hold scalar fields only as values; no fact
+                        // relates a field to its projection.
+                        NExpr::AggregateMake { .. }
+                        | NExpr::EnumMake { .. }
+                        | NExpr::ArrayRepeat { .. }
+                        | NExpr::MakeHandle { .. } => false,
+                        NExpr::Call { args, .. } => match self.primitive_operator(value) {
+                            Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(_))) => tracked(args),
+                            Some(
+                                PrimitiveWrapperCallKind::Binary(BinOp::Logical(_))
+                                | PrimitiveWrapperCallKind::Unary(UnOp::Not),
+                            ) => true,
+                            Some(_) => false,
+                            None => {
+                                if let Some(observed) = self.observed_params(value) {
+                                    pending.extend(args.iter().enumerate().filter_map(
+                                        |(param, arg)| {
+                                            observed
+                                                .through_result
+                                                .contains(&u32::try_from(param).unwrap())
+                                                .then_some(arg.value)
+                                        },
+                                    ));
+                                }
+                                false
+                            }
+                        },
+                        _ => true,
+                    };
+                    if relates {
+                        expr.for_each_value_operand(|operand| pending.push(operand.value));
+                    }
+                }
+                NValueDefinition::EntryParam { .. } => {}
+            }
+        }
+    }
+
+    /// For each load of a tracked whole cell, the stored values that can reach
+    /// it: a later whole-cell store replaces earlier ones on every path.
+    fn reaching_cell_stores(&self) -> FxHashMap<NValueId, FxHashSet<NValueId>> {
+        type Stores = FxHashMap<NPlaceBase, FxHashSet<NValueId>>;
+        let tracked =
+            |place: &NPlace<'db>| place.path.is_empty() && self.scalar.cells.contains(&place.base);
+        let mut predecessors = vec![Vec::new(); self.body.blocks.len()];
+        for (index, block) in self.body.blocks.iter().enumerate() {
+            for successor in block.terminator.kind.successors() {
+                predecessors[successor.block.index()].push(index);
+            }
+        }
+        let mut exits = vec![Stores::default(); self.body.blocks.len()];
+        let mut reaching = FxHashMap::default();
+        // The pass after the exits settle records what reaches each load.
+        let mut settled = false;
+        loop {
+            let mut changed = false;
+            for &index in self.inventory.loops.reverse_postorder() {
+                let mut current = Stores::default();
+                for predecessor in &predecessors[index] {
+                    for (base, values) in &exits[*predecessor] {
+                        current.entry(*base).or_default().extend(values);
+                    }
+                }
+                for statement in &self.body.blocks[index].statements {
+                    match &statement.kind {
+                        NStatementKind::Store { destination, value } if tracked(destination) => {
+                            current.insert(destination.base, FxHashSet::from_iter([value.value]));
+                        }
+                        NStatementKind::Define {
+                            result,
+                            expr: NExpr::Load { place, .. },
+                        } if settled && tracked(place) => {
+                            reaching.insert(
+                                *result,
+                                current.get(&place.base).cloned().unwrap_or_default(),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                if exits[index] != current {
+                    exits[index] = current;
+                    changed = true;
+                }
+            }
+            if settled {
+                return reaching;
+            }
+            settled = !changed;
+        }
+    }
+
+    /// The parameters the callee of the call defining `value` observes, or
+    /// `None` when its summary does not record them.
+    fn observed_params(&self, value: NValueId) -> Option<&ObservedParams> {
+        self.calls
+            .get(&value)
+            .and_then(|call| call.summary.observed_params.as_ref())
+    }
+
+    /// The primitive operator a core wrapper method call defining `value` stands for.
+    fn primitive_operator(&self, value: NValueId) -> Option<PrimitiveWrapperCallKind> {
+        let (_, NExpr::Call { callee, .. }) = self.body.defining_expr(value)? else {
+            return None;
+        };
+        let BodyOwner::Func(function) = callee.key.owner(self.db) else {
+            return None;
+        };
+        core_primitive_wrapper_call_kind(self.db, function, self.body.values[value.index()].ty)
+    }
+
     /// A reader loop uses its unsigned bound only once a fill is certified.
     pub(super) fn enable_bounded_readers(&mut self) {
         let mut selectors = FxHashSet::default();
@@ -191,6 +456,7 @@ impl<'db> Borrowck<'db> {
             .copied()
             .filter(|value| self.compact_scalar_phi(*value))
             .collect();
+        (self.scalar.live, self.scalar.observed) = self.scalar_liveness();
     }
 
     pub(super) fn stores_capability(&self, statement: &NStatement<'db>) -> bool {
