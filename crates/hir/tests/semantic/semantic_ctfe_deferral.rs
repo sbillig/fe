@@ -2308,13 +2308,14 @@ const fn guarded<const N: usize>() -> usize {
 #[test]
 fn opaque_associated_extents_specialize_with_their_impl() {
     // An index is outside the term language, so the extent stays a deferred
-    // body; selecting the impl must still bind it to the impl's arguments,
-    // and a symbolic extent crossing the selected method keeps one identity
-    // through normalization, whichever lowering supplied each side.
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "opaque_associated_extent.fe".into(),
-        r#"
+    // body, directly or behind a trait const; selecting the impl must still
+    // bind it to the impl's arguments, and a symbolic extent crossing the
+    // selected method keeps one identity through normalization, whichever
+    // lowering supplied each side.
+    for (name, source) in [
+        (
+            "opaque_associated_extent.fe",
+            r#"
 trait Has {
     type Item
     fn take(_ x: Self::Item)
@@ -2333,24 +2334,49 @@ fn length(_ x: Marker<1>::Item) -> usize { x.len() }
 fn forward<const N: usize>(_ x: Marker<N>::Item) { Marker<N>::take(x) }
 fn forward_result<const N: usize>() -> Marker<N>::Item { Marker<N>::make() }
 "#,
-    );
-    let (module, _) = db.top_mod(file);
-    db.assert_no_diags(module);
-    for func in module
-        .all_funcs(&db)
-        .iter()
-        .filter(|func| func.body(&db).is_some())
-    {
-        let instance = get_or_build_semantic_instance(
-            &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
-        );
-        let name = func.name(&db).to_opt().map(|name| name.data(&db).clone());
-        for result in [
-            normalize_semantic_body(&db, instance).map(|_| ()),
-            normalize_runtime_semantic_body(&db, instance).map(|_| ()),
-        ] {
-            assert!(result.is_ok(), "{name:?} must normalize: {result:?}");
+        ),
+        (
+            "trait_const_associated_extent.fe",
+            r#"
+trait Size { const LEN: usize }
+trait Has {
+    type Item
+    fn take(_ x: Self::Item)
+    fn make() -> Self::Item
+}
+struct Marker<const N: usize> {}
+impl<const N: usize> Size for Marker<N> { const LEN: usize = [2 as usize, 3][N] }
+impl<const N: usize> Has for Marker<N> {
+    type Item = [u8; Marker<N>::LEN]
+    fn take(_ x: Self::Item) { Self::take(x) }
+    fn make() -> Self::Item { Self::make() }
+}
+fn projected() -> Marker<1>::Item { [1, 2, 3] }
+fn forward<const N: usize>(_ x: Marker<N>::Item) { Marker<N>::take(x) }
+fn forward_result<const N: usize>() -> Marker<N>::Item { Marker<N>::make() }
+"#,
+        ),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(name.into(), source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        for func in module
+            .all_funcs(&db)
+            .iter()
+            .filter(|func| func.body(&db).is_some())
+        {
+            let instance = get_or_build_semantic_instance(
+                &db,
+                identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+            );
+            let func = func.name(&db).to_opt().map(|name| name.data(&db).clone());
+            for result in [
+                normalize_semantic_body(&db, instance).map(|_| ()),
+                normalize_runtime_semantic_body(&db, instance).map(|_| ()),
+            ] {
+                assert!(result.is_ok(), "{name} {func:?} must normalize: {result:?}");
+            }
         }
     }
 }

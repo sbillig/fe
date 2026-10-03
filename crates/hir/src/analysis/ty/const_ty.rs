@@ -2106,6 +2106,14 @@ pub(crate) fn evaluate_const_ty<'db>(
         };
 
         let assumptions = assumptions_for_body(db, body);
+        // Eager lowering records an associated const use in the scope its
+        // type is lowered in, the item around this body; record it the same
+        // way so both lowerings name one constant. Both solve alike there.
+        let mut use_item = body.scope().parent_item(db);
+        while let Some(ItemKind::Body(parent)) = use_item {
+            use_item = parent.scope().parent_item(db);
+        }
+        let use_scope = use_item.map_or(body.scope(), ScopeId::Item);
         if let Ok(resolved_path) = resolve_path(db, path, body.scope(), assumptions, true) {
             match resolved_path {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
@@ -2149,7 +2157,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                         let expr = ConstExprId::new(
                             db,
                             ConstExpr::TraitConst(AssocConstUse::new(
-                                body.scope(),
+                                use_scope,
                                 assumptions,
                                 inst,
                                 name,
@@ -2158,8 +2166,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                         ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty))
                     };
 
-                    let solve_cx =
-                        TraitSolveCx::new(db, body.scope()).with_assumptions(assumptions);
+                    let solve_cx = TraitSolveCx::new(db, use_scope).with_assumptions(assumptions);
                     if let Some(const_ty) = const_ty_from_trait_const(db, solve_cx, inst, name) {
                         let evaluated = const_ty.evaluate(db, expected_ty);
                         if evaluated.ty(db).has_invalid(db) {
@@ -2181,7 +2188,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                         specialize_available_const_assumptions(db, assumptions, capture_subst());
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let use_ = super::assoc_const::InherentConstUse::new(
-                            body.scope(),
+                            use_scope,
                             assumptions,
                             impl_,
                             recv_ty,
