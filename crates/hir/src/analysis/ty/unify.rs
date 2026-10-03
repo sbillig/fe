@@ -183,20 +183,33 @@ where
 
                     (ConstTyData::Hole(..), _) | (_, ConstTyData::Hole(..)) => Ok(()),
 
-                    (ConstTyData::TyParam(..), ConstTyData::TyParam(..))
-                    | (ConstTyData::Value(..), ConstTyData::Value(..))
-                    | (ConstTyData::Description(..), ConstTyData::Description(..))
-                    | (ConstTyData::Abstract(..), ConstTyData::Abstract(..)) => {
-                        if const_ty1 == const_ty2 {
-                            Ok(())
-                        } else {
-                            match (const_ty1.data(self.db), const_ty2.data(self.db)) {
-                                (
-                                    ConstTyData::Abstract(expr1, _),
-                                    ConstTyData::Abstract(expr2, _),
-                                ) => self.unify_const_expr(*expr1, *expr2),
-                                _ => Err(UnificationError::TypeMismatch),
+                    _ if const_ty1 == const_ty2 => Ok(()),
+
+                    (ConstTyData::Abstract(expr1, _), ConstTyData::Abstract(expr2, _)) => {
+                        self.unify_const_expr(*expr1, *expr2)
+                    }
+
+                    // One deferred body is the same constant under equal
+                    // captures; an identity capture stands for its formals.
+                    (
+                        ConstTyData::UnEvaluated {
+                            body: body1,
+                            capture: capture1,
+                            ..
+                        },
+                        ConstTyData::UnEvaluated {
+                            body: body2,
+                            capture: capture2,
+                            ..
+                        },
+                    ) if body1 == body2 => {
+                        match (capture1.complete(self.db), capture2.complete(self.db)) {
+                            (Some(subst1), Some(subst2)) if subst1.domain() == subst2.domain() => {
+                                subst1.values().iter().zip(subst2.values()).try_for_each(
+                                    |(&value1, &value2)| self.unify_ty(value1, value2),
+                                )
                             }
+                            _ => Err(UnificationError::TypeMismatch),
                         }
                     }
 

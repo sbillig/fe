@@ -2333,6 +2333,47 @@ fn length(_ x: Marker<1>::Item) -> usize { x.len() }
 }
 
 #[test]
+fn identical_deferred_extents_unify() {
+    // An index keeps each extent a deferred body, which unifies with itself
+    // under equal captures, an identity capture standing for its formals.
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "deferred_extent_unification.fe".into(),
+        r#"
+fn pick<const N: usize>(_ x: [u8; N]) -> [u8; { [3 as usize; 2][N] }] { todo() }
+fn again<const N: usize>(_ x: [u8; N]) -> [u8; { [3 as usize; 2][N] }] { again<N>(x) }
+fn inferred<const N: usize>(_ x: [u8; N]) -> [u8; { [3 as usize; 2][N] }] { inferred(x) }
+trait Has {
+    type Item
+    fn make() -> Self::Item
+}
+struct Marker<const N: usize> {}
+impl<const N: usize> Has for Marker<N> {
+    type Item = [u8; { [3 as usize; 2][N] }]
+    fn make() -> Self::Item { Self::make() }
+}
+fn projected<const N: usize>() -> Marker<N>::Item { projected<N>() }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+
+    for source in [
+        "trait Has { type Item }\nstruct Marker<const N: usize> {}\nimpl<const N: usize> Has for Marker<N> { type Item = [u8; { [3 as usize; 2][N] }] }\nfn swap<const N: usize, const M: usize>(_ x: Marker<N>::Item) -> Marker<M>::Item { x }",
+        "fn distinct<const N: usize>(_ x: [u8; { [3 as usize; 2][N] }]) -> [u8; { [4 as usize; 2][N] }] { x }",
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("distinct_deferred_extents.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        let rendered = format_diagnostics(&db, &db.run_on_top_mod(module));
+        assert!(
+            rendered.contains("type mismatch"),
+            "different deferred extents must stay distinct: {rendered}"
+        );
+    }
+}
+
+#[test]
 fn describing_a_non_const_body_fails_as_executing_it_does() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
