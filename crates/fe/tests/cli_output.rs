@@ -4548,3 +4548,53 @@ fn test_cli_build_payable_return_abi() {
         serde_json::json!([{"name": "", "type": "uint256"}])
     );
 }
+
+#[test]
+fn manual_recv_decode_preserves_typed_abi_at_all_optimization_levels() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fe_test/manual_recv_decode.fe");
+    for level in ["0", "2", "s"] {
+        let (output, exit_code) = run_fe_main(&[
+            "test",
+            "--jobs",
+            "1",
+            "--optimize",
+            level,
+            fixture.to_str().unwrap(),
+        ]);
+        assert_eq!(
+            exit_code, 0,
+            "manual decoding failed at -O {level}:\n{output}"
+        );
+    }
+    let out = tempdir().expect("output directory");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--standalone",
+        "--out-dir",
+        out.path().to_str().unwrap(),
+        fixture.to_str().unwrap(),
+    ]);
+    assert_eq!(exit_code, 0, "manual decoding ABI build failed:\n{output}");
+    let abi: Value = serde_json::from_str(
+        &fs::read_to_string(out.path().join("ManualViewer.abi.json")).unwrap(),
+    )
+    .unwrap();
+    for (name, payable, returns) in [("firstLength", false, 1), ("paid", true, 2)] {
+        let entry = abi
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == name)
+            .unwrap();
+        assert_eq!(
+            entry["inputs"],
+            serde_json::json!([{"name": "values", "type": "bytes[]"}])
+        );
+        assert_eq!(
+            entry["stateMutability"],
+            if payable { "payable" } else { "pure" }
+        );
+        assert_eq!(entry["outputs"].as_array().unwrap().len(), returns);
+    }
+}

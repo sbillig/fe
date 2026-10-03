@@ -869,6 +869,11 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
     },
 
+    /// Manually decoded arms select a variant without matching any of its fields.
+    RecvManualDecodePattern {
+        primary: DynLazySpan<'db>,
+    },
+
     // Const fn / const-check diagnostics -----------------------------------
     ConstFnEffectsNotAllowed(DynLazySpan<'db>),
     ConstFnNonConstCall {
@@ -1051,6 +1056,7 @@ impl<'db> BodyDiag<'db> {
             Self::RecvFallbackOnlyInBareBlock { .. } => 78,
             Self::RecvDuplicateFallback { .. } => 79,
             Self::RecvFallbackReturnTypeNotAllowed { .. } => 80,
+            Self::RecvManualDecodePattern { .. } => 96,
             Self::ConstFnEffectsNotAllowed(_) => 55,
             Self::ConstFnNonConstCall { .. } => 62,
             Self::ConstFnEffectfulCall { .. } => 63,

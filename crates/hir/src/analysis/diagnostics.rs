@@ -4779,6 +4779,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 }
             }
+            BodyDiag::RecvManualDecodePattern { primary } => primary_diag(
+                severity,
+                "manually decoded recv arms cannot match argument fields",
+                "use `Variant { .. }` and decode the payload in the handler",
+                primary.resolve(db),
+                error_code,
+            ),
             BodyDiag::RecvFallbackReturnTypeNotAllowed { primary } => {
                 let sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,

@@ -905,7 +905,13 @@ fn contract_recv_wrapper<'db>(
     } else {
         None
     };
-    let input = if abi_info.args_ty == TyId::unit(db) {
+    let manual_decode = arm.arm(db).is_some_and(|arm| arm.has_manual_decode(db));
+    if manual_decode && !projected_fields.is_empty() {
+        return Err(LowerError::Unsupported(
+            "manually decoded recv arm binds argument fields".to_string(),
+        ));
+    }
+    let input = if manual_decode || abi_info.args_ty == TyId::unit(db) {
         RuntimeInputPlan::None
     } else {
         let host = host.clone().expect("non-unit recv args require a host");
@@ -2911,12 +2917,16 @@ msg DecodeMsg {
     Raw { value: u256 } -> u256,
     #[selector = sol("swap(uint64,uint64)")]
     Swap { a: u64, b: u64 } -> u64,
+    #[selector = sol("manual(uint256)")]
+    Manual { value: u256 } -> u256,
 }
 
 pub contract DecodeHarness {
     recv DecodeMsg {
         Raw { value: _ } -> u256 { 0 }
         Swap { b, a } -> u64 { a }
+        #[decode(manual)]
+        Manual { .. } -> u256 { 7 }
     }
 }
 "#
@@ -2940,6 +2950,9 @@ pub contract DecodeHarness {
             projected_fields.is_empty(),
             "ignored recv arm fields must not be forwarded to the runtime callee: {projected_fields:?}"
         );
+
+        let manual_plan = recv_wrapper_plan(&db, top_mod, "manual(uint256)");
+        assert!(matches!(manual_plan.input, RuntimeInputPlan::None));
 
         let swap_plan = recv_wrapper_plan(&db, top_mod, "swap(uint64,uint64)");
         let RuntimeInputPlan::DecodeHostPayload {

@@ -13,6 +13,7 @@ use super::{
     GenericParamListId, HirIngot, IdentId, InlineAttr, InlineAttrErrorKind, InlineHint,
     ManualContractRootAttr, Partial, Pat, PatId, TupleTypeId, TypeBound, TypeId, UseAlias,
     WhereClauseId,
+    attr::parse_keyword_attr_spec,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
@@ -988,6 +989,14 @@ impl<'db> ContractRecvArm<'db> {
     /// Returns `true` if this recv arm is marked `#[payable]`.
     pub fn is_payable(&self, db: &'db dyn HirDb) -> bool {
         self.attributes.has_marker_attr(db, "payable")
+    }
+
+    /// Whether the handler validates and decodes its own input payload.
+    pub fn has_manual_decode(&self, db: &'db dyn HirDb) -> bool {
+        self.attributes.get_attr(db, "decode").is_some_and(|attr| {
+            parse_keyword_attr_spec(&attr.keyword_attr_spec(db), false, &[("manual", true)])
+                .unwrap_or(false)
+        })
     }
 }
 
