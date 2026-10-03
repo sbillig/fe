@@ -3634,11 +3634,27 @@ impl<'db> SignatureValues<'_, 'db> {
         scope: &BinderScope,
     ) -> Result<SourceValue<'db>, SemanticDiagnostic<'db>> {
         let valid = self.result(shape, scope)?;
+        let mut native = SourceValues::sharing(&self.values, ValueLimits::default());
+        // Arbitrary raw storage already admits every address of its contract.
+        // Only native capabilities add a distinct valid interpretation; keeping
+        // opaque raw result identities as well multiplies equivalent alternatives
+        // every time a recursive opaque summary is instantiated.
+        let valid = self
+            .values
+            .map_payloads(&valid, &mut native, |semantics, _, entry, _| {
+                matches!(
+                    semantics.class,
+                    CapabilityClass::Borrow(_) | CapabilityClass::View
+                )
+                .then(|| entry.clone())
+                .into_iter()
+                .collect()
+            });
         let checker = self.checker;
         let mut contents =
             CapabilityValues::sharing(&checker.inventory.values, ValueLimits::default());
         let overwrite = OpaqueWrite {
-            site: OpaqueWriteSite::Summary(self.choice),
+            site: OpaqueWriteSite::Seed,
             scope: checker
                 .instance
                 .key(checker.db)
@@ -3646,7 +3662,6 @@ impl<'db> SignatureValues<'_, 'db> {
                 .normalization_scope(checker.db),
             assumptions: checker.instance.assumptions(checker.db),
         };
-        self.choice += 1;
         let arbitrary = overwrite
             .contents(&mut contents, shape, scope, None)
             .map_err(|error| {
@@ -3655,7 +3670,6 @@ impl<'db> SignatureValues<'_, 'db> {
                     format!("opaque poststate has an unresolved capability: {error:?}"),
                 )
             })?;
-        let mut identities = BTreeMap::new();
         let arbitrary =
             contents.map_payloads(&arbitrary, &mut self.values, |_, _, entry, domain| {
                 let region = entry
@@ -3670,15 +3684,6 @@ impl<'db> SignatureValues<'_, 'db> {
                             .expect("opaque external contents");
                         source.invalidated =
                             matches!(entry.payload, CapabilityRef::Invalidated { .. });
-                        source.source.map_occurrences(&mut |occurrence, _| {
-                            *occurrence = AddressOccurrence::Summary(
-                                *identities.entry(*occurrence).or_insert_with(|| {
-                                    let choice = self.choice;
-                                    self.choice += 1;
-                                    choice
-                                }),
-                            );
-                        });
                         Guarded {
                             guard: clause.guard.clone(),
                             payload: source,
@@ -5845,6 +5850,62 @@ fn empty() -> [Required; 0] { [] }
             summary.may_return = false;
             checker.verify_summary(&summary).unwrap();
         }
+    }
+
+    #[test]
+    fn opaque_poststates_share_arbitrary_raw_families_without_losing_native_validity() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "opaque_poststate_families.fe".into(),
+            r#"
+struct Fields { first: *u256, second: *u256, borrowed: ref u256 }
+extern { fn unknown(_ fields: mut Fields) -> *u256 }
+"#,
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "unknown"))),
+        );
+        let summary = signature_summary(&db, instance, true).unwrap();
+        let values = SourceValues::new(&db, ValueLimits::default());
+        let [poststate] = summary.mutable_inputs.as_slice() else {
+            panic!("expected one pointer-bearing destination");
+        };
+        let leaves = values.leaves(&poststate.value, ValueOccurrence::Summary);
+        let raw: Vec<_> = leaves
+            .iter()
+            .filter(|leaf| leaf.semantics.class == CapabilityClass::Pointer)
+            .collect();
+        assert_eq!(raw.len(), 2);
+        assert_ne!(raw[0].path, raw[1].path);
+        assert_eq!(raw[0].payload, raw[1].payload);
+        assert!(
+            source_region(&raw[0].payload, &raw[0].guard)
+                .definite_write()
+                .is_none(),
+            "an arbitrary family cannot authorize a strong update"
+        );
+        assert!(raw.iter().all(|leaf| matches!(
+            leaf.payload.source.origin,
+            ExternalOrigin::OpaqueMemory
+        ) && leaf.payload.source.contract
+            == ReferentContract::memory(&db, TyId::u256(&db))
+            && !leaf.payload.invalidated));
+        let native: Vec<_> = leaves
+            .iter()
+            .filter(|leaf| matches!(leaf.semantics.class, CapabilityClass::Borrow(_)))
+            .collect();
+        assert!(native.iter().any(|leaf| !leaf.payload.invalidated));
+        assert!(native.iter().any(|leaf| leaf.payload.invalidated));
+        assert!(
+            values
+                .leaves(&summary.result, ValueOccurrence::Summary)
+                .iter()
+                .any(|leaf| matches!(leaf.payload.source.origin, ExternalOrigin::OpaqueHandle(_))),
+            "return values retain an identity for later observations"
+        );
     }
 
     #[test]

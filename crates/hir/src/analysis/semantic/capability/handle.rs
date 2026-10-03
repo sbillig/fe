@@ -151,8 +151,9 @@ pub enum OpaqueWriteSite<'db> {
         instance: SemanticInstance<'db>,
         statement: NStatementId,
     },
+    #[cfg(test)]
     Summary(u32),
-    /// Arbitrary initial bytes have no operation or cell identity.
+    /// Arbitrary bytes have no operation or cell identity.
     Seed,
 }
 
