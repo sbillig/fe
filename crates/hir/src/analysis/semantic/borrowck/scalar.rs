@@ -38,8 +38,8 @@ use super::{ir::ObservedParams, loop_certificate::frontier_candidates, solver::B
 pub(super) const CONDITION_BUDGET: u8 = 16;
 
 /// Scalar facts are generated on demand: for index selectors, loop frontiers,
-/// representable integer returns, and parameters an assertion constrains on
-/// every normal return.
+/// representable integer returns, returned boolean equality predicates, and
+/// parameters an assertion constrains on every normal return.
 #[derive(Default)]
 pub(super) struct ScalarDemand<'db> {
     /// Values whose trusted comparisons contribute guard facts.
@@ -153,7 +153,7 @@ impl<'db> Borrowck<'db> {
     }
 
     /// Values whose scalar facts something can read, and those read only through
-    /// an integer result: the result relation is the one fact a caller forgets
+    /// a scalar result: the result relation is the one fact a caller forgets
     /// when the call's result is dead. Every use counts unless it is known to
     /// relate no fact to its operands: arithmetic, a lossy cast, an unused or
     /// fact-free result, a cell nothing reads, or an argument the callee's
@@ -183,7 +183,7 @@ impl<'db> Borrowck<'db> {
                         if let NExpr::Call {
                             args, effect_args, ..
                         } = expr
-                            && self.primitive_operator(*result).is_none()
+                            && primitive_operator(self.db, &self.body, *result).is_none()
                         {
                             let observed = self.observed_params(*result);
                             pending.extend(args.iter().enumerate().filter_map(|(param, arg)| {
@@ -230,13 +230,10 @@ impl<'db> Borrowck<'db> {
         self.propagate_liveness(&mut live, branches, &stored);
         let unconditional = live.clone();
         self.propagate_liveness(&mut live, returned, &stored);
-        // Only an integer result's relation is forgotten; choices of other
-        // results stay, along with the arguments they name.
-        let observed = if self
-            .instance
-            .normalized_result_ty(self.db)
-            .is_integral(self.db)
-        {
+        // Integral and boolean result relations are projected when dead;
+        // choices of other results stay, along with the arguments they name.
+        let result_ty = self.instance.normalized_result_ty(self.db);
+        let observed = if result_ty.is_integral(self.db) || result_ty.is_bool(self.db) {
             let unconditional = params(&unconditional);
             ObservedParams {
                 through_result: params(&live).difference(&unconditional).copied().collect(),
@@ -281,17 +278,24 @@ impl<'db> Borrowck<'db> {
                     // summary observes through its result, unless it is a
                     // primitive operator. A tracked cell relates a load to the
                     // stores that can reach it.
-                    let tracked = |operands: &[NOperand]| {
+                    let comparison = |operands: &[NOperand]| {
                         operands
                             .iter()
                             .any(|operand| self.scalar.indices.contains(&self.index(operand.value)))
+                            || operands.iter().all(|operand| {
+                                copied_scalar_ty(
+                                    self.db,
+                                    self.body.values[operand.value.index()].ty,
+                                )
+                                .is_bool(self.db)
+                            })
                     };
                     let relates = match expr {
                         NExpr::Binary {
                             op: BinOp::Comp(_),
                             lhs,
                             rhs,
-                        } => tracked(&[*lhs, *rhs]),
+                        } => comparison(&[*lhs, *rhs]),
                         NExpr::Binary { op, .. } => !matches!(op, BinOp::Arith(_)),
                         NExpr::Unary { op, .. } => {
                             !matches!(op, UnOp::Plus | UnOp::Minus | UnOp::BitNot)
@@ -309,27 +313,31 @@ impl<'db> Borrowck<'db> {
                         | NExpr::EnumMake { .. }
                         | NExpr::ArrayRepeat { .. }
                         | NExpr::MakeHandle { .. } => false,
-                        NExpr::Call { args, .. } => match self.primitive_operator(value) {
-                            Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(_))) => tracked(args),
-                            Some(
-                                PrimitiveWrapperCallKind::Binary(BinOp::Logical(_))
-                                | PrimitiveWrapperCallKind::Unary(UnOp::Not),
-                            ) => true,
-                            Some(_) => false,
-                            None => {
-                                if let Some(observed) = self.observed_params(value) {
-                                    pending.extend(args.iter().enumerate().filter_map(
-                                        |(param, arg)| {
-                                            observed
-                                                .through_result
-                                                .contains(&u32::try_from(param).unwrap())
-                                                .then_some(arg.value)
-                                        },
-                                    ));
+                        NExpr::Call { args, .. } => {
+                            match primitive_operator(self.db, &self.body, value) {
+                                Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(_))) => {
+                                    comparison(args)
                                 }
-                                false
+                                Some(
+                                    PrimitiveWrapperCallKind::Binary(BinOp::Logical(_))
+                                    | PrimitiveWrapperCallKind::Unary(UnOp::Not),
+                                ) => true,
+                                Some(_) => false,
+                                None => {
+                                    if let Some(observed) = self.observed_params(value) {
+                                        pending.extend(args.iter().enumerate().filter_map(
+                                            |(param, arg)| {
+                                                observed
+                                                    .through_result
+                                                    .contains(&u32::try_from(param).unwrap())
+                                                    .then_some(arg.value)
+                                            },
+                                        ));
+                                    }
+                                    false
+                                }
                             }
-                        },
+                        }
                         _ => true,
                     };
                     if relates {
@@ -401,17 +409,6 @@ impl<'db> Borrowck<'db> {
         self.calls
             .get(&value)
             .and_then(|call| call.summary.observed_params.as_ref())
-    }
-
-    /// The primitive operator a core wrapper method call defining `value` stands for.
-    fn primitive_operator(&self, value: NValueId) -> Option<PrimitiveWrapperCallKind> {
-        let (_, NExpr::Call { callee, .. }) = self.body.defining_expr(value)? else {
-            return None;
-        };
-        let BodyOwner::Func(function) = callee.key.owner(self.db) else {
-            return None;
-        };
-        core_primitive_wrapper_call_kind(self.db, function, self.body.values[value.index()].ty)
     }
 
     /// A reader loop uses its unsigned bound only once a fill is certified.
@@ -610,7 +607,14 @@ impl<'db> Borrowck<'db> {
                 op: BinOp::Comp(operator),
                 lhs,
                 rhs,
-            } => self.comparison_guard(*operator, lhs.value, rhs.value, expected, include_bounds),
+            } => self.comparison_guard(
+                *operator,
+                lhs.value,
+                rhs.value,
+                expected,
+                include_bounds,
+                budget - 1,
+            ),
             NExpr::Call { callee, args, .. } => {
                 let BodyOwner::Func(function) = callee.key.owner(self.db) else {
                     return Some(selected);
@@ -633,8 +637,20 @@ impl<'db> Borrowck<'db> {
                             rhs.value,
                             expected,
                             include_bounds,
+                            budget - 1,
                         )
                     }
+                    (
+                        Some(PrimitiveWrapperCallKind::Binary(BinOp::Logical(operator))),
+                        [lhs, rhs],
+                    ) => self.logical_guard(
+                        operator,
+                        lhs.value,
+                        rhs.value,
+                        expected,
+                        include_bounds,
+                        budget - 1,
+                    ),
                     _ => Some(always),
                 }
             }
@@ -672,15 +688,34 @@ impl<'db> Borrowck<'db> {
         rhs: NValueId,
         expected: bool,
         include_bounds: bool,
+        budget: u8,
     ) -> Option<Guard<'db>> {
         let always = Guard::always(&BinderScope::default());
+        let lhs_ty = copied_scalar_ty(self.db, self.body.values[lhs.index()].ty);
+        let rhs_ty = copied_scalar_ty(self.db, self.body.values[rhs.index()].ty);
+        if lhs_ty.is_bool(self.db)
+            && lhs_ty == rhs_ty
+            && matches!(operator, CompBinOp::Eq | CompBinOp::NotEq)
+        {
+            let equal = expected == matches!(operator, CompBinOp::Eq);
+            return [false, true]
+                .into_iter()
+                .filter_map(|value| {
+                    self.condition_guard(lhs, value, include_bounds, budget)?
+                        .and(&self.condition_guard(
+                            rhs,
+                            if equal { value } else { !value },
+                            include_bounds,
+                            budget,
+                        )?)
+                })
+                .reduce(|left, right| left.or(&right));
+        }
         let lhs_index = self.index(lhs);
         let rhs_index = self.index(rhs);
         if !self.scalar.indices.contains(&lhs_index) && !self.scalar.indices.contains(&rhs_index) {
             return Some(always);
         }
-        let lhs_ty = copied_scalar_ty(self.db, self.body.values[lhs.index()].ty);
-        let rhs_ty = copied_scalar_ty(self.db, self.body.values[rhs.index()].ty);
         let Some((_, signed)) = integer_model(self.db, lhs_ty) else {
             return Some(always);
         };
@@ -711,6 +746,21 @@ impl<'db> Borrowck<'db> {
     }
 }
 
+/// The primitive operator a core wrapper method call defining `value` stands for.
+fn primitive_operator(
+    db: &dyn HirAnalysisDb,
+    body: &NormalizedBody<'_>,
+    value: NValueId,
+) -> Option<PrimitiveWrapperCallKind> {
+    let (_, NExpr::Call { callee, .. }) = body.defining_expr(value)? else {
+        return None;
+    };
+    let BodyOwner::Func(function) = callee.key.owner(db) else {
+        return None;
+    };
+    core_primitive_wrapper_call_kind(db, function, body.values[value.index()].ty)
+}
+
 fn scalar_seeds<'db>(
     db: &dyn HirAnalysisDb,
     body: &NormalizedBody<'db>,
@@ -718,6 +768,7 @@ fn scalar_seeds<'db>(
     let mut selectors = FxHashSet::default();
     let mut cells = FxHashSet::default();
     let mut values = Vec::new();
+    let mut boolean_conditions = Vec::new();
     for block in &body.blocks {
         for statement in &block.statements {
             let mut add_indices = |path: &NDataPath| {
@@ -746,10 +797,87 @@ fn scalar_seeds<'db>(
                 }
             }
         }
-        if let NTerminatorKind::Return(Some(value)) = block.terminator.kind
-            && body.values[value.value.index()].ty.is_integral(db)
+        if let NTerminatorKind::Return(Some(value)) = block.terminator.kind {
+            let ty = body.values[value.value.index()].ty;
+            if ty.is_integral(db) {
+                values.push(value.value);
+            } else if ty.is_bool(db) {
+                boolean_conditions.push((value.value, CONDITION_BUDGET));
+            }
+        }
+    }
+    // Boolean return choices can depend on predicates in their expression or
+    // on branches selecting their incoming values. Demand only trusted equality
+    // operands; return-only unsigned ordering remains deliberately untracked.
+    if !boolean_conditions.is_empty() {
+        boolean_conditions.extend(body.blocks.iter().filter_map(|block| {
+            if let NTerminatorKind::Branch { cond, .. } = block.terminator.kind {
+                Some((cond.value, CONDITION_BUDGET))
+            } else {
+                None
+            }
+        }));
+    }
+    let mut visited = FxHashMap::default();
+    while let Some((value, budget)) = boolean_conditions.pop() {
+        if budget == 0
+            || visited
+                .get(&value)
+                .is_some_and(|previous| *previous >= budget)
         {
-            values.push(value.value);
+            continue;
+        }
+        visited.insert(value, budget);
+        if let NValueDefinition::BlockParam { block, index } = body.values[value.index()].definition
+        {
+            boolean_conditions.extend(body.blocks.iter().flat_map(|predecessor| {
+                predecessor
+                    .terminator
+                    .kind
+                    .successors()
+                    .into_iter()
+                    .filter(move |successor| successor.block == block)
+                    .filter_map(move |successor| {
+                        successor
+                            .args
+                            .get(index as usize)
+                            .map(|argument| (argument.value, budget - 1))
+                    })
+            }));
+        }
+        let Some((_, expr)) = body.defining_expr(value) else {
+            continue;
+        };
+        let operator = match expr {
+            NExpr::Binary { op, .. } => Some(PrimitiveWrapperCallKind::Binary(*op)),
+            NExpr::Unary { op, .. } => Some(PrimitiveWrapperCallKind::Unary(*op)),
+            NExpr::Call { .. } => primitive_operator(db, body, value),
+            _ => None,
+        };
+        let equality = matches!(
+            operator,
+            Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(
+                CompBinOp::Eq | CompBinOp::NotEq
+            )))
+        );
+        if equality
+            || matches!(expr, NExpr::Forward { .. })
+            || matches!(
+                operator,
+                Some(
+                    PrimitiveWrapperCallKind::Unary(UnOp::Not)
+                        | PrimitiveWrapperCallKind::Binary(BinOp::Logical(_))
+                )
+            )
+        {
+            expr.for_each_value_operand(|operand| {
+                let ty = copied_scalar_ty(db, body.values[operand.value.index()].ty);
+                if ty.is_bool(db) {
+                    boolean_conditions.push((operand.value, budget - 1));
+                } else if equality && ty.is_integral(db) {
+                    values.push(operand.value);
+                }
+            });
         }
     }
     // A branch around a failed assertion constrains every normal return, which
