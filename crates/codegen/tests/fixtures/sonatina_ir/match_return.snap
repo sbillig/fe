@@ -43,23 +43,13 @@ func private %f(v0.@layout_1) {
 
     block2:
         v7.@layout_0 = call %empty;
-        v9.objref<i256> = obj.proj v1 0.i256;
-        v10.i256 = extract_value v7 0.i256;
-        obj.store v9 v10;
-        v12.objref<i256> = obj.proj v1 1.i256;
-        v13.i256 = extract_value v7 1.i256;
-        obj.store v12 v13;
+        obj.store v1 v7;
         call %return_data v1;
         unreachable;
 
     block3:
-        v14.@layout_0 = call %empty;
-        v15.objref<i256> = obj.proj v2 0.i256;
-        v16.i256 = extract_value v14 0.i256;
-        obj.store v15 v16;
-        v17.objref<i256> = obj.proj v2 1.i256;
-        v18.i256 = extract_value v14 1.i256;
-        obj.store v17 v18;
+        v8.@layout_0 = call %empty;
+        obj.store v2 v8;
         call %return_data v2;
         unreachable;
 }
@@ -121,22 +111,12 @@ func private %return_data(v0.objref<@layout_0>) {
 
     block1:
         v4.@layout_0 = obj.load v0;
-        v6.objref<i256> = obj.proj v1 0.i256;
-        v7.i256 = extract_value v4 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v1 1.i256;
-        v10.i256 = extract_value v4 1.i256;
-        obj.store v9 v10;
-        v11.i256 = call %ptr v1;
-        v12.@layout_0 = obj.load v0;
-        v13.objref<i256> = obj.proj v2 0.i256;
-        v14.i256 = extract_value v12 0.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v2 1.i256;
-        v16.i256 = extract_value v12 1.i256;
-        obj.store v15 v16;
-        v17.i256 = call %len v2;
-        evm_return v11 v17;
+        obj.store v1 v4;
+        v5.i256 = call %ptr v1;
+        v6.@layout_0 = obj.load v0;
+        obj.store v2 v6;
+        v7.i256 = call %len v2;
+        evm_return v5 v7;
 }
 
 

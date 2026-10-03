@@ -21,24 +21,11 @@ func private %abi_encode(v0.i256) {
 
     block1:
         v4.@layout_0 = call %alloc 32.i256;
-        v6.objref<i256> = obj.proj v1 0.i256;
-        v7.i256 = extract_value v4 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v1 1.i256;
-        v10.i256 = extract_value v4 1.i256;
-        obj.store v9 v10;
-        v12.objref<i256> = obj.proj v1 2.i256;
-        v13.i256 = extract_value v4 2.i256;
-        obj.store v12 v13;
-        v14.i256 = call %impl_MemBuffer__ptr v1;
-        call %mstore v14 v0;
-        v17.@layout_1 = call %span v1;
-        v18.objref<i256> = obj.proj v2 0.i256;
-        v19.i256 = extract_value v17 0.i256;
-        obj.store v18 v19;
-        v20.objref<i256> = obj.proj v2 1.i256;
-        v21.i256 = extract_value v17 1.i256;
-        obj.store v20 v21;
+        obj.store v1 v4;
+        v5.i256 = call %impl_MemBuffer__ptr v1;
+        call %mstore v5 v0;
+        v8.@layout_1 = call %span v1;
+        obj.store v2 v8;
         call %return_data v2;
         unreachable;
 }
@@ -246,23 +233,10 @@ func private %init() {
         v2.i256 = sym_size &__Coin_runtime;
         v3.i256 = sym_addr &__Coin_runtime;
         v4.@layout_0 = call %alloc v2;
-        v6.objref<i256> = obj.proj v0 0.i256;
-        v7.i256 = extract_value v4 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v0 1.i256;
-        v10.i256 = extract_value v4 1.i256;
-        obj.store v9 v10;
-        v12.objref<i256> = obj.proj v0 2.i256;
-        v13.i256 = extract_value v4 2.i256;
-        obj.store v12 v13;
+        obj.store v0 v4;
         call %codecopy v0 0.i256 v3 v2;
-        v15.@layout_1 = call %span v0;
-        v16.objref<i256> = obj.proj v1 0.i256;
-        v17.i256 = extract_value v15 0.i256;
-        obj.store v16 v17;
-        v18.objref<i256> = obj.proj v1 1.i256;
-        v19.i256 = extract_value v15 1.i256;
-        obj.store v18 v19;
+        v7.@layout_1 = call %span v0;
+        obj.store v1 v7;
         call %return_data v1;
         unreachable;
 }
@@ -420,22 +394,12 @@ func private %return_data(v0.objref<@layout_1>) {
 
     block1:
         v4.@layout_1 = obj.load v0;
-        v6.objref<i256> = obj.proj v1 0.i256;
-        v7.i256 = extract_value v4 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v1 1.i256;
-        v10.i256 = extract_value v4 1.i256;
-        obj.store v9 v10;
-        v11.i256 = call %ptr__g79ff v1;
-        v12.@layout_1 = obj.load v0;
-        v13.objref<i256> = obj.proj v2 0.i256;
-        v14.i256 = extract_value v12 0.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v2 1.i256;
-        v16.i256 = extract_value v12 1.i256;
-        obj.store v15 v16;
-        v17.i256 = call %len__g79ff v2;
-        evm_return v11 v17;
+        obj.store v1 v4;
+        v5.i256 = call %ptr__g79ff v1;
+        v6.@layout_1 = obj.load v0;
+        obj.store v2 v6;
+        v7.i256 = call %len__g79ff v2;
+        evm_return v5 v7;
 }
 
 func private %runtime() {
@@ -447,111 +411,102 @@ func private %runtime() {
 
     block1:
         v4.@layout_2 = call %stor_ptr__g2c78 0.i256;
-        v5.objref<i256> = obj.proj v0 0.i256;
-        v6.i256 = extract_value v4 0.i256;
-        obj.store v5 v6;
-        v8.@layout_2 = call %stor_ptr__gd216 2.i256;
-        v9.objref<i256> = obj.proj v1 0.i256;
-        v10.i256 = extract_value v8 0.i256;
-        obj.store v9 v10;
-        v11.i256 = call %calldataload 0.i256;
-        v13.i256 = shr 224.i256 v11;
-        v15.i1 = eq v13 2877082652.i256;
-        br v15 block2 block7;
+        obj.store v0 v4;
+        v6.@layout_2 = call %stor_ptr__gd216 2.i256;
+        obj.store v1 v6;
+        v7.i256 = call %calldataload 0.i256;
+        v9.i256 = shr 224.i256 v7;
+        v11.i1 = eq v9 2877082652.i256;
+        br v11 block2 block7;
 
     block2:
-        v17.i256 = call %calldataload 4.i256;
-        v19.i256 = call %calldataload 36.i256;
-        v20.i1 = eq v17 0.i256;
-        br v20 block12 block14;
+        v13.i256 = call %calldataload 4.i256;
+        v15.i256 = call %calldataload 36.i256;
+        v16.i1 = eq v13 0.i256;
+        br v16 block12 block14;
 
     block3:
-        v21.i256 = call %calldataload 4.i256;
-        v22.@layout_2 = obj.load v0;
-        v23.i256 = call %raw__g9438 v22;
-        v24.i256 = call %balance_of_raw v21 v23;
-        call %abi_encode v24;
+        v17.i256 = call %calldataload 4.i256;
+        v18.@layout_2 = obj.load v0;
+        v19.i256 = call %raw__g9438 v18;
+        v20.i256 = call %balance_of_raw v17 v19;
+        call %abi_encode v20;
         unreachable;
 
     block4:
-        v25.i256 = call %calldataload 4.i256;
-        v26.i256 = call %calldataload 36.i256;
-        v27.i1 = eq v25 0.i256;
-        br v27 block16 block18;
+        v21.i256 = call %calldataload 4.i256;
+        v22.i256 = call %calldataload 36.i256;
+        v23.i1 = eq v21 0.i256;
+        br v23 block16 block18;
 
     block5:
-        v28.@layout_2 = obj.load v1;
-        v29.i256 = call %raw__gf198 v28;
-        v30.i256 = call %total_supply v29;
-        call %abi_encode v30;
+        v24.@layout_2 = obj.load v1;
+        v25.i256 = call %raw__gf198 v24;
+        v26.i256 = call %total_supply v25;
+        call %abi_encode v26;
         unreachable;
 
     block6:
-        v31.@layout_1 = call %empty;
-        v32.objref<i256> = obj.proj v2 0.i256;
-        v33.i256 = extract_value v31 0.i256;
-        obj.store v32 v33;
-        v35.objref<i256> = obj.proj v2 1.i256;
-        v36.i256 = extract_value v31 1.i256;
-        obj.store v35 v36;
+        v27.@layout_1 = call %empty;
+        obj.store v2 v27;
         call %return_data v2;
         unreachable;
 
     block7:
-        v39.i1 = eq v13 1818602213.i256;
-        br v39 block3 block8;
+        v30.i1 = eq v9 1818602213.i256;
+        br v30 block3 block8;
 
     block8:
-        v42.i1 = eq v13 217554442.i256;
-        br v42 block4 block9;
+        v33.i1 = eq v9 217554442.i256;
+        br v33 block4 block9;
 
     block9:
-        v45.i1 = eq v13 960555502.i256;
-        br v45 block5 block10;
+        v36.i1 = eq v9 960555502.i256;
+        br v36 block5 block10;
 
     block10:
         jump block6;
 
     block11:
-        v46.i256 = phi (v52 block12) (v58 block13);
-        call %abi_encode v46;
+        v37.i256 = phi (v43 block12) (v49 block13);
+        call %abi_encode v37;
         unreachable;
 
     block12:
-        v47.@layout_2 = obj.load v0;
-        v48.@layout_2 = obj.load v1;
-        v49.i256 = call %raw__g9438 v47;
-        v50.i256 = call %raw__gf198 v48;
-        v52.i256 = call %credit_alice v19 v49 v50;
+        v38.@layout_2 = obj.load v0;
+        v39.@layout_2 = obj.load v1;
+        v40.i256 = call %raw__g9438 v38;
+        v41.i256 = call %raw__gf198 v39;
+        v43.i256 = call %credit_alice v15 v40 v41;
         jump block11;
 
     block13:
-        v53.@layout_2 = obj.load v0;
-        v54.@layout_2 = obj.load v1;
-        v55.i256 = call %raw__g9438 v53;
-        v56.i256 = call %raw__gf198 v54;
-        v58.i256 = call %credit_bob v19 v55 v56;
+        v44.@layout_2 = obj.load v0;
+        v45.@layout_2 = obj.load v1;
+        v46.i256 = call %raw__g9438 v44;
+        v47.i256 = call %raw__gf198 v45;
+        v49.i256 = call %credit_bob v15 v46 v47;
         jump block11;
 
     block14:
         jump block13;
 
     block15:
-        v59.@layout_3 = phi (v64 block16) (v68 block17);
-        v60.i256 = call %transfer_result_code v59;
-        call %abi_encode v60;
+        v50.@layout_3 = phi (v55 block16) (v59 block17);
+        v51.i256 = call %transfer_result_code v50;
+        call %abi_encode v51;
         unreachable;
 
     block16:
-        v61.@layout_2 = obj.load v0;
-        v62.i256 = call %raw__g9438 v61;
-        v64.@layout_3 = call %transfer_from_alice v26 v62;
+        v52.@layout_2 = obj.load v0;
+        v53.i256 = call %raw__g9438 v52;
+        v55.@layout_3 = call %transfer_from_alice v22 v53;
         jump block15;
 
     block17:
-        v65.@layout_2 = obj.load v0;
-        v66.i256 = call %raw__g9438 v65;
-        v68.@layout_3 = call %transfer_from_bob v26 v66;
+        v56.@layout_2 = obj.load v0;
+        v57.i256 = call %raw__g9438 v56;
+        v59.@layout_3 = call %transfer_from_bob v22 v57;
         jump block15;
 
     block18:

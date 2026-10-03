@@ -1,0 +1,104 @@
+struct Record { words: [u256; 6], marker: () }
+
+impl Copy for Record {}
+
+#[inline(never)]
+fn returned_record(_ seed: u256) -> Record {
+    Record { words: [seed, 2, 3, 4, 5, 6], marker: () }
+}
+
+#[inline(never)]
+fn rotated_record(_ source: ref Record) -> Record {
+    Record {
+        words: [
+            source.words[5],
+            source.words[0],
+            source.words[1],
+            source.words[2],
+            source.words[3],
+            source.words[4],
+        ],
+        marker: (),
+    }
+}
+
+#[test]
+fn returned_record_copies_keep_independent_storage() {
+    let mut original = returned_record(11)
+    let mut copied = original
+    original.words[0] = 77
+    copied.words[5] = 88
+    assert!(copied.words[0] == 11)
+    assert!(original.words[5] == 6)
+    assert!(original.words[0] == 77)
+    assert!(copied.words[5] == 88)
+}
+
+#[test]
+fn assigning_return_over_its_input_preserves_all_reads() {
+    let mut record = returned_record(1)
+    let mut i: u256 = 0
+    while i < 7 {
+        record = rotated_record(ref record)
+        i += 1
+    }
+    assert!(record.words[0] == 6)
+    assert!(record.words[1] == 1)
+    assert!(record.words[2] == 2)
+    assert!(record.words[3] == 3)
+    assert!(record.words[4] == 4)
+    assert!(record.words[5] == 5)
+}
+
+enum Payload {
+    Words([u256; 6],),
+    Empty,
+}
+
+impl Copy for Payload {}
+
+enum State {
+    Pending,
+    Ready,
+}
+
+impl Copy for State {}
+
+struct Envelope { payload: Payload, sequence: u256, state: State }
+
+impl Copy for Envelope {}
+
+#[inline(never)]
+fn returned_envelope(_ seed: u256) -> Envelope {
+    Envelope { payload: Payload::Words([seed, 2, 3, 4, 5, 6]), sequence: 9, state: State::Ready }
+}
+
+#[test]
+fn returned_enum_snapshot_keeps_its_tag_and_payload() {
+    let original = returned_envelope(17)
+    let mut copied = original
+    copied.payload = Payload::Empty
+    copied.sequence = 99
+    copied.state = State::Pending
+    match original.payload {
+        Payload::Words(words,) => {
+            assert!(words[0] == 17)
+            assert!(words[5] == 6)
+        },
+        Payload::Empty => assert!(false),
+    }
+    match copied.payload {
+        Payload::Empty => {},
+        Payload::Words(_,) => assert!(false),
+    }
+    assert!(original.sequence == 9)
+    assert!(copied.sequence == 99)
+    match original.state {
+        State::Ready => {},
+        State::Pending => assert!(false),
+    }
+    match copied.state {
+        State::Pending => {},
+        State::Ready => assert!(false),
+    }
+}

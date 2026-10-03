@@ -17,24 +17,11 @@ func private %abi_encode(v0.i256) {
 
     block1:
         v4.@layout_0 = call %alloc 32.i256;
-        v6.objref<i256> = obj.proj v1 0.i256;
-        v7.i256 = extract_value v4 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v1 1.i256;
-        v10.i256 = extract_value v4 1.i256;
-        obj.store v9 v10;
-        v12.objref<i256> = obj.proj v1 2.i256;
-        v13.i256 = extract_value v4 2.i256;
-        obj.store v12 v13;
-        v14.i256 = call %impl_MemBuffer__ptr v1;
-        call %mstore v14 v0;
-        v17.@layout_1 = call %span v1;
-        v18.objref<i256> = obj.proj v2 0.i256;
-        v19.i256 = extract_value v17 0.i256;
-        obj.store v18 v19;
-        v20.objref<i256> = obj.proj v2 1.i256;
-        v21.i256 = extract_value v17 1.i256;
-        obj.store v20 v21;
+        obj.store v1 v4;
+        v5.i256 = call %impl_MemBuffer__ptr v1;
+        call %mstore v5 v0;
+        v8.@layout_1 = call %span v1;
+        obj.store v2 v8;
         call %return_data v2;
         unreachable;
 }
@@ -244,23 +231,10 @@ func private %init() {
         v2.i256 = sym_size &__BalanceMap_runtime;
         v3.i256 = sym_addr &__BalanceMap_runtime;
         v4.@layout_0 = call %alloc v2;
-        v6.objref<i256> = obj.proj v0 0.i256;
-        v7.i256 = extract_value v4 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v0 1.i256;
-        v10.i256 = extract_value v4 1.i256;
-        obj.store v9 v10;
-        v12.objref<i256> = obj.proj v0 2.i256;
-        v13.i256 = extract_value v4 2.i256;
-        obj.store v12 v13;
+        obj.store v0 v4;
         call %codecopy v0 0.i256 v3 v2;
-        v15.@layout_1 = call %span v0;
-        v16.objref<i256> = obj.proj v1 0.i256;
-        v17.i256 = extract_value v15 0.i256;
-        obj.store v16 v17;
-        v18.objref<i256> = obj.proj v1 1.i256;
-        v19.i256 = extract_value v15 1.i256;
-        obj.store v18 v19;
+        v7.@layout_1 = call %span v0;
+        obj.store v1 v7;
         call %return_data v1;
         unreachable;
 }
@@ -273,23 +247,13 @@ func private %keccak256(v0.objref<@layout_1>) -> i256 {
 
     block1:
         v4.@layout_1 = obj.load v0;
-        v6.objref<i256> = obj.proj v1 0.i256;
-        v7.i256 = extract_value v4 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v1 1.i256;
-        v10.i256 = extract_value v4 1.i256;
-        obj.store v9 v10;
-        v11.i256 = call %ptr__g79ff v1;
-        v12.@layout_1 = obj.load v0;
-        v13.objref<i256> = obj.proj v2 0.i256;
-        v14.i256 = extract_value v12 0.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v2 1.i256;
-        v16.i256 = extract_value v12 1.i256;
-        obj.store v15 v16;
-        v17.i256 = call %len__g79ff v2;
-        v18.i256 = evm_keccak256 v11 v17;
-        return v18;
+        obj.store v1 v4;
+        v5.i256 = call %ptr__g79ff v1;
+        v6.@layout_1 = obj.load v0;
+        obj.store v2 v6;
+        v7.i256 = call %len__g79ff v2;
+        v8.i256 = evm_keccak256 v5 v7;
+        return v8;
 }
 
 func private %impl_MemBuffer__len(v0.objref<@layout_0>) -> i256 {
@@ -467,22 +431,12 @@ func private %return_data(v0.objref<@layout_1>) {
 
     block1:
         v4.@layout_1 = obj.load v0;
-        v6.objref<i256> = obj.proj v1 0.i256;
-        v7.i256 = extract_value v4 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v1 1.i256;
-        v10.i256 = extract_value v4 1.i256;
-        obj.store v9 v10;
-        v11.i256 = call %ptr__g79ff v1;
-        v12.@layout_1 = obj.load v0;
-        v13.objref<i256> = obj.proj v2 0.i256;
-        v14.i256 = extract_value v12 0.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v2 1.i256;
-        v16.i256 = extract_value v12 1.i256;
-        obj.store v15 v16;
-        v17.i256 = call %len__g79ff v2;
-        evm_return v11 v17;
+        obj.store v1 v4;
+        v5.i256 = call %ptr__g79ff v1;
+        v6.@layout_1 = obj.load v0;
+        obj.store v2 v6;
+        v7.i256 = call %len__g79ff v2;
+        evm_return v5 v7;
 }
 
 func private %runtime() {
@@ -536,30 +490,25 @@ func private %runtime() {
 
     block7:
         v34.@layout_1 = call %empty;
-        v35.objref<i256> = obj.proj v0 0.i256;
-        v36.i256 = extract_value v34 0.i256;
-        obj.store v35 v36;
-        v37.objref<i256> = obj.proj v0 1.i256;
-        v38.i256 = extract_value v34 1.i256;
-        obj.store v37 v38;
+        obj.store v0 v34;
         call %return_data v0;
         unreachable;
 
     block8:
-        v41.i1 = eq v4 1246470123.i256;
-        br v41 block3 block9;
+        v37.i1 = eq v4 1246470123.i256;
+        br v37 block3 block9;
 
     block9:
-        v44.i1 = eq v4 2430412327.i256;
-        br v44 block4 block10;
+        v40.i1 = eq v4 2430412327.i256;
+        br v40 block4 block10;
 
     block10:
-        v47.i1 = eq v4 3378517838.i256;
-        br v47 block5 block11;
+        v43.i1 = eq v4 3378517838.i256;
+        br v43 block5 block11;
 
     block11:
-        v50.i1 = eq v4 197806145.i256;
-        br v50 block6 block12;
+        v46.i1 = eq v4 197806145.i256;
+        br v46 block6 block12;
 
     block12:
         jump block7;
@@ -702,14 +651,9 @@ func inline(always) private %storagemap_storage_slot_with_salt(v0.i256, v1.i256)
 
     block4:
         v23.@layout_1 = call %from_raw_parts v13 v20;
-        v24.objref<i256> = obj.proj v2 0.i256;
-        v25.i256 = extract_value v23 0.i256;
-        obj.store v24 v25;
-        v27.objref<i256> = obj.proj v2 1.i256;
-        v28.i256 = extract_value v23 1.i256;
-        obj.store v27 v28;
-        v29.i256 = call %keccak256 v2;
-        return v29;
+        obj.store v2 v23;
+        v24.i256 = call %keccak256 v2;
+        return v24;
 }
 
 func private %to_word(v0.i256) -> i256 {

@@ -3489,6 +3489,20 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         class: &RuntimeClass<'db>,
         object: ValueId,
     ) -> Result<(), LowerError> {
+        if let CopySource::Value {
+            value,
+            class: source_class,
+        } = &source
+            && source_class == class
+            && matches!(class, RuntimeClass::AggregateValue { .. })
+        {
+            // Keep the typed snapshot intact so the backend can forward a call's
+            // output destination instead of materializing and copying each field.
+            self.fb
+                .insert_inst_no_result(ObjStore::new(self.module.inst_set(), object, *value));
+            return Ok(());
+        }
+
         if let CopySource::Const {
             value,
             class: source_class,

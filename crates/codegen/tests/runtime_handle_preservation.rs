@@ -2493,20 +2493,30 @@ fn use_returned_array() -> u8 {
 }
 
 #[test]
-fn by_value_array_return_materialization_structurally_copies_into_object_storage() {
+fn by_value_array_return_keeps_whole_value_store_for_destination_forwarding() {
     with_runtime_package!(
-        "by_value_array_return_materialization_structurally_copies_into_object_storage.fe",
+        "by_value_array_return_keeps_whole_value_store_for_destination_forwarding.fe",
         r#"
-fn return_array_after_projection(xs: [u256; 3]) -> [u256; 3] {
-    let ys = xs
-    let _ = ys[2]
-    ys
+#[inline(never)]
+fn returned_words(seed: u256) -> [u256; 6] {
+    [seed, 2, 3, 4, 5, 6]
 }
 
-fn use_returned_array() -> u256 {
-    let mut xs: [u256; 3] = [1, 2, 3]
-    xs = return_array_after_projection(xs)
-    xs[0]
+fn use_returned_array(seed: u256) -> u256 {
+    let mut xs = returned_words(seed)
+    xs[5] = xs[0]
+    xs[5] + xs[1]
+}
+
+msg WordsMsg {
+    #[selector = 1]
+    Read { seed: u256 } -> u256,
+}
+
+pub contract WordsContract {
+    recv WordsMsg {
+        Read { seed } -> u256 { use_returned_array(seed) }
+    }
 }
 "#,
         |db, package| {
@@ -2515,21 +2525,21 @@ fn use_returned_array() -> u256 {
             let body = sonatina_function_body(&output, "use_returned_array");
 
             assert!(
-                body.contains("extract_value"),
-                "by-value aggregate materialization should structurally extract fields instead of whole-object obj.store:\n{body}"
+                !body.contains("extract_value"),
+                "materializing a typed return value must retain the complete store for destination forwarding:\n{body}"
             );
             assert!(
-                body.contains("obj.load"),
-                "object-backed aggregate copies should load leaf values from the source object before storing them:\n{body}"
+                body.contains("obj.store"),
+                "the returned value must initialize independent object storage:\n{body}"
             );
         }
     );
 }
 
 #[test]
-fn fieldless_enum_fields_copy_into_object_storage_via_enum_ops() {
+fn fieldless_enum_fields_remain_typed_in_aggregate_storage() {
     with_test_runtime_package!(
-        "fieldless_enum_fields_copy_into_object_storage_via_enum_ops.fe",
+        "fieldless_enum_fields_remain_typed_in_aggregate_storage.fe",
         r#"
 enum E {
     A,
@@ -2551,14 +2561,18 @@ fn build(flag: bool) -> Pair {
 fn exercise() {
     let pair = build(true)
     assert(pair.xs[0] == 1)
+    match pair.e {
+        E::A => {}
+        E::B => assert(false),
+    }
 }
 "#,
         |db, package| {
             let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
                 .expect("Sonatina IR");
             assert!(
-                output.contains("enum.set_tag"),
-                "fieldless enum object copies should set the destination enum tag explicitly:\n{output}"
+                output.contains("enumtag("),
+                "reading a fieldless enum copied inside an aggregate must retain its typed tag:\n{output}"
             );
         }
     );
