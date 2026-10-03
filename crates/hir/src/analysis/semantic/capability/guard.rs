@@ -58,9 +58,11 @@ impl Ord for ValueOccurrence {
             Self::Value(value) => (0, value.as_u32(), true, 0),
             Self::CallChoice { result, choice } => (0, result.as_u32(), false, choice),
             Self::Root(root) => (1, root.as_u32(), false, 0),
-            Self::Argument(argument) => (2, argument, false, 0),
-            Self::Summary => (3, 0, false, 0),
-            Self::SummaryChoice(choice) => (4, choice, false, 0),
+            // Summary export preserves the private choices' order, including
+            // their position before argument and result observations.
+            Self::SummaryChoice(choice) => (2, choice, false, 0),
+            Self::Argument(argument) => (3, argument, false, 0),
+            Self::Summary => (4, 0, false, 0),
         };
         key(self).cmp(&key(other))
     }
