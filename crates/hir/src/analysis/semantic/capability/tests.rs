@@ -2895,6 +2895,48 @@ fn identity_substitution_reuses_nested_values_without_interning() {
 }
 
 #[test]
+fn call_branch_guards_over_distinct_result_fields_stay_compact() {
+    let scope = scope();
+    let result = NValueId::from_u32(12);
+    let mut remaining = Guard::always(&scope);
+    let alternatives: Vec<_> = (0..12)
+        .map(|index| {
+            let choice = ChoiceKey::new(
+                ValueOccurrence::CallChoice {
+                    result,
+                    choice: index,
+                },
+                StructuralPath::default(),
+            );
+            let branch = remaining.with_boolean(choice.clone(), true).unwrap();
+            remaining = remaining.with_boolean(choice, false).unwrap();
+            let field = ChoiceKey::new(
+                ValueOccurrence::Value(result),
+                StructuralPath::new([Projection::Field(FieldIndex(index.try_into().unwrap()))]),
+            );
+            let selected = branch.with_variant(field.clone(), VariantIndex(1)).unwrap();
+            let excluded = branch.with_variant(field, VariantIndex(0)).unwrap();
+            (selected, excluded)
+        })
+        .collect();
+    let union = alternatives
+        .iter()
+        .map(|(selected, _)| selected.clone())
+        .reduce(|left, right| left.or(&right))
+        .unwrap();
+    assert!(
+        union.node_count() <= alternatives.len() * 64,
+        "{} call/result-field nodes",
+        union.node_count()
+    );
+    for (selected, excluded) in alternatives {
+        assert!(selected.implies(&union));
+        assert!(excluded.and(&union).is_none());
+    }
+    assert!(remaining.and(&union).is_none());
+}
+
+#[test]
 fn caller_and_callee_choice_unions_stay_compact_through_summary_renaming() {
     let scope = scope();
     let alternatives: Vec<_> = (0..10)
