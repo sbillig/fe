@@ -643,25 +643,29 @@ preserves the allocation selected by a boolean through a join without reviving a
 moved pointer or turning one-path native initialization into an unconditional
 fact.
 
-Trusted primitive comparisons add same-type integer equality and unsigned
-ordering to those guards. Recognition uses resolved primitive operations and core
-wrapper calls; user methods with similar names contribute nothing. Negation,
-conjunction, and disjunction carry bounded relations. Unsigned widening and
-same-width same-signedness casts share index identity; truncation and signed
-widening do not. Signed comparisons contribute equality only.
+Trusted primitive comparisons add boolean equality, same-type integer equality,
+and unsigned ordering to those guards. Recognition uses resolved primitive
+operations and core wrapper calls; user methods with similar names contribute
+nothing. Negation, conjunction, and disjunction carry bounded relations. Unsigned
+widening and same-width same-signedness casts share index identity; truncation
+and signed widening do not. Signed comparisons contribute equality only.
 
 Scalar facts are generated on demand. Index selectors, loop frontiers,
-representable integer returns, and the integer parameters of a body whose
-branch guards a failed assertion seed the demand; loads, forwards, lossless
-casts, and block parameters close over it. Ordinary loop feedback omits unsigned
-bounds until a loop certificate justifies them. Exact scalar cells remember
+representable integer returns, equality predicates contributing to boolean
+returns, and the integer parameters of a body whose branch guards a failed
+assertion seed the demand; loads, forwards, lossless casts, and block parameters
+close over it. Ordinary loop feedback omits unsigned bounds until a loop
+certificate justifies them. Exact scalar cells remember
 guarded store versions, and a load binds a new SSA value only while no possible
 write has invalidated that cell.
 
 A summary exports the facts that hold on every normal return over formal
-arguments, including the relation to an integer result. A helper whose
-assertion pins a parameter therefore separates the caller's selector, while a
-helper that can return without asserting does not. Summaries also export
+arguments, including the relation to an integer or boolean result. Integral
+returns use the Result index binder; boolean returns use the Summary choice.
+Calls map these to the actual result and existentially project them when no
+fact reads that result. Argument restrictions survive this projection. A helper
+whose assertion pins a parameter therefore separates the caller's selector,
+while a helper that can return without asserting does not. Summaries also export
 definite constant values for writable scalar inputs. Local scalar choices are
 projected before export; public boolean choices map to the caller's actual
 arguments. Calls in a recursive component project their internal call choices
@@ -670,6 +674,15 @@ independent choices. Hidden index witnesses are projected in one shared
 decision-graph traversal. Injective, order-preserving decision renames reuse the
 existing branch order; renames that reorder or identify decisions use Shannon
 expansion.
+
+Scalar-only summaries classify argument observations from the exported relation
+and its projection without the result. A boolean identity observes its input
+through the result, a constant result does not observe an irrelevant branch
+selector, and an assertion keeps its argument observed even when the result is
+discarded. Accesses, ownership effects, mutable poststates, and obligations retain
+conservative observations. Returned predicates demand trusted equality operands
+within the boolean condition budget; arithmetic dependencies and return-only
+unsigned ordering remain untracked.
 
 ### Certified loop contents
 

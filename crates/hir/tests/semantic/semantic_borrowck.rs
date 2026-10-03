@@ -16,7 +16,7 @@ use fe_hir::{
             capability::{
                 external::{AddressProvenance, ExternalOrigin},
                 footprint::AccessExtent,
-                guard::{ChoiceKey, ValueOccurrence},
+                guard::{ChoiceKey, Guard, ValueOccurrence},
                 handle::{AddressOccurrence, HandleAddressSpace},
                 index::IndexExpr,
                 path::{Projection as CapabilityProjection, RegionPath, StructuralPath},
@@ -13950,5 +13950,290 @@ fn view(_ outer: mut Outer) -> mut Outer { outer }
         } else {
             assert!(diagnostics.contains(expected), "{body}: {diagnostics}");
         }
+    }
+}
+
+#[test]
+fn boolean_scalar_summaries_preserve_return_relations() {
+    let source = r#"
+fn identity(_ x: bool) -> bool { x }
+fn negated(_ x: bool) -> bool { !x }
+fn forwarded(_ x: bool) -> bool { identity(x) }
+fn nested(_ x: bool) -> bool { identity(identity(x)) }
+fn selected(_ x: bool) -> bool { if x { true } else { false } }
+fn equal(_ x: bool, _ y: bool) -> bool { x == y }
+fn unequal(_ x: bool, _ y: bool) -> bool { x != y }
+fn logical(_ x: bool, _ y: bool) -> bool { x && !y }
+fn constant(_ x: bool) -> bool { if x { true } else { true } }
+"#;
+    assert_eq!(checked_borrow_diags(source), "");
+    let result = ChoiceKey::new(ValueOccurrence::Summary, StructuralPath::default());
+    let first = ChoiceKey::new(ValueOccurrence::Argument(0), StructuralPath::default());
+    let second = ChoiceKey::new(ValueOccurrence::Argument(1), StructuralPath::default());
+    for function in [
+        "identity",
+        "negated",
+        "forwarded",
+        "nested",
+        "selected",
+        "equal",
+        "unequal",
+        "logical",
+        "constant",
+    ] {
+        with_borrow_summary(source, function, |_db, summary| {
+            let guard = summary.scalar_result.expect("boolean return relation");
+            let observed = summary.observed_params.as_ref().unwrap();
+            assert!(
+                observed.unconditional.is_empty(),
+                "{function}: {observed:?}"
+            );
+            if function == "constant" {
+                assert!(observed.through_result.is_empty(), "{observed:?}");
+            } else {
+                assert!(
+                    observed.through_result.contains(&0),
+                    "{function}: {observed:?}"
+                );
+                assert_eq!(
+                    observed.through_result.contains(&1),
+                    matches!(function, "equal" | "unequal" | "logical")
+                );
+            }
+            for x in [false, true] {
+                for y in [false, true] {
+                    let expected = match function {
+                        "negated" => !x,
+                        "equal" => x == y,
+                        "unequal" => x != y,
+                        "logical" => x && !y,
+                        "constant" => true,
+                        _ => x,
+                    };
+                    let selected = guard
+                        .with_boolean(first.clone(), x)
+                        .unwrap()
+                        .with_boolean(second.clone(), y)
+                        .unwrap();
+                    assert!(
+                        selected.with_boolean(result.clone(), expected).is_some(),
+                        "{function}: {x}, {y}"
+                    );
+                    assert!(
+                        selected.with_boolean(result.clone(), !expected).is_none(),
+                        "{function}: {x}, {y}"
+                    );
+                }
+            }
+            let discarded =
+                guard.forget_occurrences(|occurrence| occurrence == ValueOccurrence::Summary);
+            assert!(
+                Guard::always(discarded.scope()).implies(&discarded),
+                "{function}: {discarded:?}"
+            );
+        });
+    }
+}
+
+#[test]
+fn boolean_predicate_summaries_preserve_integral_inputs() {
+    let source = r#"
+fn predicate(_ x: usize) -> bool { x == 1 }
+fn selected(_ x: usize) -> bool { if x == 1 { true } else { false } }
+fn forwarded(_ x: usize) -> bool { predicate(x) }
+fn negated(_ x: usize) -> bool { !predicate(x) }
+fn arithmetic(_ x: usize) -> bool { x + 1 == 1 }
+fn ordered(_ x: usize) -> bool { x < 1 }
+"#;
+    assert_eq!(checked_borrow_diags(source), "");
+    for function in ["predicate", "selected", "forwarded", "negated"] {
+        with_borrow_summary(source, function, |_db, summary| {
+            let guard = summary.scalar_result.expect("boolean predicate relation");
+            let result = ChoiceKey::new(ValueOccurrence::Summary, StructuralPath::default());
+            let one = Guard::always(guard.scope())
+                .with_equality(IndexExpr::FormalValue(0), IndexExpr::Const(1))
+                .unwrap();
+            let expected = function != "negated";
+            let selected = guard.with_boolean(result.clone(), expected).unwrap();
+            assert!(selected.implies(&one), "{function}: {selected:?}");
+            assert!(
+                guard
+                    .and(&one)
+                    .unwrap()
+                    .with_boolean(result, !expected)
+                    .is_none(),
+                "{function}"
+            );
+            let observed = summary.observed_params.as_ref().unwrap();
+            assert!(
+                observed.unconditional.is_empty() && observed.through_result.contains(&0),
+                "{function}: {observed:?}"
+            );
+        });
+    }
+    for function in ["arithmetic", "ordered"] {
+        with_borrow_summary(source, function, |_db, summary| {
+            assert!(
+                summary.scalar_result.is_none(),
+                "{function}: {:?}",
+                summary.scalar_result
+            );
+        });
+    }
+}
+
+#[test]
+fn boolean_call_results_prove_index_separation() {
+    for (condition, accepted) in [
+        ("!same(k, j)", true),
+        ("different(k, j)", true),
+        ("forwarded(k, j)", true),
+        ("pass(pass(different(k, j)))", true),
+        ("selected(k, j, flag)", true),
+        ("same(k, j)", false),
+        ("different(k, other)", false),
+        ("pass(different(k, other))", false),
+    ] {
+        let source = format!(
+            r#"
+fn same(_ x: usize, _ y: usize) -> bool {{ x == y }}
+fn different(_ x: usize, _ y: usize) -> bool {{ x != y }}
+fn pass(_ x: bool) -> bool {{ x }}
+fn forwarded(_ x: usize, _ y: usize) -> bool {{ different(x, y) }}
+fn selected(_ x: usize, _ y: usize, _ flag: bool) -> bool {{
+    if flag {{ different(x, y) }} else {{ different(x, y) }}
+}}
+fn check(_ arr: mut [u64; 8], k: usize, j: usize, other: usize, flag: bool) {{
+    let held = mut arr[k]
+    if {condition} {{ arr[j] = 0 }}
+    held = 1
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        assert_eq!(diagnostics.is_empty(), accepted, "{source}\n{diagnostics}");
+        assert!(!diagnostics.contains("internal"), "{diagnostics}");
+    }
+}
+
+#[test]
+fn discarded_boolean_results_preserve_argument_assertions() {
+    let source = r#"
+fn constrain(_ x: usize) -> bool { assert!(x == 1)
+    true
+}
+fn discard(_ x: usize) -> usize {
+    let unused = constrain(x)
+    x
+}
+fn check_flag(_ x: bool) -> bool { assert!(x)
+    x
+}
+fn discard_flag(_ x: bool) -> bool {
+    let unused = check_flag(x)
+    false
+}
+"#;
+    assert_eq!(checked_borrow_diags(source), "");
+    for function in ["constrain", "discard"] {
+        with_borrow_summary(source, function, |_db, summary| {
+            let guard = summary.scalar_result.expect("argument assertion survives");
+            let one = Guard::always(guard.scope())
+                .with_equality(IndexExpr::FormalValue(0), IndexExpr::Const(1))
+                .unwrap();
+            assert!(guard.implies(&one), "{function}");
+            assert!(
+                summary.observed_params.unwrap().unconditional.contains(&0),
+                "{function}"
+            );
+        });
+    }
+    for function in ["check_flag", "discard_flag"] {
+        with_borrow_summary(source, function, |_db, summary| {
+            let guard = summary.scalar_result.expect("boolean assertion survives");
+            let flag = ChoiceKey::new(ValueOccurrence::Argument(0), StructuralPath::default());
+            assert!(guard.with_boolean(flag, false).is_none(), "{function}");
+            assert!(
+                summary.observed_params.unwrap().unconditional.contains(&0),
+                "{function}"
+            );
+        });
+    }
+}
+
+#[test]
+fn boolean_return_relations_keep_independent_inputs_and_loads() {
+    for (flag_ty, declaration, condition, accepted) in [
+        ("bool", "", "!pass(flag)", true),
+        ("bool", "", "!pass(other)", false),
+        ("mut bool", "", "!pass(flag)", false),
+        ("mut bool", "flag = false", "!pass(flag)", false),
+    ] {
+        let source = format!(
+            r#"
+fn pass(_ x: bool) -> bool {{ x }}
+fn check(_ arr: mut [u64; 1], _ flag: {flag_ty}, other: bool) {{
+    let held = mut arr[0]
+    if pass(flag) {{
+        {declaration}
+        if {condition} {{ arr[0] = 0 }}
+    }}
+    held = 1
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        assert_eq!(diagnostics.is_empty(), accepted, "{source}\n{diagnostics}");
+        assert!(!diagnostics.contains("internal"), "{diagnostics}");
+    }
+}
+
+#[test]
+fn recursive_boolean_return_relations_converge() {
+    let source = r#"
+fn pass(_ flag: bool, _ recurse: bool) -> bool {
+    if recurse { pass(flag, false) } else { flag }
+}
+fn forward(_ flag: bool) -> bool { pass(flag, true) }
+"#;
+    assert_eq!(checked_borrow_diags(source), "");
+    with_borrow_summary(source, "forward", |_db, summary| {
+        let guard = summary.scalar_result.expect("recursive boolean relation");
+        let result = ChoiceKey::new(ValueOccurrence::Summary, StructuralPath::default());
+        let flag = ChoiceKey::new(ValueOccurrence::Argument(0), StructuralPath::default());
+        for value in [false, true] {
+            assert!(
+                guard
+                    .with_boolean(flag.clone(), value)
+                    .unwrap()
+                    .with_boolean(result.clone(), !value)
+                    .is_none()
+            );
+        }
+    });
+}
+
+#[test]
+fn boolean_return_relations_renew_call_results_on_loop_feedback() {
+    for (condition, accepted) in [("!pass(flag)", true), ("!pass(other)", false)] {
+        let source = format!(
+            r#"
+fn pass(_ x: bool) -> bool {{ x }}
+fn check(_ arr: mut [u64; 1], flag: bool, other: bool) {{
+    let held = mut arr[0]
+    let mut iteration: usize = 0
+    while iteration < 2 {{
+        if flag {{
+            if {condition} {{ arr[0] = 0 }}
+        }}
+        iteration += 1
+    }}
+    held = 1
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        assert_eq!(diagnostics.is_empty(), accepted, "{source}\n{diagnostics}");
+        assert!(!diagnostics.contains("internal"), "{diagnostics}");
     }
 }

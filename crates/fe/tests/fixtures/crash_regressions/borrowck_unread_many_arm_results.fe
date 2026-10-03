@@ -257,3 +257,76 @@ fn used_constant_branch_results(_ arr: [u64; 1]) -> u64 {
     sum += arr[constant_branch(Many::V19.ordinal())]
     sum
 }
+
+// Boolean result relations must be projected before repeated calls multiply them.
+fn integer_predicate(_ index: usize) -> bool { index == 0 }
+fn boolean_branch(_ index: usize) -> bool { if index == 0 { true } else { false } }
+fn constant_boolean_branch(_ index: usize) -> bool { if index == 0 { true } else { true } }
+fn dead_boolean_predicate_results() {
+    let unused0 = integer_predicate(Many::V0.ordinal())
+    let unused1 = integer_predicate(Many::V1.ordinal())
+    let unused2 = integer_predicate(Many::V2.ordinal())
+    let unused3 = integer_predicate(Many::V3.ordinal())
+    let unused4 = integer_predicate(Many::V4.ordinal())
+    let unused5 = integer_predicate(Many::V5.ordinal())
+    let unused6 = integer_predicate(Many::V6.ordinal())
+    let unused7 = integer_predicate(Many::V7.ordinal())
+    let unused8 = integer_predicate(Many::V8.ordinal())
+    let unused9 = integer_predicate(Many::V9.ordinal())
+    let unused10 = integer_predicate(Many::V10.ordinal())
+    let unused11 = integer_predicate(Many::V11.ordinal())
+    let unused12 = integer_predicate(Many::V12.ordinal())
+    let unused13 = integer_predicate(Many::V13.ordinal())
+    let unused14 = integer_predicate(Many::V14.ordinal())
+    let unused15 = integer_predicate(Many::V15.ordinal())
+    let unused16 = integer_predicate(Many::V16.ordinal())
+    let unused17 = integer_predicate(Many::V17.ordinal())
+    let unused18 = integer_predicate(Many::V18.ordinal())
+    let unused19 = integer_predicate(Many::V19.ordinal())
+}
+fn dead_boolean_branch_results() {
+    let unused0 = boolean_branch(Many::V0.ordinal())
+    let unused1 = boolean_branch(Many::V1.ordinal())
+    let unused2 = boolean_branch(Many::V2.ordinal())
+    let unused3 = boolean_branch(Many::V3.ordinal())
+    let unused4 = boolean_branch(Many::V4.ordinal())
+    let unused5 = boolean_branch(Many::V5.ordinal())
+    let unused6 = boolean_branch(Many::V6.ordinal())
+    let unused7 = boolean_branch(Many::V7.ordinal())
+    let unused8 = boolean_branch(Many::V8.ordinal())
+    let unused9 = boolean_branch(Many::V9.ordinal())
+    let unused10 = boolean_branch(Many::V10.ordinal())
+    let unused11 = boolean_branch(Many::V11.ordinal())
+    let unused12 = boolean_branch(Many::V12.ordinal())
+    let unused13 = boolean_branch(Many::V13.ordinal())
+    let unused14 = boolean_branch(Many::V14.ordinal())
+    let unused15 = boolean_branch(Many::V15.ordinal())
+    let unused16 = boolean_branch(Many::V16.ordinal())
+    let unused17 = boolean_branch(Many::V17.ordinal())
+    let unused18 = boolean_branch(Many::V18.ordinal())
+    let unused19 = boolean_branch(Many::V19.ordinal())
+}
+fn live_constant_boolean_branch_results() -> usize {
+    let mut sum: usize = 0
+    if constant_boolean_branch(Many::V0.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V1.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V2.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V3.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V4.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V5.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V6.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V7.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V8.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V9.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V10.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V11.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V12.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V13.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V14.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V15.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V16.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V17.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V18.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V19.ordinal()) { sum += 1 }
+    sum
+}
