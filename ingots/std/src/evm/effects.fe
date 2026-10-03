@@ -8,6 +8,7 @@ use core::abi::{
     ByteInput,
     Decode,
     Encode,
+    abi_payload_size,
     encode_alloc,
     encode_return_alloc,
     encode_single_root_alloc,
@@ -1167,20 +1168,16 @@ impl Log for Evm {
 
 impl Create for Evm {}
 
-#[arithmetic(unchecked)]
 #[inline(always)]
 fn encode_calldata<M>(_ selector: u32, _ message: own M) -> MemBuffer
 where M: Encode<Sol>
 {
     let selector_size = size_of<Sol::Selector>()
     let selector_word = (selector as u256) << 224
-    let encoded = encode_abi_payload(message)
-    let buffer = MemBuffer::alloc(selector_size + encoded.len())
+    let payload_size = abi_payload_size(message)
+    let buffer = MemBuffer::alloc(selector_size + payload_size)
     ops::mstore(addr: buffer.ptr(), value: selector_word)
-    ptr::copy(
-        dest: ptr::offset_bytes(buffer.ptr(), selector_size),
-        source: encoded.span(),
-    )
+    message.encode(ptr::offset_bytes(buffer.ptr(), selector_size))
     buffer
 }
 

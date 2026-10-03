@@ -1,0 +1,84 @@
+use core::abi::{ByteInput, store_word}
+use core::error::ErrorVariant
+use core::ptr
+use std::abi::Sol
+use std::evm::{encode_error, encode_msg_calldata}
+
+#[abi]
+struct Nested { code: u256, data: Bytes }
+
+#[abi]
+struct Payload { nested: Nested, other: Bytes }
+
+impl ErrorVariant<Sol> for Payload {
+    const SELECTOR: u32 = 0x11223344
+}
+
+#[abi]
+struct Empty {}
+
+impl ErrorVariant<Sol> for Empty {
+    const SELECTOR: u32 = 0xaabbccdd
+}
+
+msg Message {
+    #[selector = 0x01020304]
+    Payload { nested: Nested, other: Bytes },
+    #[selector = 0x05060708]
+    Empty,
+}
+
+#[test]
+fn nested_selector_payloads_use_relative_offsets_and_independent_storage() {
+    let marker: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    let bytes = Bytes::from_word_prefix(word: 0xaabbcc << 232, len: 3)
+    let source = bytes.encoded_span()
+    let message = encode_msg_calldata(Message::Payload {
+        nested: Nested { code: marker, data: bytes },
+        other: bytes,
+    })
+    let error = encode_error(Payload {
+        nested: Nested { code: marker, data: bytes },
+        other: bytes,
+    })
+    assert!(message.len() == 260 && error.len() == 260)
+    let data = message.span()
+    assert!(data.word_at(0) >> 224 == 0x01020304)
+    assert!(error.span().word_at(0) >> 224 == 0x11223344)
+    // Outer heads, then the nested tuple and the second byte-string tail.
+    assert!(data.word_at(4) == 64)
+    assert!(data.word_at(36) == 192)
+    assert!(data.word_at(68) == marker)
+    assert!(data.word_at(100) == 64)
+    assert!(data.word_at(132) == 3)
+    assert!(data.word_at(164) == 0xaabbcc << 232)
+    assert!(data.word_at(196) == 3)
+    assert!(data.word_at(228) == 0xaabbcc << 232)
+    assert!(source.word_at(0) == 3 && source.word_at(32) == 0xaabbcc << 232)
+
+    // Both fields used the same input allocation. Mutating it afterwards must
+    // leave each encoded result intact, including the final padding bytes.
+    store_word(ptr: ptr::offset_bytes(source.ptr(), 32), value: marker)
+    assert!(data.word_at(164) == 0xaabbcc << 232)
+    assert!(data.word_at(228) == 0xaabbcc << 232)
+    let mut offset = 4
+    while offset < message.len() {
+        assert!(data.byte_at(offset) == error.span().byte_at(offset))
+        offset += 1
+    }
+    store_word(ptr: ptr::offset_bytes(error.ptr(), 68), value: 7)
+    assert!(data.word_at(68) == marker)
+}
+
+#[test]
+fn empty_selector_payloads_preserve_their_independent_prefixes() {
+    let message = encode_msg_calldata(Message::Empty {})
+    let error = encode_error(Empty {})
+    let later = encode_error(Empty {})
+    assert!(message.len() == 4 && error.len() == 4 && later.len() == 4)
+    assert!(message.span().word_at(0) >> 224 == 0x05060708)
+    assert!(error.span().word_at(0) >> 224 == 0xaabbccdd)
+    store_word(ptr: later.ptr(), value: 0)
+    assert!(message.span().word_at(0) >> 224 == 0x05060708)
+    assert!(error.span().word_at(0) >> 224 == 0xaabbccdd)
+}
