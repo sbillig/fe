@@ -82,65 +82,37 @@ fn cyclic_trait_ref_diag<'db>(span: DynLazySpan<'db>, context: &str) -> TyDiagCo
 }
 
 impl<'db> SuperTraitRefView<'db> {
-    /// Diagnostics for this super-trait reference in its owner's context.
-    /// Uses the trait's `Self` as subject and checks WF; kind mismatch is emitted
-    /// elsewhere via `Trait::diags_super_traits`.
-    pub fn diags(self, db: &'db dyn HirAnalysisDb) -> Option<TyDiagCollection<'db>> {
+    /// Why this super-trait reference fails to lower in its owner's context,
+    /// if it does; `Trait::diags_super_traits` checks the rest.
+    pub fn lowering_diag(self, db: &'db dyn HirAnalysisDb) -> Option<TyDiagCollection<'db>> {
         use name_resolution::diagnostics::PathResDiag;
         use ty::trait_lower::{self, TraitRefLowerError};
-        use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
 
         let span = self.span();
-        let subject = self.subject_self(db);
-        let scope = self.owner.scope();
-        let assumptions = self.assumptions(db);
         let tr = self.trait_ref(db);
-
-        let inst = match trait_lower::lower_trait_ref(db, subject, tr, scope, assumptions, None) {
-            Ok(i) => i,
+        match trait_lower::lower_trait_ref(
+            db,
+            self.subject_self(db),
+            tr,
+            self.owner.scope(),
+            self.assumptions(db),
+            None,
+        ) {
+            Ok(_)
+            | Err(TraitRefLowerError::UnsafeLocalBoundBlanketImpl | TraitRefLowerError::Ignored) => {
+                None
+            }
             Err(TraitRefLowerError::PathResError(err)) => {
-                let path = tr.path(db).unwrap();
-                return err.into_trait_ref_diag(db, path, span.path());
+                err.into_trait_ref_diag(db, tr.path(db).to_opt()?, span.path())
             }
             Err(TraitRefLowerError::InvalidDomain(res)) => {
-                let path = tr.path(db).unwrap();
-                let ident = path.ident(db).unwrap();
-                return Some(
-                    PathResDiag::ExpectedTrait(span.path().into(), ident, res.kind_name()).into(),
-                );
+                let ident = tr.path(db).to_opt()?.ident(db).to_opt()?;
+                Some(PathResDiag::ExpectedTrait(span.path().into(), ident, res.kind_name()).into())
             }
-            Err(TraitRefLowerError::Cycle) => {
-                return Some(cyclic_trait_ref_diag(
-                    span.path().into(),
-                    "super-trait bound",
-                ));
-            }
-            Err(TraitRefLowerError::UnsafeLocalBoundBlanketImpl | TraitRefLowerError::Ignored) => {
-                return None;
-            }
-        };
-
-        // Do not emit when subject contains assoc types of params
-        if inst.self_ty(db).contains_assoc_ty_of_param(db) {
-            return None;
-        }
-
-        match check_trait_inst_wf(
-            db,
-            ty::trait_resolution::TraitSolveCx::new(db, scope)
-                .with_assumptions(param_env(db, self.owner.into())),
-            inst,
-        ) {
-            WellFormedness::WellFormed => None,
-            WellFormedness::IllFormed { goal, subgoal } => Some(
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: span.into(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                }
-                .into(),
-            ),
+            Err(TraitRefLowerError::Cycle) => Some(cyclic_trait_ref_diag(
+                span.path().into(),
+                "super-trait bound",
+            )),
         }
     }
 }
@@ -446,7 +418,8 @@ impl<'db> Trait<'db> {
         out
     }
 
-    /// Diagnostics for super-traits (semantic, kind-mismatch only).
+    /// Diagnostics for super-traits: kind mismatches, references that fail
+    /// to lower, and well-formedness of the rest.
     pub fn diags_super_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
 
@@ -463,27 +436,26 @@ impl<'db> Trait<'db> {
                 );
             }
 
-            // Additionally, ensure that the super-trait reference is well-formed
-            if let Ok(inst) = view.trait_inst(db) {
-                match check_trait_inst_wf(
-                    db,
-                    ty::trait_resolution::TraitSolveCx::new(db, self.scope())
-                        .with_assumptions(param_env(db, self.into())),
-                    inst,
-                ) {
-                    WellFormedness::WellFormed => {}
-                    WellFormedness::IllFormed { goal, .. } => {
-                        diags.push(
-                            TraitConstraintDiag::TraitBoundNotSat {
-                                span: view.span().into(),
-                                primary_goal: goal,
-                                unsat_subgoal: None,
-                                required_by: None,
-                            }
-                            .into(),
-                        );
+            // A reference that lowers must also be well-formed.
+            let Ok(inst) = view.trait_inst(db) else {
+                diags.extend(view.lowering_diag(db));
+                continue;
+            };
+            if let WellFormedness::IllFormed { goal, .. } = check_trait_inst_wf(
+                db,
+                ty::trait_resolution::TraitSolveCx::new(db, self.scope())
+                    .with_assumptions(param_env(db, self.into())),
+                inst,
+            ) {
+                diags.push(
+                    TraitConstraintDiag::TraitBoundNotSat {
+                        span: view.span().into(),
+                        primary_goal: goal,
+                        unsat_subgoal: None,
+                        required_by: None,
                     }
-                }
+                    .into(),
+                );
             }
         }
         diags

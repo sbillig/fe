@@ -1,0 +1,1 @@
+A super-trait reference that fails to resolve or check, such as `trait Sub: Missing {}`, `trait Sub: Has<1, 2> {}`, a mistyped const argument or one that fails compile-time evaluation, is now reported. Previously such a super-trait was silently dropped from the trait.
