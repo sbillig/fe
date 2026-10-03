@@ -3012,15 +3012,12 @@ impl<'db> Borrowck<'db> {
                         continue;
                     }
                     let mut alternative = source.clone();
-                    alternative.clobber = SourceExpr::from_place(&target_clause.payload)
-                        .zip(SourceExpr::from_place(&written_clause.payload))
-                        .map(|(target, written)| {
-                            Box::new(ClobberCondition::new(
-                                target,
-                                written,
-                                extent.substitute(&written_subst),
-                            ))
-                        });
+                    alternative.clobber = ClobberCondition::from_places(
+                        &target_clause.payload,
+                        &written_clause.payload,
+                        extent.substitute(&written_subst),
+                    )
+                    .map(Box::new);
                     clauses.push(Guarded {
                         guard,
                         payload: SymbolicPlace {

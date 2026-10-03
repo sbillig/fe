@@ -6,9 +6,10 @@ use crate::{
             BorrowActivation, FieldIndex, SemOrigin,
             capability::{
                 external::{
-                    AddressProvenance, ExternalOrigin, ExternalSource, MemoryOffset,
-                    ReferentContract,
+                    AddressProvenance, ClobberCondition, ExternalOrigin, ExternalSource,
+                    MemoryOffset, ReferentContract,
                 },
+                footprint::AccessExtent,
                 handle::{
                     AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
                     OpaqueWriteSite,
@@ -629,6 +630,66 @@ fn opaque_contents_preserve_families_without_manufacturing_native_loans() {
             assert!(leaf.payload.authority(&leaf.guard).is_empty());
             for index in leaf.payload.indices() {
                 leaf.guard.scope().validate(index).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn conditional_writes_to_local_handles_preserve_prerequisites_without_authority() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let scope = BinderScope::default();
+    let contract = ReferentContract::memory(&db, TyId::u256(&db));
+    let condition = ClobberCondition::new(
+        SourceExpr::whole(ExternalSource::input(
+            InputSource::place(0),
+            contract,
+            false,
+        )),
+        SourceExpr::whole(ExternalSource::input(InputSource::place(1), contract, true)),
+        AccessExtent::Bytes(IndexExpr::Const(32)),
+    );
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    for ty in [
+        TyId::ptr_to(&db, contract.ty),
+        TyId::borrow_ref_of(&db, contract.ty),
+        TyId::borrow_mut_of(&db, contract.ty),
+    ] {
+        let shape = capability_shape(&db, overwrite.scope, overwrite.assumptions, ty).unwrap();
+        for conditional in [false, true] {
+            let mut source = ExternalSource::opaque_memory(contract);
+            source.clobber = conditional.then(|| Box::new(condition.clone()));
+            let written = region(RegionRoot::External(source));
+            let contents = overwrite
+                .contents(
+                    &mut values,
+                    shape,
+                    &scope,
+                    Some((&root(&db, 0), AccessFootprint::typed(&written))),
+                )
+                .unwrap();
+            let leaves = values.leaves(&contents, ValueOccurrence::Summary);
+            assert!(!leaves.is_empty());
+            for leaf in leaves {
+                assert!(leaf.payload.authority(&leaf.guard).is_empty());
+                let region = match &leaf.payload {
+                    CapabilityRef::Address(region) => {
+                        assert_eq!(ty, TyId::ptr_to(&db, contract.ty));
+                        region
+                    }
+                    CapabilityRef::Invalidated { region, .. } => region,
+                    payload => {
+                        panic!("overwrite established a valid native capability: {payload:?}")
+                    }
+                };
+                assert!(!region.is_empty());
+                for clause in region.clauses() {
+                    let RegionRoot::External(source) = &clause.payload.root else {
+                        panic!("replacement must be external");
+                    };
+                    assert_eq!(source.clobber.as_deref(), conditional.then_some(&condition));
+                }
             }
         }
     }

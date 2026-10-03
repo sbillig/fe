@@ -873,10 +873,10 @@ impl<'db> Borrowck<'db> {
         Ok(())
     }
 
-    /// Compare one access with every active loan. Other loans are checked
-    /// conservatively. An input loan's unresolved remainder, without the entry
-    /// assumption that distinct inputs are separate, becomes a separation
-    /// requirement on callers.
+    /// Compare one access with every active loan. An input loan's unresolved
+    /// remainder becomes a physical separation requirement on callers. A local
+    /// loan cannot escape, but a conditional arbitrary access can instead require
+    /// callers to rule out the corruption that would make that access possible.
     fn compare_access(
         &self,
         active: &[CapabilityOccurrence<'db>],
@@ -937,7 +937,6 @@ impl<'db> Borrowck<'db> {
                 {
                     continue;
                 }
-                return analysis.report(self.conflict_diag(kind, definition, origin));
             }
             if footprint.region.clauses().len() * loan.region.clauses().len()
                 > SEPARATION_PAIR_LIMIT
@@ -966,9 +965,16 @@ impl<'db> Borrowck<'db> {
                         return analysis.report(self.conflict_diag(kind, definition, origin));
                     }
                 };
-                if !representable(&pair.access) || !representable(&pair.borrowed) {
-                    // A caller cannot name this endpoint.
-                    return analysis.report(self.conflict_diag(kind, definition, origin));
+                if !input_backed || !representable(&pair.access) || !representable(&pair.borrowed) {
+                    // A caller cannot name a local loan. It can still exclude
+                    // an arbitrary access by proving its corruption prerequisite
+                    // false. This grants no authority and requires separation of
+                    // the original write even if the local loan was suspended.
+                    let Some(payload) = self.clobber_separation(&pair.access) else {
+                        return analysis.report(self.conflict_diag(kind, definition, origin));
+                    };
+                    clauses.push(Guarded { guard, payload });
+                    continue;
                 }
                 let suspended = Separation::suspension_slices(&pair.borrowed, &suspended, &guard);
                 clauses.push(Guarded {
@@ -1077,6 +1083,10 @@ impl<'db> Borrowck<'db> {
                             || self.refinable_guard(&slice.guard)
                     }))
             {
+                if let Some(payload) = self.clobber_separation(&pair.access) {
+                    clauses.push(Guarded { guard, payload });
+                    continue;
+                }
                 return analysis.report(self.separation_diag(
                     "cannot prove that this call keeps memory the callee holds borrowed separate from the callee's access",
                     origin,
@@ -1110,6 +1120,39 @@ impl<'db> Borrowck<'db> {
             origin,
             "borrow separation requirements exceed the analysis limits".into(),
         )
+    }
+
+    /// Excluding the corruption that introduced an arbitrary address also
+    /// excludes an access through it. The prerequisite is checked physically at
+    /// callers, without the authority or suspensions of the later local loan.
+    fn clobber_separation(&self, access: &SymbolicPlace<'db>) -> Option<Separation<'db>> {
+        let RegionRoot::External(source) = &access.root else {
+            return None;
+        };
+        let clobber = source.clobber_dependency()?;
+        let place = |source: &SourceExpr<'db>| SymbolicPlace {
+            root: RegionRoot::External(source.source.clone()),
+            path: source.path.clone(),
+            views: source.views.clone(),
+        };
+        let protected = place(&clobber.target);
+        let access = place(&clobber.written);
+        if clobber.target.invalidated
+            || clobber.written.invalidated
+            || !representable(&protected)
+            || !representable(&access)
+            || !(self.refinable_place(&protected) || self.refinable_place(&access))
+        {
+            return None;
+        }
+        Some(Separation {
+            protected,
+            protected_kind: BorrowKind::Ref,
+            access,
+            access_kind: BorrowKind::Mut,
+            extent: clobber.extent,
+            suspended: Box::new([]),
+        })
     }
 
     /// A conflict at a call, with the borrow and access the requirement began

@@ -46,7 +46,8 @@ pub const SEPARATION_SIZE_LIMIT: usize = 256;
 /// of `protected` outside the suspended projections.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Separation<'db> {
-    /// A selected referent of a borrow that is live across the access.
+    /// A selected referent of a live borrow, or a cell whose corruption a
+    /// caller must exclude to rule out a conditional arbitrary access.
     pub protected: SymbolicPlace<'db>,
     pub protected_kind: BorrowKind,
     pub access: SymbolicPlace<'db>,

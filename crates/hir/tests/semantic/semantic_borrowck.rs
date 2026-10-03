@@ -11032,6 +11032,157 @@ fn inspect(n: u256) {{
 }
 
 #[test]
+fn loop_writes_keep_local_array_handles_conditional() {
+    let helpers = r#"use core::ptr
+use core::size_of
+
+struct Arr<T> { ptr: *T, len: u256 }
+impl<T> Copy for Arr<T> {}
+impl<T> Arr<T> {
+    fn alloc(_ len: u256) -> Self {
+        Arr { ptr: ptr::cast<u8, T>(ptr::alloc_bytes(len * size_of<T>())), len }
+    }
+    fn at(self, _ index: u256) -> *T {
+        assert(index < self.len)
+        ptr::offset(self.ptr, index)
+    }
+}
+struct State { amount: u256, valid: bool }
+impl Copy for State {}
+struct Book { orders: Arr<State>, items: Arr<State>, used: u256, blob: *u8 }
+impl Copy for Book {}
+impl Book {
+    fn order(ref self, _ index: u256) -> *State { self.orders.at(index) }
+}
+
+fn one(_ book: ref Book, _ index: u256) {
+    let order = book.order(index)
+    order.amount = order.amount + 1
+    order.valid = true
+}
+
+fn prepare(_ book: ref Book) -> (Book, Arr<u256>, bool) {
+    let hashes = Arr<u256>::alloc(book.orders.len)
+    let mut i: u256 = 0
+    while i < book.orders.len {
+        *hashes.at(i) = i
+        one(book, i)
+        i += 1
+    }
+    (book, hashes, true)
+}
+
+"#;
+    for pointer in [
+        "book.order(index)",
+        "ptr::offset(book.orders.ptr, index)",
+        "ptr::cast<u8, State>(ptr::offset_bytes(ptr::byte_ptr(book.orders.ptr), index * size_of<State>()))",
+    ] {
+        for call in [
+            "prepare(ref book)",
+            "forward(ref book)",
+            "prepare_then_write(ref book)",
+        ] {
+            for aliases in [false, true] {
+                let orders = if aliases {
+                    "Arr<State> { ptr: ptr::cast<Book, State>(header), len: 2 }"
+                } else {
+                    "Arr<State>::alloc(2)"
+                };
+                let inspect = format!(
+                    r#"
+fn forward(_ book: ref Book) -> (Book, Arr<u256>, bool) {{ prepare(book) }}
+fn prepare_then_write(_ book: ref Book) -> (Book, Arr<u256>, bool) {{
+    let (prepared, hashes, contains) = prepare(book)
+    one(ref prepared, 0)
+    (prepared, hashes, contains)
+}}
+fn inspect() {{
+    let header = ptr::alloc<Book>()
+    let orders = {orders}
+    let book = Book {{ orders, items: Arr<State>::alloc(0), used: 0, blob: ptr::alloc_bytes(0) }}
+    *header = book
+    let (prepared, hashes, contains) = {call}
+    assert(prepared.order(1).amount == 21)
+    assert(*hashes.at(1) == 1 && contains)
+}}
+"#
+                );
+                // The alias control borrows the same header its pool writes hit.
+                let inspect = if aliases {
+                    inspect.replace("ref book)", "ref *header)")
+                } else {
+                    inspect
+                };
+                let source = format!(
+                    "{}\n{inspect}",
+                    helpers.replace("book.order(index)", pointer)
+                );
+                let diagnostics = checked_borrow_diags(&source);
+                assert_eq!(diagnostics.is_empty(), !aliases, "{source}\n{diagnostics}");
+                if aliases {
+                    assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn local_loans_require_callers_to_refute_conditional_corruption() {
+    for access in [
+        "*pointer = 9",
+        "let holder = Holder { pointer }\npoke(ref holder)",
+    ] {
+        for aliases in [false, true] {
+            for corrupt in [false, true] {
+                let destination = if aliases {
+                    "ptr::byte_ptr(slot)"
+                } else {
+                    "ptr::alloc_bytes(32)"
+                };
+                let source = format!(
+                    r#"
+use core::ptr
+struct Holder {{ pointer: *u256 }}
+fn poke(_ holder: ref Holder) {{ *holder.pointer = 9 }}
+fn replaced(slot: **u256, destination: *u8, corrupt: bool) -> *u256 {{
+    if corrupt {{ ptr::zero_bytes(destination, 32) }}
+    *slot
+}}
+fn work(slot: **u256, destination: *u8, corrupt: bool) -> u256 {{
+    let pointer = replaced(slot, destination, corrupt)
+    let mut local: u256 = 1
+    let held = mut local
+    {access}
+    held += 1
+    held
+}}
+fn forward(slot: **u256, destination: *u8, corrupt: bool) -> u256 {{ work(slot, destination, corrupt) }}
+fn inspect() -> u256 {{
+    let owner = ptr::alloc<u256>()
+    *owner = 7
+    let slot = ptr::alloc<*u256>()
+    *slot = owner
+    forward(slot, destination: {destination}, corrupt: {corrupt})
+}}
+"#
+                );
+                let diagnostics = checked_borrow_diags(&source);
+                assert_eq!(
+                    diagnostics.is_empty(),
+                    !(aliases && corrupt),
+                    "{source}\n{diagnostics}"
+                );
+                if aliases && corrupt {
+                    assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn writes_through_conditional_replacements_keep_their_prerequisite() {
     // Offsets and casts of the replaced pointer keep its prerequisite too.
     for (call, returned) in [

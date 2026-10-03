@@ -24,7 +24,7 @@ use super::{
     handle::{AddressOccurrence, HandleAddressSpace, OpaqueHandleRef},
     index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     path::{RegionPath, aligned_index_pairs},
-    region::{ProviderRegionId, RegionRoot},
+    region::{ProviderRegionId, RegionRoot, SymbolicPlace},
     source::{InputSource, SourceExpr},
     value::{Guarded, IndexPayload},
 };
@@ -401,6 +401,26 @@ fn place_correspondence<'db>(
 }
 
 impl<'db> ClobberCondition<'db> {
+    pub fn from_places(
+        target: &SymbolicPlace<'db>,
+        written: &SymbolicPlace<'db>,
+        extent: AccessExtent<'db>,
+    ) -> Option<Self> {
+        // A local target cannot escape in a summary, but the write still
+        // depends on the condition that made its address arbitrary. Retaining
+        // that prerequisite drops only the additional target-overlap test.
+        if let RegionRoot::External(source) = &written.root
+            && let Some(condition) = source.clobber_dependency()
+        {
+            return Some(condition.clone());
+        }
+        Some(Self::new(
+            SourceExpr::from_place(target)?,
+            SourceExpr::from_place(written)?,
+            extent,
+        ))
+    }
+
     pub fn new(
         mut target: SourceExpr<'db>,
         mut written: SourceExpr<'db>,
@@ -521,7 +541,7 @@ impl<'db> ExternalSource<'db> {
 
     /// The corruption condition under which this address, or the base it
     /// is offset from, exists.
-    fn clobber_dependency(&self) -> Option<&ClobberCondition<'db>> {
+    pub(crate) fn clobber_dependency(&self) -> Option<&ClobberCondition<'db>> {
         let mut dependency = self;
         loop {
             if let Some(condition) = &dependency.clobber {

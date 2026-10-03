@@ -1,0 +1,71 @@
+use core::ptr
+use core::size_of
+
+struct Arr<T> { ptr: *T, len: u256 }
+impl<T> Copy for Arr<T> {}
+impl<T> Arr<T> {
+    fn alloc(_ len: u256) -> Self {
+        Arr { ptr: ptr::cast<u8, T>(ptr::alloc_bytes(len * size_of<T>())), len }
+    }
+    fn at(self, _ index: u256) -> *T {
+        assert(index < self.len)
+        ptr::offset(self.ptr, index)
+    }
+}
+struct State { amount: u256, valid: bool }
+impl Copy for State {}
+struct Book { orders: Arr<State>, items: Arr<State>, used: u256, blob: *u8 }
+impl Copy for Book {}
+impl Book {
+    fn order(ref self, _ index: u256) -> *State {
+        self.orders.at(index)
+    }
+}
+
+fn one(_ book: ref Book, _ index: u256) {
+    let order = book.order(index)
+    order.amount += 1
+    order.valid = true
+}
+
+fn prepare(_ book: ref Book) -> (Book, Arr<u256>, bool) {
+    let hashes = Arr<u256>::alloc(book.orders.len)
+    let mut i: u256 = 0
+    while i < book.orders.len {
+        *hashes.at(i) = i
+        one(book, i)
+        i += 1
+    }
+    (book, hashes, true)
+}
+
+fn prepare_then_write(_ book: ref Book) -> (Book, Arr<u256>, bool) {
+    let (prepared, hashes, contains) = prepare(book)
+    one(ref prepared, 0)
+    (prepared, hashes, contains)
+}
+
+#[test]
+fn nested_array_handles_keep_pool_writes_separate_from_book() {
+    let orders = Arr<State>::alloc(2)
+    *orders.at(0) = State { amount: 10, valid: false }
+    *orders.at(1) = State { amount: 20, valid: false }
+    let book = Book { orders, items: Arr<State>::alloc(0), used: 0, blob: ptr::alloc_bytes(0) }
+    let (prepared, hashes, contains) = prepare(ref book)
+    assert(book.order(0).amount == 11)
+    assert(prepared.order(1).amount == 21)
+    assert(*hashes.at(1) == 1 && contains)
+}
+
+#[test]
+fn returned_book_keeps_its_pool_separate_from_its_borrowed_header() {
+    let orders = Arr<State>::alloc(2)
+    *orders.at(0) = State { amount: 10, valid: false }
+    *orders.at(1) = State { amount: 20, valid: false }
+    let book = Book { orders, items: Arr<State>::alloc(0), used: 0, blob: ptr::alloc_bytes(0) }
+    let (prepared, hashes, contains) = prepare_then_write(ref book)
+    assert(book.order(0).amount == 12)
+    assert(prepared.order(1).amount == 21)
+    assert(prepared.order(0).valid && prepared.order(1).valid)
+    assert(*hashes.at(0) == 0 && *hashes.at(1) == 1 && contains)
+}

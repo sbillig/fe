@@ -13,9 +13,8 @@ use super::{
     region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace, substitute_clause},
     semantics::{CapabilityClass, UnresolvedCapability},
     shape::ShapeId,
-    source::SourceExpr,
     state::{CapabilityValue, CapabilityValues},
-    value::{Guarded, IndexPayload},
+    value::Guarded,
 };
 use crate::{
     analysis::ty::{trait_resolution::PredicateListId, ty_def::TyId},
@@ -152,15 +151,12 @@ impl<'db> OpaqueWrite<'db> {
                         } else {
                             family.clone()
                         };
-                        alternative.clobber = SourceExpr::from_place(&target)
-                            .zip(SourceExpr::from_place(&clause.payload))
-                            .map(|(target, written)| {
-                                Box::new(ClobberCondition::new(
-                                    target,
-                                    written.substitute(db, &fresh),
-                                    extent.substitute(&fresh),
-                                ))
-                            });
+                        alternative.clobber = ClobberCondition::from_places(
+                            &target,
+                            &substitute_clause(clause, &fresh).payload,
+                            extent.substitute(&fresh),
+                        )
+                        .map(Box::new);
                         Some((guard, alternative))
                     })
                     .collect::<Vec<_>>()
