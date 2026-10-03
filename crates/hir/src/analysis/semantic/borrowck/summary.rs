@@ -111,7 +111,15 @@ impl<'db> BorrowSummary<'db> {
             ValueOccurrence::Argument(_) | ValueOccurrence::Summary => occurrence,
             _ => ValueOccurrence::SummaryChoice(choices[&occurrence]),
         };
-        let map = |guard: &Guard<'db>| guard.map_occurrences(rename);
+        // Components often share guards. This renaming is fixed for one
+        // summary, so reuse each result without keeping it across exports.
+        let mut renamed = FxHashMap::default();
+        let mut map = |guard: &Guard<'db>| {
+            renamed
+                .entry(guard.clone())
+                .or_insert_with(|| guard.map_occurrences(rename))
+                .clone()
+        };
         for value in std::iter::once(&mut self.result)
             .chain(self.mutable_inputs.iter_mut().map(|input| &mut input.value))
             .chain(
@@ -120,7 +128,7 @@ impl<'db> BorrowSummary<'db> {
                     .map(|range| &mut range.contents),
             )
         {
-            *value = values.map_guards(value, map);
+            *value = values.map_guards(value, &mut map);
         }
         for range in &mut self.certified_ranges {
             range.coverage = map(&range.coverage).expect("injective summary choice renaming");
@@ -146,7 +154,6 @@ impl<'db> BorrowSummary<'db> {
                 &mut self.availability.reinitialized,
                 &mut self.availability.unavailable,
                 &mut self.native_requirements,
-                &mut self.separation_validity,
             ])
         {
             *region = RegionSet::new(
@@ -157,9 +164,18 @@ impl<'db> BorrowSummary<'db> {
                 }),
             );
         }
-        self.separation_validity = self
-            .separation_validity
-            .forget_occurrences(|choice| matches!(choice, ValueOccurrence::SummaryChoice(_)));
+        drop(renamed);
+        // Pre-call obligations hide every private choice. Project them before
+        // renaming: moving selectors after argument fields can build an
+        // exponential intermediate graph that projection immediately discards.
+        // The retained Argument/Summary occurrences need no renaming.
+        let private = |choice| {
+            !matches!(
+                choice,
+                ValueOccurrence::Argument(_) | ValueOccurrence::Summary
+            )
+        };
+        self.separation_validity = self.separation_validity.forget_occurrences(private);
         // Equal relations merge; the first origin in body order names each.
         let scope = BinderScope::default();
         let mut origins = BTreeMap::new();
@@ -168,12 +184,9 @@ impl<'db> BorrowSummary<'db> {
             // These are pre-call obligations. A caller must establish them for
             // every possible private execution of the callee; only argument
             // choices can restrict which executions it admits at the boundary.
-            let renamed = SeparationSet::new(db, &scope, [clause])
-                .map_occurrences(db, rename)
-                .forget_occurrences(db, |choice| {
-                    matches!(choice, ValueOccurrence::SummaryChoice(_))
-                });
-            for clause in renamed.clauses() {
+            let projected =
+                SeparationSet::new(db, &scope, [clause]).forget_occurrences(db, private);
+            for clause in projected.clauses() {
                 origins.entry(clause.payload.clone()).or_insert(origin);
                 clauses.push(clause.clone());
             }
@@ -702,9 +715,10 @@ impl<'db> Borrowck<'db> {
         self.inventory
             .add_external_sources(self.db, self.instance, bases)
             .map_err(|error| {
-                self.internal_diag(
+                self.storage_error(
                     SemOrigin::Body(self.body.template_owner),
-                    format!("unresolved external call storage: {error:?}"),
+                    error,
+                    "unresolved external call storage",
                 )
             })?;
         Ok(())
