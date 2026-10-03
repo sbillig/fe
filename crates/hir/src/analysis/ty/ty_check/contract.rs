@@ -34,7 +34,8 @@ use crate::{
     },
     core::semantic::FieldStorageLayout,
     hir_def::{
-        Contract, FieldParent, IdentId, ItemKind, Mod, PathId, Struct, scope_graph::ScopeId,
+        Contract, FieldParent, IdentId, ItemKind, Mod, Partial, Pat, PathId, Struct,
+        scope_graph::ScopeId,
     },
     semantic::FieldView,
     span::{DynLazySpan, path::LazyPathSpan},
@@ -534,6 +535,20 @@ pub fn check_contract_recv_blocks<'db>(
         let path_span = recv_span.clone().path();
 
         for (arm_idx, arm) in recv.arms.data(db).iter().enumerate() {
+            if arm.has_manual_decode(db)
+                && !matches!(
+                    arm.pat.data(db, arm.body),
+                    Partial::Present(Pat::Record(_, fields))
+                        if fields.iter().all(|field| field.pat.is_rest(db, arm.body))
+                )
+            {
+                diags.push(
+                    BodyDiag::RecvManualDecodePattern {
+                        primary: recv_span.clone().arms().arm(arm_idx).pat().into(),
+                    }
+                    .into(),
+                );
+            }
             if !arm.is_fallback(db) {
                 continue;
             }

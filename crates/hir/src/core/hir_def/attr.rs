@@ -245,7 +245,7 @@ pub(crate) fn parse_marker_attr_spec(attr: &KeywordAttrSpec) -> Result<(), ()> {
     parse_keyword_attr_spec(attr, (), &[])
 }
 
-fn parse_keyword_attr_spec<T: Copy>(
+pub(crate) fn parse_keyword_attr_spec<T: Copy>(
     attr: &KeywordAttrSpec,
     bare: T,
     args: &[(&str, T)],

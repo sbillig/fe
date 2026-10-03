@@ -55,3 +55,72 @@ version = "0.0.0"
     assert_eq!(span.file, file);
     assert_eq!(&file.text(&db)[span.range], "test_mod");
 }
+
+#[test]
+fn manual_recv_decode_requires_unbound_record_pattern() {
+    for (pattern, valid) in [
+        ("Read { .. }", true),
+        ("Read { value }", false),
+        ("Read { value: _ }", false),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let source = format!(
+            r#"
+msg Msg {{
+    #[selector = sol("read(uint256)")]
+    Read {{ value: u256 }} -> u256,
+}}
+contract C {{
+    recv Msg {{
+        #[decode(manual)]
+        {pattern} -> u256 {{ 7 }}
+    }}
+}}
+"#
+        );
+        let file = db.new_stand_alone("manual_recv_decode.fe".into(), &source);
+        let (top_mod, _) = db.top_mod(file);
+        let diags: Vec<_> = initialize_analysis_pass()
+            .run_on_module(&db, top_mod)
+            .into_iter()
+            .map(|diag| diag.to_complete(&db))
+            .collect();
+        if valid {
+            assert!(diags.is_empty(), "{diags:#?}");
+        } else {
+            assert!(
+                diags
+                    .iter()
+                    .any(|diag| diag.error_code.to_string() == "8-0096"),
+                "{diags:#?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn manual_recv_decode_rejects_invalid_attributes() {
+    for attribute in [
+        "#[decode]",
+        "#[decode()]",
+        "#[decode(auto)]",
+        "#[decode = 1]",
+        "#[decode(manual = 1)]",
+        "#[decode(manual)] #[decode(manual)]",
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let source = format!(
+            r#"
+msg Msg {{
+    #[selector = sol("read(uint256)")]
+    Read {{ value: u256 }} -> u256,
+}}
+contract C {{ recv Msg {{ {attribute} Read {{ .. }} -> u256 {{ 7 }} }} }}
+"#
+        );
+        let file = db.new_stand_alone("invalid_manual_recv_decode.fe".into(), &source);
+        let (top_mod, _) = db.top_mod(file);
+        let diags = initialize_analysis_pass().run_on_module(&db, top_mod);
+        assert!(!diags.is_empty(), "accepted {attribute}");
+    }
+}

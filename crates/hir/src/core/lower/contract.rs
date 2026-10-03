@@ -54,7 +54,7 @@ impl<'db> ContractRecvArm<'db> {
         let ret_ty = ast.ret_ty().map(|ty| TypeId::lower_ast(ctxt, ty));
         let effects = lower_uses_clause_opt(ctxt, ast.uses_clause());
         let attributes =
-            super::payable::lower_contract_entry_attrs_opt(ctxt, ast.attr_list(), "recv arm");
+            super::payable::lower_contract_entry_attrs_opt(ctxt, ast.attr_list(), "recv arm", true);
 
         ContractRecvArm {
             pat,
@@ -163,8 +163,12 @@ fn lower_contract_init<'db>(
 ) -> ContractInit<'db> {
     let db = ctxt.db();
 
-    let attributes =
-        super::payable::lower_contract_entry_attrs_opt(ctxt, init_ast.attr_list(), "init block");
+    let attributes = super::payable::lower_contract_entry_attrs_opt(
+        ctxt,
+        init_ast.attr_list(),
+        "init block",
+        false,
+    );
     let id = ctxt.joined_id(TrackedItemVariant::ContractInit);
     let params = init_ast
         .params()

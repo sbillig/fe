@@ -1,0 +1,107 @@
+use core::abi::ByteInput
+use core::message::MsgVariant
+use core::ptr::{self, MemBuffer, MemSpan}
+use std::abi::{Bytes, DynArray, Sol, bytes_from_word, dyn_array_from}
+use std::evm::{Address, Call, CallData, Ctx, Evm, RawMem}
+
+msg ViewMsg {
+    #[selector = sol("firstLength(bytes[])")]
+    FirstLength { values: DynArray<Bytes> } -> u256,
+    #[selector = sol("eager(bytes[])")]
+    Eager { values: DynArray<Bytes> } -> u256,
+    #[selector = sol("paid(bytes[])")]
+    Paid { values: DynArray<Bytes> } -> (u256, u256),
+    #[selector = sol("ignored(uint8)")]
+    Ignored { value: u8 } -> u256,
+}
+
+pub contract ManualViewer {
+    recv ViewMsg {
+        #[decode(manual)]
+        FirstLength { .. } -> u256 {
+            CallData::with_base(4).array_view<Bytes>(0).bytes_at(0).len()
+        }
+
+        Eager { values } -> u256 { values.get(0).len() }
+
+        #[payable]
+        #[decode(manual)]
+        Paid { .. } -> (u256, u256) uses (ctx: Ctx) {
+            (CallData::with_base(4).array_view<Bytes>(0).bytes_at(0).len(), ctx.value())
+        }
+
+        Ignored { value: _ } -> u256 { 17 }
+    }
+}
+
+fn call_words<const N: usize>(
+    _ addr: Address, selector: u256, words: [u256; N], value: u256,
+) -> (bool, u256, u256) uses (evm: mut Evm) {
+    let len = 4 + (N as u256) * 32
+    let data = MemBuffer::alloc(len + 32)
+    evm.mstore(addr: data.ptr(), value: selector << 224)
+    let mut i: usize = 0
+    while i < N {
+        evm.mstore(addr: ptr::offset_bytes(data.ptr(), 4 + (i as u256) * 32), value: words[i])
+        i += 1
+    }
+    let mut ret = MemBuffer::alloc(64)
+    let result = evm.raw_call(
+        addr,
+        gas: 100000,
+        value,
+        args: MemSpan::from_raw_parts(ptr: data.ptr(), len),
+        ret: mut ret,
+    )
+    (
+        result.success(),
+        result.returndata_len(),
+        if result.returndata_len() >= 32 { ret.span().word_at(0) } else { 0 },
+    )
+}
+
+#[test(balance = 1000)]
+fn manual_recv_typed_calls_and_payable_returns() uses (evm: mut Evm) {
+    let addr = evm.create2<ManualViewer>(value: 0, args: (), salt: 0)
+    let values = with (RawMem = evm) { dyn_array_from([bytes_from_word(7)]) }
+    let length = evm.call(
+        addr, gas: 100000, value: 0, message: ViewMsg::FirstLength { values },
+    )
+    assert(length == 32)
+    let values = with (RawMem = evm) { dyn_array_from([bytes_from_word(9)]) }
+    let (length, value) = evm.call(
+        addr, gas: 100000, value: 123, message: ViewMsg::Paid { values },
+    )
+    assert(length == 32 && value == 123)
+}
+
+#[test]
+fn manual_recv_only_validates_accessed_tails() uses (evm: mut Evm) {
+    let addr = evm.create2<ManualViewer>(value: 0, args: (), salt: 0)
+    let words = [32, 2, 64, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff, 3, 0x010203 << 232]
+    let manual = call_words(
+        addr, selector: <ViewMsg::FirstLength as MsgVariant<Sol>>::SELECTOR as u256, words, value: 0,
+    )
+    assert(manual.0 && manual.1 == 32 && manual.2 == 3)
+    let eager = call_words(
+        addr, selector: <ViewMsg::Eager as MsgVariant<Sol>>::SELECTOR as u256, words, value: 0,
+    )
+    assert(!eager.0)
+}
+
+#[test(balance = 1000)]
+fn manual_recv_preserves_checks_and_ordinary_decoding() uses (evm: mut Evm) {
+    let addr = evm.create2<ManualViewer>(value: 0, args: (), salt: 0)
+    let selector = <ViewMsg::FirstLength as MsgVariant<Sol>>::SELECTOR as u256
+    let truncated = call_words(addr, selector, words: [], value: 0)
+    assert(!truncated.0 && truncated.1 == 0)
+    let bad_tail = call_words(addr, selector, words: [32, 1, 32, 100], value: 0)
+    assert(!bad_tail.0 && bad_tail.1 == 0)
+    let paid = call_words(addr, selector, words: [32, 1, 32, 0], value: 1)
+    assert(!paid.0)
+    let ignored = call_words(
+        addr, selector: <ViewMsg::Ignored as MsgVariant<Sol>>::SELECTOR as u256,
+        words: [256], value: 0,
+    )
+    assert(!ignored.0)
+}

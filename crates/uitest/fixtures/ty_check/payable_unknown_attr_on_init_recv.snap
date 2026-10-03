@@ -19,7 +19,7 @@ error[12-0004]: unsupported `#[foo]` attribute on recv arm
    ┌─ payable_unknown_attr_on_init_recv.fe:13:9
    │
 13 │         #[foo]
-   │         ^^^^^^ expected `#[payable]`
+   │         ^^^^^^ expected `#[payable]` or `#[decode(manual)]`
 
 error[8-0012]: undefined variable
   ┌─ payable_unknown_attr_on_init_recv.fe:8:9

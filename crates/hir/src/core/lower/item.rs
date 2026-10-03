@@ -137,6 +137,7 @@ fn validate_mod_attrs<'db>(
             AttrRule::unsupported("abi", ABI_TARGETS),
             AttrRule::unsupported("must_use", MUST_USE_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
+            AttrRule::unsupported("decode", "recv arms"),
         ],
     );
 }
@@ -153,6 +154,7 @@ pub(super) fn validate_module_inner_attrs<'db>(
             AttrRule::supported("arithmetic", ARITHMETIC_FORM, ARITHMETIC_EXPECTED),
             AttrRule::unsupported("must_use", MUST_USE_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
+            AttrRule::unsupported("decode", "recv arms"),
             AttrRule::unsupported("abi", ABI_TARGETS),
         ],
     );
@@ -182,6 +184,7 @@ fn validate_func_attrs<'db>(
             AttrRule::unsupported("error", ERROR_TARGETS),
             AttrRule::unsupported("abi", ABI_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
+            AttrRule::unsupported("decode", "recv arms"),
         ],
     );
 }
@@ -202,6 +205,7 @@ fn validate_struct_attrs<'db>(
             AttrRule::supported("abi", BARE_FORM, "`#[abi]`"),
             AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
+            AttrRule::unsupported("decode", "recv arms"),
         ],
     );
 }
@@ -222,6 +226,7 @@ fn validate_enum_attrs<'db>(
             AttrRule::unsupported("abi", ABI_TARGETS),
             AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
+            AttrRule::unsupported("decode", "recv arms"),
         ],
     );
 }
@@ -243,6 +248,7 @@ fn validate_unsupported_item_attrs<'db>(
             AttrRule::unsupported("abi", ABI_TARGETS),
             AttrRule::unsupported("must_use", MUST_USE_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
+            AttrRule::unsupported("decode", "recv arms"),
         ],
     );
 }
@@ -258,6 +264,7 @@ pub(super) fn validate_for_loop_attrs<'db>(
         &[
             AttrRule::supported("unroll", UNROLL_FORM, "`#[unroll]` or `#[unroll(never)]`"),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
+            AttrRule::unsupported("decode", "recv arms"),
         ],
     );
 }
