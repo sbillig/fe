@@ -1085,48 +1085,157 @@ pub(crate) enum RebaseConstUseEnv<'db> {
     Identity,
     /// A stored constraint's use, which is evaluated later: the root of the
     /// ingot it was written in, where selection for a generic `Self` starts
-    /// (a downstream blanket impl lives there), and these assumptions.
-    Stored(PredicateListId<'db>),
+    /// (a downstream blanket impl lives there), and the predicates, in
+    /// comparison form, that its parameters reach. Selecting the use's impl
+    /// only proves predicates whose subject is built from those parameters,
+    /// or from parameters that such predicates mention; the rest of the list
+    /// is not evidence, and solving under it would evaluate its constants.
+    Stored(Vec<StoredPredicate<'db>>),
+}
+
+pub(crate) struct StoredPredicate<'db> {
+    inst: TraitInstId<'db>,
+    subject_params: FxHashSet<TyParam<'db>>,
+    params: FxHashSet<TyParam<'db>>,
+}
+
+/// The generic parameters `value` mentions.
+fn mentioned_params<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: &impl TyVisitable<'db>,
+) -> FxHashSet<TyParam<'db>> {
+    struct Params<'db> {
+        db: &'db dyn HirAnalysisDb,
+        found: FxHashSet<TyParam<'db>>,
+    }
+
+    impl<'db> TyVisitor<'db> for Params<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_param(&mut self, param: &TyParam<'db>) {
+            self.found.insert(param.clone());
+        }
+
+        fn visit_const_param(&mut self, param: &TyParam<'db>, const_ty_ty: TyId<'db>) {
+            self.found.insert(param.clone());
+            self.visit_ty(const_ty_ty);
+        }
+    }
+
+    let mut params = Params {
+        db,
+        found: FxHashSet::default(),
+    };
+    value.visit_with(&mut params);
+    params.found
+}
+
+impl<'db> RebaseConstUseEnv<'db> {
+    /// The environment a list's uses are stored with: its predicates in
+    /// comparison form, which cannot refer back to the list.
+    pub(crate) fn stored(
+        db: &'db dyn HirAnalysisDb,
+        predicates: impl IntoIterator<Item = TraitInstId<'db>>,
+    ) -> Self {
+        Self::Stored(
+            predicates
+                .into_iter()
+                .map(|inst| {
+                    let inst = inst.fold_with(db, &mut Self::Identity);
+                    StoredPredicate {
+                        inst,
+                        subject_params: mentioned_params(db, &inst.self_ty(db)),
+                        params: mentioned_params(db, &inst),
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// The scope and assumptions a use written at `origin` of a constant
+    /// defined at `defining` gets, given the parameters the use mentions.
+    fn env(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        origin: ScopeId<'db>,
+        defining: ScopeId<'db>,
+        mut reached: FxHashSet<TyParam<'db>>,
+    ) -> (ScopeId<'db>, PredicateListId<'db>) {
+        let (scope, assumptions) = match self {
+            Self::Identity => (defining, PredicateListId::empty_list(db)),
+            Self::Stored(predicates) => {
+                let mut kept = vec![false; predicates.len()];
+                while let Some(idx) = predicates.iter().enumerate().position(|(idx, pred)| {
+                    !kept[idx]
+                        && (pred.subject_params.is_empty()
+                            || !pred.subject_params.is_disjoint(&reached))
+                }) {
+                    kept[idx] = true;
+                    reached.extend(predicates[idx].params.iter().cloned());
+                }
+                let kept = predicates
+                    .iter()
+                    .zip(kept)
+                    .filter_map(|(pred, kept)| kept.then_some(pred.inst))
+                    .collect::<Vec<_>>();
+                (origin, PredicateListId::new(db, kept))
+            }
+        };
+        (
+            ScopeId::Item(ItemKind::TopMod(scope.ingot(db).root_mod(db))),
+            assumptions,
+        )
+    }
 }
 
 impl<'db> TyFolder<'db> for RebaseConstUseEnv<'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        let ty = ty.super_fold_with(db, self);
+        // A use's environment is replaced, never folded: it can hold the
+        // whole list the use was lowered under.
         let TyData::ConstTy(const_ty) = ty.data(db) else {
-            return ty;
+            return ty.super_fold_with(db, self);
         };
         let ConstTyData::Abstract(expr, expected_ty) = const_ty.data(db) else {
-            return ty;
-        };
-        let stored = match self {
-            Self::Identity => None,
-            Self::Stored(assumptions) => Some(*assumptions),
-        };
-        let env = |origin: ScopeId<'db>, defining: ScopeId<'db>| {
-            let (scope, assumptions) = stored
-                .map_or((defining, PredicateListId::empty_list(db)), |assumptions| {
-                    (origin, assumptions)
-                });
-            (
-                ScopeId::Item(ItemKind::TopMod(scope.ingot(db).root_mod(db))),
-                assumptions,
-            )
+            return ty.super_fold_with(db, self);
         };
         let rebased = match expr.data(db) {
             ConstExpr::TraitConst(use_) => {
-                let (scope, assumptions) = env(use_.origin_scope(), use_.inst().def(db).scope());
-                ConstExpr::TraitConst(use_.with_env(scope, assumptions))
+                let inst = use_.inst().fold_with(db, self);
+                let (scope, assumptions) = self.env(
+                    db,
+                    use_.origin_scope(),
+                    inst.def(db).scope(),
+                    mentioned_params(db, &inst),
+                );
+                ConstExpr::TraitConst(AssocConstUse::new(scope, assumptions, inst, use_.name()))
             }
             ConstExpr::InherentConst(use_) => {
-                let (scope, assumptions) = env(use_.origin_scope(), use_.impl_().scope());
-                ConstExpr::InherentConst(use_.with_env(scope, assumptions))
+                let receiver_ty = use_.receiver_ty().fold_with(db, self);
+                let (scope, assumptions) = self.env(
+                    db,
+                    use_.origin_scope(),
+                    use_.impl_().scope(),
+                    mentioned_params(db, &receiver_ty),
+                );
+                ConstExpr::InherentConst(InherentConstUse::new(
+                    scope,
+                    assumptions,
+                    use_.impl_(),
+                    receiver_ty,
+                    use_.name(),
+                ))
             }
-            _ => return ty,
+            _ => return ty.super_fold_with(db, self),
         };
-        let expr = ConstExprId::new(db, rebased);
+        let expected_ty = expected_ty.fold_with(db, self);
         TyId::const_ty(
             db,
-            ConstTyId::new(db, ConstTyData::Abstract(expr, *expected_ty)),
+            ConstTyId::new(
+                db,
+                ConstTyData::Abstract(ConstExprId::new(db, rebased), expected_ty),
+            ),
         )
     }
 }

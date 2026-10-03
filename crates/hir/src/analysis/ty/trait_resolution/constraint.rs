@@ -561,17 +561,12 @@ fn collect_decl_constraint_pairs_impl<'db>(
     // A const use in a bound records the constraints it was solved under,
     // which include this very list while a cycle computes it, so recording
     // them makes every iteration differ from the last and the cycle never
-    // settles. A use keeps the list with the uses inside it in their
-    // comparison form instead: that cannot refer back to the list, and it
-    // holds the bounds, such as an enclosing item's `T: Gate<{ T::W }>`, that
-    // select the use's implementation once the list is instantiated.
-    let mut rebase = RebaseConstUseEnv::Stored(PredicateListId::new(
-        db,
-        all_predicates
-            .keys()
-            .map(|inst| inst.fold_with(db, &mut RebaseConstUseEnv::Identity))
-            .collect::<Vec<_>>(),
-    ));
+    // settles. A use keeps the list's predicates its parameters reach, with
+    // the uses inside them in their comparison form instead: that cannot
+    // refer back to the list, and it holds the bounds, such as an enclosing
+    // item's `T: Gate<{ T::W }>`, that select the use's implementation once
+    // the list is instantiated.
+    let mut rebase = RebaseConstUseEnv::stored(db, all_predicates.keys().copied());
     let mut rebased = IndexMap::new();
     for (inst, source) in all_predicates {
         rebased
