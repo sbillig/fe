@@ -1334,7 +1334,12 @@ pub fn canonicalize_const_ty_for_mode<'db>(
                     ),
                     ConstCaptureEnv::Empty | ConstCaptureEnv::Identity(_) => capture.clone(),
                 },
-                policy: *policy,
+                // The policy says when lowering checks the body, which a
+                // comparison of the value it denotes must not see.
+                policy: match mode {
+                    ConstCanonMode::Identity => UnevaluatedConstPolicy::Evaluate,
+                    ConstCanonMode::Stored | ConstCanonMode::Display => *policy,
+                },
             },
         ),
     };

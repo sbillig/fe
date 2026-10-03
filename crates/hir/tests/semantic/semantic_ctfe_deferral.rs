@@ -11,9 +11,9 @@ use fe_hir::{
             SemConstValue, SemOrigin, SemanticInstanceKey, array_const,
             const_computation_for_instance, describe_const_computation, eval_body_owner_const,
             force_const_computation, force_const_description, get_or_build_semantic_instance,
-            identity_semantic_instance_key, int_const, reify_runtime_const,
-            reify_runtime_const_for_ty, sem_const_ty, specialize_const_computation,
-            specialize_const_description, tuple_const,
+            identity_semantic_instance_key, int_const, normalize_runtime_semantic_body,
+            normalize_semantic_body, reify_runtime_const, reify_runtime_const_for_ty, sem_const_ty,
+            specialize_const_computation, specialize_const_description, tuple_const,
         },
         ty::{
             const_expr::{ConstExpr, ConstExprId, ConstInvocation},
@@ -2308,7 +2308,9 @@ const fn guarded<const N: usize>() -> usize {
 #[test]
 fn opaque_associated_extents_specialize_with_their_impl() {
     // An index is outside the term language, so the extent stays a deferred
-    // body; selecting the impl must still bind it to the impl's arguments.
+    // body; selecting the impl must still bind it to the impl's arguments,
+    // and a symbolic extent crossing the selected method keeps one identity
+    // through normalization, whichever lowering supplied each side.
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "opaque_associated_extent.fe".into(),
@@ -2316,20 +2318,41 @@ fn opaque_associated_extents_specialize_with_their_impl() {
 trait Has {
     type Item
     fn take(_ x: Self::Item)
+    fn make() -> Self::Item
 }
 struct Marker<const N: usize> {}
 impl<const N: usize> Has for Marker<N> {
     type Item = [u8; { [3 as usize; 2][N] }]
-    fn take(_ x: Self::Item) {}
+    fn take(_ x: Self::Item) { Self::take(x) }
+    fn make() -> Self::Item { Self::make() }
 }
 fn generic<T: Has>(_ x: T::Item) { T::take(x) }
 fn projected() -> Marker<1>::Item { [1, 2, 3] }
 fn via_generic() { generic<Marker<1>>([1, 2, 3]) }
 fn length(_ x: Marker<1>::Item) -> usize { x.len() }
+fn forward<const N: usize>(_ x: Marker<N>::Item) { Marker<N>::take(x) }
+fn forward_result<const N: usize>() -> Marker<N>::Item { Marker<N>::make() }
 "#,
     );
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
+    for func in module
+        .all_funcs(&db)
+        .iter()
+        .filter(|func| func.body(&db).is_some())
+    {
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+        );
+        let name = func.name(&db).to_opt().map(|name| name.data(&db).clone());
+        for result in [
+            normalize_semantic_body(&db, instance).map(|_| ()),
+            normalize_runtime_semantic_body(&db, instance).map(|_| ()),
+        ] {
+            assert!(result.is_ok(), "{name:?} must normalize: {result:?}");
+        }
+    }
 }
 
 #[test]
