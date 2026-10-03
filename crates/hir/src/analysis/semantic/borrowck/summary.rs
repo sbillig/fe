@@ -78,6 +78,7 @@ use super::{
         CertifiedRangePoststate, InputPoststate, MemoryAccess, PendingSemanticValidation,
         ScalarInputPoststate, SeparationOrigin,
     },
+    scalar::CONDITION_BUDGET,
     solver::{BorrowSummaryMode, Borrowck, Resolution},
     transport::{TransportRoute, referent_contract},
     validation::can_specialize,
@@ -994,8 +995,8 @@ impl<'db> Borrowck<'db> {
             };
             may_return = true;
             let origin = block.terminator.origin;
-            // Facts over formal arguments hold on every normal return; an
-            // integer result also relates to the value this path returns.
+            // Facts over formal arguments hold on every normal return; a
+            // scalar result also relates to the value this path returns.
             let actual = returned
                 .filter(|_| scalar_ty.is_integral(self.db))
                 .map(|returned| self.index(returned.value));
@@ -1013,6 +1014,24 @@ impl<'db> Borrowck<'db> {
                     Some(actual) => guard
                         .with_equality(scalar_scope.1, actual)
                         .expect("a fresh result can equal a returned scalar"),
+                    None if scalar_ty.is_bool(self.db) => [false, true]
+                        .into_iter()
+                        .filter_map(|expected| {
+                            self.condition_guard(
+                                returned.expect("Boolean return operand").value,
+                                expected,
+                                true,
+                                CONDITION_BUDGET,
+                            )?
+                            .in_scope(&scalar_scope.0)
+                            .with_boolean(
+                                ChoiceKey::new(ValueOccurrence::Summary, StructuralPath::default()),
+                                expected,
+                            )?
+                            .and(&guard)
+                        })
+                        .reduce(|left, right| left.or(&right))
+                        .expect("a feasible return has a Boolean result"),
                     None => guard,
                 };
                 let subst = IndexSubst::new(
@@ -1034,6 +1053,18 @@ impl<'db> Borrowck<'db> {
                 guard
                     .substitute(&subst)
                     .expect("renaming a feasible scalar return preserves feasibility")
+                    // Project private choices before moving the public ones:
+                    // renaming first can create an exponential intermediate.
+                    .forget_occurrences(|occurrence| match occurrence {
+                        ValueOccurrence::Argument(_) => false,
+                        ValueOccurrence::Summary => !scalar_ty.is_bool(self.db),
+                        ValueOccurrence::Value(value) => {
+                            !matches!(self.body.values[value.index()].definition,
+                                NValueDefinition::EntryParam { param }
+                                    if self.summary_param_ty(param).is_some_and(|ty| ty.is_bool(self.db)))
+                        }
+                        _ => true,
+                    })
                     .map_occurrences(|occurrence| match occurrence {
                         ValueOccurrence::Value(value)
                             if let NValueDefinition::EntryParam { param } =
@@ -1047,9 +1078,6 @@ impl<'db> Borrowck<'db> {
                         other => other,
                     })
                     .expect("scalar choice renaming preserves feasibility")
-                    .forget_occurrences(|occurrence| {
-                        !matches!(occurrence, ValueOccurrence::Argument(_))
-                    })
                     .forget_indices(|index| {
                         matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_))
                     })
@@ -2220,17 +2248,22 @@ impl<'db> Borrowck<'db> {
         }
         if let Some(guard) = &summary.scalar_result {
             let (scope, _) = BinderScope::default().bind(IndexNamespace::Result);
-            // Only an integer result can be named by the postcondition.
-            let integral = self
-                .instance
-                .normalized_result_ty(self.db)
-                .is_integral(self.db);
+            let result_ty = self.instance.normalized_result_ty(self.db);
             if guard.scope() != &scope
-                || guard.occurrences().into_iter().any(|occurrence| {
-                    !matches!(occurrence, ValueOccurrence::Argument(param) if self.summary_param_ty(param).is_some_and(|ty| ty.is_bool(self.db)))
-                })
+                || guard
+                    .occurrences()
+                    .into_iter()
+                    .any(|occurrence| match occurrence {
+                        ValueOccurrence::Argument(param) => !self
+                            .summary_param_ty(param)
+                            .is_some_and(|ty| ty.is_bool(self.db)),
+                        ValueOccurrence::Summary => !result_ty.is_bool(self.db),
+                        _ => true,
+                    })
                 || guard.indices().into_iter().any(|index| match index {
-                    IndexExpr::Bound(_) => !integral || scope.validate(index).is_err(),
+                    IndexExpr::Bound(_) => {
+                        !result_ty.is_integral(self.db) || scope.validate(index).is_err()
+                    }
                     IndexExpr::FormalValue(param) => !self
                         .summary_param_ty(param)
                         .is_some_and(|ty| ty.as_view(self.db).unwrap_or(ty).is_integral(self.db)),
@@ -2737,7 +2770,9 @@ impl<'db> Borrowck<'db> {
             let postcondition = if self.scalar.live.contains(&result) {
                 postcondition.clone()
             } else {
-                postcondition.forget_indices(|index| index == returned)
+                postcondition
+                    .forget_occurrences(|occurrence| occurrence == ValueOccurrence::Summary)
+                    .forget_indices(|index| index == returned)
             };
             let subst = IndexSubst::new(
                 postcondition.scope(),

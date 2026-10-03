@@ -38,7 +38,7 @@ use super::{ir::ObservedParams, loop_certificate::frontier_candidates, solver::B
 pub(super) const CONDITION_BUDGET: u8 = 16;
 
 /// Scalar facts are generated on demand: for index selectors, loop frontiers,
-/// representable integer returns, and parameters an assertion constrains on
+/// representable scalar returns, and parameters an assertion constrains on
 /// every normal return.
 #[derive(Default)]
 pub(super) struct ScalarDemand<'db> {
@@ -88,6 +88,21 @@ impl<'db> Borrowck<'db> {
     pub(super) fn prepare_scalar_demand(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
         let (mut selectors, cells, mut values) = scalar_seeds(self.db, &self.body);
         values.retain(|value| self.supported_scalar_return(*value));
+        // Boolean results can expose comparisons of integer arguments even
+        // when the callee never uses them as indices itself.
+        if self.instance.normalized_result_ty(self.db).is_bool(self.db) {
+            selectors.extend(
+                self.body
+                    .values
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, value)| {
+                        (matches!(value.definition, NValueDefinition::EntryParam { .. })
+                            && value.ty.is_integral(self.db))
+                        .then_some(NValueId::new(index))
+                    }),
+            );
+        }
         if self.inventory.loops.has_cycle()
             && self.body.blocks.iter().flat_map(|block| &block.statements).any(|statement| {
                 self.stores_capability(statement)
@@ -150,7 +165,7 @@ impl<'db> Borrowck<'db> {
     }
 
     /// Values whose scalar facts something can read, and those read only through
-    /// an integer result: the result relation is the one fact a caller forgets
+    /// a scalar result: the result relation is the one fact a caller forgets
     /// when the call's result is dead. Every use counts unless it is known to
     /// relate no fact to its operands: arithmetic, a lossy cast, an unused or
     /// fact-free result, a cell nothing reads, or an argument the callee's
@@ -224,13 +239,10 @@ impl<'db> Borrowck<'db> {
                 })
                 .collect::<BTreeSet<_>>()
         };
-        // Only an integer result's relation is forgotten; choices of other
+        // Integer and Boolean result relations are forgotten; choices of other
         // results stay, along with the arguments they name.
-        let observed = if self
-            .instance
-            .normalized_result_ty(self.db)
-            .is_integral(self.db)
-        {
+        let result_ty = self.instance.normalized_result_ty(self.db);
+        let observed = if result_ty.is_integral(self.db) || result_ty.is_bool(self.db) {
             let unconditional = params(&unconditional);
             ObservedParams {
                 through_result: params(&live).difference(&unconditional).copied().collect(),

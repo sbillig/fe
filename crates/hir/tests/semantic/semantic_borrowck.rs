@@ -13748,6 +13748,102 @@ fn inspect() {
 }
 
 #[test]
+fn boolean_call_results_preserve_argument_conditions() {
+    for (first, second, valid) in [
+        ("flag", "!identity(flag)", true),
+        ("flag", "!forward(flag)", true),
+        ("flag", "negate(flag)", true),
+        ("flag", "!choose(flag)", true),
+        ("flag && other", "!conjunction(flag, other)", true),
+        ("true", "never()", true),
+        ("flag", "identity(flag)", false),
+        ("flag", "!identity(other)", false),
+        ("flag", "always()", false),
+    ] {
+        let source = format!(
+            r#"
+use std::native::ByteBuffer
+fn identity(_ flag: bool) -> bool {{ flag }}
+fn forward(_ flag: bool) -> bool {{ identity(identity(flag)) }}
+fn negate(_ flag: bool) -> bool {{ !flag }}
+fn choose(_ flag: bool) -> bool {{ if flag {{ true }} else {{ false }} }}
+fn conjunction(_ flag: bool, _ other: bool) -> bool {{ flag && other }}
+fn never() -> bool {{ false }}
+fn always() -> bool {{ true }}
+fn caller(buffer: own ByteBuffer, flag: bool, other: bool) {{
+    if {first} {{ buffer.release() }}
+    if {second} {{ buffer.release() }}
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        if valid {
+            assert_eq!(diagnostics, "", "{source}");
+        } else {
+            assert!(
+                diagnostics.contains("move conflict"),
+                "{source}\n{diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
+fn boolean_call_results_preserve_integer_predicates() {
+    for (predicate, complement) in [("index == 1", "index != 1"), ("index < 4", "index >= 4")] {
+        for (second, valid) in [("!predicate(index)", true), ("predicate(index)", false)] {
+            let source = format!(
+                r#"
+use std::native::ByteBuffer
+fn predicate(_ index: usize) -> bool {{ {predicate} }}
+fn complement(_ index: usize) -> bool {{ {complement} }}
+fn caller(buffer: own ByteBuffer, index: usize) {{
+    if predicate(index) {{ buffer.release() }}
+    if {second} {{ buffer.release() }}
+}}
+fn complementary(buffer: own ByteBuffer, index: usize) {{
+    if predicate(index) {{ buffer.release() }}
+    if complement(index) {{ buffer.release() }}
+}}
+"#
+            );
+            let diagnostics = checked_borrow_diags(&source);
+            if valid {
+                assert_eq!(diagnostics, "", "{source}");
+            } else {
+                assert!(
+                    diagnostics.contains("move conflict in `fn caller`"),
+                    "{source}\n{diagnostics}"
+                );
+                assert!(
+                    !diagnostics.contains("move conflict in `fn complementary`"),
+                    "{source}\n{diagnostics}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn discarded_boolean_call_results_keep_argument_postconditions() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use std::native::ByteBuffer
+fn constrain(_ flag: bool) -> bool {
+    if !flag { assert!(false) }
+    false
+}
+fn caller(buffer: own ByteBuffer, flag: bool) {
+    let unused = constrain(flag)
+    buffer.release()
+    if !flag { buffer.release() }
+}
+"#,
+    );
+    assert_eq!(diagnostics, "");
+}
+
+#[test]
 fn discarded_scalar_call_results_keep_argument_postconditions() {
     let source = r#"
 fn constrain(_ index: usize) -> usize {
