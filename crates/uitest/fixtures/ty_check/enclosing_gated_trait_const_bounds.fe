@@ -66,3 +66,19 @@ impl<T: Width + Keyed<{ T::W }>> Bar<T> {
 }
 
 fn nested<T: Width + Keyed<{ T::W }>, U: Has<4>>() { Bar<T>::need<3, U>() }
+
+trait Witness { type Item: Gate }
+
+struct Implied<T, W> {}
+
+impl<T, W: Witness<Item = T>> Implied<T, W> {
+    fn need<const N: usize, U: Has<{ Marker<T, N>::LEN }>>() {}
+}
+
+fn implied<T, W: Witness<Item = T>, U: Has<4>>() { Implied<T, W>::need<3, U>() }
+
+trait Factory<W: Witness<Item = Self>> {
+    fn need<const N: usize, U: Has<{ Marker<Self, N>::LEN }>>() {}
+}
+
+fn implied_self<T: Factory<W>, W: Witness<Item = T>, U: Has<4>>() { <T as Factory<W>>::need<3, U>() }

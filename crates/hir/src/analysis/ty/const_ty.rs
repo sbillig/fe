@@ -1134,21 +1134,29 @@ fn mentioned_params<'db>(
 
 impl<'db> RebaseConstUseEnv<'db> {
     /// The environment a list's uses are stored with: its predicates in
-    /// comparison form, which cannot refer back to the list.
+    /// comparison form, which cannot refer back to the list, together with
+    /// the bounds they imply, such as `T: Gate` from `W: Witness<Item = T>`
+    /// where `Witness::Item: Gate`, whose subject differs from theirs.
     pub(crate) fn stored(
         db: &'db dyn HirAnalysisDb,
         predicates: impl IntoIterator<Item = TraitInstId<'db>>,
     ) -> Self {
-        Self::Stored(
+        let predicates = PredicateListId::new(
+            db,
             predicates
                 .into_iter()
-                .map(|inst| {
-                    let inst = inst.fold_with(db, &mut Self::Identity);
-                    StoredPredicate {
-                        inst,
-                        subject_params: mentioned_params(db, &inst.self_ty(db)),
-                        params: mentioned_params(db, &inst),
-                    }
+                .map(|inst| inst.fold_with(db, &mut Self::Identity))
+                .collect::<Vec<_>>(),
+        );
+        Self::Stored(
+            predicates
+                .extend_all_bounds(db)
+                .list(db)
+                .iter()
+                .map(|&inst| StoredPredicate {
+                    inst,
+                    subject_params: mentioned_params(db, &inst.self_ty(db)),
+                    params: mentioned_params(db, &inst),
                 })
                 .collect(),
         )
