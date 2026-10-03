@@ -4,8 +4,9 @@ use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, Zero};
 
 use crate::core::hir_def::{
-    BinOp, Body, Const, Contract, Expr, ExprId, Func, GenericArgListId, GenericParamOwner, IdentId,
-    LitKind, Partial, PatId, PathId, Stmt, TypeAlias as HirTypeAlias, TypeId as HirTypeId, UnOp,
+    BinOp, Body, Const, Contract, Expr, ExprId, Func, GenericArgListId, GenericParamOwner,
+    HirIngot, IdentId, LitKind, Partial, PatId, PathId, Stmt, TypeAlias as HirTypeAlias,
+    TypeId as HirTypeId, UnOp,
 };
 use salsa::Update;
 
@@ -1071,6 +1072,43 @@ fn canonicalize_const_expr_for_mode<'db>(
     }
 }
 
+/// Unification identifies an associated or inherent const use by its trait
+/// instance (or impl and receiver) and name. The scope and assumptions it is
+/// solved under only decide how evaluation finds it; solving reads just the
+/// scope's ingot. Once evaluation has used them, the comparison form keeps
+/// the ingot root and no assumptions, so the uses one constant gets in
+/// different items compare equal.
+struct EraseConstUseEnv;
+
+impl<'db> TyFolder<'db> for EraseConstUseEnv {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        let ty = ty.super_fold_with(db, self);
+        let TyData::ConstTy(const_ty) = ty.data(db) else {
+            return ty;
+        };
+        let ConstTyData::Abstract(expr, expected_ty) = const_ty.data(db) else {
+            return ty;
+        };
+        let root =
+            |scope: ScopeId<'db>| ScopeId::Item(ItemKind::TopMod(scope.ingot(db).root_mod(db)));
+        let none = PredicateListId::empty_list(db);
+        let erased = match expr.data(db) {
+            ConstExpr::TraitConst(use_) => {
+                ConstExpr::TraitConst(use_.with_env(root(use_.origin_scope()), none))
+            }
+            ConstExpr::InherentConst(use_) => {
+                ConstExpr::InherentConst(use_.with_env(root(use_.origin_scope()), none))
+            }
+            _ => return ty,
+        };
+        let expr = ConstExprId::new(db, erased);
+        TyId::const_ty(
+            db,
+            ConstTyId::new(db, ConstTyData::Abstract(expr, *expected_ty)),
+        )
+    }
+}
+
 pub fn evaluate_type_level_const_expr<'db>(
     db: &'db dyn HirAnalysisDb,
     expr: ConstExprId<'db>,
@@ -1563,7 +1601,7 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
         return canonicalized;
     };
 
-    match const_ty.data(db) {
+    let compared = match const_ty.data(db) {
         ConstTyData::UnEvaluated {
             ty: Some(expected_ty),
             ..
@@ -1589,7 +1627,8 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
                 .map_or(canonicalized, |evaluated| TyId::const_ty(db, evaluated))
         }
         _ => canonicalized,
-    }
+    };
+    compared.fold_with(db, &mut EraseConstUseEnv)
 }
 
 pub(crate) struct ValidatedUnEvaluatedConst<'db> {

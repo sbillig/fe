@@ -2310,8 +2310,9 @@ fn opaque_associated_extents_specialize_with_their_impl() {
     // An index is outside the term language, so the extent stays a deferred
     // body, directly or behind a trait const; selecting the impl must still
     // bind it to the impl's arguments, and a symbolic extent crossing the
-    // selected method keeps one identity through normalization, whichever
-    // lowering supplied each side.
+    // selected method, or another function whose bounds differ, keeps one
+    // identity through normalization, whichever lowering or item supplied
+    // each side.
     for (name, source) in [
         (
             "opaque_associated_extent.fe",
@@ -2354,6 +2355,24 @@ impl<const N: usize> Has for Marker<N> {
 fn projected() -> Marker<1>::Item { [1, 2, 3] }
 fn forward<const N: usize>(_ x: Marker<N>::Item) { Marker<N>::take(x) }
 fn forward_result<const N: usize>() -> Marker<N>::Item { Marker<N>::make() }
+"#,
+        ),
+        (
+            "cross_item_const_extent.fe",
+            r#"
+trait Size { const LEN: usize }
+trait Other {}
+struct Marker<const N: usize> {}
+impl<const N: usize> Size for Marker<N> { const LEN: usize = [2 as usize, 3][N] }
+impl<const N: usize> Marker<N> { const WIDTH: usize = [4 as usize, 5][N] }
+fn take<const N: usize>(_ x: [u8; Marker<N>::LEN]) -> [u8; Marker<N>::LEN] { x }
+fn forward<const N: usize>(_ x: [u8; Marker<N>::LEN]) -> [u8; Marker<N>::LEN] { take<N>(x) }
+fn take_width<const N: usize>(_ x: [u8; Marker<N>::WIDTH]) -> [u8; Marker<N>::WIDTH] { x }
+fn forward_width<const N: usize>(_ x: [u8; Marker<N>::WIDTH]) -> [u8; Marker<N>::WIDTH] {
+    take_width<N>(x)
+}
+fn take_bound<T: Size>(_ x: [u8; T::LEN]) -> [u8; T::LEN] { x }
+fn forward_bound<T: Size + Other>(_ x: [u8; T::LEN]) -> [u8; T::LEN] { take_bound<T>(x) }
 "#,
         ),
     ] {

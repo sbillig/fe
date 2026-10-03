@@ -1,0 +1,1 @@
+An array length written with an associated or inherent constant, such as `[u8; Marker<N>::LEN]` or `[u8; T::LEN]`, can now be passed between generic functions, including ones with different bounds. Previously such a call type-checked and then failed with an internal error.
