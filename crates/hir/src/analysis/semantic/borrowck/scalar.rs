@@ -58,6 +58,9 @@ pub(super) struct ScalarDemand<'db> {
     pub live: FxHashSet<NValueId>,
     /// The parameters among them, as this body's summary exports them.
     pub observed: ObservedParams,
+    /// Unconditional observations other than control-flow choices. Scalar-only
+    /// summaries can refine branch observations once their postcondition is known.
+    pub non_branch_params: BTreeSet<u32>,
     readers: Vec<(NValueId, Vec<NValueId>)>,
 }
 
@@ -156,8 +159,9 @@ impl<'db> Borrowck<'db> {
     /// fact-free result, a cell nothing reads, or an argument the callee's
     /// summary never observes. A call result outside the live set occurs in no
     /// other fact, so forgetting its relation to the arguments is exact.
-    pub(super) fn scalar_liveness(&self) -> (FxHashSet<NValueId>, ObservedParams) {
+    pub(super) fn scalar_liveness(&self) -> (FxHashSet<NValueId>, ObservedParams, BTreeSet<u32>) {
         let mut pending = Vec::new();
+        let mut branches = Vec::new();
         let mut returned = Vec::new();
         for block in &self.body.blocks {
             for statement in &block.statements {
@@ -204,18 +208,13 @@ impl<'db> Borrowck<'db> {
             }
             match &block.terminator.kind {
                 NTerminatorKind::Branch { cond: value, .. }
-                | NTerminatorKind::MatchEnum { value, .. } => pending.push(value.value),
+                | NTerminatorKind::MatchEnum { value, .. } => branches.push(value.value),
                 NTerminatorKind::Return(Some(value)) => returned.push(value.value),
                 NTerminatorKind::Goto(_)
                 | NTerminatorKind::Assert { .. }
                 | NTerminatorKind::Return(None) => {}
             }
         }
-        let mut live = FxHashSet::default();
-        let stored = self.reaching_cell_stores();
-        self.propagate_liveness(&mut live, pending, &stored);
-        let unconditional = live.clone();
-        self.propagate_liveness(&mut live, returned, &stored);
         let params = |live: &FxHashSet<NValueId>| {
             live.iter()
                 .filter_map(|value| match self.body.values[value.index()].definition {
@@ -224,6 +223,13 @@ impl<'db> Borrowck<'db> {
                 })
                 .collect::<BTreeSet<_>>()
         };
+        let mut live = FxHashSet::default();
+        let stored = self.reaching_cell_stores();
+        self.propagate_liveness(&mut live, pending, &stored);
+        let non_branch = params(&live);
+        self.propagate_liveness(&mut live, branches, &stored);
+        let unconditional = live.clone();
+        self.propagate_liveness(&mut live, returned, &stored);
         // Only an integer result's relation is forgotten; choices of other
         // results stay, along with the arguments they name.
         let observed = if self
@@ -242,7 +248,7 @@ impl<'db> Borrowck<'db> {
                 through_result: BTreeSet::new(),
             }
         };
-        (live, observed)
+        (live, observed, non_branch)
     }
 
     fn propagate_liveness(
@@ -456,7 +462,11 @@ impl<'db> Borrowck<'db> {
             .copied()
             .filter(|value| self.compact_scalar_phi(*value))
             .collect();
-        (self.scalar.live, self.scalar.observed) = self.scalar_liveness();
+        (
+            self.scalar.live,
+            self.scalar.observed,
+            self.scalar.non_branch_params,
+        ) = self.scalar_liveness();
     }
 
     pub(super) fn stores_capability(&self, statement: &NStatement<'db>) -> bool {
