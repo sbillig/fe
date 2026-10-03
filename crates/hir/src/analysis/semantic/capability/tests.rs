@@ -3747,12 +3747,13 @@ fn distinct_allocated_fields_are_physically_disjoint_only_as_typed_direct_target
     let whole = |source| region(source, RegionPath::default());
     // Whether an access may overlap a typed borrow without the entry assumption.
     let possible = |access: &RegionSet<'_>, extent, borrowed: &RegionSet<'_>| {
-        !AccessFootprint {
+        AccessFootprint {
             region: access,
             extent,
         }
         .physical_pairs(&db, borrowed)
-        .is_empty()
+        .next()
+        .is_some()
     };
     let field = provider_source(&db, &ledger);
     let sibling = provider_source(&db, &other);

@@ -13112,16 +13112,63 @@ fn drive() {{
 }
 
 #[test]
+fn branch_selected_fresh_allocations_do_not_exhaust_separation_pairs() {
+    let count = 17;
+    let params = (0..count)
+        .map(|index| format!("_ a{index}: *u256"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let select = |arm: &dyn Fn(usize) -> String| {
+        let arms = (0..count)
+            .map(|index| {
+                let pattern = if index + 1 == count {
+                    "_".into()
+                } else {
+                    index.to_string()
+                };
+                format!("{pattern} => {}", arm(index))
+            })
+            .collect::<Vec<_>>()
+            .join(",\n");
+        format!("match k {{ {arms} }}")
+    };
+    let value = select(&|index| format!("mut *a{index}"));
+    let pointer = select(&|_| "ptr::alloc<u256>()".into());
+    let source = format!(
+        r#"
+use core::ptr
+fn leaf(value: mut u256, pointer: *u256) {{ *pointer = 1
+value = 2 }}
+fn plain(k: u256, {params}) {{
+    let value = {value}
+    let pointer = {pointer}
+    leaf(value, pointer)
+}}
+"#
+    );
+    assert!(checked_borrow_diags(&source).is_empty());
+}
+
+#[test]
 fn separation_exhaustion_is_absorbing_before_fallbacks() {
-    // A callee's relation resolves to 17 protected places and 17 fresh
-    // allocations, past the pair limit, while every clause stays small.
+    // Independent selections of 17 native places and 17 stored capabilities
+    // retain 289 physical pairs, while every clause stays small.
     // Neither recursion nor a pending callee may replace the incomplete
     // requirements with a signature fallback, and every caller inherits the
     // failure, in any query order.
     let count = 17;
-    let params: Vec<_> = (0..count).map(|index| format!("a{index}: *u256")).collect();
-    let args: Vec<_> = (0..count).map(|index| format!("a{index}")).collect();
-    let select = |arm: &dyn Fn(usize) -> String| {
+    let params: Vec<_> = (0..count)
+        .flat_map(|index| {
+            [
+                format!("a{index}: mut u256"),
+                format!("b{index}: *mut u256"),
+            ]
+        })
+        .collect();
+    let args: Vec<_> = (0..count)
+        .flat_map(|index| [format!("a{index}: mut a{index}"), format!("b{index}")])
+        .collect();
+    let select = |selector: &str, arm: &dyn Fn(usize) -> String| {
         let arms: Vec<_> = (0..count)
             .map(|index| {
                 let pattern = if index + 1 == count {
@@ -13132,38 +13179,38 @@ fn separation_exhaustion_is_absorbing_before_fallbacks() {
                 format!("        {pattern} => {}", arm(index))
             })
             .collect();
-        format!("match k {{\n{}\n    }}", arms.join(",\n"))
+        format!("match {selector} {{\n{}\n    }}", arms.join(",\n"))
     };
     let call = format!(
         "    let value = {}\n    let pointer = {}\n    leaf(value, pointer)",
-        select(&|index| format!("mut *a{index}")),
-        select(&|_| "ptr::alloc<u256>()".to_string())
+        select("k", &|index| format!("mut a{index}")),
+        select("j", &|index| format!("b{index}"))
     );
     let (params, args) = (params.join(", "), args.join(", "));
     let source = format!(
         r#"
-use core::ptr
 trait Operation {{ fn apply() }}
 struct Safe {{}}
 impl Operation for Safe {{ fn apply() {{}} }}
-fn leaf(value: mut u256, pointer: *u256) {{
-    *pointer = 1
+fn leaf(value: mut u256, pointer: *mut u256) {{
+    let other = *pointer
+    other = 1
     value = 2
 }}
-fn plain(k: u256, {params}) {{
+fn plain(k: u256, j: u256, {params}) {{
 {call}
 }}
-fn recursive(k: u256, again: bool, {params}) {{
+fn recursive(k: u256, j: u256, again: bool, {params}) {{
 {call}
-    if again {{ recursive(k, again: false, {args}) }}
+    if again {{ recursive(k, j, again: false, {args}) }}
 }}
-fn generic<T: Operation>(k: u256, {params}) {{
+fn generic<T: Operation>(k: u256, j: u256, {params}) {{
 {call}
     T::apply()
 }}
-fn plain_caller(k: u256, {params}) {{ plain(k, {args}) }}
-fn recursive_caller(k: u256, {params}) {{ recursive(k, again: true, {args}) }}
-fn generic_caller(k: u256, {params}) {{ generic<Safe>(k, {args}) }}
+fn plain_caller(k: u256, j: u256, {params}) {{ plain(k, j, {args}) }}
+fn recursive_caller(k: u256, j: u256, {params}) {{ recursive(k, j, again: true, {args}) }}
+fn generic_caller(k: u256, j: u256, {params}) {{ generic<Safe>(k, j, {args}) }}
 "#
     );
     let names = [

@@ -26,7 +26,7 @@ use super::{
 // three deep, with a child borrow live across a read through a stored
 // borrow, needs 7432 guard nodes and 7 witnesses.
 
-/// Most jointly opened pairs one comparison may materialize.
+/// Most physically overlapping, jointly feasible pairs one comparison may materialize.
 pub const SEPARATION_PAIR_LIMIT: usize = 256;
 /// Most relations one summary may export.
 pub const SEPARATION_CLAUSE_LIMIT: usize = 1024;

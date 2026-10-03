@@ -968,13 +968,15 @@ impl<'db> Borrowck<'db> {
                 }
                 return analysis.report(self.conflict_diag(kind, definition, origin));
             }
-            if footprint.region.clauses().len() * loan.region.clauses().len()
-                > SEPARATION_PAIR_LIMIT
-            {
+            let pairs: Vec<_> = footprint
+                .physical_pairs(self.db, &loan.region)
+                .take(SEPARATION_PAIR_LIMIT + 1)
+                .collect();
+            if pairs.len() > SEPARATION_PAIR_LIMIT {
                 return analysis.exhaust(self.separation_limit_diag(origin));
             }
             let mut clauses = Vec::new();
-            for pair in footprint.physical_pairs(self.db, &loan.region) {
+            for pair in pairs {
                 let Some(guard) = (match permitted() {
                     Some(permitted) => pair
                         .possible
@@ -1038,7 +1040,11 @@ impl<'db> Borrowck<'db> {
         origin: SemOrigin<'db>,
         moved: SemOrigin<'db>,
     ) -> Option<Vec<(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)>> {
-        if footprint.region.clauses().len() * unavailable.clauses().len() > SEPARATION_PAIR_LIMIT {
+        let pairs: Vec<_> = footprint
+            .physical_pairs(self.db, unavailable)
+            .take(SEPARATION_PAIR_LIMIT + 1)
+            .collect();
+        if pairs.len() > SEPARATION_PAIR_LIMIT {
             return None;
         }
         let separation_origin = SeparationOrigin {
@@ -1048,7 +1054,7 @@ impl<'db> Borrowck<'db> {
             access: origin,
         };
         let mut facts = ConflictFacts::default();
-        for pair in footprint.physical_pairs(self.db, unavailable) {
+        for pair in pairs {
             if pair.definite.is_some() {
                 return None;
             }
@@ -1072,20 +1078,21 @@ impl<'db> Borrowck<'db> {
         analysis: &mut ConflictFacts<'db>,
     ) {
         let scope = requirement.guard.scope();
-        if requirement.access.clauses().len() * requirement.protected.clauses().len()
-            > SEPARATION_PAIR_LIMIT
-        {
-            return analysis.exhaust(self.separation_limit_diag(origin));
-        }
+        let access = requirement.access.with_guard(&requirement.guard);
+        let protected = requirement.protected.with_guard(&requirement.guard);
         let footprint = AccessFootprint {
-            region: &requirement.access.with_guard(&requirement.guard),
+            region: &access,
             extent: requirement.extent,
         };
+        let pairs: Vec<_> = footprint
+            .physical_pairs(self.db, &protected)
+            .take(SEPARATION_PAIR_LIMIT + 1)
+            .collect();
+        if pairs.len() > SEPARATION_PAIR_LIMIT {
+            return analysis.exhaust(self.separation_limit_diag(origin));
+        }
         let mut clauses = Vec::new();
-        for pair in footprint.physical_pairs(
-            self.db,
-            &requirement.protected.with_guard(&requirement.guard),
-        ) {
+        for pair in pairs {
             let lift =
                 IndexSubst::new(scope, pair.possible.scope(), []).expect("separation pair scope");
             let slices: Vec<_> = requirement
@@ -1617,7 +1624,8 @@ mod tests {
                 region: &other,
                 extent: AccessExtent::Unknown,
             }
-            .physical_pairs(&db, &borrowed),
+            .physical_pairs(&db, &borrowed)
+            .collect::<Vec<_>>(),
         )
         .ok()
         .unwrap();
@@ -1636,17 +1644,21 @@ mod tests {
                 region: &start,
                 extent: AccessExtent::Bytes(IndexExpr::Const(64)),
             }
-            .physical_pairs(&db, &borrowed),
+            .physical_pairs(&db, &borrowed)
+            .collect::<Vec<_>>(),
         )
         .ok()
         .unwrap();
         let partial = suspension(&span, &field);
         assert!(remove_suspended(&partial, &span, span.possible.clone()).is_some());
         // A typed access within the suspended field is covered exactly.
-        let [typed] =
-            <[_; 1]>::try_from(AccessFootprint::typed(&start).physical_pairs(&db, &borrowed))
-                .ok()
-                .unwrap();
+        let [typed] = <[_; 1]>::try_from(
+            AccessFootprint::typed(&start)
+                .physical_pairs(&db, &borrowed)
+                .collect::<Vec<_>>(),
+        )
+        .ok()
+        .unwrap();
         let partial = suspension(&typed, &field);
         assert!(remove_suspended(&partial, &typed, typed.possible.clone()).is_none());
     }

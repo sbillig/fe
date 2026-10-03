@@ -174,17 +174,14 @@ impl<'a, 'db> AccessFootprint<'a, 'db> {
     pub fn physical_pairs(
         self,
         db: &'db dyn HirAnalysisDb,
-        borrowed: &RegionSet<'db>,
-    ) -> Vec<FootprintPair<'db>> {
+        borrowed: &'a RegionSet<'db>,
+    ) -> impl Iterator<Item = FootprintPair<'db>> + 'a {
         let scope = self.region.scope();
         assert_eq!(scope, borrowed.scope(), "footprint scopes must match");
-        let mut pairs = Vec::new();
-        for left in self.region.clauses() {
-            for right in borrowed.clauses() {
+        self.region.clauses().iter().flat_map(move |left| {
+            borrowed.clauses().iter().filter_map(move |right| {
                 let (left, right, left_subst, _) = open_clause_pair(left, right, scope);
-                let Some(guard) = left.guard.and(&right.guard) else {
-                    continue;
-                };
+                let guard = left.guard.and(&right.guard)?;
                 let extent = self.extent.substitute(&left_subst);
                 let left_address = LinearAddress::new(db, &left.payload);
                 let right_address = LinearAddress::new(db, &right.payload);
@@ -200,7 +197,7 @@ impl<'a, 'db> AccessFootprint<'a, 'db> {
                     || right_len == Some(0)
                     || disjoint_ranges(&left_address, &right_address, left_len, right_len)
                 {
-                    continue;
+                    return None;
                 }
                 // Paths separate only places of one typed object, in one
                 // interpretation; objects that may overlap do so anywhere.
@@ -243,9 +240,7 @@ impl<'a, 'db> AccessFootprint<'a, 'db> {
                         false,
                     )
                 };
-                let Some(possible) = possible else {
-                    continue;
-                };
+                let possible = possible?;
                 // A typed access shares its exact intersection with the typed
                 // borrow. A byte span certainly shares a byte only when it is
                 // nonempty and starts at the borrowed place.
@@ -268,16 +263,15 @@ impl<'a, 'db> AccessFootprint<'a, 'db> {
                         )
                     })
                     .and_then(|definite| definite.and(&possible));
-                pairs.push(FootprintPair {
+                Some(FootprintPair {
                     access: left.payload,
                     borrowed: right.payload,
                     extent,
                     possible,
                     definite,
-                });
-            }
-        }
-        pairs
+                })
+            })
+        })
     }
 }
 
@@ -737,7 +731,9 @@ mod tests {
         let (scope, root, path) = access;
         let access = RegionSet::singleton(scope, root, RegionPath::new(path));
         let borrowed = RegionSet::singleton(scope, borrowed.0, RegionPath::new(borrowed.1));
-        AccessFootprint::typed(&access).physical_pairs(db, &borrowed)
+        AccessFootprint::typed(&access)
+            .physical_pairs(db, &borrowed)
+            .collect()
     }
 
     #[test]
@@ -805,6 +801,7 @@ mod tests {
         // A typed access contains every typed member it prefixes.
         let [typed] = AccessFootprint::typed(&whole)
             .physical_pairs(&db, &member)
+            .collect::<Vec<_>>()
             .try_into()
             .ok()
             .unwrap();
@@ -815,6 +812,7 @@ mod tests {
             extent: AccessExtent::Bytes(IndexExpr::Const(1)),
         }
         .physical_pairs(&db, &member)
+        .collect::<Vec<_>>()
         .try_into()
         .ok()
         .unwrap();
@@ -825,6 +823,7 @@ mod tests {
             extent: AccessExtent::Bytes(IndexExpr::Const(1)),
         }
         .physical_pairs(&db, &member)
+        .collect::<Vec<_>>()
         .try_into()
         .ok()
         .unwrap();

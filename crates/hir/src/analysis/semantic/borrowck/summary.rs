@@ -3161,7 +3161,7 @@ impl<'db> Borrowck<'db> {
                     AccessFootprint::typed(target).overlap(self.db, written),
                     OverlapResult::Disjoint
                 ),
-                AliasBasis::Physical => written.physical_pairs(self.db, target).is_empty(),
+                AliasBasis::Physical => written.physical_pairs(self.db, target).next().is_none(),
             }
         };
         // A separation endpoint keeps its dependencies' native validity,
@@ -3171,8 +3171,13 @@ impl<'db> Borrowck<'db> {
             let target = instantiations.resolve(self, &clobber.target, scope)?;
             let written = instantiations.resolve(self, &clobber.written, scope)?;
             if basis == AliasBasis::Physical {
-                if target.region.clauses().len() * written.region.clauses().len()
-                    > SEPARATION_PAIR_LIMIT
+                if (AccessFootprint {
+                    region: &written.region,
+                    extent: clobber.extent,
+                })
+                .physical_pairs(self.db, &target.region)
+                .nth(SEPARATION_PAIR_LIMIT)
+                .is_some()
                 {
                     return Err(self.separation_limit_diag(origin));
                 }
@@ -6373,9 +6378,8 @@ fn clobber(slot: *ref u256) {
             [(Some(0), Some(1))].into()
         );
 
-        // A clobber whose dependencies resolve to 17 places each exceeds the
-        // pair limit before any comparison; the assumed basis compares no
-        // pairs and needs no limit.
+        // Many cells of one physical object have only diagonal overlaps. Their
+        // Cartesian product exceeds the budget, but the actual pairs do not.
         let pointee = SourceExpr::from_place(&referents[2].clauses()[0].payload).unwrap();
         let cells = (0..17).fold(pointer.clone(), |value, cell| {
             let region = RegionSet::singleton(
@@ -6401,6 +6405,35 @@ fn clobber(slot: *ref u256) {
                 .resolve(&mut checker, &product, &scope)
                 .is_ok()
         );
+        let resolved = SourceInstantiations::physical(&wide, result, inputs)
+            .resolve(&mut checker, &product, &scope)
+            .unwrap();
+        assert!(!resolved.region.is_empty());
+
+        // Independently manufactured raw addresses can all overlap. Genuine
+        // pair exhaustion still fails closed after filtering.
+        let mut unknown = checker.inventory.values.empty(pointer.shape(), &scope);
+        for choice in 0..17 {
+            let region = RegionSet::singleton(
+                &scope,
+                RegionRoot::External(ExternalSource::unknown(
+                    pointee.source.contract,
+                    AddressOccurrence::Value {
+                        instance,
+                        value: result,
+                        choice,
+                    },
+                    Box::new([]),
+                    AddressProvenance::Raw,
+                )),
+                RegionPath::default(),
+            );
+            let value = uniform(&mut checker, &pointer, |_| {
+                CapabilityRef::Address(region.clone())
+            });
+            unknown = checker.inventory.values.join(&unknown, &value);
+        }
+        wide.set_value(args[2].value, unknown);
         let exhausted = SourceInstantiations::physical(&wide, result, inputs)
             .resolve(&mut checker, &product, &scope)
             .unwrap_err();
