@@ -1302,6 +1302,25 @@ fn native_frame_release_survives_independent_buffer_growth() {
 }
 
 #[test]
+fn native_local_buffer_survives_conditional_writes_from_other_buffers() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("local_buffer_clobber.fe");
+    fs::write(
+        &source,
+        include_str!("fixtures/crash_regressions/native_local_buffer_clobber.fe"),
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("local_buffer_clobber"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
 fn native_stored_references_use_concrete_enum_and_padded_layouts() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("reference_layout.fe");

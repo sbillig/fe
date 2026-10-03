@@ -24,7 +24,7 @@ use super::{
     handle::{AddressOccurrence, HandleAddressSpace, OpaqueHandleRef},
     index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     path::{RegionPath, aligned_index_pairs},
-    region::{ProviderRegionId, RegionRoot},
+    region::{ProviderRegionId, RegionRoot, SymbolicPlace},
     source::{InputSource, SourceExpr},
     value::{Guarded, IndexPayload},
 };
@@ -401,6 +401,21 @@ fn place_correspondence<'db>(
 }
 
 impl<'db> ClobberCondition<'db> {
+    /// A conditional write keeps its prerequisite even when the newly touched
+    /// cell is local and cannot itself appear in a caller-facing condition.
+    pub fn from_places(
+        target: &SymbolicPlace<'db>,
+        written: &SymbolicPlace<'db>,
+        extent: AccessExtent<'db>,
+    ) -> Option<Self> {
+        let written = SourceExpr::from_place(written)?;
+        written
+            .source
+            .clobber_dependency()
+            .cloned()
+            .or_else(|| Some(Self::new(SourceExpr::from_place(target)?, written, extent)))
+    }
+
     pub fn new(
         mut target: SourceExpr<'db>,
         mut written: SourceExpr<'db>,
@@ -1602,11 +1617,73 @@ impl<'db> ExternalSource<'db> {
 
 #[cfg(test)]
 mod tests {
+    use cranelift_entity::EntityRef;
+
     use super::*;
     use crate::{
         analysis::semantic::capability::path::{Projection, StructuralPath},
         test_db::HirAnalysisTestDb,
     };
+
+    #[test]
+    fn conditional_writes_to_local_cells_keep_only_the_existing_prerequisite() {
+        let db = HirAnalysisTestDb::default();
+        let contract = ReferentContract::memory(&db, TyId::u256(&db));
+        let place = |root| SymbolicPlace {
+            root,
+            path: RegionPath::default(),
+            views: Default::default(),
+        };
+        let input = |param| ExternalSource::input(InputSource::place(param), contract, false);
+        let condition = ClobberCondition::new(
+            SourceExpr::whole(input(0)),
+            SourceExpr::whole(input(1)),
+            AccessExtent::Typed,
+        );
+        let local = place(RegionRoot::Root {
+            root: NRootId::new(0),
+            contract,
+        });
+        let mut replacement = ExternalSource::opaque_memory(contract);
+        for conditional in [false, true] {
+            replacement.clobber = conditional.then(|| Box::new(condition.clone()));
+            for written in [
+                replacement.clone(),
+                ExternalSource::memory(
+                    &db,
+                    SourceExpr::whole(replacement.clone()),
+                    TyId::u8(&db),
+                    MemoryOffset::Element(TyId::u8(&db), IndexExpr::Const(4)),
+                ),
+            ] {
+                assert_eq!(
+                    ClobberCondition::from_places(
+                        &local,
+                        &place(RegionRoot::External(written)),
+                        AccessExtent::Unknown,
+                    ),
+                    conditional.then(|| condition.clone()),
+                );
+            }
+        }
+        assert!(ClobberCondition::from_places(&local, &local, AccessExtent::Typed).is_none());
+        assert!(
+            ClobberCondition::from_places(
+                &local,
+                &place(RegionRoot::External(input(0))),
+                AccessExtent::Typed,
+            )
+            .is_none()
+        );
+        assert_eq!(
+            ClobberCondition::from_places(
+                &place(RegionRoot::External(input(0))),
+                &place(RegionRoot::External(input(1))),
+                AccessExtent::Typed,
+            ),
+            Some(condition)
+        );
+    }
 
     #[test]
     fn clobber_coarsening_keeps_the_target_and_unchanged_write_extent() {

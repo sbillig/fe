@@ -1,0 +1,30 @@
+use std::native::ByteBuffer
+
+struct Buffers { first: ByteBuffer, second: ByteBuffer }
+impl Buffers {
+    fn grow(mut self, _ len: u64) {
+        core::assert(self.first.try_resize(len))
+        core::assert(self.second.try_resize(len))
+        self.first.set_byte(index: len - 1, value: 19)
+        self.second.set_byte(index: len - 1, value: 42)
+    }
+}
+fn execute(_ buffers: mut Buffers, len: u64) {
+    let mut local = ByteBuffer::new()
+    core::assert(local.try_resize(1))
+    local.set_byte(index: 0, value: 7)
+    buffers.grow(len)
+    core::assert(local.byte_at(0) == 7)
+    local.release()
+}
+pub fn main() -> i32 {
+    let mut buffers = Buffers { first: ByteBuffer::new(), second: ByteBuffer::new() }
+    execute(mut buffers, len: 32)
+    execute(mut buffers, len: 513)
+    core::assert(buffers.first.len() == 513 && buffers.second.len() == 513)
+    core::assert(buffers.first.byte_at(31) == 19 && buffers.first.byte_at(512) == 19)
+    core::assert(buffers.second.byte_at(31) == 42 && buffers.second.byte_at(512) == 42)
+    buffers.first.release()
+    buffers.second.release()
+    0
+}
