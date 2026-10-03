@@ -13752,6 +13752,7 @@ fn boolean_call_results_preserve_argument_conditions() {
     for (first, second, valid) in [
         ("flag", "!identity(flag)", true),
         ("flag", "!forward(flag)", true),
+        ("flag", "!identity(!negate(flag))", true),
         ("flag", "negate(flag)", true),
         ("flag", "!choose(flag)", true),
         ("flag && other", "!conjunction(flag, other)", true),
@@ -13790,11 +13791,16 @@ fn caller(buffer: own ByteBuffer, flag: bool, other: bool) {{
 
 #[test]
 fn boolean_call_results_preserve_integer_predicates() {
-    for (predicate, complement) in [("index == 1", "index != 1"), ("index < 4", "index >= 4")] {
+    for (predicate, complement) in [
+        ("index == 1", "index != 1"),
+        ("index < 4", "index >= 4"),
+        ("identity(index < 4)", "index >= 4"),
+    ] {
         for (second, valid) in [("!predicate(index)", true), ("predicate(index)", false)] {
             let source = format!(
                 r#"
 use std::native::ByteBuffer
+fn identity(_ flag: bool) -> bool {{ flag }}
 fn predicate(_ index: usize) -> bool {{ {predicate} }}
 fn complement(_ index: usize) -> bool {{ {complement} }}
 fn caller(buffer: own ByteBuffer, index: usize) {{
@@ -13957,6 +13963,42 @@ fn pick(_ offset: usize, _ index: usize, _ arr: [u64; 4]) -> u64 {
             "{observed:?}"
         );
     });
+}
+
+#[test]
+fn summaries_only_observe_scalar_branches_that_reach_postconditions() {
+    let source = r#"
+fn predicate(_ x: usize) -> bool { if x == 0 { true } else { false } }
+fn constant(_ x: usize) -> bool { if x == 0 { true } else { true } }
+fn constrain(_ x: usize) -> bool {
+    if x != 0 { assert!(false) }
+    true
+}
+fn write(_ x: usize, _ cells: mut [u64; 4]) -> bool {
+    if x == 0 { cells[0] = 1 }
+    false
+}
+"#;
+    for (name, unconditional, through_result) in [
+        ("predicate", false, true),
+        ("constant", false, false),
+        ("constrain", true, false),
+        ("write", true, false),
+    ] {
+        with_borrow_summary(source, name, |_db, summary| {
+            let observed = summary.observed_params.unwrap();
+            assert_eq!(
+                observed.unconditional.contains(&0),
+                unconditional,
+                "{name}: {observed:?}"
+            );
+            assert_eq!(
+                observed.through_result.contains(&0),
+                through_result,
+                "{name}: {observed:?}"
+            );
+        });
+    }
 }
 
 #[test]

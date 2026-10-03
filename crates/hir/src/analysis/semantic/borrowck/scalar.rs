@@ -10,7 +10,7 @@ use crate::{
             SemOrigin,
             capability::{
                 external::ExternalOrigin,
-                guard::Guard,
+                guard::{ChoiceKey, Guard},
                 index::{BinderScope, IndexExpr},
                 region::{RegionRoot, RegionSet},
                 state::BorrowState,
@@ -58,6 +58,9 @@ pub(super) struct ScalarDemand<'db> {
     pub live: FxHashSet<NValueId>,
     /// The parameters among them, as this body's summary exports them.
     pub observed: ObservedParams,
+    /// Unconditional observations other than control-flow choices. Scalar-only
+    /// summaries can refine branch observations once their postcondition is known.
+    pub non_branch_params: BTreeSet<u32>,
     readers: Vec<(NValueId, Vec<NValueId>)>,
 }
 
@@ -91,7 +94,7 @@ impl<'db> Borrowck<'db> {
         // Boolean results can expose comparisons of integer arguments even
         // when the callee never uses them as indices itself.
         if self.instance.normalized_result_ty(self.db).is_bool(self.db) {
-            selectors.extend(
+            values.extend(
                 self.body
                     .values
                     .iter()
@@ -171,8 +174,9 @@ impl<'db> Borrowck<'db> {
     /// fact-free result, a cell nothing reads, or an argument the callee's
     /// summary never observes. A call result outside the live set occurs in no
     /// other fact, so forgetting its relation to the arguments is exact.
-    pub(super) fn scalar_liveness(&self) -> (FxHashSet<NValueId>, ObservedParams) {
+    pub(super) fn scalar_liveness(&self) -> (FxHashSet<NValueId>, ObservedParams, BTreeSet<u32>) {
         let mut pending = Vec::new();
+        let mut branches = Vec::new();
         let mut returned = Vec::new();
         for block in &self.body.blocks {
             for statement in &block.statements {
@@ -219,18 +223,13 @@ impl<'db> Borrowck<'db> {
             }
             match &block.terminator.kind {
                 NTerminatorKind::Branch { cond: value, .. }
-                | NTerminatorKind::MatchEnum { value, .. } => pending.push(value.value),
+                | NTerminatorKind::MatchEnum { value, .. } => branches.push(value.value),
                 NTerminatorKind::Return(Some(value)) => returned.push(value.value),
                 NTerminatorKind::Goto(_)
                 | NTerminatorKind::Assert { .. }
                 | NTerminatorKind::Return(None) => {}
             }
         }
-        let mut live = FxHashSet::default();
-        let stored = self.reaching_cell_stores();
-        self.propagate_liveness(&mut live, pending, &stored);
-        let unconditional = live.clone();
-        self.propagate_liveness(&mut live, returned, &stored);
         let params = |live: &FxHashSet<NValueId>| {
             live.iter()
                 .filter_map(|value| match self.body.values[value.index()].definition {
@@ -239,6 +238,13 @@ impl<'db> Borrowck<'db> {
                 })
                 .collect::<BTreeSet<_>>()
         };
+        let mut live = FxHashSet::default();
+        let stored = self.reaching_cell_stores();
+        self.propagate_liveness(&mut live, pending, &stored);
+        let non_branch = params(&live);
+        self.propagate_liveness(&mut live, branches, &stored);
+        let unconditional = live.clone();
+        self.propagate_liveness(&mut live, returned, &stored);
         // Integer and Boolean result relations are forgotten; choices of other
         // results stay, along with the arguments they name.
         let result_ty = self.instance.normalized_result_ty(self.db);
@@ -254,7 +260,7 @@ impl<'db> Borrowck<'db> {
                 through_result: BTreeSet::new(),
             }
         };
-        (live, observed)
+        (live, observed, non_branch)
     }
 
     fn propagate_liveness(
@@ -410,7 +416,7 @@ impl<'db> Borrowck<'db> {
     }
 
     /// The primitive operator a core wrapper method call defining `value` stands for.
-    fn primitive_operator(&self, value: NValueId) -> Option<PrimitiveWrapperCallKind> {
+    pub(super) fn primitive_operator(&self, value: NValueId) -> Option<PrimitiveWrapperCallKind> {
         let (_, NExpr::Call { callee, .. }) = self.body.defining_expr(value)? else {
             return None;
         };
@@ -468,7 +474,11 @@ impl<'db> Borrowck<'db> {
             .copied()
             .filter(|value| self.compact_scalar_phi(*value))
             .collect();
-        (self.scalar.live, self.scalar.observed) = self.scalar_liveness();
+        (
+            self.scalar.live,
+            self.scalar.observed,
+            self.scalar.non_branch_params,
+        ) = self.scalar_liveness();
     }
 
     pub(super) fn stores_capability(&self, statement: &NStatement<'db>) -> bool {
@@ -566,6 +576,34 @@ impl<'db> Borrowck<'db> {
 
     pub(super) fn lossless_scalar_cast(&self, source: NValueId, target: TyId<'db>) -> bool {
         lossless_integer_cast(self.db, self.body.values[source.index()].ty, target)
+    }
+
+    /// Bounds on changing loop values require a certified reader frontier.
+    pub(super) fn scalar_bounds_enabled(&self, value: NValueId) -> bool {
+        self.inventory.loops.for_value(&self.body, value).is_none()
+            || (self.scalar.bounded_readers.contains(&value)
+                && (!self.prefix_certificates.is_empty()
+                    || self
+                        .calls
+                        .values()
+                        .any(|call| !call.summary.certified_ranges.is_empty())))
+    }
+
+    /// Relate a Boolean occurrence to its value under this body's scalar demand.
+    pub(super) fn boolean_relation(
+        &self,
+        value: NValueId,
+        result: ChoiceKey<'db>,
+        include_bounds: bool,
+    ) -> Guard<'db> {
+        [false, true]
+            .into_iter()
+            .filter_map(|expected| {
+                self.condition_guard(value, expected, include_bounds, CONDITION_BUDGET)?
+                    .with_boolean(result.clone(), expected)
+            })
+            .reduce(|left, right| left.or(&right))
+            .expect("a Boolean value admits a result")
     }
 
     /// The guard under which `value` equals `expected`, following trusted
@@ -686,10 +724,24 @@ impl<'db> Borrowck<'db> {
         let Some((_, signed)) = integer_model(self.db, lhs_ty) else {
             return Some(always);
         };
+        // Return predicates can expose bounds between public parameters and
+        // constants. Bounds involving private temporaries would be projected
+        // out again, and tracking them throughout the body can grow expensive
+        // intermediate graphs (for example offset <= buffer.len()).
+        let parameter_bound = self.instance.normalized_result_ty(self.db).is_bool(self.db)
+            && [lhs_index, rhs_index].into_iter().all(|index| match index {
+                IndexExpr::Const(_) | IndexExpr::TypeConst(_) => true,
+                IndexExpr::Runtime(value) => matches!(
+                    self.body.values[value.index()].definition,
+                    NValueDefinition::EntryParam { .. }
+                ),
+                _ => false,
+            });
         if lhs_ty != rhs_ty
             || ((!include_bounds
                 || signed
-                || (!self.scalar.selectors.contains(&lhs_index)
+                || (!parameter_bound
+                    && !self.scalar.selectors.contains(&lhs_index)
                     && !self.scalar.selectors.contains(&rhs_index)))
                 && !matches!(operator, CompBinOp::Eq | CompBinOp::NotEq))
         {

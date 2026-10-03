@@ -78,7 +78,6 @@ use super::{
         CertifiedRangePoststate, InputPoststate, MemoryAccess, PendingSemanticValidation,
         ScalarInputPoststate, SeparationOrigin,
     },
-    scalar::CONDITION_BUDGET,
     solver::{BorrowSummaryMode, Borrowck, Resolution},
     transport::{TransportRoute, referent_contract},
     validation::can_specialize,
@@ -1014,23 +1013,14 @@ impl<'db> Borrowck<'db> {
                     Some(actual) => guard
                         .with_equality(scalar_scope.1, actual)
                         .expect("a fresh result can equal a returned scalar"),
-                    None if scalar_ty.is_bool(self.db) => [false, true]
-                        .into_iter()
-                        .filter_map(|expected| {
-                            self.condition_guard(
-                                returned.expect("Boolean return operand").value,
-                                expected,
-                                true,
-                                CONDITION_BUDGET,
-                            )?
-                            .in_scope(&scalar_scope.0)
-                            .with_boolean(
-                                ChoiceKey::new(ValueOccurrence::Summary, StructuralPath::default()),
-                                expected,
-                            )?
-                            .and(&guard)
-                        })
-                        .reduce(|left, right| left.or(&right))
+                    None if scalar_ty.is_bool(self.db) => self
+                        .boolean_relation(
+                            returned.expect("Boolean return operand").value,
+                            ChoiceKey::new(ValueOccurrence::Summary, StructuralPath::default()),
+                            true,
+                        )
+                        .in_scope(&scalar_scope.0)
+                        .and(&guard)
                         .expect("a feasible return has a Boolean result"),
                     None => guard,
                 };
@@ -1516,8 +1506,59 @@ impl<'db> Borrowck<'db> {
             scalar_inputs,
             requirements,
         };
-        let (summary, provenance) =
+        let (mut summary, provenance) =
             summary.abstract_choices(self.db, &mut values, choices, separations);
+        if (scalar_ty.is_bool(self.db) || scalar_ty.is_integral(self.db))
+            && summary.mutable_inputs.is_empty()
+            && summary.scalar_inputs.is_empty()
+            && summary.certified_ranges.is_empty()
+            && summary.requirements.is_empty()
+            && summary.accesses.is_empty()
+            && summary.availability.incoming.is_empty()
+            && summary.availability.reinitialized.is_empty()
+            && summary.availability.unavailable.is_empty()
+            && summary.native_requirements.is_empty()
+            && summary.loan_requirements.is_empty()
+            && summary.separation_validity.is_empty()
+        {
+            // With only a scalar postcondition, a branch can expose an argument
+            // only through the result or a fact shared by every normal return.
+            // Merely selecting a discarded result must not keep its inputs live.
+            let parameters = |guard: &Guard<'db>| {
+                guard
+                    .occurrences()
+                    .into_iter()
+                    .filter_map(|occurrence| {
+                        if let ValueOccurrence::Argument(param) = occurrence {
+                            Some(param)
+                        } else {
+                            None
+                        }
+                    })
+                    .chain(guard.indices().into_iter().filter_map(|index| {
+                        if let IndexExpr::FormalValue(param) = index {
+                            Some(param)
+                        } else {
+                            None
+                        }
+                    }))
+                    .collect::<BTreeSet<_>>()
+            };
+            let mut unconditional = self.scalar.non_branch_params.clone();
+            let mut through_result = BTreeSet::new();
+            if let Some(guard) = &summary.scalar_result {
+                through_result = parameters(guard);
+                let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
+                let guard = guard
+                    .forget_occurrences(|occurrence| occurrence == ValueOccurrence::Summary)
+                    .forget_indices(|index| index == returned);
+                unconditional.extend(parameters(&guard));
+                through_result.retain(|param| !unconditional.contains(param));
+            }
+            let observed = summary.observed_params.as_mut().expect("body observations");
+            observed.unconditional = unconditional;
+            observed.through_result = through_result;
+        }
         // Merging equal relations ORs their guards, so check the final clauses.
         let requirements = &summary.loan_requirements;
         let validity = &summary.separation_validity;
@@ -2762,7 +2803,19 @@ impl<'db> Borrowck<'db> {
                 state.store_scalar(root, IndexExpr::Const(value));
             }
         }
-        if let Some(postcondition) = &call.summary.scalar_result {
+        let primitive_boolean = self.body.values[result.index()].ty.is_bool(self.db)
+            && self.primitive_operator(result).is_some();
+        if primitive_boolean && self.scalar.live.contains(&result) {
+            // Primitive predicates use the caller's demand and loop policy.
+            // Their body summaries would eagerly add unrequested comparisons
+            // and bounds on changing loop values.
+            let relation = self.boolean_relation(
+                result,
+                self.boolean_choice(result),
+                self.scalar_bounds_enabled(result),
+            );
+            state.constrain(&relation, &mut self.inventory.values);
+        } else if !primitive_boolean && let Some(postcondition) = &call.summary.scalar_result {
             let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
             // Keep facts about the arguments, but drop the relation for a result
             // no other fact can name. Otherwise each call adds its return
