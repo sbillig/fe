@@ -1,0 +1,31 @@
+use std::native::ByteBuffer
+struct State { data: ByteBuffer, journal: ByteBuffer }
+struct Frame { memory: ByteBuffer }
+impl Frame {
+ fn run(mut self, _ state: mut State) {
+  core::assert(self.memory.try_resize(1))
+  core::assert(state.journal.try_resize(1))
+  core::assert(state.data.try_resize(1))
+  state.data.set_byte(index: 0, value: 7)
+ }
+ fn release(own self) { self.memory.release() }
+}
+fn execute(_ state: mut State) {
+ let mut frame = Frame { memory: ByteBuffer::new() }
+ frame.run(mut state)
+ frame.release()
+}
+
+fn nested(_ state: mut State, depth: u64) {
+    if depth == 0 { execute(mut state) }
+    else { nested(mut state, depth: depth - 1) }
+}
+pub fn main() -> i32 {
+    let mut state = State { data: ByteBuffer::new(), journal: ByteBuffer::new() }
+    nested(mut state, depth: 3)
+    core::assert(state.data.byte_at(0) == 7 && state.journal.byte_at(0) == 0)
+    nested(mut state, depth: 2)
+    state.data.release()
+    state.journal.release()
+    0
+}

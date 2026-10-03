@@ -1283,3 +1283,20 @@ fn native_account_code_reads_survive_independent_journal_growth() {
         assert!(result.status.success(), "O{level}: {result:?}");
     }
 }
+
+#[test]
+fn native_frame_release_survives_independent_buffer_growth() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("log_buffer_moves.fe");
+    fs::write(
+        &source,
+        include_str!("fixtures/crash_regressions/native_log_buffer_moves.fe"),
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("log_buffer_moves")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}

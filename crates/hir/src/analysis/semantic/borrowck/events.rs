@@ -1028,6 +1028,39 @@ impl<'db> Borrowck<'db> {
         }
     }
 
+    /// A conditional arbitrary address can avoid an ownership conflict only if
+    /// callers establish the physical condition excluding its raw overwrite.
+    /// A certain overlap or an unconditional address cannot use this route.
+    pub(super) fn exclude_clobbered_access(
+        &self,
+        footprint: AccessFootprint<'_, 'db>,
+        unavailable: &RegionSet<'db>,
+        origin: SemOrigin<'db>,
+        moved: SemOrigin<'db>,
+    ) -> Option<Vec<(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)>> {
+        if footprint.region.clauses().len() * unavailable.clauses().len() > SEPARATION_PAIR_LIMIT {
+            return None;
+        }
+        let separation_origin = SeparationOrigin {
+            owner: self.instance.key(self.db).owner(self.db),
+            template_owner: self.body.template_owner,
+            borrow: moved,
+            access: origin,
+        };
+        let mut facts = ConflictFacts::default();
+        for pair in footprint.physical_pairs(self.db, unavailable) {
+            if pair.definite.is_some() {
+                return None;
+            }
+            let exclusion = clobber_exclusion(&pair.access, pair.possible, separation_origin)?;
+            self.discharge(&exclusion, origin, &mut facts);
+            if facts.diagnostic.is_some() {
+                return None;
+            }
+        }
+        Some(facts.deferred)
+    }
+
     /// Settle a callee's separation clause at this call. Only physical
     /// separation or the callee's frozen suspension discharges it; authority
     /// found while resolving an endpoint never does. What callers can still

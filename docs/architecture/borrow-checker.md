@@ -707,14 +707,16 @@ unsigned bound only after a corresponding fill certificate is established.
 Recursive forwarding of an input preserves that input's may-alias identity. For a
 call with one direct capability result, fresh alternatives share one output
 port: the returned object of that call evaluation. A call without a capability
-result can instead use one fixed capability slot in a directly named input as
-its sole fresh output. Dynamic destinations, multiple fresh slots, and fresh
-objects exported through other summary components disable this extension.
-The port is keyed by the caller's semantic instance and call-result value, and
+result can instead use fixed capability slots in directly named inputs. Each
+independent slot has a separate port. If one allocation family is exposed by
+multiple slots, its members may differ or alias, so the original identities are
+retained. Dynamic destinations and fresh objects exported through other summary
+components also disable this extension. A port is keyed by its output slot,
+the caller's semantic instance and call-result value, and
 the enclosing loop generation distinguishes actual evaluations. Other exported
 components may name fresh storage only as a proven stored copy or invalid
 contents of fresh storage; certified ranges and native requirements disable the
-port. A family can supply the one output object, but its abstract value does not
+ports. A family can supply one output object, but its abstract value does not
 identify a second observable family member with it. Stored copies with family or
 existential allocation arguments therefore disable the port. Equal abstract
 values alone never merge objects.
@@ -723,10 +725,12 @@ Convergence: each function in a recursive component has finitely many allocation
 and call sites. Fresh alternatives that reach the result reuse their call site's
 port instead of adding a summary choice per recursion depth, and the internal
 recursive choices are projected from input may-sources, fresh output ports,
-stored copies of the result, and invalid fresh contents. The source identities reachable in a
-component summary are therefore drawn from a finite set, and the guards over them
-join monotonically. Growth outside this representation, such as a poststate that
-exports a distinct fresh object, still reaches the bounded convergence
+stored copies of the result, and invalid fresh contents. Arbitrary raw poststates
+also project private recursive choices conservatively, retaining their corruption
+conditions and acquiring no authority or allocation birth. The source identities
+reachable in a supported component summary are therefore drawn from a finite set,
+and the guards over them join monotonically. Growth outside this representation,
+such as correlated families exposed through several slots, still reaches the bounded convergence
 diagnostic; neither that failure nor a pending or blocked body validates through
 a signature fallback.
 
@@ -754,6 +758,13 @@ normal-return execution domain: a possible write never becomes a definite one.
 Opaque signature contracts conservatively consume exposed non-Copy raw pointees
 and supply no restoration guarantee. Trusted byte-memory intrinsics describe byte
 accesses; a byte write is not an ownership-consuming load.
+
+When an ownership conflict exists only through a conditionally corrupted raw
+address, availability can export the stronger physical separation obligation
+that excludes the original overwrite. The obligation is discharged with the
+same physical rules as borrowed-place separation. Proven logical move conflicts,
+unconditional arbitrary accesses, and certainly overlapping overwrites retain
+the move diagnostic; no initialization or borrow authority is assumed.
 
 Every call resolves its result sources, requirements, and effects against one
 pre-call snapshot. Provenance poststates are then applied simultaneously. A callee

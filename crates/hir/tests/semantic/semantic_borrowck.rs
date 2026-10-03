@@ -13900,3 +13900,66 @@ fn execute(_ state: mut State) {
     );
     assert!(diagnostics.is_empty(), "{diagnostics}");
 }
+
+#[test]
+fn releasing_a_frame_after_growing_independent_owned_buffers_is_valid() {
+    let diagnostics = checked_borrow_diags(include_str!(
+        "../../../fe/tests/fixtures/crash_regressions/native_log_buffer_moves.fe"
+    ));
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn independent_recursive_poststate_ports_preserve_ownership_and_generations() {
+    for (uses, moved) in [
+        ("consume(*pair.left)\nconsume(*pair.right)", false),
+        (
+            "consume(*pair.left)\n*pair.right = Item { n: 2 }\nconsume(*pair.left)",
+            true,
+        ),
+        (
+            "let old = pair.left\nconsume(*old)\nfill(mut pair, depth: 2)\nconsume(*pair.left)\nconsume(*old)",
+            true,
+        ),
+        (
+            "let old = pair.left\nconsume(*old)\nfill(mut pair, depth: 2)\nconsume(*pair.left)\nconsume(*pair.right)",
+            false,
+        ),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ n: u256 }}
+struct Pair {{ left: *Item, right: *Item }}
+fn consume(_ item: own Item) {{}}
+fn initialized() -> *Item {{
+    let pointer = core::ptr::alloc<Item>()
+    *pointer = Item {{ n: 1 }}
+    pointer
+}}
+fn fill(_ pair: mut Pair, depth: u256) {{
+    if depth == 0 {{
+        pair.left = initialized()
+        pair.right = initialized()
+    }} else {{ fill(mut pair, depth: depth - 1) }}
+}}
+fn inspect() {{
+    let mut pair = Pair {{ left: initialized(), right: initialized() }}
+    fill(mut pair, depth: 3)
+    {uses}
+}}
+"#
+        ));
+        assert!(
+            !diagnostics.contains("did not converge"),
+            "{uses}: {diagnostics}"
+        );
+        if moved {
+            assert!(
+                diagnostics.contains("move conflict in `fn inspect`"),
+                "{uses}: {diagnostics}"
+            );
+        } else {
+            assert!(diagnostics.is_empty(), "{uses}: {diagnostics}");
+        }
+    }
+}

@@ -9,7 +9,7 @@ use cranelift_entity::EntityRef;
 
 use super::{
     access::ResolvedAccess,
-    ir::{AvailabilityRequirement, AvailabilitySummary},
+    ir::{AvailabilityRequirement, AvailabilitySummary, SeparationOrigin},
     solver::Borrowck,
     summary::{CallInputs, SourceInstantiations},
 };
@@ -25,6 +25,7 @@ use crate::analysis::{
             index::{BinderScope, IndexExpr},
             path::RegionPath,
             region::{OverlapResult, RegionRoot, RegionSet},
+            separation::Separation,
             shape::ShapeId,
             source::{InputOrigin, SourceExpr},
             state::BorrowState,
@@ -56,6 +57,7 @@ pub(super) struct ResolvedAvailability<'db> {
 }
 
 pub(super) struct AvailabilityAnalysis<'db> {
+    pub separations: Vec<(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)>,
     pub summary: AvailabilitySummary<'db>,
     pub native_validity: NativeValidity<'db>,
     pub diagnostic: Option<SemanticDiagnostic<'db>>,
@@ -482,6 +484,7 @@ impl<'db> Borrowck<'db> {
             }
         }
         let mut analysis = AvailabilityAnalysis {
+            separations: Vec::new(),
             summary: AvailabilitySummary::empty(),
             native_validity: NativeValidity::default(),
             diagnostic: None,
@@ -770,20 +773,34 @@ impl<'db> Borrowck<'db> {
         if (analysis.report_errors || independent)
             && analysis.diagnostic.is_none()
             && let Some(fact) = state.moved.values().find(|fact| {
+                let mut conflicts = |access: &RegionSet<'db>, unavailable: &RegionSet<'db>| {
+                    // Ownership exists even for an empty representation. Never
+                    // replace a proven logical conflict with a byte obligation.
+                    if footprint.extent == AccessExtent::Typed
+                        && !access.proven_intersection(unavailable).is_empty()
+                    {
+                        return true;
+                    }
+                    let access = AccessFootprint {
+                        region: access,
+                        extent: footprint.extent,
+                    };
+                    if matches!(
+                        access.overlap(self.db, AccessFootprint::typed(unavailable)),
+                        OverlapResult::Disjoint
+                    ) {
+                        return false;
+                    }
+                    let Some(separations) =
+                        self.exclude_clobbered_access(access, unavailable, origin, fact.origin)
+                    else {
+                        return true;
+                    };
+                    analysis.separations.extend(separations);
+                    false
+                };
                 if kind != MemoryAccessKind::Write {
-                    // Ownership still exists for an empty representation.
-                    // Exact structural overlap is a logical conflict even when
-                    // the corresponding physical footprint touches no bytes.
-                    return (footprint.extent == AccessExtent::Typed
-                        && !region.proven_intersection(&fact.region).is_empty())
-                        || !matches!(
-                            AccessFootprint {
-                                region: &region,
-                                extent: footprint.extent
-                            }
-                            .overlap(self.db, AccessFootprint::typed(&fact.region)),
-                            OverlapResult::Disjoint
-                        );
+                    return conflicts(&region, &fact.region);
                 }
                 // Requirements are conjunctive. A whole-value write elsewhere
                 // cannot authorize an earlier field write through a moved owner.
@@ -794,17 +811,7 @@ impl<'db> Borrowck<'db> {
                         if write.guard.scope() == region.scope() {
                             unavailable = unavailable.with_guard(&write.guard);
                         }
-                        ((footprint.extent == AccessExtent::Typed
-                            && !written.proven_intersection(&unavailable).is_empty())
-                            || !matches!(
-                                AccessFootprint {
-                                    region: &written,
-                                    extent: footprint.extent
-                                }
-                                .overlap(self.db, AccessFootprint::typed(&unavailable)),
-                                OverlapResult::Disjoint
-                            ))
-                            && !written.provably_covers(&unavailable)
+                        !written.provably_covers(&unavailable) && conflicts(&written, &unavailable)
                     })
                 })
             })
@@ -862,7 +869,7 @@ mod tests {
                 FieldIndex, VariantIndex,
                 borrowck::solver::BorrowSummaryMode,
                 capability::{
-                    external::ExternalSource,
+                    external::{ClobberCondition, ExternalSource, ReferentContract},
                     guard::ChoiceKey,
                     handle::{
                         AddressOccurrence, HandleAddressSpace, OpaqueHandleContract,
@@ -873,7 +880,7 @@ mod tests {
                     test_roots,
                 },
                 get_or_build_semantic_instance, identity_semantic_instance_key,
-                normalized::{NExpr, normalize_semantic_body, verify_normalized_body},
+                normalized::{NExpr, NRootId, normalize_semantic_body, verify_normalized_body},
             },
             ty::{ProviderAddressSpace, ty_check::BodyOwner, ty_def::TyId},
         },
@@ -1153,6 +1160,94 @@ mod tests {
         checker.solve().unwrap();
         assert!(checker.availability_diagnostic().is_none());
         assert!(checker.build_summary().is_ok());
+    }
+
+    #[test]
+    fn conditional_raw_access_after_move_exports_only_proven_exclusions() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "conditional_move.fe".into(),
+            "struct Item { n: u256 }\n\
+             fn pair(first: own Item, second: own Item, a: mut u256, b: mut u256) -> (Item, Item) { (first, second) }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "pair"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        let (block, index) = checker.body.blocks.iter().enumerate().find_map(|(block, body)| {
+            body.statements.iter().position(|statement| matches!(&statement.kind,
+                NStatementKind::Define { expr: NExpr::AggregateMake { fields, .. }, .. } if fields.len() == 2
+            )).map(|index| (block, index))
+        }).unwrap();
+        let scope = BinderScope::default();
+        checker.operations[block][index].accesses[0].region = RegionSet::singleton(
+            &scope,
+            test_roots::local(&db, NRootId::new(0)),
+            RegionPath::default(),
+        );
+        let target = SourceExpr {
+            source: ExternalSource::input(
+                InputSource::place(2),
+                ReferentContract::memory(&db, TyId::u256(&db)),
+                false,
+            ),
+            path: RegionPath::default(),
+            views: Default::default(),
+            invalidated: false,
+        };
+        let mut other = target.clone();
+        other.source = ExternalSource::input(InputSource::place(3), target.source.contract, false);
+        for (written, conflict) in [
+            (Some(other), false),
+            (Some(target.clone()), true),
+            (None, true),
+        ] {
+            let mut source = ExternalSource::opaque_memory(target.source.contract);
+            source.clobber = written.map(|written| {
+                Box::new(ClobberCondition::new(
+                    target.clone(),
+                    written,
+                    AccessExtent::Typed,
+                ))
+            });
+            checker.operations[block][index].availability = Some(ResolvedAvailability {
+                incoming: vec![(
+                    AvailabilityRequirement {
+                        kind: MemoryAccessKind::Write,
+                        extent: AccessExtent::Unknown,
+                        region: RegionSet::singleton(
+                            &scope,
+                            RegionRoot::External(source),
+                            RegionPath::default(),
+                        ),
+                    },
+                    NativeValidity::default(),
+                )],
+                reinitialized: RegionSet::empty(&scope),
+                unavailable: RegionSet::empty(&scope),
+                consumed: Vec::new(),
+            });
+            let analysis = checker.analyze_availability();
+            assert_eq!(analysis.diagnostic.is_some(), conflict);
+            let summary = checker.build_summary();
+            assert_eq!(summary.is_err(), conflict, "{summary:?}");
+            if !conflict {
+                assert!(!analysis.separations.is_empty());
+                let (summary, _) = summary.unwrap();
+                assert!(!summary.loan_requirements.is_empty());
+                assert!(
+                    summary
+                        .loan_requirements
+                        .clauses()
+                        .iter()
+                        .all(|clause| clause.payload.suspended.is_empty())
+                );
+            }
+        }
     }
 
     #[test]
