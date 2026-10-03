@@ -917,9 +917,11 @@ impl<'db> Borrowck<'db> {
         let pending_accesses = self.body_memory_accesses();
         // Control-flow restrictions and logical moves also change modeled
         // contents, but neither writes bytes. Publish typed poststates for write
-        // destinations and newly created objects. Byte writes also expose their
-        // corrupted interpretations. Typed alias invalidation is replayed from
-        // the actual accesses, not as another store to each possible alias.
+        // destinations and newly created objects. Both typed and byte alias
+        // invalidation are replayed from the actual accesses at the caller.
+        // Exporting whole alias poststates would also replay unrelated typed
+        // stores collected in their weak contents, retaining recursive births
+        // through every hypothetical reachable alias.
         let writes: Vec<_> = pending_accesses
             .iter()
             .filter(|access| access.kind == MemoryAccessKind::Write)
@@ -933,16 +935,7 @@ impl<'db> Borrowck<'db> {
                         access.region.clauses().iter().any(|clause| {
                             matches!(&clause.payload.root, RegionRoot::External(source)
                                 if input.source.match_instance(&input.scope, source, clause.guard.scope()).is_some())
-                        }) || (access.extent != AccessExtent::Typed
-                            && !matches!(
-                                AccessFootprint::typed(&RegionSet::singleton(
-                                    &input.scope,
-                                    RegionRoot::External(input.source.clone()),
-                                    RegionPath::default(),
-                                ).quantify_into(self.db, access.region.scope()))
-                                    .overlap(self.db, access.footprint()),
-                                OverlapResult::Disjoint
-                            ))
+                        })
                     }))
             {
                 let root = RegionRoot::External(input.source.clone());
@@ -5902,7 +5895,14 @@ fn clobber(slot: *ref u256) {
                             .any(|leaf| leaf.payload.invalidated)
                     })
                 }
-                assert!(invalid(&values, &concrete));
+                assert!(concrete.mutable_inputs.is_empty());
+                assert!(
+                    concrete.accesses.iter().any(|access| {
+                        access.kind == MemoryAccessKind::Write
+                            && access.extent == AccessExtent::Bytes(IndexExpr::Const(32))
+                    }),
+                    "byte corruption must be replayed at callers"
+                );
                 assert!(
                     invalid(&values, &fallback),
                     "opaque native poststate restored entry validity"

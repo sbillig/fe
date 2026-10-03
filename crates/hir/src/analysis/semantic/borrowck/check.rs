@@ -704,6 +704,50 @@ mod tests {
     };
 
     #[test]
+    fn byte_write_effects_invalidate_caller_aliases_until_reinitialized() {
+        for restored in [false, true] {
+            let mut db = HirAnalysisTestDb::default();
+            let restore = if restored { "*slot = value" } else { "" };
+            let file = db.new_stand_alone(
+                "byte_write_aliases.fe".into(),
+                &format!(
+                    r#"
+use core::ptr
+fn clobber(slot: *ref u256, alias: *ref u256) {{
+    ptr::zero_bytes(ptr::byte_ptr(slot), 32)
+}}
+fn root(slot: *ref u256, value: ref u256) -> u256 {{
+    *slot = value
+    clobber(slot, alias: slot)
+    {restore}
+    let borrowed = *slot
+    borrowed + 0
+}}
+"#
+                ),
+            );
+            let (module, _) = db.top_mod(file);
+            db.assert_no_diags(module);
+            let instance = get_or_build_semantic_instance(
+                &db,
+                identity_semantic_instance_key(
+                    &db,
+                    BodyOwner::Func(find_func(&db, module, "root")),
+                ),
+            );
+            let result = check_semantic_borrows(&db, instance);
+            if restored {
+                assert!(result.is_ok(), "{result:?}");
+            } else {
+                assert!(
+                    matches!(result, Err(SemanticAnalysisError::Diagnostic(diag))
+                    if diag.sub_diagnostics.iter().any(|sub| sub.message.contains("invalidated by a raw write")))
+                );
+            }
+        }
+    }
+
+    #[test]
     fn opaque_native_summaries_preserve_query_order_and_provisional_recovery() {
         for summary_first in [false, true] {
             let mut db = HirAnalysisTestDb::default();

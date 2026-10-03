@@ -1336,3 +1336,22 @@ fn native_stored_references_use_concrete_enum_and_padded_layouts() {
         assert!(result.status.success(), "O{level}: {result:?}");
     }
 }
+
+#[test]
+fn native_recursive_buffer_growth_with_unused_generic_effect() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("recursive_unused_effect.fe");
+    fs::write(
+        &source,
+        include_str!("fixtures/crash_regressions/native_recursive_unused_effect.fe"),
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("recursive_unused_effect"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}

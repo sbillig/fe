@@ -1,0 +1,22 @@
+use std::native::ByteBuffer
+
+trait Write { fn write(mut self) }
+struct Writer { status: u8 }
+impl Write for Writer { fn write(mut self) {} }
+
+fn grow(_ buffer: mut ByteBuffer, depth: u8) uses (writer: mut Write) {
+    core::assert(buffer.try_resize((3 - depth as u64) * 32))
+    buffer.set_byte(index: depth as u64, value: depth + 7)
+    if depth > 0 { grow(mut buffer, depth: depth - 1) }
+}
+
+pub fn main() -> i32 {
+    let mut buffer = ByteBuffer::new()
+    with (Write = Writer { status: 0 }) { grow(mut buffer, depth: 2) }
+    core::assert(buffer.len() == 96)
+    core::assert(buffer.byte_at(0) == 7)
+    core::assert(buffer.byte_at(1) == 8)
+    core::assert(buffer.byte_at(2) == 9)
+    buffer.release()
+    0
+}
