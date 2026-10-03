@@ -159,7 +159,6 @@ impl<'db> Borrowck<'db> {
     pub(super) fn scalar_liveness(&self) -> (FxHashSet<NValueId>, ObservedParams) {
         let mut pending = Vec::new();
         let mut returned = Vec::new();
-        let mut stored: FxHashMap<NPlaceBase, Vec<NValueId>> = FxHashMap::default();
         for block in &self.body.blocks {
             for statement in &block.statements {
                 match &statement.kind {
@@ -198,15 +197,8 @@ impl<'db> Borrowck<'db> {
                             }));
                         }
                     }
-                    NStatementKind::Store { destination, value } => {
+                    NStatementKind::Store { destination, .. } => {
                         pending.extend(self.body.place_values(destination));
-                        // Only a whole scalar cell records the value it holds.
-                        if destination.path.is_empty() {
-                            stored
-                                .entry(destination.base)
-                                .or_default()
-                                .push(value.value);
-                        }
                     }
                 }
             }
@@ -220,6 +212,7 @@ impl<'db> Borrowck<'db> {
             }
         }
         let mut live = FxHashSet::default();
+        let stored = self.reaching_cell_stores();
         self.propagate_liveness(&mut live, pending, &stored);
         let unconditional = live.clone();
         self.propagate_liveness(&mut live, returned, &stored);
@@ -256,7 +249,7 @@ impl<'db> Borrowck<'db> {
         &self,
         live: &mut FxHashSet<NValueId>,
         mut pending: Vec<NValueId>,
-        stored: &FxHashMap<NPlaceBase, Vec<NValueId>>,
+        stored: &FxHashMap<NValueId, FxHashSet<NValueId>>,
     ) {
         while let Some(value) = pending.pop() {
             if !live.insert(value) {
@@ -276,11 +269,12 @@ impl<'db> Borrowck<'db> {
                     let Some((_, expr)) = self.body.defining_expr(value) else {
                         continue;
                     };
-                    // Arithmetic and lossy casts relate no fact to their
-                    // operands, and a comparison relates them only with a
-                    // tracked side. A call relates the arguments its summary
-                    // observes through its result, unless it is a primitive
-                    // operator. A tracked cell relates a load to its stores.
+                    // Arithmetic, lossy casts and constructors relate no fact
+                    // to their operands, and a comparison relates them only
+                    // with a tracked side. A call relates the arguments its
+                    // summary observes through its result, unless it is a
+                    // primitive operator. A tracked cell relates a load to the
+                    // stores that can reach it.
                     let tracked = |operands: &[NOperand]| {
                         operands
                             .iter()
@@ -299,12 +293,16 @@ impl<'db> Borrowck<'db> {
                         NExpr::ScalarCast { value: source, to } => {
                             self.lossless_scalar_cast(source.value, *to)
                         }
-                        NExpr::Load { place, .. } => {
-                            if place.path.is_empty() && self.scalar.cells.contains(&place.base) {
-                                pending.extend(stored.get(&place.base).into_iter().flatten());
-                            }
+                        NExpr::Load { .. } => {
+                            pending.extend(stored.get(&value).into_iter().flatten());
                             false
                         }
+                        // Constructors hold scalar fields only as values; no fact
+                        // relates a field to its projection.
+                        NExpr::AggregateMake { .. }
+                        | NExpr::EnumMake { .. }
+                        | NExpr::ArrayRepeat { .. }
+                        | NExpr::MakeHandle { .. } => false,
                         NExpr::Call { args, .. } => match self.primitive_operator(value) {
                             Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(_))) => tracked(args),
                             Some(
@@ -334,6 +332,60 @@ impl<'db> Borrowck<'db> {
                 }
                 NValueDefinition::EntryParam { .. } => {}
             }
+        }
+    }
+
+    /// For each load of a tracked whole cell, the stored values that can reach
+    /// it: a later whole-cell store replaces earlier ones on every path.
+    fn reaching_cell_stores(&self) -> FxHashMap<NValueId, FxHashSet<NValueId>> {
+        type Stores = FxHashMap<NPlaceBase, FxHashSet<NValueId>>;
+        let tracked =
+            |place: &NPlace<'db>| place.path.is_empty() && self.scalar.cells.contains(&place.base);
+        let mut predecessors = vec![Vec::new(); self.body.blocks.len()];
+        for (index, block) in self.body.blocks.iter().enumerate() {
+            for successor in block.terminator.kind.successors() {
+                predecessors[successor.block.index()].push(index);
+            }
+        }
+        let mut exits = vec![Stores::default(); self.body.blocks.len()];
+        let mut reaching = FxHashMap::default();
+        // The pass after the exits settle records what reaches each load.
+        let mut settled = false;
+        loop {
+            let mut changed = false;
+            for &index in self.inventory.loops.reverse_postorder() {
+                let mut current = Stores::default();
+                for predecessor in &predecessors[index] {
+                    for (base, values) in &exits[*predecessor] {
+                        current.entry(*base).or_default().extend(values);
+                    }
+                }
+                for statement in &self.body.blocks[index].statements {
+                    match &statement.kind {
+                        NStatementKind::Store { destination, value } if tracked(destination) => {
+                            current.insert(destination.base, FxHashSet::from_iter([value.value]));
+                        }
+                        NStatementKind::Define {
+                            result,
+                            expr: NExpr::Load { place, .. },
+                        } if settled && tracked(place) => {
+                            reaching.insert(
+                                *result,
+                                current.get(&place.base).cloned().unwrap_or_default(),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                if exits[index] != current {
+                    exits[index] = current;
+                    changed = true;
+                }
+            }
+            if settled {
+                return reaching;
+            }
+            settled = !changed;
         }
     }
 
