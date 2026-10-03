@@ -13699,3 +13699,143 @@ fn inspect() {
         "{diagnostics}"
     );
 }
+
+#[test]
+fn discarded_scalar_call_results_keep_argument_postconditions() {
+    let source = r#"
+fn constrain(_ index: usize) -> usize {
+    if index != 1 { assert!(false) }
+    index
+}
+fn discard(_ index: usize) -> usize {
+    let unused = constrain(index)
+    index
+}
+"#;
+    assert_eq!(checked_borrow_diags(source), "");
+    with_borrow_summary(source, "discard", |_db, summary| {
+        let guard = summary
+            .scalar_result
+            .expect("argument equality survives an unused result");
+        let bound = fe_hir::analysis::semantic::capability::guard::Guard::always(guard.scope())
+            .with_equality(IndexExpr::FormalValue(0), IndexExpr::Const(1))
+            .unwrap();
+        assert!(guard.implies(&bound));
+    });
+}
+
+#[test]
+fn forwarded_scalar_call_results_keep_return_relations() {
+    let source = r#"
+fn identity(_ index: usize) -> usize { index }
+fn forward(_ index: usize) -> usize { identity(index) }
+"#;
+    with_borrow_summary(source, "forward", |_db, summary| {
+        use fe_hir::analysis::semantic::capability::guard::Guard;
+        use fe_hir::analysis::semantic::capability::index::{BinderScope, IndexNamespace};
+        let guard = summary
+            .scalar_result
+            .expect("a used result keeps its relation");
+        let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
+        let equality = Guard::always(guard.scope())
+            .with_equality(returned, IndexExpr::FormalValue(0))
+            .unwrap();
+        assert!(guard.implies(&equality));
+    });
+}
+
+#[test]
+fn nested_scalar_call_results_keep_return_relations() {
+    let source = r#"
+fn identity(_ index: usize) -> usize { index }
+fn nested(_ index: usize) -> usize { identity(identity(index)) }
+"#;
+    with_borrow_summary(source, "nested", |_db, summary| {
+        use fe_hir::analysis::semantic::capability::guard::Guard;
+        use fe_hir::analysis::semantic::capability::index::{BinderScope, IndexNamespace};
+        let guard = summary
+            .scalar_result
+            .expect("a returned call chain keeps its relation");
+        let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
+        let equality = Guard::always(guard.scope())
+            .with_equality(returned, IndexExpr::FormalValue(0))
+            .unwrap();
+        assert!(guard.implies(&equality));
+    });
+}
+
+#[test]
+fn named_scalar_call_results_keep_return_relations() {
+    // The result itself is not tracked, but another fact names it: a
+    // comparison with a tracked index, a tracked cell it is stored to, a kept
+    // call relation or argument postcondition it is passed to, or a callee
+    // that indexes with it.
+    for body in [
+        "let held = mut arr[k]\n    if same(k) != j { arr[j] = 0 }\n    held = 1",
+        "let held = mut arr[k]\n    if same(same(k)) != j { arr[j] = 0 }\n    held = 1",
+        "let held = mut arr[k]\n    if j != k {\n        let mut m: usize = same(j)\n        \
+         if flag { m = j }\n        arr[m] = 0\n    }\n    held = 1",
+        "let held = mut arr[0]\n    let unused = constrain(same(k))\n    arr[k] = 2\n    held = 1",
+        "let cells = ptr::alloc<[u64; 8]>()\n    *cells = [0; 8]\n    \
+         let held = mut (*cells)[k]\n    if j != k { write(cells, same(j)) }\n    held = 1",
+    ] {
+        let source = format!(
+            r#"
+use core::ptr
+fn same(_ x: usize) -> usize {{ x }}
+fn constrain(_ index: usize) -> usize {{
+    if index != 1 {{ assert!(false) }}
+    index
+}}
+fn write(_ cells: *[u64; 8], _ index: usize) {{ (*cells)[index] = 0 }}
+fn f(_ arr: mut [u64; 8], k: usize, j: usize, flag: bool) {{
+    {body}
+}}
+"#
+        );
+        assert_eq!(checked_borrow_diags(&source), "", "{source}");
+    }
+}
+
+#[test]
+fn summaries_observe_indexing_parameters_not_arithmetic_ones() {
+    let source = r#"
+fn pick(_ offset: usize, _ index: usize, _ arr: [u64; 4]) -> u64 {
+    let unused = offset + 1
+    arr[index]
+}
+"#;
+    with_borrow_summary(source, "pick", |_db, summary| {
+        let observed = summary.observed_params.as_ref().unwrap();
+        assert!(
+            observed.unconditional.contains(&1)
+                && !observed.unconditional.contains(&0)
+                && !observed.through_result.contains(&0),
+            "{observed:?}"
+        );
+    });
+}
+
+#[test]
+fn summaries_observe_returned_parameters_through_the_result() {
+    // A caller that forgets a dead result's relation leaves `x` unread, while a
+    // checked parameter is observed regardless.
+    let source = r#"
+fn identity(_ x: usize) -> usize { x }
+fn constrain(_ index: usize) -> usize {
+    if index != 1 { assert!(false) }
+    0
+}
+"#;
+    with_borrow_summary(source, "identity", |_db, summary| {
+        let observed = summary.observed_params.as_ref().unwrap();
+        assert!(
+            observed.through_result.contains(&0) && !observed.unconditional.contains(&0),
+            "{observed:?}"
+        );
+    });
+    with_borrow_summary(source, "constrain", |_db, summary| {
+        let observed = summary.observed_params.as_ref().unwrap();
+        assert!(observed.unconditional.contains(&0), "{observed:?}");
+    });
+}

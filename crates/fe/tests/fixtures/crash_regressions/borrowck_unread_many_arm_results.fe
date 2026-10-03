@@ -1,0 +1,177 @@
+// Many-arm call results that no fact reads. Each call's result alternatives are
+// forgotten rather than multiplied across calls: comparisons no condition
+// reads, results passed only to a dead wrapper result, a cell nothing loads,
+// and selectors narrowed by a lossy cast.
+trait Tagged {
+    fn ordinal(self) -> usize
+}
+
+enum Many {
+    V0,
+    V1,
+    V2,
+    V3,
+    V4,
+    V5,
+    V6,
+    V7,
+    V8,
+    V9,
+    V10,
+    V11,
+    V12,
+    V13,
+    V14,
+    V15,
+    V16,
+    V17,
+    V18,
+    V19,
+}
+
+impl Tagged for Many {
+    fn ordinal(self) -> usize {
+        match self {
+            Many::V0 => 0
+            Many::V1 => 1
+            Many::V2 => 2
+            Many::V3 => 3
+            Many::V4 => 4
+            Many::V5 => 5
+            Many::V6 => 6
+            Many::V7 => 7
+            Many::V8 => 8
+            Many::V9 => 9
+            Many::V10 => 10
+            Many::V11 => 11
+            Many::V12 => 12
+            Many::V13 => 13
+            Many::V14 => 14
+            Many::V15 => 15
+            Many::V16 => 16
+            Many::V17 => 17
+            Many::V18 => 18
+            Many::V19 => 19
+        }
+    }
+}
+
+fn unused_comparisons(k: usize) -> usize {
+    let c0 = Many::V0.ordinal() == k
+    let c1 = Many::V1.ordinal() == k
+    let c2 = Many::V2.ordinal() == k
+    let c3 = Many::V3.ordinal() == k
+    let c4 = Many::V4.ordinal() == k
+    let c5 = Many::V5.ordinal() == k
+    let c6 = Many::V6.ordinal() == k
+    let c7 = Many::V7.ordinal() == k
+    let c8 = Many::V8.ordinal() == k
+    let c9 = Many::V9.ordinal() == k
+    let c10 = Many::V10.ordinal() == k
+    let c11 = Many::V11.ordinal() == k
+    let c12 = Many::V12.ordinal() == k
+    let c13 = Many::V13.ordinal() == k
+    let c14 = Many::V14.ordinal() == k
+    let c15 = Many::V15.ordinal() == k
+    let c16 = Many::V16.ordinal() == k
+    let c17 = Many::V17.ordinal() == k
+    let c18 = Many::V18.ordinal() == k
+    let c19 = Many::V19.ordinal() == k
+    k
+}
+
+fn identity(_ x: usize) -> usize {
+    x
+}
+
+fn dead_wrapper_results() {
+    let unused0 = identity(Many::V0.ordinal())
+    let unused1 = identity(Many::V1.ordinal())
+    let unused2 = identity(Many::V2.ordinal())
+    let unused3 = identity(Many::V3.ordinal())
+    let unused4 = identity(Many::V4.ordinal())
+    let unused5 = identity(Many::V5.ordinal())
+    let unused6 = identity(Many::V6.ordinal())
+    let unused7 = identity(Many::V7.ordinal())
+    let unused8 = identity(Many::V8.ordinal())
+    let unused9 = identity(Many::V9.ordinal())
+    let unused10 = identity(Many::V10.ordinal())
+    let unused11 = identity(Many::V11.ordinal())
+    let unused12 = identity(Many::V12.ordinal())
+    let unused13 = identity(Many::V13.ordinal())
+    let unused14 = identity(Many::V14.ordinal())
+    let unused15 = identity(Many::V15.ordinal())
+    let unused16 = identity(Many::V16.ordinal())
+    let unused17 = identity(Many::V17.ordinal())
+    let unused18 = identity(Many::V18.ordinal())
+    let unused19 = identity(Many::V19.ordinal())
+}
+
+fn unread_cell() {
+    let mut sink: usize = 0
+    sink = Many::V0.ordinal()
+    sink = Many::V1.ordinal()
+    sink = Many::V2.ordinal()
+    sink = Many::V3.ordinal()
+    sink = Many::V4.ordinal()
+    sink = Many::V5.ordinal()
+    sink = Many::V6.ordinal()
+    sink = Many::V7.ordinal()
+    sink = Many::V8.ordinal()
+    sink = Many::V9.ordinal()
+    sink = Many::V10.ordinal()
+    sink = Many::V11.ordinal()
+    sink = Many::V12.ordinal()
+    sink = Many::V13.ordinal()
+    sink = Many::V14.ordinal()
+    sink = Many::V15.ordinal()
+    sink = Many::V16.ordinal()
+    sink = Many::V17.ordinal()
+    sink = Many::V18.ordinal()
+    sink = Many::V19.ordinal()
+}
+
+fn narrowed_selectors(_ arr: [u64; 256]) -> u64 {
+    let mut total: u64 = 0
+    let s0: u8 = Many::V0.ordinal().downcast_truncate()
+    total += arr[s0 as usize]
+    let s1: u8 = Many::V1.ordinal().downcast_truncate()
+    total += arr[s1 as usize]
+    let s2: u8 = Many::V2.ordinal().downcast_truncate()
+    total += arr[s2 as usize]
+    let s3: u8 = Many::V3.ordinal().downcast_truncate()
+    total += arr[s3 as usize]
+    let s4: u8 = Many::V4.ordinal().downcast_truncate()
+    total += arr[s4 as usize]
+    let s5: u8 = Many::V5.ordinal().downcast_truncate()
+    total += arr[s5 as usize]
+    let s6: u8 = Many::V6.ordinal().downcast_truncate()
+    total += arr[s6 as usize]
+    let s7: u8 = Many::V7.ordinal().downcast_truncate()
+    total += arr[s7 as usize]
+    let s8: u8 = Many::V8.ordinal().downcast_truncate()
+    total += arr[s8 as usize]
+    let s9: u8 = Many::V9.ordinal().downcast_truncate()
+    total += arr[s9 as usize]
+    let s10: u8 = Many::V10.ordinal().downcast_truncate()
+    total += arr[s10 as usize]
+    let s11: u8 = Many::V11.ordinal().downcast_truncate()
+    total += arr[s11 as usize]
+    let s12: u8 = Many::V12.ordinal().downcast_truncate()
+    total += arr[s12 as usize]
+    let s13: u8 = Many::V13.ordinal().downcast_truncate()
+    total += arr[s13 as usize]
+    let s14: u8 = Many::V14.ordinal().downcast_truncate()
+    total += arr[s14 as usize]
+    let s15: u8 = Many::V15.ordinal().downcast_truncate()
+    total += arr[s15 as usize]
+    let s16: u8 = Many::V16.ordinal().downcast_truncate()
+    total += arr[s16 as usize]
+    let s17: u8 = Many::V17.ordinal().downcast_truncate()
+    total += arr[s17 as usize]
+    let s18: u8 = Many::V18.ordinal().downcast_truncate()
+    total += arr[s18 as usize]
+    let s19: u8 = Many::V19.ordinal().downcast_truncate()
+    total += arr[s19 as usize]
+    total
+}
