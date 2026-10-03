@@ -1457,8 +1457,59 @@ impl<'db> Borrowck<'db> {
             scalar_inputs,
             requirements,
         };
-        let (summary, provenance) =
+        let (mut summary, provenance) =
             summary.abstract_choices(self.db, &mut values, choices, separations);
+        if (scalar_ty.is_bool(self.db) || scalar_ty.is_integral(self.db))
+            && summary.mutable_inputs.is_empty()
+            && summary.scalar_inputs.is_empty()
+            && summary.certified_ranges.is_empty()
+            && summary.requirements.is_empty()
+            && summary.accesses.is_empty()
+            && summary.availability.incoming.is_empty()
+            && summary.availability.reinitialized.is_empty()
+            && summary.availability.unavailable.is_empty()
+            && summary.native_requirements.is_empty()
+            && summary.loan_requirements.is_empty()
+            && summary.separation_validity.is_empty()
+        {
+            // With only a scalar postcondition, a branch can expose an argument
+            // only through the result or a fact shared by every normal return.
+            // Merely selecting a discarded result must not keep its inputs live.
+            let parameters = |guard: &Guard<'db>| {
+                guard
+                    .occurrences()
+                    .into_iter()
+                    .filter_map(|occurrence| {
+                        if let ValueOccurrence::Argument(param) = occurrence {
+                            Some(param)
+                        } else {
+                            None
+                        }
+                    })
+                    .chain(guard.indices().into_iter().filter_map(|index| {
+                        if let IndexExpr::FormalValue(param) = index {
+                            Some(param)
+                        } else {
+                            None
+                        }
+                    }))
+                    .collect::<BTreeSet<_>>()
+            };
+            let mut unconditional = self.scalar.non_branch_params.clone();
+            let mut through_result = BTreeSet::new();
+            if let Some(guard) = &summary.scalar_result {
+                through_result = parameters(guard);
+                let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
+                let guard = guard
+                    .forget_occurrences(|occurrence| occurrence == ValueOccurrence::Summary)
+                    .forget_indices(|index| index == returned);
+                unconditional.extend(parameters(&guard));
+                through_result.retain(|param| !unconditional.contains(param));
+            }
+            let observed = summary.observed_params.as_mut().expect("body observations");
+            observed.unconditional = unconditional;
+            observed.through_result = through_result;
+        }
         // Merging equal relations ORs their guards, so check the final clauses.
         let requirements = &summary.loan_requirements;
         let validity = &summary.separation_validity;

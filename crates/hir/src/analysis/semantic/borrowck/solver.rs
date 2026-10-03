@@ -676,7 +676,11 @@ impl<'db> Borrowck<'db> {
         #[cfg(feature = "borrowck-profile")]
         let profile = self.profile_scope("solve");
         self.prepare_calls()?;
-        (self.scalar.live, self.scalar.observed) = self.scalar_liveness();
+        (
+            self.scalar.live,
+            self.scalar.observed,
+            self.scalar.non_branch_params,
+        ) = self.scalar_liveness();
         if self
             .calls
             .values()
