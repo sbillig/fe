@@ -146,7 +146,6 @@ impl<'db> BorrowSummary<'db> {
                 &mut self.availability.reinitialized,
                 &mut self.availability.unavailable,
                 &mut self.native_requirements,
-                &mut self.separation_validity,
             ])
         {
             *region = RegionSet::new(
@@ -157,9 +156,17 @@ impl<'db> BorrowSummary<'db> {
                 }),
             );
         }
-        self.separation_validity = self
-            .separation_validity
-            .forget_occurrences(|choice| matches!(choice, ValueOccurrence::SummaryChoice(_)));
+        // Pre-call obligations hide every private choice. Project them before
+        // renaming: moving selectors after argument fields can build an
+        // exponential intermediate graph that projection immediately discards.
+        // The retained Argument/Summary occurrences need no renaming.
+        let private = |choice| {
+            !matches!(
+                choice,
+                ValueOccurrence::Argument(_) | ValueOccurrence::Summary
+            )
+        };
+        self.separation_validity = self.separation_validity.forget_occurrences(private);
         // Equal relations merge; the first origin in body order names each.
         let scope = BinderScope::default();
         let mut origins = BTreeMap::new();
@@ -168,12 +175,9 @@ impl<'db> BorrowSummary<'db> {
             // These are pre-call obligations. A caller must establish them for
             // every possible private execution of the callee; only argument
             // choices can restrict which executions it admits at the boundary.
-            let renamed = SeparationSet::new(db, &scope, [clause])
-                .map_occurrences(db, rename)
-                .forget_occurrences(db, |choice| {
-                    matches!(choice, ValueOccurrence::SummaryChoice(_))
-                });
-            for clause in renamed.clauses() {
+            let projected =
+                SeparationSet::new(db, &scope, [clause]).forget_occurrences(db, private);
+            for clause in projected.clauses() {
                 origins.entry(clause.payload.clone()).or_insert(origin);
                 clauses.push(clause.clone());
             }
@@ -5530,6 +5534,284 @@ pub contract C {
                 .resolve(&mut checker, &source, &scope)
                 .unwrap();
             assert!(resolved.region.is_empty());
+        }
+    }
+
+    #[test]
+    fn summary_preconditions_project_private_choices_without_reordering() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("private_summary_choices.fe".into(), "fn anchor() {}");
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let owner = BodyOwner::Func(find_func(&db, module, "anchor"));
+        let instance =
+            get_or_build_semantic_instance(&db, identity_semantic_instance_key(&db, owner));
+        let summary = Borrowck::new(&db, instance)
+            .unwrap()
+            .borrow_summary()
+            .unwrap()
+            .summary
+            .unwrap();
+        let mut values = SourceValues::new(&db, ValueLimits::default());
+        let scope = BinderScope::default();
+        let origin = SeparationOrigin {
+            owner,
+            template_owner: owner,
+            borrow: SemOrigin::Body(owner),
+            access: SemOrigin::Body(owner),
+        };
+        for arms in [4, 8, 12] {
+            let mut remaining = Guard::always(&scope);
+            let mut selected = Vec::new();
+            let mut fields = Vec::new();
+            let mut choices = BTreeSet::new();
+            for field in 0..arms {
+                let occurrence = ValueOccurrence::Value(NValueId::new(field));
+                choices.insert(occurrence);
+                let private = ChoiceKey::new(occurrence, StructuralPath::default());
+                let input = Guard::always(&scope)
+                    .with_boolean(
+                        ChoiceKey::new(
+                            ValueOccurrence::Argument(0),
+                            StructuralPath::new([Projection::Field(FieldIndex(field as u16))]),
+                        ),
+                        true,
+                    )
+                    .unwrap();
+                selected.push(
+                    remaining
+                        .with_boolean(private.clone(), true)
+                        .unwrap()
+                        .and(&input)
+                        .unwrap(),
+                );
+                remaining = remaining.with_boolean(private, false).unwrap();
+                fields.push(input);
+            }
+            let guard = selected
+                .into_iter()
+                .reduce(|left, right| left.or(&right))
+                .unwrap();
+            let expected = fields
+                .into_iter()
+                .reduce(|left, right| left.or(&right))
+                .unwrap();
+            let place = |param| SymbolicPlace {
+                root: RegionRoot::External(summary_input(&db, param).source),
+                path: RegionPath::default(),
+                views: Default::default(),
+            };
+            // Exercise each precondition independently: either used to reorder
+            // the private selectors after all argument fields, then drop them.
+            for validity in [false, true] {
+                let mut input = summary.clone();
+                let separations = if validity {
+                    input.separation_validity = RegionSet::new(
+                        &scope,
+                        [Guarded {
+                            guard: guard.clone(),
+                            payload: place(1),
+                        }],
+                    );
+                    Vec::new()
+                } else {
+                    vec![(
+                        Guarded {
+                            guard: guard.clone(),
+                            payload: Separation {
+                                protected: place(0),
+                                protected_kind: BorrowKind::Ref,
+                                access: place(1),
+                                access_kind: BorrowKind::Mut,
+                                extent: AccessExtent::Typed,
+                                suspended: Box::new([]),
+                            },
+                        },
+                        origin,
+                    )]
+                };
+                let before = DECISION_INTERN_ATTEMPTS.get();
+                let (output, origins) =
+                    input.abstract_choices(&db, &mut values, choices.clone(), separations);
+                let attempts = DECISION_INTERN_ATTEMPTS.get() - before;
+                let actual = if validity {
+                    assert!(origins.is_empty());
+                    &output.separation_validity.clauses()[0].guard
+                } else {
+                    assert_eq!(origins, [origin]);
+                    &output.loan_requirements.clauses()[0].guard
+                };
+                assert_eq!(actual, &expected);
+                assert!(
+                    attempts <= arms * 64,
+                    "{arms} arms, validity={validity}: {attempts} decision interning attempts"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn summary_precondition_projection_preserves_suspensions_and_witnesses() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "summary_projection.fe".into(),
+            "fn anchor() {}\nfn other() {}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let owner = BodyOwner::Func(find_func(&db, module, "anchor"));
+        let other = BodyOwner::Func(find_func(&db, module, "other"));
+        let instance =
+            get_or_build_semantic_instance(&db, identity_semantic_instance_key(&db, owner));
+        let summary = Borrowck::new(&db, instance)
+            .unwrap()
+            .borrow_summary()
+            .unwrap()
+            .summary
+            .unwrap();
+        let origin = SeparationOrigin {
+            owner,
+            template_owner: owner,
+            borrow: SemOrigin::Body(owner),
+            access: SemOrigin::Body(owner),
+        };
+        let later = SeparationOrigin {
+            owner: other,
+            ..origin
+        };
+        let mut values = SourceValues::new(&db, ValueLimits::default());
+        let scope = BinderScope::default();
+        let (nested, witness) = scope.bind(IndexNamespace::Existential);
+        let outer = Guard::always(&nested)
+            .with_boolean(
+                ChoiceKey::new(ValueOccurrence::Argument(0), StructuralPath::default()),
+                true,
+            )
+            .unwrap()
+            .with_boolean(
+                ChoiceKey::new(ValueOccurrence::Summary, StructuralPath::default()),
+                true,
+            )
+            .unwrap();
+        let place = |param| SymbolicPlace {
+            root: RegionRoot::External(summary_input(&db, param).source),
+            path: RegionPath::new([Projection::Index(witness)]),
+            views: Default::default(),
+        };
+        for occurrence in [
+            ValueOccurrence::Value(NValueId::new(3)),
+            ValueOccurrence::Root(NRootId::new(3)),
+            ValueOccurrence::CallChoice {
+                result: NValueId::new(3),
+                choice: 2,
+            },
+            ValueOccurrence::SummaryChoice(3),
+        ] {
+            let private = ChoiceKey::new(
+                occurrence,
+                StructuralPath::new([Projection::Index(witness)]),
+            );
+            let rename = |value| {
+                if value == occurrence {
+                    ValueOccurrence::SummaryChoice(0)
+                } else {
+                    value
+                }
+            };
+            for branch in [None, Some(false), Some(true)] {
+                let guard = branch.map_or_else(
+                    || outer.clone(),
+                    |value| outer.with_boolean(private.clone(), value).unwrap(),
+                );
+                let relation = Guarded {
+                    guard: guard.clone(),
+                    payload: Separation {
+                        protected: place(0),
+                        protected_kind: BorrowKind::Ref,
+                        access: place(1),
+                        access_kind: BorrowKind::Mut,
+                        extent: AccessExtent::Typed,
+                        suspended: [
+                            Guard::always(&nested)
+                                .with_boolean(private.clone(), true)
+                                .unwrap(),
+                            Guard::always(&nested)
+                                .with_boolean(private.clone(), false)
+                                .unwrap(),
+                            outer.clone(),
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(field, guard)| Guarded {
+                            guard,
+                            payload: RegionPath::new([Projection::Field(FieldIndex(field as u16))]),
+                        })
+                        .collect(),
+                    },
+                };
+                let expected = SeparationSet::new(&db, &scope, [relation.clone()])
+                    .map_occurrences(&db, rename)
+                    .forget_occurrences(&db, |choice| {
+                        matches!(choice, ValueOccurrence::SummaryChoice(_))
+                    });
+                let mut input = summary.clone();
+                input.separation_validity = RegionSet::new(
+                    &scope,
+                    [Guarded {
+                        guard: guard.clone(),
+                        payload: place(1),
+                    }],
+                );
+                input.native_requirements = input.separation_validity.clone();
+                let (output, origins) = input.abstract_choices(
+                    &db,
+                    &mut values,
+                    BTreeSet::from([occurrence]),
+                    vec![(relation.clone(), origin), (relation, later)],
+                );
+                assert_eq!(output.loan_requirements, expected);
+                assert_eq!(origins, [origin]);
+                assert_eq!(
+                    output.separation_validity,
+                    RegionSet::new(
+                        &scope,
+                        [Guarded {
+                            guard: outer.clone(),
+                            payload: place(1)
+                        }]
+                    )
+                );
+                // Native effects still retain their private choices, renamed.
+                assert_eq!(
+                    output.native_requirements,
+                    RegionSet::new(
+                        &scope,
+                        [Guarded {
+                            guard: guard.map_occurrences(rename).unwrap(),
+                            payload: place(1)
+                        }]
+                    )
+                );
+                let [clause] = output.loan_requirements.clauses() else {
+                    panic!("one relation")
+                };
+                assert_eq!(clause.guard, outer);
+                let paths = clause
+                    .payload
+                    .suspended
+                    .iter()
+                    .map(|slice| {
+                        assert_eq!(slice.guard, Guard::always(&nested));
+                        slice.payload.clone()
+                    })
+                    .collect::<BTreeSet<_>>();
+                let expected_paths = [Some(2), branch.map(|value| if value { 0 } else { 1 })]
+                    .into_iter()
+                    .flatten()
+                    .map(|field| RegionPath::new([Projection::Field(FieldIndex(field))]))
+                    .collect();
+                assert_eq!(paths, expected_paths, "{occurrence:?}, {branch:?}");
+            }
         }
     }
 
