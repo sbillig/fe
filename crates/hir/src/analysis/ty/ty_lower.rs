@@ -2794,7 +2794,8 @@ pub(crate) fn func_implicit_param_plan<'db>(
                 layout_hole_fallback_ty(db, *hole_ty),
             );
             let lowered_idx = prefix_len + implicit_precursors.len();
-            let implicit_arg = precursor.evaluate(db, func.scope(), lowered_idx, 0);
+            let implicit_arg =
+                precursor.evaluate(db, func.scope(), ParamBasis::Full, lowered_idx, 0);
             implicit_precursors.push(precursor);
             bindings.push((placeholder, implicit_arg));
         }
@@ -3466,7 +3467,15 @@ pub(crate) fn evaluate_params_precursor<'db>(
     set.params_precursor(db)
         .iter()
         .enumerate()
-        .map(|(i, p)| p.evaluate(db, set.scope(db), i, set.offset_to_explicit(db)))
+        .map(|(i, p)| {
+            p.evaluate(
+                db,
+                set.scope(db),
+                set.basis(db),
+                i,
+                set.offset_to_explicit(db),
+            )
+        })
         .collect()
 }
 
@@ -4324,7 +4333,7 @@ impl<'db> GenericParamTypeSet<'db> {
         let idx = self.offset_to_explicit(db) + explicit_idx;
         let param = self.params_precursor(db).get(idx)?;
         matches!(param.default_hir_const, Some(ConstGenericArgValue::Hole))
-            .then(|| param.declared_const_ty(db, self.scope(db)))
+            .then(|| param.declared_const_ty(db, self.scope(db), self.basis(db)))
             .flatten()
     }
 
@@ -4348,7 +4357,7 @@ impl<'db> GenericParamTypeSet<'db> {
         self.params_precursor(db)
             .get(param_idx)
             .filter(|param| matches!(param.default_hir_const, Some(ConstGenericArgValue::Hole)))
-            .and_then(|param| param.declared_const_ty(db, self.scope(db)))
+            .and_then(|param| param.declared_const_ty(db, self.scope(db), self.basis(db)))
             .is_some_and(|ty| {
                 matches!(
                     ty.data(db),
@@ -4366,7 +4375,13 @@ impl<'db> GenericParamTypeSet<'db> {
         let cand = params.first()?;
 
         if cand.is_trait_self() {
-            Some(cand.evaluate(db, self.scope(db), 0, self.offset_to_explicit(db)))
+            Some(cand.evaluate(
+                db,
+                self.scope(db),
+                self.basis(db),
+                0,
+                self.offset_to_explicit(db),
+            ))
         } else {
             None
         }
@@ -4382,9 +4397,15 @@ impl<'db> GenericParamTypeSet<'db> {
         original_idx: usize,
     ) -> Option<TyId<'db>> {
         let idx = self.offset_to_explicit(db) + original_idx;
-        self.params_precursor(db)
-            .get(idx)
-            .map(|p| p.evaluate(db, self.scope(db), idx, self.offset_to_explicit(db)))
+        self.params_precursor(db).get(idx).map(|p| {
+            p.evaluate(
+                db,
+                self.scope(db),
+                self.basis(db),
+                idx,
+                self.offset_to_explicit(db),
+            )
+        })
     }
 }
 
@@ -4536,6 +4557,7 @@ impl<'db> TyParamPrecursor<'db> {
         &self,
         db: &'db dyn HirAnalysisDb,
         scope: ScopeId<'db>,
+        basis: ParamBasis,
         lowered_idx: usize,
         explicit_offset: usize,
     ) -> TyId<'db> {
@@ -4573,7 +4595,7 @@ impl<'db> TyParamPrecursor<'db> {
                     lowered_idx.checked_sub(explicit_offset),
                 );
                 let ty = self
-                    .declared_const_ty(db, scope)
+                    .declared_const_ty(db, scope, basis)
                     .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
                 let const_ty = ConstTyId::new(db, ConstTyData::TyParam(param, ty));
                 TyId::new(db, TyData::ConstTy(const_ty))
@@ -4658,15 +4680,23 @@ impl<'db> TyParamPrecursor<'db> {
         matches!(self.variant, Variant::Const(_) | Variant::ImplicitConst(_))
     }
 
+    /// Shape discovery reads the source basis, which must not depend on the
+    /// full parameter list it is discovering slots for. The owner's declared
+    /// constraints are lowered over that full list, so a source parameter's
+    /// type is lowered without them: only a projection type needs them.
     fn declared_const_ty(
         &self,
         db: &'db dyn HirAnalysisDb,
         scope: ScopeId<'db>,
+        basis: ParamBasis,
     ) -> Option<TyId<'db>> {
         let Variant::Const(Some(ty)) = self.variant else {
             return None;
         };
-        let assumptions = generic_param_owner_assumptions(db, scope);
+        let assumptions = match basis {
+            ParamBasis::Source => PredicateListId::empty_list(db),
+            ParamBasis::Full => generic_param_owner_assumptions(db, scope),
+        };
         Some(lower_const_ty_ty(db, scope, ty, assumptions))
     }
 }

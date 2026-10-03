@@ -1,0 +1,1 @@
+A function whose bounds pass a const parameter as an argument beside a computed const argument, such as `fn f<const N: usize, T: Width<N> + Has<{ N + 1 }>>()`, no longer crashes the compiler with a query cycle.

@@ -1,0 +1,29 @@
+// A bound passing a const parameter as an argument (`Width<N>`) beside one
+// computing a const argument from it (`Has<{ N + 1 }>`). Discovering the
+// function's layout slots resolves `N` without the constraints that are
+// lowered over those slots.
+const fn inc(n: usize) -> usize { n + 1 }
+
+trait Width<const N: usize> {}
+
+trait Has<const N: usize> {}
+
+struct X {}
+
+impl Width<3> for X {}
+
+impl Has<4> for X {}
+
+fn arith<T: Width<N> + Has<{ N + 1 }>, const N: usize>() {}
+
+fn call<T: Width<N> + Has<{ inc(n: N) }>, const N: usize>() {}
+
+fn ordered<const N: usize, T: Width<N> + Has<{ N + 1 }>>() {}
+
+fn valid() {
+    arith<X, 3>()
+    call<X, 3>()
+    ordered<3, X>()
+}
+
+fn wrong() { arith<X, 4>() }
