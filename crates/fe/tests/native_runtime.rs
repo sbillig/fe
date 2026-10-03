@@ -1018,46 +1018,7 @@ pub fn main() -> i32 {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/byte_buffer_allocator.c");
     for level in ["0", "1", "2"] {
         let out = temp.path().join(format!("out-{level}"));
-        let report = temp.path().join(format!("report-{level}.tar.gz"));
-        build(
-            &source,
-            &out,
-            level,
-            &["--report", "--report-out", report.to_str().unwrap()],
-        );
-        let listing = Command::new("tar")
-            .arg("-tzf")
-            .arg(&report)
-            .output()
-            .unwrap();
-        assert!(listing.status.success(), "{listing:?}");
-        let listing = String::from_utf8(listing.stdout).unwrap();
-        let objects: Vec<_> = listing
-            .lines()
-            .filter(|name| name.ends_with("/allocation_failure.o"))
-            .collect();
-        assert_eq!(objects.len(), 1, "{listing}");
-        let extracted = Command::new("tar")
-            .arg("-xOf")
-            .arg(&report)
-            .arg(objects[0])
-            .output()
-            .unwrap();
-        assert!(extracted.status.success(), "{extracted:?}");
-        let object = out.join("allocation_failure.o");
-        fs::write(&object, extracted.stdout).unwrap();
-        let executable = out.join("controlled_allocator");
-        let linked = Command::new("cc")
-            .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-fno-builtin"])
-            .arg(&object)
-            .arg(&allocator)
-            .arg("-o")
-            .arg(&executable)
-            .output()
-            .unwrap();
-        assert!(linked.status.success(), "{linked:?}");
-        let result = Command::new(&executable).output().unwrap();
-        assert!(result.status.success(), "O{level}: {result:?}");
+        build_with_allocator(&source, &out, level, &allocator);
     }
 }
 
@@ -1378,4 +1339,72 @@ fn native_raw_aggregate_reference_accessors_at_o1() {
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
+}
+
+fn build_with_allocator(source: &Path, out: &Path, level: &str, allocator: &Path) {
+    let stem = source.file_stem().unwrap().to_str().unwrap();
+    let object_name = format!("{stem}.o");
+    let report = out.with_extension("tar.gz");
+    build(
+        source,
+        out,
+        level,
+        &["--report", "--report-out", report.to_str().unwrap()],
+    );
+    let listing = Command::new("tar")
+        .arg("-tzf")
+        .arg(&report)
+        .output()
+        .unwrap();
+    assert!(listing.status.success(), "{listing:?}");
+    let listing = String::from_utf8(listing.stdout).unwrap();
+    let objects: Vec<_> = listing
+        .lines()
+        .filter(|name| name.ends_with(&object_name))
+        .collect();
+    assert_eq!(objects.len(), 1, "{listing}");
+    let extracted = Command::new("tar")
+        .arg("-xOf")
+        .arg(&report)
+        .arg(objects[0])
+        .output()
+        .unwrap();
+    assert!(extracted.status.success(), "{extracted:?}");
+    let object = out.join(&object_name);
+    fs::write(&object, extracted.stdout).unwrap();
+    let executable = out.join("controlled_allocator");
+    let linked = Command::new("cc")
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-fno-builtin"])
+        .arg(&object)
+        .arg(allocator)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .unwrap();
+    assert!(linked.status.success(), "{linked:?}");
+    let result = Command::new(&executable).output().unwrap();
+    assert!(result.status.success(), "O{level}: {result:?}");
+}
+
+#[test]
+fn native_owned_box_accessors_and_move_out_at_o1() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/owned_box.fe");
+    build(&source, temp.path(), "1", &["--standalone"]);
+    let result = Command::new(temp.path().join("owned_box"))
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+}
+
+#[test]
+fn native_owned_box_allocation_failure_and_release_at_o1() {
+    let temp = tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
+    build_with_allocator(
+        &fixtures.join("box_allocation_failure.fe"),
+        &temp.path().join("out"),
+        "1",
+        &fixtures.join("box_allocator.c"),
+    );
 }

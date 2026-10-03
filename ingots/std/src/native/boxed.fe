@@ -1,0 +1,29 @@
+use core::{Result, size_of}
+use core::ptr
+use ingot::native::bytes::{malloc, free, is_null}
+
+/// A typed native heap allocation with explicit ownership.
+///
+/// `into_inner` returns the value and releases its slot. Dropping a Box does not
+/// implicitly release memory; the caller must also release any owned contents.
+pub struct Box<T> { pointer: *T }
+
+impl<T> Box<T> {
+    /// Allocate a slot, returning the original value if allocation fails.
+    pub fn try_new(_ value: own T) -> Result<T, Self> {
+        let size = size_of<T>()
+        if size > 0x7fffffffffffffff { return Result::Err(value) }
+        let address = malloc(size: if size == 0 { 1 } else { size.downcast_unchecked() })
+        if is_null(address) { return Result::Err(value) }
+        let pointer = ptr::cast<u8, T>(address)
+        *pointer = value
+        Result::Ok(Self { pointer })
+    }
+    pub fn get(self) -> ref T { ref *self.pointer }
+    pub fn get_mut(mut self) -> mut T { mut *self.pointer }
+    pub fn into_inner(own self) -> T {
+        let value = *self.pointer
+        free(ptr::cast<T, u8>(self.pointer))
+        value
+    }
+}

@@ -53,6 +53,7 @@ fn hashed_storage_contracts_require_standard_library_identity() {
                 target: IntrinsicMemoryTarget::HashedStorageSlot(0),
                 kind: access,
                 extent: IntrinsicMemoryExtent::Typed,
+                requires_available: true,
             }],
             "{name}"
         );
@@ -173,6 +174,7 @@ fn classifies_core_and_std_runtime_builtins() {
             target: IntrinsicMemoryTarget::Pointee(0),
             kind: MemoryAccessKind::Read,
             extent: IntrinsicMemoryExtent::Bytes(32),
+            requires_available: true,
         }]
     );
     assert_eq!(
@@ -185,11 +187,13 @@ fn classifies_core_and_std_runtime_builtins() {
                 target: IntrinsicMemoryTarget::Pointee(1),
                 kind: MemoryAccessKind::Read,
                 extent: IntrinsicMemoryExtent::Argument(2),
+                requires_available: true,
             },
             IntrinsicMemoryAccess {
                 target: IntrinsicMemoryTarget::Pointee(0),
                 kind: MemoryAccessKind::Write,
                 extent: IntrinsicMemoryExtent::Argument(2),
+                requires_available: true,
             },
         ]
     );
@@ -210,11 +214,13 @@ fn classifies_core_and_std_runtime_builtins() {
                 target: IntrinsicMemoryTarget::Value(0),
                 kind: MemoryAccessKind::MutAccess,
                 extent: IntrinsicMemoryExtent::Typed,
+                requires_available: true,
             },
             IntrinsicMemoryAccess {
                 target: IntrinsicMemoryTarget::Pointee(1),
                 kind: MemoryAccessKind::Write,
                 extent: IntrinsicMemoryExtent::Bytes(32),
+                requires_available: true,
             },
         ]
     );

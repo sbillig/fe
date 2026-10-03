@@ -170,6 +170,9 @@ pub struct IntrinsicMemoryAccess {
     pub target: IntrinsicMemoryTarget,
     pub kind: MemoryAccessKind,
     pub extent: IntrinsicMemoryExtent,
+    /// Whether the access needs the current logical value to remain available.
+    /// Deallocation clobbers storage exclusively without inspecting its contents.
+    pub requires_available: bool,
 }
 
 impl IntrinsicMemoryAccess {
@@ -178,6 +181,7 @@ impl IntrinsicMemoryAccess {
             target: IntrinsicMemoryTarget::Value(input),
             kind,
             extent: IntrinsicMemoryExtent::Typed,
+            requires_available: true,
         }
     }
 
@@ -186,6 +190,7 @@ impl IntrinsicMemoryAccess {
             target: IntrinsicMemoryTarget::Pointee(input),
             kind,
             extent,
+            requires_available: true,
         }
     }
 
@@ -199,6 +204,7 @@ impl IntrinsicMemoryAccess {
             target: IntrinsicMemoryTarget::Address { input, space },
             kind,
             extent,
+            requires_available: true,
         }
     }
 
@@ -207,6 +213,7 @@ impl IntrinsicMemoryAccess {
             target: IntrinsicMemoryTarget::HashedStorageSlot(input),
             kind,
             extent: IntrinsicMemoryExtent::Typed,
+            requires_available: true,
         }
     }
 
@@ -215,6 +222,7 @@ impl IntrinsicMemoryAccess {
             target: IntrinsicMemoryTarget::WholeSpace(space),
             kind,
             extent: IntrinsicMemoryExtent::Unknown,
+            requires_available: true,
         }
     }
 }
@@ -241,11 +249,12 @@ const RAW_MEM_BYTE_WRITES: &[IntrinsicMemoryAccess] = &[
 ];
 // Releasing an allocation requires exclusive access, but does not read its bytes.
 // The private std wrapper consumes its owner and never exports the raw address.
-const RELEASE_ALLOCATION: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
-    0,
-    MemoryAccessKind::Write,
-    IntrinsicMemoryExtent::Unknown,
-)];
+const RELEASE_ALLOCATION: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess {
+    target: IntrinsicMemoryTarget::Pointee(0),
+    kind: MemoryAccessKind::Write,
+    extent: IntrinsicMemoryExtent::Unknown,
+    requires_available: false,
+}];
 const READ_POINTEE_0: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
     0,
     MemoryAccessKind::Read,

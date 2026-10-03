@@ -397,6 +397,7 @@ impl<'db> Borrowck<'db> {
             );
         }
         let mut accesses = Vec::new();
+        let mut incoming = Vec::new();
         let contracts = contract.memory.unwrap_or_default();
         let authorizers = contracts
             .iter()
@@ -475,7 +476,8 @@ impl<'db> Borrowck<'db> {
                     "intrinsic memory access has no input referent".into(),
                 )
             })?;
-            accesses.push(MemoryAccess {
+            let requires_available = access.requires_available;
+            let access = MemoryAccess {
                 kind: access.kind,
                 extent: match access.extent {
                     IntrinsicMemoryExtent::Typed => AccessExtent::Typed,
@@ -500,7 +502,15 @@ impl<'db> Borrowck<'db> {
                 } else {
                     authorizers.clone()
                 },
-            });
+            };
+            if requires_available {
+                incoming.push(AvailabilityRequirement {
+                    kind: access.kind,
+                    extent: access.extent,
+                    region: access.region.clone(),
+                });
+            }
+            accesses.push(access);
         }
         Ok(Some(BorrowSummary {
             native_requirements: RegionSet::empty(&scope),
@@ -515,14 +525,7 @@ impl<'db> Borrowck<'db> {
             scalar_inputs: Vec::new(),
             requirements: Vec::new(),
             availability: AvailabilitySummary {
-                incoming: accesses
-                    .iter()
-                    .map(|access| AvailabilityRequirement {
-                        kind: access.kind,
-                        extent: access.extent,
-                        region: access.region.clone(),
-                    })
-                    .collect(),
+                incoming,
                 ..AvailabilitySummary::empty()
             },
             accesses,

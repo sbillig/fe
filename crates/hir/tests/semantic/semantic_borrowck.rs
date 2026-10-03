@@ -14240,3 +14240,45 @@ fn inspect() {{
         }
     }
 }
+
+#[test]
+fn native_box_preserves_moves_and_live_borrows() {
+    for (body, expected) in [
+        ("let _ = owner.into_inner()", ""),
+        (
+            "let _ = owner.into_inner()\nlet _ = owner.into_inner()",
+            "move conflict",
+        ),
+        (
+            "let view = owner.get()\nlet _ = owner.into_inner()\ncore::assert(view == 42)",
+            "borrow conflict",
+        ),
+        (
+            "let view = owner.get_mut()\nlet _ = owner.into_inner()\nview += 1",
+            "borrow conflict",
+        ),
+        (
+            "let view = owner.get()\nlet other = owner.get_mut()\nother += 1\ncore::assert(view == 42)",
+            "borrow conflict",
+        ),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+use core::Result
+use std::native::Box
+fn run() {{
+    let mut owner = match Box::try_new(42 as u256) {{
+        Result::Ok(owner) => owner,
+        Result::Err(_) => core::panic(),
+    }}
+    {body}
+}}
+"#
+        ));
+        if expected.is_empty() {
+            assert!(diagnostics.is_empty(), "{body}: {diagnostics}");
+        } else {
+            assert!(diagnostics.contains(expected), "{body}: {diagnostics}");
+        }
+    }
+}

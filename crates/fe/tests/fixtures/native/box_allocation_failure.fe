@@ -1,0 +1,32 @@
+use core::Result
+use std::native::Box
+struct Payload { data: [u8; 4097] }
+fn boxed<T>(_ value: own T) -> Box<T> {
+    match Box::try_new(value) {
+        Result::Ok(owner) => owner,
+        Result::Err(_) => core::panic(),
+    }
+}
+pub fn main() -> i32 {
+    let payload = Payload { data: [0xab; 4097] }
+    match Box::try_new(payload) {
+        Result::Ok(owner) => {
+            let _ = owner.into_inner()
+            core::assert(false)
+        },
+        Result::Err(value) => {
+            core::assert(value.data[0] == 0xab && value.data[4096] == 0xab)
+        },
+    }
+    let mut count: u64 = 0
+    while count < 3 {
+        let mut owner = boxed([7 as u8; 257])
+        let view = owner.get_mut()
+        view[256] = 42
+        let value = owner.into_inner()
+        core::assert(value[0] == 7 && value[256] == 42)
+        count += 1
+    }
+    let _ = boxed(()).into_inner()
+    0
+}

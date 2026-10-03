@@ -1,0 +1,39 @@
+use core::Result
+use std::native::{Box, ByteBuffer}
+fn boxed<T>(_ value: own T) -> Box<T> {
+    match Box::try_new(value) {
+        Result::Ok(owner) => owner,
+        Result::Err(_) => core::panic(),
+    }
+}
+
+struct RefHolder { link: mut u256 }
+struct Packet { first: u8, word: u256, buffer: ByteBuffer, last: u8 }
+
+pub fn main() -> i32 {
+    let mut scalar = boxed(42 as u256)
+    let view = scalar.get_mut()
+    view += 1
+    core::assert(scalar.get() == 43)
+    core::assert(scalar.into_inner() == 43)
+    let mut bytes = ByteBuffer::new()
+    core::assert(bytes.try_resize(8193))
+    bytes.set_byte(index: 8192, value: 42)
+    let mut owner = boxed(Packet { first: 7, word: 1 << 200, buffer: bytes, last: 9 })
+    core::assert(owner.get().first == 7 && owner.get().word == 1 << 200)
+    owner.get_mut().buffer.set_byte(index: 0, value: 33)
+    let packet = owner.into_inner()
+    core::assert(packet.last == 9 && packet.buffer.byte_at(0) == 33)
+    core::assert(packet.buffer.byte_at(8192) == 42)
+    packet.buffer.release()
+    let empty = boxed(())
+    let _ = empty.into_inner()
+    let mut n: u256 = 11
+    let pointer = boxed(RefHolder { link: mut n })
+    let mut holder = pointer.into_inner()
+    holder.link += 5
+    core::assert(n == 16)
+    let array = boxed([0xab as u8; 257]).into_inner()
+    core::assert(array[0] == 0xab && array[256] == 0xab)
+    0
+}

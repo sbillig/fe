@@ -54,3 +54,5 @@ impl Arg {
         *ptr::offset(self.ptr, index as u256)
     }
 }
+
+pub use boxed::Box
