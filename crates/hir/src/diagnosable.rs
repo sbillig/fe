@@ -11,7 +11,9 @@ use smallvec1::SmallVec;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
 use crate::analysis::ty;
-use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
+use crate::analysis::ty::diagnostics::{
+    TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+};
 use crate::analysis::ty::generic_defaults::{
     default_dependencies, param_declaration_assumptions, type_default_diags,
 };
@@ -1773,13 +1775,46 @@ impl<'db> Diagnosable<'db> for ImplTrait<'db> {
     type Diagnostic = TyDiagCollection<'db>;
 
     fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        // An impl defines its associated types in its body; a binding in its
+        // header is rejected wherever lowering gets to.
+        let mut out = self
+            .hir_trait_ref(db)
+            .to_opt()
+            .and_then(|tr| tr.path(db).to_opt())
+            .map_or_else(Vec::new, |path| {
+                let segment = path.segment_index(db);
+                path.generic_args(db)
+                    .data(db)
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, arg)| match arg {
+                        GenericArg::AssocType(binding) => Some((idx, binding.name.to_opt()?)),
+                        _ => None,
+                    })
+                    .map(|(idx, name)| {
+                        TraitLowerDiag::ImplHeaderAssocTypeBinding {
+                            span: self
+                                .span()
+                                .trait_ref()
+                                .path()
+                                .segment(segment)
+                                .generic_args()
+                                .arg(idx)
+                                .into(),
+                            name,
+                        }
+                        .into()
+                    })
+                    .collect()
+            });
+
         // Early path/domain/WF checks; bail out on errors to avoid noisy follow-ups
         let (implementor_opt, validity_diags) = self.diags_implementor_validity(db);
+        out.extend(validity_diags);
         let Some(implementor) = implementor_opt else {
-            return validity_diags;
+            return out;
         };
 
-        let mut out = validity_diags;
         out.extend(implementor.diags_method_conformance(db));
         out.extend(self.diags_effect_handle_raw(db, implementor));
         out.extend(self.diags_trait_ref_and_wf(db));

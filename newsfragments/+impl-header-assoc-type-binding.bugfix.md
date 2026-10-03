@@ -1,0 +1,1 @@
+An associated-type binding in an `impl` header, such as `impl Has<Item = u16> for bool { type Item = u8 }`, is now rejected. It was silently ignored, so it could name a missing type or contradict the impl's own `type Item`; associated types are defined only in the impl body.
