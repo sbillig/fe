@@ -2,6 +2,7 @@ use rustc_hash::FxHashSet;
 
 use crate::analysis::semantic::capability::test_roots;
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     iter::empty,
 };
@@ -3517,7 +3518,9 @@ fn feedback_keeps_loop_invariant_guard_facts() {
         for repeated in [false, true] {
             let index = |index| repeated && index == runtime(5);
             let occurrences = |candidate| repeated && candidate == occurrence;
+            let guards = RefCell::default();
             let repeats = FeedbackRepeats {
+                guards: &guards,
                 index: &index,
                 occurrence: &occurrences,
             };
