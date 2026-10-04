@@ -800,6 +800,7 @@ mod tests {
         ParseError,
         ast::*,
         lexer::Lexer,
+        parse_source_file,
         parser::{Parser, RecoveryMode},
     };
 
@@ -1138,6 +1139,71 @@ mod tests {
         let or_pos = source.find("||").unwrap() as u32;
         assert_eq!(diag.range().start(), crate::TextSize::from(or_pos));
         assert_eq!(diag.range().end(), crate::TextSize::from(or_pos + 2));
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn if_expr_keeps_trailing_infix_operators_outside_else() {
+        for conditional in [
+            "if first { 1 } else { 2 }",
+            "if first { 1 } else if second { 2 } else { 3 }",
+        ] {
+            let source = format!("{conditional} + 4");
+            let (expr, errors): (BinExpr, _) = parse_expr_with_errors(&source);
+            assert!(errors.is_empty(), "{source}: {errors:?}");
+            let lhs = expr.lhs().unwrap();
+            assert!(matches!(lhs.kind(), ExprKind::If(_)));
+            assert_eq!(lhs.syntax().text().to_string().trim(), conditional);
+            assert_eq!(expr.rhs().unwrap().syntax().text().to_string().trim(), "4");
+        }
+
+        let expr: BinExpr =
+            parse_expr("1 + if first { 1 } else { 0 } + if second { 0 } else { 1 }");
+        let ExprKind::Bin(lhs) = expr.lhs().unwrap().kind() else {
+            panic!("addition must remain left-associative around conditional operands");
+        };
+        assert!(matches!(lhs.rhs().unwrap().kind(), ExprKind::If(_)));
+        assert!(matches!(expr.rhs().unwrap().kind(), ExprKind::If(_)));
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn if_expr_keeps_postfix_operators_outside_else() {
+        let field: FieldExpr = parse_expr("if flag { first } else { second }.field");
+        let call: CallExpr = parse_expr("if flag { first } else { second }(value)");
+        let method: MethodCallExpr = parse_expr("if flag { first } else { second }.method()");
+        let index: IndexExpr = parse_expr("if flag { first } else { second }[0]");
+        let cast: CastExpr = parse_expr("if flag { first } else { second } as u256");
+        for receiver in [
+            field.receiver(),
+            call.callee(),
+            method.receiver(),
+            index.expr(),
+            cast.expr(),
+        ] {
+            let ExprKind::If(conditional) = receiver.unwrap().kind() else {
+                panic!("postfix operator must apply to the complete conditional");
+            };
+            assert!(matches!(
+                conditional.else_().unwrap().kind(),
+                ExprKind::Block(_)
+            ));
+        }
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn if_expr_rejects_malformed_else_without_panicking() {
+        for tail in ["else", "else else { 2 }", "else 7", "else if"] {
+            let source = format!("fn test() {{ let value = if true {{ 1 }} {tail} }}");
+            for mode in [RecoveryMode::Recover, RecoveryMode::NoRecover] {
+                let (node, errors) = parse_source_file(&source, mode);
+                assert!(!errors.is_empty(), "{source} must produce a diagnostic");
+                if mode == RecoveryMode::Recover {
+                    assert_eq!(SyntaxNode::new_root(node).to_string(), source);
+                }
+            }
+        }
     }
 
     #[test]
