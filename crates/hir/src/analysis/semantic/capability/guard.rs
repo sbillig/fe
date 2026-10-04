@@ -2020,6 +2020,15 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct Collision(u8);
+
+    impl Hash for Collision {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            0u8.hash(state);
+        }
+    }
+
     #[test]
     fn graph_interning_resolves_collisions_without_retaining_dead_buffers() {
         let mut shared = SharedGraphs::<u8, Collision>::default();
