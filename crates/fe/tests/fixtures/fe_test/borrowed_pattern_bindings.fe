@@ -1,0 +1,82 @@
+use core::Option
+
+struct Frame { value: u64, words: [u64; 2] }
+
+fn scalar_in_arm() {
+    let mut slot: Option<u64> = Option::Some(41)
+    match mut slot {
+        Option::Some(value) => {
+            value += 1
+            core::assert(value == 42)
+        }
+        Option::None => core::panic()
+    }
+    match slot {
+        Option::Some(value) => core::assert(value == 42)
+        Option::None => core::panic()
+    }
+}
+
+fn scalar_match_result() {
+    let mut slot: Option<u64> = Option::Some(17)
+    let value = match mut slot {
+        Option::Some(value) => value
+        Option::None => core::panic()
+    }
+    value += 2
+    core::assert(value == 19)
+    match slot {
+        Option::Some(value) => core::assert(value == 19)
+        Option::None => core::panic()
+    }
+}
+
+fn aggregate_in_arm() {
+    let mut slot = Option::Some(Frame { value: 41, words: [4, 7] })
+    match mut slot {
+        Option::Some(frame) => {
+            frame.value += 1
+            frame.words[1] += frame.words[0]
+            core::assert(frame.value == 42)
+            core::assert(frame.words[1] == 11)
+        }
+        Option::None => core::panic()
+    }
+    match slot {
+        Option::Some(frame) => {
+            core::assert(frame.value == 42)
+            core::assert(frame.words[1] == 11)
+        }
+        Option::None => core::panic()
+    }
+}
+
+fn aggregate_match_result() {
+    let mut slot = Option::Some(Frame { value: 17, words: [5, 9] })
+    let frame = match mut slot {
+        Option::Some(frame) => frame
+        Option::None => core::panic()
+    }
+    frame.value += 2
+    frame.words[0] = frame.value
+    core::assert(frame.value == 19)
+    core::assert(frame.words[0] == 19)
+    let view = match ref slot {
+        Option::Some(frame) => frame
+        Option::None => core::panic()
+    }
+    core::assert(view.value == 19)
+    core::assert(view.words[0] == 19)
+    core::assert(view.words[1] == 9)
+}
+
+pub fn main() -> i32 {
+    scalar_in_arm()
+    scalar_match_result()
+    aggregate_in_arm()
+    aggregate_match_result()
+    0
+}
+
+#[test]
+fn borrowed_pattern_bindings() { core::assert(main() == 0) }
