@@ -830,10 +830,28 @@ impl<'db> Borrowck<'db> {
                 region.clauses().iter().any(|write| {
                     let written = RegionSet::new(region.scope(), [write.clone()]);
                     fact.region.clauses().iter().any(|moved| {
-                        let mut unavailable = RegionSet::new(fact.region.scope(), [moved.clone()]);
-                        if write.guard.scope() == region.scope() {
-                            unavailable = unavailable.with_guard(&write.guard);
+                        let unavailable = RegionSet::new(fact.region.scope(), [moved.clone()]);
+                        // Separate unrelated holders before combining their guards.
+                        // Collect clobber obligations only after ruling out a
+                        // whole-value reinitialization below.
+                        let overlaps = (footprint.extent == AccessExtent::Typed
+                            && !written.proven_intersection(&unavailable).is_empty())
+                            || !matches!(
+                                AccessFootprint {
+                                    region: &written,
+                                    extent: footprint.extent,
+                                }
+                                .overlap(self.db, AccessFootprint::typed(&unavailable)),
+                                OverlapResult::Disjoint
+                            );
+                        if !overlaps {
+                            return false;
                         }
+                        let unavailable = if write.guard.scope() == region.scope() {
+                            unavailable.with_guard(&write.guard)
+                        } else {
+                            unavailable
+                        };
                         !written.provably_covers(&unavailable) && conflicts(&written, &unavailable)
                     })
                 })
