@@ -2859,6 +2859,7 @@ impl<'db> Borrowck<'db> {
                 continue;
             };
             state.certify_family_contents(
+                &mut self.inventory.values,
                 &clause.payload.root,
                 region.scope(),
                 &coverage,

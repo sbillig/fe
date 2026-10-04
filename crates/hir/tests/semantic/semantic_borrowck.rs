@@ -14725,3 +14725,50 @@ fn inspect() {{
         assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
     }
 }
+
+#[test]
+fn certified_initialization_keeps_later_loops_separate() {
+    let source = r#"
+use core::{Option, ptr}
+struct Cell { pointer: Option<*u8> }
+struct Holder { cell: *Cell }
+impl Cell {
+    fn update(mut self) {
+        match self.pointer {
+            Option::Some(pointer) => { *pointer = 0 }
+            Option::None => { self.pointer = Option::Some(ptr::alloc<u8>()) }
+        }
+    }
+}
+impl Holder {
+    fn get(mut self) -> mut Cell { mut *self.cell }
+}
+fn inspect(_ limit: usize) {
+    let cell = ptr::alloc<Cell>()
+    let mut i: usize = 0
+    while i < limit {
+        *cell = Cell { pointer: Option::None }
+        i += 1
+    }
+    if limit == 0 { return }
+    let mut holder = Holder { cell }
+    let mut count: u64 = 0
+    while count < 2 {
+        let cell = holder.get()
+        core::assert(count < 2)
+        cell.update()
+        count += 1
+    }
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+    let diagnostics = checked_borrow_diags(&source.replace("if limit == 0 { return }", ""));
+    assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+    let aliased = source.replace(
+        "let mut holder = Holder { cell }",
+        "let original = ptr::alloc<u8>()\n*original = 0\n(*cell).pointer = Option::Some(original)\nlet held = mut *original\nlet mut holder = Holder { cell }",
+    ).replace("        count += 1\n    }", "        count += 1\n    }\n    held = 1");
+    let diagnostics = checked_borrow_diags(&aliased);
+    assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+}

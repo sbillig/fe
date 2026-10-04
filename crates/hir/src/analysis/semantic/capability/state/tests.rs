@@ -1808,3 +1808,60 @@ fn arbitrary_memory_offsets_may_overlap_without_becoming_typed_identity() {
         assert!(leaf.payload.authority(&leaf.guard).is_empty());
     }
 }
+
+#[test]
+fn certified_family_contents_survive_later_member_writes() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let shapes = Shapes::new(&db);
+    let scope = BinderScope::default();
+    let (family_scope, member) = scope.bind(IndexNamespace::InputSlot);
+    let cell = |index| allocation_cell(&db, 0, index);
+    for count in [0, 1, 2] {
+        let mut values = CapabilityValues::new(&db, ValueLimits::default());
+        let initial = handle_in(&mut values, shapes.handle, &family_scope, 0);
+        let mut state = BorrowState::new(&mut values, [], [(cell(member), initial)]);
+        let certified = handle_in(&mut values, shapes.handle, &family_scope, 1);
+        if let Some(coverage) =
+            Guard::always(&family_scope).with_bound(member, IndexExpr::Const(count))
+        {
+            assert!(state.certify_family_contents(
+                &mut values,
+                &cell(member),
+                &family_scope,
+                &coverage,
+                &certified,
+            ));
+        }
+        let replacement = handle(&mut values, shapes.handle, 2);
+        state
+            .write_region(
+                overwrite,
+                &mut values,
+                &region(cell(IndexExpr::Const(0))),
+                &replacement,
+            )
+            .unwrap();
+        for selected in [0, 1, 2] {
+            let loaded = read(
+                &db,
+                &mut values,
+                &state,
+                &region(cell(IndexExpr::Const(selected))),
+                shapes.handle,
+            );
+            let expected = if selected == 0 {
+                2
+            } else if selected < count {
+                1
+            } else {
+                0
+            };
+            assert_eq!(
+                loaded,
+                handle(&mut values, shapes.handle, expected),
+                "count={count} selected={selected}"
+            );
+        }
+    }
+}

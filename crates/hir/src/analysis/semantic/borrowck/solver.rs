@@ -757,6 +757,7 @@ impl<'db> Borrowck<'db> {
                                 continue;
                             };
                             if !edge.certify_family_contents(
+                                &mut self.inventory.values,
                                 &certificate.family,
                                 &certificate.family_scope,
                                 &coverage,
@@ -882,6 +883,10 @@ impl<'db> Borrowck<'db> {
                     if !certificates.is_empty() {
                         self.prefix_certificates = certificates;
                         self.enable_bounded_readers();
+                        // The proved contents retract earlier possibilities.
+                        // Rebuild loans derived before that refinement as well.
+                        self.inventory.reset_epoch_loans();
+                        self.source_generation += 1;
                         continue;
                     }
                 }
