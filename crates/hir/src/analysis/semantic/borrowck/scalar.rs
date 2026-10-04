@@ -1,5 +1,6 @@
 //! Trusted scalar predicates share the borrow checker's scoped guard algebra.
 use cranelift_entity::EntityRef;
+use num_traits::ToPrimitive;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::BTreeSet;
 
@@ -7,7 +8,7 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            SemOrigin,
+            SConst, SemConstScalar, SemConstValue, SemOrigin,
             capability::{
                 external::ExternalOrigin,
                 guard::{ChoiceKey, Guard},
@@ -62,6 +63,23 @@ pub(super) struct ScalarDemand<'db> {
     /// summaries can refine branch observations once their postcondition is known.
     pub non_branch_params: BTreeSet<u32>,
     readers: Vec<(NValueId, Vec<NValueId>)>,
+}
+
+/// Integer literals represented exactly by the index algebra.
+pub(super) fn constant_index<'db>(
+    db: &'db dyn HirAnalysisDb,
+    constant: &SConst<'db>,
+) -> Option<usize> {
+    if let SConst::Value(constant) = constant
+        && let SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } = constant.value().value(db)
+    {
+        value.to_usize()
+    } else {
+        None
+    }
 }
 
 pub(super) fn integer_model(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<(usize, bool)> {
