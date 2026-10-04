@@ -1330,6 +1330,18 @@ fn native_recursive_buffer_growth_with_unused_generic_effect() {
 }
 
 #[test]
+fn native_returned_reference_projections_mutate_the_original_at_o1() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/native/returned_reference_projection.fe");
+    build(&source, temp.path(), "1", &["--standalone"]);
+    let result = Command::new(temp.path().join("returned_reference_projection"))
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+}
+
+#[test]
 fn native_raw_scalar_reference_accessors_at_o1() {
     let temp = tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
