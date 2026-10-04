@@ -14038,12 +14038,15 @@ fn constant(_ x: bool) -> bool { if x { true } else { true } }
 #[test]
 fn boolean_predicate_summaries_preserve_integral_inputs() {
     let source = r#"
+fn pass(_ flag: bool) -> bool { flag }
 fn predicate(_ x: usize) -> bool { x == 1 }
 fn selected(_ x: usize) -> bool { if x == 1 { true } else { false } }
 fn forwarded(_ x: usize) -> bool { predicate(x) }
 fn negated(_ x: usize) -> bool { !predicate(x) }
 fn arithmetic(_ x: usize) -> bool { x + 1 == 1 }
 fn ordered(_ x: usize) -> bool { x < 1 }
+fn wrapped_arithmetic(_ x: usize) -> bool { pass(x + 1 == 1) }
+fn wrapped_ordered(_ x: usize) -> bool { pass(x < 1) }
 "#;
     assert_eq!(checked_borrow_diags(source), "");
     for function in ["predicate", "selected", "forwarded", "negated"] {
@@ -14071,7 +14074,12 @@ fn ordered(_ x: usize) -> bool { x < 1 }
             );
         });
     }
-    for function in ["arithmetic", "ordered"] {
+    for function in [
+        "arithmetic",
+        "ordered",
+        "wrapped_arithmetic",
+        "wrapped_ordered",
+    ] {
         with_borrow_summary(source, function, |_db, summary| {
             assert!(
                 summary.scalar_result.is_none(),
@@ -14083,6 +14091,72 @@ fn ordered(_ x: usize) -> bool { x < 1 }
 }
 
 #[test]
+fn boolean_call_argument_predicates_survive_summary_export() {
+    let source = r#"
+fn pass(_ flag: bool) -> bool { flag }
+fn invert(_ flag: bool) -> bool { !flag }
+fn pick(_ ignored: bool, _ observed: bool) -> bool { observed }
+fn constant(_ ignored: bool) -> bool { true }
+fn wrapped(_ x: usize, _ y: usize) -> bool { pass(x != y) }
+fn nested(_ x: usize, _ y: usize) -> bool { pass(pass(x != y)) }
+fn inverted(_ x: usize, _ y: usize) -> bool { invert(x == y) }
+fn logical(_ x: usize, _ y: usize) -> bool { pass(x != y && !(x == y)) }
+fn joined(_ x: usize, _ y: usize, _ flag: bool) -> bool {
+    pass(if flag { x != y } else { !(x == y) })
+}
+fn ignoring(_ noise: usize, _ x: usize, _ y: usize) -> bool {
+    pick(noise == 0, x != y)
+}
+fn ignored(_ x: usize, _ y: usize) -> bool { constant(x != y) }
+"#;
+    assert_eq!(checked_borrow_diags(source), "");
+    let result = ChoiceKey::new(ValueOccurrence::Summary, StructuralPath::default());
+    for function in [
+        "wrapped", "nested", "inverted", "logical", "joined", "ignoring",
+    ] {
+        with_borrow_summary(source, function, |_db, summary| {
+            let first = u32::from(function == "ignoring");
+            let second = first + 1;
+            let observed = summary.observed_params.as_ref().unwrap();
+            assert!(
+                observed.unconditional.is_empty(),
+                "{function}: {observed:?}"
+            );
+            assert_eq!(
+                observed.through_result.iter().copied().collect::<Vec<_>>(),
+                [first, second],
+                "{function}: {observed:?}"
+            );
+            let guard = summary.scalar_result.expect("wrapped predicate relation");
+            for x in [0, 1] {
+                for y in [0, 1] {
+                    let selected = guard
+                        .with_equality(IndexExpr::FormalValue(first), IndexExpr::Const(x))
+                        .unwrap()
+                        .with_equality(IndexExpr::FormalValue(second), IndexExpr::Const(y))
+                        .unwrap();
+                    assert!(
+                        selected.with_boolean(result.clone(), x != y).is_some(),
+                        "{function}: {x}, {y}"
+                    );
+                    assert!(
+                        selected.with_boolean(result.clone(), x == y).is_none(),
+                        "{function}: {x}, {y}"
+                    );
+                }
+            }
+        });
+    }
+    with_borrow_summary(source, "ignored", |_db, summary| {
+        let observed = summary.observed_params.unwrap();
+        assert!(observed.unconditional.is_empty(), "{observed:?}");
+        assert!(observed.through_result.is_empty(), "{observed:?}");
+        let guard = summary.scalar_result.expect("constant result");
+        assert!(guard.with_boolean(result, false).is_none());
+    });
+}
+
+#[test]
 fn boolean_call_results_prove_index_separation() {
     for (condition, accepted) in [
         ("!same(k, j)", true),
@@ -14090,9 +14164,16 @@ fn boolean_call_results_prove_index_separation() {
         ("forwarded(k, j)", true),
         ("pass(pass(different(k, j)))", true),
         ("selected(k, j, flag)", true),
+        ("pass(k != j)", true),
+        ("wrapped(k, j)", true),
+        ("nested(k, j)", true),
+        ("joined(k, j, flag)", true),
         ("same(k, j)", false),
         ("different(k, other)", false),
         ("pass(different(k, other))", false),
+        ("wrapped(k, other)", false),
+        ("pass(k == j)", false),
+        ("nested(k, other)", false),
     ] {
         let source = format!(
             r#"
@@ -14100,6 +14181,11 @@ fn same(_ x: usize, _ y: usize) -> bool {{ x == y }}
 fn different(_ x: usize, _ y: usize) -> bool {{ x != y }}
 fn pass(_ x: bool) -> bool {{ x }}
 fn forwarded(_ x: usize, _ y: usize) -> bool {{ different(x, y) }}
+fn wrapped(_ x: usize, _ y: usize) -> bool {{ pass(x != y) }}
+fn nested(_ x: usize, _ y: usize) -> bool {{ pass(pass(x != y)) }}
+fn joined(_ x: usize, _ y: usize, _ flag: bool) -> bool {{
+    pass(if flag {{ x != y }} else {{ !(x == y) }})
+}}
 fn selected(_ x: usize, _ y: usize, _ flag: bool) -> bool {{
     if flag {{ different(x, y) }} else {{ different(x, y) }}
 }}
@@ -14126,6 +14212,11 @@ fn discard(_ x: usize) -> usize {
     let unused = constrain(x)
     x
 }
+fn require(_ flag: bool) { assert!(flag) }
+fn discard_predicate(_ x: usize) -> bool {
+    require(x == 1)
+    false
+}
 fn check_flag(_ x: bool) -> bool { assert!(x)
     x
 }
@@ -14135,7 +14226,7 @@ fn discard_flag(_ x: bool) -> bool {
 }
 "#;
     assert_eq!(checked_borrow_diags(source), "");
-    for function in ["constrain", "discard"] {
+    for function in ["constrain", "discard", "discard_predicate"] {
         with_borrow_summary(source, function, |_db, summary| {
             let guard = summary.scalar_result.expect("argument assertion survives");
             let one = Guard::always(guard.scope())

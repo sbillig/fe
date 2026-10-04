@@ -682,7 +682,11 @@ selector, and an assertion keeps its argument observed even when the result is
 discarded. Accesses, ownership effects, mutable poststates, and obligations retain
 conservative observations. Returned predicates demand trusted equality operands
 within the boolean condition budget; arithmetic dependencies and return-only
-unsigned ordering remain untracked.
+unsigned ordering remain untracked. Demand is prepared after callee summaries
+are available and follows their observed boolean arguments when the result is
+live or the observation is unconditional. Guard instantiation and boolean join
+edges bind those arguments to their trusted predicates before local choices are
+projected away; unobserved arguments retain no predicate facts.
 
 ### Certified loop contents
 

@@ -330,3 +330,55 @@ fn live_constant_boolean_branch_results() -> usize {
     if constant_boolean_branch(Many::V19.ordinal()) { sum += 1 }
     sum
 }
+
+// Binding a live wrapper's arguments must leave dead predicate results unread.
+fn pass_boolean(_ flag: bool) -> bool { flag }
+fn constant_boolean(_ flag: bool) -> bool { true }
+fn dead_boolean_argument_predicates(k: usize) {
+    let unused0 = pass_boolean(pass_boolean(Many::V0.ordinal() == k))
+    let unused1 = pass_boolean(pass_boolean(Many::V1.ordinal() == k))
+    let unused2 = pass_boolean(pass_boolean(Many::V2.ordinal() == k))
+    let unused3 = pass_boolean(pass_boolean(Many::V3.ordinal() == k))
+    let unused4 = pass_boolean(pass_boolean(Many::V4.ordinal() == k))
+    let unused5 = pass_boolean(pass_boolean(Many::V5.ordinal() == k))
+    let unused6 = pass_boolean(pass_boolean(Many::V6.ordinal() == k))
+    let unused7 = pass_boolean(pass_boolean(Many::V7.ordinal() == k))
+    let unused8 = pass_boolean(pass_boolean(Many::V8.ordinal() == k))
+    let unused9 = pass_boolean(pass_boolean(Many::V9.ordinal() == k))
+    let unused10 = pass_boolean(pass_boolean(Many::V10.ordinal() == k))
+    let unused11 = pass_boolean(pass_boolean(Many::V11.ordinal() == k))
+    let unused12 = pass_boolean(pass_boolean(Many::V12.ordinal() == k))
+    let unused13 = pass_boolean(pass_boolean(Many::V13.ordinal() == k))
+    let unused14 = pass_boolean(pass_boolean(Many::V14.ordinal() == k))
+    let unused15 = pass_boolean(pass_boolean(Many::V15.ordinal() == k))
+    let unused16 = pass_boolean(pass_boolean(Many::V16.ordinal() == k))
+    let unused17 = pass_boolean(pass_boolean(Many::V17.ordinal() == k))
+    let unused18 = pass_boolean(pass_boolean(Many::V18.ordinal() == k))
+    let unused19 = pass_boolean(pass_boolean(Many::V19.ordinal() == k))
+}
+
+// A live constant result observes neither its Boolean argument nor its inputs.
+fn live_constant_boolean_arguments(k: usize) -> usize {
+    let mut sum: usize = 0
+    if constant_boolean(Many::V0.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V1.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V2.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V3.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V4.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V5.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V6.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V7.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V8.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V9.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V10.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V11.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V12.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V13.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V14.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V15.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V16.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V17.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V18.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V19.ordinal() == k) { sum += 1 }
+    sum
+}

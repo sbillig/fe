@@ -159,7 +159,7 @@ impl<'db> Borrowck<'db> {
                 message,
             )
         })?;
-        let mut checker = Self {
+        Ok(Self {
             db,
             instance,
             before: vec![Vec::new(); body.blocks.len()],
@@ -188,9 +188,7 @@ impl<'db> Borrowck<'db> {
             source_generation: 0,
             capability_regions: RefCell::default(),
             availability_diagnostic: OnceCell::new(),
-        };
-        checker.prepare_scalar_demand()?;
-        Ok(checker)
+        })
     }
 
     pub fn shape(&self, ty: TyId<'db>) -> Result<ShapeId<'db>, SemanticDiagnostic<'db>> {
@@ -505,16 +503,7 @@ impl<'db> Borrowck<'db> {
                                 .with_boolean(choice.clone(), value)
                                 .expect("boolean alternative is feasible")
                         };
-                        let include_bounds =
-                            self.inventory
-                                .loops
-                                .for_value(&self.body, cond.value)
-                                .is_none()
-                                || (self.scalar.bounded_readers.contains(&cond.value)
-                                    && (!self.prefix_certificates.is_empty()
-                                        || self.calls.values().any(|call| {
-                                            !call.summary.certified_ranges.is_empty()
-                                        })));
+                        let include_bounds = self.scalar_bounds_enabled(cond.value);
                         let guard = guard.and(&self.condition_guard(
                             cond.value,
                             value,
@@ -575,21 +564,29 @@ impl<'db> Borrowck<'db> {
             .zip(&successor.args)
         {
             if self.body.values[parameter.index()].ty.is_bool(self.db) {
-                let parameter = self.boolean_choice(*parameter);
-                let equal =
-                    if let Some(value) = literal_bool_cond(self.db, &self.body, argument.value) {
-                        always.with_boolean(parameter, value)?
-                    } else {
-                        let argument = self.boolean_choice(argument.value);
-                        [true, false]
-                            .into_iter()
-                            .filter_map(|value| {
-                                always
-                                    .with_boolean(parameter.clone(), value)?
-                                    .with_boolean(argument.clone(), value)
-                            })
-                            .reduce(|left, right| left.or(&right))?
-                    };
+                let choice = self.boolean_choice(*parameter);
+                let equal = if let Some(value) =
+                    literal_bool_cond(self.db, &self.body, argument.value)
+                {
+                    always.with_boolean(choice, value)?
+                } else {
+                    [true, false]
+                        .into_iter()
+                        .filter_map(|value| {
+                            let argument = if self.scalar.live.contains(parameter) {
+                                self.condition_guard(
+                                    argument.value,
+                                    value,
+                                    self.scalar_bounds_enabled(argument.value),
+                                    CONDITION_BUDGET,
+                                )?
+                            } else {
+                                always.with_boolean(self.boolean_choice(argument.value), value)?
+                            };
+                            argument.with_boolean(choice.clone(), value)
+                        })
+                        .reduce(|left, right| left.or(&right))?
+                };
                 selected = selected.and(&equal)?;
             } else if self.scalar.values.contains(parameter)
                 && (self.scalar.selectors.contains(&self.index(*parameter))
@@ -676,11 +673,7 @@ impl<'db> Borrowck<'db> {
         #[cfg(feature = "borrowck-profile")]
         let profile = self.profile_scope("solve");
         self.prepare_calls()?;
-        (
-            self.scalar.live,
-            self.scalar.observed,
-            self.scalar.non_branch_params,
-        ) = self.scalar_liveness();
+        self.prepare_scalar_demand()?;
         if self
             .calls
             .values()
