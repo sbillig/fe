@@ -3833,7 +3833,7 @@ impl<'db> SignatureValues<'_, 'db> {
             assumptions: checker.instance.assumptions(checker.db),
         };
         let arbitrary = overwrite
-            .contents(&mut contents, shape, scope, None)
+            .contents(&mut contents, shape, scope, None, None)
             .map_err(|error| {
                 checker.internal_diag(
                     SemOrigin::Body(checker.body.template_owner),
