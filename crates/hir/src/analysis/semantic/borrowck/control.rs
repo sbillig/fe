@@ -7,7 +7,11 @@ use std::{
 use cranelift_entity::EntityRef;
 
 use crate::analysis::semantic::{
-    capability::{guard::ValueOccurrence, index::IndexExpr},
+    capability::{
+        guard::{ChoiceKey, Guard, ValueOccurrence},
+        index::{BinderScope, IndexExpr},
+        path::StructuralPath,
+    },
     normalized::{
         NBlockId, NValueDefinition, NValueId, NormalizedBody, NormalizedBodyVerifyError,
         normalized_cfg,
@@ -132,6 +136,8 @@ pub(super) struct LoopRegions {
     regions: BTreeMap<NBlockId, LoopRegion>,
     /// Each feedback edge and the region whose next iteration it starts.
     feedback: BTreeMap<(NBlockId, NBlockId), NBlockId>,
+    /// All predecessors of feedback destinations, including initial function entry.
+    entries: BTreeMap<NBlockId, Vec<Option<NBlockId>>>,
 }
 
 #[derive(Default)]
@@ -277,12 +283,29 @@ impl LoopRegions {
                 }),
             );
         }
+        let entries = feedback
+            .keys()
+            .map(|(_, to)| *to)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|to| {
+                let predecessors = reverse[to.index()]
+                    .iter()
+                    .map(|from| Some(NBlockId::new(*from)))
+                    .chain((to == body.entry).then_some(None))
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                (to, predecessors)
+            })
+            .collect();
         let mut loops = Self {
             reverse_postorder: order,
             successors,
             blocks,
             regions,
             feedback,
+            entries,
         };
         for (index, value) in body.values.iter().enumerate() {
             let block = match value.definition {
@@ -383,6 +406,20 @@ impl LoopRegions {
         self.feedback.get(&(from, to)).copied()
     }
 
+    /// Partition joined loop states by their most recent incoming edge. Feedback
+    /// first forgets the prior visit, then both provenance and availability use
+    /// this guard, preserving their correlation without accumulating history.
+    pub fn entry_guard<'db>(&self, from: Option<NBlockId>, to: NBlockId) -> Option<Guard<'db>> {
+        let predecessors = self.entries.get(&to)?;
+        let selected = predecessors.binary_search(&from).expect("loop predecessor");
+        let bits = usize::BITS - (predecessors.len() - 1).leading_zeros();
+        Guard::always(&BinderScope::default()).with_choice_bits(
+            ChoiceKey::new(ValueOccurrence::LoopEntry(to), StructuralPath::default()),
+            bits as u16,
+            |bit| selected & (1 << bit) != 0,
+        )
+    }
+
     /// Whether the next iteration of `region` renews this index: its own or a
     /// nested iteration, or a value defined inside it.
     pub fn repeats_index(&self, region: NBlockId, index: IndexExpr<'_>) -> bool {
@@ -406,6 +443,8 @@ impl LoopRegions {
             ValueOccurrence::Value(value) | ValueOccurrence::CallChoice { result: value, .. } => {
                 self.regions[&region].values.contains(&value)
             }
+            ValueOccurrence::LoopEntry(block) => self.blocks[block.index()]
+                .is_some_and(|inner| self.enclosing(inner).any(|outer| outer == region)),
             ValueOccurrence::Root(_) => true,
             ValueOccurrence::Argument(_)
             | ValueOccurrence::Summary
@@ -540,6 +579,9 @@ mod tests {
         assert!(loops.drops_fact(inner, IndexExpr::Runtime(header)));
         assert!(loops.repeats_index(outer, IndexExpr::Iteration(inner)));
         assert!(!loops.repeats_index(inner, IndexExpr::Iteration(outer)));
+        assert!(loops.repeats_occurrence(inner, ValueOccurrence::LoopEntry(inner)));
+        assert!(loops.repeats_occurrence(outer, ValueOccurrence::LoopEntry(inner)));
+        assert!(!loops.repeats_occurrence(inner, ValueOccurrence::LoopEntry(outer)));
         // An occurrence made before the inner loop names no value it defines.
         let arguments = loops.arguments(&body, header);
         assert_eq!(arguments[0], IndexExpr::Iteration(outer));
