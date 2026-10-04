@@ -1,0 +1,77 @@
+use core::{Option, ptr}
+
+struct Node { value: u64 }
+enum Link { Nil, Cons(*Node) }
+struct Holder { link: Link }
+struct Pair<T> { first: T, second: T }
+
+fn head(_ link: Link) -> u64 {
+    match link { Link::Nil => 0, Link::Cons(node) => node.value }
+}
+
+fn pointer(_ link: ref Link) -> *Node {
+    match link { Link::Nil => core::panic(), Link::Cons(node) => node }
+}
+
+fn edit(_ link: mut Link) {
+    match link {
+        Link::Nil => {}
+        Link::Cons(node) => { node.value += 1 }
+    }
+}
+
+fn retarget(_ link: mut Link, _ replacement: *Node) {
+    match link {
+        Link::Nil => {}
+        Link::Cons(node) => { node = replacement }
+    }
+}
+
+fn read_pointer(_ node: *Node) -> u64 { node.value }
+fn read_ref(_ node: ref *Node) -> u64 { node.value }
+
+fn destructure(_ pair: Pair<*Node>) -> u64 {
+    let Pair { first, second } = pair
+    read_pointer(first) + read_ref(ref second)
+}
+
+fn optional(_ link: ref Option<*Node>) -> u64 {
+    if let Option::Some(node) = link { (*node).value } else { 0 }
+}
+
+pub fn main() -> i32 {
+    let first = ptr::alloc<Node>()
+    *first = Node { value: 7 }
+    let second = ptr::alloc<Node>()
+    *second = Node { value: 19 }
+    let mut link = Link::Cons(first)
+    core::assert(head(link) == 7)
+    core::assert(pointer(ref link) == first)
+    edit(mut link)
+    core::assert(first.value == 8)
+    retarget(mut link, second)
+    core::assert(pointer(ref link) == second)
+    core::assert(head(link) == 19)
+    core::assert(destructure(Pair { first, second }) == 27)
+    let optional_link = Option::Some(first)
+    core::assert(optional(ref optional_link) == 8)
+    let absent: Option<*Node> = Option::None
+    core::assert(optional(ref absent) == 0)
+    core::assert(head(Link::Nil) == 0)
+
+    // The scrutinee's raw address must be dereferenced before using its payload.
+    let holder = ptr::alloc<Holder>()
+    *holder = Holder { link: Link::Cons(first) }
+    core::assert(head(holder.link) == 8)
+    core::assert(pointer(ref holder.link) == first)
+    match holder.link {
+        Link::Nil => core::panic()
+        Link::Cons(node) => { core::assert(node.value == 8) }
+    }
+    retarget(mut holder.link, second)
+    core::assert(head(holder.link) == 19)
+    0
+}
+
+#[test]
+fn raw_pointer_pattern_bindings() { core::assert(main() == 0) }
