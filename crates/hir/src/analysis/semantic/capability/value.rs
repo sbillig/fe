@@ -921,7 +921,8 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
     /// Select index-independent fields before substituting. Rebuilding siblings
     /// that the projection discards can dominate reads from large aggregates.
     /// Array selectors are already in the destination scope, so substitute before
-    /// the first index. Retain the full prefix for subsequent enum observations.
+    /// the first index. A supplied observation prefix is already in destination
+    /// coordinates, so enum guards using it must also wait until after substitution.
     pub fn project_substituted(
         &mut self,
         value: &ValueId<'db, P>,
@@ -938,7 +939,10 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         let split = path
             .as_slice()
             .iter()
-            .position(|step| matches!(step, Projection::Index(_)))
+            .position(|step| {
+                matches!(step, Projection::Index(_))
+                    || (!base.is_empty() && matches!(step, Projection::VariantField { .. }))
+            })
             .unwrap_or(path.as_slice().len());
         let (prefix, suffix) = path.as_slice().split_at(split);
         let selected = self.project_from(value, prefix, occurrence, base.clone())?;

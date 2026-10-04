@@ -4197,27 +4197,31 @@ fn projected_subobjects_preserve_enum_observation_paths() {
             ),
         },
     );
+    let (source, input) = scope().bind(IndexNamespace::InputSlot);
+    let (destination, selected) = scope().bind(IndexNamespace::Existential);
     let mut values = ValueInterner::new(&db, ValueLimits::default());
-    let value = values.from_shape(array_shape(&db, sum, 2), &scope(), |_, _, scope| {
+    let value = values.from_shape(array_shape(&db, sum, 2), &source, |_, _, scope| {
         vec![Guarded {
             guard: Guard::always(scope),
             payload: Payload {
                 tag: 1,
-                indices: Vec::new(),
+                indices: vec![input],
             },
         }]
     });
-    let subst = IndexSubst::new(&scope(), &scope(), []).unwrap();
+    let subst = IndexSubst::new(&source, &destination, [(input, selected)]).unwrap();
+    let full = values.substitute(&value, &subst);
     let occurrence = ValueOccurrence::Argument(3);
-    for index in [0, 1] {
-        let prefix = StructuralPath::new([Projection::Index(IndexExpr::Const(index))]);
-        let element = values.project(&value, &prefix, occurrence).unwrap();
+    for index in [IndexExpr::Const(0), IndexExpr::Const(1), input] {
+        let source_path = StructuralPath::new([Projection::Index(index)]);
+        let prefix = source_path.substitute(&subst);
+        let element = values.project(&value, &source_path, occurrence).unwrap();
         for variant in [VariantIndex(0), VariantIndex(1)] {
             let suffix = StructuralPath::new([Projection::VariantField {
                 variant,
                 field: FieldIndex(0),
             }]);
-            let expected = values.project(&value, &prefix.concat(&suffix), occurrence);
+            let expected = values.project(&full, &prefix.concat(&suffix), occurrence);
             let actual =
                 values.project_substituted(&element, &subst, &suffix, occurrence, prefix.clone());
             assert_eq!(actual, expected);
