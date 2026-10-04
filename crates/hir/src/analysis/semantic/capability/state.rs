@@ -1081,6 +1081,11 @@ impl<'db> BorrowState<'db> {
                     continue;
                 }
                 let db = values.db;
+                // The source leaves are fixed for this clause. Destination roots
+                // only select a shape and lexical scope; apply their residual
+                // guards separately after sharing the compatible contents.
+                let mut by_shape = FxHashMap::default();
+                let mut by_slot = FxHashMap::default();
                 for (root, contents) in &self.contents {
                     if !root.may_alias_unknown(&clause.payload.root)
                         || (root == &clause.payload.root
@@ -1107,24 +1112,36 @@ impl<'db> BorrowState<'db> {
                     ) {
                         continue;
                     }
-                    let added = values.from_shape(
-                        contents.shape(),
-                        contents.scope(),
-                        |semantics, _, scope| {
-                            leaves
-                                .iter()
-                                .filter(|leaf| leaf.semantics == semantics)
-                                .filter_map(|leaf| {
-                                    let subst = leaf.guard.scope().freshening(scope);
-                                    Some(Guarded {
-                                        guard: leaf.guard.substitute(&subst)?,
-                                        payload: leaf.payload.substitute(db, &subst),
-                                    })
-                                })
-                                .collect()
-                        },
-                    );
-                    let added = values.with_guard(&added, &residual);
+                    let added = by_shape
+                        .entry((contents.shape(), contents.scope().clone()))
+                        .or_insert_with(|| {
+                            values.from_shape(
+                                contents.shape(),
+                                contents.scope(),
+                                |semantics, _, scope| {
+                                    by_slot
+                                        .entry((semantics, scope.clone()))
+                                        .or_insert_with(|| {
+                                            leaves
+                                                .iter()
+                                                .filter(|leaf| leaf.semantics == semantics)
+                                                .filter_map(|leaf| {
+                                                    let subst =
+                                                        leaf.guard.scope().freshening(scope);
+                                                    Some(Guarded {
+                                                        guard: leaf.guard.substitute(&subst)?,
+                                                        payload: leaf
+                                                            .payload
+                                                            .substitute(db, &subst),
+                                                    })
+                                                })
+                                                .collect::<Vec<_>>()
+                                        })
+                                        .clone()
+                                },
+                            )
+                        });
+                    let added = values.with_guard(added, &residual);
                     let old = updates.get(root).unwrap_or(contents);
                     updates.insert(root.clone(), values.join(old, &added));
                 }

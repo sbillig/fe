@@ -1556,7 +1556,8 @@ fn unknown_alias_stores_retain_origins_across_offsets_and_respect_address_spaces
     };
     let first = opaque(0, ProviderAddressSpace::Memory);
     let second = opaque(1, ProviderAddressSpace::Memory);
-    let storage = opaque(2, ProviderAddressSpace::Storage);
+    let third = opaque(2, ProviderAddressSpace::Memory);
+    let storage = opaque(3, ProviderAddressSpace::Storage);
     let original = handle(&mut values, shapes.handle, 0);
     let pair = values.product(
         shapes.pair,
@@ -1572,6 +1573,7 @@ fn unknown_alias_stores_retain_origins_across_offsets_and_respect_address_spaces
         [
             (first.clone(), pair.clone()),
             (second.clone(), pair.clone()),
+            (third.clone(), pair.clone()),
             (storage.clone(), pair),
         ],
     );
@@ -1601,12 +1603,12 @@ fn unknown_alias_stores_retain_origins_across_offsets_and_respect_address_spaces
         read(&db, &mut values, &state, &field(first, 1), shapes.handle),
         original
     );
-    for index in [0, 1] {
+    for (alias, index) in [(&second, 0), (&second, 1), (&third, 0), (&third, 1)] {
         let loaded = read(
             &db,
             &mut values,
             &state,
-            &field(second.clone(), index),
+            &field(alias.clone(), index),
             shapes.handle,
         );
         let ids: Vec<_> = loaded
