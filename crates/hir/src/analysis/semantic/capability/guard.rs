@@ -26,7 +26,7 @@ use super::{
 };
 use crate::analysis::semantic::{
     VariantIndex,
-    normalized::{NRootId, NValueId},
+    normalized::{NBlockId, NRootId, NValueId},
 };
 
 const INDEX_BITS: u16 = 256;
@@ -38,12 +38,17 @@ thread_local! {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ValueOccurrence {
+    /// The incoming control-flow edge of the current loop-header visit.
+    LoopEntry(NBlockId),
     Value(NValueId),
     Root(NRootId),
     Argument(u32),
     Summary,
     SummaryChoice(u32),
-    CallChoice { result: NValueId, choice: u32 },
+    CallChoice {
+        result: NValueId,
+        choice: u32,
+    },
 }
 
 impl Ord for ValueOccurrence {
@@ -55,12 +60,13 @@ impl Ord for ValueOccurrence {
         // Otherwise mutually exclusive accesses to independent fields encode
         // every subset of those fields before the branch can select one.
         let key = |occurrence: &Self| match *occurrence {
-            Self::Value(value) => (0, value.as_u32(), true, 0),
-            Self::CallChoice { result, choice } => (0, result.as_u32(), false, choice),
-            Self::Root(root) => (1, root.as_u32(), false, 0),
-            Self::Argument(argument) => (2, argument, false, 0),
-            Self::Summary => (3, 0, false, 0),
-            Self::SummaryChoice(choice) => (4, choice, false, 0),
+            Self::LoopEntry(block) => (0, block.as_u32(), false, 0),
+            Self::Value(value) => (1, value.as_u32(), true, 0),
+            Self::CallChoice { result, choice } => (1, result.as_u32(), false, choice),
+            Self::Root(root) => (2, root.as_u32(), false, 0),
+            Self::Argument(argument) => (3, argument, false, 0),
+            Self::Summary => (4, 0, false, 0),
+            Self::SummaryChoice(choice) => (5, choice, false, 0),
         };
         key(self).cmp(&key(other))
     }
@@ -1650,7 +1656,7 @@ impl<'db> Guard<'db> {
         self.with_choice_bits(choice, 1, |_| value)
     }
 
-    fn with_choice_bits(
+    pub(crate) fn with_choice_bits(
         &self,
         choice: ChoiceKey<'db>,
         bits: u16,
@@ -1749,9 +1755,22 @@ impl<'db> Guard<'db> {
         domain: &Self,
         hidden: impl Fn(ValueOccurrence) -> bool,
     ) -> Option<Self> {
-        let projected = domain.forget_occurrences(&hidden);
+        self.project_universally(domain, |guard| guard.forget_occurrences(&hidden))
+    }
+
+    /// Retain only facts true for every hidden scalar admitted by `domain`.
+    pub fn forget_indices_universally(
+        &self,
+        domain: &Self,
+        hidden: impl Fn(IndexExpr<'db>) -> bool,
+    ) -> Option<Self> {
+        self.project_universally(domain, |guard| guard.forget_indices(&hidden))
+    }
+
+    fn project_universally(&self, domain: &Self, project: impl Fn(&Self) -> Self) -> Option<Self> {
+        let projected = project(domain);
         match domain.difference(self) {
-            Some(refuted) => projected.difference(&refuted.forget_occurrences(hidden)),
+            Some(refuted) => projected.difference(&project(&refuted)),
             None => Some(projected),
         }
     }
@@ -1996,6 +2015,41 @@ mod tests {
                 assert_eq!(
                     projected, expected,
                     "domain {branch:?}, permission {required:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn universal_scalar_projection_requires_every_admitted_execution() {
+        let scope = BinderScope::default();
+        let hidden = IndexExpr::Runtime(NValueId::from_u32(0));
+        let member = IndexExpr::FormalValue(0);
+        let bounded = Guard::always(&scope).with_bound(hidden, 2).unwrap();
+        let range = Guard::always(&scope).with_bound(member, 4).unwrap();
+        for admitted in [None, Some(0), Some(1)] {
+            let domain = admitted.map_or_else(
+                || bounded.clone(),
+                |value| {
+                    bounded
+                        .with_equality(hidden, IndexExpr::Const(value))
+                        .unwrap()
+                },
+            );
+            for required in [None, Some(0), Some(1)] {
+                let permission = required.map_or_else(
+                    || range.clone(),
+                    |value| {
+                        range
+                            .with_equality(hidden, IndexExpr::Const(value))
+                            .unwrap()
+                    },
+                );
+                let expected = (required.is_none() || admitted == required).then(|| range.clone());
+                assert_eq!(
+                    permission.forget_indices_universally(&domain, |index| index == hidden),
+                    expected,
+                    "domain {admitted:?}, permission {required:?}",
                 );
             }
         }

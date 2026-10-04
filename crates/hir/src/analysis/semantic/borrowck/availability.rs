@@ -338,7 +338,11 @@ impl<'db> Borrowck<'db> {
         #[cfg(feature = "borrowck-profile")]
         let profile = self.profile_scope("availability");
         let mut entries = vec![None; self.body.blocks.len()];
-        entries[self.body.entry.index()] = Some(AvailabilityState::new());
+        let mut initial = AvailabilityState::new();
+        if let Some(guard) = self.inventory.loops.entry_guard(None, self.body.entry) {
+            initial.restrict(&guard).expect("initial loop entry");
+        }
+        entries[self.body.entry.index()] = Some(initial);
         // Revisit only blocks whose entry state changed: an unchanged block
         // would rejoin the same edges into its successors.
         let mut dirty = vec![false; self.body.blocks.len()];
@@ -473,6 +477,14 @@ impl<'db> Borrowck<'db> {
                                 self.inventory.loops.drops_fact(iteration, index)
                             })
                             .forget_occurrences(repeats_occurrence);
+                    }
+                    if let Some(guard) = self
+                        .inventory
+                        .loops
+                        .entry_guard(Some(NBlockId::new(block_index)), successor.block)
+                        && edge.restrict(&guard).is_none()
+                    {
+                        continue;
                     }
                     edge.moved.retain(|_, fact| !fact.region.is_empty());
                     let entry = &mut entries[successor.block.index()];
