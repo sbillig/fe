@@ -16,7 +16,6 @@ use hir::analysis::{
             NTerminator, NTerminatorKind, NValueId, ReadMode,
         },
         reify_runtime_const_for_ty, runtime_size_bytes, sem_const_ty,
-        verify_layout_evidence_runtime_compatibility,
     },
     ty::{
         CallableLayoutParamPort, LayoutBundleUnrepresentable,
@@ -87,7 +86,9 @@ use super::{
     realize::{
         RuntimeArgSource, RuntimeValueUseEmitter, SelectedRuntimeArg, emit_runtime_value_use_plan,
     },
-    returns::declaration_runtime_return_class,
+    returns::{
+        declaration_runtime_return_class, runtime_return_class_for_body, semantic_never_returns,
+    },
     semantic_body::{RuntimeOperand, RuntimeSemanticBody},
     source::{
         RuntimeSourceMode, RuntimeSourceQuery, SemanticPlaceValueSource,
@@ -111,12 +112,7 @@ pub fn lower_to_rmir<'db>(
     let semantic = key
         .semantic(db)
         .expect("semantic lowering only applies to semantic runtime instances");
-    let normalized_body = RuntimeSemanticBody::admitted(db, semantic).map_err(|error| {
-        LowerError::Unsupported(format!(
-            "semantic normalization failed for {:?}: {error:?}",
-            semantic.key(db)
-        ))
-    })?;
+    let normalized_body = RuntimeSemanticBody::admitted(db, semantic)?;
     let type_env = RuntimeTypeEnv::for_semantic(db, semantic);
     for ty in normalized_body
         .normalized
@@ -130,7 +126,8 @@ pub fn lower_to_rmir<'db>(
     }
     check_runtime_body_supported(db, semantic.key(db), &normalized_body)?;
     let facts = BodyStaticFacts::new(db, &normalized_body);
-    let abi = runtime_body_abi_plan(db, key, &normalized_body);
+    let returned = runtime_return_class_for_body(db, key, &normalized_body);
+    let abi = runtime_body_abi_plan(db, key, &normalized_body, returned.as_ref());
     let param_locals = crate::runtime::lower::interface::runtime_param_locals(
         db,
         semantic,
@@ -142,11 +139,9 @@ pub fn lower_to_rmir<'db>(
         key.params(db),
         &param_locals,
     );
-    let visible_ret_class = abi.returns.visible.clone();
-    if let Some(ret_class) = visible_ret_class
-        .clone()
-        .filter(|class| class.contains_transport(db))
-    {
+    // Return locals keep the body's own class; return lowering adapts it to
+    // the declaration contract.
+    if let Some(ret_class) = returned.filter(|class| class.contains_transport(db)) {
         let return_locals = normalized_body
             .normalized
             .blocks
@@ -170,7 +165,7 @@ pub fn lower_to_rmir<'db>(
 
 /// Instantiation-dependent array roots are only visible after specialization,
 /// so they surface here rather than as a definition-site diagnostic.
-fn layout_evidence_failure<'db>(
+pub(super) fn layout_evidence_failure<'db>(
     key: SemanticInstanceKey<'db>,
     error: &LayoutEvidenceError<'db>,
 ) -> LowerError {
@@ -649,19 +644,6 @@ impl<'db> RmirEmitter<'db> {
         let env = RuntimeTypeEnv::for_semantic(db, semantic);
         let layout_evidence = layout_evidence_body(db, semantic)
             .map_err(|error| layout_evidence_failure(semantic.key(db), &error))?;
-        verify_layout_evidence_runtime_compatibility(
-            db,
-            &semantic_body.normalized,
-            &semantic_body.layout_plan,
-            &semantic_body.source,
-            layout_evidence,
-        )
-        .map_err(|error| {
-            LowerError::Unsupported(format!(
-                "layout evidence is incompatible with runtime semantic body for {:?}: {error:?}",
-                semantic.key(db)
-            ))
-        })?;
         let const_ref_regions = collect_const_ref_regions(db, env, &semantic_body);
         let terminated_blocks = vec![false; semantic_body.normalized.blocks.len()];
         let stmt_origins = vec![Vec::new(); semantic_body.normalized.blocks.len()];
@@ -1135,6 +1117,19 @@ impl<'db> RmirEmitter<'db> {
             .ty;
         let normalized_id =
             self.semantic_body.normalized.blocks[bb.index()].statements[stmt_idx].id;
+        // A call that never returns ends its executable block and produces no
+        // value, so carrier inference gives its result no class.
+        if let NExpr::Call {
+            callee,
+            args,
+            effect_args,
+            ..
+        } = expr
+            && semantic_never_returns(self.db, get_or_build_semantic_instance(self.db, callee.key))
+        {
+            self.lower_call(bb, normalized_id, *callee, args, effect_args);
+            return;
+        }
         let direct_class = self.current_expr_direct_class(bb.index(), stmt_idx, expr);
         if self.root_provider_value_load_is_lazy(dst, expr)
             || ((matches!(expr, NExpr::MakeView { .. })

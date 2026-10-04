@@ -777,6 +777,13 @@ the runtime return/argument adapters, and codegen, with handle-preservation test
 covering their interaction. Layout cannot supply ownership facts missing from
 normalized semantics.
 
+The local borrow check publishes the control flow its solve proved executable:
+unreachable blocks, the call at which a block diverges because its callee's
+summary does not return, and infeasible successor edges. Runtime lowering emits
+exactly that flow, with everything else unreachable, and a callee is
+nonreturning at runtime exactly when its summary is. Representation choices and
+return inference therefore see the same returning paths as the summary.
+
 Frontend move marking recognizes dereferences of temporary pointers, including
 selected fields and array elements. Lowering preserves those places through
 normalization; projecting a read snapshot must not replace consuming the original
@@ -814,7 +821,9 @@ Loading a reference from a slot returns the stored carrier, not the slot address
 Return inference and value forwarding retain normalized operands: a loaded native
 field remains its descriptor even when its semantic local is an erased place alias.
 Copy scalar parameters materialize their value when the calling convention carries
-an implicit view. Declaration and body queries enforce the same return class.
+an implicit view. The declaration query fixes the return class without the
+body, from type-level forwarding and the summary; it may be wider than the class
+the body returns, which return lowering adapts, but never narrower.
 The verifier checks these conversions independently of semantic borrow checking;
 runtime representation never supplies ownership or aliasing authority.
 
