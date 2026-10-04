@@ -1051,67 +1051,71 @@ impl<'db> ExternalSource<'db> {
     }
 
     pub fn substitute(&self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
-        let mut result = self.rename_indices(subst);
-        result.contract = self.contract.substitute(db, subst);
-        result.clobber = self.clobber.as_ref().map(|clobber| {
-            Box::new(ClobberCondition {
-                target: clobber.target.substitute(db, subst),
-                written: clobber.written.substitute(db, subst),
-                extent: clobber.extent.substitute(subst),
-            })
-        });
-        match &self.origin {
+        let origin = match &self.origin {
             ExternalOrigin::Unknown {
                 contract,
                 occurrence,
                 arguments,
                 provenance,
-            } => {
-                result.origin = ExternalOrigin::Unknown {
-                    contract: contract.substitute(db, subst),
-                    occurrence: *occurrence,
-                    arguments: arguments.iter().map(|index| subst.apply(*index)).collect(),
-                    provenance: *provenance,
-                };
-            }
+            } => ExternalOrigin::Unknown {
+                contract: contract.substitute(db, subst),
+                occurrence: *occurrence,
+                arguments: arguments.iter().map(|index| subst.apply(*index)).collect(),
+                provenance: *provenance,
+            },
             ExternalOrigin::OpaqueHandle(handle) => {
-                result.origin = ExternalOrigin::OpaqueHandle(handle.substitute(db, subst))
+                ExternalOrigin::OpaqueHandle(handle.substitute(db, subst))
             }
             // The interned binding, and so its storage classification, is unchanged.
             ExternalOrigin::Provider {
                 provider,
                 target_ty,
                 storage,
-            } => {
-                result.origin = ExternalOrigin::Provider {
-                    provider: *provider,
-                    target_ty: target_ty.fold_with(db, &mut subst.clone()),
-                    storage: *storage,
-                }
-            }
+            } => ExternalOrigin::Provider {
+                provider: *provider,
+                target_ty: target_ty.fold_with(db, &mut subst.clone()),
+                storage: *storage,
+            },
             ExternalOrigin::Allocation(handle) => {
-                result.origin = ExternalOrigin::Allocation(handle.substitute(db, subst));
+                ExternalOrigin::Allocation(handle.substitute(db, subst))
             }
             ExternalOrigin::Memory {
                 base,
                 offset,
                 target_ty,
-            } => {
-                result.origin = ExternalOrigin::Memory {
-                    target_ty: target_ty.fold_with(db, &mut subst.clone()),
-                    base: Box::new(base.substitute(db, subst)),
-                    offset: match *offset {
-                        MemoryOffset::Element(ty, index) => MemoryOffset::Element(
-                            ty.fold_with(db, &mut subst.clone()),
-                            subst.apply(index),
-                        ),
-                        offset => offset,
-                    },
-                };
-            }
-            ExternalOrigin::Input(_) | ExternalOrigin::Local(_) | ExternalOrigin::OpaqueMemory => {}
+            } => ExternalOrigin::Memory {
+                target_ty: target_ty.fold_with(db, &mut subst.clone()),
+                base: Box::new(base.substitute(db, subst)),
+                offset: match *offset {
+                    MemoryOffset::Element(ty, index) => MemoryOffset::Element(
+                        ty.fold_with(db, &mut subst.clone()),
+                        subst.apply(index),
+                    ),
+                    offset => offset,
+                },
+            },
+            ExternalOrigin::Input(input) => ExternalOrigin::Input(input.substitute(subst)),
+            ExternalOrigin::Local(root) => ExternalOrigin::Local(*root),
+            ExternalOrigin::OpaqueMemory => ExternalOrigin::OpaqueMemory,
+        };
+        Self {
+            origin,
+            contract: self.contract.substitute(db, subst),
+            clobber: self.clobber.as_ref().map(|clobber| {
+                Box::new(ClobberCondition {
+                    target: clobber.target.substitute(db, subst),
+                    written: clobber.written.substitute(db, subst),
+                    extent: clobber.extent.substitute(subst),
+                })
+            }),
+            dereferences: self
+                .dereferences
+                .iter()
+                .map(|path| path.substitute(subst))
+                .collect(),
+            reachable: self.reachable,
+            uncertain: self.uncertain,
         }
-        result
     }
 
     pub(super) fn rename_indices(&self, subst: &IndexSubst<'db>) -> Self {

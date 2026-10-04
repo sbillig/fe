@@ -2211,6 +2211,37 @@ fn inspect<const N: usize>(_ ptr: own Ptr<[u256; N]>) {}
         RegionPath::default(),
     );
     let source = SourceExpr::from_place(&region.clauses()[0].payload).unwrap();
+    let nested = |source, target_ty, index| {
+        let source: SourceExpr<'_> = source;
+        let path = RegionPath::new([Projection::Index(index)]);
+        let target = SourceExpr {
+            invalidated: true,
+            ..source.clone()
+        };
+        let written = SourceExpr {
+            path: path.clone(),
+            ..source.clone()
+        };
+        let mut result = ExternalSource::memory(
+            &db,
+            source,
+            target_ty,
+            MemoryOffset::Element(target_ty, index),
+        )
+        .follow(path, ReferentContract::memory(&db, target_ty), true);
+        result.clobber = Some(Box::new(ClobberCondition {
+            target,
+            written,
+            extent: AccessExtent::Bytes(index),
+        }));
+        result
+    };
+    let nested_source = nested(source.clone(), contract.target_ty, runtime(2));
+    let nested_source = nested(
+        SourceExpr::whole(nested_source),
+        contract.target_ty,
+        runtime(2),
+    );
     let mut values = ValueInterner::new(&db, ValueLimits::default());
     let value = values.from_shape(shape, &scope(), |_, _, scope| {
         vec![Guarded {
@@ -2247,9 +2278,18 @@ fn inspect<const N: usize>(_ ptr: own Ptr<[u256; N]>) {}
         );
         assert_eq!(origin.occurrence, AddressOccurrence::Summary(4));
         assert_eq!(origin.arguments.as_ref(), &[IndexExpr::Const(5)]);
+        let specialized_source = SourceExpr::from_place(&selected.clauses()[0].payload).unwrap();
+        assert_eq!(source.substitute(&db, &subst), specialized_source);
+        let expected = nested(specialized_source, semantics.target_ty, IndexExpr::Const(5));
+        let expected = nested(
+            SourceExpr::whole(expected),
+            semantics.target_ty,
+            IndexExpr::Const(5),
+        );
+        assert_eq!(nested_source.substitute(&db, &subst), expected);
         assert_eq!(
-            source.substitute(&db, &subst),
-            SourceExpr::from_place(&selected.clauses()[0].payload).unwrap()
+            nested_source.clone().widen().substitute(&db, &subst),
+            expected.widen()
         );
     }
 }
