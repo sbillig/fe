@@ -13922,3 +13922,66 @@ fn inspect() {
     );
     assert!(diagnostics.contains("move conflict"), "{diagnostics}");
 }
+
+#[test]
+fn typed_call_poststates_preserve_dynamic_slot_provenance() {
+    let declarations = r#"
+use core::{Option, ptr}
+struct Cell { pointer: Option<*u8> }
+struct Holder { cells: *[Cell; 2], len: usize }
+impl Cell {
+    fn update(mut self) {
+        match self.pointer {
+            Option::Some(pointer) => { *pointer = 0 }
+            Option::None => { self.replace() }
+        }
+    }
+    fn replace(mut self) { self.pointer = Option::Some(ptr::alloc<u8>()) }
+}
+impl Holder {
+    fn get(mut self) -> mut Cell { mut (*self.cells)[self.len - 1] }
+}
+"#;
+    let diagnostics = checked_borrow_diags(&format!(
+        r#"{declarations}
+fn inspect() {{
+    let cells = ptr::alloc<[Cell; 2]>()
+    (*cells)[0] = Cell {{ pointer: Option::None }}
+    (*cells)[1] = Cell {{ pointer: Option::None }}
+    let mut holder = Holder {{ cells, len: 1 }}
+    let mut count: u64 = 0
+    while count < 2 {{
+        let cell = holder.get()
+        core::assert(count < 2)
+        cell.update()
+        count += 1
+    }}
+}}
+"#
+    ));
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+
+    for access in [
+        // The stored pointer really aliases a live borrow.
+        "holder.get().update()",
+        // Replacing an unknown selected member must retain the other member.
+        "holder.get().replace()\n(*cells)[1].update()",
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"{declarations}
+fn inspect() {{
+    let original = ptr::alloc<u8>()
+    *original = 0
+    let cells = ptr::alloc<[Cell; 2]>()
+    (*cells)[0] = Cell {{ pointer: Option::Some(original) }}
+    (*cells)[1] = Cell {{ pointer: Option::Some(original) }}
+    let mut holder = Holder {{ cells, len: 1 }}
+    let held = mut *original
+    {access}
+    held = 1
+}}
+"#
+        ));
+        assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+    }
+}
