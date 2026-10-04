@@ -1100,14 +1100,14 @@ fn build_local_static_facts<'db>(
         {
             lowered_ty.map_or(SemanticFallback::None, |ty| {
                 let class = stored_class_for_ty_in_env(db, type_env, ty);
-                let view_is_erased = runtime_interface_ty_in_env(db, type_env, local_data.ty)
-                    .as_view(db)
-                    .is_some();
-                if !class.is_transport() || view_is_erased {
+                let interface_ty = runtime_interface_ty_in_env(db, type_env, local_data.ty);
+                if interface_ty.as_view(db).is_some()
+                    || (!class.is_transport() && interface_ty.as_borrow(db).is_none())
+                {
                     SemanticFallback::TargetValue(class)
                 } else if matches!(interface, SemanticLocalKind::PlaceBoundValue) {
-                    // A borrowed pointer denotes its slot, not the pointer stored
-                    // there. Preserve the address kind of the actual aliased place.
+                    // A borrow must stay attached to its storage. Materializing
+                    // its contents here would make later reads use a stale copy.
                     SemanticFallback::PlaceAddress
                 } else {
                     SemanticFallback::None
