@@ -683,13 +683,19 @@ discarded. Accesses, ownership effects, mutable poststates, and obligations reta
 conservative observations. Returned predicates demand trusted equality operands
 within the boolean condition budget; arithmetic dependencies and return-only
 unsigned ordering remain untracked. Demand is prepared after callee summaries
-are available and follows their observed boolean arguments when the result is
-live or the observation is unconditional. Cell discovery, liveness, and Boolean
-argument seeding close together until no new scalar values are demanded, so a
-stored and reloaded call result retains its predicate dependencies. Guard
-instantiation and boolean join edges bind those arguments to their trusted
-predicates before local choices are projected away; unobserved arguments retain
-no predicate facts.
+are available and follows their observed scalar arguments when the result is
+live or the observation is unconditional. Observation and fact demand use the
+same dependency transfers for calls, forwards, lossless casts, block parameters,
+and loads of exact scalar cells. Observed integral arguments demand their value
+identities; Boolean arguments demand their predicates within the condition
+budget. A demanded load follows its reaching stored values, excluding stores
+replaced by a later whole-cell write. Cell discovery, liveness, and typed demand
+close together before summary projection. Demanded integer joins retain their
+predecessor equalities; seeding an integer return alone still requires a compact
+join. Selector demand alone admits unsigned bounds; following a call's argument
+preserves value facts without promoting it to a selector. Guard instantiation and boolean join edges bind arguments to their
+trusted predicates before local choices are projected away. Dead results and
+unobserved arguments retain no argument predicate relations.
 
 ### Certified loop contents
 

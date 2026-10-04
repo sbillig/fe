@@ -18,9 +18,9 @@ use crate::{
             definite_assignment::literal_bool_cond,
             diagnostics::{SemanticDiagnostic, normalized_body_internal_diag},
             normalized::{
-                NDataPath, NDataProjection, NEffectArgValue, NExpr, NIndex, NOperand, NPlace,
-                NPlaceBase, NRootKind, NStatement, NStatementKind, NTerminatorKind,
-                NValueDefinition, NValueId, NormalizedBody, copied_scalar_ty,
+                NDataPath, NDataProjection, NEffectArgValue, NExpr, NIndex, NPlace, NPlaceBase,
+                NRootKind, NStatement, NStatementKind, NTerminatorKind, NValueDefinition, NValueId,
+                NormalizedBody, copied_scalar_ty,
             },
         },
         ty::{
@@ -36,6 +36,16 @@ use super::{ir::ObservedParams, loop_certificate::frontier_candidates, solver::B
 
 /// Nested boolean operations followed when deriving a branch condition.
 pub(super) const CONDITION_BUDGET: u8 = 16;
+
+/// Dependency policies share transfers, while only selectors admit bounds and
+/// predicates demand comparison operands within the condition budget.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum ScalarUse {
+    Live,
+    Value,
+    Selector,
+    Predicate(u8),
+}
 
 /// Scalar facts are generated on demand: for index selectors, loop frontiers,
 /// representable integer returns, returned boolean equality predicates, and
@@ -89,8 +99,7 @@ pub(super) fn lossless_integer_cast(
 
 impl<'db> Borrowck<'db> {
     pub(super) fn prepare_scalar_demand(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
-        let (mut selectors, cells, mut values) = scalar_seeds(self);
-        values.retain(|value| self.supported_scalar_return(*value));
+        let (mut selectors, cells, values) = scalar_seeds(self);
         if self.inventory.loops.has_cycle()
             && self.body.blocks.iter().flat_map(|block| &block.statements).any(|statement| {
                 self.stores_capability(statement)
@@ -159,7 +168,10 @@ impl<'db> Borrowck<'db> {
     /// fact-free result, a cell nothing reads, or an argument the callee's
     /// summary never observes. A call result outside the live set occurs in no
     /// other fact, so forgetting its relation to the arguments is exact.
-    pub(super) fn scalar_liveness(&self) -> (FxHashSet<NValueId>, ObservedParams, BTreeSet<u32>) {
+    fn scalar_liveness(
+        &self,
+        stored: &FxHashMap<NValueId, FxHashSet<NValueId>>,
+    ) -> (FxHashSet<NValueId>, ObservedParams, BTreeSet<u32>) {
         let mut pending = Vec::new();
         let mut branches = Vec::new();
         let mut returned = Vec::new();
@@ -178,23 +190,10 @@ impl<'db> Borrowck<'db> {
                                 },
                             ));
                         }
-                        // A primitive operator relates its operands only through
-                        // its result, below.
-                        if let NExpr::Call {
-                            args, effect_args, ..
-                        } = expr
+                        if let NExpr::Call { effect_args, .. } = expr
                             && primitive_operator(self.db, &self.body, *result).is_none()
                         {
-                            let observed = self.observed_params(*result);
-                            pending.extend(args.iter().enumerate().filter_map(|(param, arg)| {
-                                observed
-                                    .is_none_or(|observed| {
-                                        observed
-                                            .unconditional
-                                            .contains(&u32::try_from(param).unwrap())
-                                    })
-                                    .then_some(arg.value)
-                            }));
+                            pending.extend(self.observed_arguments(*result, false));
                             pending.extend(effect_args.iter().filter_map(|arg| match arg.arg {
                                 NEffectArgValue::Value(value) => Some(value.value),
                                 NEffectArgValue::Place(_) => None,
@@ -224,12 +223,11 @@ impl<'db> Borrowck<'db> {
                 .collect::<BTreeSet<_>>()
         };
         let mut live = FxHashSet::default();
-        let stored = self.reaching_cell_stores();
-        self.propagate_liveness(&mut live, pending, &stored);
+        self.propagate_liveness(&mut live, pending, stored);
         let non_branch = params(&live);
-        self.propagate_liveness(&mut live, branches, &stored);
+        self.propagate_liveness(&mut live, branches, stored);
         let unconditional = live.clone();
-        self.propagate_liveness(&mut live, returned, &stored);
+        self.propagate_liveness(&mut live, returned, stored);
         // Integral and boolean result relations are projected when dead;
         // choices of other results stay, along with the arguments they name.
         let result_ty = self.instance.normalized_result_ty(self.db);
@@ -258,94 +256,207 @@ impl<'db> Borrowck<'db> {
             if !live.insert(value) {
                 continue;
             }
-            match self.body.values[value.index()].definition {
-                NValueDefinition::BlockParam { block, index } => pending.extend(
-                    self.body
-                        .blocks
-                        .iter()
-                        .flat_map(|predecessor| predecessor.terminator.kind.successors())
-                        .filter(|successor| successor.block == block)
-                        .filter_map(|successor| successor.args.get(index as usize))
-                        .map(|argument| argument.value),
+            let (dependencies, _) = self.scalar_dependencies(value, ScalarUse::Live, stored);
+            pending.extend(dependencies.into_iter().map(|(value, _)| value));
+        }
+    }
+
+    /// The shared transfer rules for observation and fact generation. Calls
+    /// follow exactly their observed arguments; loads follow reaching stores,
+    /// never stores killed by a later whole-cell write.
+    fn scalar_dependencies(
+        &self,
+        value: NValueId,
+        usage: ScalarUse,
+        stored: &FxHashMap<NValueId, FxHashSet<NValueId>>,
+    ) -> (Vec<(NValueId, ScalarUse)>, Option<NPlaceBase>) {
+        let budget = match usage {
+            ScalarUse::Predicate(0) => return (Vec::new(), None),
+            ScalarUse::Predicate(budget) => budget - 1,
+            _ => CONDITION_BUDGET,
+        };
+        let inherited = if matches!(usage, ScalarUse::Predicate(_)) {
+            ScalarUse::Predicate(budget)
+        } else {
+            usage
+        };
+        if let NValueDefinition::BlockParam { block, index } =
+            self.body.values[value.index()].definition
+        {
+            let incoming = self
+                .body
+                .blocks
+                .iter()
+                .flat_map(|predecessor| predecessor.terminator.kind.successors())
+                .filter(|successor| successor.block == block)
+                .filter_map(|successor| successor.args.get(index as usize))
+                .map(|argument| (argument.value, inherited))
+                .collect();
+            return (incoming, None);
+        }
+        let Some((_, expr)) = self.body.defining_expr(value) else {
+            return (Vec::new(), None);
+        };
+        match expr {
+            NExpr::Forward { src } => return (vec![(src.value, inherited)], None),
+            NExpr::ScalarCast { value: source, to } => {
+                let dependencies = self
+                    .lossless_scalar_cast(source.value, *to)
+                    .then_some((source.value, inherited))
+                    .into_iter()
+                    .collect();
+                return (dependencies, None);
+            }
+            NExpr::Load { place, .. } => {
+                let tracked = place.path.is_empty()
+                    && if usage == ScalarUse::Live {
+                        self.scalar.cells.contains(&place.base)
+                    } else {
+                        place.ty.is_integral(self.db)
+                    };
+                let dependencies = if tracked {
+                    stored
+                        .get(&value)
+                        .into_iter()
+                        .flatten()
+                        .map(|value| (*value, inherited))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let cell = (tracked && usage != ScalarUse::Live).then_some(place.base);
+                return (dependencies, cell);
+            }
+            _ => {}
+        }
+        let operator = match expr {
+            NExpr::Binary { op, .. } => Some(PrimitiveWrapperCallKind::Binary(*op)),
+            NExpr::Unary { op, .. } => Some(PrimitiveWrapperCallKind::Unary(*op)),
+            NExpr::Call { .. } => primitive_operator(self.db, &self.body, value),
+            _ => None,
+        };
+        if matches!(expr, NExpr::Call { .. }) && operator.is_none() {
+            let arguments = self.observed_arguments(
+                value,
+                usage == ScalarUse::Live || self.scalar.live.contains(&value),
+            );
+            let dependencies = arguments
+                .into_iter()
+                .filter_map(|value| {
+                    let usage = if usage == ScalarUse::Live {
+                        Some(ScalarUse::Live)
+                    } else {
+                        self.scalar_use(value, budget)
+                    }?;
+                    Some((value, usage))
+                })
+                .collect();
+            return (dependencies, None);
+        }
+        let mut operands = Vec::new();
+        expr.for_each_value_operand(|operand| operands.push(operand.value));
+        let dependencies = if usage == ScalarUse::Live {
+            let comparison = || {
+                operands
+                    .iter()
+                    .any(|value| self.scalar.indices.contains(&self.index(*value)))
+                    || operands.iter().all(|value| {
+                        copied_scalar_ty(self.db, self.body.values[value.index()].ty)
+                            .is_bool(self.db)
+                    })
+            };
+            let relates = match operator {
+                Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(_))) => comparison(),
+                Some(PrimitiveWrapperCallKind::Binary(BinOp::Arith(_)))
+                | Some(PrimitiveWrapperCallKind::Unary(UnOp::Plus | UnOp::Minus | UnOp::BitNot)) => {
+                    false
+                }
+                _ if matches!(expr, NExpr::Call { .. }) => matches!(
+                    operator,
+                    Some(
+                        PrimitiveWrapperCallKind::Binary(BinOp::Logical(_))
+                            | PrimitiveWrapperCallKind::Unary(UnOp::Not)
+                    )
                 ),
-                NValueDefinition::Statement { .. } => {
-                    let Some((_, expr)) = self.body.defining_expr(value) else {
-                        continue;
-                    };
-                    // Arithmetic, lossy casts and constructors relate no fact
-                    // to their operands, and a comparison relates them only
-                    // with a tracked side. A call relates the arguments its
-                    // summary observes through its result, unless it is a
-                    // primitive operator. A tracked cell relates a load to the
-                    // stores that can reach it.
-                    let comparison = |operands: &[NOperand]| {
-                        operands
-                            .iter()
-                            .any(|operand| self.scalar.indices.contains(&self.index(operand.value)))
-                            || operands.iter().all(|operand| {
-                                copied_scalar_ty(
-                                    self.db,
-                                    self.body.values[operand.value.index()].ty,
-                                )
-                                .is_bool(self.db)
-                            })
-                    };
-                    let relates = match expr {
-                        NExpr::Binary {
-                            op: BinOp::Comp(_),
-                            lhs,
-                            rhs,
-                        } => comparison(&[*lhs, *rhs]),
-                        NExpr::Binary { op, .. } => !matches!(op, BinOp::Arith(_)),
-                        NExpr::Unary { op, .. } => {
-                            !matches!(op, UnOp::Plus | UnOp::Minus | UnOp::BitNot)
-                        }
-                        NExpr::ScalarCast { value: source, to } => {
-                            self.lossless_scalar_cast(source.value, *to)
-                        }
-                        NExpr::Load { .. } => {
-                            pending.extend(stored.get(&value).into_iter().flatten());
-                            false
-                        }
-                        // Constructors hold scalar fields only as values; no fact
-                        // relates a field to its projection.
-                        NExpr::AggregateMake { .. }
+                _ => !matches!(
+                    expr,
+                    NExpr::AggregateMake { .. }
                         | NExpr::EnumMake { .. }
                         | NExpr::ArrayRepeat { .. }
-                        | NExpr::MakeHandle { .. } => false,
-                        NExpr::Call { args, .. } => {
-                            match primitive_operator(self.db, &self.body, value) {
-                                Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(_))) => {
-                                    comparison(args)
-                                }
-                                Some(
-                                    PrimitiveWrapperCallKind::Binary(BinOp::Logical(_))
-                                    | PrimitiveWrapperCallKind::Unary(UnOp::Not),
-                                ) => true,
-                                Some(_) => false,
-                                None => {
-                                    if let Some(observed) = self.observed_params(value) {
-                                        pending.extend(args.iter().enumerate().filter_map(
-                                            |(param, arg)| {
-                                                observed
-                                                    .through_result
-                                                    .contains(&u32::try_from(param).unwrap())
-                                                    .then_some(arg.value)
-                                            },
-                                        ));
-                                    }
-                                    false
-                                }
-                            }
-                        }
-                        _ => true,
-                    };
-                    if relates {
-                        expr.for_each_value_operand(|operand| pending.push(operand.value));
-                    }
-                }
-                NValueDefinition::EntryParam { .. } => {}
+                        | NExpr::MakeHandle { .. }
+                ),
+            };
+            if relates {
+                operands
+                    .into_iter()
+                    .map(|value| (value, ScalarUse::Live))
+                    .collect()
+            } else {
+                Vec::new()
             }
+        } else if matches!(usage, ScalarUse::Predicate(_)) {
+            let equality = matches!(
+                operator,
+                Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(
+                    CompBinOp::Eq | CompBinOp::NotEq
+                )))
+            );
+            let relates = equality
+                || matches!(
+                    operator,
+                    Some(
+                        PrimitiveWrapperCallKind::Unary(UnOp::Not)
+                            | PrimitiveWrapperCallKind::Binary(BinOp::Logical(_))
+                    )
+                );
+            if relates {
+                operands
+                    .into_iter()
+                    .filter_map(|value| {
+                        let usage = self.scalar_use(value, budget)?;
+                        (equality || matches!(usage, ScalarUse::Predicate(_)))
+                            .then_some((value, usage))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        (dependencies, None)
+    }
+
+    fn scalar_use(&self, value: NValueId, budget: u8) -> Option<ScalarUse> {
+        let ty = self.body.values[value.index()].ty;
+        if ty.is_bool(self.db) {
+            Some(ScalarUse::Predicate(budget))
+        } else {
+            ty.is_integral(self.db).then_some(ScalarUse::Value)
+        }
+    }
+
+    /// Unknown summaries conservatively observe every argument unconditionally.
+    /// Result-dependent arguments enter only when the result is observable.
+    fn observed_arguments(&self, value: NValueId, through_result: bool) -> Vec<NValueId> {
+        if let Some((_, NExpr::Call { args, .. })) = self.body.defining_expr(value)
+            && primitive_operator(self.db, &self.body, value).is_none()
+        {
+            let observed = self.observed_params(value);
+            args.iter()
+                .enumerate()
+                .filter_map(|(param, arg)| {
+                    let param = u32::try_from(param).unwrap();
+                    observed
+                        .is_none_or(|observed| {
+                            observed.unconditional.contains(&param)
+                                || (through_result && observed.through_result.contains(&param))
+                        })
+                        .then_some(arg.value)
+                })
+                .collect()
+        } else {
+            Vec::new()
         }
     }
 
@@ -423,48 +534,75 @@ impl<'db> Borrowck<'db> {
         }
     }
 
-    /// Track scalar facts for new selectors and values, and everything they load.
+    /// Close observations and typed fact demand together. Every newly demanded
+    /// cell or live result revisits the same dependency rules before export.
     fn add_scalar_demand(
         &mut self,
-        mut selectors: FxHashSet<NValueId>,
-        values: impl IntoIterator<Item = NValueId>,
+        selectors: FxHashSet<NValueId>,
+        values: impl IntoIterator<Item = (NValueId, ScalarUse)>,
         cells: FxHashSet<NPlaceBase>,
     ) {
-        let mut selector_cells = FxHashSet::default();
-        close_scalar_values(self.db, &self.body, &mut selectors, &mut selector_cells);
-        let selector_indices: Vec<_> = selectors.iter().map(|value| self.index(*value)).collect();
-        self.scalar.selectors.extend(selector_indices);
-        self.scalar
-            .values
-            .extend(selectors.into_iter().chain(values));
-        self.scalar
-            .cells
-            .extend(cells.into_iter().chain(selector_cells));
-        // Discovering cells can make more call results live, whose Boolean
-        // arguments demand more values and cells. Close both demands together.
+        let mut roots: Vec<_> = values.into_iter().collect();
+        roots.extend(
+            selectors
+                .into_iter()
+                .map(|value| (value, ScalarUse::Selector)),
+        );
+        self.scalar.cells.extend(cells);
+        let mut stored = FxHashMap::default();
+        let mut stored_cells = 0;
         loop {
-            close_scalar_values(
-                self.db,
-                &self.body,
-                &mut self.scalar.values,
-                &mut self.scalar.cells,
+            let previous = (
+                self.scalar.values.len(),
+                self.scalar.cells.len(),
+                self.scalar.selectors.len(),
+                self.scalar.live.len(),
             );
+            let (selectors, cells, values) = scalar_seeds(self);
+            self.scalar.cells.extend(cells);
+            if stored_cells != self.scalar.cells.len() {
+                stored = self.reaching_cell_stores();
+                stored_cells = self.scalar.cells.len();
+            }
+            let mut pending = roots.clone();
+            pending.extend(values);
+            pending.extend(
+                selectors
+                    .into_iter()
+                    .map(|value| (value, ScalarUse::Selector)),
+            );
+            pending.extend(self.scalar.values.iter().map(|value| {
+                let usage = if self.scalar.selectors.contains(&self.index(*value)) {
+                    ScalarUse::Selector
+                } else {
+                    ScalarUse::Value
+                };
+                (*value, usage)
+            }));
+            self.close_scalar_demand(pending, &stored);
             self.scalar.indices = self
                 .scalar
                 .values
                 .iter()
                 .map(|value| self.index(*value))
                 .collect();
+            if stored_cells != self.scalar.cells.len() {
+                stored = self.reaching_cell_stores();
+                stored_cells = self.scalar.cells.len();
+            }
             (
                 self.scalar.live,
                 self.scalar.observed,
                 self.scalar.non_branch_params,
-            ) = self.scalar_liveness();
-            let (_, _, mut values) = scalar_seeds(self);
-            values.retain(|value| self.supported_scalar_return(*value));
-            let previous = self.scalar.values.len();
-            self.scalar.values.extend(values);
-            if self.scalar.values.len() == previous {
+            ) = self.scalar_liveness(&stored);
+            if previous
+                == (
+                    self.scalar.values.len(),
+                    self.scalar.cells.len(),
+                    self.scalar.selectors.len(),
+                    self.scalar.live.len(),
+                )
+            {
                 break;
             }
         }
@@ -473,8 +611,68 @@ impl<'db> Borrowck<'db> {
             .values
             .iter()
             .copied()
-            .filter(|value| self.compact_scalar_phi(*value))
+            .filter(|value| {
+                matches!(
+                    self.body.values[value.index()].definition,
+                    NValueDefinition::BlockParam { .. }
+                )
+            })
             .collect();
+    }
+
+    fn close_scalar_demand(
+        &mut self,
+        mut pending: Vec<(NValueId, ScalarUse)>,
+        stored: &FxHashMap<NValueId, FxHashSet<NValueId>>,
+    ) {
+        let mut visited = FxHashSet::default();
+        let mut predicates = FxHashMap::default();
+        while let Some((value, usage)) = pending.pop() {
+            if let ScalarUse::Predicate(budget) = usage {
+                if budget == 0
+                    || predicates
+                        .get(&value)
+                        .is_some_and(|previous| *previous >= budget)
+                {
+                    continue;
+                }
+                predicates.insert(value, budget);
+            } else if !visited.insert((value, usage)) {
+                continue;
+            }
+            if matches!(usage, ScalarUse::Value | ScalarUse::Selector) {
+                self.scalar.values.insert(value);
+                if usage == ScalarUse::Selector {
+                    self.scalar.selectors.insert(self.index(value));
+                }
+            }
+            let (dependencies, cell) = self.scalar_dependencies(value, usage, stored);
+            pending.extend(dependencies);
+            if let Some(cell) = cell {
+                self.scalar.cells.insert(cell);
+                // All SSA loads of a demanded cell share its versioned identity.
+                // The shared transfer follows each load's own reaching stores.
+                pending.extend(
+                    self.body
+                        .blocks
+                        .iter()
+                        .flat_map(|block| &block.statements)
+                        .filter_map(|statement| {
+                            if let NStatementKind::Define {
+                                result,
+                                expr: NExpr::Load { place, .. },
+                            } = &statement.kind
+                                && place.path.is_empty()
+                                && place.base == cell
+                            {
+                                Some((*result, usage))
+                            } else {
+                                None
+                            }
+                        }),
+                );
+            }
+        }
     }
 
     pub(super) fn stores_capability(&self, statement: &NStatement<'db>) -> bool {
@@ -784,14 +982,17 @@ fn primitive_operator(
 
 fn scalar_seeds<'db>(
     checker: &Borrowck<'db>,
-) -> (FxHashSet<NValueId>, FxHashSet<NPlaceBase>, Vec<NValueId>) {
+) -> (
+    FxHashSet<NValueId>,
+    FxHashSet<NPlaceBase>,
+    Vec<(NValueId, ScalarUse)>,
+) {
     let db = checker.db;
     let body = &checker.body;
     let mut selectors = FxHashSet::default();
     let mut cells = FxHashSet::default();
     let mut values = Vec::new();
-    let mut boolean_conditions = Vec::new();
-    let mut returns_boolean = false;
+    let returns_boolean = checker.instance.normalized_result_ty(db).is_bool(db);
     for block in &body.blocks {
         for statement in &block.statements {
             let mut add_indices = |path: &NDataPath| {
@@ -806,20 +1007,15 @@ fn scalar_seeds<'db>(
                     if let NExpr::ProjectValue { path, .. } = expr {
                         add_indices(&path.0);
                     }
-                    if let NExpr::Call { args, .. } = expr
-                        && primitive_operator(db, body, *result).is_none()
-                        && let Some(observed) = checker.observed_params(*result)
-                    {
-                        boolean_conditions.extend(args.iter().enumerate().filter_map(
-                            |(param, arg)| {
-                                let param = u32::try_from(param).unwrap();
-                                (body.values[arg.value.index()].ty.is_bool(db)
-                                    && (observed.unconditional.contains(&param)
-                                        || (checker.scalar.live.contains(result)
-                                            && observed.through_result.contains(&param))))
-                                .then_some((arg.value, CONDITION_BUDGET))
-                            },
-                        ));
+                    if matches!(expr, NExpr::Call { .. }) {
+                        values.extend(
+                            checker
+                                .observed_arguments(*result, checker.scalar.live.contains(result))
+                                .into_iter()
+                                .filter_map(|value| {
+                                    Some((value, checker.scalar_use(value, CONDITION_BUDGET)?))
+                                }),
+                        );
                     }
                 }
                 NStatementKind::Store { destination, value } => {
@@ -835,104 +1031,40 @@ fn scalar_seeds<'db>(
                 }
             }
         }
-        if let NTerminatorKind::Return(Some(value)) = block.terminator.kind {
-            let ty = body.values[value.value.index()].ty;
-            if ty.is_integral(db) {
-                values.push(value.value);
-            } else if ty.is_bool(db) {
-                returns_boolean = true;
-                boolean_conditions.push((value.value, CONDITION_BUDGET));
-            }
-        }
-    }
-    // Boolean return choices can depend on predicates in their expression or
-    // on branches selecting their incoming values. Demand only trusted equality
-    // operands; return-only unsigned ordering remains deliberately untracked.
-    if returns_boolean {
-        boolean_conditions.extend(body.blocks.iter().filter_map(|block| {
-            if let NTerminatorKind::Branch { cond, .. } = block.terminator.kind {
-                Some((cond.value, CONDITION_BUDGET))
-            } else {
-                None
-            }
-        }));
-    }
-    let mut visited = FxHashMap::default();
-    while let Some((value, budget)) = boolean_conditions.pop() {
-        if budget == 0
-            || visited
-                .get(&value)
-                .is_some_and(|previous| *previous >= budget)
-        {
-            continue;
-        }
-        visited.insert(value, budget);
-        if let NValueDefinition::BlockParam { block, index } = body.values[value.index()].definition
-        {
-            boolean_conditions.extend(body.blocks.iter().flat_map(|predecessor| {
-                predecessor
-                    .terminator
-                    .kind
-                    .successors()
-                    .into_iter()
-                    .filter(move |successor| successor.block == block)
-                    .filter_map(move |successor| {
-                        successor
-                            .args
-                            .get(index as usize)
-                            .map(|argument| (argument.value, budget - 1))
-                    })
-            }));
-        }
-        let Some((_, expr)) = body.defining_expr(value) else {
-            continue;
-        };
-        let operator = match expr {
-            NExpr::Binary { op, .. } => Some(PrimitiveWrapperCallKind::Binary(*op)),
-            NExpr::Unary { op, .. } => Some(PrimitiveWrapperCallKind::Unary(*op)),
-            NExpr::Call { .. } => primitive_operator(db, body, value),
-            _ => None,
-        };
-        if let NExpr::Call { args, .. } = expr
-            && operator.is_none()
-            && let Some(observed) = checker.observed_params(value)
-        {
-            boolean_conditions.extend(args.iter().enumerate().filter_map(|(param, arg)| {
-                (observed
-                    .through_result
-                    .contains(&u32::try_from(param).unwrap())
-                    && body.values[arg.value.index()].ty.is_bool(db))
-                .then_some((arg.value, budget - 1))
-            }));
-        }
-        let equality = matches!(
-            operator,
-            Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(
-                CompBinOp::Eq | CompBinOp::NotEq
-            )))
-        );
-        if equality
-            || matches!(expr, NExpr::Forward { .. })
-            || matches!(
-                operator,
-                Some(
-                    PrimitiveWrapperCallKind::Unary(UnOp::Not)
-                        | PrimitiveWrapperCallKind::Binary(BinOp::Logical(_))
-                )
-            )
-        {
-            expr.for_each_value_operand(|operand| {
-                let ty = copied_scalar_ty(db, body.values[operand.value.index()].ty);
-                if ty.is_bool(db) {
-                    boolean_conditions.push((operand.value, budget - 1));
-                } else if equality && ty.is_integral(db) {
-                    values.push(operand.value);
+        match block.terminator.kind {
+            NTerminatorKind::Return(Some(value)) => {
+                if let Some(usage) = checker.scalar_use(value.value, CONDITION_BUDGET)
+                    && (usage != ScalarUse::Value || checker.supported_scalar_return(value.value))
+                {
+                    values.push((value.value, usage));
                 }
-            });
+            }
+            NTerminatorKind::Branch { cond, .. } if returns_boolean => {
+                values.push((cond.value, ScalarUse::Predicate(CONDITION_BUDGET)));
+            }
+            _ => {}
         }
     }
-    // A branch around a failed assertion constrains every normal return, which
-    // a summary exports over the integer parameters it compares.
+    // Constant stores to writable scalar inputs also demand their load versions.
+    values.extend(
+        body.blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| {
+                if let NStatementKind::Define {
+                    result,
+                    expr: NExpr::Load { place, .. },
+                } = &statement.kind
+                    && place.path.is_empty()
+                    && cells.contains(&place.base)
+                {
+                    Some((*result, ScalarUse::Value))
+                } else {
+                    None
+                }
+            }),
+    );
+    // Failed assertions can constrain integer parameters on every normal return.
     if body.blocks.iter().any(|block| {
         block.terminator.kind.successors().iter().any(|successor| {
             matches!(
@@ -949,61 +1081,8 @@ fn scalar_seeds<'db>(
                     matches!(value.definition, NValueDefinition::EntryParam { .. })
                         && value.ty.is_integral(db)
                 })
-                .map(|(index, _)| NValueId::new(index)),
+                .map(|(index, _)| (NValueId::new(index), ScalarUse::Value)),
         );
     }
     (selectors, cells, values)
-}
-
-fn close_scalar_values(
-    db: &dyn HirAnalysisDb,
-    body: &NormalizedBody<'_>,
-    values: &mut FxHashSet<NValueId>,
-    cells: &mut FxHashSet<NPlaceBase>,
-) {
-    loop {
-        let previous = (values.len(), cells.len());
-        for value in values.iter().copied().collect::<Vec<_>>() {
-            match body.defining_expr(value) {
-                Some((_, NExpr::Load { place, .. })) if place.path.is_empty() => {
-                    cells.insert(place.base);
-                }
-                Some((_, NExpr::Forward { src })) => {
-                    values.insert(src.value);
-                }
-                Some((_, NExpr::ScalarCast { value: src, to }))
-                    if lossless_integer_cast(db, body.values[src.value.index()].ty, *to) =>
-                {
-                    values.insert(src.value);
-                }
-                _ => {}
-            }
-            if let NValueDefinition::BlockParam { block, index } =
-                body.values[value.index()].definition
-            {
-                values.extend(
-                    body.blocks
-                        .iter()
-                        .flat_map(|predecessor| predecessor.terminator.kind.successors())
-                        .filter(|successor| successor.block == block)
-                        .filter_map(|successor| successor.args.get(index as usize))
-                        .map(|argument| argument.value),
-                );
-            }
-        }
-        for statement in body.blocks.iter().flat_map(|block| &block.statements) {
-            if let NStatementKind::Define {
-                result,
-                expr: NExpr::Load { place, .. },
-            } = &statement.kind
-                && place.path.is_empty()
-                && cells.contains(&place.base)
-            {
-                values.insert(*result);
-            }
-        }
-        if previous == (values.len(), cells.len()) {
-            break;
-        }
-    }
 }

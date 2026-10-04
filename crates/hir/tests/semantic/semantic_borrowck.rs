@@ -14156,6 +14156,144 @@ fn ignored(_ x: usize, _ y: usize) -> bool { constant(x != y) }
     });
 }
 
+const SCALAR_PREDICATE_BODIES: [&str; 10] = [
+    "different(x, y)",
+    "let copy: usize = x\n    different(copy, y)",
+    "let mut copy: usize = x\n    copy != y",
+    "let mut copy: usize = x\n    different(copy, y)",
+    "let mut copy: usize = 0\n    copy = x\n    different(copy, y)",
+    "let mut first: usize = x\n    let mut copy: usize = first\n    copy != y",
+    "let mut first: usize = x\n    let mut copy: usize = first\n    different(copy, y)",
+    "let copy = if flag { x } else { x }\n    different(copy, y)",
+    "let mut first: usize = x\n    let mut second: usize = x\n    \
+     let copy = if flag { first } else { second }\n    different(copy, y)",
+    "let copy: u256 = x as u256\n    different_wide(copy, y as u256)",
+];
+
+#[test]
+fn scalar_predicate_dependencies_survive_equivalent_source_forms() {
+    for body in SCALAR_PREDICATE_BODIES {
+        let source = format!(
+            r#"
+fn different(_ x: usize, _ y: usize) -> bool {{ x != y }}
+fn different_wide(_ x: u256, _ y: u256) -> bool {{ x != y }}
+fn predicate(_ x: usize, _ y: usize, _ flag: bool) -> bool {{
+    {body}
+}}
+"#
+        );
+        assert_eq!(checked_borrow_diags(&source), "", "{source}");
+        with_borrow_summary(&source, "predicate", |_db, summary| {
+            let observed = summary.observed_params.as_ref().unwrap();
+            assert!(observed.unconditional.is_empty(), "{body}: {observed:?}");
+            assert_eq!(
+                observed.through_result.iter().copied().collect::<Vec<_>>(),
+                [0, 1],
+                "{body}: {observed:?}"
+            );
+            let guard = summary
+                .scalar_result
+                .expect("equivalent predicate relation");
+            let result = ChoiceKey::new(ValueOccurrence::Summary, StructuralPath::default());
+            for x in [0, 1, 2] {
+                for y in [0, 1, 2] {
+                    let selected = guard
+                        .with_equality(IndexExpr::FormalValue(0), IndexExpr::Const(x))
+                        .unwrap()
+                        .with_equality(IndexExpr::FormalValue(1), IndexExpr::Const(y))
+                        .unwrap();
+                    assert!(
+                        selected.with_boolean(result.clone(), x != y).is_some(),
+                        "{body}: {x}, {y}"
+                    );
+                    assert!(
+                        selected.with_boolean(result.clone(), x == y).is_none(),
+                        "{body}: {x}, {y}"
+                    );
+                }
+            }
+        });
+    }
+}
+
+#[test]
+fn scalar_predicate_dependencies_separate_indices_without_reviving_overwritten_values() {
+    for (body, accepted) in SCALAR_PREDICATE_BODIES.into_iter().map(|body| (body, true)).chain([
+        ("let mut copy: usize = x\n    copy = 1\n    different(copy, y)", false),
+        ("let mut first: usize = x\n    let mut copy: usize = first\n    copy = 1\n    different(copy, y)", false),
+        ("let mut first: usize = x\n    first = 1\n    let mut copy: usize = first\n    different(copy, y)", false),
+        ("let mut copy: usize = x\n    clobber(mut copy)\n    different(copy, y)", false),
+    ]) {
+        let source = format!(
+            r#"
+fn different(_ x: usize, _ y: usize) -> bool {{ x != y }}
+fn different_wide(_ x: u256, _ y: u256) -> bool {{ x != y }}
+fn clobber(_ value: mut usize) {{ value = 1 }}
+fn predicate(_ x: usize, _ y: usize, _ flag: bool) -> bool {{
+    {body}
+}}
+fn check(_ arr: mut [u64; 8], k: usize, j: usize, flag: bool) {{
+    let held = mut arr[k]
+    if predicate(k, j, flag) {{ arr[j] = 0 }}
+    held = 1
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        assert_eq!(diagnostics.is_empty(), accepted, "{source}\n{diagnostics}");
+        assert!(!diagnostics.contains("internal"), "{diagnostics}");
+    }
+}
+
+#[test]
+fn scalar_dependency_closure_keeps_dead_and_unobserved_integral_arguments_unread() {
+    let source = r#"
+fn different(_ x: usize, _ y: usize) -> bool { x != y }
+fn choose(_ flag: bool) -> usize { if flag { 1 } else { 0 } }
+fn constant(_ ignored: usize) -> bool { true }
+fn discarded(_ x: usize, _ y: usize) -> usize {
+    let mut first: usize = x
+    let mut copy: usize = first
+    let unused = different(copy, y)
+    0
+}
+fn overwritten(_ x: usize, _ y: usize) -> usize {
+    let mut first: usize = x
+    let mut copy: usize = first
+    let mut result: usize = choose(different(copy, y))
+    result = 0
+    result
+}
+fn ignored(_ x: usize) -> bool {
+    let mut first: usize = x
+    let mut copy: usize = first
+    constant(copy)
+}
+"#;
+    assert_eq!(checked_borrow_diags(source), "");
+    for function in ["discarded", "overwritten", "ignored"] {
+        with_borrow_summary(source, function, |_db, summary| {
+            let observed = summary.observed_params.as_ref().unwrap();
+            assert!(
+                observed.unconditional.is_empty(),
+                "{function}: {observed:?}"
+            );
+            assert!(
+                observed.through_result.is_empty(),
+                "{function}: {observed:?}"
+            );
+            let guard = summary.scalar_result.expect("constant result relation");
+            if function == "ignored" {
+                let result = ChoiceKey::new(ValueOccurrence::Summary, StructuralPath::default());
+                assert!(guard.with_boolean(result, false).is_none());
+            } else {
+                let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
+                assert!(guard.with_equality(returned, IndexExpr::Const(1)).is_none());
+            }
+        });
+    }
+}
+
 #[test]
 fn stored_call_results_preserve_boolean_argument_predicates() {
     for (body, dependent) in [
