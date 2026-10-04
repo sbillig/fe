@@ -1408,3 +1408,15 @@ fn native_owned_box_allocation_failure_and_release_at_o1() {
         &fixtures.join("box_allocator.c"),
     );
 }
+
+#[test]
+fn native_raw_pointer_pattern_bindings_at_o1() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/raw_pointer_pattern_bindings.fe");
+    build(&source, temp.path(), "1", &["--standalone"]);
+    let result = Command::new(temp.path().join("raw_pointer_pattern_bindings"))
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+}
