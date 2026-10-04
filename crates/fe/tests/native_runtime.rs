@@ -1023,6 +1023,18 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_byte_buffer_replace_transfers_both_owners_at_o1() {
+    let temp = tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
+    build_with_allocator(
+        &fixtures.join("byte_buffer_replace.fe"),
+        &temp.path().join("out"),
+        "1",
+        &fixtures.join("byte_buffer_allocator.c"),
+    );
+}
+
+#[test]
 fn native_input_reborrows_preserve_independent_buffer_and_scalar_updates() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("forwarded_buffers.fe");

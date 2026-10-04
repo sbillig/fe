@@ -99,6 +99,20 @@ impl ByteBuffer {
     /// Reset the logical extent while retaining reusable storage.
     pub fn clear(mut self) { self.len = 0 }
 
+    /// Transfer a replacement into this slot and return its previous owner.
+    /// Neither buffer is copied, allocated or released by this operation.
+    pub fn replace(mut self, _ replacement: own Self) -> Self {
+        let allocation = match self.allocation {
+            Option::Some(address) => Option::Some(address),
+            Option::None => Option::None,
+        }
+        let previous = Self { allocation, len: self.len, capacity: self.capacity }
+        self.allocation = replacement.allocation
+        self.len = replacement.len
+        self.capacity = replacement.capacity
+        previous
+    }
+
     /// Release the allocation and consume the owner.
     pub fn release(own self) {
         match self.allocation {

@@ -1,0 +1,28 @@
+use std::native::ByteBuffer
+
+pub fn main() -> i32 {
+    let mut slot = ByteBuffer::new()
+    core::assert(!slot.try_resize(3000))
+    let mut incoming = ByteBuffer::new()
+    core::assert(incoming.try_resize(513))
+    incoming.set_byte(index: 512, value: 42)
+    let empty = slot.replace(incoming)
+    core::assert(empty.len() == 0 && empty.capacity() == 0)
+    empty.release()
+    let mut replacement = ByteBuffer::new()
+    core::assert(replacement.try_resize(1500))
+    replacement.set_byte(index: 1499, value: 77)
+    core::assert(!replacement.try_resize(3000))
+    let previous = slot.replace(replacement)
+    core::assert(previous.len() == 513 && previous.capacity() == 1024)
+    core::assert(previous.byte_at(512) == 42)
+    core::assert(slot.len() == 1500 && slot.capacity() == 2048)
+    core::assert(slot.byte_at(1499) == 77)
+    previous.release()
+    let last = slot.replace(ByteBuffer::new())
+    core::assert(last.len() == 1500 && last.byte_at(1499) == 77)
+    core::assert(slot.len() == 0 && slot.capacity() == 0)
+    last.release()
+    slot.release()
+    0
+}

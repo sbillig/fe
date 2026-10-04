@@ -14982,3 +14982,38 @@ fn run() {{
         }
     }
 }
+
+#[test]
+fn native_byte_buffer_replace_preserves_ownership_and_live_borrows() {
+    let prefix = "use std::native::ByteBuffer\n";
+    let diagnostics = checked_borrow_diags(&format!(
+        "{prefix}fn exchange(slot: mut ByteBuffer, incoming: own ByteBuffer) {{
+         let previous = slot.replace(incoming)
+previous.release()
+}}"
+    ));
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+    for (body, expected) in [
+        (
+            "let old = slot.replace(incoming)\nincoming.release()",
+            "move conflict",
+        ),
+        (
+            "let old = slot.replace(incoming)\nold.release()\nold.release()",
+            "move conflict",
+        ),
+        (
+            "let view = ref slot\nlet old = slot.replace(incoming)\nlet size = view.len()",
+            "borrow conflict",
+        ),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            "{prefix}fn run() {{
+let mut slot = ByteBuffer::new()
+             let incoming = ByteBuffer::new()
+{body}
+}}"
+        ));
+        assert!(diagnostics.contains(expected), "{body}: {diagnostics}");
+    }
+}
