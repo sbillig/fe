@@ -3008,6 +3008,7 @@ impl<'db> Borrowck<'db> {
                 })
             })
             .and_then(|mut guard| {
+                let mut occurrences = None;
                 for arg in inputs.args {
                     let occurrence = ValueOccurrence::Value(self.forwarded_value(arg.value));
                     if let Some(value) = literal_bool_cond(self.db, &self.body, arg.value) {
@@ -3016,6 +3017,25 @@ impl<'db> Borrowck<'db> {
                             value,
                         )?;
                         guard = guard.forget_occurrences(|candidate| candidate == occurrence);
+                    } else if self.body.values[arg.value.index()].ty.is_bool(self.db)
+                        && occurrences
+                            .get_or_insert_with(|| guard.occurrences())
+                            .contains(&occurrence)
+                    {
+                        // A formal boolean names the actual predicate's choice.
+                        // Bind that choice before summary export projects it out.
+                        let predicate = [false, true]
+                            .into_iter()
+                            .filter_map(|expected| {
+                                self.condition_guard(
+                                    arg.value,
+                                    expected,
+                                    self.scalar_bounds_enabled(arg.value),
+                                    CONDITION_BUDGET,
+                                )
+                            })
+                            .reduce(|left, right| left.or(&right))?;
+                        guard = guard.and(&predicate.in_scope(guard.scope()))?;
                     } else if let Some(variant) =
                         literal_enum_variant(self.db, &self.body, arg.value)
                     {

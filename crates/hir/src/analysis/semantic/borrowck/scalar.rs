@@ -89,7 +89,8 @@ pub(super) fn lossless_integer_cast(
 
 impl<'db> Borrowck<'db> {
     pub(super) fn prepare_scalar_demand(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
-        let (mut selectors, cells, mut values) = scalar_seeds(self.db, &self.body);
+        let live = self.scalar_liveness().0;
+        let (mut selectors, cells, mut values) = scalar_seeds(self, &live);
         values.retain(|value| self.supported_scalar_return(*value));
         if self.inventory.loops.has_cycle()
             && self.body.blocks.iter().flat_map(|block| &block.statements).any(|statement| {
@@ -563,6 +564,16 @@ impl<'db> Borrowck<'db> {
         lossless_integer_cast(self.db, self.body.values[source.index()].ty, target)
     }
 
+    pub(super) fn scalar_bounds_enabled(&self, value: NValueId) -> bool {
+        self.inventory.loops.for_value(&self.body, value).is_none()
+            || (self.scalar.bounded_readers.contains(&value)
+                && (!self.prefix_certificates.is_empty()
+                    || self
+                        .calls
+                        .values()
+                        .any(|call| !call.summary.certified_ranges.is_empty())))
+    }
+
     /// The guard under which `value` equals `expected`, following trusted
     /// boolean operations within a budget of nested conditions.
     pub(super) fn condition_guard(
@@ -762,13 +773,16 @@ fn primitive_operator(
 }
 
 fn scalar_seeds<'db>(
-    db: &dyn HirAnalysisDb,
-    body: &NormalizedBody<'db>,
+    checker: &Borrowck<'db>,
+    live: &FxHashSet<NValueId>,
 ) -> (FxHashSet<NValueId>, FxHashSet<NPlaceBase>, Vec<NValueId>) {
+    let db = checker.db;
+    let body = &checker.body;
     let mut selectors = FxHashSet::default();
     let mut cells = FxHashSet::default();
     let mut values = Vec::new();
     let mut boolean_conditions = Vec::new();
+    let mut returns_boolean = false;
     for block in &body.blocks {
         for statement in &block.statements {
             let mut add_indices = |path: &NDataPath| {
@@ -778,10 +792,25 @@ fn scalar_seeds<'db>(
                 }));
             };
             match &statement.kind {
-                NStatementKind::Define { expr, .. } => {
+                NStatementKind::Define { result, expr } => {
                     expr.for_each_place_operand(|place| add_indices(&place.path));
                     if let NExpr::ProjectValue { path, .. } = expr {
                         add_indices(&path.0);
+                    }
+                    if let NExpr::Call { args, .. } = expr
+                        && primitive_operator(db, body, *result).is_none()
+                        && let Some(observed) = checker.observed_params(*result)
+                    {
+                        boolean_conditions.extend(args.iter().enumerate().filter_map(
+                            |(param, arg)| {
+                                let param = u32::try_from(param).unwrap();
+                                (body.values[arg.value.index()].ty.is_bool(db)
+                                    && (observed.unconditional.contains(&param)
+                                        || (live.contains(result)
+                                            && observed.through_result.contains(&param))))
+                                .then_some((arg.value, CONDITION_BUDGET))
+                            },
+                        ));
                     }
                 }
                 NStatementKind::Store { destination, value } => {
@@ -802,6 +831,7 @@ fn scalar_seeds<'db>(
             if ty.is_integral(db) {
                 values.push(value.value);
             } else if ty.is_bool(db) {
+                returns_boolean = true;
                 boolean_conditions.push((value.value, CONDITION_BUDGET));
             }
         }
@@ -809,7 +839,7 @@ fn scalar_seeds<'db>(
     // Boolean return choices can depend on predicates in their expression or
     // on branches selecting their incoming values. Demand only trusted equality
     // operands; return-only unsigned ordering remains deliberately untracked.
-    if !boolean_conditions.is_empty() {
+    if returns_boolean {
         boolean_conditions.extend(body.blocks.iter().filter_map(|block| {
             if let NTerminatorKind::Branch { cond, .. } = block.terminator.kind {
                 Some((cond.value, CONDITION_BUDGET))
@@ -854,6 +884,18 @@ fn scalar_seeds<'db>(
             NExpr::Call { .. } => primitive_operator(db, body, value),
             _ => None,
         };
+        if let NExpr::Call { args, .. } = expr
+            && operator.is_none()
+            && let Some(observed) = checker.observed_params(value)
+        {
+            boolean_conditions.extend(args.iter().enumerate().filter_map(|(param, arg)| {
+                (observed
+                    .through_result
+                    .contains(&u32::try_from(param).unwrap())
+                    && body.values[arg.value.index()].ty.is_bool(db))
+                .then_some((arg.value, budget - 1))
+            }));
+        }
         let equality = matches!(
             operator,
             Some(PrimitiveWrapperCallKind::Binary(BinOp::Comp(
