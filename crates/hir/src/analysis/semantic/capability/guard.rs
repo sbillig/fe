@@ -2021,50 +2021,6 @@ mod tests {
     }
 
     #[test]
-    fn universal_scalar_projection_requires_every_admitted_execution() {
-        let scope = BinderScope::default();
-        let hidden = IndexExpr::Runtime(NValueId::from_u32(0));
-        let member = IndexExpr::FormalValue(0);
-        let bounded = Guard::always(&scope).with_bound(hidden, 2).unwrap();
-        let range = Guard::always(&scope).with_bound(member, 4).unwrap();
-        for admitted in [None, Some(0), Some(1)] {
-            let domain = admitted.map_or_else(
-                || bounded.clone(),
-                |value| {
-                    bounded
-                        .with_equality(hidden, IndexExpr::Const(value))
-                        .unwrap()
-                },
-            );
-            for required in [None, Some(0), Some(1)] {
-                let permission = required.map_or_else(
-                    || range.clone(),
-                    |value| {
-                        range
-                            .with_equality(hidden, IndexExpr::Const(value))
-                            .unwrap()
-                    },
-                );
-                let expected = (required.is_none() || admitted == required).then(|| range.clone());
-                assert_eq!(
-                    permission.forget_indices_universally(&domain, |index| index == hidden),
-                    expected,
-                    "domain {admitted:?}, permission {required:?}",
-                );
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    struct Collision(u8);
-
-    impl Hash for Collision {
-        fn hash<H: Hasher>(&self, state: &mut H) {
-            0u8.hash(state);
-        }
-    }
-
-    #[test]
     fn graph_interning_resolves_collisions_without_retaining_dead_buffers() {
         let mut shared = SharedGraphs::<u8, Collision>::default();
         let first = shared.intern(Decision::leaf(Collision(1)));

@@ -1,0 +1,98 @@
+mod cleared_pointer {
+    use core::{Option, ptr}
+    struct Item { value: u64 }
+    fn consume(_ value: own Item) {}
+    fn inspect() {
+        let pointer = ptr::alloc<Item>()
+        *pointer = Item { value: 42 }
+        let mut top = Option::Some(pointer)
+        while true {
+            let selected = match top {
+                Option::Some(selected) => selected,
+                Option::None => return,
+            }
+            consume(*selected)
+            top = Option::None
+        }
+    }
+}
+
+mod nested_reinitialization {
+    use core::{Option, ptr}
+    struct Item { value: u64 }
+    fn consume(_ value: own Item) {}
+    fn inspect(count: usize) {
+        let pointer = ptr::alloc<Item>()
+        *pointer = Item { value: 42 }
+        for _ in 0..count {
+            *pointer = Item { value: 42 }
+            let mut top = Option::Some(pointer)
+            while true {
+                let selected = match top {
+                    Option::Some(selected) => selected,
+                    Option::None => break,
+                }
+                consume(*selected)
+                top = Option::None
+            }
+        }
+    }
+}
+
+mod forwarded {
+    use core::{Option, ptr}
+    struct Item { value: u64 }
+    fn consume(_ value: own Item) {}
+    fn drain(_ pointer: *Item) { 
+        let mut top = Option::Some(pointer)
+        while true {
+            let selected = match top {
+                Option::Some(selected) => selected,
+                Option::None => break,
+            }
+            consume(*selected)
+            top = Option::None
+        }
+     }
+    fn inspect() {
+        let pointer = ptr::alloc<Item>()
+        *pointer = Item { value: 42 }
+        drain(pointer)
+        *pointer = Item { value: 43 }
+    drain(pointer)
+    }
+}
+
+mod inline {
+    use core::{Option, ptr}
+    struct Item { value: u64 }
+    fn consume(_ value: own Item) {}
+    fn drain(_ pointer: *Item) { 
+        let mut top = Option::Some(pointer)
+        while true {
+            let selected = match top {
+                Option::Some(selected) => selected,
+                Option::None => break,
+            }
+            consume(*selected)
+            top = Option::None
+        }
+     }
+    fn inspect() {
+        let pointer = ptr::alloc<Item>()
+        *pointer = Item { value: 42 }
+        
+        let mut top = Option::Some(pointer)
+        while true {
+            let selected = match top {
+                Option::Some(selected) => selected,
+                Option::None => break,
+            }
+            consume(*selected)
+            top = Option::None
+        }
+
+        *pointer = Item { value: 43 }
+    drain(pointer)
+    }
+}
