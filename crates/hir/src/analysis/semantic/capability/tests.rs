@@ -3143,7 +3143,13 @@ fn substituted_projection_prunes_siblings_and_preserves_enum_and_index_domains()
                 let occurrence = ValueOccurrence::Argument(3);
                 let expected = values.project(&full, &path, occurrence);
                 let before = values.metrics().nodes_created;
-                let selected = values.project_substituted(&value, &subst, &path, occurrence);
+                let selected = values.project_substituted(
+                    &value,
+                    &subst,
+                    &path,
+                    occurrence,
+                    StructuralPath::default(),
+                );
                 assert_eq!(selected, expected, "{path:?}");
                 let built = values.metrics().nodes_created - before;
                 assert!(built < 32, "unselected siblings were rebuilt");
@@ -4127,4 +4133,55 @@ fn an_interner_without_a_limit_keeps_no_values() {
         once,
         "a limited interner reuses an equal value"
     );
+}
+
+#[test]
+fn projected_subobjects_preserve_enum_observation_paths() {
+    let db = HirAnalysisTestDb::default();
+    let variant = ShapeId::new(
+        &db,
+        CapabilityShape {
+            direct: None,
+            children: ShapeChildren::Product([(FieldIndex(0), leaf_shape(&db))].into()),
+        },
+    );
+    let sum = ShapeId::new(
+        &db,
+        CapabilityShape {
+            direct: None,
+            children: ShapeChildren::Sum(
+                [(VariantIndex(0), variant), (VariantIndex(1), variant)].into(),
+            ),
+        },
+    );
+    let (source, input) = scope().bind(IndexNamespace::InputSlot);
+    let (destination, selected) = scope().bind(IndexNamespace::Existential);
+    let mut values = ValueInterner::new(&db, ValueLimits::default());
+    let value = values.from_shape(array_shape(&db, sum, 2), &source, |_, _, scope| {
+        vec![Guarded {
+            guard: Guard::always(scope),
+            payload: Payload {
+                tag: 1,
+                indices: vec![input],
+            },
+        }]
+    });
+    let subst = IndexSubst::new(&source, &destination, [(input, selected)]).unwrap();
+    let full = values.substitute(&value, &subst);
+    let occurrence = ValueOccurrence::Argument(3);
+    for index in [IndexExpr::Const(0), IndexExpr::Const(1), input] {
+        let source_path = StructuralPath::new([Projection::Index(index)]);
+        let prefix = source_path.substitute(&subst);
+        let element = values.project(&value, &source_path, occurrence).unwrap();
+        for variant in [VariantIndex(0), VariantIndex(1)] {
+            let suffix = StructuralPath::new([Projection::VariantField {
+                variant,
+                field: FieldIndex(0),
+            }]);
+            let expected = values.project(&full, &prefix.concat(&suffix), occurrence);
+            let actual =
+                values.project_substituted(&element, &subst, &suffix, occurrence, prefix.clone());
+            assert_eq!(actual, expected);
+        }
+    }
 }

@@ -1347,6 +1347,7 @@ impl<'db> Borrowck<'db> {
             .map(|certified| {
                 (
                     certified.family.clone(),
+                    certified.path.clone(),
                     certified.scope.clone(),
                     certified.coverage.clone(),
                     vec![&certified.contents],
@@ -1354,12 +1355,10 @@ impl<'db> Borrowck<'db> {
             })
             .collect();
         for state in returns {
-            common_ranges.retain_mut(|(family, scope, coverage, contents)| {
-                let Some(incoming) = state
-                    .certified()
-                    .iter()
-                    .find(|incoming| incoming.family == *family && incoming.scope == *scope)
-                else {
+            common_ranges.retain_mut(|(family, path, scope, coverage, contents)| {
+                let Some(incoming) = state.certified().iter().find(|incoming| {
+                    incoming.family == *family && incoming.path == *path && incoming.scope == *scope
+                }) else {
                     return false;
                 };
                 let Some(shared) = coverage.and(&incoming.coverage) else {
@@ -1371,7 +1370,7 @@ impl<'db> Borrowck<'db> {
             });
         }
         let mut certified_ranges = Vec::new();
-        for (family, scope, coverage, contents) in common_ranges {
+        for (family, path, scope, coverage, contents) in common_ranges {
             if contents.iter().any(|value| {
                 self.inventory
                     .values
@@ -1391,7 +1390,7 @@ impl<'db> Borrowck<'db> {
             };
             let destination = SourceExpr {
                 source,
-                path: RegionPath::default(),
+                path,
                 views: Default::default(),
                 invalidated: false,
             };
@@ -2715,6 +2714,7 @@ impl<'db> Borrowck<'db> {
             state.certify_family_contents(
                 &mut self.inventory.values,
                 &clause.payload.root,
+                &clause.payload.path,
                 region.scope(),
                 &coverage,
                 &contents,
