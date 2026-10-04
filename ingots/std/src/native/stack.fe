@@ -1,0 +1,61 @@
+use core::{Option, Result, size_of}
+use core::ptr
+use ingot::native::bytes::{malloc, free, is_null}
+
+/// Fixed-capacity native storage with explicit ownership and release.
+/// Drain owned elements before releasing the empty stack.
+pub struct FixedStack<T, const CAPACITY: usize> {
+    slots: *[Option<T>; CAPACITY],
+    len: usize,
+}
+
+impl<T, const CAPACITY: usize> FixedStack<T, CAPACITY> {
+    /// Allocate once and initialize slots in place; allocation failure returns None.
+    pub fn try_new() -> Option<Self> {
+        let size = size_of<[Option<T>; CAPACITY]>()
+        if size > 0x7fffffffffffffff { return Option::None }
+        let address = malloc(size: if size == 0 { 1 } else { size.downcast_unchecked() })
+        if is_null(address) { return Option::None }
+        let slots = ptr::cast<u8, [Option<T>; CAPACITY]>(address)
+        let mut index: usize = 0
+        while index < CAPACITY {
+            (*slots)[index] = Option::None
+            index += 1
+        }
+        Option::Some(Self { slots, len: 0 })
+    }
+
+    pub fn len(self) -> usize { self.len }
+
+    /// Preserve the supplied value if the stack is full; pushing does not allocate.
+    pub fn try_push(mut self, _ value: own T) -> Result<T, ()> {
+        if self.len == CAPACITY { return Result::Err(value) }
+        (*self.slots)[self.len] = Option::Some(value)
+        self.len += 1
+        Result::Ok(())
+    }
+
+    pub fn top_mut(mut self) -> mut T {
+        core::assert(self.len > 0)
+        match mut (*self.slots)[self.len - 1] {
+            Option::Some(value) => value,
+            Option::None => core::panic(),
+        }
+    }
+
+    pub fn pop(mut self) -> T {
+        core::assert(self.len > 0)
+        let index = self.len - 1
+        let slots = self.slots
+        self.len = index
+        let value = (*slots)[index]
+        (*slots)[index] = Option::None
+        match value { Option::Some(value) => value, Option::None => core::panic() }
+    }
+
+    /// Release empty storage. Owned elements must first be popped and consumed.
+    pub fn release(own self) {
+        core::assert(self.len == 0)
+        free(ptr::cast<[Option<T>; CAPACITY], u8>(self.slots))
+    }
+}

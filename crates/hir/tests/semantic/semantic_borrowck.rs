@@ -14933,3 +14933,52 @@ fn run() -> u256 {
     ));
     assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
 }
+
+#[test]
+fn native_fixed_stack_preserves_ownership_and_live_borrows() {
+    for (body, expected) in [
+        (
+            "let value = stack.pop()\ncore::assert(value == 42)\nstack.release()",
+            "",
+        ),
+        (
+            "let value = stack.pop()\nstack.release()\nstack.release()",
+            "move conflict",
+        ),
+        (
+            "let view = stack.top_mut()\nlet value = stack.pop()\ncore::assert(view == value)",
+            "borrow conflict",
+        ),
+        (
+            "let view = stack.top_mut()\nstack.release()\ncore::assert(view == 42)",
+            "borrow conflict",
+        ),
+        (
+            "let view = stack.top_mut()\nlet other = stack.top_mut()\nother += 1\ncore::assert(view == 42)",
+            "borrow conflict",
+        ),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+use core::{{Option, Result}}
+use std::native::FixedStack
+fn run() {{
+    let mut stack: FixedStack<u256, 2> = match FixedStack::try_new() {{
+        Option::Some(stack) => stack,
+        Option::None => return,
+    }}
+    match stack.try_push(42) {{
+        Result::Ok(()) => {{}},
+        Result::Err(_) => core::panic(),
+    }}
+    {body}
+}}
+"#
+        ));
+        if expected.is_empty() {
+            assert!(diagnostics.is_empty(), "{body}: {diagnostics}");
+        } else {
+            assert!(diagnostics.contains(expected), "{body}: {diagnostics}");
+        }
+    }
+}

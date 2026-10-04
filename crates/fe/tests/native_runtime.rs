@@ -15,7 +15,7 @@ use std::{
         ffi::OsStringExt,
         process::{CommandExt, ExitStatusExt},
     },
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
@@ -1341,7 +1341,7 @@ fn native_raw_aggregate_reference_accessors_at_o1() {
     assert!(result.status.success(), "{result:?}");
 }
 
-fn build_with_allocator(source: &Path, out: &Path, level: &str, allocator: &Path) {
+fn build_native_object(source: &Path, out: &Path, level: &str) -> PathBuf {
     let stem = source.file_stem().unwrap().to_str().unwrap();
     let object_name = format!("{stem}.o");
     let report = out.with_extension("tar.gz");
@@ -1372,6 +1372,11 @@ fn build_with_allocator(source: &Path, out: &Path, level: &str, allocator: &Path
     assert!(extracted.status.success(), "{extracted:?}");
     let object = out.join(&object_name);
     fs::write(&object, extracted.stdout).unwrap();
+    object
+}
+
+fn build_with_allocator(source: &Path, out: &Path, level: &str, allocator: &Path) {
+    let object = build_native_object(source, out, level);
     let executable = out.join("controlled_allocator");
     let linked = Command::new("cc")
         .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-fno-builtin"])
@@ -1443,4 +1448,39 @@ fn nonreturning_borrow_joins_execute_at_o1() {
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
+}
+
+#[test]
+fn native_fixed_stack_owns_slots_and_values_at_o1() {
+    let temp = tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
+    let object = build_native_object(&fixtures.join("fixed_stack.fe"), temp.path(), "1");
+    for (stack_failure, buffer_failure, mode) in [
+        (0, 0, "0"),
+        (1, 0, "1"),
+        (0, 1, "2"),
+        (0, 2, "2"),
+        (0, 3, "2"),
+        (0, 4, "2"),
+    ] {
+        let executable = temp
+            .path()
+            .join(format!("stack-{stack_failure}-{buffer_failure}"));
+        let linked = Command::new("cc")
+            .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-fno-builtin"])
+            .arg(format!("-DFAIL_STACK={stack_failure}"))
+            .arg(format!("-DFAIL_BUFFER={buffer_failure}"))
+            .arg(&object)
+            .arg(fixtures.join("stack_allocator.c"))
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(linked.status.success(), "{linked:?}");
+        let result = Command::new(&executable).arg(mode).output().unwrap();
+        assert!(
+            result.status.success(),
+            "{stack_failure}/{buffer_failure}: {result:?}"
+        );
+    }
 }

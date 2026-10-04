@@ -56,3 +56,5 @@ impl Arg {
 }
 
 pub use boxed::Box
+
+pub use stack::FixedStack
