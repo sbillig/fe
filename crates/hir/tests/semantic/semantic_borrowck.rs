@@ -15047,3 +15047,37 @@ fn view(_ outer: mut Outer) -> mut Outer { outer }
         }
     }
 }
+
+#[test]
+fn named_integer_constants_preserve_array_separation() {
+    for (first, second, valid) in [
+        ("0", "ONE", true),
+        ("ZERO", "ALIAS", true),
+        ("ONE", "ALIAS", false),
+        ("1", "ONE", false),
+        ("0", "unknown", false),
+    ] {
+        let source = format!(
+            r#"
+const ZERO: usize = 0
+const ONE: usize = ZERO + 1
+const ALIAS: usize = ONE
+fn caller(values: own [mut u256; 2], unknown: usize) {{
+    let first = values[{first}]
+    let second = values[{second}]
+    first = 1
+    second = 2
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        if valid {
+            assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+        } else {
+            assert!(
+                diagnostics.contains("borrow conflict"),
+                "{source}\n{diagnostics}"
+            );
+        }
+    }
+}

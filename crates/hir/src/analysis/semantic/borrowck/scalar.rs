@@ -16,6 +16,7 @@ use crate::{
                 region::{RegionRoot, RegionSet},
                 state::BorrowState,
             },
+            ctfe::eval_const_ref,
             definite_assignment::literal_bool_cond,
             diagnostics::{SemanticDiagnostic, normalized_body_internal_diag},
             normalized::{
@@ -65,16 +66,20 @@ pub(super) struct ScalarDemand<'db> {
     readers: Vec<(NValueId, Vec<NValueId>)>,
 }
 
-/// Integer literals represented exactly by the index algebra.
+/// Integer constants represented exactly by the index algebra.
 pub(super) fn constant_index<'db>(
     db: &'db dyn HirAnalysisDb,
     constant: &SConst<'db>,
 ) -> Option<usize> {
-    if let SConst::Value(constant) = constant
-        && let SemConstValue::Scalar {
-            value: SemConstScalar::Int { value },
-            ..
-        } = constant.value().value(db)
+    let constant = match constant {
+        SConst::Value(value) => value.value(),
+        SConst::Ref(reference) => eval_const_ref(db, *reference).into_ready()?,
+        SConst::Description(_) | SConst::Evidence(_) | SConst::Invalid(_) => return None,
+    };
+    if let SemConstValue::Scalar {
+        value: SemConstScalar::Int { value },
+        ..
+    } = constant.value(db)
     {
         value.to_usize()
     } else {
