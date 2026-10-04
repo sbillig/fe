@@ -928,6 +928,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         subst: &IndexSubst<'db>,
         path: &StructuralPath<IndexExpr<'db>>,
         occurrence: ValueOccurrence,
+        base: StructuralPath<IndexExpr<'db>>,
     ) -> Option<ValueId<'db, P>> {
         assert_eq!(
             value.scope(),
@@ -940,9 +941,14 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             .position(|step| matches!(step, Projection::Index(_)))
             .unwrap_or(path.as_slice().len());
         let (prefix, suffix) = path.as_slice().split_at(split);
-        let selected = self.project_from(value, prefix, occurrence, StructuralPath::default())?;
+        let selected = self.project_from(value, prefix, occurrence, base.clone())?;
         let selected = self.substitute(&selected, subst);
-        self.project_from(&selected, suffix, occurrence, StructuralPath::new(prefix))
+        self.project_from(
+            &selected,
+            suffix,
+            occurrence,
+            base.concat(&StructuralPath::new(prefix)),
+        )
     }
 
     fn project_from(

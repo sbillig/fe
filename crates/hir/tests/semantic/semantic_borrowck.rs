@@ -14819,3 +14819,117 @@ fn run() -> u256 {{
         }
     }
 }
+
+#[test]
+fn structural_array_initialization_keeps_later_loops_separate() {
+    for (size, bound, selected, dynamic, valid) in [
+        (1, 0, 0, true, false),
+        (1, 1, 0, true, true),
+        (2, 2, 1, true, true),
+        (2, 1, 0, false, true),
+        (2, 1, 1, false, false),
+        (2, 2, 1, false, true),
+    ] {
+        let getter = if dynamic {
+            "self.len - 1".to_owned()
+        } else {
+            selected.to_string()
+        };
+        let len = selected + 1;
+        for summarized in [false, true] {
+            let fill = format!(
+                r#"
+    let cells = ptr::alloc<[Cell; {size}]>()
+    let mut i: usize = 0
+    while i < {bound} {{
+        (*cells)[i] = Cell {{ pointer: Option::None }}
+        i += 1
+    }}
+"#
+            );
+            let (helper, initialization) = if summarized {
+                (
+                    format!("fn fill() -> *[Cell; {size}] {{ {fill}\n cells }}"),
+                    "let cells = fill()".to_owned(),
+                )
+            } else {
+                (String::new(), fill)
+            };
+            let source = format!(
+                r#"
+use core::{{Option, ptr}}
+struct Cell {{ pointer: Option<*u8> }}
+struct Holder {{ cells: *[Cell; {size}], len: usize }}
+impl Cell {{
+    fn update(mut self) {{
+        match self.pointer {{
+            Option::Some(pointer) => {{ *pointer = 0 }}
+            Option::None => {{ self.pointer = Option::Some(ptr::alloc<u8>()) }}
+        }}
+    }}
+}}
+impl Holder {{
+    fn get(mut self) -> mut Cell {{ mut (*self.cells)[{getter}] }}
+}}
+{helper}
+fn inspect() {{
+    {initialization}
+    let mut holder = Holder {{ cells, len: {len} }}
+    let mut count: u64 = 0
+    while count < 1 {{
+        let cell = holder.get()
+        core::assert(count == 0)
+        cell.update()
+        count += 1
+    }}
+}}
+"#
+            );
+            let diagnostics = checked_borrow_diags(&source);
+            if valid {
+                assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+            } else {
+                assert!(
+                    diagnostics.contains("borrow conflict"),
+                    "{source}\n{diagnostics}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn structural_array_certificates_preserve_input_aliases() {
+    let source = r#"
+use core::ptr
+fn fill(_ source: *u256) -> *[*u256; 2] {
+    let cells = ptr::alloc<[*u256; 2]>()
+    let mut i: usize = 0
+    while i < 2 {
+        (*cells)[i] = source
+        i += 1
+    }
+    cells
+}
+fn inspect(_ target: mut u256, _ source: *u256) -> u256 {
+    let cells = fill(source)
+    let pointer = (*cells)[1]
+    target += 1
+    *pointer
+}
+fn run() -> u256 {
+    let target = ptr::alloc<u256>()
+    let source = ptr::alloc<u256>()
+    *target = 0
+    *source = 7
+    inspect(mut *target, source)
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+    let diagnostics = checked_borrow_diags(&source.replace(
+        "inspect(mut *target, source)",
+        "inspect(mut *target, target)",
+    ));
+    assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+}

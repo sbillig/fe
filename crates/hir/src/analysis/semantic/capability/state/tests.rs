@@ -1828,6 +1828,7 @@ fn certified_family_contents_survive_later_member_writes() {
             assert!(state.certify_family_contents(
                 &mut values,
                 &cell(member),
+                &RegionPath::default(),
                 &family_scope,
                 &coverage,
                 &certified,
@@ -1863,5 +1864,139 @@ fn certified_family_contents_survive_later_member_writes() {
                 "count={count} selected={selected}"
             );
         }
+    }
+}
+
+#[test]
+fn structural_certificates_preserve_partial_ranges_and_later_writes() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let shapes = Shapes::new(&db);
+    let scope = BinderScope::default();
+    let (family_scope, member) = scope.bind(IndexNamespace::InputSlot);
+    let RegionRoot::External(source) = allocation_cell(&db, 0, IndexExpr::Const(0)) else {
+        panic!("allocation")
+    };
+    let ExternalOrigin::Memory { base, .. } = source.origin else {
+        panic!("typed allocation")
+    };
+    let family = RegionRoot::External(base.source);
+    let whole = region(family.clone());
+    let selected = |index| {
+        whole.project(&RegionPath::new([Projection::Index(IndexExpr::Const(
+            index,
+        ))]))
+    };
+    for count in [0, 1, 2, 3, 4] {
+        let mut values = CapabilityValues::new(&db, ValueLimits::default());
+        let old = handle(&mut values, shapes.handle, 0);
+        let array = values.array_repeat(shapes.array, &old);
+        let mut state = BorrowState::new(&mut values, [], [(family.clone(), array)]);
+        let replacement = handle_in(&mut values, shapes.handle, &family_scope, 1);
+        if let Some(coverage) =
+            Guard::always(&family_scope).with_bound(member, IndexExpr::Const(count))
+        {
+            assert!(state.certify_family_contents(
+                &mut values,
+                &family,
+                &RegionPath::new([Projection::Index(member)]),
+                &family_scope,
+                &coverage,
+                &replacement,
+            ));
+        }
+        assert!(
+            state.certified_initialized_region(&whole).is_empty(),
+            "an element proof cannot initialize its parent"
+        );
+        for index in [0, 1, 2] {
+            let request = selected(index);
+            assert_eq!(
+                !state.certified_initialized_region(&request).is_empty(),
+                index < count
+            );
+            assert_eq!(
+                read(&db, &mut values, &state, &request, shapes.handle),
+                handle(&mut values, shapes.handle, usize::from(index < count))
+            );
+        }
+        assert!(
+            state.certified_initialized_region(&selected(3)).is_empty(),
+            "out-of-bounds elements are never certified"
+        );
+        let new = handle(&mut values, shapes.handle, 2);
+        state
+            .write_region(overwrite, &mut values, &selected(0), &new)
+            .unwrap();
+        for index in [0, 1, 2] {
+            let expected = if index == 0 {
+                2
+            } else {
+                usize::from(index < count)
+            };
+            assert_eq!(
+                read(&db, &mut values, &state, &selected(index), shapes.handle),
+                handle(&mut values, shapes.handle, expected)
+            );
+        }
+        // Parent loads must also preserve the refined elements after invalidation.
+        let loaded = read(&db, &mut values, &state, &whole, shapes.array);
+        for index in [0, 1, 2] {
+            let actual = values
+                .project(
+                    &loaded,
+                    &StructuralPath::new([Projection::Index(IndexExpr::Const(index))]),
+                    ValueOccurrence::Summary,
+                )
+                .unwrap();
+            let expected = if index == 0 {
+                2
+            } else {
+                usize::from(index < count)
+            };
+            assert_eq!(actual, handle(&mut values, shapes.handle, expected));
+        }
+    }
+}
+
+#[test]
+fn joining_certificates_for_different_elements_does_not_initialize_either() {
+    let db = HirAnalysisTestDb::default();
+    let shapes = Shapes::new(&db);
+    let scope = BinderScope::default();
+    let RegionRoot::External(source) = allocation_cell(&db, 0, IndexExpr::Const(0)) else {
+        panic!("allocation")
+    };
+    let ExternalOrigin::Memory { base, .. } = source.origin else {
+        panic!("typed allocation")
+    };
+    let family = RegionRoot::External(base.source);
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let old = handle(&mut values, shapes.handle, 0);
+    let array = values.array_repeat(shapes.array, &old);
+    let initial = BorrowState::new(&mut values, [], [(family.clone(), array)]);
+    let replacement = handle(&mut values, shapes.handle, 1);
+    let mut left = initial.clone();
+    let mut right = initial;
+    for (state, index) in [(&mut left, 0), (&mut right, 1)] {
+        assert!(state.certify_family_contents(
+            &mut values,
+            &family,
+            &RegionPath::new([Projection::Index(IndexExpr::Const(index))]),
+            &scope,
+            &Guard::always(&scope),
+            &replacement,
+        ));
+    }
+    left.join(&right, &mut values);
+    for index in [0, 1] {
+        let request = region(family.clone()).project(&RegionPath::new([Projection::Index(
+            IndexExpr::Const(index),
+        )]));
+        assert!(left.certified_initialized_region(&request).is_empty());
+        assert_eq!(
+            read(&db, &mut values, &left, &request, shapes.handle),
+            values.join(&old, &replacement)
+        );
     }
 }
