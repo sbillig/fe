@@ -1432,3 +1432,15 @@ fn native_borrowed_pattern_bindings_at_o1() {
         .unwrap();
     assert!(result.status.success(), "{result:?}");
 }
+
+#[test]
+fn nonreturning_borrow_joins_execute_at_o1() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/nonreturning_borrow_joins.fe");
+    build(&source, temp.path(), "1", &["--standalone"]);
+    let result = Command::new(temp.path().join("nonreturning_borrow_joins"))
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+}
