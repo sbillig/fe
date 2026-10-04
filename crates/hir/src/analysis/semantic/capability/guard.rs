@@ -1577,6 +1577,10 @@ impl<'db> Guard<'db> {
         &self.scope
     }
 
+    pub fn is_always(&self) -> bool {
+        self.condition.is_always()
+    }
+
     pub(super) fn downgrade(&self) -> WeakGuard<'db> {
         WeakGuard {
             scope: self.scope.clone(),

@@ -4083,6 +4083,60 @@ fn cached_region_restriction_matches_exactly_and_shares_graph_storage() {
 }
 
 #[test]
+fn unconditional_value_guards_do_not_rebuild_structural_values() {
+    let db = HirAnalysisTestDb::default();
+    let element = leaf_shape(&db);
+    let product = ShapeId::new(
+        &db,
+        CapabilityShape {
+            direct: None,
+            children: ShapeChildren::Product(
+                [(FieldIndex(0), element), (FieldIndex(1), element)].into(),
+            ),
+        },
+    );
+    let shape = array_shape(&db, product, 7);
+    let choice = ChoiceKey::new(ValueOccurrence::Argument(0), StructuralPath::default());
+    let yes = Guard::always(&scope())
+        .with_boolean(choice.clone(), true)
+        .unwrap();
+    let no = Guard::always(&scope()).with_boolean(choice, false).unwrap();
+    for interned_nodes in [None, Some(1)] {
+        let mut values = ValueInterner::new(
+            &db,
+            ValueLimits {
+                interned_nodes,
+                ..ValueLimits::default()
+            },
+        );
+        let left = leaf(&mut values, element, &scope(), 1, vec![runtime(0)]);
+        let left = values.with_guard(&left, &yes);
+        let right = leaf(&mut values, element, &scope(), 2, vec![runtime(1)]);
+        let pair = values.product(
+            product,
+            &scope(),
+            [(FieldIndex(0), left.clone()), (FieldIndex(1), right)],
+        );
+        let array = values.array_repeat(shape, &pair);
+        let empty = values.empty(product, &scope());
+        let array = values.replace(&array, &path(IndexExpr::Const(3)), &empty);
+        let before = values.metrics();
+        for guard in [Guard::always(&scope()), yes.or(&no)] {
+            for value in [&left, &pair, &array, &empty] {
+                assert_eq!(values.with_guard(value, &guard), *value);
+            }
+        }
+        assert_eq!(values.metrics().nodes_created, before.nodes_created);
+        assert_eq!(
+            values.metrics().operations_evaluated,
+            before.operations_evaluated
+        );
+        assert!(values.with_guard(&left, &no).is_empty());
+        assert_ne!(values.with_guard(&pair, &no), pair);
+    }
+}
+
+#[test]
 fn an_interner_without_a_limit_keeps_no_values() {
     // Counting the nodes an operation really builds needs the cache off, which two
     // tests ask for with no limit. Reclaiming entries must not quietly keep any,

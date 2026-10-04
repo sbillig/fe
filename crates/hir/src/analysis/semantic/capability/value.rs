@@ -692,7 +692,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             guard.scope(),
             "guard scope must match its value"
         );
-        if value.is_empty() {
+        if guard.is_always() || value.is_empty() {
             return value.clone();
         }
         self.memoized(
