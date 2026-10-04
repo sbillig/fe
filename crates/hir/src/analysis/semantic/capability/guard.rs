@@ -1767,7 +1767,13 @@ impl<'db> Guard<'db> {
         self.project_universally(domain, |guard| guard.forget_indices(&hidden))
     }
 
-    fn project_universally(&self, domain: &Self, project: impl Fn(&Self) -> Self) -> Option<Self> {
+    /// Keep this condition only where it holds for every execution `domain`
+    /// admits that `project` cannot distinguish.
+    pub(crate) fn project_universally(
+        &self,
+        domain: &Self,
+        project: impl Fn(&Self) -> Self,
+    ) -> Option<Self> {
         let projected = project(domain);
         match domain.difference(self) {
             Some(refuted) => projected.difference(&project(&refuted)),

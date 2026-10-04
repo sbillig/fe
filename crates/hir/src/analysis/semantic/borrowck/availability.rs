@@ -449,27 +449,45 @@ impl<'db> Borrowck<'db> {
                             );
                         }
                         // Forgetting a witness is safe for may facts, but cannot
-                        // turn a previous iteration's write into a must fact.
+                        // turn a previous iteration's write into a must fact. A
+                        // write to renewed storage is dropped; any other write
+                        // survives where it held for every execution reaching
+                        // this edge, whatever the renewed facts were.
                         edge.initialized = RegionSet::new(
                             edge.initialized.scope(),
-                            edge.initialized
-                                .clauses()
-                                .iter()
-                                .filter(|clause| {
-                                    !clause
+                            edge.initialized.clauses().iter().filter_map(|clause| {
+                                if clause
+                                    .payload
+                                    .root
+                                    .indices()
+                                    .chain(clause.payload.path.indices())
+                                    .any(repeats_index)
+                                {
+                                    return None;
+                                }
+                                let guard = if clause.guard.indices().into_iter().any(repeats_index)
+                                    || clause
                                         .guard
-                                        .indices()
+                                        .occurrences()
                                         .into_iter()
-                                        .chain(clause.payload.root.indices())
-                                        .chain(clause.payload.path.indices())
-                                        .any(repeats_index)
-                                        && !clause
-                                            .guard
-                                            .occurrences()
-                                            .into_iter()
-                                            .any(repeats_occurrence)
+                                        .any(repeats_occurrence)
+                                {
+                                    clause.guard.project_universally(
+                                        &edge.guard.in_scope(clause.guard.scope()),
+                                        |guard| {
+                                            guard
+                                                .forget_indices(repeats_index)
+                                                .forget_occurrences(repeats_occurrence)
+                                        },
+                                    )?
+                                } else {
+                                    clause.guard.clone()
+                                };
+                                Some(Guarded {
+                                    guard,
+                                    payload: clause.payload.clone(),
                                 })
-                                .cloned(),
+                            }),
                         );
                         edge.guard = edge
                             .guard
