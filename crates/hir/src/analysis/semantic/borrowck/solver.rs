@@ -657,7 +657,10 @@ impl<'db> Borrowck<'db> {
     }
 
     fn initial_state(&mut self) -> BorrowState<'db> {
-        let mut state = self.inventory.entry.clone();
+        let mut state = self
+            .inventory
+            .entry
+            .before_allocations(&mut self.inventory.values);
         if let Some(guard) = self.inventory.loops.entry_guard(None, self.body.entry) {
             state.constrain(&guard, &mut self.inventory.values);
         }
