@@ -1567,7 +1567,7 @@ fn unknown_alias_stores_retain_origins_across_offsets_and_respect_address_spaces
             (FieldIndex(1), original.clone()),
         ],
     );
-    let mut state = BorrowState::new(
+    let initial = BorrowState::new(
         &mut values,
         [],
         [
@@ -1577,6 +1577,7 @@ fn unknown_alias_stores_retain_origins_across_offsets_and_respect_address_spaces
             (storage.clone(), pair),
         ],
     );
+    let mut state = initial.clone();
     let replacement = handle(&mut values, shapes.handle, 1);
     let field = |root, index| {
         region(root).project(&RegionPath::new([Projection::Field(FieldIndex(index))]))
@@ -1600,7 +1601,13 @@ fn unknown_alias_stores_retain_origins_across_offsets_and_respect_address_spaces
         replacement
     );
     assert_eq!(
-        read(&db, &mut values, &state, &field(first, 1), shapes.handle),
+        read(
+            &db,
+            &mut values,
+            &state,
+            &field(first.clone(), 1),
+            shapes.handle
+        ),
         original
     );
     for (alias, index) in [(&second, 0), (&second, 1), (&third, 0), (&third, 1)] {
@@ -1629,6 +1636,70 @@ fn unknown_alias_stores_retain_origins_across_offsets_and_respect_address_spaces
                 &db,
                 &mut values,
                 &state,
+                &field(storage.clone(), index),
+                shapes.handle
+            ),
+            original
+        );
+    }
+
+    // Repeated destination clauses share a complete write footprint, but a
+    // second footprint must retain its own branch condition and replacement.
+    let selector = IndexExpr::Runtime(NValueId::from_u32(7));
+    let yes = Guard::always(&scope)
+        .with_equality(selector, IndexExpr::Const(0))
+        .unwrap();
+    let no = Guard::always(&scope)
+        .with_disequality(selector, IndexExpr::Const(0))
+        .unwrap();
+    let left = field(first.clone(), 0)
+        .union(&field(second.clone(), 0))
+        .with_guard(&yes);
+    let right = field(first, 1).union(&field(second, 1)).with_guard(&no);
+    let alternate = handle(&mut values, shapes.handle, 2);
+    let mut guarded = initial;
+    guarded
+        .write_regions(
+            overwrite,
+            &mut values,
+            &[(&left, &replacement), (&right, &alternate)],
+        )
+        .unwrap();
+    for index in [0, 1] {
+        let loaded = read(
+            &db,
+            &mut values,
+            &guarded,
+            &field(third.clone(), index),
+            shapes.handle,
+        );
+        for (condition, expected) in [(&yes, LoanId(1)), (&no, LoanId(2))] {
+            let feasible: Vec<_> = loaded
+                .direct()
+                .iter()
+                .filter(|entry| {
+                    entry
+                        .guard
+                        .and(&condition.in_scope(entry.guard.scope()))
+                        .is_some()
+                })
+                .collect();
+            let ids: BTreeSet<_> = feasible
+                .iter()
+                .filter_map(|entry| entry.payload.loan().map(|loan| loan.id))
+                .collect();
+            assert_eq!(ids, [LoanId(0), expected].into());
+            assert!(
+                feasible
+                    .iter()
+                    .any(|entry| matches!(entry.payload, CapabilityRef::Invalidated { .. }))
+            );
+        }
+        assert_eq!(
+            read(
+                &db,
+                &mut values,
+                &guarded,
                 &field(storage.clone(), index),
                 shapes.handle
             ),

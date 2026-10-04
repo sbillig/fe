@@ -3,7 +3,7 @@
 //! A carrier describes its referent region. Loading that region reads a separate
 //! structural value; updating it never changes the carrier or its loan identity.
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, hash_map::Entry};
 
 use super::{
     birth::AllocationBirth,
@@ -1007,10 +1007,20 @@ impl<'db> BorrowState<'db> {
             self.contents.extend(updates);
             return Ok(());
         };
+        // Every clause of a destination uses the same complete write footprint.
+        // Reuse its arbitrary contents by replacement index rather than hashing the
+        // whole footprint again. Residual typed coverage remains per clause.
+        let mut unknown_contents = FxHashMap::default();
         let clauses = replacements
             .iter()
-            .flat_map(|(region, _)| region.clauses().iter().map(move |clause| (*region, clause)));
-        for ((region, clause), domains) in clauses.zip(&typed) {
+            .enumerate()
+            .flat_map(|(index, (region, _))| {
+                region
+                    .clauses()
+                    .iter()
+                    .map(move |clause| (index, *region, clause))
+            });
+        for ((index, region, clause), domains) in clauses.zip(&typed) {
             for (root, contents) in &self.contents {
                 if !contents.shape().contains_capability(values.db)
                     || !root.may_alias_unknown(&clause.payload.root)
@@ -1041,15 +1051,20 @@ impl<'db> BorrowState<'db> {
                 // their typed contents have the same shape. A partial store
                 // can corrupt a native capability rather than copy it intact.
                 let old = updates.get(root).unwrap_or(contents);
-                let unknown = overwrite
-                    .contents(
-                        values,
-                        contents.shape(),
-                        contents.scope(),
-                        Some((root, AccessFootprint::typed(region))),
-                    )
-                    .map_err(StateError::OpaqueContents)?;
-                let unknown = values.with_guard(&unknown, &residual);
+                let unknown = match unknown_contents.entry((index, root)) {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(entry) => entry.insert(
+                        overwrite
+                            .contents(
+                                values,
+                                contents.shape(),
+                                contents.scope(),
+                                Some((root, AccessFootprint::typed(region))),
+                            )
+                            .map_err(StateError::OpaqueContents)?,
+                    ),
+                };
+                let unknown = values.with_guard(unknown, &residual);
                 updates.insert(root.clone(), values.join(old, &unknown));
             }
         }
