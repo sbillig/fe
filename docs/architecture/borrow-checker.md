@@ -684,9 +684,12 @@ conservative observations. Returned predicates demand trusted equality operands
 within the boolean condition budget; arithmetic dependencies and return-only
 unsigned ordering remain untracked. Demand is prepared after callee summaries
 are available and follows their observed boolean arguments when the result is
-live or the observation is unconditional. Guard instantiation and boolean join
-edges bind those arguments to their trusted predicates before local choices are
-projected away; unobserved arguments retain no predicate facts.
+live or the observation is unconditional. Cell discovery, liveness, and Boolean
+argument seeding close together until no new scalar values are demanded, so a
+stored and reloaded call result retains its predicate dependencies. Guard
+instantiation and boolean join edges bind those arguments to their trusted
+predicates before local choices are projected away; unobserved arguments retain
+no predicate facts.
 
 ### Certified loop contents
 

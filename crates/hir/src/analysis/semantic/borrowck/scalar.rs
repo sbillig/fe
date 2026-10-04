@@ -89,8 +89,7 @@ pub(super) fn lossless_integer_cast(
 
 impl<'db> Borrowck<'db> {
     pub(super) fn prepare_scalar_demand(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
-        let live = self.scalar_liveness().0;
-        let (mut selectors, cells, mut values) = scalar_seeds(self, &live);
+        let (mut selectors, cells, mut values) = scalar_seeds(self);
         values.retain(|value| self.supported_scalar_return(*value));
         if self.inventory.loops.has_cycle()
             && self.body.blocks.iter().flat_map(|block| &block.statements).any(|statement| {
@@ -441,18 +440,34 @@ impl<'db> Borrowck<'db> {
         self.scalar
             .cells
             .extend(cells.into_iter().chain(selector_cells));
-        close_scalar_values(
-            self.db,
-            &self.body,
-            &mut self.scalar.values,
-            &mut self.scalar.cells,
-        );
-        self.scalar.indices = self
-            .scalar
-            .values
-            .iter()
-            .map(|value| self.index(*value))
-            .collect();
+        // Discovering cells can make more call results live, whose Boolean
+        // arguments demand more values and cells. Close both demands together.
+        loop {
+            close_scalar_values(
+                self.db,
+                &self.body,
+                &mut self.scalar.values,
+                &mut self.scalar.cells,
+            );
+            self.scalar.indices = self
+                .scalar
+                .values
+                .iter()
+                .map(|value| self.index(*value))
+                .collect();
+            (
+                self.scalar.live,
+                self.scalar.observed,
+                self.scalar.non_branch_params,
+            ) = self.scalar_liveness();
+            let (_, _, mut values) = scalar_seeds(self);
+            values.retain(|value| self.supported_scalar_return(*value));
+            let previous = self.scalar.values.len();
+            self.scalar.values.extend(values);
+            if self.scalar.values.len() == previous {
+                break;
+            }
+        }
         self.scalar.phis = self
             .scalar
             .values
@@ -460,11 +475,6 @@ impl<'db> Borrowck<'db> {
             .copied()
             .filter(|value| self.compact_scalar_phi(*value))
             .collect();
-        (
-            self.scalar.live,
-            self.scalar.observed,
-            self.scalar.non_branch_params,
-        ) = self.scalar_liveness();
     }
 
     pub(super) fn stores_capability(&self, statement: &NStatement<'db>) -> bool {
@@ -774,7 +784,6 @@ fn primitive_operator(
 
 fn scalar_seeds<'db>(
     checker: &Borrowck<'db>,
-    live: &FxHashSet<NValueId>,
 ) -> (FxHashSet<NValueId>, FxHashSet<NPlaceBase>, Vec<NValueId>) {
     let db = checker.db;
     let body = &checker.body;
@@ -806,7 +815,7 @@ fn scalar_seeds<'db>(
                                 let param = u32::try_from(param).unwrap();
                                 (body.values[arg.value.index()].ty.is_bool(db)
                                     && (observed.unconditional.contains(&param)
-                                        || (live.contains(result)
+                                        || (checker.scalar.live.contains(result)
                                             && observed.through_result.contains(&param))))
                                 .then_some((arg.value, CONDITION_BUDGET))
                             },

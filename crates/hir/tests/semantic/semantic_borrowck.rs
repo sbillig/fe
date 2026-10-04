@@ -18,7 +18,7 @@ use fe_hir::{
                 footprint::AccessExtent,
                 guard::{ChoiceKey, Guard, ValueOccurrence},
                 handle::{AddressOccurrence, HandleAddressSpace},
-                index::IndexExpr,
+                index::{BinderScope, IndexExpr, IndexNamespace},
                 path::{Projection as CapabilityProjection, RegionPath, StructuralPath},
                 region::RegionRoot,
                 separation::SEPARATION_CLAUSE_LIMIT,
@@ -14154,6 +14154,68 @@ fn ignored(_ x: usize, _ y: usize) -> bool { constant(x != y) }
         let guard = summary.scalar_result.expect("constant result");
         assert!(guard.with_boolean(result, false).is_none());
     });
+}
+
+#[test]
+fn stored_call_results_preserve_boolean_argument_predicates() {
+    for (body, dependent) in [
+        ("choose(x != y)", true),
+        ("let mut m: usize = choose(x != y)\n    m", true),
+        ("let mut m: usize = 0\n    m = choose(x != y)\n    m", true),
+        (
+            "let mut first: usize = choose(x != y)\n    \
+             let mut m: usize = choose(first != 0)\n    m",
+            true,
+        ),
+        ("let mut m: usize = choose(x != y)\n    m = 0\n    m", false),
+        (
+            "let mut m: usize = 0\n    let unused = choose(x != y)\n    m",
+            false,
+        ),
+    ] {
+        let source = format!(
+            r#"
+fn choose(_ flag: bool) -> usize {{ if flag {{ 1 }} else {{ 0 }} }}
+fn stored(_ x: usize, _ y: usize) -> usize {{
+    {body}
+}}
+"#
+        );
+        assert_eq!(checked_borrow_diags(&source), "", "{source}");
+        with_borrow_summary(&source, "stored", |_db, summary| {
+            let observed = summary.observed_params.as_ref().unwrap();
+            assert!(observed.unconditional.is_empty(), "{body}: {observed:?}");
+            assert_eq!(
+                observed.through_result.iter().copied().collect::<Vec<_>>(),
+                if dependent { vec![0, 1] } else { vec![] },
+                "{body}: {observed:?}"
+            );
+            let guard = summary.scalar_result.expect("stored predicate relation");
+            let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
+            for x in [0, 1] {
+                for y in [0, 1] {
+                    let selected = guard
+                        .with_equality(IndexExpr::FormalValue(0), IndexExpr::Const(x))
+                        .unwrap()
+                        .with_equality(IndexExpr::FormalValue(1), IndexExpr::Const(y))
+                        .unwrap();
+                    let expected = usize::from(dependent && x != y);
+                    assert!(
+                        selected
+                            .with_equality(returned, IndexExpr::Const(expected))
+                            .is_some(),
+                        "{body}: {x}, {y}"
+                    );
+                    assert!(
+                        selected
+                            .with_equality(returned, IndexExpr::Const(1 - expected))
+                            .is_none(),
+                        "{body}: {x}, {y}"
+                    );
+                }
+            }
+        });
+    }
 }
 
 #[test]

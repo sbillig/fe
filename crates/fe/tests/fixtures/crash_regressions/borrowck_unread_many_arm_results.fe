@@ -382,3 +382,31 @@ fn live_constant_boolean_arguments(k: usize) -> usize {
     if constant_boolean(Many::V19.ordinal() == k) { sum += 1 }
     sum
 }
+
+// Whole-cell stores kill dead call results before predicate demand propagates.
+fn choose_boolean(_ flag: bool) -> usize { if flag { 1 } else { 0 } }
+fn overwritten_boolean_argument_predicates(k: usize) -> usize {
+    let mut result: usize = 0
+    result = choose_boolean(Many::V0.ordinal() == k)
+    result = choose_boolean(Many::V1.ordinal() == k)
+    result = choose_boolean(Many::V2.ordinal() == k)
+    result = choose_boolean(Many::V3.ordinal() == k)
+    result = choose_boolean(Many::V4.ordinal() == k)
+    result = choose_boolean(Many::V5.ordinal() == k)
+    result = choose_boolean(Many::V6.ordinal() == k)
+    result = choose_boolean(Many::V7.ordinal() == k)
+    result = choose_boolean(Many::V8.ordinal() == k)
+    result = choose_boolean(Many::V9.ordinal() == k)
+    result = choose_boolean(Many::V10.ordinal() == k)
+    result = choose_boolean(Many::V11.ordinal() == k)
+    result = choose_boolean(Many::V12.ordinal() == k)
+    result = choose_boolean(Many::V13.ordinal() == k)
+    result = choose_boolean(Many::V14.ordinal() == k)
+    result = choose_boolean(Many::V15.ordinal() == k)
+    result = choose_boolean(Many::V16.ordinal() == k)
+    result = choose_boolean(Many::V17.ordinal() == k)
+    result = choose_boolean(Many::V18.ordinal() == k)
+    result = choose_boolean(Many::V19.ordinal() == k)
+    result = 0
+    result
+}
