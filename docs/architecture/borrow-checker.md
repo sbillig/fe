@@ -1,7 +1,8 @@
 # Borrow checker architecture
 
 Fe's borrow checker enforces ownership (moves and initialization) and the
-aliasing rules of `ref`, `mut`, and view borrows. It runs on each semantic
+aliasing rules of `ref`, `mut`, and view borrows, and of `Borrows` memory
+views. It runs on each semantic
 instance's verified, operation-preserving normalized body
 ([`semantic/borrow`](../../crates/hir/src/analysis/semantic/borrow)).
 
@@ -47,7 +48,7 @@ Every SSA value and every root's contents carry a set of *tokens*:
 
 | Token | Created by | Meaning |
 | --- | --- | --- |
-| Loan | `ref`/`mut` borrows and views | A borrow of resolved places; shared or mutable. A two-phase receiver borrow is shared until its call. |
+| Loan | `ref`/`mut` borrows, views, and call results | A borrow of resolved places; shared or mutable. A two-phase receiver borrow is shared until its call. |
 | Input | entry values, effect providers | Everything a caller supplied through one parameter or provider. |
 | Handle | provider handles | Names a provider's storage; confers no exclusivity. |
 
@@ -60,6 +61,10 @@ carrier (`CapabilityTarget`) resolves to the regions of the carrier's
 tokens, extended by the place's path, so an access through any copy reaches
 the same storage. A reborrow records its carrier's tokens as parents; an
 access through a reborrow is authorized by the reborrow and its ancestors.
+
+A value holding only provider handles carries `Handle` tokens, including
+handles loaded from a parameter or provider: they name storage without
+conferring exclusivity.
 
 ### Regions
 
@@ -85,14 +90,16 @@ A forward fixed point over the reachable control-flow graph computes the
 tokens of every value, the tokens of every root's contents, and the possibly
 moved values and root paths. A backward liveness pass computes which values
 and roots may still be read. A loan is live where a live value or a live
-root's contents carry it. A block ends at a call to a function that never
-returns.
+root's contents carry it, or where it is stored in a root that a live loan
+borrows: a borrow of a wrapper keeps the borrows inside it live. A block
+ends at a call to a function that never returns.
 
 ### Moves and initialization
 
 - Using a possibly moved value or root path is an error. A value moved on one
   branch is unavailable after the join; one moved in a loop body is
-  unavailable on the next iteration.
+  unavailable on the next iteration. An operation's operands are checked in
+  order, so one call or aggregate cannot move the same value twice.
 - Local slots other than entry bindings start uninitialized.
 - A store to a path reinitializes it and every path below it. Assigning into
   part of a wholly moved value is an error, as is moving out through a borrow
@@ -107,30 +114,39 @@ unless the access holds the loan through its carrier or the carrier's
 ancestors:
 
 - a read conflicts with mutable loans;
-- a write, move, or mutable borrow conflicts with every loan.
+- a write, move, or mutable borrow conflicts with every loan, except that
+  overwriting a place does not conflict with the loans of `Borrows` views
+  derived from it (see below).
 
 ### Calls
 
 For `r = f(args; effects)`:
 
 1. **Arguments.** Two arguments, or an argument and an effect place, whose
-   regions overlap conflict when either is mutable. Each argument's use is an
-   access with its own authority: a mutable borrow passed while a reborrow of
-   it is live conflicts.
-2. **Result.** If the callee has a capability-carrying `self` receiver, the
-   result holds the receiver argument's tokens; otherwise it holds every
-   capability-carrying argument's tokens. Handles from any argument or effect
-   place are always included.
-3. **Flow into `mut` referents.** A `mut` argument or mutable effect whose
-   referent type can hold borrows may receive every other capability the call
-   was given. Local roots gain those tokens; parameter and provider referents
+   regions overlap conflict when either is mutable. An argument reaches its
+   own borrows and the borrows stored in the storage they borrow, so passing
+   `ref wrapper` and `mut x` conflicts when the wrapper holds a borrow of `x`.
+   Handles confer no exclusivity and are not compared. Each argument's use is
+   an access with its own authority: a mutable borrow passed while a reborrow
+   of it is live conflicts.
+2. **Result.** A result that holds borrows is a new loan with the result's
+   borrow kind, whose parents are its sources: the receiver argument if the
+   callee has a capability-carrying `self` receiver, and every
+   capability-carrying argument otherwise. A `ref` result of a `mut` argument
+   is therefore shared, and the argument cannot write while the result is
+   live. Handles from any argument or effect place are always included.
+3. **Flow into mutable referents.** Each mutable borrow an argument reaches,
+   directly or inside an aggregate, whose referent type can hold borrows may
+   receive every other capability the call was given; so may a mutable
+   effect. Local roots gain those tokens; parameter and provider referents
    are checked as escapes.
 4. **External executions.** A call that can reenter the contract may write any
    persistent or transient slot: the `CALL`, `DELEGATECALL`, `CREATE`, and
    `CREATE2` builtins, methods of the sealed std `Call`, `Create`, and `Super`
    capabilities, and callees given a mutable such capability as an effect. A
    static call only reads them, and precompile calls cannot reenter. No
-   conflicting storage or transient loan may be live across such a call.
+   conflicting storage or transient loan may be live across such a call; the
+   loans the call itself receives are live while it runs.
 
 A type parameter carries no borrows when a generic body is checked: as in
 Rust, a value of a generic type never borrows through elided inputs. A
@@ -141,11 +157,11 @@ concrete instance.
 
 | Rule | Diagnostic |
 | --- | --- |
-| A returned borrow of a local root | ``cannot return a borrow to local `x` `` |
+| A returned borrow of a local root (a view may borrow a local owner) | ``cannot return a borrow to local `x` `` |
 | A returned borrow of an effect provider or effect parameter | `cannot return a borrow derived from an effect parameter` |
 | A method returning a borrow of a parameter other than `self` | ``a method can only return borrows derived from `self` `` |
 | A local borrow stored in a parameter or provider referent | ``cannot leave a borrow of local `x` in caller-accessible storage`` |
-| A borrow stored in storage or transient storage | ``cannot store `T` in storage`` |
+| A borrow or view stored in storage or transient storage | ``cannot store `T` in storage`` |
 | A write to calldata or code | `cannot write to calldata` |
 | A `mut` borrow of non-memory passed as an ordinary argument | ``cannot pass `mut T` from storage as function argument`` |
 | A raw pointer to a value that holds borrows | `raw pointers cannot point to values that hold borrows` |
@@ -178,6 +194,30 @@ impl Iter {
 All borrows in one value share one lifetime, raw pointers cannot point to
 borrowing values, and storage cannot hold them.
 
+## Memory views
+
+Owners such as `MemArray`, `MemBuffer`, and `Bytes` hold raw pointers to the
+memory they own. A safe view of that memory, such as `MemSlice`, is a value
+of a type that implements the `core::marker::Borrows` marker, and the checker
+treats it like a `ref`:
+
+- A call returning a view borrows from its sources as above. Through a
+  capability whose target owns memory, the view borrows that target, so
+  `let s = a.as_slice()` keeps `a` borrowed and `a.index_mut(0)` conflicts.
+  Through a capability whose target owns no memory, such as a view or a
+  reader holding one, it borrows only what the target holds, so
+  `s = s.slice(..)` and a reader advancing while its input is viewed are
+  accepted.
+- Memory is never freed. Overwriting an owner leaves the memory its views
+  borrow unchanged, so a write to the owner does not conflict with them, and
+  a function may return a view of a local owner. Moving the owner or
+  borrowing it mutably while a view is live conflicts.
+- Views cannot be stored in storage, and a method can only return views
+  derived from `self`.
+
+Owners with a safe mutating API must not be `Copy`. Copy owners such as
+`Bytes` and `String` are immutable after construction.
+
 ## Raw memory and `unsafe`
 
 Raw pointers are values: creating, casting, offsetting, and comparing them is
@@ -199,5 +239,6 @@ pair accepted and rejected programs in the same file:
 | [`loans.fe`](../../crates/uitest/fixtures/semantic_borrowck/loans.fe) | Field and index disjointness, borrow lifetimes, copied borrows, argument overlap |
 | [`call_contracts.fe`](../../crates/uitest/fixtures/semantic_borrowck/call_contracts.fe) | Result elision, two-phase receivers, flow into `mut` referents |
 | [`return_borrows.fe`](../../crates/uitest/fixtures/semantic_borrowck/return_borrows.fe) | Returned borrows of locals, parameters, `self`, and effects |
-| [`borrow_fields.fe`](../../crates/uitest/fixtures/semantic_borrowck/borrow_fields.fe) | Borrowing wrappers and their restrictions |
+| [`borrow_fields.fe`](../../crates/uitest/fixtures/semantic_borrowck/borrow_fields.fe) | Borrowing wrappers, their contents, and their restrictions |
+| [`views.fe`](../../crates/uitest/fixtures/semantic_borrowck/views.fe) | `Borrows` memory views and their owners |
 | [`external_call_state_borrows.fe`](../../crates/uitest/fixtures/semantic_borrowck/external_call_state_borrows.fe) | Storage borrows across external calls |
